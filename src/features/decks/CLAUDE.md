@@ -17,6 +17,7 @@ is [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md) a
 | `commanders.ts` | Eligibility, partners, colour identity                                         |
 | `companions.ts` | Companion rules                                                                |
 | `bracket.ts`    | The Commander bracket **floor**. **Advisory only — `engine.ts` does not import it** |
+| `types.ts`      | `CardFacts` and the two `Pick`s off it — `CardIdentity`, and `BracketCardFacts`, which is what `estimateBracket` takes |
 
 - **`validateDeck` answers for the deck and `validateForMarks` answers for every card drawn**, and
   which one a surface calls is the whole of issue #134 — see the second bullet of **The category
@@ -68,7 +69,19 @@ Full record, with every measurement and the provenance of each rung:
 - **The card ids sent to `combosForCards` must be the same pile `estimateBracket` counts.** Both
   drop an inactive category; the combos handed to the estimate are *not* re-checked there, so a
   query built off an unfiltered list would report a combo out of a switched-off Maybeboard and
-  nothing downstream could tell.
+  nothing downstream could tell. **That rule crossed into Rust on 2026-09-07**:
+  `BRACKET_IDS_SQL` builds the gallery read's id list over the same pile `BRACKET_CARDS_SQL`
+  reads, which is `DeckBracket.tsx:117-121` written in SQL, and it has to be for this bullet's
+  reason.
+- **The gallery asks the same question about every deck on the wall** (2026-09-07, issue #387),
+  through `deck_bracket_reads` and `useDeckBrackets` rather than through `deck_get` per tile.
+  Two things bind an implementer here. **The estimator takes `BracketCardFacts`** — the five
+  fields it actually reads — which is what makes a five-field row per card legal at the type
+  level; a `DeckCard[]` still assigns, so nothing in the editor moved. And **the tile estimates
+  over the _live_ list while the editor estimates over the tab the reader is standing on**, so a
+  deck left on Theory prints its plan in one place and its actual list in the other. That is the
+  one honest divergence between the two surfaces and it is by design — the tile is a fact about
+  the deck, the editor a fact about what is on screen.
 
 ## The category model
 
@@ -374,12 +387,25 @@ reader to configure the deck they had just made; it now asks all of them.
   improves the settings dialog for free. `collapse: false` because different printings are
   different art and collapsing hides the choice being made; `playableOnly: false` because art
   series and tokens are some of the best crops and a cover is not a card you cast.
-- **The tiles do not credit the illustrator, and that is the documented exception, not an
-  oversight.** `CardSummary` carries no `artist`; `CardStack`, `GridView`, `TheoryDiffDialog` and
-  the original `ChoiceTile` all draw the same crop uncredited, justified by every crop sitting
-  inside a control that names its card. The **preview** is strict at both surfaces: no artist, no
-  picture. At create there is no `DeckRow` to read one from, so the host fetches it with
-  `card_detail` — the credit arrives with the picture and never before it.
+- **The editor's card tiles do not credit the illustrator, and that is the documented exception —
+  which as of 2026-09-07 has a better justification than the one written here for a month.**
+  Scryfall's guideline has **two arms**: name the artist in the same interface, *or show the full
+  card image in it* ([frontend-design.md](../../../docs/reference/frontend-design.md) carries the
+  correction, the verbatim quotation and where the rule actually lives — it is on
+  `scryfall.com/docs/api` and not on `docs/api/images`). `CardStack` and `views/GridView` draw
+  `DECK_CARD_VARIANT`, which is **`display`** — a whole printed card, carrying its own printed
+  credit — so the deck editor satisfies the **second** arm outright and owes nothing extra. This
+  bullet said all four surfaces drew "the same crop uncredited"; two of them stopped when they
+  went to whole cards, and it was not corrected here. The two still drawing a bare `art` crop
+  uncredited are `TheoryDiffDialog`'s rows and `DeckCoverPicker`'s `ChoiceTile`, both sitting
+  inside a control that names the card, and both blocked on the same missing column —
+  `CardSummary` and `DeckCardRow` carry no per-row `artist`. The **preview** is strict at both
+  cover surfaces: no artist, no picture. At create there is no `DeckRow` to read one from, so the
+  host fetches it with `card_detail` — the credit arrives with the picture and never before it.
+  **The gallery tile is not an inconsistency with any of this.** It draws a crop and shows no
+  full card anywhere, so it has to take the **first** arm — and it does, as a tooltip on the
+  picture rather than as a line of type under it. Two surfaces answering one rule by its two
+  different arms is the rule working, not the app disagreeing with itself.
 - **A cover is a card id, and the create is one write again** (2026-08-31). The reader-picked
   *file* cover is deleted whole — `deck_set_cover_image`, the `/cover/<deckId>` route, the
   encoder and the `data/covers/` directory — and a migration flips every `cover_kind = 'custom'`
@@ -2125,6 +2151,118 @@ price | type`). An **inactive category stays its own group in all three grouping
   — no second rule, so the cycle fence, the already-there refusal and `reorderedLevel`'s no-op all
   hold. It draws no strip of member art: a strip is what a folder is *recognised* by, and this tile
   is the way out rather than a folder to pick out of a wall.
+- **The tile says what colours the deck is and what bracket it reads as, and it no longer says
+  who painted the cover** (2026-09-07, issue #387). Three facts changed on one element and each
+  has its own rule below; the design is
+  `docs/superpowers/plans/2026-09-07-deck-gallery-overview.md`, the drawing is in
+  [frontend-design.md](../../../docs/reference/frontend-design.md), and the two reads behind it
+  are in [decks-storage.md](../../../docs/reference/decks-storage.md). What is worth stating
+  here, once: **the tile asks nothing for itself.** `DecksPage` runs `useDeckPips` and
+  `useDeckBrackets` for the whole wall and hands each tile a `PipCounts | null` and a
+  `string | null`; forty tiles each fetching their own would be forty queries for one screen,
+  which is `zoom`'s arrangement on this component and the same argument.
+- **`hasCover`/`coverUrl`'s refusal to draw a cover whose artist is unknown _stays_, and reading
+  it as a rule about the deleted credit line is the mistake to avoid.** The line went; the name
+  did not — it is the tooltip on `Cover`'s frame now — so the condition means exactly what it
+  always said: a crop is drawn only where this app can say who painted it. The two cannot come
+  apart, because they are one test on one field (`deck.coverArtist`), and `useTooltip` refuses
+  falsy content, so a deck with no artist is a frame with no hint *and* no picture.
+  **The credit tooltip is always shown and never `whenClipped`**, which is the one binding on this
+  tile that is not a convenience. That option opens a tooltip only when the anchor's own text is
+  genuinely cut off — right for a truncating cell repeating itself, and exactly wrong on a picture
+  frame, where there is no text to clip, so the hint would open for nobody and the artist would be
+  unreachable on every tile in the gallery. `describes` is left at its default for the same
+  reason: the four controls in the tray pass `describes: false` because they already say their
+  words in an `aria-label`, and this frame says the artist nowhere else. The `alt` stays empty —
+  the crop is decorative and the deck's name is two lines down, so putting the illustrator into
+  the tile's accessible name would announce a painter before the deck on every tile on the wall.
+  **`FolderCard`'s strip got the strictly better end of this.** Its old line comma-joined up to
+  three artists into one string with no way to tell which crop belonged to whom, and that file's
+  own comment had rejected "a credit that names artists for some tiles and not others" for
+  exactly that reason. Each `MemberArt` now carries its own painter's name, which is the
+  arrangement that objection was really asking for. `DeckCoverPicker`'s `CoverPreview` keeps a
+  **visible** credit: it is one large crop with nothing else on screen.
+- **`DeckColorBar` draws a record it is handed and computes nothing but percentages.** Rust
+  answers cost strings (`deck_pip_costs`), `mana.ts`'s `addPips` decides what a pip *is* over the
+  one `SYMBOL` tokeniser, and `deckPips.ts` folds. A component that did its own tokenising would
+  be a second answer to "what is a pip", and `{W/U}` is exactly the symbol two implementations
+  disagree about — it counts as **one pip of each half**, because the bar answers *what does this
+  deck want* rather than what will be spent. Twobrid and Phyrexian are their colour, `{C}` is a
+  pip, and generic is not.
+  **Three silences, and none of them is a placeholder.** A colour with no pips draws **no
+  element**, not a zero-width one — the same pixels, a different DOM, and a zero-width `<span>` is
+  something a test can find and a later `:first-child` rule can style, standing for a colour the
+  deck does not have. `null` (the read still out) and an all-zero record (an all-lands pile) both
+  draw **no bar at all**: an empty grey rule says "no colours" in the same vocabulary a full bar
+  uses to say what they are, and a reader cannot tell that from a rendering fault. And **a deck
+  absent from `useDeckPips`' map is not a deck with no pips** — it is also a deck the read has not
+  reached, one still in flight and one whose read failed, three states that are indistinguishable
+  from the tile and that the two consumers treat alike (no bar, and last in a colour sort).
+  Its accessible name is **the colours and nothing else** (`White, Green`), because the span sits
+  inside the tile's `<button>` and joins that button's name — a reader walking the wall wants the
+  deck's colours between the picture and the name, not its arithmetic. The counts are in the
+  tooltip.
+- **`bracketLabel`'s vocabulary is `DeckBracket.tsx`'s and may not diverge from it.** `Bracket 3`
+  is the reader's own answer, `Bracket ~3` is a reading, and the `~` means the same thing on a
+  tile as on the editor's button — one glyph a reader learns once. **The editor's third form
+  (`Bracket 2 · ~4`, the mismatch) is deliberately not copied**: that button is a control, and
+  pressing it opens the advisory that names the card responsible, so the second number is a
+  question the reader can immediately ask. A tile has no room to explain one, and a number a
+  reader cannot interrogate is worse than the one they chose. `null` is drawn as no bracket
+  segment at all and covers both "this format has no command zone" and "nothing has answered
+  yet"; never `Bracket ?`, never a skeleton, never a dash.
+  **The tile estimates over the _live_ list and the editor over the tab the reader is standing
+  on**, which is the one way the two surfaces can honestly print different numbers about one
+  deck. A deck left on **Theory** reads its plan in the editor and its live list on the tile. The
+  tile is a fact about the deck; the editor is a fact about what is on screen.
+- **The sort is remembered and the filter is not**, and that split is the rule rather than an
+  omission. `useDeckSort` keeps one `app_meta` row; `deckFilter.ts` holds no state and reads no
+  storage. An order is how a reader likes to read their gallery and it is visible in the toolbar
+  the moment they open it; a filter is a thing they are doing right now, and **a gallery that
+  opened already narrowed, with no memory of having asked for it, looks like a gallery that has
+  lost decks.** `useDeckSort` is also a **call-it-once** hook — the press is held in local state,
+  so a second mount would be a second copy that never hears about the first one's press. There is
+  one sort control on one page, so the constraint costs nothing and is worth stating rather than
+  discovering.
+- **The deck comparators are written in their own natural direction, and `sortDecks` negates only
+  when the reader's direction differs from `NATURAL_DESC[key]`.** This is the one shape decision
+  in `deckSort.ts` and a test caught the alternative: write them all ascending and negate on
+  `desc`, and the **tiebreak turns round with the primary term** — `cards` reads biggest-first by
+  default, so its name tiebreak would run Z→A and two hundred-card decks would list *Zur* above
+  *Atraxa* for no reason a reader could see. Negating the whole comparator also keeps a tie at
+  exactly `0`, so stability survives the flip and the reverse of a list is that list upside down.
+  **Two rules follow that are _not_ `sorting.ts`'s, and the difference is a control.**
+  - **"Unknowns last" holds in the key's natural direction only, not in both.** `nullsLast` pins
+    nulls at the foot whichever way it runs, and it *can*, because the card sorts have no
+    direction toggle — their `descending` flag describes one fixed order. This wall has a toggle,
+    and a block of tiles that visibly refused to move through a reversal reads as a toggle that
+    did not take. So a deck whose bracket or pips have not arrived sorts last the moment the
+    reader picks that key, and first when they press the arrow.
+  - **`colors` has three ranks, not two**: coloured decks, then a deck with real `{C}` pips (it
+    draws a bar, and Eldrazi has an identity), then a deck with no pips at all — an all-lands
+    pile, a deck of nothing but generic costs, and a read still in flight, which are
+    indistinguishable from here and all draw nothing.
+- **`deckFilter` folds accents and lowercases with a _pinned_ locale, and the pin is not
+  theoretical.** `"I".toLocaleLowerCase()` is `"ı"` under `tr`, so a deck named *Izzet Storm*
+  would stop answering to a typed `izzet` on a Turkish desktop — silently, and only there. The
+  fold is NFD plus a strip of U+0300–U+036F, spelled as escapes and never as the characters
+  themselves, because a regex written with invisible combining marks is a regex nobody can check.
+  **Not `compareLabels`**, which already folds case and accents the same way but is an
+  `Intl.Collator` and has no substring API at all; asking it this question means sliding a window
+  across the name and comparing every slice of the needle's length.
+  **Empty `formats` means _no format filter_, not _no formats_.** The bug shape is a
+  `formats.includes(deck.formatKey)` with no empty check in front of it, which empties the wall
+  the moment the chip row appears and reads as the gallery having lost every deck at once.
+- **Two test traps this feature's suites were written around, both general enough to expect
+  again.**
+  - **jsdom never fires `unhandledrejection`**, so a dropped `.catch()` on a fire-and-forget IPC
+    write is invisible to vitest: the test passes *against* the defect. `useDeckSort`'s write is
+    exactly that shape, and the only assertion that can see it is a mock returning a thenable
+    with a spied `catch`.
+  - **A fold test that puts every case in one row cannot see per-row accumulation.** `deckPips`'
+    "folds several costs" test stayed green when the accumulator was replaced by a fresh record
+    per row, because the mutation only bites *across* rows. If the code accumulates over a list,
+    the fixture has to be a list.
 
 - **A deck card is the whole card, and the app's marks are overlays on it.** The picture _is_ the
   card, so `deckCardName` on the button is the **only** name a screen reader gets — but the app

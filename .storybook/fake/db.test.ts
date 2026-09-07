@@ -7891,7 +7891,13 @@ describe("the busy fault", () => {
     // record above. **Both read halves are absent from this table** — `deck_quick_add_wishes`
     // through `lock_db_read` and `wishlist_optimize_plan` through `db_read` — exactly as
     // `deck_pull_plan` is.
-    expect(names).toHaveLength(91);
+    //
+    // `set_deck_sort` (issue #387) is the ninth `app_meta` write and joins for the reason all
+    // eight do: the row is in the reader's own database, so the write takes the write connection
+    // and answers BUSY under a sync like every other. Its read half, `deck_sort`, is absent for
+    // `deck_pull_plan`'s reason — and the two *gallery* reads that shipped beside it,
+    // `deck_pip_costs` and `deck_bracket_reads`, are absent for the same one.
+    expect(names).toHaveLength(92);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
