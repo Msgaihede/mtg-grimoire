@@ -930,6 +930,7 @@ describe("the export dialog's remembered choice", () => {
       format: "csv",
       fields: ["quantity", "name", "condition"],
       arenaOnly: false,
+      includeInactive: false,
     });
     expect(useAppStore.getState().exportPrefs.collection.format).toBe("csv");
     expect(useAppStore.getState().exportPrefs.deck.format).toBe("plain");
@@ -954,5 +955,53 @@ describe("the export dialog's remembered choice", () => {
     useAppStore.getState().setExportPrefs("deck", { ...prefs, arenaOnly: true });
     expect(useAppStore.getState().exportPrefs.deck.arenaOnly).toBe(true);
     expect(useAppStore.getState().exportPrefs.collection.arenaOnly).toBe(false);
+  });
+
+  /**
+   * `Include inactive categories` opens **off** as well, and the argument is the *opposite* of
+   * the one above it — which is the whole reason this is a test of its own rather than another
+   * line inside the Arena one.
+   *
+   * `arenaOnly` starts off because the Arena export had written every card handed to it since it
+   * shipped, so a filter that started on would quietly change what an existing reader's next
+   * export contained. Here the change is the fix: issue #390 is a reader reporting their
+   * maybeboard turning up in a deck they exported, so `includeInactive: true` would ship the
+   * feature with the bug still in it. Off is the *new* behaviour rather than the old one, and
+   * that is what makes the default worth pinning — the value that preserves what shipped is
+   * exactly the value the issue asks against.
+   *
+   * **So it is worth writing down what this costs, because it is the thing `arenaOnly` refused
+   * to do.** The five formats that wrote a switched-off pile before this landed — plain,
+   * Moxfield, Archidekt, TCGplayer and CSV — stop writing one unless the box is ticked, so an
+   * existing reader's next deck export really does come out different from their last. The
+   * dialog's own count line — `N cards in inactive categories are not written.` — is how they
+   * find the box: it is drawn whenever this flag is holding something back, so the change is
+   * never silent, which is the condition on which a default that changes behaviour is
+   * acceptable at all. Arena and MTGO are untouched in both directions, because `dropsInactive`
+   * already answered for them and no preference may turn a maybeboard back on there.
+   *
+   * All three surfaces are asserted even though only the deck can ever draw the box:
+   * `ExportPrefs` is one shape, and `SURFACE_HAS_PILES` is what makes the other two unreachable
+   * rather than a value chosen for them. A `true` seeded on the collection would be invisible in
+   * the app and would still be wrong.
+   */
+  it("opens with inactive categories left out on every surface", () => {
+    const { exportPrefs } = useAppStore.getState();
+    expect([
+      exportPrefs.deck.includeInactive,
+      exportPrefs.collection.includeInactive,
+      exportPrefs.wishlist.includeInactive,
+    ]).toEqual([false, false, false]);
+  });
+
+  /** Per surface, like the two pairs beside it. Whether a reader wants their cuts in the deck
+   *  list they are pasting into a bracket checker says nothing about the CSV they take of their
+   *  binder — and the write must not leak, because a `Record` written back whole is exactly the
+   *  shape that would let it. */
+  it("keeps the inactive-category choice apart by surface", () => {
+    const prefs = useAppStore.getState().exportPrefs.deck;
+    useAppStore.getState().setExportPrefs("deck", { ...prefs, includeInactive: true });
+    expect(useAppStore.getState().exportPrefs.deck.includeInactive).toBe(true);
+    expect(useAppStore.getState().exportPrefs.collection.includeInactive).toBe(false);
   });
 });
