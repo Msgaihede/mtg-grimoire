@@ -30,6 +30,56 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.21.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.20.0...v0.21.0) (2026-09-07)
+
+
+### Features
+
+* **appearance:** carry a chosen mark colour to :root ([9102d03](https://github.com/Msgaihede/mtg-grimoire/commit/9102d03d9436fb3dc2c9131add52cef66cca8025))
+* **collection,wishlist:** add a card-search sidebar to both pages ([0899bcc](https://github.com/Msgaihede/mtg-grimoire/commit/0899bcc027d063483888f07912e16f38c18f5797))
+* **collection,wishlist:** add a card-search sidebar to both pages ([953fe91](https://github.com/Msgaihede/mtg-grimoire/commit/953fe91b6ff3618399bbc4e8b89ee11ebfa148bd))
+* **collection:** track what a copy cost, and let a condition say nothing ([5a46568](https://github.com/Msgaihede/mtg-grimoire/commit/5a46568a123e487275de719920337eb97866ad3b))
+* **collection:** track what a copy cost, and let a condition say nothing ([3755a2b](https://github.com/Msgaihede/mtg-grimoire/commit/3755a2b5bdbc43cfec5c5b147fd04e791daa5e0a))
+* **decks:** both theory marks sync, undo and read back in words ([bd0f652](https://github.com/Msgaihede/mtg-grimoire/commit/bd0f6524ae613583a7e5781ada849b2e911e0fff))
+* **decks:** both theory marks take a required tier ([f02cfff](https://github.com/Msgaihede/mtg-grimoire/commit/f02cfffd9bb54b475894163813ae540f6567b9d7))
+* **decks:** carry the card name on a theory slot ([f533a36](https://github.com/Msgaihede/mtg-grimoire/commit/f533a362f9d9517646cb3e74a2dd254971255b12))
+* **decks:** colour bar, bracket and a filter row on the deck gallery ([e51cb44](https://github.com/Msgaihede/mtg-grimoire/commit/e51cb445d10d233821c67a79af01f8edb7792e10))
+* **decks:** colour bar, bracket and a filter row on the deck gallery ([518f053](https://github.com/Msgaihede/mtg-grimoire/commit/518f053460f29818a66562b8bd7ccf391f0e0fb1)), closes [#387](https://github.com/Msgaihede/mtg-grimoire/issues/387)
+* **decks:** count owned copies at the printing and finish ([cd20ff2](https://github.com/Msgaihede/mtg-grimoire/commit/cd20ff268fa0cb195ed6765797a4971437a2ceb9))
+* **decks:** import missing cards from the collection in deck settings ([741c11b](https://github.com/Msgaihede/mtg-grimoire/commit/741c11b215fd9e022dba1b6566eea9f9f8910ee6))
+* **decks:** import missing cards from the collection, at the printing-and-finish grain ([1efccaf](https://github.com/Msgaihede/mtg-grimoire/commit/1efccafe5e309a76517fe6c317f088cac26d2296))
+* **decks:** let the three label commands run with no deck ([b4663ce](https://github.com/Msgaihede/mtg-grimoire/commit/b4663ce23bc25f8c6579894f8b638ad5192f4224))
+* **decks:** read and write both theory marks on a deck ([6077ab2](https://github.com/Msgaihede/mtg-grimoire/commit/6077ab247dc5468875a72019c1b1f84a15df53c0))
+* **decks:** resolve a deck's tokens and emblems, and let the reader pick art ([801e8a3](https://github.com/Msgaihede/mtg-grimoire/commit/801e8a3d897204b617f762851cce5ae6decbc1d1))
+* **decks:** resolve a deck's tokens and emblems, and let the reader pick art ([d678224](https://github.com/Msgaihede/mtg-grimoire/commit/d67822406162da771faabd21574b288a367d9e2a))
+* **decks:** resolve a live row to one of two theory tiers ([b709765](https://github.com/Msgaihede/mtg-grimoire/commit/b709765a5666febe8840698da50810e32161ee71))
+* **decks:** switch each theory mark on or off per deck ([ecce5ea](https://github.com/Msgaihede/mtg-grimoire/commit/ecce5eac9471183d0f532feedaf4366e0dab3bcd))
+* **decks:** thread the two-tier theory mark through the four views ([3da631b](https://github.com/Msgaihede/mtg-grimoire/commit/3da631b69ed8d90b3e75bfa882aafb3f6341b568))
+* **export:** offer Include inactive categories on every format ([ee8bda7](https://github.com/Msgaihede/mtg-grimoire/commit/ee8bda726610771eaa8265c52868603301e775b9))
+* **export:** offer Include inactive categories on every format ([2ac2d63](https://github.com/Msgaihede/mtg-grimoire/commit/2ac2d630c923ee59736306915b2ae2598cc3cf45)), closes [#390](https://github.com/Msgaihede/mtg-grimoire/issues/390)
+* **ipc:** mirror the theory name grain, the mark colours and the deckless label writes ([fd66492](https://github.com/Msgaihede/mtg-grimoire/commit/fd66492c95d4fea2a4443e4f4ee8edd4dc387087))
+* **schema:** user rung 35 gives every deck both theory marks ([a25c60f](https://github.com/Msgaihede/mtg-grimoire/commit/a25c60f23e8636b93a869b88d0ea25e21abf0707))
+* **schema:** v35 sweeps a deck's group down to what its list claims ([f504bcd](https://github.com/Msgaihede/mtg-grimoire/commit/f504bcd1693b803bbe2a20319e4dd887eb0c1523))
+* **search:** extract the shared card-search panel and its app_meta row ([c6f2366](https://github.com/Msgaihede/mtg-grimoire/commit/c6f2366fb2570b30b80e4f58cd010e647aa38fbe))
+* **settings:** an Appearance group, and the theory marks' colours ([18a2181](https://github.com/Msgaihede/mtg-grimoire/commit/18a218106672de7912715aa3f8a23f67bd422106))
+* **settings:** manage labels from the Appearance group ([e9bb931](https://github.com/Msgaihede/mtg-grimoire/commit/e9bb931a7f5ab4eeb29892f42f25707a88dedd16))
+* **settings:** remember a per-mark colour in one app_meta row ([67eea72](https://github.com/Msgaihede/mtg-grimoire/commit/67eea72c79ada11e92a6f26fc72d30ef16e8299f))
+
+
+### Bug Fixes
+
+* **collection,wishlist:** floor the sidebar on the view, and open railed ([c6d296b](https://github.com/Msgaihede/mtg-grimoire/commit/c6d296baa73229e4821dc3e9c39a988393d2d73d))
+* **decks:** draw no theory-mark switches where the answer cannot be written ([6d9b917](https://github.com/Msgaihede/mtg-grimoire/commit/6d9b917c8b8e3f119d0080684d184249815958f1))
+* **decks:** give the command zone the deck's plan ([88e140f](https://github.com/Msgaihede/mtg-grimoire/commit/88e140fe1cb373abb70e2099c6df3099b27b7759))
+* **decks:** let the colour picker be told what it is colouring ([734d687](https://github.com/Msgaihede/mtg-grimoire/commit/734d6870299769795633b76a4ac92d37d42a6b5f))
+* **decks:** put both theory marks on the DeckRow wire mirror ([ae6575f](https://github.com/Msgaihede/mtg-grimoire/commit/ae6575f7915792b14225710c2cd56a755ff5cc23))
+* **schema:** renumber the theory-mark rung to v36 after the merge ([e0233ac](https://github.com/Msgaihede/mtg-grimoire/commit/e0233ac28a8616ddedebf4a333de2ef302d38906))
+* **schema:** renumber the theory-mark rung to v37, ahead of the merge ([637b60c](https://github.com/Msgaihede/mtg-grimoire/commit/637b60ce486daa28d4e5f7b3787ebf6eb4a1df0b))
+* **schema:** renumber the theory-mark rung to v38, ahead of the merge ([2afc2db](https://github.com/Msgaihede/mtg-grimoire/commit/2afc2dbac96b7165c6c16cb28603ce4f4c56e2ad))
+* **schema:** the token rung is v36, and main's condition rung keeps v35 ([0e8f730](https://github.com/Msgaihede/mtg-grimoire/commit/0e8f7303e2bc92107611f6f54dabb00159be810f))
+* **schema:** the token rung is v37 — renumbered a second time ([e173ab9](https://github.com/Msgaihede/mtg-grimoire/commit/e173ab9222576b337a1af3f9982b0a8f57d702c0))
+* **schema:** the v36 fixture rewinds v37, and two docs that argued from head ([62cc30a](https://github.com/Msgaihede/mtg-grimoire/commit/62cc30a88c6e79f61670f060a4a6a52fcd1509b6))
+
 ## [0.20.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.19.0...v0.20.0) (2026-09-05)
 
 
