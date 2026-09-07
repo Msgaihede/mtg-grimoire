@@ -51,8 +51,11 @@ const THEORY: &str = crate::schema::DECK_VARIANTS[1];
 
 /// One card the plan asks for — [`theory_slots`]' row, and the deck editor's theory tick.
 ///
-/// Two fields and no third: this is a mark's whole input, and every column that is *not* here
-/// (the name, the set, the price, the pile) is one the tick would have to be told to ignore.
+/// **Three fields since 2026-09-07, and the third is the name.** This carried two until the mark
+/// grew a second tier: a green tick for the printing the plan named and a blue one for the same
+/// card in a printing it did not. The loose tier needs an identity that survives a different
+/// printing, and the name is it. What is still *not* here is everything a mark would have to be
+/// told to ignore — the set, the price, the pile.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TheorySlot {
@@ -61,6 +64,21 @@ pub struct TheorySlot {
     /// is what stops the tick and the shopping list drifting apart: "the same planned card" is
     /// one definition, and both surfaces spell it with this code.
     pub key: String,
+    /// The card's printed name, exactly as `cards.name` holds it — or `None` for an orphan whose
+    /// printing has left the corpus.
+    ///
+    /// **The second grain, and the loose tier's whole input.** `key` above answers *is this the
+    /// printing I planned*; this answers *is this the card I planned*, which is the question a
+    /// reader holding a different Forest is asking. It is a name rather than an `oracle_id`
+    /// because Scryfall omits that field on reversible cards, on both sides of the comparison,
+    /// and an identity with a fallback chain is two rules for two sides to disagree about.
+    ///
+    /// **Unfolded on purpose.** SQLite's `lower()` is ASCII-only; the webview's `toLowerCase()`
+    /// is not. Folded here, `Lim-Dûl's Vault` and `Æther Vial` would spell one key in the plan
+    /// and another in the live list, and the mark would go dark on exactly the cards whose
+    /// absence is hardest to notice. `theoryMatch.ts`'s `theoryNameKey` folds both sides, in one
+    /// language, and is the only place the rule is written.
+    pub name_key: Option<String>,
     /// How many copies the plan asks for, **summed across every active pile it filed them in** —
     /// see [`theory_slots`] on why the fold is here rather than in the caller.
     pub quantity: i64,
@@ -847,7 +865,10 @@ fn unfinished(e: tauri::Error) -> String {
 /// every row, joins categories and rolls up what the deck's group holds, which is a great deal
 /// of work for a mark.
 /// This command answers neither a comparison nor a priced row: one indexed scan of `deck_cards`,
-/// three columns, no join to `cards` and no marketplace. `DeckEditor.test.tsx` pins the first
+/// four columns, a LEFT JOIN to `cards` for the name alone, and no marketplace. The join arrived
+/// with the loose tier on 2026-09-07 and is a primary-key lookup per group; what the founding
+/// argument was really against is still absent — this does not price a row, does not roll up what
+/// the group holds, and does not become a second `deck_get`. `DeckEditor.test.tsx` pins the first
 /// reason from the frontend side — nothing may call `deck_get` for the list the reader is not on.
 ///
 /// **It answers [`group_key`] itself rather than a pair**, which is the whole reason the tick and
@@ -879,9 +900,10 @@ fn unfinished(e: tauri::Error) -> String {
 pub fn theory_slots(conn: &Connection, deck_id: i64) -> Result<Vec<TheorySlot>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT dc.card_id, dc.finish, SUM(dc.quantity)
+            "SELECT dc.card_id, dc.finish, SUM(dc.quantity), c.name
                FROM deck_cards dc
                JOIN deck_categories cat ON cat.id = dc.category_id
+               LEFT JOIN cards c ON c.id = dc.card_id
               WHERE dc.deck_id = ?1 AND dc.variant = ?2 AND cat.is_active = 1
               GROUP BY dc.card_id, dc.finish",
         )
@@ -892,14 +914,16 @@ pub fn theory_slots(conn: &Connection, deck_id: i64) -> Result<Vec<TheorySlot>, 
                 r.get::<_, String>(0)?,
                 r.get::<_, Option<String>>(1)?,
                 r.get::<_, i64>(2)?,
+                r.get::<_, Option<String>>(3)?,
             ))
         })
         .map_err(|e| e.to_string())?;
     let mut slots = Vec::new();
     for row in rows {
-        let (card_id, finish, quantity) = row.map_err(|e| e.to_string())?;
+        let (card_id, finish, quantity, name) = row.map_err(|e| e.to_string())?;
         slots.push(TheorySlot {
             key: group_key(&card_id, finish.as_deref()),
+            name_key: name,
             quantity,
         });
     }
@@ -2367,6 +2391,72 @@ mod tests {
         assert_eq!(slot_counts(&conn, d), vec![("bolt-lea|".to_owned(), 2)]);
     }
 
+    /// The name travels with the slot so the *loose* tier has something to match on, and it
+    /// travels **verbatim**: SQLite's `lower()` is ASCII-only and the webview's `toLowerCase()`
+    /// is not, so a name folded here and a live row folded there would spell two keys for one
+    /// card — and they would differ on exactly the names with diacritics, which is the failure
+    /// nobody notices. `theoryMatch.ts`'s `theoryNameKey` is the one place the fold happens.
+    #[test]
+    fn a_slot_carries_the_printed_name_unfolded() {
+        let conn = seeded();
+        let d = deck(&conn, "Burn");
+        set_theory(&conn, d, true);
+        let main = category(&conn, d, "Main deck");
+        add(&conn, d, "bolt-lea", main, THEORY, 4);
+
+        let slots = theory_slots(&conn, d).unwrap();
+        assert_eq!(slots.len(), 1);
+        assert_eq!(slots[0].name_key.as_deref(), Some("Lightning Bolt"));
+    }
+
+    /// Two printings of one card are still two slots — the exact grain is untouched by this
+    /// change — and both carry the same name, which is what lets the loose tier fold them.
+    #[test]
+    fn two_printings_are_two_slots_with_one_name() {
+        let conn = seeded();
+        let d = deck(&conn, "Burn");
+        set_theory(&conn, d, true);
+        let main = category(&conn, d, "Main deck");
+        add(&conn, d, "bolt-lea", main, THEORY, 2);
+        add(&conn, d, "bolt-m10", main, THEORY, 2);
+
+        let mut names: Vec<_> = theory_slots(&conn, d)
+            .unwrap()
+            .into_iter()
+            .map(|s| s.name_key)
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec![
+                Some("Lightning Bolt".to_owned()),
+                Some("Lightning Bolt".to_owned())
+            ]
+        );
+    }
+
+    /// **The join is LEFT and this is why.** A theory row whose printing has left the corpus is
+    /// an orphan — `deck_cards.card_id` is a soft reference — and an inner join would drop it
+    /// from the plan entirely, taking its *exact* tick with it. It keeps its `group_key` and
+    /// simply has no loose tier: `None` is "this card cannot be matched by name", which is the
+    /// honest answer when the app does not know what the card is called.
+    #[test]
+    fn an_orphan_keeps_its_exact_key_and_has_no_name() {
+        let conn = seeded();
+        let d = deck(&conn, "Burn");
+        set_theory(&conn, d, true);
+        let main = category(&conn, d, "Main deck");
+        add(&conn, d, "bolt-m10", main, THEORY, 1);
+        // What the next sync does to a printing Scryfall stopped publishing.
+        conn.execute("DELETE FROM cards WHERE id = 'bolt-m10'", [])
+            .unwrap();
+
+        let slots = theory_slots(&conn, d).unwrap();
+        assert_eq!(slots.len(), 1, "an orphan must not vanish from the plan");
+        assert_eq!(slots[0].key, group_key("bolt-m10", None));
+        assert_eq!(slots[0].name_key, None);
+    }
+
     /// `diff_select`'s rule, read by the same reasoning: a card parked in an inactive pile is
     /// not something the user has decided to play, so the plan is not asking for it.
     #[test]
@@ -2452,12 +2542,15 @@ mod tests {
     fn theory_slot_json_uses_the_camel_case_names_the_frontend_expects() {
         let value = serde_json::to_value(TheorySlot {
             key: "bolt-lea|foil".to_owned(),
+            name_key: Some("Lightning Bolt".to_owned()),
             quantity: 4,
         })
         .unwrap();
         assert_eq!(
             value,
-            serde_json::json!({ "key": "bolt-lea|foil", "quantity": 4 })
+            serde_json::json!({
+                "key": "bolt-lea|foil", "nameKey": "Lightning Bolt", "quantity": 4
+            })
         );
     }
 }
