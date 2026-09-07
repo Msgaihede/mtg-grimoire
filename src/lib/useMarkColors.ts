@@ -72,15 +72,15 @@ export type MarkColorKey = (typeof MARK_COLOR_KEYS)[number];
  * whole reason these are literals here and in the stylesheet both — `LABEL_COLORS`' argument one
  * folder over, where a hex is written to a column rather than read into a control.
  *
- * ⚠️ **Nothing keeps the two spellings in step, and `LABEL_COLORS` is not the precedent here it
- * looks like.** `labelColors.test.ts` reads `src/index.css` through Vite's `?raw` and compares its
- * six against the declarations; no suite does that for these two. What exists is
- * `useMarkColors.test.ts` asserting `#56bd78` and `#0e68ab` as typed literals, which pins this
- * constant to itself and says nothing about the stylesheet — so a palette edit that moved
- * `--color-theory-exact` and left this alone would ship a picker opening on a colour the mark is
- * not drawn in, with nothing red anywhere. The fix is one test in
- * `labelColors.test.ts`' shape; it is owed rather than done (noted 2026-09-07). This comment
- * claimed the fence existed until then.
+ * **The duplicate is deliberate and the fence is what makes it safe.**
+ * `useMarkColors.test.ts`' `the defaults against the palette` reads `src/index.css` through
+ * Vite's `?raw` and compares each entry here against the declaration for that mark's own custom
+ * property — `labelColors.test.ts`' arrangement for `LABEL_COLORS`, copied because the duplication
+ * is the same duplication. Without it a palette edit that moved `--color-theory-exact` and left
+ * this alone would ship a picker opening on a colour the mark is not drawn in, with nothing red
+ * anywhere, and it reddens from **either** side: neither spelling is the specification, and that
+ * they cannot come apart is. (This comment claimed the fence existed before it did, and then said
+ * it was owed; it was written on 2026-09-07.)
  */
 export const MARK_COLOR_DEFAULTS: Readonly<Record<MarkColorKey, string>> = {
   theoryExact: "#56bd78",

@@ -2,6 +2,9 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createElement, type ReactNode } from "react";
+// `?raw`, like `labelColors.test.ts`' own sweep of this file and `lib/tokens.test.ts`' — there is
+// no `node:fs` to reach for here, because `@types/node` is banned from this program on purpose.
+import css from "@/index.css?raw";
 
 const markColors = vi.hoisted(() => vi.fn());
 const setMarkColor = vi.hoisted(() => vi.fn());
@@ -13,9 +16,11 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 import {
   isMarkColorKey,
   MARK_COLOR_DEFAULTS,
+  MARK_COLOR_KEYS,
   MARK_COLORS_KEY,
   useMarkColors,
   useMarkColorVars,
+  type MarkColorKey,
 } from "./useMarkColors";
 
 let client: QueryClient;
@@ -56,6 +61,51 @@ describe("isMarkColorKey", () => {
     expect(isMarkColorKey("theoryName")).toBe(true);
     expect(isMarkColorKey("ruleBreak")).toBe(false);
     expect(isMarkColorKey("")).toBe(false);
+  });
+});
+
+/**
+ * **The two defaults against the stylesheet that actually paints them.**
+ *
+ * `MARK_COLOR_DEFAULTS` is `index.css`' two hexes written a second time, and it has to be:
+ * `var(--color-theory-exact)` cannot be an `<input type="color">`'s value, so the picker opens on
+ * a literal. That is `LABEL_COLORS`' duplication one folder over, and this is
+ * `labelColors.test.ts`' fence copied along with it — **the duplicate is deliberate and the cost
+ * of a duplicate is that it drifts.** Without this, a palette edit that moved
+ * `--color-theory-exact` and left the constant alone would ship a swatch claiming to set a colour
+ * the mark is not drawn in: one colour on the card, another in the control that sets it, and
+ * nothing red anywhere.
+ *
+ * **Both directions are the point.** Moving the stylesheet reddens this and moving the constant
+ * reddens it — neither of the two is the specification, and that they cannot come apart is.
+ *
+ * The property names are spelled here rather than exported from the module, exactly as that suite
+ * spells its own `VARS` — and they are already pinned from the other end by the
+ * `useMarkColorVars` cases below, which name each of the four.
+ */
+describe("the defaults against the palette", () => {
+  const VARS: Readonly<Record<MarkColorKey, string>> = {
+    theoryExact: "--color-theory-exact",
+    theoryName: "--color-theory-name",
+  };
+
+  it.each(MARK_COLOR_KEYS.map((key) => [key, MARK_COLOR_DEFAULTS[key]] as const))(
+    "%s opens on the colour the stylesheet draws it in",
+    (key, hex) => {
+      // The colon is load-bearing: `--color-theory-exact-fg` sits on the next line and holds a
+      // `var()` rather than a hex, so a looser pattern would read the wrong declaration.
+      const declared = new RegExp(`${VARS[key]}:\\s*(#[0-9a-f]{6})`, "i").exec(css);
+      expect(declared, `${VARS[key]} is missing from index.css`).not.toBeNull();
+      expect(declared?.[1].toLowerCase()).toBe(hex);
+    },
+  );
+
+  /** Lowercase `#rrggbb` on this side too, because a swatch reads as pressed by comparing the
+   *  stored colour to this one as a string. */
+  it("spells both defaults in the one shape", () => {
+    for (const key of MARK_COLOR_KEYS) {
+      expect(MARK_COLOR_DEFAULTS[key]).toMatch(/^#[0-9a-f]{6}$/);
+    }
   });
 });
 
