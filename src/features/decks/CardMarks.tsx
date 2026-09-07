@@ -40,6 +40,7 @@ import type { DeckCard } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { cn } from "@/lib/utils";
 import { labelColorCss, labelFgCss } from "./labelColors";
+import type { TheoryTier } from "./theoryMatch";
 
 /**
  * The one label a card wears, as an 8px chip in its own colour with the name one hover away.
@@ -163,23 +164,47 @@ export function QuantityTag({
 export const THEORY_MATCH_LABEL = "In the theory list";
 
 /**
- * The same sentence with the count difference on the end of it, for a row the plan asks for a
- * different number of.
+ * The whole of what blue adds to that sentence — the loose tier said in words.
  *
- * The mark itself is two characters (`+2`, `-8`) and a sign is not a word: "more than planned" and
- * "fewer than planned" are what the glyph means, and they are the only part of it a reader who
- * cannot see the mark gets. Said here rather than at the three call sites for
- * {@link THEORY_MATCH_LABEL}'s reason — the chip's tooltip, the table's `sr-only` twin and
- * `deckCardName`'s clause must not drift.
+ * A `name` match is the same *card* in a printing the plan did not name, and
+ * {@link THEORY_MATCH_LABEL} alone is true of it: it really is in the theory list. That is exactly
+ * why the extra clause is needed rather than optional — the sentence a reader hears would be
+ * **identical** on a green mark and a blue one, so the colour would be the only thing carrying the
+ * distinction and a reader who cannot see it would be told nothing at all about why this row is
+ * not the other one. `theoryMatch.ts` has what the two tiers mean.
  *
- * `0` is {@link THEORY_MATCH_LABEL} unchanged, which is the tick's own case: adding
- * "0 more than planned" to a card that matches would be the mark explaining itself where there is
- * nothing to explain. `Math.abs` because the sign is already spelled in the words.
+ * **Built from {@link THEORY_MATCH_LABEL} rather than written out**, because the exact tier's
+ * sentence is the prefix of this one by construction: a reword of the base has to reach both, and
+ * two literals sharing four words is two literals that agree until somebody edits one.
  */
-export function theoryMatchLabel(delta: number): string {
-  if (delta === 0) return THEORY_MATCH_LABEL;
+export const THEORY_MATCH_NAME_LABEL = `${THEORY_MATCH_LABEL} · a different printing`;
+
+/**
+ * What a mark means, in words — the tier and then the count difference, said once so that the
+ * chip's tooltip, the table's `sr-only` twin and `deckCardName`'s clause cannot drift apart.
+ *
+ * **The tier is the first thing it says and it is not defaulted**, for the components' own reason
+ * one screen down: a caller that has not thought about which tier this row is in must not be able
+ * to word a green sentence over a substitute printing.
+ *
+ * The count is the second. The mark itself is two characters (`+2`, `-8`) and a sign is not a
+ * word: "more than planned" and "fewer than planned" are what the glyph means, and they are the
+ * only part of it a reader who cannot see the mark gets. Said here rather than at the three call
+ * sites for {@link THEORY_MATCH_LABEL}'s reason.
+ *
+ * `0` is the base sentence unchanged, which is the tick's own case: adding "0 more than planned"
+ * to a card that matches would be the mark explaining itself where there is nothing to explain.
+ * `Math.abs` because the sign is already spelled in the words.
+ *
+ * **The number is at the tier's own grain and this function does not have to know that** — an
+ * `exact` row's `-6` is about that printing and a `name` row's `0` is about the card, which is
+ * `theoryMatchMark`'s rule and the reason the two arrive here already paired.
+ */
+export function theoryMatchLabel(tier: TheoryTier, delta: number): string {
+  const base = tier === "exact" ? THEORY_MATCH_LABEL : THEORY_MATCH_NAME_LABEL;
+  if (delta === 0) return base;
   const word = delta > 0 ? "more" : "fewer";
-  return `${THEORY_MATCH_LABEL} · ${Math.abs(delta)} ${word} than planned`;
+  return `${base} · ${Math.abs(delta)} ${word} than planned`;
 }
 
 /**
@@ -195,7 +220,8 @@ export function theoryDeltaText(delta: number): string {
 }
 
 /**
- * How the tick says which one it is, for anything that has to find it **after the fact**.
+ * How the tick says which one it is, for anything that has to find it **after the fact** — and
+ * since 2026-09-07 **which of the two tiers it is**, as the attribute's own value.
  *
  * The same problem `STACK_OPEN_ATTR` and `LANDED_ATTR` solve one file over: the mark used to be
  * addressable by its `title`, and the tooltip sweep moved that text off the DOM attribute a
@@ -203,6 +229,14 @@ export function theoryDeltaText(delta: number): string {
  * `RuleBreakMark`'s `RULE BREAK` or `GameChangerBanner`'s spelled-out words), so a test or a
  * live probe needs its own handle rather than `getByText`. On both {@link TheoryMatchMark} and
  * {@link TheoryMatchBadge} — one fact, two drawings, one attribute.
+ *
+ * **The value is the `TheoryTier`** — `"exact"` or `"name"` — rather than the empty string it
+ * carried while there was one tier. That is the whole of how a test or a CDP probe tells the two
+ * marks apart **without reading a colour**, which is the one thing neither can do honestly: the
+ * fill is a custom property now, jsdom resolves no stylesheet, and a reader who has set their own
+ * green in Settings → Appearance has moved the very value an assertion would be pinning.
+ * `[data-theory-match]` still selects every mark, so a sweep that counts them is unchanged;
+ * `[data-theory-match="name"]` is the new question.
  */
 export const THEORY_MATCH_ATTR = "data-theory-match";
 
@@ -245,7 +279,7 @@ export const THEORY_MATCH_ATTR = "data-theory-match";
  * ## A card the plan asks for a *different number* of says the difference instead of the tick
  *
  * `+2` where the live list holds two more than planned, `-8` where it holds eight fewer, in the
- * same box and the same azure — [issue #212](https://github.com/Msgaihede/mtg-grimoire/issues/212).
+ * same box and the tier's own colour — [issue #212](https://github.com/Msgaihede/mtg-grimoire/issues/212).
  * The tick is what the **matching** card wears, so the two are never drawn together: see the
  * comment on the content below, and `theoryMatch.ts` for what is subtracted from what and for the
  * one rule about singleton decks that keeps this mark off every card of a Commander list.
@@ -256,28 +290,49 @@ export const THEORY_MATCH_ATTR = "data-theory-match";
  * card is fine must never be confusable with {@link RuleBreakMark}, which says a card is a
  * problem. The four separations hold and were the condition of drawing a tick at all: the
  * **place** (this in the top-right corner, the rule break moved to the bottom-left on
- * 2026-08-20 precisely so the two are never adjacent), the **colour** (azure against
+ * 2026-08-20 precisely so the two are never adjacent), the **colour** (green or azure against
  * destructive), the **shape** (a filled mark against a hairline box), and the card's own
  * **edge**, which only a rule break changes. A card can be both, and on that card the two marks
  * are in opposite corners saying two unrelated things — which is the arrangement, not an
  * accident of it.
  *
- * ## The fill is `pie-u`, and every other candidate was ruled out by looking at one
+ * **The colour is the one of the four a reader can defeat**, and since 2026-09-07 they can:
+ * `--color-theory-exact` and `--color-theory-name` are theirs to set in Settings → Appearance, so
+ * nothing stops somebody choosing a red for one of them. That is theirs to do and not this app's
+ * to prevent — the other three separations are structural and hold whatever colour is picked,
+ * which is exactly why there are four of them rather than one.
  *
- * Photographed 2026-08-20 against the built stylesheet, over real card art, beside the gold
- * banner (`docs/reference/frontend-design.md` has the pass). **Gold** — the obvious first choice,
- * since `bg-accent` is what a chip on a card usually is — put two gold marks in one 27px strip
- * meaning two unrelated things, and read as an extension of {@link GameChangerBanner}.
- * **`--color-ok`**, the green the format check draws its `CircleCheck` in, is legible and says
- * exactly the wrong sentence: it is this app's "nothing is wrong here" colour, which is the one
- * reading a tick must not have. **The neutral count paint** was invisible as a distinction — a
- * grey chip at one end of the strip and a grey chip at the other read as two of the same thing.
- * Azure is none of those, and it is a colour the reader has no other meaning for on a card face.
+ * ## The fill was one azure and is now two colours, and green is no longer disqualified
  *
- * It **is** one of the six label colours, and that is the one cost. A card labelled Azure draws
+ * The candidates were photographed 2026-08-20 against the built stylesheet, over real card art,
+ * beside the gold banner (`docs/reference/frontend-design.md` has the pass). Two of the three
+ * refusals stand unchanged. **Gold** — the obvious first choice, since `bg-accent` is what a chip
+ * on a card usually is — put two gold marks in one 27px strip meaning two unrelated things, and
+ * read as an extension of {@link GameChangerBanner}. **The neutral count paint** was invisible as
+ * a distinction: a grey chip at one end of the strip and a grey chip at the other read as two of
+ * the same thing.
+ *
+ * **The third is reversed.** That pass ruled `--color-ok` out in these words: *it is this app's
+ * "nothing is wrong here" colour, which is the one reading a tick must not have.* That was a
+ * finding about a mark meaning **this card is in the plan** — a fact, not a verdict — and it stood
+ * for as long as the mark said only that.
+ *
+ * The mark says two things since 2026-09-07. Green is the *exact* tier: this is the printing you
+ * planned, which **is** a "nothing is wrong here" verdict and is the one reading it should have.
+ * Azure keeps the looser one — the same card in a printing the plan did not name — where the old
+ * argument still applies, because that is a fact rather than a verdict.
+ *
+ * Azure **is** one of the six label colours, and that is the one cost. A card labelled Azure draws
  * an azure {@link QuantityTag} at the other end of this strip — but that mark is a *number* at
  * the opposite end, so the pair are still told apart by content and position, which is the same
- * argument that lets two gold things (a Gold label and the banner) already coexist.
+ * argument that lets two gold things (a Gold label and the banner) already coexist. **The green is
+ * not one of the six**, so the exact tier pays nothing at all here; `#56bd78` is `--color-ok`
+ * converted to sRGB and belongs to no label a reader can put on a card.
+ *
+ * Neither colour is a literal here any more. Both are `--color-theory-*` custom properties, so
+ * the reader's own choice in Settings → Appearance moves every surface at once; `src/index.css`
+ * holds the defaults — including the `-fg` each fill prints its tick on — and `@/lib/useMarkColors`
+ * writes over them.
  *
  * ## `aria-hidden`, like every mark here
  *
@@ -288,10 +343,21 @@ export const THEORY_MATCH_ATTR = "data-theory-match";
  * `sr-only` twin.
  */
 export function TheoryMatchMark({
+  tier,
   variant = "banner",
   delta = 0,
   className,
 }: {
+  /**
+   * Which of the two statements this mark is making — `theoryMatch.ts`'s `TheoryTier`, and the
+   * whole of what decides its colour.
+   *
+   * **Required, and deliberately not defaulted.** A default would let a caller that has not
+   * thought about the tier draw the green *this is the printing you planned* over a substitute
+   * printing, which is the exact confusion the two tiers exist to remove — and it would do it
+   * silently, on a mark whose whole job is to be believed at a glance.
+   */
+  tier: TheoryTier;
   /**
    * Which surface's quantity badge to echo. `"banner"` is the stack's {@link CountTag} box;
    * `"chip"` is the Grid tile's smaller flat chip — see the "two drawings" note above.
@@ -299,30 +365,50 @@ export function TheoryMatchMark({
   variant?: "banner" | "chip";
   /**
    * How many copies the live list holds **over** (positive) or **short** (negative) of what the
-   * plan asks for — `theoryMatch.ts`'s `theoryMatchDelta`, which is `0` for the card that
-   * matches and answers `null` for a card the plan does not ask for at all (drawn as no mark).
+   * plan asks for — `theoryMatch.ts`'s `TheoryMark.delta`, which is `0` for the row that matches,
+   * where the whole mark is `null` for a card the plan does not ask for at all (drawn as no mark).
+   *
+   * **It is at {@link tier}'s own grain**, which is that module's rule rather than this one's: an
+   * `exact` row's number is about that printing and a `name` row's is about the card, so the two
+   * arrive here already paired and nothing is recomputed from a tier here.
    *
    * Defaults to `0`, so a caller that has not thought about counts gets the tick this component
-   * has always drawn.
+   * has always drawn. The tier above deliberately has no such default.
    */
   delta?: number;
   className?: string;
 }) {
   const banner = variant === "banner";
+  const exact = tier === "exact";
   const tip = useTooltip();
   return (
     <span
       aria-hidden="true"
-      {...{ [THEORY_MATCH_ATTR]: "" }}
-      // Redundant with `deckCardName`'s own clause (`theoryMatchLabel(delta)`) — the words are
-      // already the whole of what a keyboard reader gets from the button this sits inside, so
+      // The tier as the value, which is how a test and a live probe tell the two marks apart
+      // without reading a colour — see {@link THEORY_MATCH_ATTR}.
+      {...{ [THEORY_MATCH_ATTR]: tier }}
+      // Redundant with `deckCardName`'s own clause (`theoryMatchLabel(tier, delta)`) — the words
+      // are already the whole of what a keyboard reader gets from the button this sits inside, so
       // `describes: false` leaves `aria-describedby` unset.
-      {...tip(theoryMatchLabel(delta), { describes: false })}
-      // Mirrored — **reflected** across the vertical axis, not rotated 180°, which is the whole of
-      // issue #182 — because this sits in the card's **right**-hand corner; see the constant. The
-      // chip has no slant at all: it is echoing a square 9px chip, and a 10px bite out of a 14px
-      // box is most of the box.
-      style={banner ? { clipPath: COUNT_TAG_SLANT_MIRRORED } : undefined}
+      {...tip(theoryMatchLabel(tier, delta), { describes: false })}
+      style={{
+        // Mirrored — **reflected** across the vertical axis, not rotated 180°, which is the whole
+        // of issue #182 — because this sits in the card's **right**-hand corner; see the constant.
+        // The chip has no slant at all: it is echoing a square 9px chip, and a 10px bite out of a
+        // 14px box is most of the box.
+        ...(banner ? { clipPath: COUNT_TAG_SLANT_MIRRORED } : null),
+        // **Two explicit branches rather than one `--color-theory-${tier}` template**, and the
+        // reason is a grep: the four property names have to be findable from this file, which is
+        // the only place they are read. It is also why this is an inline style and not a Tailwind
+        // arbitrary value — a mistyped `bg-[…]` emits no rule at all, silently, and neither suite
+        // nor Storybook can go red for a mark drawn in nothing. (Written `[…]` rather than spelled
+        // out for a second reason: Tailwind scans comments too, so a whole class name in prose is
+        // a rule in the built sheet that nothing on screen wears.)
+        backgroundColor: exact ? "var(--color-theory-exact)" : "var(--color-theory-name)",
+        // The fill is the reader's to change, so what is legible on it cannot be a fixed token:
+        // `useMarkColors` recomputes each `-fg` from the fill's own luminance.
+        color: exact ? "var(--color-theory-exact-fg)" : "var(--color-theory-name-fg)",
+      }}
       className={cn(
         banner
           ? // **The mirrored box, and the pairing is not optional** (issues #158, #182 and #212).
@@ -341,7 +427,8 @@ export function TheoryMatchMark({
               "px-[calc(0.25rem*var(--mark-scale,1))]",
               "text-[calc(0.5625rem*var(--mark-scale,1))]",
             ),
-        "bg-pie-u text-text",
+        // No fill and no foreground here: both are the `style` above, per the tier. Nothing else
+        // about the box changes with the tier.
         className,
       )}
     >
@@ -381,9 +468,15 @@ export function TheoryMatchMark({
 /**
  * The same fact for the two views that draw **no art** — the table's rows and the text columns.
  *
- * A row of type has no corner to lay a banner in, so this is the glyph alone, in the same azure
- * {@link TheoryMatchMark} is filled with. One colour for the mark on every surface; only the size
- * and the box change.
+ * A row of type has no corner to lay a banner in, so this is the glyph alone, in the same colour
+ * {@link TheoryMatchMark} is *filled* with — `--color-theory-exact` for the exact tier and
+ * `--color-theory-name` for the loose one, set as text here rather than as a background. One
+ * colour per tier on every surface; only the size and the box change.
+ *
+ * **It takes no `-fg`, and that is the difference between the two components rather than an
+ * omission.** The banner prints its tick *on* the fill and so needs to know what is legible
+ * against it; this draws the glyph in the colour itself, on the view's own background, so there
+ * is nothing printed on anything.
  *
  * ## It is deliberately **not** {@link GameChangerBadge}'s outlined box, and that is a finding
  *
@@ -401,18 +494,22 @@ export function TheoryMatchMark({
  * These two views draw a **quantity column** instead, so the shortfall is arguably already
  * answerable by reading a number the reader would have to hold the plan in their head to compare
  * against — which is exactly the work the mark exists to save. So `+2` and `-8` are drawn here as
- * well, in the same azure, and the rule stays one rule across all four views: a tick is the card
- * that matches, a signed number is the card that does not.
+ * well, in the tier's own colour, and the rule stays one rule across all four views: a tick is the
+ * card that matches, a signed number is the card that does not.
  *
  * It keeps no box of its own for it, for this component's founding reason — a hairline box with
- * content inside reads as a control — so the number is bare type in `text-pie-u`, in the mono
- * `tabular-nums` face every count in these two views is set in.
+ * content inside reads as a control — so the number is bare type in the same colour as the glyph,
+ * in the mono `tabular-nums` face every count in these two views is set in.
  */
 export function TheoryMatchBadge({
+  tier,
   delta = 0,
   className,
 }: {
-  /** See {@link TheoryMatchMark.delta} — `0` is the card that matches, and the tick. */
+  /** See {@link TheoryMatchMark.tier} — required for that component's reason, and the whole of
+   *  what decides this glyph's colour. */
+  tier: TheoryTier;
+  /** See {@link TheoryMatchMark.delta} — `0` is the row that matches, and the tick. */
   delta?: number;
   className?: string;
 }) {
@@ -420,15 +517,20 @@ export function TheoryMatchBadge({
   return (
     <span
       aria-hidden="true"
-      {...{ [THEORY_MATCH_ATTR]: "" }}
+      // The tier as the value — see {@link THEORY_MATCH_ATTR}.
+      {...{ [THEORY_MATCH_ATTR]: tier }}
       // Redundant with `deckCardName`'s own clause, exactly as `TheoryMatchMark`'s is.
-      {...tip(theoryMatchLabel(delta), { describes: false })}
+      {...tip(theoryMatchLabel(tier, delta), { describes: false })}
+      // The text colour only — there is no fill to print on. Two explicit branches and an inline
+      // style for `TheoryMatchMark`'s two reasons: the property names have to be greppable, and a
+      // mistyped Tailwind arbitrary value emits no rule at all.
+      style={{ color: tier === "exact" ? "var(--color-theory-exact)" : "var(--color-theory-name)" }}
       // 12px, matching `DeckFinishMark`'s glyph on the same line rather than `GC`'s 9px type —
       // a stroked tick needs the height that two letters in a box do not. The number takes the
       // 9px `GC` is set at instead, because two characters of type beside a card's name is what
       // that badge already is and a 12px one would out-shout the name it sits next to.
       className={cn(
-        "flex shrink-0 items-center text-pie-u",
+        "flex shrink-0 items-center",
         delta !== 0 && "font-mono text-[0.5625rem] leading-3 tabular-nums",
         className,
       )}

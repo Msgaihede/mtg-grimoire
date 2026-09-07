@@ -186,6 +186,12 @@ pub const COMMANDS: &[&str] = &[
     "set_card_zoom",
     "list_view",
     "set_list_view",
+    // **Both halves, and the write's `color` is the optional one.** A browser reader recolours a
+    // mark and resets it from the same panel, and Reset sends no colour at all — so the arm reads
+    // it with `optional` rather than `field`, or the reset is the one press that works on the
+    // desktop and refuses here.
+    "mark_colors",
+    "set_mark_color",
     // **Both halves, the way `list_view` has both.** The read alone would open every browser
     // session on the default order however the reader had left it, which is the setting not
     // existing rather than the setting being read-only.
@@ -814,7 +820,11 @@ pub fn call(
         }
 
         "deck_label_create" => {
-            let deck_id: i64 = field(command, args, "deckId")?;
+            // `optional`, not `field`: the Appearance panel in Settings sends no
+            // `deckId` at all, which is what the label write takes as "no deck to
+            // touch and no history to write" — the web mirror of Tauri filling a
+            // missing `Option` argument with `None`.
+            let deck_id: Option<i64> = optional(command, args, "deckId")?;
             let name: String = field(command, args, "name")?;
             let color: String = field(command, args, "color")?;
             encode(
@@ -827,7 +837,8 @@ pub fn call(
         }
 
         "deck_label_update" => {
-            let deck_id: i64 = field(command, args, "deckId")?;
+            // `optional` for `deck_label_create`'s reason, above.
+            let deck_id: Option<i64> = optional(command, args, "deckId")?;
             let id: i64 = field(command, args, "id")?;
             let name: String = field(command, args, "name")?;
             let color: String = field(command, args, "color")?;
@@ -841,7 +852,8 @@ pub fn call(
         }
 
         "deck_label_delete" => {
-            let deck_id: i64 = field(command, args, "deckId")?;
+            // `optional` for `deck_label_create`'s reason, above.
+            let deck_id: Option<i64> = optional(command, args, "deckId")?;
             let id: i64 = field(command, args, "id")?;
             encode(
                 command,
@@ -1802,6 +1814,29 @@ pub fn call(
                 command,
                 crate::sync::with_write(state, |c| crate::listview::store(c, &section, &view))
                     .map_err(RouteError::Failed)?,
+            )
+        }
+
+        // `listview`'s pair with the vocabulary moved out, and the read is infallible on this side
+        // too: a browser that cannot read the row draws every mark in the colour the stylesheet
+        // gives it rather than failing to draw the card.
+        "mark_colors" => {
+            let conn = crate::sync::lock_db_read(state);
+            encode(command, crate::markcolors::stored(&conn))
+        }
+
+        // **`color` is `optional` and not `field`, and that is the whole of this arm's care.**
+        // Reset sends no colour, which `field` would refuse as `missing \`color\`` — a Reset
+        // button that works on the desktop and answers an argument error in a browser.
+        "set_mark_color" => {
+            let mark: String = field(command, args, "mark")?;
+            let color: Option<String> = optional(command, args, "color")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::markcolors::store(c, &mark, color.as_deref())
+                })
+                .map_err(RouteError::Failed)?,
             )
         }
 
@@ -2785,9 +2820,14 @@ mod tests {
         // **It happened again immediately**, which is why the paragraph above is not a story
         // about one afternoon: the deck-gallery branch (issue #387) and the tokens one
         // (issue #388) each read 135 while they were open, and the merge answers **139**.
+        //
+        // **And a third time, which is now the expected shape rather than a surprise.** The
+        // theory-mark branch read **137** and the token branch **139** while both were open,
+        // and this merge answers **141** — again a number neither side wrote and neither
+        // side's delta added to the other's total would have reached.
         assert_eq!(
             COMMANDS.len(),
-            139,
+            141,
             "update this number when a command is added"
         );
     }

@@ -911,6 +911,29 @@ device wrote a row; the group's ordering is the hybrid logical clock, and syncin
 would put two answers to "when" in the database with nothing to say which one a reader is being
 shown.
 
+**`app_meta` is on no list either, and since 2026-09-07 that is a stated decision rather than a
+gap nobody had reached.** The theory mark shipped three things at once and they land on opposite
+sides of this census, which makes it the clearest statement of the rule the list embodies:
+
+- **The two per-deck switches travel.** `decks.theory_mark_exact` and `decks.theory_mark_name`
+  (user schema v38) are columns on `decks`, which is on the list above, and both were added to
+  its `capture::Spec` by hand — `bracket`'s precedent at v26. Which of the mark's two tiers a
+  deck draws is an answer *about the deck*, made once by the reader, and two devices showing one
+  deck's marks differently with nothing on screen explaining it is the failure that edit prevents.
+- **The labels travel.** `deck_labels` has been on the list since it was `deck_tags`, and the
+  Appearance panel that now edits them app-wide changes nothing about that.
+- **The colours do not.** They are one `mark_colors` row in `app_meta`, and **`app_meta` is not
+  in `SYNCED_TABLES`** — so there is no field for a spec to leave off and no registration that
+  was skipped. A rendering choice belongs to the device that draws it, which is what every other
+  preference in that table already says, and the panel tells the reader so on screen rather than
+  leaving them to discover it on a second device.
+
+**What that line separates is not "state" from "settings".** Per-deck *view* state travels:
+`last_variant`, `last_group_by`, `last_sort_by` and `tokens_open` are all on the `decks` spec, on
+the argument that a reader who opened that area on one device meant it about the deck rather than
+about the machine. The cut is **per-deck against per-device** — what a deck *is*, including how
+it is being read, against how this particular screen paints it.
+
 ### ⚠️ A table's NAME is on the wire, and v33 renamed one
 
 `Meta { table, .. }` in `apply.rs` and the literals in `capture.rs` and `baseline.rs` are the

@@ -90,7 +90,7 @@ export const ByType: Story = { args: { groups: deckGroups("type", "type") } };
  * a label replaces everything inside the control it names. `CardMarks.tsx` has the rule.
  */
 export const TheoryMatches: Story = {
-  args: { theoryMatches: deckTheoryMatches() },
+  args: { theoryPlan: deckTheoryMatches() },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     // Four rows carry the badge, and each one says the words beside it — the pairing this view

@@ -39,6 +39,7 @@ import {
 } from "./CardStack";
 import { LANDED_ATTR, SELECTED_ATTR } from "./cardControl";
 import { deckCardSlot } from "./dnd";
+import type { TheoryPlan } from "./theoryMatch";
 import { card } from "./validation/fixtures";
 import type { ValidationIssue } from "./validation/types";
 
@@ -1367,6 +1368,22 @@ describe("CardStack tooltips", () => {
 });
 
 describe("CardStack marks", () => {
+  /**
+   * A plan whose only tier is the **exact** one, built from the wire keys the cases below spell
+   * by hand.
+   *
+   * Both switches on, which is what every deck is born with, and `byName` empty — so a row that
+   * is not in `exact` matches nothing at all and the cases here are about the green mark alone.
+   * The blue one is {@link theoryMatchMark}'s own suite's subject and the views' new stories'; a
+   * fixture here that quietly carried it would make every "one mark of two cards" count below
+   * depend on a tier this file is not testing.
+   */
+  const exactPlan = (exact: ReadonlyMap<string, number>): TheoryPlan => ({
+    exact,
+    byName: new Map(),
+    marks: { exact: true, name: true },
+  });
+
   const banned: ValidationIssue = {
     severity: "error",
     code: "banned",
@@ -1407,7 +1424,7 @@ describe("CardStack marks", () => {
           // The wire format `deck_theory_slots` answers with — `${cardId}|${finish ?? ""}`, which
           // is `deck_theory.rs`'s `group_key`. Spelled out rather than built with `theorySlot`, so
           // this notices the grain changing under it instead of agreeing with it by construction.
-          theoryMatches={new Map([[`${planned.cardId}|`, 0]])}
+          theoryPlan={exactPlan(new Map([[`${planned.cardId}|`, 0]]))}
         />
       </TooltipProvider>,
     );
@@ -1504,13 +1521,13 @@ describe("CardStack marks", () => {
           cards={[short, over]}
           label="Ramp"
           currency="usd"
-          theoryMatches={
+          theoryPlan={exactPlan(
             new Map([
               // Four planned against two sleeved up, and one planned against four.
               [`${short.cardId}|`, -2],
               [`${over.cardId}|`, 3],
-            ])
-          }
+            ]),
+          )}
         />
       </TooltipProvider>,
     );

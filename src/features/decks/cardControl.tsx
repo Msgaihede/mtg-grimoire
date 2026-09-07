@@ -43,6 +43,7 @@ import type { ImageVariant } from "@/lib/images";
 import type { DeckCard } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { theoryMatchLabel } from "./CardMarks";
+import type { TheoryMark } from "./theoryMatch";
 import {
   cardDraggable,
   deckCardSlot,
@@ -357,16 +358,20 @@ export function deckCardName(
   card: DeckCard,
   ruleBreakText: string | null,
   /**
-   * What the deck's plan says about this row — `theoryMatch.ts`'s `theoryMatchDelta`, and `null`
-   * for every card of a deck that keeps no plan. `0` is the card the plan asks for exactly, and a
-   * signed number is how far the live list is from it.
+   * What the deck's plan says about this row — `theoryMatch.ts`'s `theoryMatchMark`, and `null`
+   * for every card of a deck that keeps no plan. Otherwise **which of the two tiers** the row is
+   * in and how far the live list is from the plan at that tier's own grain, where `0` is the card
+   * the plan asks for exactly and a signed number is the difference.
    *
-   * The mark itself is `TheoryMatchMark`, which is a tick or two characters of type and therefore
-   * says nothing at all to a reader who cannot see it. **`null` and `0` are not the same
-   * statement** and the clause below turns on the difference: absent draws no mark and says
-   * nothing, `0` says the sentence, and anything else says it with the count on the end.
+   * **The tier is said in words here and nowhere else on three of the four views.** The mark
+   * itself is `TheoryMatchMark`, whose whole statement of *which* tier is a colour — green for
+   * the printing the plan named, blue for another printing of a planned card — and a colour says
+   * nothing at all to a reader who cannot see it, so `theoryMatchLabel` is handed the tier below
+   * rather than the delta alone. **`null` and `0` are still not the same statement** and the
+   * clause turns on the difference: absent draws no mark and says nothing, `0` says the tier's
+   * sentence, and anything else says it with the count on the end.
    */
-  theoryDelta: number | null = null,
+  theoryMark: TheoryMark | null = null,
 ): string {
   // Both of {@link deckCardShort}'s guards, said in words exactly where the figure is drawn —
   // one predicate, so the name and the mark cannot come to disagree.
@@ -398,8 +403,12 @@ export function deckCardName(
     //
     // `theoryMatchLabel` is the same sentence the mark's own tooltip and the table's `sr-only`
     // twin say, so a reader who cannot see the `-8` still gets "8 fewer than planned" rather than
-    // the bare "in the theory list" this said before issue #212.
-    theoryDelta === null ? null : theoryMatchLabel(theoryDelta).toLowerCase(),
+    // the bare "in the theory list" this said before issue #212 — and, since the mark grew a
+    // second tier, the same sentence names **which** tier, because that half of the mark is drawn
+    // as a colour and a colour is the one thing a screen reader is told nothing about.
+    theoryMark === null
+      ? null
+      : theoryMatchLabel(theoryMark.tier, theoryMark.delta).toLowerCase(),
     ruleBreakText === null ? null : `rule break: ${ruleBreakText}`,
   ]
     .filter((part): part is string => part !== null)

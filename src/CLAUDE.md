@@ -1,8 +1,18 @@
 # src — the React frontend
 
 **TS owns domain logic** (deck validation, import/export parsing); Rust supplies facts. Keep
-that boundary. `src/lib/ipc.ts` is a **hand-written mirror** of the Rust structs and can drift
-silently — nothing type-checks it against the crate.
+that boundary. `src/lib/ipc.ts` is a **hand-written mirror** of the Rust structs and the compiler
+checks none of it against the crate.
+
+**What stands in for the compiler is opt-in and partial, and knowing which half you are in is the
+whole of the rule.** `ipc.test.ts` reads the `.rs` files as text (Vite's `?raw`) and compares a
+**named list** of structs field for field, plus a set of hand-written cases pinning command names
+and argument names. A struct on one of those two tables cannot drift; every struct that is on
+neither still can, silently, and the fence says nothing about it. Adding a row is the whole of the
+fix and it costs one line. It earns its keep: `DeckRow` is on the table, so `decks` growing
+`theory_mark_exact` and `theory_mark_name` in Rust went **red** here until the mirror carried both
+(2026-09-07) — and the same file's `TheorySlot` was found declared **twice** with identical
+members, which TypeScript merges rather than refuses, so nothing in either build could see it.
 
 ## Before writing any UI
 
@@ -817,6 +827,25 @@ Every one of these has its measurement and its story in
 - shadcn components: always `npx shadcn@latest add <x>` with Radix base (components.json). The
   app palette maps `accent` to a **text** colour (gold), so rewrite a vendored component's
   `bg-accent` surfaces to `bg-surface`. `bg-muted` needs no rewrite.
+- **A mark whose colour the reader can change reads it from a custom property, never from a
+  Tailwind class** (2026-09-07). `src/index.css` defines four — `--color-theory-exact`,
+  `--color-theory-exact-fg`, `--color-theory-name` and `--color-theory-name-fg` — and
+  `TheoryMatchMark` / `TheoryMatchBadge` set `backgroundColor` and `color` to `var(…)` inline,
+  reading no store and taking no colour prop. The reader's own answer is one `app_meta` row, and
+  `@/lib/useMarkColors` writes all four onto `document.documentElement` at the app root; an absent
+  key writes **nothing**, so *never chosen* and *reset* are one state and the stylesheet's value
+  stands. Three things this shape buys that a prop would not. **A Tailwind arbitrary value can
+  emit nothing** — a mistyped `bg-[…]` compiles to no rule at all, and a mark that quietly loses
+  its fill is exactly what neither suite can see. **No colour is threaded through four surfaces**:
+  `StackView`/`CardStack` and `GridView` draw the filled banner, `TableView` and `TextView` draw
+  the badge, and none of the four decides a colour. And **neither suite needs a store seeded** —
+  Storybook loads the real stylesheet so the defaults are simply there, vitest asserts the `var()`
+  string, and a story that wants a custom colour sets one variable. The
+  `-fg` half is what the tick is printed *on*, computed with `labelFgCss`' luminance formula so a
+  pale custom green does not swallow the glyph. The defaults are **literal hexes** rather than
+  `var(--color-ok)` / `var(--color-pie-u)`, for `LABEL_COLORS`' reason one file over: these are
+  the values a colour picker opens on and a reader's choice replaces, so they cannot be a
+  reference to something the palette decides later.
 - Card images arrive over `mtgimg://`; `mtgimg:` is an `img-src` and nothing else — **read images
   with `<img>`, never with `fetch`** (a `fetch()` at it fails CORS by design).
 - **`src/lib/platform.ts` is the only place the page asks what platform it is on**, and it asks

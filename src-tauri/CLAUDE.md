@@ -116,9 +116,10 @@ both plus the frontend.
   every upgraded one, and a fresh worktree is a fresh install, so nothing else here can see it.
   The single-file ladder is frozen at **v26** — `schema::migrate_single_file`
   climbs to `schema::LEGACY_SINGLE_FILE_VERSION` and stops, and the two files carry their own
-  numbers from there (`USER_SCHEMA_VERSION` **37** since decks learned which tokens they make —
-  one rung above a deck's group holding only copies its live list claims at
-  `(card_id, finish)`, which is itself one above a condition learning to say nothing —
+  numbers from there (`USER_SCHEMA_VERSION` **38** since the theory mark grew a second tier —
+  one rung above decks learning which tokens they make, which is one above a deck's group
+  holding only copies its live list claims at `(card_id, finish)`, itself one above a
+  condition learning to say nothing —
   `CORPUS_SCHEMA_VERSION` 1, deliberately
   incomparable). This line read **v25** while that was head, and
   [the ladder's history](../docs/reference/data-and-sync.md) is the story. (This line read
@@ -146,7 +147,8 @@ both plus the frontend.
   claims at `(card_id, finish)` into `Recently removed` — the rung that brings a file converted
   at v25 under the rule `owned_by_printing` now enforces at read time — and is the second rung on
   either ladder that changes no shape at all, so it owes neither a `USER_SCHEMA_SQL` line nor an
-  `UNDO_V36`, where v34 and v35 each owed both. **It was written as v35 and renumbered on the way
+  `UNDO_V36`, where v34 and v35 each owed both; the rewind numbers have a gap at 36 exactly as
+  they do at 32. **It was written as v35 and renumbered on the way
   in**, this list's own rule again, and it runs *after* v35 for a reason renumbering does not
   settle by itself: v35 rebuilds `collection_entries`, and v36 reads and writes that table.
   **v37 then landed the same day, and had to be renumbered twice getting in** — written as 35,
@@ -154,10 +156,22 @@ both plus the frontend.
   one row per token the reader has deviated on and grained on `DECK_TOKEN_GRAIN`, and adds
   `decks.tokens_open`; it is a shape rung, so it owes both its `USER_SCHEMA_SQL` lines and its
   `UNDO_V37`, for [issue #388](https://github.com/Msgaihede/mtg-grimoire/issues/388).
-  **What made both collisions invisible is worth more than the numbers**: each time, both
-  branches wrote the *same* `USER_SCHEMA_VERSION`, so git reported no conflict on that line at
-  all and only the rungs underneath it collided. `grep USER_SCHEMA_VERSION
-  src-tauri/src/schema.rs` settles it in one command and nothing else does.)
+  **v38** adds `decks.theory_mark_exact` and `decks.theory_mark_name`, `NOT NULL DEFAULT 1`
+  both. Which of the theory mark's two tiers a deck draws is an answer *about the deck*, so both
+  columns are on
+  `capture::TABLES`' `decks` spec beside `bracket`; **that spec spells its field list by hand and
+  has no fence in the other direction**, so a column added to a synced table and not to it is
+  captured by nothing and goes red nowhere.
+  **v35, v36, v37 and v38 all landed within days of each other from four branches; the token rung
+  was renumbered twice on its way in and the theory rung three times** — written as 35, moved to
+  36 when the sixth grade landed, to 37 when the deck-group sweep did, and to 38 when the token
+  rung did. So this is a property of the ladder under parallel work rather than of any one branch.
+  **What made every one of those collisions invisible is worth more than the numbers**: each
+  time, both branches wrote the *same* `USER_SCHEMA_VERSION`, so git reported no conflict on that
+  line at all and only the rungs underneath it collided. `grep USER_SCHEMA_VERSION
+  src-tauri/src/schema.rs` settles it in one command and nothing else does. It is the strongest
+  form of the rule above: **take the next free number at the moment you land, never at the moment
+  you start**, and never assume the number you wrote is the one you ship.)
 - **v35 is the user ladder's third table rebuild, and a CHECK is why.** SQLite cannot alter one,
   so widening the grade list means building `collection_entries_v35`, copying every column
   **including `id`**, dropping, renaming and replaying all five indexes as frozen literals — the
@@ -173,15 +187,21 @@ both plus the frontend.
   rebuild emits no sync ops**: `DROP TABLE` takes the three capture triggers with it,
   `prepare_database` reinstalls them on the next line, and the copy lands in a table that has none
   while it is being written.
-- **`UNDO_V35` maps rather than deletes, and it runs first.** The rewind carries an ungraded row
+- **`UNDO_V35` maps rather than deletes, and it runs third — behind `UNDO_V38` and `UNDO_V37`, ahead of
+  everything else.** It read "and it runs first" for as long as v35 was head, which the theory
+  rung made false the same day; the chains themselves are `{UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} …`
+  — **there is no `UNDO_V36`, because v36 writes no shape** — and they were
+  right throughout, because they are code. The rewind carries an ungraded row
   back as `'NM'` — precisely what the old `DEFAULT` would have recorded for the same press —
   because no rewind on either ladder may lose one of the reader's cards. It can collide on the
   grain where a printing is held at both `NONE` and `NM`, and the closing
   `CREATE UNIQUE INDEX` is where that fails loudly rather than quietly; no fixture seeds such a
-  pair. Its position is load-bearing beyond the usual walk-backwards rule: `UNDO_V29` does
+  pair. **What is load-bearing about its position is the rung it must precede, not the place it
+  holds in the list**: `UNDO_V29` does
   `ALTER TABLE collection_entries DROP COLUMN sync_uid`, and `DROP COLUMN` refuses a column an
   index names — so `UNDO_V35` has to have put `idx_collection_entries_uid` back before
-  `UNDO_V29` takes it away.
+  `UNDO_V29` takes it away. `UNDO_V38` sitting above it changes nothing about that: it drops two
+  `decks` columns and touches no index anywhere.
 - **v24 and v25 are one spec's rung split in two, and the split is deliberate.** v24 creates
   `collection_folders` in its **final** shape — `kind` and `deck_id` columns and both partial
   unique indexes included — and files nothing into it. **v25 inserts the single `removed` folder
