@@ -684,9 +684,10 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `foreign_keys=ON` fires none either. Nothing points an enforced foreign key at
   `collection_entries` at head — `deck_allocations` went at v25 — so the `foreign_keys` pragma
   cannot make this rung behave two ways.
-  **`UNDO_V35` maps rather than deletes, and it runs second** — behind `UNDO_V36` and ahead of
-  everything else. It read "and it runs first" for as long as v35 was head, which **v36 made false
-  the same day**; every chain is `{UNDO_V36} {UNDO_V35} {UNDO_V34} …` and was right throughout,
+  **`UNDO_V35` maps rather than deletes, and it runs second** — behind `UNDO_V37` and ahead of
+  everything else. It read "and it runs first" for as long as v35 was head, which **the theory
+  rung made false the same day**; every chain is `{UNDO_V37} {UNDO_V35} {UNDO_V34} …` — **with no
+  `UNDO_V36` in it, because v36 writes no shape** — and was right throughout,
   because a chain is code and this sentence is not. The rewind carries an ungraded row
   back as `'NM'`, which is precisely what the old `DEFAULT` would have recorded for the same
   press, because no rewind on either ladder may lose one of the reader's cards. It **can** collide
@@ -696,7 +697,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   list**: `UNDO_V29` does
   `ALTER TABLE collection_entries DROP COLUMN sync_uid`, and `DROP COLUMN` refuses a column an
   index names — so `UNDO_V35` has to have put `idx_collection_entries_uid` back before `UNDO_V29`
-  comes to take it away. `UNDO_V36` above it changes nothing there — it drops two `decks` columns
+  comes to take it away. `UNDO_V37` above it changes nothing there — it drops two `decks` columns
   and names no index at all.
   **Two prose chains in `schema.rs` were already stale before this branch opened** and were
   corrected while the rung was being written: `UNDO_V33` still called itself "the newest rewind on
@@ -724,7 +725,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   0 bytes. A single probe at that moment reads exactly like a rung that never ran. Wait for the
   window to draw, then probe; and note that a read-only `node:sqlite` open **creates the `-shm`
   file itself**, so a fresh `-shm` timestamp is not evidence the app has touched anything.
-  **v36 gives `decks` two columns, `theory_mark_exact` and `theory_mark_name`** — which of the
+  **v37 gives `decks` two columns, `theory_mark_exact` and `theory_mark_name`** — which of the
   theory mark's two tiers a deck draws, now that a live row can be the printing the plan named
   *or* the same card in one it did not. `NOT NULL DEFAULT 1` both, which is the whole of the
   upgrade: every deck that already exists draws both marks from the first launch on the new
@@ -734,9 +735,11 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   which printing it is. **Appended at the end**, which is what keeps `deck.rs`'s positional
   `r.get(n)` reads honest: both are `INTEGER` beside seven other `INTEGER`s on that row, so a
   column inserted anywhere but last hands a bracket to a bool with nothing going red.
-  **It was written as v35 and renumbered at the merge**, which is this ladder's rule working for
-  the third time — v12/v13/v14 collided three ways in one day, v33 and v34 twice, and v35 and v36
-  landed the same day from two branches. The number belongs to whoever lands first.
+  **It was written as v35, renumbered to v36, and renumbered again to v37** — the sixth grade
+  took 35 and the deck-group sweep took 36, both while this branch was open. That is this
+  ladder's rule working for the fourth and fifth time; v12/v13/v14 collided three ways in one day
+  and v33/v34 twice. **Twice on one branch is new**, and it is the strongest argument the ladder
+  has for taking the next free number at the moment you land rather than at the moment you start.
   **Both columns are on the capture spec and travel**, `bracket`'s precedent at v26: which tier a
   deck draws is an answer *about the deck*, and two devices showing one deck's marks differently
   with nothing on screen explaining it is the failure that edit prevents. The mark's **colours**

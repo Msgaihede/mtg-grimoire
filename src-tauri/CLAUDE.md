@@ -139,15 +139,21 @@ both plus the frontend.
   free number when you land, never reuse one, and never assume the number you wrote is the one
   you ship. v35 widens `collection_entries.condition` to a sixth value, `NONE` — *not set* — and
   makes it the column's `DEFAULT`, for
-  [issue #361](https://github.com/Msgaihede/mtg-grimoire/issues/361). **v35 and v36 then landed
-  the same day from two branches as well**, which is the third time this list has recorded that
-  and the second in a week: v36 adds `decks.theory_mark_exact` and `decks.theory_mark_name`,
-  `NOT NULL DEFAULT 1` both, and **it was written as 35 and renumbered at the merge** — the
-  number belongs to whoever lands first, and the sixth grade landed first. Which of the theory
-  mark's two tiers a deck draws is an answer *about the deck*, so both columns are on
+  [issue #361](https://github.com/Msgaihede/mtg-grimoire/issues/361). v36 is the deck-group
+  sweep, and **writes no shape at all** — v32's exemption, earned a second time — so it owes
+  neither a `USER_SCHEMA_SQL` line nor an `UNDO_V36`, and the rewind numbers have a gap there
+  exactly as they do at 32. v37 adds `decks.theory_mark_exact` and `decks.theory_mark_name`,
+  `NOT NULL DEFAULT 1` both. Which of the theory mark's two tiers a deck draws is an answer
+  *about the deck*, so both columns are on
   `capture::TABLES`' `decks` spec beside `bracket`; **that spec spells its field list by hand and
   has no fence in the other direction**, so a column added to a synced table and not to it is
-  captured by nothing and goes red nowhere.)
+  captured by nothing and goes red nowhere.
+  **v35, v36 and v37 all landed within days of each other from three branches, and the theory
+  rung was renumbered twice** — written as 35, moved to 36 when the sixth grade landed, moved to
+  37 when the deck-group sweep did. That is the fourth and fifth time this list has recorded a
+  collision, and twice on one branch is new. It is the strongest form of the rule above: **take
+  the next free number at the moment you land, never at the moment you start**, and never assume
+  the number you wrote is the one you ship.)
 - **v35 is the user ladder's third table rebuild, and a CHECK is why.** SQLite cannot alter one,
   so widening the grade list means building `collection_entries_v35`, copying every column
   **including `id`**, dropping, renaming and replaying all five indexes as frozen literals — the
@@ -163,9 +169,10 @@ both plus the frontend.
   rebuild emits no sync ops**: `DROP TABLE` takes the three capture triggers with it,
   `prepare_database` reinstalls them on the next line, and the copy lands in a table that has none
   while it is being written.
-- **`UNDO_V35` maps rather than deletes, and it runs second — behind `UNDO_V36` and ahead of
-  everything else.** It read "and it runs first" for as long as v35 was head, which v36 made
-  false the same day; the chains themselves are `{UNDO_V36} {UNDO_V35} {UNDO_V34} …` and were
+- **`UNDO_V35` maps rather than deletes, and it runs second — behind `UNDO_V37` and ahead of
+  everything else.** It read "and it runs first" for as long as v35 was head, which the theory
+  rung made false the same day; the chains themselves are `{UNDO_V37} {UNDO_V35} {UNDO_V34} …`
+  — **there is no `UNDO_V36`, because v36 writes no shape** — and they were
   right throughout, because they are code. The rewind carries an ungraded row
   back as `'NM'` — precisely what the old `DEFAULT` would have recorded for the same press —
   because no rewind on either ladder may lose one of the reader's cards. It can collide on the
@@ -175,7 +182,7 @@ both plus the frontend.
   holds in the list**: `UNDO_V29` does
   `ALTER TABLE collection_entries DROP COLUMN sync_uid`, and `DROP COLUMN` refuses a column an
   index names — so `UNDO_V35` has to have put `idx_collection_entries_uid` back before
-  `UNDO_V29` takes it away. `UNDO_V36` sitting above it changes nothing about that: it drops two
+  `UNDO_V29` takes it away. `UNDO_V37` sitting above it changes nothing about that: it drops two
   `decks` columns and touches no index anywhere.
 - **v24 and v25 are one spec's rung split in two, and the split is deliberate.** v24 creates
   `collection_folders` in its **final** shape — `kind` and `deck_id` columns and both partial

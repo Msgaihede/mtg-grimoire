@@ -115,7 +115,7 @@ const DECK_FIELDS: &[&str] = &[
     // an ordinary `deck_update` writes and an ordinary history row records, so a Ctrl+Z that
     // left it alone would put a deck's format back and leave the bracket the same press moved.
     "bracket",
-    // Schema v36, and on the list for the same reason `game_key` and `bracket` are: both are
+    // Schema v37, and on the list for the same reason `game_key` and `bracket` are: both are
     // deck-level answers an ordinary `deck_update` writes and an ordinary history row records,
     // so a Ctrl+Z that left them alone would put a deck's format back and leave the theory marks
     // the same press moved.

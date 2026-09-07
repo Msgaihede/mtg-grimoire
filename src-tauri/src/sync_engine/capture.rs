@@ -300,7 +300,7 @@ pub const TABLES: [Spec; 12] = [
             "last_sort_by",
             "separate_x_group",
             "bracket",
-            // **Schema v36's two theory marks, and they travel for `bracket`'s reason** — which
+            // **Schema v37's two theory marks, and they travel for `bracket`'s reason** — which
             // of the mark's two tiers a deck draws is an answer *about the deck*, made once by
             // the reader, exactly like the bracket and the X group above it. Two devices showing
             // one deck's marks differently, with nothing on screen saying why, is the failure
@@ -1003,7 +1003,7 @@ mod tests {
         );
     }
 
-    /// **Both of schema v36's theory marks travel, and independently.**
+    /// **Both of schema v37's theory marks travel, and independently.**
     ///
     /// The whole reason they are on the spec: which of the mark's two tiers a deck draws is an
     /// answer *about the deck*, made once by the reader, and two devices showing one deck's
