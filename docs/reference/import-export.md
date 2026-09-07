@@ -729,6 +729,42 @@ The neighbouring trap is the same no-op reached from the other side: a box holdi
 unparseable **greys Save and names the trouble**, rather than dropping the field from the patch
 and writing nothing while looking like it wrote something.
 
+### Both surfaces driven in the shipped window
+
+2026-09-07, debug `tauri dev` at 1920×1080 over a copy of the main checkout's real database.
+
+**The add popup.** Opens on `Not set`; the price box is empty with the marketplace figure as its
+placeholder, and **the placeholder follows the finish chips** — `$0.32` on nonfoil, `$0.43` the
+moment Foil is pressed, with the typed value untouched. Typing `4.25` and adding wrote
+`condition: NONE, finish: foil, purchase_price: 4.25, purchase_currency: USD,
+condition_original: null` — the default, the money and its currency, all from one press.
+
+**The collection table.** An ungraded row's `Finish · condition` cell is the finish **alone** —
+`Foil`, with no `<abbr>` and no `sr-only` parenthetical hanging off it. Edited to Lightly played
+it becomes `Foil · LP` with both back. Two states of one cell, and the empty one is the one
+jsdom could not have caught drawing `Foil · NONE`.
+
+**The Edit copy dialog.** `ipc.collectionUpdate`'s first caller wrote `LP` and `9.99` over the
+row above. At the app's own floor — a 1024×700 window, so a **666px** page viewport — the panel
+is **313px** with **177px** of headroom and both buttons inside it. It only overflows below a
+**~380px** viewport, which `minHeight: 700` puts out of reach, so the clamp needs nothing.
+
+**The condition filter.** The tray draws six chips on one row at 1920 (83px each, group 530px)
+and at 1024 (group 352px, right edge 972, no page scroll); at 900 and 700 it becomes the grid,
+with `Not set` on its own full-width row and the five grades in two rows behind it — no clipped
+text and no horizontal overflow at any width. `Not set` carries **no `aria-label`**, because its
+visible text is its name, while `NM` still announces `NM, near mint`. Filtering by it answered
+**0 rows** against a collection whose only loose copy was `LP`, and switching the chip to `LP`
+brought that row straight back — the sentinel really does reach the backend and really does
+discriminate. The summary chip reads **`Condition: Not set`**, not `Condition: NONE`.
+
+**One thing measured and deliberately not fixed.** Escape, Cancel and a successful Save all
+leave the caret on `<body>`, so the next Tab restarts from the top of the app. That is **not
+this dialog's** doing: the same pass drove `AllPrintingsDialog` from the same context menu and
+got the same answer, so it is how every dialog opened from a context-menu row already behaves —
+the menu's opener is a table row that has unmounted by the time the dialog closes. Worth a fix
+of its own, in `Dialog`/`useContextMenu` rather than here.
+
 ### A plain-text list into the wishlist
 
 Pasted `1 Lightning Bolt`, `1 Sol Ring`, `1 Counterspell` — no set, no collector number on any line
