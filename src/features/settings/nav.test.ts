@@ -52,17 +52,16 @@ function withoutComments(source: string): string {
 }
 
 /**
- * The one `PanelId` no `SettingsSection` answers to **yet**.
+ * **There is no exemption list any more, and its deletion is the point of having had one.**
  *
- * `labels` is declared in `nav.ts` so that the `Appearance` group arrives on the rail whole — the
- * mark colours and the label list are one question and a group that held half of it for a release
- * would be a rail entry that changed meaning under the reader. Its panel is the next task's.
- *
- * **An exact set rather than a skip**, so the day that panel is written this literal disagrees
- * with the sweep and gets deleted. A tolerance that quietly widens is how a rail entry that
- * scrolls to nothing survives, which is the exact failure the sweep below exists to catch.
+ * `NOT_YET_DRAWN` held exactly `["labels"]` for as long as that panel was unwritten: `nav.ts`
+ * declared the id so the `Appearance` group could arrive on the rail whole — the mark colours and
+ * the label list are one question, and a group that held half of it for a release would be a rail
+ * entry that changed meaning under the reader. It was an **exact set** rather than a tolerance
+ * precisely so that the day `LabelsPanel.tsx` landed, the literal disagreed with the sweep and had
+ * to be removed. It landed, and it was. A tolerance that quietly widens is how a rail entry that
+ * scrolls to nothing survives, which is the failure the sweep below exists to catch.
  */
-const NOT_YET_DRAWN: PanelId[] = ["labels"];
 
 /** Every `SettingsSection` stem the shipped tree actually draws, and the tags that carry none. */
 function sweep(): { ids: Set<string>; dynamic: string[] } {
@@ -132,11 +131,9 @@ describe("the settings rail", () => {
     // under-report rather than go red. Fail on it by name instead.
     expect(dynamic).toEqual([]);
 
-    // Both sides are subjects: the shipped tree on one, the closed union on the other — less the
-    // one id whose panel is not written yet, which is named above rather than tolerated.
-    const declared = (Object.keys(PANELS) as PanelId[]).filter(
-      (id) => !NOT_YET_DRAWN.includes(id),
-    );
+    // Both sides are subjects, and both are whole: the shipped tree on one, the closed union on
+    // the other, with nothing exempted from either. See the note above for what used to be.
+    const declared = Object.keys(PANELS) as PanelId[];
     expect([...ids].sort()).toEqual(declared.sort());
   });
 

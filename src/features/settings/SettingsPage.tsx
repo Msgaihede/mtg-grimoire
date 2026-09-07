@@ -6,6 +6,7 @@ import { CombosPanel } from "@/features/settings/CombosPanel";
 import { DangerZonePanel } from "@/features/settings/DangerZonePanel";
 import { ErrorLogPanel } from "@/features/settings/ErrorLogPanel";
 import { HiddenTagsPanel } from "@/features/settings/HiddenTagsPanel";
+import { LabelsPanel } from "@/features/settings/LabelsPanel";
 import { MarketplacePanel } from "@/features/settings/MarketplacePanel";
 import { ReviewPanel } from "@/features/settings/ReviewPanel";
 import { SettingsNav } from "@/features/settings/SettingsNav";
@@ -308,6 +309,22 @@ export function SettingsPage({ update }: { update: Update }) {
             already holds for `useMarkColorVars`, so a hook here would be a second reader of one
             cached answer rather than a second channel — and threading it down would buy a prop. */}
         {shown("theory-marks") && <TheoryMarksPanel />}
+
+        {/* **Second in `Appearance`, and it is the deck editor's Labels dialog with the deck taken
+            out.** That dialog draws two sections — the labels *this deck's list is wearing*, whose
+            destructive control takes a label off those cards, and every other label, whose
+            destructive control deletes it app-wide. Settings has no deck and therefore no first
+            section: what a reader manages here is the list itself. The dialog is untouched.
+
+            **Below the mark colours rather than above them**, because that is the order the two
+            answer in: the theory marks are the app's own vocabulary and a reader meets them
+            without asking, where a label is a thing they invented and may have none of.
+
+            It reaches the backend itself, which is `BackupPanel`'s rule and `TheoryMarksPanel`'s
+            reason directly above: `deck_label_all` is one `["decks"]`-rooted cache entry the deck
+            dialogs already read, so a hook here would be a second reader of one cached answer and
+            threading it down would buy a prop. */}
+        {shown("labels") && <LabelsPanel />}
 
         {/* **The two facts that reached the reader at exactly one place each, and that place was a
             hover tooltip** on the ribbon's status line — `Ribbon.tsx:96` names the folder and
