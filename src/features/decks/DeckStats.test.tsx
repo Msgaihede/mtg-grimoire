@@ -549,16 +549,28 @@ describe("DeckStats", () => {
    * rather than the ordinary one — deliberately, because every case below this line is about the
    * wishlist half, and either live callback would put another button into each of their queries
    * for nothing. The cases that are about one of the other two presses pass it and say so.
+   *
+   * **`tracksCollection` defaults to `true`**, which is the ordinary deck and what every case
+   * above the virtual-deck block is a claim about — so those cases go on asserting the shortfall
+   * exactly as they did before the prop existed, which is the regression this change most needs
+   * to keep. The `false` arm is passed explicitly, and only there.
    */
   const strip = (
     cards: DeckCard[],
     send = sender(),
     onPull: (() => void) | null = null,
     onAddMissing: (() => void) | null = null,
+    tracksCollection = true,
   ) =>
     render(
       <TooltipProvider>
-        <DeckStats cards={cards} send={send} onPull={onPull} onAddMissing={onAddMissing} />
+        <DeckStats
+          tracksCollection={tracksCollection}
+          cards={cards}
+          send={send}
+          onPull={onPull}
+          onAddMissing={onAddMissing}
+        />
       </TooltipProvider>,
     );
 
@@ -572,11 +584,17 @@ describe("DeckStats", () => {
    */
   async function press(cards: DeckCard[], settled: MissingWrite) {
     const view = render(
-      <DeckStats cards={cards} send={sender()} onPull={null} onAddMissing={null} />,
+      <DeckStats
+        tracksCollection
+        cards={cards}
+        send={sender()}
+        onPull={null}
+        onAddMissing={null}
+      />,
     );
     await userEvent.click(screen.getByRole("button", { name: "Send missing to wishlist" }));
     view.rerender(
-      <DeckStats cards={cards} send={settled} onPull={null} onAddMissing={null} />,
+      <DeckStats tracksCollection cards={cards} send={settled} onPull={null} onAddMissing={null} />,
     );
     return view;
   }
@@ -639,6 +657,7 @@ describe("DeckStats", () => {
 
     rerender(
       <DeckStats
+        tracksCollection
         cards={deck}
         send={sender()}
         onPull={null}
@@ -822,13 +841,25 @@ describe("DeckStats", () => {
     const settled = sender({ isSuccess: true, data: 1 });
     const view = render(
       <TooltipProvider>
-        <DeckStats cards={short()} send={sender()} onPull={null} onAddMissing={null} />
+        <DeckStats
+          tracksCollection
+          cards={short()}
+          send={sender()}
+          onPull={null}
+          onAddMissing={null}
+        />
       </TooltipProvider>,
     );
     await userEvent.click(screen.getByRole("button", { name: "Send missing to wishlist" }));
     view.rerender(
       <TooltipProvider>
-        <DeckStats cards={short()} send={settled} onPull={null} onAddMissing={null} />
+        <DeckStats
+          tracksCollection
+          cards={short()}
+          send={settled}
+          onPull={null}
+          onAddMissing={null}
+        />
       </TooltipProvider>,
     );
 
@@ -854,6 +885,7 @@ describe("DeckStats", () => {
 
     rerender(
       <DeckStats
+        tracksCollection
         cards={[card({ name: "Bolt", quantity: 4, ownedQuantity: 1 }), card({ name: "Bear" })]}
         send={sender({ isSuccess: true, data: 1 })}
         onPull={null}
@@ -884,6 +916,7 @@ describe("DeckStats", () => {
     // Away…
     rerender(
       <DeckStats
+        tracksCollection
         cards={[card({ name: "Bolt", quantity: 5, ownedQuantity: 1 })]}
         send={settled}
         onPull={null}
@@ -892,7 +925,7 @@ describe("DeckStats", () => {
     );
     // …and back to exactly the number that was sent.
     rerender(
-      <DeckStats cards={deck} send={settled} onPull={null} onAddMissing={null} />,
+      <DeckStats tracksCollection cards={deck} send={settled} onPull={null} onAddMissing={null} />,
     );
 
     expect(screen.getByRole("status")).toHaveTextContent("");
@@ -995,6 +1028,7 @@ describe("DeckStats", () => {
     rerender(
       <TooltipProvider>
         <DeckStats
+          tracksCollection
           cards={short()}
           send={sender({ isPending: true })}
           onPull={onPull}
@@ -1125,6 +1159,7 @@ describe("DeckStats", () => {
     render(
       <TooltipProvider>
         <DeckStats
+          tracksCollection
           cards={short()}
           send={sender({ isPending: true })}
           onPull={null}
@@ -1161,13 +1196,25 @@ describe("DeckStats", () => {
     const settled = sender({ isSuccess: true, data: 1 });
     const view = render(
       <TooltipProvider>
-        <DeckStats cards={deck} send={sender()} onPull={null} onAddMissing={onAddMissing} />
+        <DeckStats
+          tracksCollection
+          cards={deck}
+          send={sender()}
+          onPull={null}
+          onAddMissing={onAddMissing}
+        />
       </TooltipProvider>,
     );
     await userEvent.click(screen.getByRole("button", { name: "Send missing to wishlist" }));
     view.rerender(
       <TooltipProvider>
-        <DeckStats cards={deck} send={settled} onPull={null} onAddMissing={onAddMissing} />
+        <DeckStats
+          tracksCollection
+          cards={deck}
+          send={settled}
+          onPull={null}
+          onAddMissing={onAddMissing}
+        />
       </TooltipProvider>,
     );
 
@@ -1197,7 +1244,7 @@ describe("DeckStats", () => {
   it("takes the caret back after the write it disabled itself for", async () => {
     const deck = short();
     const { rerender } = render(
-      <DeckStats cards={deck} send={sender()} onPull={null} onAddMissing={null} />,
+      <DeckStats tracksCollection cards={deck} send={sender()} onPull={null} onAddMissing={null} />,
     );
     const button = screen.getByRole("button", { name: "Send missing to wishlist" });
     await userEvent.click(button);
@@ -1211,6 +1258,7 @@ describe("DeckStats", () => {
     button.blur();
     rerender(
       <DeckStats
+        tracksCollection
         cards={deck}
         send={sender({ isPending: true })}
         onPull={null}
@@ -1221,6 +1269,7 @@ describe("DeckStats", () => {
 
     rerender(
       <DeckStats
+        tracksCollection
         cards={deck}
         send={sender({ isSuccess: true, data: 3 })}
         onPull={null}
@@ -1229,5 +1278,80 @@ describe("DeckStats", () => {
     );
 
     expect(screen.getByRole("button", { name: "Send missing to wishlist" })).toHaveFocus();
+  });
+
+  /**
+   * **A Virtual deck (issue #401) — the whole shortfall half absent, and the charts untouched.**
+   *
+   * Every case above this block is a claim about `tracksCollection: true`, which is the
+   * regression these three are really guarding: this change touches the one line of the band a
+   * hundred existing decks read every time they are opened, and a fix that emptied it for
+   * everybody would pass a bare "the virtual deck draws nothing" check.
+   *
+   * The deck is short of three copies **and owns one**, so both of the block's two arms are
+   * reachable from these rows: the `N of M missing` sentence with its three presses, and — by
+   * owning the lot — the `All N owned.` fallback that replaces it. A fixture short of nothing
+   * would leave half of what has to disappear untested.
+   */
+  describe("a deck that does not track a collection", () => {
+    /** The `false` arm, at the ordinary shortfall. */
+    const virtualStrip = (cards: DeckCard[] = short()) =>
+      strip(cards, sender(), vi.fn(), vi.fn(), false);
+
+    /**
+     * The count, all three presses, and the two lines that answer them.
+     *
+     * `onPull` and `onAddMissing` are live `vi.fn()`s here rather than `null`, deliberately: with
+     * both `null` the two buttons are already absent for the theory list's own reason, and the
+     * test would pass over a `tracksCollection` that reached neither. Only the wishlist press,
+     * which has no `null` of its own, would be a real claim.
+     */
+    it("draws no shortfall line and none of the three presses", () => {
+      virtualStrip();
+
+      expect(screen.queryByText(/missing/i)).not.toBeInTheDocument();
+      for (const name of [
+        "Pull from collection",
+        "Add missing to collection",
+        "Send missing to wishlist",
+      ]) {
+        expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
+      }
+    });
+
+    /**
+     * **The fallback goes too, and it is the sentence this rule exists for.** `All 4 owned.` over
+     * a deck the reader has said they own none of is the worst of the two things this line can
+     * say, so a fix that only hid the shortfall arm would have made the virtual deck read as
+     * fully owned. The fixture owns every copy, which is the one state that draws it.
+     */
+    it("draws no all-owned fallback either", () => {
+      virtualStrip([card({ name: "Bolt", quantity: 4, ownedQuantity: 4 })]);
+
+      expect(screen.queryByText(/owned/i)).not.toBeInTheDocument();
+    });
+
+    /** The live region and the refusal line are inside the same block, so a write that somehow
+     *  answered would have nowhere to say so — asserted rather than assumed, because a stray
+     *  `role="status"` left behind is an empty announcement on every render of the band. */
+    it("keeps no live region or refusal line for a write it never makes", () => {
+      strip(short(), sender({ isError: true, error: "nope" }), vi.fn(), vi.fn(), false);
+
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    /** What a deck wants and what a deck costs are facts about the *list*, so the pips and the
+     *  four charts are untouched. Half of this test is the point of the other half: an
+     *  implementation that hid the whole band would satisfy every absence above it. */
+    it("keeps the pips row and every chart", () => {
+      strip(boros(), sender(), vi.fn(), vi.fn(), false);
+
+      const pips = screen.getByRole("group", { name: /pips/i });
+      expect(within(pips).getByText("White").parentElement).toHaveTextContent("8");
+      for (const name of ["Mana curve", "Colors", "Lands", "Card types"]) {
+        expect(screen.getByRole("list", { name })).toBeInTheDocument();
+      }
+    });
   });
 });

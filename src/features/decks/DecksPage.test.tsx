@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 import type { DeckFolder, DeckRow, FormatSpec, ImportMatch, SyncStatus } from "@/lib/ipc";
@@ -50,6 +50,17 @@ const deckPipCosts = vi.hoisted(() => vi.fn());
 const deckBracketReads = vi.hoisted(() => vi.fn());
 const deckSort = vi.hoisted(() => vi.fn());
 const setDeckSort = vi.hoisted(() => vi.fn());
+/**
+ * The one `app_meta` row behind how wide the folder tree is and whether it is folded to its rail.
+ *
+ * **It has to be here even for the cases that never touch the sidebar's edge.** The whole `ipc`
+ * object is replaced by this mock, so a command left out is `undefined` — `useFolderPane`'s
+ * `queryFn` throws a `TypeError`, the read settles in `error`, and the hook falls back to its
+ * defaults. Every case in this file would go on passing over a tree whose stored answer can never
+ * arrive, which is the shape of vacuous this mock has produced before.
+ */
+const deckFolderPane = vi.hoisted(() => vi.fn());
+const setDeckFolderPane = vi.hoisted(() => vi.fn());
 /** The one `app_meta` row behind "what does a new deck start on" — read by this screen and
  *  handed to both surfaces that make a deck. `null` here means no deck has been created on this
  *  install, which is the ordinary gallery's state as far as this preference is concerned. */
@@ -88,6 +99,8 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckBracketReads,
     deckSort,
     setDeckSort,
+    deckFolderPane,
+    setDeckFolderPane,
     importResolve,
     deckImportCommit,
     importReadFile,
@@ -124,6 +137,7 @@ const BURN: DeckRow = {
   folderId: null,
   notes: null,
   theoryEnabled: false,
+  virtualOnly: false,
   theoryMarkExact: true,
   theoryMarkName: true,
   theoryMarkUnplanned: true,
@@ -169,6 +183,24 @@ const KENRITH: DeckRow = {
   cardCount: 100,
   folderId: 2,
   theoryEnabled: true,
+  virtualOnly: false,
+};
+
+/**
+ * The third kind: a deck the reader tracks without owning the cardboard.
+ *
+ * **`theoryEnabled` is spelled out as `false` rather than inherited**, even though `BURN` already
+ * carries it, because the pair is the fixture's whole point: `theory_enabled` and `virtual_only`
+ * are two columns spelling one three-way choice, and a row with both `true` is what Rust writes
+ * the other column in the same patch to keep out. A reader arriving at this fixture should be
+ * able to see which of the three rows of `deckKind.ts`'s table it is without opening `BURN`.
+ */
+const ARENA: DeckRow = {
+  ...BURN,
+  id: 9,
+  name: "Arena Mono-Red",
+  theoryEnabled: false,
+  virtualOnly: true,
 };
 
 /** Two folders, three decks: `Burn` at the top level, `Sunday draft` in Commander and
@@ -364,6 +396,11 @@ beforeEach(() => {
   // answers in and therefore the wall a reader knows.
   deckSort.mockReset().mockResolvedValue("");
   setDeckSort.mockReset().mockResolvedValue(undefined);
+  // Nobody has dragged the folder tree's edge or folded it either, so the row is missing and the
+  // backend answers the shape it answers for one: a `null` width, which this side turns into
+  // `DEFAULT_FOLDER_TREE_WIDTH_PX`, and a `collapsed` of false.
+  deckFolderPane.mockReset().mockResolvedValue({ width: null, collapsed: false });
+  setDeckFolderPane.mockReset().mockResolvedValue(undefined);
   // Nobody has made a deck yet, so there is no remembered format: the two create surfaces get
   // Commander, which is what `newDeckFormat` answers for a reader with no history.
   deckLastFormat.mockReset().mockResolvedValue(null);
@@ -1290,8 +1327,8 @@ describe("DecksPage", () => {
     await userEvent.click(await screen.findByRole("option", { name: "Modern" }));
     await userEvent.click(screen.getByRole("button", { name: "Create deck" }));
 
-    // The whole deck in one call, and the two answers the reader left alone are the switch's
-    // `false` and nothing else: a field left empty is **absent** rather than `""`, because this
+    // The whole deck in one call, and the answers the reader left alone are the kind group's
+    // pair and nothing else: a field left empty is **absent** rather than `""`, because this
     // is an INSERT and an absent field is the column's own default. What each field does on the
     // wire is `CreateDeckDialog.test.tsx`'s subject; this one is about the gallery's own two
     // steps — the write, and going to what it made.
@@ -1303,7 +1340,12 @@ describe("DecksPage", () => {
         // format there is no `last_deck_game` to seed it from, because a filter a reader set
         // to find one format must not narrow the next dialog's list for them.
         gameKey: "any",
+        // **Both kind columns, always** — every deck is born `Regular`, and the pair is one
+        // three-way choice rather than two questions, so the create sends both even where
+        // neither was touched. `deckKind.ts` argues why the fourth combination has to be
+        // unrepresentable.
         theoryEnabled: false,
+        virtualOnly: false,
       }),
     );
     await waitFor(() => expect(useAppStore.getState().openDeckId).toBe(9));
@@ -1773,32 +1815,66 @@ describe("DecksPage", () => {
   });
 
   /**
-   * Which of a deck's two lists exist, on the tile — derived from the two fields `deck_list`
-   * already answers rather than stored, so the badge and the editor's Theory/Actual switch can
-   * never disagree. A theory list beside an empty actual one is a plan, not a deck.
+   * What kind of deck this is, on the tile — derived from fields `deck_list` already answers
+   * rather than stored, so the badge and the editor's own controls can never disagree. A theory
+   * list beside an empty actual one is a plan, not a deck; a virtual deck is one the reader owns
+   * none of.
    *
-   * **The deck with one list is asserted to wear _no_ badge**, which is the half of issue #357
-   * a reworded string would not have covered: a word every deck in the gallery carries says
-   * nothing about any of them. The pattern is the badge's whole **vocabulary** — the two words
-   * it can hold now and the one it used to — rather than the two current ones, because the claim
-   * is that this tile is unmarked and a badge reading `ACTUAL` would satisfy a narrower regex
-   * while being the exact thing that was deleted.
+   * **The ordinary deck is asserted to wear _no_ badge**, which is the half of issue #357 a
+   * reworded string would not have covered: a word every deck in the gallery carries says
+   * nothing about any of them. The pattern is the badge's whole **vocabulary** — the three words
+   * it can hold now and the one it used to — rather than today's three, because the claim is
+   * that this tile is unmarked and a badge reading `ACTUAL` would satisfy a narrower regex while
+   * being the exact thing that was deleted.
+   *
+   * **The virtual arm is asserted to answer _before_ the theory ones** by the fixture rather
+   * than by a second case: `ARENA` is a Virtual deck with sixty cards, so a `deckBadge` that
+   * tested `theoryEnabled` first would read it as `regular` and draw nothing — and one that
+   * tested `cardCount` first would call it `THEORY + ACTUAL`. Both wrong answers are a failure
+   * here.
    */
-  it("badges a deck by which of its two lists exist", async () => {
+  it("badges a deck by what kind of deck it is", async () => {
     deckList.mockResolvedValue([
       BURN,
       { ...KENRITH, folderId: null },
       { ...KENRITH, id: 8, name: "Sketch", cardCount: 0, folderId: null },
+      ARENA,
     ]);
 
     wrap(<DecksPage />);
 
     const burn = (await tileFor("Burn")).closest("li")!;
-    expect(within(burn).queryByText(/THEORY|ACTUAL|LIVE/)).not.toBeInTheDocument();
+    expect(within(burn).queryByText(/THEORY|ACTUAL|LIVE|VIRTUAL/)).not.toBeInTheDocument();
     const kenrith = (await tileFor("Kenrith Two-Drops")).closest("li")!;
     expect(within(kenrith).getByText("THEORY + ACTUAL")).toBeInTheDocument();
     const sketch = (await tileFor("Sketch")).closest("li")!;
     expect(within(sketch).getByText("THEORY ONLY")).toBeInTheDocument();
+    const arena = (await tileFor("Arena Mono-Red")).closest("li")!;
+    expect(within(arena).getByText("VIRTUAL")).toBeInTheDocument();
+  });
+
+  /**
+   * The dash means **provisional**, and a virtual deck's list is not.
+   *
+   * A class assertion, because jsdom loads no stylesheet and lays nothing out — there is no
+   * computed border style to read, so the source text of the class list is the only thing here
+   * that can go red. It is worth one case anyway: which of the two treatments a new badge takes
+   * is a *ruling* (`DeckTile.tsx` argues it at the site), and a ruling with no test is a line of
+   * prose the next `cn(…)` edit can quietly reverse. `THEORY ONLY` is asserted beside it so the
+   * case cannot pass by the class having been dropped from both.
+   */
+  it("dashes the plan's badge and not the virtual one", async () => {
+    deckList.mockResolvedValue([
+      { ...KENRITH, id: 8, name: "Sketch", cardCount: 0, folderId: null },
+      ARENA,
+    ]);
+
+    wrap(<DecksPage />);
+
+    const sketch = (await tileFor("Sketch")).closest("li")!;
+    expect(within(sketch).getByText("THEORY ONLY")).toHaveClass("border-dashed");
+    const arena = (await tileFor("Arena Mono-Red")).closest("li")!;
+    expect(within(arena).getByText("VIRTUAL")).not.toHaveClass("border-dashed");
   });
 });
 
@@ -2278,6 +2354,7 @@ describe("DecksPage folders", () => {
         formatKey: "commander",
         gameKey: "any",
         theoryEnabled: false,
+        virtualOnly: false,
         folderId: 3,
       }),
     );
@@ -3016,6 +3093,7 @@ describe("the folder row's menu", () => {
         formatKey: "commander",
         gameKey: "any",
         theoryEnabled: false,
+        virtualOnly: false,
         folderId: 1,
       }),
     );
@@ -3156,6 +3234,7 @@ describe("the folder row's menu", () => {
         formatKey: "commander",
         gameKey: "any",
         theoryEnabled: false,
+        virtualOnly: false,
         folderId: 1,
       }),
     );
@@ -3455,5 +3534,144 @@ describe("DecksPage zoom", () => {
       gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
       gap: "24px",
     });
+  });
+});
+
+/**
+ * **The page's half of the folder tree's width**: the stored answers reaching the sidebar, the
+ * two gestures reaching the command, and the cap coming off a measurement of the desk row rather
+ * than out of a constant.
+ *
+ * What is deliberately *not* here: the splitter's arithmetic (`components/ResizeHandle.test.tsx`),
+ * what the tree draws at a width and what it drops in the rail (`FolderTree.test.tsx`), and the
+ * hook's debounce, its optimism and its refusals (`useFolderPane.test.ts`). Each of those has a
+ * file that can drive it directly, and repeating one here would be a second copy of an answer
+ * rather than a check that the three are joined up.
+ */
+describe("the folder tree's width", () => {
+  /**
+   * The window's *layout* width, which is what `useDeskWidth` reads and what jsdom answers `0` to
+   * until a test says otherwise.
+   *
+   * **`document.documentElement.clientWidth` and never `window.innerWidth`**, which is the hook's
+   * own rule: `innerWidth` counts the classic scrollbar and the layout does not. An own property
+   * over jsdom's prototype getter is the one way to give a box a width with no layout engine —
+   * `useDeskWidth.test.ts`'s helper, spelled again because a suite that measures a page has to
+   * arrange the same fiction.
+   */
+  function layoutWidth(px: number): void {
+    Object.defineProperty(document.documentElement, "clientWidth", {
+      value: px,
+      configurable: true,
+    });
+  }
+
+  afterEach(() => {
+    // Put the environment back to answering `0`, which is what every other case in this file
+    // assumes — an unmeasured row is read as roomy, and a leaked width would cap a tree in a
+    // case that has never heard of one.
+    delete (document.documentElement as unknown as { clientWidth?: number }).clientWidth;
+  });
+
+  const tree = () => screen.getByRole("navigation", { name: "Folders" });
+  const handle = () => screen.getByRole("separator", { name: "Resize folders" });
+  const chevron = () => screen.getByRole("button", { name: /^(Expand|Collapse) folders$/ });
+
+  /** One pointer event with a real `clientX` on it — jsdom ships no `PointerEvent`, so Testing
+   *  Library's pointer helpers fall back to a plain `Event` and the coordinate never arrives. */
+  function pointer(type: string, clientX: number) {
+    const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX, button: 0 });
+    Object.defineProperty(event, "pointerId", { value: 1 });
+    fireEvent(handle(), event);
+  }
+
+  /** A whole drag on the tree's right edge. Docked left, so rightward is wider. */
+  function dragEdge(from: number, to: number) {
+    pointer("pointerdown", from);
+    pointer("pointermove", to);
+    pointer("pointerup", to);
+  }
+
+  it("opens the tree at the width the reader last dragged it to", async () => {
+    deckFolderPane.mockResolvedValue({ width: 300, collapsed: false });
+
+    wrap(<DecksPage />);
+    await tileFor("Burn");
+
+    await waitFor(() => expect(tree()).toHaveStyle({ width: "300px" }));
+    expect(handle()).toHaveAttribute("aria-valuenow", "300");
+  });
+
+  /**
+   * **The cap is measured, not chosen**, and this is the whole of that wiring: `useDeskWidth`
+   * reads the layout width, halves it, and the number comes out the far end as the splitter's
+   * `aria-valuemax` — which is also where End lands. 500 is written as a literal because half of
+   * 1000 is 500; an assertion deriving it from the same expression the page uses would pass for
+   * whatever that expression became.
+   */
+  it("caps the drag at half the window and lets End go to exactly that", async () => {
+    layoutWidth(1000);
+
+    wrap(<DecksPage />);
+    await tileFor("Burn");
+
+    await waitFor(() => expect(handle()).toHaveAttribute("aria-valuemax", "500"));
+
+    handle().focus();
+    await userEvent.keyboard("{End}");
+
+    await waitFor(() => expect(tree()).toHaveStyle({ width: "500px" }));
+  });
+
+  /**
+   * The reader's own width, written once the drag has stopped moving.
+   *
+   * **The command carries both facts**, because the row holds both: a width write that dropped
+   * the fold would be a drag putting a folded tree back open on the next launch.
+   */
+  it("remembers a dragged width, with the fold beside it", async () => {
+    wrap(<DecksPage />);
+    await tileFor("Burn");
+    await waitFor(() => expect(deckFolderPane).toHaveBeenCalled());
+
+    // 208 + (400 − 300) = 308.
+    dragEdge(300, 400);
+
+    await waitFor(() => expect(tree()).toHaveStyle({ width: "308px" }));
+    await waitFor(() => expect(setDeckFolderPane).toHaveBeenCalledWith(308, false));
+  });
+
+  /** And a fold is remembered with the *width* beside it, which is the same row read the other
+   *  way round: a reader who widens the tree and then rails it must come back to both. */
+  it("remembers a fold, with the dragged width beside it", async () => {
+    deckFolderPane.mockResolvedValue({ width: 260, collapsed: false });
+
+    wrap(<DecksPage />);
+    await tileFor("Burn");
+    await waitFor(() => expect(tree()).toHaveStyle({ width: "260px" }));
+
+    await userEvent.click(chevron());
+
+    await waitFor(() => expect(setDeckFolderPane).toHaveBeenCalledWith(260, true));
+  });
+
+  /**
+   * **The page opens on the rail when that is where the reader left it**, and the rail is the
+   * folder rows being *gone* rather than hidden — so the gallery beside it is the only wall on
+   * screen. The wall itself is untouched by any of this.
+   */
+  it("opens folded when that is how the reader left it", async () => {
+    withFolders();
+    deckFolderPane.mockResolvedValue({ width: 260, collapsed: true });
+
+    wrap(<DecksPage />);
+    await tileFor("Burn");
+
+    await waitFor(() => expect(chevron()).toHaveAccessibleName("Expand folders"));
+    expect(within(tree()).queryByRole("button", { name: /^Commander, / })).toBeNull();
+    expect(tree().style.width).toBe("");
+    // The wall is drawn exactly as it is with the tree open — the rail gives width back, it does
+    // not narrow what the reader is looking at.
+    expect(screen.getByRole("list", { name: "Your decks" })).toBeInTheDocument();
   });
 });

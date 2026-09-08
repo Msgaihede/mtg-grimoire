@@ -65,6 +65,7 @@ import { movedTo } from "./categoryDrag";
 import { buildCategoryMenu } from "./categoryMenu";
 import { ClearCategory } from "./ClearCategory";
 import { buildDeckCardMenu } from "./deckCardMenu";
+import { tracksCollection } from "./deckKind";
 import { deckSlotOrder, deckWalkStops } from "./deckWalk";
 import { Dialog } from "@/components/Dialog";
 import { DeckHistoryDialog } from "./DeckHistoryDialog";
@@ -1081,6 +1082,34 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * costs one `deck_get` rather than two.
    */
   const theoryEnabled = row?.theoryEnabled === true;
+
+  /**
+   * Whether this deck reads the reader's collection at all — `deckKind.ts`'s
+   * {@link tracksCollection}, answered **once here** and handed to the five surfaces that owe a
+   * reader an owned readout.
+   *
+   * **A Virtual deck is the `false` case** (issue #401): a list the reader tracks without owning
+   * the cardboard, so it has no `collection_folders` group and every owned figure would be a `0`
+   * about cardboard nobody ever claimed to have. What goes with it is the whole of what this
+   * editor says about a binder — `DeckStats`' shortfall block and its three presses,
+   * `DeckLedger`'s `Owned` term, `PriceStrip`'s `Recently removed` note, `TableView`'s `Owned`
+   * column, the docked panel's Collection tab, and the card menu's `Collection ▸` submenu.
+   *
+   * **One answer handed down, never `deckKind(row)` spelled at six sites**, which is
+   * {@link separateX}'s arrangement one flag over and for its reason: a curve and a heading that
+   * each decided for themselves would be two surfaces answering one question about one deck two
+   * ways. It is also why every one of those props is **required** rather than optional — a host
+   * that has not thought about it must not silently get the collection-reading case.
+   *
+   * **A row that has not answered reads as `false`, and the direction is the argument.** Only
+   * {@link PriceStrip} is drawn before `deck_get` lands — everything else in this list is inside
+   * a `row &&` — so the choice is between its `Recently removed` note appearing a beat late on
+   * every deck, and appearing and then being taken away on a virtual one. A page filling in is
+   * what a reader expects of a load; a promise withdrawn is not. It is also `deckKind`'s own
+   * tie-break read one step out: where the answer is not in, show *less* of the collection rather
+   * than more.
+   */
+  const tracks = row !== null && tracksCollection(row);
 
   const [view, setView] = useState<DeckView>(DEFAULT_VIEW);
   // The two the deck row remembers, seeded from the same constants a stored word this build
@@ -2120,7 +2149,14 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * also what {@link pullCard}'s `fetchQuery` fills, through the shared options factory, so the
    * press that *decides* whether to open this dialog and the dialog itself are one read.
    */
-  const pullPlan = usePullPlan(deckId, layer?.kind === "pull");
+  //
+  // **{@link tracks} rides the same gate, and it is not a second reading of the layer.** Rust
+  // refuses `deck_pull_plan` for a virtual deck **by name** (`deck::VIRTUAL_HOLDS_NOTHING`)
+  // rather than answering an empty plan, so a query left enabled would put a real error banner on
+  // a screen whose reader never asked a question. Nothing can open the layer on such a deck — the
+  // stats band's press is `null` and the card menu's row is gone — so this is the fence for the
+  // deck changing *under* an editor that is already open, which a sync from another device can do.
+  const pullPlan = usePullPlan(deckId, tracks && layer?.kind === "pull");
 
   /** The one card an open pull is about, or `null` for the deck-wide press. */
   const pulledCard = layer?.kind === "pull" ? (layer.card ?? null) : null;
@@ -2179,7 +2215,11 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * this feature's own write: recording the copies closes the very holes this read answers. See
    * {@link useMissingPlan} for why the key sits under that root.
    */
-  const missingPlan = useMissingPlan(deckId, layer?.kind === "addMissing");
+  //
+  // **{@link tracks} for {@link pullPlan}'s reason exactly** — `deck_missing_plan` is the other
+  // command Rust refuses by name for a virtual deck, and an enabled query behind a layer nothing
+  // can open is a banner nobody pressed for.
+  const missingPlan = useMissingPlan(deckId, tracks && layer?.kind === "addMissing");
 
   /** The press {@link QuickUnwishDialog} is asking about — the card, the count and the wishes,
    *  all frozen at the press. See the arm's own doc for why none of the three is looked up. */
@@ -2860,9 +2900,19 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           // as a refusal. The row says `a plan holds no cards` instead. The stats band's
           // deck-wide `onPull` is `null` there for a different reason and stays so: that button
           // has a *question* to lose, where these rows have an answer to give.
-          quickAdd,
-          quickAddAndUnwish,
-          pullCard,
+          //
+          // **A virtual deck passes all three as `undefined`, and the whole submenu goes with
+          // them** — `collectionItems`' own all-three-or-none rule (`deckCardMenu.tsx`), which
+          // drops the item rather than drawing two answers to a question whose third would then
+          // read as *impossible* rather than as unwired. **Structural rather than greyed, and
+          // that is the split**: the three arms of `QUICK_ADD_REASON` grey a row about a deck
+          // that *has* a binder and cannot use it here — a plan holds no cards, this pile is
+          // switched off, nothing missing — where a virtual deck has no binder to talk about at
+          // all. A greyed `Quick add 0 copies` on every card of every pile of such a deck is a
+          // row that spends the menu's width on a sentence that is true of the whole deck.
+          quickAdd: tracks ? quickAdd : undefined,
+          quickAddAndUnwish: tracks ? quickAddAndUnwish : undefined,
+          pullCard: tracks ? pullCard : undefined,
           // **Only when this card is in the set** — `dragsWholeSelection`'s rule for a press
           // instead of a drag. A right-click on a card the reader has not picked is about that
           // card, so `[]` goes over and the menu is the singular one it has always been.
@@ -2891,6 +2941,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       setFinishAt,
       openAddLabel,
       removeCard,
+      tracks,
       quickAdd,
       quickAddAndUnwish,
       pullCard,
@@ -3612,6 +3663,14 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     marketplace,
     violations,
     theoryPlan,
+    // Whether this deck has a binder behind it at all — {@link tracks}, handed down whole like
+    // `violations` and `theoryPlan` beside it, because it is one fact about the deck that every
+    // view spends differently. `TableView` drops its `Owned` column; the other three drop the red
+    // shortage figure `deckCardShort` draws in a card's chin, which on a Virtual deck would be a
+    // `0/1` on every card of the list — the same wall of marks all saying one untrue thing that
+    // issue #354 reported of the theory list, reached from the other side. **All four**, so that
+    // one toolbar press cannot change what the deck claims to own.
+    tracksCollection: tracks,
     onSelect: openCard,
     actions,
     // The two marks a card can carry here, in the four views that draw them. `landed` is this
@@ -3985,6 +4044,9 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           formatName={spec?.displayName ?? row.formatName ?? null}
           gameChangers={gameChangers}
           tight={tightHeader}
+          // Four terms rather than five on a Virtual deck — the `Owned` figure is the one thing
+          // on this line that is about a *binder* rather than about the deck. See {@link tracks}.
+          tracksCollection={tracks}
           check={
             // Nothing at all while the seeded rules are not in hand. A format the seed no longer
             // carries has no rules to judge against, and a button that said "No issues" because
@@ -4469,6 +4531,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               categories={categories}
               deckId={deckId}
               targetCategoryId={targetCategoryId}
+              // No Collection tab on a Virtual deck, so the column is the card search and the
+              // strip that would offer to switch between two things is not drawn — see
+              // {@link tracks} here and `DeckSearchPanelProps.tracksCollection` there.
+              tracksCollection={tracks}
               defaultFormat={searchFormatDefault}
               open={panelOpen}
               setOpen={setPanelOpen}
@@ -4493,7 +4559,16 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           column's — one box further in and the number would be measuring nothing. It owns its
           own drag monitor for `QuickZones`' reason, which is why no `dragging` state reaches
           this file any more: see {@link PriceStrip}. */}
-      <PriceStrip marketplace={marketplace} variant={variant} onRemove={applyDrops} />
+      {/* **`tracksCollection` is the note rather than the strip**: the prices are true of every
+          kind of deck, and where a cut card *goes* is only a sentence a deck with a collection
+          group behind it can write — see {@link tracks}, which is also where the `row === null`
+          reading is argued, this being the one child of the five drawn before `deck_get` lands. */}
+      <PriceStrip
+        marketplace={marketplace}
+        variant={variant}
+        tracksCollection={tracks}
+        onRemove={applyDrops}
+      />
 
       {row && (
         // What this deck puts on the table beside itself — the tokens and emblems its cards
@@ -4591,7 +4666,17 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               the same seam: `deck_pull_plan` takes no variant and reads the live list, exactly as
               `deck_missing_to_wishlist` does one command over. Absent rather than greyed, for the
               editor's own rule about a control that cannot act: a button that spends the whole
-              Theory tab refusing teaches the reader to stop looking at the line it is in. */}
+              Theory tab refusing teaches the reader to stop looking at the line it is in.
+
+              **{@link tracks} is a second term on both, and it is a different sentence rather
+              than a stronger one.** `variant === "live"` is about which of a deck's two *lists*
+              is on screen; `tracks` is about the *deck*, and a Virtual deck keeps one live list
+              — so on that deck the first term is satisfied on the only tab there is and the
+              second is what takes the press away. The rule above extends unchanged: absent
+              rather than greyed, because a button that refuses for the whole life of a deck is
+              worse than one that refuses for the length of a tab. The block those two presses
+              sit in goes with them (`tracksCollection` below) — a shortfall line with no way to
+              act on it is the same lesson written as a number. */}
           {/* **`onAddMissing` is `null` on the plan for `onPull`'s reason**, which is the list
               rather than the feature: `deck_missing_plan` takes no variant and walks the live
               list, because a plan holds no cards and is therefore short of nothing. Absent
@@ -4607,8 +4692,9 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           <DeckStats
             cards={deck.cards}
             send={deck.missingToWishlist}
-            onPull={variant === "live" ? openPull : null}
-            onAddMissing={variant === "live" ? openAddMissing : null}
+            onPull={tracks && variant === "live" ? openPull : null}
+            onAddMissing={tracks && variant === "live" ? openAddMissing : null}
+            tracksCollection={tracks}
             separateXGroup={separateX}
           />
         </section>
@@ -4808,6 +4894,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             <ClearCategory
               category={clearedCategory}
               variant={variant}
+              // {@link tracks}, inverted: the confirmation's second sentence promises a folder
+              // the reader's copies go back to, and a virtual deck has no group for them to
+              // arrive in. Not a fourth reading of `variant` — see `ClearDeck`'s own prop.
+              virtual={!tracks}
               pending={clearPending}
               onCancel={dismiss}
               onCleared={() => clearCategory(clearedCategory.id, { onSuccess: dismiss })}
@@ -4855,7 +4945,16 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           its Cancel, Escape — and the caret's destination is a button in the stats band two
           screens down the page, which is precisely where a reader who has just shut this expects
           to be. `close` exists for the click-away, and a scrim press here is not one this surface
-          distinguishes. */}
+          distinguishes.
+
+          **This mount takes no `tracks` term, and the three that could have carried one do not
+          either** (`pull`, `addMissing`, `quickUnwish`). The fence is upstream and it is the
+          *opener*: `DeckStats`' two presses are `null` on a Virtual deck and the card menu's
+          `Collection ▸` submenu is not built, so no press anywhere in this editor can set one of
+          those three arms. A second test here would be a second answer to a question already
+          settled — and the wrong one to reach for, because it would draw a dialog that is *open*
+          with a plan it may not read. What the query behind it does take is the term, for the
+          reason written at {@link pullPlan}: a read Rust refuses by name must not run. */}
       <PullFromCollectionDialog
         open={layer?.kind === "pull"}
         deckName={row?.name ?? ""}

@@ -659,6 +659,101 @@ describe("buildDeckCardMenu", () => {
         labels(buildDeckCardMenu(bolt({ quantity: 4 }), collectionDeps())).indexOf("Collection"),
       );
     });
+
+    /**
+     * ## The third deck kind — issue #401
+     *
+     * **The submenu is absent on a virtual deck, and it is absent structurally.** `DeckEditor`
+     * wires none of the three writes for a deck the reader tracks without owning the cardboard, so
+     * the all-three-or-none guard that has been here since the submenu shipped is the refusal —
+     * no new arm, no new branch. That was chosen over three greyed rows: a wholly greyed submenu
+     * is four things to read past on a menu already carrying thirteen rows, and *this deck tracks
+     * no cardboard* is a fact about the **deck** rather than about the row that was right-clicked,
+     * which is the class of fact the gallery tile and Deck settings say.
+     */
+    describe("on a virtual deck", () => {
+      /**
+       * The state a reader actually meets, and it is `deps()` with nothing added — which is the
+       * point. The kind is spelled on the deps for readability, and the assertion holds without
+       * it, because it is the *writes* that are missing.
+       */
+      it("draws no Collection item at all when the surface wires no collection writes", () => {
+        const virtual = deps({ tracksCollection: false });
+        expect(has(buildDeckCardMenu(short(), virtual), "Collection")).toBe(false);
+      });
+
+      /**
+       * **The rest of the menu is untouched**, which is the half worth pinning: a virtual deck is
+       * still a deck, so moving a card between piles, labelling it, setting a finish and removing
+       * it all mean exactly what they meant. Only the row that writes to the reader's *binder*
+       * goes.
+       */
+      it("leaves every other row exactly where it was", () => {
+        const virtual = deps({ tracksCollection: false, spec: spec("commander") });
+        const withBinder = collectionDeps({ spec: spec("commander") });
+
+        expect(labels(buildDeckCardMenu(short(), virtual))).toEqual(
+          labels(buildDeckCardMenu(short(), withBinder)).filter((l) => l !== "Collection"),
+        );
+      });
+
+      /**
+       * **The fence behind the structural refusal.** A surface that wires the three writes on a
+       * virtual deck anyway greys the rows with a sentence instead of offering *Quick add 3
+       * copies* on a row whose owned count can never move — the switched-off pile's own measured
+       * failure (two presses, two copies recorded, the row still reading `0/1`) reached one deck
+       * kind over. `DeckEditor` does not produce this state; the `Record` keyed on
+       * `quickAddBlock`'s union is what makes it unreachable *silently* rather than unreachable
+       * by hope, and this is the case that proves the wording exists.
+       */
+      it("greys all three rows with a reason if a surface wires them anyway", () => {
+        const wired = collectionDeps({ tracksCollection: false });
+        const rows = collection(buildDeckCardMenu(short(), wired)).items;
+        const actions = rows.filter((i): i is MenuAction => i.kind === "action");
+
+        expect(actions).toHaveLength(3);
+        for (const row of actions) {
+          expect(row.disabled).toBe(true);
+          expect(row.reason).toBe("this deck tracks no cardboard");
+        }
+      });
+
+      /** And a greyed row writes nothing when pressed, which is the half `disabled` alone does
+       *  not promise — the rows are `aria-disabled`, so a caret still reaches them. */
+      it("writes nothing when one of those rows is pressed anyway", () => {
+        const quickAdd = vi.fn();
+        const quickAddAndUnwish = vi.fn();
+        const pullCard = vi.fn();
+        const rows = collection(
+          buildDeckCardMenu(
+            short(),
+            collectionDeps({ tracksCollection: false, quickAdd, quickAddAndUnwish, pullCard }),
+          ),
+        ).items;
+
+        for (const row of rows.filter((i): i is MenuAction => i.kind === "action")) row.onSelect();
+
+        expect(quickAdd).not.toHaveBeenCalled();
+        expect(quickAddAndUnwish).not.toHaveBeenCalled();
+        expect(pullCard).not.toHaveBeenCalled();
+      });
+
+      /**
+       * **The regression half: a deck that does track cardboard is unaffected by the flag's
+       * arrival.** Absent means `true` at the read, so every surface that has never heard of a
+       * deck kind goes on offering the three live rows — which is `decks.virtual_only DEFAULT 0`
+       * read at the menu.
+       */
+      it("still offers the three live rows where the deck tracks cardboard", () => {
+        for (const wired of [collectionDeps(), collectionDeps({ tracksCollection: true })]) {
+          const actions = collection(buildDeckCardMenu(short(), wired)).items.filter(
+            (i): i is MenuAction => i.kind === "action",
+          );
+          expect(actions).toHaveLength(3);
+          expect(actions.every((r) => r.disabled !== true && r.reason === undefined)).toBe(true);
+        }
+      });
+    });
   });
 });
 

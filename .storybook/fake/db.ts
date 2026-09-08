@@ -470,6 +470,32 @@ export interface FakeDeck {
    *  can set and never see is a switch nothing can draw. */
   theoryEnabled: boolean;
   /**
+   * `decks.virtual_only` (schema v40): whether this deck is one the reader tracks **without
+   * owning the cardboard** — an MTGO or Arena list, a proxy pile, a deck they are only reading
+   * about.
+   *
+   * **Required, where the five columns below it are optional, and the reason is that this one
+   * is half of a *kind* rather than a preference.** `separateXGroup` and its neighbours are
+   * `NOT NULL DEFAULT 0` columns a seed written before them is answered for by the DDL; this
+   * one pairs with {@link theoryEnabled} directly above — which is required for exactly the
+   * same reason — and the two together say what sort of deck this is. A fixture that says
+   * nothing about its kind is a fixture whose author has not decided, which is
+   * {@link FakeCollectionFolder.locked}'s argument one table over.
+   *
+   * **Three kinds, two booleans, and the fourth pair is unrepresentable.** `false/false` is a
+   * regular deck, `true/false` a deck with a plan beside its actual list, `false/true` a virtual
+   * one. {@link writeHandlers.deck_update} writes the other column whenever a patch sets one
+   * ({@link deckKind}), so `true/true` can never be stored — and a story that could reach it
+   * would be a story about a state the app has no word for.
+   *
+   * **Setting it moves not one `deck_cards` row**, which is the opposite of `theoryEnabled` and
+   * the whole reason a reader may press it and press it back: a virtual deck keeps its one
+   * ordinary `live` list, so {@link DeckRow.cardCount} and the gallery's colour bar go on
+   * counting it. What moves is the *cardboard* — see {@link writeHandlers.deck_update}, where
+   * both directions of the group transition are written out.
+   */
+  virtualOnly: boolean;
+  /**
    * `decks.theory_mark_exact` and `decks.theory_mark_name` (schema v38) and
    * `decks.theory_mark_unplanned` (v39): which of the theory
    * mark's three tiers this deck draws — green for a live row that is the printing the plan
@@ -1426,6 +1452,34 @@ export interface FakeDb {
    */
   deckSort: string | null;
   /**
+   * `app_meta.deck_folder_pane` — how wide the decks page's folder tree was left, and whether
+   * the reader railed it down to icons.
+   *
+   * **The first row here whose value is a stored *object* rather than a map**, and that is the
+   * one thing to read before the shape makes sense. Its four object-valued neighbours
+   * ({@link FakeDb.cardZoom}, {@link FakeDb.listView}, {@link FakeDb.flattenState},
+   * {@link FakeDb.searchOpen}) are `Record`s because each holds one answer *per section*, and a
+   * page this build has no column on is a state a story wants. This one holds two halves of a
+   * single answer about a single pane, so the row is a JSON object with two fixed keys and the
+   * field is that object — or `null` for the row never having been written.
+   *
+   * **`null` is the whole of "nothing stored", and the two halves cannot go missing
+   * separately.** A reader who rails the tree without ever having dragged it still writes a
+   * width, because the press sends the width the page is drawing at; so there is no
+   * `{ width: absent, collapsed: true }` for a story to stand in, and a nullable `width` here
+   * would be a third state the backend cannot produce — {@link FakeDb.navCollapsed}'s argument,
+   * two rows over.
+   *
+   * **The junk state that *is* reachable is a width outside the band**, which is why this stores
+   * a bare `number` and not a narrowed one: a row a hand-edit put `4` or `9999` into is a row a
+   * story wants to be able to seed. What it costs the reader is **the width and only the
+   * width** — the two fields are read independently, so a railed tree stays railed through a
+   * number nobody typed. See {@link readHandlers.deck_folder_pane} and
+   * {@link writeHandlers.set_deck_folder_pane}: the read shrugs at it and the write refuses it,
+   * this table's usual split.
+   */
+  deckFolderPane: FakeDeckFolderPane | null;
+  /**
    * `marketplace_prices` — the table that made a third and fourth marketplace possible.
    *
    * Keyed `(marketplace, cardId, finish)` and **not** a column on `cards`, for the schema's own
@@ -1531,6 +1585,26 @@ export interface FakeDb {
    */
   supporter: FakeSupporter;
   fault: Fault | null;
+}
+
+/**
+ * `app_meta.deck_folder_pane`'s stored value — **the row, not the answer read out of it**.
+ *
+ * `{"width": <integer>, "collapsed": <bool>}` on disk, and every build that writes the row
+ * writes both keys. What {@link readHandlers.deck_folder_pane} answers is a *different* shape:
+ * its `width` is nullable, because "no row" and "a row this app cannot use" both have to be
+ * sayable and neither of them is a width. Storing the DTO here would fold that distinction away
+ * and leave a story unable to seed the row a reader actually has — {@link FakeDb.marketplace}'s
+ * rule about a fake that stores what it answers.
+ */
+export interface FakeDeckFolderPane {
+  /** The dragged width in CSS pixels. Outside {@link MIN_FOLDER_PANE_WIDTH} …
+   *  {@link MAX_FOLDER_PANE_WIDTH}, or not whole, it reads as **no width** — and only as that:
+   *  the `collapsed` beside it is answered from the row either way. */
+  width: number;
+  /** Railed down to icons, or open. A `bool`, so no junk state — see
+   *  {@link writeHandlers.set_nav_collapsed} for the argument in full. */
+  collapsed: boolean;
 }
 
 /**
@@ -1888,6 +1962,53 @@ function isStorableHex(color: string): boolean {
 }
 
 /**
+ * `deckfolderpane::MIN_PANE_WIDTH` and `MAX_PANE_WIDTH` — the band the folder tree's **stored**
+ * width is kept inside.
+ *
+ * **A storage bound, and the word is load-bearing rather than decorative.** These are not the
+ * stops the drag handle moves between: the frontend's own clamp is
+ * `MIN_FOLDER_TREE_WIDTH_PX`, it answers a different question — how narrow a tree may be
+ * *dragged* to on the desk in front of you — and it is deliberately narrower at the bottom and
+ * has no fixed top at all, because how wide a tree may get depends on the monitor. The crate
+ * documents this pair as wider than any UI clamp on purpose, and 1200 is what lets a 2560-pixel
+ * desk hand its reader a ~1280-pixel tree without the row that remembers it refusing to.
+ *
+ * **They are still spelled here rather than imported**, which is {@link isStorableHex}'s rule and
+ * the opposite of {@link isStorableZoom}'s. The zoom's ends belong to the *ladder*, a frontend
+ * vocabulary the Rust keeps a copy of, so a third copy in this file would be the one nothing
+ * checks. These two are the **crate's own**: the row is in the reader's database, a width in it
+ * may have been written by any build or by a hand edit, and what a stored width may be is the
+ * only thing about it the backend decides. Importing the handle's clamp instead would have made
+ * the fake agree with the wrong file by construction — which is exactly how this constant was
+ * wrong the first time it was written, at `160`, refusing in Storybook a drag the shipped app
+ * accepts.
+ */
+const MIN_FOLDER_PANE_WIDTH = 80;
+const MAX_FOLDER_PANE_WIDTH = 1200;
+
+/**
+ * `deckfolderpane::is_storable` — whether a width is one this row may hold.
+ *
+ * The band and nothing else, and it is the **read's** predicate first: a stored width outside it
+ * is dropped, which is what {@link readHandlers.deck_folder_pane} answers `null` for. The write
+ * refuses the same thing so that the drop is never silent.
+ *
+ * **`Number.isInteger` is doing a second job here and it is not the band's.** `width` is a `u32`
+ * at the far end, so `208.5` and `-1` are refused by serde before the shipped command's body is
+ * entered at all — `RouteError::Args` rather than `RouteError::Failed`, which is the crate's own
+ * way of saying the two refusals are different events. {@link writeHandlers.set_deck_folder_pane}
+ * keeps them separate for that reason; this predicate folds them because a *read* cannot tell
+ * them apart — a row holding either is a row the width came out of unusable — and
+ * {@link isStorableZoom}'s `Number.isFinite` is the same guard one predicate over, settling `NaN`
+ * and both infinities before they fail every comparison in silence.
+ */
+function isStorablePaneWidth(width: number): boolean {
+  return (
+    Number.isInteger(width) && width >= MIN_FOLDER_PANE_WIDTH && width <= MAX_FOLDER_PANE_WIDTH
+  );
+}
+
+/**
  * What the `errorLog` fault seeds: one of each shape the panel has to draw.
  *
  * A folded repeat (the ×600 an unreachable image host produces — the case the whole grain
@@ -2106,6 +2227,13 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // which is what `deck_list` already sorts by and what the gallery drew before there was a
     // picker at all.
     deckSort: null,
+    // The folder tree's own row, and a `null` for the third time — a reader who has neither
+    // dragged the tree nor railed it. `deck_folder_pane` answers `{ width: null, collapsed:
+    // false }` for that, which is the frontend's cue to draw its own default width rather than a
+    // number this side invented, so every decks story that says nothing about the tree opens at
+    // the width the app ships. A story that wants one railed, or one dragged wide, passes the
+    // whole row — both halves are written together and there is no half of one to seed.
+    deckFolderPane: null,
     // Empty here and filled by a seed, exactly as the card corpus is: a downloaded feed is a
     // table with rows in it, and "no rows" is the honest state of an install that has never
     // chosen Card Kingdom. `starterSeed` fills both from the corpus.
@@ -5125,6 +5253,13 @@ function toDeckRow(db: FakeDb, d: FakeDeck): DeckRow {
     folderId: d.folderId,
     notes: d.notes,
     theoryEnabled: d.theoryEnabled,
+    // v40's, and read straight off the row with **no `?? false`** beside it, which is the one
+    // thing worth saying here: it is required on {@link FakeDeck} rather than defaulted, because
+    // it is half of the deck's *kind* and the line above is the other half. Placed beside that
+    // line rather than appended with the `?? default` group below, because `DeckRow` carries the
+    // pair adjacently for the same reason — a reader folding the two into a word
+    // (`features/decks/deckKind.ts`) should not have to hunt for the second half.
+    virtualOnly: d.virtualOnly,
     // v38's pair and v39's third, the **fifth, sixth and seventh** columns on the
     // `?? default` footing — and the only ones whose default is `true`. `NOT NULL DEFAULT 1` is
     // the whole of both migrations: a
@@ -7599,6 +7734,18 @@ export function readHandlers(db: FakeDb) {
      * the field rather than passing it through.
      */
     deck_pull_plan: (args: { deckId: number }): DeckPullRow[] => {
+      // **First, ahead of the read, and {@link isVirtual}'s own contract is what makes that
+      // safe**: a deck that is not there answers `false` rather than throwing, so a stale
+      // editor's dead id falls straight through to the {@link DECK_GONE} below — "that deck is
+      // gone" must not become a sentence about virtual decks.
+      //
+      // A refusal rather than the empty vector this read already has a meaning for: zero rows
+      // here mean *there is nothing in your collection this deck needs*, and the dialog says
+      // exactly that — over a deck that will never need anything from a binder, because it is
+      // not made of cardboard at all. {@link deck_missing_plan} makes the same trade on the
+      // other half of the shortfall, and the two refuse together or the dialogs disagree about
+      // what a deck is.
+      if (isVirtual(db, args.deckId)) throw refuse(VIRTUAL_HOLDS_NOTHING);
       const detail = readHandlers(db).deck_get({ id: args.deckId, variant: LIVE });
       if (!detail) throw refuse(DECK_GONE);
       // The crate's `(card_id, finish)` tuple key, spelled as `deck_theory::group_key`'s string
@@ -7747,6 +7894,10 @@ export function readHandlers(db: FakeDb) {
      * hand-minted one here would be a URL nobody ever fetches.
      */
     deck_missing_plan: (args: { deckId: number }): DeckMissingRow[] => {
+      // {@link deck_pull_plan}'s fence, ahead of the shortfall walk and for its reason: a
+      // virtual deck is short of nothing, and an empty shortfall would say the reader has
+      // everything rather than that the question does not apply. The two reads refuse together.
+      if (isVirtual(db, args.deckId)) throw refuse(VIRTUAL_HOLDS_NOTHING);
       // Bound once rather than per row: {@link readHandlers} builds its whole table on every
       // call, and the wish lookup below runs for every printing the deck is short of.
       const reads = readHandlers(db);
@@ -8154,6 +8305,50 @@ export function readHandlers(db: FakeDb) {
      */
     deck_sort: (): string =>
       db.deckSort !== null && db.deckSort !== "" ? db.deckSort : DEFAULT_DECK_SORT,
+
+    /**
+     * `deckfolderpane::deck_folder_pane` — how wide the decks page's folder tree was left, and
+     * whether it was railed.
+     *
+     * The newest `app_meta` setting, and **the only one that answers two fields out of one
+     * row** — which is what makes its fallback worth reading rather than assuming.
+     *
+     * **The two fields are read independently, and that is the crate's decision written down**
+     * (`a_junk_width_leaves_the_collapse_standing`). A stored width of `9999` costs the reader
+     * their width and *nothing else*: the answer is `{ width: null, collapsed: true }` for a
+     * railed tree, so the rail they actually pressed survives a number they never typed. The
+     * tidier-looking fake is the wrong one here — folding both halves to their defaults reads
+     * as "the row is unreadable, start over", and it is a fake teaching a reader that a
+     * hand-edited width can silently un-rail their tree.
+     *
+     * That puts this read **with** the narrowing reads above rather than against them, which is
+     * the correction this comment carries: it said the opposite for one wave, on the reasoning
+     * that one JSON object parses or does not. `flatten_state` drops the one entry it cannot key
+     * and leaves the page beside it standing; this drops the one *field* it cannot use and
+     * leaves the field beside it standing. Same rule, one grain finer.
+     *
+     * **Infallible like {@link readHandlers.nav_collapsed}**, and for its reason: nothing here
+     * throws, because there is nothing useful a page can do with an error that is not "draw the
+     * defaults". A missing row is `{ width: null, collapsed: false }` — and the `null` is the
+     * frontend's cue to draw its own default width, the same absent-rather-than-defaulted rule
+     * {@link readHandlers.mark_colors} keeps for a colour, said about a scalar. A fake inventing
+     * `208` here would be a second opinion about a width the stylesheet owns, and would make
+     * "never dragged" and "dragged to exactly the default" one state.
+     *
+     * Read at launch and only at launch — the page asks once and then owns the state — so what
+     * this read is *for* is the first frame. A story seeded railed has to open railed rather
+     * than opening wide and snapping shut, which is the flash a fake that always answered the
+     * default would hide, and it is a whole pane's width of the desk re-packing on the way past.
+     *
+     * A read, so it answers through every second of a sync — the write below does not.
+     */
+    deck_folder_pane: (): { width: number | null; collapsed: boolean } => ({
+      width:
+        db.deckFolderPane !== null && isStorablePaneWidth(db.deckFolderPane.width)
+          ? db.deckFolderPane.width
+          : null,
+      collapsed: db.deckFolderPane?.collapsed ?? false,
+    }),
 
     /**
      * `mirror::settings::mirror_status` — everything the Backup panel draws, in one round trip.
@@ -8628,6 +8823,31 @@ const ENTRY_IN_A_DECK = "Those copies are in a deck. Cut the card from the deck 
  * honest answer. A press that reported success and moved nothing reads as a card that vanished.
  */
 const THEORY_HOLDS_NOTHING = "A theory list is a plan, and a plan holds no cards.";
+/**
+ * `deck::VIRTUAL_HOLDS_NOTHING`, verbatim — what **every** collection and wishlist command says
+ * when it is pointed at a virtual deck (schema v40, issue #401).
+ *
+ * **{@link THEORY_HOLDS_NOTHING}'s neighbour and not its synonym**, and the pair is worth
+ * reading together because the two sentences are true of different things. A theory row is a
+ * *plan*, so nothing in any folder backs it and there is nothing to give back. A virtual deck's
+ * rows are ordinary `live` rows the reader genuinely intends to play — what it has none of is
+ * *cardboard*, because the deck exists precisely because they do not own any. Saying "a plan
+ * holds no cards" over one of these would be a true sentence about the wrong thing, which is
+ * why {@link writeHandlers.deck_to_collection} asks the deck's kind **before** the row's
+ * variant.
+ *
+ * **In words rather than by answering an empty list**, which is the whole reason this constant
+ * exists. `attributeOwned` already reads 0 for a deck with no group, so a virtual deck would
+ * *silently* produce a "0 owned, all missing" readout — a shopping list a hundred cards long,
+ * from a deck whose owner never meant to buy one of them. An empty shortfall and a deck that
+ * owns nothing by definition are the same JSON and very different sentences.
+ *
+ * **One constant rather than nine**, `deck.rs`'s own argument for naming it on the crate: nine
+ * handlers say it here, and a sentence spelled nine times is a sentence that will be spelled
+ * nine ways.
+ */
+const VIRTUAL_HOLDS_NOTHING =
+  "A virtual deck keeps no cardboard, so it has nothing to compare with your collection.";
 const NOT_THAT_MANY = "There are not that many copies to move.";
 const ZERO_MOVE = "Moving copies needs a quantity of at least one.";
 const DECK_CARD_GONE = "That card is not in this deck any more.";
@@ -9017,6 +9237,15 @@ function isAbsolutePath(path: string): boolean {
  * * the wishlist as a whole, plus each wishlist folder;
  *
  * and one more for `README.txt`, which is part of the deliverable rather than decoration.
+ *
+ * **A virtual deck changes neither term, and it is worth saying why rather than leaving it to
+ * be rediscovered** (schema v40). It is one set of seven like any regular deck: it keeps one
+ * ordinary `live` list, carries `theoryEnabled: false`, and so misses the second set exactly as
+ * a deck with no plan does — which is `mirror::layout`'s own answer and not a coincidence, since
+ * its rows *are* `live` rows. And it has no `collection_folders` group, which needs no arm here
+ * either: the second term counts the folder rows this store actually holds, so a group that was
+ * never made is one fewer file by arithmetic rather than by a branch. **Derived, never a
+ * constant** is what buys that.
  */
 /**
  * An empty zip archive, base64 — the 22-byte end-of-central-directory record and nothing else.
@@ -9518,14 +9747,43 @@ const COLLECTION_REMOVED_KIND = "removed";
 const REMOVED_FOLDER_NAME = "Recently removed";
 
 /**
+ * `deck::is_virtual` — is this deck one the reader tracks without owning cardboard for it?
+ *
+ * **The fact, and never the conclusion**, which is why it answers a `boolean` rather than
+ * throwing {@link VIRTUAL_HOLDS_NOTHING} on its callers' behalf: nine handlers ask it and each
+ * one refuses at a different point in its own sequence — some behind a stamp, one behind the
+ * `deck_cards` row it was pointed at, two ahead of everything. A helper that raised could not be
+ * asked the question for any other purpose, and {@link deckGroup} below is the neighbour that
+ * makes the same choice for the same reason.
+ *
+ * **A deck that is not there answers `false`, and that is deliberate rather than sloppy.**
+ * Nothing here is a fence against a stale id: every caller either writes the deck (and hears
+ * {@link DECK_GONE} from {@link requireDeck}) or reads it (and hears it from `deck_get`), so
+ * raising here would put a second, differently-worded refusal in front of a state each of them
+ * already handles — and it would be the *first* thing said about a deck that is not there, which
+ * is the wrong sentence. `deck::is_virtual`'s `unwrap_or(false)`, spelled as `?? false`.
+ */
+function isVirtual(db: FakeDb, deckId: number): boolean {
+  return db.decks.find((d) => d.id === deckId)?.virtualOnly ?? false;
+}
+
+/**
  * `deck::deck_group` / `collection_alloc::deck_group` — the folder that stands for a deck.
  *
- * **`undefined` rather than a refusal, even though every deck has one.** Schema v25 gave one to
- * every deck that existed and `deck_create` gives one to every deck made since, so the absent
- * arm is unreachable through the app — but a hand-seeded fixture can leave it out, and the two
- * callers that must cope are `deck_delete` (deleting something that is not there is a success)
- * and {@link deck_to_collection} (a reader must always be able to cut a card). Only
- * {@link collection_to_deck} *needs* somewhere to put copies, and that is the one that refuses.
+ * **`undefined` rather than a refusal**, and since schema v40 the absent arm is reachable
+ * through the app rather than only from a fixture: a **virtual** deck is born without a group
+ * and a deck patched into one has its group taken away ({@link isVirtual} above, and
+ * {@link writeHandlers.deck_update} where both directions are written out). That absence is
+ * load-bearing — `owned_by_printing` joins this row, so with none there every owned figure is 0
+ * with nothing asking why — which is exactly why it is not an empty group left standing.
+ *
+ * Every *other* deck has one: schema v25 gave one to every deck that existed and `deck_create`
+ * gives one to every non-virtual deck made since. The two callers that must cope are
+ * `deck_delete` (deleting something that is not there is a success) and
+ * {@link deck_to_collection} (a reader must always be able to cut a card). Only
+ * {@link collection_to_deck} *needs* somewhere to put copies, and that is the one that refuses —
+ * behind its own {@link VIRTUAL_HOLDS_NOTHING} check, so a virtual deck hears about its kind
+ * rather than about a folder it has no use for.
  */
 function deckGroup(db: FakeDb, deckId: number): FakeCollectionFolder | undefined {
   return db.collectionFolders.find(
@@ -10167,6 +10425,43 @@ function theoryCopies(db: FakeDb, deckId: number): number {
   return db.deckCards
     .filter((dc) => dc.deckId === deckId && dc.variant === "theory")
     .reduce((n, dc) => n + dc.quantity, 0);
+}
+
+/**
+ * `deck::deck_kind` — a patch's two kind flags read as **one** answer, in
+ * `(theoryEnabled, virtualOnly)` order.
+ *
+ * **Three kinds from two booleans, and the fourth pair has no meaning.** `false/false` is a
+ * regular deck, `true/false` a deck with a plan beside its actual list, `false/true` a virtual
+ * deck (schema v40). `true/true` names none of the three and there is no fourth kind for it to
+ * become — a plan is a list of cards to *acquire*, and a deck that owns nothing has nothing to
+ * acquire them into — so a patch naming one flag is asking for a **kind** and the other half is
+ * written too.
+ *
+ * **This is why {@link writeHandlers.deck_update} reads the answer rather than the patch**, in
+ * both the history and the row write: a deck moving from theory to virtual has both columns
+ * move, and both are the reader's edit. Recording only the half the caller mentioned would leave
+ * the drawer saying half of what happened, and — worse — reading the raw `theoryEnabled` for the
+ * live-list move would leave a `{ theoryEnabled: false, virtualOnly: true }` patch one careless
+ * edit away from pouring the live list into the plan of a deck that is about to have no
+ * cardboard at all.
+ *
+ * **`=== true` and never a truthiness test or a `?? false`**: absent means "leave it" throughout
+ * {@link DeckPatch}, so a patch that says nothing about either flag must leave both alone, and a
+ * patch that turns one *off* is not asking for a kind and clears nothing. Only switching a flag
+ * **on** names a kind, because only one of the two can be on.
+ *
+ * **Theory wins a tie, and it is the harmless half.** Both `true` is a caller's bug — every
+ * dialog on the other side of the wire sends one kind — but it has to resolve to something.
+ * Becoming virtual is the destructive direction: it files the deck's whole drawer of cardboard
+ * into `Recently removed` and takes its group away, where turning a plan on moves rows between
+ * two of the deck's own lists and touches nothing the reader owns. An ambiguous press must not
+ * be the one that empties a drawer.
+ */
+function deckKind(patch: DeckPatch): [boolean | undefined, boolean | undefined] {
+  if (patch.theoryEnabled === true) return [true, false];
+  if (patch.virtualOnly === true) return [false, true];
+  return [patch.theoryEnabled, patch.virtualOnly];
 }
 
 /**
@@ -11171,6 +11466,13 @@ export function writeHandlers(db: FakeDb) {
       // The deck fence first, so a stale editor's id answers `DECK_GONE` before there is an
       // orphan to worry about.
       const deck = requireDeck(db, args.deckId);
+      // **What kind of deck this is, asked before anything about the card**, and behind
+      // {@link requireDeck} for that call's stated reason: "that deck is gone" and "that deck
+      // holds no cardboard" are different things to be told, and a stale id must hear the first.
+      // A virtual deck tracks no copies at all, so there is nothing here for the folder rule,
+      // the pile or the quantity check below to be about — and asking now is also what keeps the
+      // name arm from inventing a pile this press is going to refuse.
+      if (deck.virtualOnly) throw refuse(VIRTUAL_HOLDS_NOTHING);
       // **The row the copies are coming out of, hoisted above the pile with the fence that needs
       // it** — `collection_alloc`'s own order since issue #358. The deck fence stays *first*, so
       // a stale editor's dead deck id is still told the deck is gone rather than that it does
@@ -11316,6 +11618,15 @@ export function writeHandlers(db: FakeDb) {
       if (args.quantity <= 0) throw refuse(ZERO_MOVE);
       const row = db.deckCards.find((dc) => dc.id === args.deckCardId);
       if (!row) throw refuse(DECK_CARD_GONE);
+      // **The deck's kind before the row's variant**, which is the same order
+      // {@link collection_to_deck} asks them in and is the whole reason the two refusals cannot
+      // be heard the wrong way round: a virtual deck keeps one `live` list and holds no
+      // cardboard for it, so {@link THEORY_HOLDS_NOTHING} would be a true sentence about the
+      // wrong thing. The deck id comes off the row above rather than from the caller — this
+      // command is pointed at a `deck_cards` row — so this is the first statement at which the
+      // question can be asked at all, and {@link DECK_CARD_GONE} still answers a stale editor
+      // first.
+      if (isVirtual(db, row.deckId)) throw refuse(VIRTUAL_HOLDS_NOTHING);
       if (row.variant !== LIVE) throw refuse(THEORY_HOLDS_NOTHING);
       if (args.quantity > row.quantity) throw refuse(NOT_THAT_MANY);
       const deck = requireDeck(db, row.deckId);
@@ -11419,6 +11730,12 @@ export function writeHandlers(db: FakeDb) {
       // end here, which is this fake's rule for every write: a rolled-back transaction takes the
       // bump with it, and a refused pull must not resort the gallery.
       const deck = requireDeck(db, args.deckId);
+      // The deck's kind, before a single pick is read: a virtual deck owns no cardboard, so
+      // there is nothing in any binder for this press to move and nowhere of the deck's to move
+      // it to. Behind the deck fence so a dead id still hears {@link DECK_GONE}; **ahead of the
+      // group** so the refusal names the deck rather than a folder it has no use for — a virtual
+      // deck has none, and {@link NO_DECK_GROUP} would be the true half of the wrong sentence.
+      if (deck.virtualOnly) throw refuse(VIRTUAL_HOLDS_NOTHING);
       const group = deckGroup(db, args.deckId);
       if (!group) throw refuse(NO_DECK_GROUP);
 
@@ -11557,6 +11874,11 @@ export function writeHandlers(db: FakeDb) {
       // a caller sending junk hears about the junk and not about the deck.
       const finish = normaliseFinish(args.finish) ?? "nonfoil";
       const deck = requireDeck(db, args.deckId);
+      // A virtual deck keeps no cardboard, so there is nothing for this press to record and no
+      // group of the deck's to record it into. **Ahead of {@link deckPlays}, which cannot stand
+      // in for it** — a virtual deck's live list plays its cards perfectly well; what it has
+      // none of is copies.
+      if (deck.virtualOnly) throw refuse(VIRTUAL_HOLDS_NOTHING);
       if (!deckPlays(db, args.deckId, args.cardId)) throw refuse(NOT_IN_DECK);
       const group = deckGroup(db, args.deckId);
       if (!group) throw refuse(NO_DECK_GROUP);
@@ -11699,6 +12021,11 @@ export function writeHandlers(db: FakeDb) {
       // there waits until the end here, this fake's rule for every write: a refused press must
       // not resort the gallery.
       const deck = requireDeck(db, args.deckId);
+      // {@link deck_pull_from_collection}'s rider, placed the same way: behind the deck fence so
+      // a dead id still hears {@link DECK_GONE}, ahead of the group so the refusal names the
+      // deck rather than the folder it does not have. A virtual deck is short of nothing to
+      // begin with — {@link deck_missing_plan} refuses the read this dialog was filled from.
+      if (deck.virtualOnly) throw refuse(VIRTUAL_HOLDS_NOTHING);
       // One group per deck since schema v25. Filing at the root instead would record copies no
       // deck claims.
       const group = deckGroup(db, args.deckId);
@@ -12321,6 +12648,17 @@ export function writeHandlers(db: FakeDb) {
         folderId: args.deck.folderId ?? null,
         notes: args.deck.notes ?? null,
         theoryEnabled: args.deck.theoryEnabled ?? false,
+        // v40's, and **the column is set here while nothing is released**, which is
+        // `theoryEnabled`'s arrangement one line up read one field over: a deck being born holds
+        // no copies, so the transition work the patch does — filing the group's cardboard into
+        // `Recently removed` — has nothing to act on. What a create *does* skip is the group
+        // itself, below.
+        //
+        // No fence against `{ theoryEnabled: true, virtualOnly: true }` here, and there is
+        // nothing to fence: `deck_create` writes what it is handed, and a caller sending both is
+        // a caller's bug rather than a third kind. {@link deckKind} is the patch route's
+        // resolution and there is no create-time twin of it in the crate either.
+        virtualOnly: args.deck.virtualOnly ?? false,
         // The DDL's three defaults, and they stay defaults: the view memory is where the reader
         // *left* a deck, so a deck being born has nowhere to have been left. `lastGroupBy`/
         // `lastSortBy` are imported rather than spelled out because the column's default and the
@@ -12347,10 +12685,19 @@ export function writeHandlers(db: FakeDb) {
       // never reaches this line, which is what leaves the previous answer standing.
       db.lastDeckFormat = row.formatKey;
       ensurePredefinedCategories(db, row.id);
-      // **And the group that holds its copies**, in the same breath as the four categories and
-      // for the same reason: a deck that exists without the row saying where its cards sit is a
-      // state nothing downstream expects — {@link collection_to_deck} refuses one outright.
-      createDeckGroup(db, row.id, row.name);
+      // **And the group that holds its copies — unless there are no copies to sit in it.** In
+      // the same breath as the four categories and for the same reason: a deck that exists
+      // without the row saying where its cards sit is a state nothing downstream expects —
+      // {@link collection_to_deck} refuses one outright.
+      //
+      // **A virtual deck is that deck on purpose** (schema v40). It owns no cardboard, so a
+      // group for it would be a drawer every collection command already refuses to file into —
+      // and its *absence* is what makes every owned readout answer 0 with no new branch
+      // anywhere, because {@link ownedByPrinting} looks the group up and answers an empty map
+      // when there is none, which {@link attributeOwned} then spends on nothing. The
+      // alternative — an empty group nothing may write to — is a row every reader has to
+      // remember is special, instead of this one `if`.
+      if (!row.virtualOnly) createDeckGroup(db, row.id, row.name);
       record(db, row.id, DECK_LEVEL, "deck", null, { field: "name", from: null, to: row.name }, 0);
       return toDeckRow(db, row);
     },
@@ -12383,6 +12730,14 @@ export function writeHandlers(db: FakeDb) {
      * A reader who wants the deck copied into a plan they have already begun asks for it by name:
      * {@link deck_theory_copy_from_live} still copies, and still skips rather than folding.
      *
+     * **And the third kind, schema v40.** `virtualOnly` and `theoryEnabled` are one three-way
+     * choice wearing two columns, so setting either **clears the other in the same write** —
+     * {@link deckKind} resolves the pair once and nothing below reads the raw patch again.
+     * Switching `virtualOnly` **on** files the copies the deck's group holds into
+     * `Recently removed` and takes the group away; switching it **off** gives the group back,
+     * empty. Unlike the theory switch it moves **not one `deck_cards` row** in either direction,
+     * which is what lets a reader press it and press it back.
+     *
      * The history is written **per changed field**, and only for fields that actually changed:
      * a dialog that saves an untouched form must not fill the drawer with edits nobody made.
      */
@@ -12392,6 +12747,11 @@ export function writeHandlers(db: FakeDb) {
       const name = patch.name === undefined ? undefined : validName(patch.name);
       const formatKey = patch.formatKey === undefined ? undefined : validFormat(patch.formatKey);
       const bracket = patch.bracket === undefined ? undefined : validBracket(patch.bracket);
+      // The deck's **kind**, resolved once and read by everything below that touches either
+      // flag: the two history arms, the live-list move and the group transition. Neither
+      // `patch.theoryEnabled` nor `patch.virtualOnly` is read again after this line, which is
+      // the whole point — see {@link deckKind}, where the pair and the tie-break are argued.
+      const [theoryEnabled, virtualOnly] = deckKind(patch);
       const deck = requireDeck(db, args.id);
       const before = { ...deck };
       const field = (key: string, from: unknown, to: unknown) =>
@@ -12421,8 +12781,31 @@ export function writeHandlers(db: FakeDb) {
       // One row, whether or not the live list moved below: the move is part of switching the
       // list on rather than a second edit, and N `add` rows for one press would read as a deck
       // somebody typed out.
-      if (patch.theoryEnabled !== undefined && patch.theoryEnabled !== before.theoryEnabled) {
-        field("theory", before.theoryEnabled, patch.theoryEnabled);
+      //
+      // **The resolved half and not `patch.theoryEnabled`**, since schema v40 — see
+      // {@link deckKind}. A patch that turns the deck virtual turns this off too, and that is a
+      // change the reader made and can undo, so it earns its row like any other.
+      if (theoryEnabled !== undefined && theoryEnabled !== before.theoryEnabled) {
+        field("theory", before.theoryEnabled, theoryEnabled);
+      }
+      // v40's, and the word is `deck.rs`'s: `"virtualOnly"`, camelCase — `xGroup`'s rule and the
+      // sixth multi-word key in the switch `auditText.ts` reads. Nothing enforces the agreement,
+      // exactly as that arm says: an unrecognised field falls through to "Changed the deck".
+      //
+      // **The arm above and this one are one press and two rows whenever both columns moved**,
+      // which is this handler's "a patch that changes two fields is two facts" applied to a
+      // change the patch only half spells. Two rows rather than one "changed the deck's kind",
+      // because the drawer is read months later and "turned the plan off" and "made this a
+      // virtual deck" are two things a reader would want to find separately — and because a
+      // single row would have to invent a vocabulary for a value that is stored nowhere.
+      //
+      // **The copies this write releases and the group it takes away are deliberately not
+      // recorded here.** Those land on the *collection*, and `collection_alloc`'s own rule is
+      // that a move records the deck command it stands in for rather than inventing a kind. A
+      // reader looking for where their cards went finds them in `Recently removed`, which is
+      // what that folder is.
+      if (virtualOnly !== undefined && virtualOnly !== before.virtualOnly) {
+        field("virtualOnly", before.virtualOnly, virtualOnly);
       }
       // Read through `?? false` on the `from` side for {@link FakeDeck.separateXGroup}'s reason:
       // an absent column is the DDL's `0`, so a deck that has never been asked and a deck
@@ -12536,9 +12919,15 @@ export function writeHandlers(db: FakeDb) {
       deck.archived = patch.archived ?? deck.archived;
       deck.folderId = patch.folderId ?? deck.folderId;
       deck.notes = patch.notes ?? deck.notes;
-      if (patch.theoryEnabled !== undefined) {
-        const turnedOn = patch.theoryEnabled && !before.theoryEnabled;
-        deck.theoryEnabled = patch.theoryEnabled;
+      // **The resolved half throughout, never `patch.theoryEnabled`** — {@link deckKind}'s
+      // paragraph on exactly this. The condition is the same one for every press that already
+      // moved the live list, and it is *narrower* for one that did not exist before schema v40:
+      // a `{ theoryEnabled: false, virtualOnly: true }` patch resolves the theory half to
+      // `false`, so nothing here can pour the live list into the plan of a deck that is about
+      // to have no cardboard at all.
+      if (theoryEnabled !== undefined) {
+        const turnedOn = theoryEnabled && !before.theoryEnabled;
+        deck.theoryEnabled = theoryEnabled;
         if (turnedOn && theoryCopies(db, deck.id) === 0) {
           moveLiveToTheory(db, deck.id);
           // The tab the reader is put on, because it is now the tab their deck is in. Written
@@ -12547,6 +12936,54 @@ export function writeHandlers(db: FakeDb) {
           deck.lastVariant = "theory";
         }
       }
+      // **Becoming Virtual puts the deck's cardboard back on the reader's desk** (schema v40),
+      // and **moves not one `deck_cards` row** — which is the exact opposite of the theory
+      // switch above it and the whole reason a reader may press this and press it back. Every
+      // card stays in the list and the variant it was in; what moves is the *cardboard*. A deck
+      // that has stopped counting what it owns must not go on holding copies that are then
+      // invisible on the Collection page and unavailable to every other deck.
+      //
+      // **Two release calls, and the order is what empties the drawer rather than a preference.**
+      // {@link releaseUnclaimedCopies} first — what the group holds *over* what the live list
+      // claims — then the live claim itself through {@link releasePileCopies}. The other way
+      // round would compute the surplus against a group the second call had already emptied and
+      // leave a group holding more copies than its list names exactly where it was. Between them
+      // they are total, which is what the drop below needs: the crate's `folder_id` is
+      // `ON DELETE SET NULL`, so a row left behind there would be scattered to the root of the
+      // collection — the wrong destination, and a `UNIQUE constraint failed` the moment the root
+      // already holds that grain.
+      //
+      // **And then the group row, rather than an empty group left standing** —
+      // {@link deck_create}'s argument read from the other end: its *absence* is what makes
+      // every owned readout answer 0 with no new branch anywhere.
+      //
+      // **Ceasing to be Virtual makes the group again, empty**, which is the only way back: a
+      // deck that has been given a group can hold copies, and {@link collection_to_deck} refuses
+      // in words when there is none. The copies are **not** fetched back out of
+      // `Recently removed` — nothing recorded which of them came from here, and that is the
+      // reader's own filing to redo, exactly where `Clear actual list…` leaves it. The **name**
+      // is the one the deck is called *after* this patch, because the rename above has already
+      // run and a group made with the old one would be a drawer labelled with a name the gallery
+      // stopped using in this very write.
+      //
+      // The two arms are exclusive by construction — `virtualOnly` is one value — and neither
+      // can share a press with the theory move above: {@link deckKind} forces the resolved
+      // theory half to `false` on the way in to virtual, and `before.virtualOnly` is true on the
+      // way out, so `turnedOn`'s `!before.theoryEnabled` is the only other thing that could have
+      // been true and a virtual deck's theory switch is already off.
+      if (virtualOnly === true && !before.virtualOnly) {
+        releaseUnclaimedCopies(db, deck.id, LIVE);
+        releasePileCopies(
+          db,
+          deck.id,
+          db.deckCards.filter((dc) => dc.deckId === deck.id && dc.variant === LIVE),
+        );
+        const group = deckGroup(db, deck.id);
+        if (group) db.collectionFolders = db.collectionFolders.filter((f) => f !== group);
+      } else if (virtualOnly === false && before.virtualOnly) {
+        createDeckGroup(db, deck.id, deck.name);
+      }
+      deck.virtualOnly = virtualOnly ?? deck.virtualOnly;
       // `coalesce(?n, separate_x_group)`, and **nothing else happens**: this switch writes one
       // column and touches not one `deck_cards` row. Where the theory switch above seeds a list,
       // this one only changes how the same cards are read — the curve is regrouped in TS, by
@@ -12726,7 +13163,15 @@ export function writeHandlers(db: FakeDb) {
       // Its own group, empty, named after the copy — `deck_create`'s line and for its reason. It
       // is emphatically **not** a copy of the original's contents: the cards are in the original
       // deck, and a duplicate that came with them would be a press that quietly unbuilt a deck.
-      createDeckGroup(db, copy.id, copy.name);
+      //
+      // **Unless the copy is virtual, in which case there is no group to be empty** (schema
+      // v40), which is {@link deck_create}'s `if` and its argument: a copy of a virtual deck is
+      // a virtual deck, and the *absence* of the row is what makes every owned readout answer 0
+      // with no new branch anywhere. `virtualOnly` came across in the spread above and did not
+      // need a line of its own — it is an answer *about the deck* that a copy inherits, which is
+      // `separateXGroup`'s footing rather than the three view-state columns' — so this `if` is
+      // the whole of what the kind costs here.
+      if (!copy.virtualOnly) createDeckGroup(db, copy.id, copy.name);
       const categoryMap = new Map<number, number>();
       for (const c of db.deckCategories.filter((row) => row.deckId === source.id)) {
         const made: FakeDeckCategory = { ...c, id: nextId(db.deckCategories), deckId: copy.id };
@@ -13207,6 +13652,15 @@ export function writeHandlers(db: FakeDb) {
      */
     deck_missing_to_wishlist: (args: { deckId: number }): number => {
       refuseIfBusy(db);
+      // **A virtual deck has nothing to be short of** (schema v40), so this is the one press on
+      // it that would otherwise succeed loudly and wrongly. The shortfall below reads what the
+      // deck plays against what its group holds; a virtual deck has no group, so every card in
+      // it comes back missing and this button would put the entire decklist on the reader's
+      // shopping list — a hundred cards they never meant to buy, from a deck that exists
+      // precisely because they do not intend to own it. First, {@link deck_pull_plan}'s reason:
+      // {@link isVirtual} answers `false` for a deck that is not there, so a stale id still
+      // falls through to the {@link DECK_GONE} below.
+      if (isVirtual(db, args.deckId)) throw refuse(VIRTUAL_HOLDS_NOTHING);
       const detail = readHandlers(db).deck_get({ id: args.deckId, variant: LIVE });
       if (!detail) throw refuse(DECK_GONE);
       const missing = new Map<string, { name: string; quantity: number }>();
@@ -14088,6 +14542,13 @@ export function writeHandlers(db: FakeDb) {
     deck_theory_missing_to_wishlist: (args: { deckId: number; only?: string[] }): number => {
       refuseIfBusy(db);
       if (!db.decks.some((d) => d.id === args.deckId)) throw refuse(DECK_GONE);
+      // **Behind the existence check and ahead of the diff**: "that deck is gone" and "that deck
+      // keeps no cardboard" are different things to be told, and a deck the reader owns nothing
+      // for has nothing to put on a shopping list. Nothing below this line writes a wish for a
+      // deck that answers yes — and a virtual deck cannot be here in any case, since
+      // {@link deckKind} clears the theory switch on the way in, so this is the fence against a
+      // fixture rather than against a press.
+      if (isVirtual(db, args.deckId)) throw refuse(VIRTUAL_HOLDS_NOTHING);
       const only = args.only === undefined ? null : new Set(args.only);
       let touched = 0;
       // The marketplace decides no part of *which* rows are short — it only prices them — so
@@ -14535,6 +14996,63 @@ export function writeHandlers(db: FakeDb) {
       refuseIfBusy(db);
       if (args.sort === "") throw refuse(NO_DECK_SORT);
       db.deckSort = args.sort;
+    },
+
+    /**
+     * `deckfolderpane::set_deck_folder_pane` — remember the folder tree's width and its rail.
+     *
+     * **One write for two fields, and that is the contract rather than a convenience.** The
+     * reader makes two gestures — a drag and a press — and both land in one `app_meta` row; a
+     * command per field would have to read the other half back before writing, and two of those
+     * racing would lose one. So both arrive together and the row is replaced whole, which is
+     * also why a press that only rails the tree still sends the width the page is drawing at,
+     * and why {@link FakeDb.deckFolderPane} has no half-written state to seed.
+     *
+     * **The width is refused and the collapse is not**, which is
+     * {@link writeHandlers.set_flatten_state}'s split drawn with a number where that one has a
+     * section. The `boolean` has no junk state — Tauri's deserializer refused anything that is
+     * not `true` or `false` before this handler was reached, the argument
+     * {@link writeHandlers.set_nav_collapsed} makes in full. The **number** has one, and
+     * refusing it is the half a fake is easiest to leave out: the read above drops an out-of-band
+     * width *in silence*, so a fake that stored `9999` would let a story drag the tree, save,
+     * read back the default and look like it worked. `set_card_zoom`'s note names that bug and
+     * this is the second number here it applies to.
+     *
+     * **The width is refused in two sentences, not one, and the split is the crate's**: `width`
+     * is a `u32`, so `208.5` and `-1` never reach the shipped command's body at all — the route
+     * answers `RouteError::Args`, a message about the *call*, where an out-of-band `9999` gets
+     * into the body and comes back `RouteError::Failed`, a message about the *value*. A fake has
+     * no deserializer, so the first of those has to be made by hand or a frontend that forgot to
+     * round would pass every story here and fail on the desk. Two sentences rather than one
+     * because a story renders them, and "this is not a number I can be sent" and "this is not a
+     * width I may store" are two different things to have to read. {@link isStorablePaneWidth}
+     * folds them, deliberately, for the reason a *read* has to.
+     *
+     * The band sentence names the storage bound rather than the drag's stops, which is
+     * {@link MIN_FOLDER_PANE_WIDTH}'s whole note: a width this handler accepts and the handle
+     * cannot reach is a hand-edited row, not a bug.
+     *
+     * It honours `busy` like every other ordinary write — `deckfolderpane.rs` takes the write
+     * connection through `sync::with_write`, and the lock comes first: a drag finished while a
+     * sync holds the connection answers BUSY, because nothing has looked at the number yet. The
+     * read beside it takes `db_read` and keeps answering, so the tree a reader was refused stays
+     * drawn in the shape they left it.
+     */
+    set_deck_folder_pane: (args: { width: number; collapsed: boolean }): void => {
+      refuseIfBusy(db);
+      if (!Number.isInteger(args.width) || args.width < 0) {
+        throw refuse(
+          `invalid args \`width\` for command \`set_deck_folder_pane\`: ` +
+            `${args.width} is not a u32.`,
+        );
+      }
+      if (!isStorablePaneWidth(args.width)) {
+        throw refuse(
+          `${args.width} is not a folder pane width this app can store. ` +
+            `Expected a whole number between ${MIN_FOLDER_PANE_WIDTH} and ${MAX_FOLDER_PANE_WIDTH}.`,
+        );
+      }
+      db.deckFolderPane = { width: args.width, collapsed: args.collapsed };
     },
 
     /**

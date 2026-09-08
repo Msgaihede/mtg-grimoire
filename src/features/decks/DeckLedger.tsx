@@ -28,6 +28,14 @@ import { deckStats } from "./DeckStats";
  * rules make of the deck ({@link check}), what the format calls powerful, and the bracket the two
  * add up to are each a press with a layer behind it; this component owns where they sit and the
  * middle one's words, and nothing about what they open.
+ *
+ * **Five figures on a regular deck and four on a virtual one** (2026-09-08, issue #401). A Virtual
+ * deck is one the reader tracks without owning the cardboard, so `Owned` would read `0` beside a
+ * red `100 missing` for a list nobody ever claimed to have — the one figure on this line that is
+ * about a *binder* rather than about the deck, and therefore the one that goes. `tracksCollection`
+ * is what says so; the other four are arithmetic over the rows and are true of every kind of deck.
+ * (Six `<dt>`s and five, counting the `Format` term, which is not a figure and is drawn as one —
+ * that is the count `DeckLedger.test.tsx` asserts the hairlines against.)
  */
 export function DeckLedger({
   cards,
@@ -35,6 +43,7 @@ export function DeckLedger({
   formatName,
   gameChangers,
   tight,
+  tracksCollection,
   check,
   bracket,
 }: {
@@ -69,6 +78,25 @@ export function DeckLedger({
    * half of the bracket popup's own headline.
    */
   tight: boolean;
+  /**
+   * Does this deck read the collection at all? `deckKind.ts`'s `tracksCollection(deck)`, answered
+   * by the host.
+   *
+   * `false` drops the `Owned` term and the hairline in front of it — a **Virtual** deck owns
+   * nothing by construction, so the figure would be a zero and a red shortfall about cardboard
+   * the reader never said they had. **Absent rather than dimmed to an em dash**, which is this
+   * feature's standing answer and the right one here twice over: a dash on this line already
+   * means *no number to give* (the average of a deck of nothing but lands), and re-using it for
+   * *no question to ask* would put two meanings on one glyph.
+   *
+   * **The boolean and not the deck**, for `formatName`'s reason one prop up: this line is handed
+   * facts and draws them. `DeckEditor` answers it once for the header, the band, the strip and
+   * the table, so the four cannot disagree about whether this deck has a binder behind it.
+   *
+   * **Required rather than optional**, so a host that has not thought about it cannot silently
+   * get the arm that draws an owned count over a deck that owns nothing.
+   */
+  tracksCollection: boolean;
   /** The format check — a press and the panel of findings behind it, or nothing at all while
    *  `format_specs` has not answered. */
   check: ReactNode;
@@ -164,32 +192,43 @@ export function DeckLedger({
           {formatPrice(stats.price, marketplace.currency)}
         </dd>
       </div>
-      <Rule />
 
       {/* What the deck secured from the collection, and what it could not. The shortfall is the
           one red thing on this line and it is a *fact*, not a refusal — the press that acts on it
-          is `Send missing to wishlist`, under the deck with the charts. */}
-      <div className="flex shrink-0 items-baseline gap-1.5">
-        <dt className="text-[0.6875rem] text-dim">Owned</dt>
-        <dd className="font-mono text-[0.8125rem] tabular-nums">
-          {count(stats.owned)}
-          {stats.missing > 0 && (
-            <span className="ml-1.5 text-[0.6875rem] text-destructive">
-              {tight ? (
-                <>
-                  {/* The words for a screen reader, the sign for the eye. `−3` is only legible
-                      beside the number it is short of, which is exactly what a reader hearing
-                      this line one term at a time does not have. */}
-                  <span className="sr-only">{count(stats.missing)} missing</span>
-                  <span aria-hidden="true">−{count(stats.missing)}</span>
-                </>
-              ) : (
-                `${count(stats.missing)} missing`
+          is `Send missing to wishlist`, under the deck with the charts, **on a deck that has a
+          collection to be short of**. It is drawn under the same condition as this term, so a
+          reader is never pointed at a button that is not there.
+
+          **The hairline is inside the condition, not above it**, which is the whole of what makes
+          this a clean deletion: every term on this line is preceded by its own `Rule`, so a term
+          that leaves without one strands a divider between the last figure and the controls
+          pinned right — punctuation with nothing after it to punctuate. */}
+      {tracksCollection && (
+        <>
+          <Rule />
+          <div className="flex shrink-0 items-baseline gap-1.5">
+            <dt className="text-[0.6875rem] text-dim">Owned</dt>
+            <dd className="font-mono text-[0.8125rem] tabular-nums">
+              {count(stats.owned)}
+              {stats.missing > 0 && (
+                <span className="ml-1.5 text-[0.6875rem] text-destructive">
+                  {tight ? (
+                    <>
+                      {/* The words for a screen reader, the sign for the eye. `−3` is only
+                          legible beside the number it is short of, which is exactly what a reader
+                          hearing this line one term at a time does not have. */}
+                      <span className="sr-only">{count(stats.missing)} missing</span>
+                      <span aria-hidden="true">−{count(stats.missing)}</span>
+                    </>
+                  ) : (
+                    `${count(stats.missing)} missing`
+                  )}
+                </span>
               )}
-            </span>
-          )}
-        </dd>
-      </div>
+            </dd>
+          </div>
+        </>
+      )}
 
       <div className="ml-auto flex shrink-0 items-center gap-1.5">
         {check}

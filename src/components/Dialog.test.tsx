@@ -244,6 +244,40 @@ describe("Dialog", () => {
   });
 
   /**
+   * **A tall dialog stops 5vh short of the window's edge, and the ceiling is stated as an inset**
+   * (2026-09-08).
+   *
+   * A panel whose body outgrows the window draws to `max-h-full`, which is the scrim's *padded*
+   * box — so at a flat 24px every such dialog drew to 24px of the title bar and stopped reading
+   * as a panel over the app. `AllPrintingsDialog` reported it and carried the fix in its own
+   * `size` for two days; the same wall is Categories' on a long deck, History's, Pull from
+   * collection's and Import's, so it moved here and every dialog got it.
+   *
+   * **Two things this asserts as absences, and each is a real way to undo it.** The panel must
+   * keep `max-h-full` and grow **no** `sm:max-h-…` of its own: a named variant here would sit on
+   * the same property as `CardDetailModal`'s `min-[640px]:max-h-[min(825px,80vh)]`, and Tailwind
+   * emits named variants *after* arbitrary ones — so the shell would silently outrank that host's
+   * ceiling at every width, which is the mixed-families trap `PANEL_SIZE` documents. And the
+   * inset keeps its `max(1.5rem,…)` floor: a bare `5vh` is 19.5px on a phone in landscape at
+   * 844×390, less glass than the 24px across, on the one class of window that still has an inset
+   * at all.
+   *
+   * **jsdom has no layout engine and applies no stylesheet**, so the ceiling itself is invisible
+   * here; the numbers are in `docs/reference/frontend-design.md`.
+   */
+  it("leaves 5vh of glass above and below a dialog that outgrows the window", async () => {
+    open({ size: "w-[48rem]" });
+    const dialog = await panel();
+    const scrim = dialog.parentElement as HTMLElement;
+
+    expect(scrim.classList.contains("sm:py-[max(1.5rem,5vh)]")).toBe(true);
+
+    // The panel's own height rule is untouched — this is the box it is a percentage *of* moving,
+    // not a second rule beside it.
+    expect([...dialog.classList].filter((c) => c.includes("max-h-"))).toEqual(["max-h-full"]);
+  });
+
+  /**
    * **Below the phone fold the panel is the window, and this moves every dialog in the app**
    * (2026-09-03) — deliberately, unlike `flanks` and `container` beside it. A 16px inset and a
    * rounded border on a 358px-wide panel is chrome nobody chose, and Deck settings, Categories
@@ -264,12 +298,18 @@ describe("Dialog", () => {
     const dialogPanel = await panel();
     const scrim = dialogPanel.parentElement as HTMLElement;
 
-    // The scrim's inset is zero below `sm` and 24px at and above it. `p-4` is gone: `sm` is
-    // 640px, which is this fold exactly, so an intermediate rung would emit a rule for a
+    // The scrim's inset is zero below `sm`, and above it 24px across with a *taller* inset down
+    // — `max(1.5rem,5vh)`, which is where every dialog's 90vh ceiling lives. `p-4` is gone: `sm`
+    // is 640px, which is this fold exactly, so an intermediate rung would emit a rule for a
     // zero-width range.
     expect(scrim.classList.contains("p-0")).toBe(true);
-    expect(scrim.classList.contains("sm:p-6")).toBe(true);
+    expect(scrim.classList.contains("sm:px-6")).toBe(true);
+    expect(scrim.classList.contains("sm:py-[max(1.5rem,5vh)]")).toBe(true);
     expect(scrim.classList.contains("p-4")).toBe(false);
+    // The old uniform inset, asserted as an absence: it is the ceiling being reverted, and
+    // `sm:p-6` beside `sm:py-…` is two live rules for one property with stylesheet order as the
+    // tiebreak.
+    expect(scrim.classList.contains("sm:p-6")).toBe(false);
 
     // The frame is the same fold: no rounding and no border on a panel that fills the glass.
     expect(dialogPanel.classList.contains("sm:rounded-xl")).toBe(true);

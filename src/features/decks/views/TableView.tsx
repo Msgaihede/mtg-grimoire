@@ -117,6 +117,7 @@ const RENAME_HEIGHT = 48;
 export function TableView({
   groups,
   marketplace,
+  tracksCollection,
   violations,
   theoryPlan,
   onSelect,
@@ -129,6 +130,27 @@ export function TableView({
   /** Which marketplace the Price column and every band's total are quoted from. One value for
    *  the whole view, so a band and the rows under it cannot name two currencies. */
   marketplace: Marketplace;
+  /**
+   * Does this deck read the collection at all? `deckKind.ts`'s `tracksCollection(deck)`, answered
+   * by the host.
+   *
+   * `false` **drops the Owned column from the list**, and dropping it is the whole point rather
+   * than an economy of markup. `OwnedBadge` already returns `null` for a row with nothing owned
+   * and nothing wished, so a *Virtual* deck (issue #401) would draw a headed column that is blank
+   * on every row of every deck — a question the table keeps asking and never answers, and one a
+   * reader can only resolve by knowing a rule that is nowhere on screen. The column's own cell
+   * guard is a different absence and stays: an inactive pile is one pile of a deck that *does*
+   * own cards.
+   *
+   * **It is a column and not a cell, so the widths move with it.** The grid template is built from
+   * this list, so a virtual deck's table spends the 4rem on the two flexible columns instead of on
+   * an empty gutter — which is the same argument the `Move…` select's removal made about 72px of
+   * empty gutter on every row.
+   *
+   * **Required rather than optional**, so a host that has not thought about it cannot silently get
+   * the column back.
+   */
+  tracksCollection: boolean;
   violations?: Map<string, ValidationIssue[]>;
   /** The deck's plan — `theoryMatch.ts`'s two lookups and the deck's own two mark switches,
    *  handed in whole like `violations` beside it. `undefined` for a deck with no plan. */
@@ -316,17 +338,30 @@ export function TableView({
         cell: (row) =>
           row.kind === "card" ? formatPrice(row.card.unitPrice, marketplace.currency) : null,
       },
-      {
-        key: "owned",
-        width: "4rem",
-        header: "Owned",
-        // The allocator claims nothing for an inactive category, so a badge there would read
-        // as "you own none of these" when the truth is "this deck reserved none".
-        cell: (row) =>
-          row.kind === "card" && row.card.categoryActive ? (
-            <OwnedBadge owned={row.card.ownedQuantity} />
-          ) : null,
-      },
+      // **Spread away entirely for a deck with no collection behind it, rather than drawn empty**
+      // (2026-09-08, issue #401). `OwnedBadge` answers `null` for a row that owns nothing and
+      // wishes for nothing, so a Virtual deck left with this column has a heading over eighty
+      // blank cells: a table asking one question of every row and answering it for none. The two
+      // absences below are different in kind and both survive — an inactive pile is a fact about
+      // one pile of a deck that does own cards, and a `0` there means *this deck reserved none*.
+      //
+      // Its position is unchanged for the decks that keep it: between Price and Labels, where a
+      // reader comparing what is dearest and what is missing reads the two side by side.
+      ...(tracksCollection
+        ? [
+            {
+              key: "owned",
+              width: "4rem",
+              header: "Owned",
+              // The allocator claims nothing for an inactive category, so a badge there would read
+              // as "you own none of these" when the truth is "this deck reserved none".
+              cell: (row: Row) =>
+                row.kind === "card" && row.card.categoryActive ? (
+                  <OwnedBadge owned={row.card.ownedQuantity} />
+                ) : null,
+            },
+          ]
+        : []),
       {
         key: "label",
         // A dot and a truncated name; empty in most decks, and it was holding 112px while the
@@ -361,7 +396,7 @@ export function TableView({
             : null,
       },
     ],
-    [editable, actions, marketplace, tip],
+    [editable, actions, marketplace, tracksCollection, tip],
   );
 
   // Closed over the column count, because the band's one cell has to say how many columns it

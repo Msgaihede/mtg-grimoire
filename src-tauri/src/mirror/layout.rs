@@ -608,6 +608,13 @@ mod tests {
             folder_id: None,
             notes: None,
             theory_enabled: false,
+            // Schema v40's column, and the layout reads it for the same reason it reads none of
+            // the marks below: it does not have to. A virtual deck carries `theory_enabled:
+            // false`, so `plan_files` already gives it the one-list shape a regular deck gets —
+            // seven files at the top and the `Theory/` directory merely *owned*, so a pass can
+            // prune what an earlier kind left there. That is the right answer rather than a
+            // coincidence: a virtual deck has exactly one list, and its rows are `live` rows.
+            virtual_only: false,
             // Schema v38's pair and v39's third, `true` because that is the columns' own
             // `DEFAULT 1` and this
             // builder's contract is "what a fresh deck would carry". The layout reads none of

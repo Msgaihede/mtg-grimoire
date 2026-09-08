@@ -34,8 +34,15 @@
  * clearing the pile files those copies into `Recently removed` — the reader still physically
  * owns them, and a confirmation saying only "this cannot be undone" was the destructive half of
  * a sentence whose other half is reassuring. A **Theory** pile is a plan and holds no copies, so
- * it says so instead rather than promising a folder nothing will arrive in. The two are one
- * ternary because they answer the same question and a reader must never see both.
+ * it says so instead rather than promising a folder nothing will arrive in. The three are one
+ * ternary because they answer the same question and a reader must never see two of them.
+ *
+ * **The third is a virtual deck** (2026-09-08, issue #401) — one the reader tracks without owning
+ * the cardboard. Its rows are `live` rows and it has no collection group at all, so the variant
+ * alone sent it down the `Recently removed` arm and named a folder nothing would ever arrive in.
+ * It is a {@link ClearCategory} prop rather than a fourth reading of the variant, for the reason
+ * {@link ClearDeck}'s own doc gives at length: *which list* and *does this deck own cardboard*
+ * stopped being the same question the moment a virtual deck's one list was a `live` one.
  */
 import { plural, verb } from "@/lib/counts";
 import type { DeckCategory, DeckVariant } from "@/lib/ipc";
@@ -45,6 +52,7 @@ import { CONFIRM_CANCEL, CONFIRM_DESTRUCTIVE, useConfirmFocus } from "./metaRows
 export function ClearCategory({
   category,
   variant,
+  virtual,
   pending,
   onCancel,
   onCleared,
@@ -53,6 +61,16 @@ export function ClearCategory({
   /** Which list is being emptied — the one the editor is open on. Named in the sentence, because
    *  "its cards" over a deck with two lists is the ambiguity this dialog exists to close. */
   variant: DeckVariant;
+  /**
+   * Whether this deck keeps no cardboard — `DeckRow.virtualOnly`, schema v40. See
+   * {@link ClearDeck}'s prop of the same name, where the argument is written in full: a virtual
+   * deck's rows are `live` rows with no collection group behind them, so the variant alone
+   * offered the `Recently removed` promise to a deck with no folder for anything to arrive in.
+   *
+   * Required for that file's reason — a flag whose wrong default is a **sentence** cannot have
+   * one.
+   */
+  virtual: boolean;
   /** The write is the host's, so whether it is in flight is too. */
   pending: boolean;
   onCancel: () => void;
@@ -80,11 +98,16 @@ export function ClearCategory({
       {/* The sentence carries the outcome, not the button — `DeleteCategory`'s rule, and the
           reason holds here too: this is the line a reader's eye is on while they decide. */}
       <p className="mt-1.5 text-[0.6875rem] leading-relaxed text-destructive">
-        The {plural(here, "card")} in it {verb(here, "leaves", "leave")} the {listName(variant)}{" "}
-        and the pile stays.{" "}
-        {variant === "live"
-          ? "Any copies you own go back to Recently removed."
-          : "A theory list holds no copies, so nothing else moves."}
+        The {plural(here, "card")} in it {verb(here, "leaves", "leave")}{" "}
+        the {listName(variant, { virtual })} and the pile stays.{" "}
+        {/* The three answers {@link ClearDeck} argues, in the same order and for the same
+            reason — a virtual deck has no group, so the middle arm is the one the variant
+            could not reach. */}
+        {virtual
+          ? "This deck keeps no copies, so nothing else moves."
+          : variant === "live"
+            ? "Any copies you own go back to Recently removed."
+            : "A theory list holds no copies, so nothing else moves."}
       </p>
       {elsewhere > 0 && (
         <p className="mt-1 text-[0.6875rem] leading-relaxed text-dim">

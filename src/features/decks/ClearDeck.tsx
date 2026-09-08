@@ -45,6 +45,15 @@
  * destructive half of a sentence whose other half is reassuring. A **Theory** list is a plan and
  * holds no copies, so it says so instead of promising a folder nothing will arrive in. The two are
  * one ternary because they answer the same question and a reader must never see both.
+ *
+ * **A third answer joined them on 2026-09-08 (issue #401), and it is the one the variant could
+ * not reach.** A **virtual** deck — one the reader tracks without owning the cardboard — keeps
+ * its rows in `live` like any ordinary deck, and has no collection group at all. So the variant
+ * said `live` and the sentence promised `Recently removed` to a deck with no folder for anything
+ * to arrive in: the reassurance was not merely unhelpful, it named a place the reader could then
+ * go and fail to find their cards. It takes a {@link ClearDeck} prop rather than a fourth reading
+ * of the variant, because *which list* and *does this deck own cardboard* stopped being the same
+ * question the moment a virtual deck's one list was a `live` one.
  */
 import { type JSX } from "react";
 import { plural, verb } from "@/lib/counts";
@@ -54,6 +63,7 @@ import { CONFIRM_CANCEL, CONFIRM_DESTRUCTIVE, useConfirmFocus } from "./metaRows
 
 export function ClearDeck({
   variant,
+  virtual,
   cardCount,
   otherCount,
   pending,
@@ -63,6 +73,26 @@ export function ClearDeck({
   /** Which list is being emptied. Named in the sentence, because "the deck" over a deck with
    *  two lists is the ambiguity this confirmation exists to close. */
   variant: DeckVariant;
+  /**
+   * Whether this deck keeps no cardboard — `DeckRow.virtualOnly`, schema v40.
+   *
+   * **It decides both halves of this confirmation, and the second half is the one that was
+   * false.** A virtual deck's rows *are* `live` rows, so `variant` alone put it under the
+   * `Recently removed` promise — and a virtual deck has no collection group, so there are no
+   * copies to give back and no folder for them to arrive in. That is the exact failure the
+   * import preview's mode note is drawn behind four conditions to avoid, met here from the other
+   * direction: **a reassurance that names a folder nothing will reach is worse than no
+   * reassurance**, because a reader who believes it will go looking.
+   *
+   * The first half is milder and still wrong: `listName` would call the one list a virtual deck
+   * has *the actual list*, which is one half of a two-tab vocabulary this reader has never been
+   * shown.
+   *
+   * Required rather than optional, this folder's rule for a flag whose wrong default is a
+   * sentence: `false` promises a folder to a deck that has none, and `true` withholds one from
+   * every ordinary deck.
+   */
+  virtual: boolean;
   /** Copies in the list being emptied — the number the destructive button quotes. */
   cardCount: number;
   /** Copies in the list that is NOT being touched. Drawn only when > 0. */
@@ -77,11 +107,12 @@ export function ClearDeck({
   // yet, a stray Enter must not decide for them, and here the default answer would be the
   // destructive one over a whole list. The mechanism is the hook's; this is why this site wants
   // it. The name is the question without its mark, so it says which list without asking twice.
-  const confirm = useConfirmFocus(`Clear the ${listName(variant)}`);
+  const list = listName(variant, { virtual });
+  const confirm = useConfirmFocus(`Clear the ${list}`);
 
   return (
     <div {...confirm}>
-      <p className="text-xs">Clear the {listName(variant)}?</p>
+      <p className="text-xs">Clear the {list}?</p>
 
       {/* The sentence carries the outcome, not the button — the rule both of this folder's other
           destructive questions follow, and the reason holds here too: this is the line a reader's
@@ -89,9 +120,18 @@ export function ClearDeck({
       <p className="mt-1.5 text-[0.6875rem] leading-relaxed text-destructive">
         The {plural(cardCount, "card")} in it {verb(cardCount, "leaves", "leave")} the deck{" "}
         and the piles stay.{" "}
-        {variant === "live"
-          ? "Any copies you own go back to Recently removed."
-          : "A theory list holds no copies, so nothing else moves."}
+        {/* **Three answers, and the middle one is the new arm rather than a special case of
+            either.** The `Recently removed` promise is true of a list whose rows are backed by
+            collection rows in this deck's group; a virtual deck's rows are `live` rows with no
+            group behind them, so `variant` alone offered it a folder nothing would ever arrive
+            in. It is worded from the deck rather than from the list — *this deck keeps no
+            copies* — because that is the fact, and a reader who has just been told their cards
+            are leaving should be told plainly that none of them were cardboard. */}
+        {virtual
+          ? "This deck keeps no copies, so nothing else moves."
+          : variant === "live"
+            ? "Any copies you own go back to Recently removed."
+            : "A theory list holds no copies, so nothing else moves."}
       </p>
       {otherCount > 0 && (
         <p className="mt-1 text-[0.6875rem] leading-relaxed text-dim">

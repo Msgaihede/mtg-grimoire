@@ -18,6 +18,7 @@ function clear(props: Partial<Parameters<typeof ClearDeck>[0]> = {}) {
   render(
     <ClearDeck
       variant="live"
+      virtual={false}
       cardCount={12}
       otherCount={3}
       pending={false}
@@ -79,6 +80,30 @@ describe("ClearDeck", () => {
         "A theory list holds no copies, so nothing else moves.",
     );
     expect(screen.queryByText(/Recently removed/)).not.toBeInTheDocument();
+  });
+
+  /**
+   * A **virtual** deck (issue #401) — and the case the variant alone answered **wrongly**, which
+   * is why it is asserted from three directions rather than one.
+   *
+   * Its rows are `live` rows, so the ternary reached the `Recently removed` arm and promised a
+   * folder to a deck that has no collection group for anything to arrive in. The sentence read
+   * perfectly and named a place the reader could go and fail to find their cards, which is the
+   * class of defect this whole component exists to prevent.
+   *
+   * The two negatives are the assertions that would have caught it; the positive alone would
+   * pass against a build that drew both sentences.
+   */
+  it("promises no folder on a virtual deck, and calls its one list the deck", () => {
+    clear({ variant: "live", virtual: true, otherCount: 0 });
+
+    expect(screen.getByText("Clear the deck?")).toBeInTheDocument();
+    expect(outcome()).toHaveTextContent(
+      "The 12 cards in it leave the deck and the piles stay. " +
+        "This deck keeps no copies, so nothing else moves.",
+    );
+    expect(screen.queryByText(/Recently removed/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/actual list/)).not.toBeInTheDocument();
   });
 
   /**

@@ -201,6 +201,11 @@ pub const COMMANDS: &[&str] = &[
     // existing rather than the setting being read-only.
     "deck_sort",
     "set_deck_sort",
+    // **The decks page's folder tree**, both halves for `deck_sort`'s reason — a browser that
+    // could read the width and not write it would open every session on the tree the desktop had
+    // last been left with and never record a drag of its own.
+    "deck_folder_pane",
+    "set_deck_folder_pane",
     "flatten_state",
     "set_flatten_state",
     // **The three docked search columns' shared row**, and both halves for `deck_sort`'s reason.
@@ -1889,6 +1894,25 @@ pub fn call(
             )
         }
 
+        // `decksort`'s pair one setting over, and infallible on this side for its reason: a browser
+        // that cannot read the row draws the folder tree at the width `FolderTree` would have
+        // picked anyway. The write's two arguments are both required — the frontend knows the
+        // width and the collapse together, because it has just drawn them together.
+        "deck_folder_pane" => {
+            let conn = crate::sync::lock_db_read(state);
+            encode(command, crate::deckpane::stored(&conn))
+        }
+
+        "set_deck_folder_pane" => {
+            let width: u32 = field(command, args, "width")?;
+            let collapsed: bool = field(command, args, "collapsed")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| crate::deckpane::store(c, width, collapsed))
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
         "flatten_state" => {
             let conn = crate::sync::lock_db_read(state);
             encode(command, crate::flatten::stored(&conn))
@@ -2693,6 +2717,56 @@ mod tests {
         assert_eq!(zoom["search"], json!(1.5));
     }
 
+    /// **The folder tree's width and collapse, round-tripped through the route** — the pair beside
+    /// the one above, and written separately because the thing to pin here is the *shape* rather
+    /// than only the survival: the read answers an object with both fields, `width` is `null`
+    /// before anything is stored rather than absent, and an out-of-band width is a
+    /// [`RouteError::Failed`] and not a silent save.
+    #[test]
+    fn the_folder_tree_pane_is_written_and_read_back_through_the_route() {
+        let s = state("web-route-deck-folder-pane");
+
+        assert_eq!(
+            call(&s, "deck_folder_pane", &json!({})).unwrap(),
+            json!({ "width": null, "collapsed": false }),
+            "a browser that has never dragged the tree gets both defaults, not a missing key"
+        );
+
+        call(
+            &s,
+            "set_deck_folder_pane",
+            &json!({ "width": 264, "collapsed": true }),
+        )
+        .unwrap();
+        assert_eq!(
+            call(&s, "deck_folder_pane", &json!({})).unwrap(),
+            json!({ "width": 264, "collapsed": true })
+        );
+
+        // The band is storage's, so the route reports the refusal rather than swallowing it.
+        let err = call(
+            &s,
+            "set_deck_folder_pane",
+            &json!({ "width": 40000, "collapsed": false }),
+        )
+        .unwrap_err();
+        assert!(matches!(&err, RouteError::Failed(_)), "got {err:?}");
+        assert_eq!(
+            call(&s, "deck_folder_pane", &json!({})).unwrap(),
+            json!({ "width": 264, "collapsed": true }),
+            "a refused write leaves the reader's choice standing"
+        );
+
+        // A negative width never reaches `store` — `u32` refuses it at the argument.
+        let err = call(
+            &s,
+            "set_deck_folder_pane",
+            &json!({ "width": -5, "collapsed": false }),
+        )
+        .unwrap_err();
+        assert!(matches!(&err, RouteError::Args { .. }), "got {err:?}");
+    }
+
     /// **`set_marketplace` routes to `store`, not to `set_marketplace_now`**, and this is the
     /// evidence the difference is only the mirror.
     ///
@@ -2905,9 +2979,13 @@ mod tests {
         // answers **144** — counted from the merged array, not reached by adding 2 and 1, which
         // is the same discipline arriving at the same number for a reason that would still hold
         // if it had not. If a later merge turns this red, take the number from `left`.
+        //
+        // The folder-tree branch read **146** — 144 plus its two routes, and then confirmed by
+        // running the assertion red and copying `left` rather than by trusting the arithmetic,
+        // which is the only reading of this paragraph that survives the next merge.
         assert_eq!(
             COMMANDS.len(),
-            144,
+            146,
             "update this number when a command is added"
         );
     }

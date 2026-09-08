@@ -63,6 +63,7 @@ const BURN: DeckRow = {
   folderId: null,
   notes: "Sideboard plan lives in the Maybeboard.",
   theoryEnabled: false,
+  virtualOnly: false,
   theoryMarkExact: true,
   theoryMarkName: true,
   theoryMarkUnplanned: true,
@@ -611,30 +612,58 @@ describe("DeckSettingsDialog", () => {
   });
 
   /**
-   * The switch, and the two sentences it owes the reader — this is the control they decide by,
-   * and both halves of what it does are surprising if they are not said.
+   * The deck's kind, which was a `Theory deck` switch until issue #401 made it a three-way
+   * group — and what this host owes it is **one write carrying both columns**.
    *
-   * **Turning it on moves the deck into the plan and leaves the live list empty.** It used to
-   * copy, and the description used to say so; a description that still promised a copy would be
-   * the app telling a reader their sleeved-up deck is safe as they press the thing that empties
-   * it. Turning it *off* is still not a delete.
+   * `theory_enabled` and `virtual_only` are two columns spelling one choice, so a relay that
+   * sent the field that changed and left the other standing would be the way the impossible
+   * `true, true` row gets into the database. The assertion is therefore on the whole patch and
+   * not on the field the press moved: `toHaveBeenCalledWith(4, { theoryEnabled: true })` passes
+   * against exactly the bug this is here to catch.
+   *
+   * **And one call, not two.** Two `update`s would be two transactions and two history lines
+   * for one press, with a moment in between in which the deck is neither kind — and switching
+   * *to* theory pours the live list into the plan, so that moment is one a card write can land
+   * in. `toHaveBeenCalledTimes(1)` is the half of this that no patch-shape assertion covers.
    */
-  it("switches the theory list on, and says what it does to the deck in both directions", async () => {
+  it("writes the deck's kind as one patch carrying both columns", async () => {
     open();
     await loaded();
 
-    const toggle = screen.getByRole("switch", { name: /Theory deck/ });
-    expect(toggle).toHaveAttribute("aria-checked", "false");
-    expect(screen.getByText(/keeps every row/)).toBeInTheDocument();
-    expect(
-      screen.getByText(/makes the deck you have the plan and starts the actual list empty/),
-    ).toBeInTheDocument();
-    // The sentence it must no longer make: nothing is copied any more.
-    expect(screen.queryByText(/copies the live deck/)).not.toBeInTheDocument();
+    const group = screen.getByRole("group", { name: "Deck kind" });
+    expect(within(group).getByRole("button", { name: "Regular" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
 
-    await userEvent.click(toggle);
+    await userEvent.click(within(group).getByRole("button", { name: "Theory + Actual" }));
 
-    await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { theoryEnabled: true }));
+    await waitFor(() =>
+      expect(deckUpdate).toHaveBeenCalledWith(4, { theoryEnabled: true, virtualOnly: false }),
+    );
+    expect(deckUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * The third kind, from the same control and through the same one write.
+   *
+   * The pair is the assertion again and it matters more in this direction: a deck switched to
+   * Virtual **from a plan** is the press that has to put `theoryEnabled` back to `false`, and a
+   * relay carrying only the column that was pressed would leave it standing — which is the
+   * `true, true` row exactly.
+   */
+  it("writes Virtual as the same pair, clearing the plan in the same patch", async () => {
+    deckGet.mockResolvedValue(withPlan());
+    open();
+    await loaded();
+
+    const group = screen.getByRole("group", { name: "Deck kind" });
+    await userEvent.click(within(group).getByRole("button", { name: "Virtual" }));
+
+    await waitFor(() =>
+      expect(deckUpdate).toHaveBeenCalledWith(4, { theoryEnabled: false, virtualOnly: true }),
+    );
+    expect(deckUpdate).toHaveBeenCalledTimes(1);
   });
 
   /**
@@ -667,7 +696,9 @@ describe("DeckSettingsDialog", () => {
     open();
     await loaded();
 
-    expect(screen.getByRole("switch", { name: /Theory deck/ })).toBeInTheDocument();
+    // The kind control itself is there, which is what stops this passing on a panel that
+    // failed to draw at all.
+    expect(screen.getByRole("group", { name: "Deck kind" })).toBeInTheDocument();
     expect(screen.queryByRole("switch", { name: /Matching printing/ })).toBeNull();
     expect(screen.queryByRole("switch", { name: /Different printing/ })).toBeNull();
     expect(screen.queryByRole("switch", { name: /Not in the theory list/ })).toBeNull();
@@ -802,16 +833,16 @@ describe("DeckSettingsDialog", () => {
   });
 
   /**
-   * **The switch that takes the plan away is a few rows up this same dialog**, so the deck can
+   * **The control that takes the plan away is a few rows up this same dialog**, so the deck can
    * stop having a theory list while its clear confirmation is standing — and the two halves of
    * one control disagreed: the trigger was gated on `theoryEnabled` and the open question was
    * not, so the reader was left being asked to clear a list nothing else on the screen admitted
    * to.
    *
-   * The deck is re-read rather than the switch being pressed, because it is the **row** the
-   * question is reconciled against — a plan taken away on another device and arriving in a
-   * refetch has to close it just the same, and driving the switch would prove only the local
-   * path. `asking` is derived at render for this, never reconciled in an effect.
+   * The deck is re-read rather than the press being what closes it, because it is the **row**
+   * the question is reconciled against — a plan taken away on another device and arriving in a
+   * refetch has to close it just the same, and driving the control alone would prove only the
+   * local path. `asking` is derived at render for this, never reconciled in an effect.
    */
   it("withdraws the theory question when the deck stops keeping a plan", async () => {
     deckGet.mockResolvedValue(withPlan());
@@ -821,9 +852,14 @@ describe("DeckSettingsDialog", () => {
     await userEvent.click(screen.getByRole("button", { name: /Clear theory list/ }));
     expect(screen.getByRole("group", { name: "Clear the theory list" })).toBeInTheDocument();
 
-    // The plan goes; the rows it held do not, which is what the switch's own copy promises.
+    // The plan goes; the rows it held do not, which is what the kind control's own caption
+    // promises.
     deckGet.mockResolvedValue({ ...withPlan(), deck: { ...withPlan().deck, theoryEnabled: false } });
-    await userEvent.click(screen.getByRole("switch", { name: /Theory deck/ }));
+    await userEvent.click(
+      within(screen.getByRole("group", { name: "Deck kind" })).getByRole("button", {
+        name: "Regular",
+      }),
+    );
 
     await waitFor(() =>
       expect(screen.queryByRole("group", { name: "Clear the theory list" })).toBeNull(),
@@ -1172,6 +1208,89 @@ describe("DeckSettingsDialog", () => {
     await waitFor(() =>
       expect(deckPullFromCollection).toHaveBeenCalledWith(4, [{ entryId: 11, quantity: 3 }]),
     );
+  });
+
+  /*
+   * ---- A Virtual deck, which reads no collection at all -------------------------------------
+   *
+   * Issue #401's third deck kind: a list the reader tracks without owning the cardboard. What
+   * this dialog owes it is one absence and one survival — the whole `Fill this deck from your
+   * collection` block goes, and `Empty a list` stays, because a deck the reader owns none of
+   * still has cards in it.
+   *
+   * **Absent, not greyed**, which is this file's own standing rule (the `Clear theory list…` arm
+   * has made it since it shipped) rather than a new one: a greyed control under a state the
+   * reader chose reads as something broken. So every case below is a `queryBy…` that must find
+   * nothing, and the `getBy…` beside it is what stops the file passing on a dialog that failed
+   * to render at all.
+   */
+
+  /**
+   * The section, the button and — the half no rendering assertion can see — the query behind it.
+   *
+   * `deck_pull_plan` **refuses a virtual deck by name**, so a hook left enabled would not answer
+   * an empty plan quietly: it would put a real error sentence on this screen, under a heading
+   * that has no business being there. That is why the assertion on `deckPullPlan` is here rather
+   * than left to the section's absence to imply — the section could be gated and the query left
+   * running, and everything visible would look right.
+   */
+  it("draws nothing collection-shaped on a virtual deck, and asks for no plan", async () => {
+    deckGet.mockResolvedValue(detail({ virtualOnly: true }));
+    open();
+    await loaded();
+
+    expect(screen.queryByText("Fill this deck from your collection")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Import missing cards from collection/ })).toBeNull();
+    expect(deckPullPlan).not.toHaveBeenCalled();
+  });
+
+  /**
+   * And the ordinary deck still gets all three, which is what stops the case above passing
+   * against a dialog that had simply stopped drawing the section.
+   *
+   * The same three claims, inverted, over the file's default deck — so a gate accidentally
+   * written the wrong way round, or widened to every deck, is two red cases rather than one
+   * silently-satisfied `queryBy`.
+   */
+  it("still draws the collection section on a deck that is not virtual", async () => {
+    open();
+    await loaded();
+
+    expect(screen.getByText("Fill this deck from your collection")).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: /Import missing cards from collection/ }),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(deckPullPlan).toHaveBeenCalledWith(4));
+  });
+
+  /**
+   * Emptying survives, and there is exactly **one** button to do it with.
+   *
+   * The count is the assertion. A virtual deck's `theoryEnabled` is `false` by construction —
+   * the two columns spell one three-way choice — so the theory arm is already gated and no
+   * second guard was added for it; `toHaveLength(1)` is what proves that reading rather than
+   * asserting it in prose. The name is matched on a **pattern** for this file's standing reason
+   * (a greyed button carries its reason in its name) and deliberately stops at `Clear`: the word
+   * after it comes from `listName`, which is where a virtual deck's own wording is decided and
+   * pinned, and an assertion that re-spelled it here would either duplicate that helper's test
+   * or read its constant back at it.
+   */
+  it("still offers a clear on a virtual deck, and offers exactly one", async () => {
+    deckGet.mockResolvedValue({
+      ...detail({ virtualOnly: true }),
+      categories: [
+        { ...CATEGORIES[0], cardCount: 4, cardCountAllVariants: 4 },
+        { ...CATEGORIES[1], cardCount: 3, cardCountAllVariants: 3 },
+      ],
+    });
+    open();
+    await loaded();
+
+    expect(screen.getByText("Empty a list")).toBeInTheDocument();
+    const clears = screen.getAllByRole("button", { name: /^Clear / });
+    expect(clears).toHaveLength(1);
+    expect(clears[0]).toBeEnabled();
+    expect(clears[0]).not.toHaveAccessibleName(/theory/i);
   });
 });
 

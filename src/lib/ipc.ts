@@ -36,6 +36,7 @@
  * `PairingStatus`/`PairingOffer`/`PairingHandshake`/`PairingSealedKey`/
  * `PairingProgress`/`QrMatrix`/`PairedDevice`      — `src-tauri/src/sync_pair/pairing.rs`,
  *                                                  `.../identity.rs`, `.../invite.rs`
+ * `DeckFolderPane`                                — `src-tauri/src/deckpane.rs`
  * `ScannerAsset`/`ScannerStatus`/`ScannerSidecar`/
  * `ScannerCaptured`                                — `src-tauri/src/scanner.rs`
  * `ScannerOptions`/`ScannerVerdict`/`ScannerFrameSize`/
@@ -54,7 +55,8 @@
  * mirror keeps the Rust spelling verbatim; `ipc.test.ts`'s `snakeMirrors` is the table that
  * compares them with no camel step.
  *
- * **Nine settings carry no struct at all.** Each is one `app_meta` row: three answered as a
+ * **Ten settings are one `app_meta` row each, and nine of them carry no struct at all.** Of the
+ * nine: three answered as a
  * bare string — `getMarketplace`/`setMarketplace` (`src-tauri/src/marketplace.rs`),
  * `printingGroupBy`/`setPrintingGroupBy` (`src-tauri/src/card.rs`) and
  * `deckSort`/`setDeckSort` (`src-tauri/src/decksort.rs`) — five as a bare map,
@@ -63,11 +65,11 @@
  * (`src-tauri/src/flatten.rs`), `markColors`/`setMarkColor`
  * (`src-tauri/src/markcolors.rs`) and `searchOpen`/`setSearchOpen`
  * (`src-tauri/src/searchopen.rs`), and one as a
- * bare `boolean`: `navCollapsed`/`setNavCollapsed` (`src-tauri/src/nav.rs`). All nine are
+ * bare `boolean`: `navCollapsed`/`setNavCollapsed` (`src-tauri/src/nav.rs`). All ten are
  * the shape a stored preference has to have: the read falls back on its default for a row that
  * is missing *or* holds a value this build does not recognise, and only the *write* refuses.
  *
- * Seven of them are therefore typed loosely here rather than as their unions: the narrowing
+ * Eight of them are therefore typed loosely here rather than as their unions: the narrowing
  * belongs to the module that owns the vocabulary (`@/lib/marketplace`,
  * `@/features/card/printings`, `@/lib/cardZoom`, `@/lib/store` for both of its two rows,
  * `@/features/decks/deckSort`, `@/lib/useMarkColors`, `@/features/search/useSearchOpen`), and a
@@ -90,6 +92,24 @@
  * three rows, six commands, three query keys and three prefetches for one fact. It is
  * {@link ipc.searchOpen} now, a map keyed by section — so the setting moved out of the boolean
  * paragraph and into the map one without a word of either argument changing.
+ *
+ * **The tenth is the first stored preference that carries a struct**, and it is on the list above
+ * rather than in the paragraph below because of it: {@link DeckFolderPane}
+ * (`src-tauri/src/deckpane.rs`) is how wide the decks page's folder tree was dragged *and*
+ * whether it is folded to its rail, and the two are one row because they are one gesture's worth
+ * of state — a reader who folds a tree they had widened must come back to both facts, and two
+ * rows would be two writes that can half-land. **A struct rather than a map** for the reason
+ * {@link ipc.searchOpen} is a map rather than two rows, arrived at from the other end: the
+ * search-column row has one *kind* of value under keys this side invents, and this one has two
+ * *different* values under names both sides already know, so a `Record<string, unknown>` here
+ * would throw away the only thing worth checking. Being a struct is also what puts it on
+ * `ipc.test.ts`' mirror table, where the nine below cannot be — a bare `boolean` has no fields
+ * to compare — so this is the one stored setting whose *shape* cannot drift silently.
+ * **`width` is nullable and `collapsed` is not**, which is the same asymmetry those nine turn on:
+ * how wide is a number a reader has to have produced, so a database nobody has dragged has
+ * nothing honest to say and says `null`; folded-or-not has a default that is true of every
+ * database from the first launch. `@/features/decks/useFolderPane` is where the `null` becomes a
+ * pixel count, and `FolderTree` owns that number.
  *
  * The zoom row, the list-layout row, the flatten row, the mark-colour row and the search-column
  * row are the five of the nine whose *shape* is a map, and the difference is worth a sentence:
@@ -2838,6 +2858,21 @@ export interface DeckInput {
    * unchanged.
    */
   theoryEnabled?: boolean;
+  /**
+   * Whether the new deck is one the reader tracks without owning the cardboard. See
+   * {@link DeckRow.virtualOnly}, where the kind is argued in full.
+   *
+   * **At create this sets the column and releases nothing**, for {@link DeckInput.theoryEnabled}'s
+   * reason one field up: a deck being born holds no copies, so the transition work the patch
+   * does — filing the group's cardboard into `Recently removed` — has nothing to act on. What a
+   * create *does* skip is the deck group itself: a virtual deck is born without one, where the
+   * patch route has to take an existing one away.
+   *
+   * Sending it with `theoryEnabled: true` is a caller's bug and not a third kind. Rust writes
+   * the two columns so the pair can never both be set; there is no combination to spell here
+   * that {@link deckKind} cannot read back.
+   */
+  virtualOnly?: boolean;
 }
 
 /**
@@ -2904,8 +2939,29 @@ export interface DeckPatch {
    * Switching it off **keeps every row** — it hides a switch, it does not delete a list, and
    * nothing in the backend ever deletes a `theory` row except the ordinary card writes the
    * reader makes against it.
+   *
+   * **Setting it clears {@link DeckPatch.virtualOnly} in the same write**, because the two are
+   * one three-way choice wearing two columns — see {@link DeckRow.virtualOnly}.
    */
   theoryEnabled?: boolean;
+  /**
+   * Whether this deck is one the reader tracks without owning the cardboard. See
+   * {@link DeckRow.virtualOnly}, where the kind is argued in full.
+   *
+   * **Switching it on files the copies the deck's group holds into `Recently removed` and takes
+   * the group away**, in the same transaction. Unlike {@link DeckPatch.theoryEnabled} above it
+   * moves not one `deck_cards` row — every card stays in the list and the variant it was in,
+   * which is the whole reason a reader may press this and press it back. What moves is the
+   * *cardboard*: a deck that has stopped counting what it owns must not go on holding copies
+   * that are then invisible on the Collection page and unavailable to every other deck.
+   *
+   * **Switching it off gives the deck its group back, empty.** The copies are not fetched from
+   * `Recently removed` — that is the reader's own filing to redo, exactly where
+   * `Clear actual list…` leaves it — because nothing recorded which of them came from here.
+   *
+   * **It clears {@link DeckPatch.theoryEnabled} in the same write**, for the reason above.
+   */
+  virtualOnly?: boolean;
   /**
    * Whether this deck draws the **green** theory mark — the live row that is the printing the
    * plan named. See {@link DeckRow.theoryMarkExact}, where the whole rule is written.
@@ -3148,6 +3204,43 @@ export interface DeckRow {
    * switch *moves* the live list into theory and quite deliberately leaves live empty.
    */
   theoryEnabled: boolean;
+  /**
+   * Whether this deck is one the reader tracks **without owning the cardboard** — an MTGO or
+   * Arena list, a proxy pile, a deck they are only reading about. `decks.virtual_only INTEGER
+   * NOT NULL DEFAULT 0`, schema v40, and `false` on every deck that predates it, which is the
+   * state every existing deck is in.
+   *
+   * **It is the third deck kind, and the three are two booleans rather than an enum.** Regular
+   * is `theoryEnabled: false, virtualOnly: false`; Theory + Actual is `true, false`; Virtual is
+   * `false, true`. Rust refuses the fourth combination by writing the other column in the same
+   * patch, so `true, true` is unrepresentable — see `deckKind` in
+   * `features/decks/deckKind.ts`, which is the one place that folds the pair into a word and
+   * the only thing any surface should branch on.
+   *
+   * **A virtual deck keeps one `live` list, and that is deliberate rather than incidental.** It
+   * reads as "a plan with no actual version" — no variant switch is drawn, so the reader never
+   * meets the word *Actual* — but the rows stay in the variant every other read already counts.
+   * {@link DeckRow.cardCount} and the gallery's colour bar both count `variant = 'live'`, so a
+   * virtual deck whose cards sat in `theory` would report **0 cards under an empty bar on every
+   * tile, forever**. This is the same rule that kept `live` as the stored word when the tab was
+   * renamed `Actual`: the label moved and the value did not.
+   *
+   * **What it turns off is every reading of the collection and the wishlist**, which is the
+   * whole of the feature. There is no owned count, no missing count, no shortage mark, no
+   * `Pull from collection`, no `Add missing`, no `Send missing to wishlist`, no Collection tab
+   * in the deck's own search panel. Rust refuses each of those writes by name
+   * (`deck::VIRTUAL_HOLDS_NOTHING`) rather than answering an empty list, because an empty
+   * shortfall and a deck that owns nothing by definition are the same JSON and very different
+   * sentences.
+   *
+   * **A virtual deck has no `collection_folders` group**, and that is where the isolation
+   * actually comes from rather than from a branch at each reader: `owned_by_printing` joins the
+   * deck's group, so with none there every owned figure is `0` with nothing asking why.
+   * Switching a deck to virtual files the copies its group held into `Recently removed` first —
+   * the reader still owns the cardboard, it is simply no longer filed under a deck that has
+   * stopped counting it.
+   */
+  virtualOnly: boolean;
   /**
    * Whether this deck draws the **green** theory mark — the live row that is the printing the
    * plan named.
@@ -5254,6 +5347,30 @@ export interface ReviewRow {
 }
 
 /**
+ * How the decks page's folder tree was last left — one `app_meta` row, and the only stored
+ * preference in this file that carries a struct.
+ *
+ * Two fields because they are one gesture's worth of state and not two settings that happen to be
+ * about the same sidebar: a reader who widens the tree and then folds it has said two things about
+ * one column, and a build that stored them in two rows would have two writes that can half-land —
+ * a fold remembered against a width that was not, or the reverse. See this file's header for why
+ * that makes it a struct rather than {@link searchOpen}'s map.
+ *
+ * **Neither field is clamped here and neither should be.** The drag's own floor and ceiling are
+ * `FolderTree`'s and `useDeskWidth`'s, and they are a fact about the window this row was *not*
+ * written in — a narrow session that stored its own squeeze would be a reader's width thrown away
+ * by a window they resized once. The crate refuses a width that could never be a width at all and
+ * takes every other number as typed; `@/features/decks/useFolderPane` is where it becomes the
+ * pixel count the tree is drawn at.
+ */
+export interface DeckFolderPane {
+  /** How wide the reader dragged the folder tree, in px — `null` on a database nobody has dragged. */
+  width: number | null;
+  /** Whether the tree is folded to its rail. `false` on a database nobody has folded it in. */
+  collapsed: boolean;
+}
+
+/**
  * Which edge detector runs — `Method` in `crates/card-scanner/src/session.rs`, whose
  * `#[serde(rename_all = "lowercase")]` is the whole of the mapping.
  */
@@ -7161,8 +7278,6 @@ export const ipc = {
   setMarkColor: (mark: string, color: string | null) =>
     invoke<void>("set_mark_color", { mark, color }),
   /**
-   * Whether the deck editor's card search column was last left open.
-  /**
    * Whether each of the app's docked card-search columns was last left open, as section name →
    * open.
    *
@@ -7202,6 +7317,58 @@ export const ipc = {
    */
   setSearchOpen: (section: string, open: boolean) =>
     invoke<void>("set_search_open", { section, open }),
+  /**
+   * How the decks page's folder tree was last left — how wide the reader dragged it, and whether
+   * it is folded to its rail.
+   *
+   * The **tenth** `app_meta` setting and the **first that carries a struct** — see this file's
+   * header, and {@link DeckFolderPane} for why the two facts are one row. **Infallible by
+   * signature**, which is {@link navCollapsed}'s contract and for its reason: the decks page reads
+   * this while it is drawing, and there is nothing it could do with an error that is not just
+   * "draw the tree at its default width" — so the far end answers that instead of making this side
+   * spell it out. A missing row, a row this build cannot parse and a row that cannot be read at
+   * all are all `{ width: null, collapsed: false }`.
+   *
+   * **`width` reaches this side as `number | null` and is deliberately not defaulted at the far
+   * end.** `null` is *the reader has never dragged this*, which the crate can say honestly and a
+   * number would be it inventing a pixel count for a column it does not draw —
+   * {@link markColors}' split, where what an uncustomised mark looks like belongs to the
+   * stylesheet. `@/features/decks/useFolderPane` turns the `null` into
+   * `DEFAULT_FOLDER_TREE_WIDTH_PX`, which is `FolderTree`'s number.
+   */
+  deckFolderPane: () => invoke<DeckFolderPane>("deck_folder_pane"),
+  /**
+   * Remember the tree's width and its fold, together.
+   *
+   * Two arguments where its neighbours in this family take one or two, and Tauri matches by name:
+   * **`width` and `collapsed`**. Both are sent on every write because the row is one struct — a
+   * caller that only means to change the fold still has to say what the width is, which is what
+   * makes the pending-write race in `@/features/decks/useFolderPane` a race worth solving there
+   * rather than a shape to be fixed here.
+   *
+   * **`width` is a `number` and never `null` on this side of the wire**, though the read answers
+   * `null` — the asymmetry {@link setMarkColor} has in the other direction. There is no "leave it
+   * as it was": once a reader has dragged or folded anything, this app knows a width and says it,
+   * and the hook supplies `DEFAULT_FOLDER_TREE_WIDTH_PX` for the fold that arrives before any
+   * drag. What that costs is one thing and it is worth naming: a reader who folds a tree they have
+   * never resized freezes *today's* default into their database, so a later build that picks a
+   * different default will not reach them — `features/decks/labelColors.ts`' cost, paid here
+   * because a nullable argument would be a second way to spell "unchanged" that only one of the
+   * two fields could use.
+   *
+   * **The only refusal is a width that could never be a width** — the crate bounds the number so
+   * `app_meta` cannot collect a row every later read would discard, and it does not check it
+   * against the *window*, deliberately: what fits is a fact about a desk this crate never
+   * measures, and a clamp here would make one narrow session permanent. That is
+   * `CardSearchPanel`'s clamp split stated one level down.
+   *
+   * Answers `collection::BUSY` under a running sync, like every other write, and **a refusal here
+   * is deliberately not surfaced** — {@link setNavCollapsed}'s trade, for its reason: the reader is
+   * looking at the width they just dragged, it stays where they put it for this session, and what
+   * a BUSY costs is only the next launch's starting width for that tree.
+   */
+  setDeckFolderPane: (width: number, collapsed: boolean) =>
+    invoke<void>("set_deck_folder_pane", { width, collapsed }),
   /**
    * How the deck gallery was last ordered — one `app_meta` row holding `"<key>:<direction>"`,
    * e.g. `"updated:desc"`.
