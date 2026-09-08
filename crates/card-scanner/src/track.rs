@@ -296,13 +296,14 @@ impl Observation {
     /// nothing else the scanner sees is — which is why the member it names can be trusted
     /// where a hash's cannot.
     ///
-    /// Weighted above a clean title read but not beyond argument. Measured over the corpus
-    /// with the fallback crops it resolves 15 of 39 rectifications and 14 of those are right,
-    /// so roughly one resolve in fifteen is a confident wrong answer — a misread digit, which
-    /// no amount of parsing fixes. A single frame must not be able to carry that on its own;
-    /// several agreeing frames should walk away with it, and at 2.0 against appearance's 1.0
-    /// for *which card* — with 20.0 for *which printing*, where nothing else can tell one
-    /// from another — they do.
+    /// **Below a clean title read on *which card*, and alone on *which printing*.** A clean
+    /// read is worth 6.0 for the card and nothing at all for the printing; this is worth 2.0
+    /// and 20.0. Measured over the corpus with the fallback crops it resolves 15 of 39
+    /// rectifications and 14 of those are right, so roughly one resolve in fifteen is a
+    /// confident wrong answer — a misread digit, which no amount of parsing fixes. A single
+    /// frame must not be able to carry that on its own; several agreeing frames should walk
+    /// away with it, and at 2.0 against appearance's 1.0 they do. The two fields below say
+    /// what each half of that is for.
     pub fn from_collector(key: [u8; ID_LEN], member: [u8; ID_LEN]) -> Observation {
         Observation {
             key,

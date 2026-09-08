@@ -790,14 +790,26 @@ mod tests {
         out
     }
 
-    /// Every top-level key `live.html` reads off a frame — `j.<key>` and `latest?.<key>` —
-    /// except the one the page itself adds (`round_trip_ms`) and the names that are not
-    /// verdict keys (`ok` is; `tracked` is; `error` is).
+    /// Every top-level key `live.html` reads off a frame, under every name it holds one by —
+    /// `j`, `latest` and `lastOcr` — except the one the page itself adds (`round_trip_ms`) and
+    /// the names that are not verdict keys (`ok` is; `tracked` is; `error` is).
+    ///
+    /// **The optional-chaining spellings are not optional, and leaving them out made this test
+    /// vacuous.** `ocr` is read *only* as `j?.ocr` and `lastOcr?.ocr` (`live.html:621`–`624`);
+    /// with a plain `j.` needle alone the scrape yielded 20 keys without it, so deleting
+    /// `Verdict::ocr` would have left this green while blanking the page's OCR panel.
     fn keys_the_page_reads() -> Vec<String> {
         let html = include_str!("bin/live.html");
+        let ident = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '$';
         let mut keys = std::collections::BTreeSet::new();
-        for needle in ["j.", "latest?.", "latest."] {
+        for needle in ["j.", "j?.", "latest.", "latest?.", "lastOcr.", "lastOcr?."] {
             for (i, _) in html.match_indices(needle) {
+                // Anchored to a name boundary: `j.` at the tail of `obj.foo` is somebody
+                // else's property, and reading a key off it would invent one the verdict
+                // then has to carry for ever.
+                if html[..i].chars().next_back().is_some_and(ident) {
+                    continue;
+                }
                 let rest = &html[i + needle.len()..];
                 let key: String = rest
                     .chars()
@@ -819,7 +831,15 @@ mod tests {
         let v = s.frame(&blank_jpeg(), &FrameOptions::default());
         let json = serde_json::to_value(&v).expect("serialise");
         let obj = json.as_object().expect("an object");
-        let missing: Vec<_> = keys_the_page_reads()
+        let keys = keys_the_page_reads();
+        // **The scrape itself can fail silently, and did.** A needle that stops matching makes
+        // the census vacuously green, so the key that is reachable only through the optional
+        // spellings is asserted for by name — it is the canary for the whole scrape.
+        assert!(
+            keys.contains(&"ocr".to_string()),
+            "the scrape lost the optional-chaining reads: {keys:?}"
+        );
+        let missing: Vec<_> = keys
             .into_iter()
             // `error` is skipped when there is none; a blank frame has one, so it is present.
             .filter(|k| !obj.contains_key(k))
