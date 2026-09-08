@@ -514,7 +514,14 @@ pub fn run() {
             marketplace_feed::marketplace_feed_status,
             combos::combos_status,
             combos::combos_refresh,
+            // **Two reads whose names differ by one letter and which ask opposite
+            // questions.** `combos_for_cards` (plural) takes a set of printing ids and
+            // answers which combos that set *fully contains* — the deck bracket's fourth
+            // signal. `combos_for_card` (singular) takes one `oracle_id` and answers every
+            // combo that *names* it, however many of the other pieces the reader has; that
+            // is the card page's question and it is paged.
             combos::combos_for_cards,
+            combos::combos_for_card,
             combos::combos_clear,
             tags::oracle::oracle_tags_refresh,
             tags::oracle::oracle_tags_status,

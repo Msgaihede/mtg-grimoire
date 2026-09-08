@@ -122,10 +122,29 @@ deliberately**: no screenshots are stored.
   `feedFetchError` and the two tag ones, and
   `bracketMismatch` is `starter` plus a fifth deck the reader has told `Bracket 2` whose cards
   force the estimate's floor to 4. `starter` seeds the combo catalogue itself, exactly as it
-  seeds the price feeds and both taxonomies — **seven combos, two of them live-verified against
-  Commander Spellbook on 2026-08-27 and five constructed**, because the corpus's playable half
-  can make only two real ones and neither reaches the `R`/`P`/`C`/`E` letters the advisory has
-  to draw. `COMBO_FIXTURES` in `db.ts` says which is which, per row.
+  seeds the price feeds and both taxonomies, and **`COMBO_FIXTURES` in `db.ts` is in two halves
+  that are read for two different things** — no count of either is written here, because
+  `db.test.ts` answers it and a number in this file goes red nowhere:
+  - **The hand-written half, where every row argues for its own existence.** Two are
+    **live-verified** — `POST /find-my-combos` over every oracle card in `cards.ts` on
+    **2026-08-27**, with Spellbook's own ids, letters, feature names and popularity figures — and
+    the rest are **constructed**, because the corpus's playable half can make only those two and
+    neither reaches the `R`/`P`/`C`/`E` letters the bracket advisory has to draw, nor a
+    `requires[]` template, nor an unowned piece, nor a piece the corpus has never synced. Each row
+    says at its own line which it is, and **the four prose fields are constructed even on the two
+    live rows**: the probe predates corpus schema 2 and did not record them. **Fixing that is a
+    change to `scripts/gen-storybook-cards.mjs`'s `SELECTIONS`, not to a fixture** — the corpus is
+    generated wholesale, so a hand-written card row would be a UUID nothing regenerates.
+  - **A generated half, which exists to make a *count* big enough** — enough combos on one card
+    that `CombosDialog`'s page size leaves a second page, so a story can press **Show more** and
+    get something. They are generated rather than typed because typing them would be that many
+    more chances to disagree with each other, and they join the same exported list rather than a
+    second one, which would be the two-catalogues drift this file warns about one table over. Two
+    properties of them are load-bearing rather than arbitrary: their popularity **ascends with
+    their id**, so the stored order is the exact reverse of the answer and a handler that forgot
+    to sort cannot pass by accident; and every one of them names a card **no seeded Commander
+    deck holds**, which is the whole of what keeps every pre-existing bracket story answering
+    exactly what it answered before.
 - **`starter` seeds both tag taxonomies too**, derived from the corpus the same way. Oracle: **32
   oracle cards, covering 42 of the 59 printings** (measured by `db.test.ts`, which fails rather
   than letting this line rot), closed over their ancestors as `oracle_tag_cards` stores them, so

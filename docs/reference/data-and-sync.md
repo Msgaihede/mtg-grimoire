@@ -518,7 +518,15 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
 - **The single-file ladder is frozen at v26**, and `schema::LEGACY_SINGLE_FILE_VERSION` is the
   answer; schema 27 splits the file in two and the halves number themselves separately
   (`USER_SCHEMA_VERSION` on the reader's file — this page stops spelling out which number two
-  sentences from here, and says why — `CORPUS_SCHEMA_VERSION` 1 on the rebuildable one). This
+  sentences from here, and says why — `CORPUS_SCHEMA_VERSION` on the rebuildable one, which stood
+  at **1** from the split until it grew its first and only rung on 2026-09-08: **corpus schema
+  2**, four prose columns on `combos`, described in
+  [commander-brackets.md](commander-brackets.md). This page names that rung rather than parking
+  the head number beside it, for the reason the next two sentences give about the other half of
+  the pair — and note the two scales are **deliberately incomparable**, so nothing may subtract
+  one from the other: a user version says what has been done to rows that exist nowhere else, a
+  corpus version says whether this file's shape is what the build expects, and only the corpus
+  one is allowed to give up and rebuild.) This
   line read **v18** for two
   whole rungs, because a prose-only edit routes to neither CI job and nothing goes red when a
   ladder entry rots. **It then read 30 for two more**, through v31 and v32, and so did

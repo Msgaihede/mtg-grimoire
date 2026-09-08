@@ -132,8 +132,14 @@ both plus the frontend.
   which is one above a deck's group
   holding only copies its live list claims at `(card_id, finish)`, itself one above a
   condition learning to say nothing —
-  `CORPUS_SCHEMA_VERSION` 1, deliberately
-  incomparable). This line read **v25** while that was head, and
+  `CORPUS_SCHEMA_VERSION` **2** since 2026-09-08, deliberately
+  incomparable and **not to be subtracted from the other**: a user version is "what has been done
+  to rows that exist nowhere else", a corpus version is "is this file's shape what this build
+  expects". The corpus number stood at 1 from the split until the combo feed's four prose columns
+  landed, which is the corpus ladder's first rung ever and the only one it has — **and it is
+  gated on the table's shape rather than on this number**, for a reason that catches every fresh
+  install and is written up under *Commander Spellbook* below.
+  This line read **v25** while that was head, and
   [the ladder's history](../docs/reference/data-and-sync.md) is the story. (This line read
   **v18** for two whole rungs, then **v20** for two more, then **v23** for one and **v24** for
   one, because a prose-only edit routes to neither CI job: v19 added `deck_cards.finish`, v20 the
@@ -416,16 +422,59 @@ shared_cell` walks both into two databases and compares them column by column.
   Near Mint from both feeds, cheapest row wins a collision, and an unpriced finish gets
   **no row** rather than a zero.
 - **Commander Spellbook's combos are a fourth optional bulk download and live in `combos` /
-  `combo_cards` / `combo_meta`** (schema v26). `src/combos.rs` is the only writer, and it is
-  modelled on `marketplace_feed.rs` and **not** on `tags/` — this is not Scryfall, so it gets its
-  **own `reqwest` client**, its own timeouts, no share of Scryfall's pacing budget and no place in
-  its 429 lockout. What binds every part of it, each rule a way this feed is allowed to fail:
+  `combo_cards` / `combo_meta`** — created by schema v26 and **brought to head by corpus schema
+  2**, which is the corpus ladder's first and only rung. `src/combos.rs` is the only writer, and
+  it is modelled on `marketplace_feed.rs` and **not** on `tags/` — this is not Scryfall, so it
+  gets its **own `reqwest` client**, its own timeouts, no share of Scryfall's pacing budget and no
+  place in its 429 lockout. What binds every part of it, each rule a way this feed is allowed to fail:
   - **Streaming end to end**, because the file expands 23× (27 542 314 B gzipped → 639 585 506 B,
     measured 2026-08-27) and almost all of that is Scryfall image URLs nothing here wants. Byte
-    stream → a temp file under `tmp/` → `GzDecoder` → `serde_json` with a `DeserializeSeed` over
-    the `variants` array, one variant live at a time. `MAX_FEED_BYTES` is checked against the
+    stream → a temp file under `tmp/` → 64 KB chunks → `feed::frame::Decoder`, which sniffs the
+    gzip magic and decompresses → `feed::frame::Elements`, which frames one `variants[]` element
+    at a time by brace depth → `serde_json::from_slice` on that one element. One variant is live
+    at a time. **Push-shaped rather than pull, and that is what the web target cost**: the
+    `DeserializeSeed` over the array this module shipped with drives `read()` and blocks until it
+    gets bytes, which a browser stream with no thread behind it can never satisfy. `read_file`
+    and the seed remain as the file-shaped entry point the tests use; `ingest_gz` goes through
+    `read_stream`. `MAX_FEED_BYTES` is checked against the
     declared `Content-Length` **and** against the running total, because a chunked response
     declares nothing.
+  - **Corpus schema 2 (2026-09-08) added four prose columns and is gated on the table's SHAPE,
+    never on the version number.** `combos` gained `mana_needed`, `easy_prerequisites`,
+    `notable_prerequisites` and `description`, all `TEXT NOT NULL DEFAULT ''` in the feed's own
+    spelling, because Spellbook writes `""` rather than a null and the default should match the
+    wire instead of inventing a third state. Two things about landing it are traps:
+    - **`split::finish` stamps whatever `CORPUS_SCHEMA_VERSION` is onto the file it renames into
+      `corpus.db`, and that file's contents come from `migrate_single_file`'s frozen v26 rung** —
+      the shape of version **1**. So every converted database *and every fresh install* reaches
+      `migrate_corpus` already wearing head with a v1-shaped `combos`. An
+      `if v < CORPUS_SCHEMA_VERSION` gate skips exactly that population, and the symptom lands
+      much later as an ingest raising `table combos has no column named description` on a machine
+      nobody can reproduce from a fresh worktree. `migrate_corpus` asks `combos_are_at_head`
+      (`PRAGMA {schema}.table_info(combos)` against `COMBO_V2_COLUMNS`) and stamps the version
+      afterwards as a record rather than a gate — `TAG_INDEXES_SQL`'s own argument one line down:
+      a rung fires once, in one direction, and a shape that has to be right on *every* launch
+      cannot be defended by one. **The probe reads column names and never `sqlite_master`'s
+      text**, because after the first ingest the live `combos` is `COMBO_STAGING_SQL`'s
+      declaration renamed over it — same columns, different string — so a text probe would drop
+      the reader's combos and re-download 27.5 MB on every launch. **And `split.rs`'s own test
+      cannot catch any of this**: it asserts the stamped version against the constant it is
+      stamped from, so it stays green over the mismatch. The fixture that catches it is in
+      `schema.rs`, at the shape below head.
+    - **`create_corpus_schema` is bare `CREATE TABLE`, not `IF NOT EXISTS`.** Bumping the version
+      and letting the builder run again does not silently no-op — it raises `table cards already
+      exists` and **stops the launch**. That is why the combo DDL was split out of
+      `CORPUS_SCHEMA_SQL` into `COMBO_TABLES_SQL`, why the rung is `rebuild_combo_tables` rather
+      than a second call to the builder, and why both paths go through `create_combo_tables` so a
+      *built* corpus and a *climbed* one cannot end up shaped differently. **A corpus rung may
+      point at a head constant where a user rung may never**: a user rung is history and a
+      constant moving under it rewrites what a fresh install created yesterday; a corpus rung is
+      allowed to give up and rebuild, because what is behind it is a download. The rung drops the
+      three tables (and a v1-shaped staging pair, child before parent), deletes `combo_meta`
+      rather than blanking it, replays `COMBO_INDEXES_SQL`, and touches **nothing else** — not
+      `cards`, `cards_fts`, either taxonomy, `image_cache` or `marketplace_prices`, and `user.db`
+      is not opened. One silent re-download of a file `refresh_if_due` already fetches uninvited,
+      against a full Scryfall resync for four columns on one table.
   - **The write is staged and promoted by one rename transaction**, with the `combo_meta` row
     inside it: a watermark without its rows would 304 past an empty database forever, and rows
     without their watermark would re-download a file the database already holds. **A failure
@@ -465,17 +514,35 @@ shared_cell` walks both into two databases and compares them column by column.
     because the vocabulary is theirs and an eighth letter must be a skipped variant rather than a
     failed ingest. What a letter means for a deck's bracket is TypeScript's
     (`features/decks/validation/bracket.ts`), which is this crate's facts/conclusions boundary
-    applied to a fourth data source.
+    applied to a fourth data source. The four prose columns are the same rule one step further:
+    they are shown and never parsed, and **nothing here decides whether a prerequisite is met**.
+  - **Two match queries, two questions, and they may never become one statement with a flag.**
+    `match_combos` / `combos_for_cards` asks *which combos does this pile of printings completely
+    hold* and is the deck advisory's and the gallery's fourth signal; `card_combos` /
+    `combos_for_card` asks *which combos name this one oracle card at all* and claims nothing
+    about the other pieces. Folding them would mean a `have = card_count` clause that is
+    sometimes applied — two queries wearing one name. The card side is named by **`oracle_id` and
+    never a printing id**, since `combo_cards` is keyed on it and a printing would only be
+    resolved to answer identically for all of them. Its `owned` figures come from
+    `collection_source::copies_of_oracle` under `Availability::Everything`, and its
+    `OWNED_CTE` carries two fences worth knowing before you touch it: `k.oracle_id IS NOT NULL`,
+    without which one NULL makes `min()` report **every** combo as fully owned, and a
+    `CROSS JOIN` that pins the outer loop to the collection and is worth 65 ms. Both, with the
+    rejected shapes and every timing, in
+    [commander-brackets.md](../docs/reference/commander-brackets.md).
   `combo_cards.combo_id` is the **only enforced key in this schema joining two tables that are
   neither the user's nor Scryfall's** — legal where a key on `cards.id` never is, because `combos`
   is the feed's own table and no sync can abort on it. What it buys is what the tag tables' soft
   keys do not have: a `combo_cards` row cannot outlive its combo. Its price is in
   `swap_combo_staging`, which drops the **child first** — a `DROP TABLE` with foreign keys on is
   an implicit `DELETE`, so the other order drags every child row through a cascade on the way to
-  dropping that table too. `idx_combo_cards_oracle` is what the whole feature turns on — the match query
-  starts from the deck's oracle ids and joins *into* `combo_cards` — and it is replayed from one
-  constant (`COMBO_INDEXES_SQL`) by the v26 rung and by `swap_combo_staging`, because a rename
-  carries the *staging* table's indexes. Every measurement:
+  dropping that table too. `idx_combo_cards_oracle` is what the whole feature turns on, and **both
+  match queries start from it** — the deck's oracle ids, or one card's, joined *into*
+  `combo_cards`, where asking `combos` "does this one name the card" is a scan of the whole
+  catalogue. It is replayed from one
+  constant (`COMBO_INDEXES_SQL`) at **three** sites — the v26 rung, `swap_combo_staging` (because
+  a rename carries the *staging* table's indexes) and `create_combo_tables`, which is corpus
+  schema 2's drop-and-rebuild and the fresh-corpus builder both. Every measurement:
   [commander-brackets.md](../docs/reference/commander-brackets.md).
 
 - **A price filter is built where the marketplace is known, and there are two of them because the
@@ -2083,7 +2150,7 @@ The whole record, including the pipeline the crate implements:
 | [search-faceting.md](../docs/reference/search-faceting.md) | `src/index/` — why the index is in memory, and the fail-open rule |
 | [in-app-updates.md](../docs/reference/in-app-updates.md) | `update.rs` — why the portable swap is hand-written |
 | [decks-storage.md](../docs/reference/decks-storage.md) | The deck tables, the card commands, how owned/missing is answered, the audit log, the decklist import, and the token resolver — the union keep rule, why there is no name test, and the v36 table |
-| [commander-brackets.md](../docs/reference/commander-brackets.md) | `combos.rs` and the v26 rung — the feed measured end to end, what is kept and what is skipped, the match query, the launch gate and the clear, and `decks.bracket` |
+| [commander-brackets.md](../docs/reference/commander-brackets.md) | `combos.rs`, the v26 rung and **corpus schema 2** — the feed measured end to end, what is kept and what is skipped, **both** match queries and the card side's three statements, the shape gate and why a version gate skips every fresh install, the launch gate and the clear, and `decks.bracket` |
 | [wishlist-folders.md](../docs/reference/wishlist-folders.md) | The wishlist's cabinet (v23) — the four-term grain, the merge rule, the root-add duplicate |
 | [collection-folders.md](../docs/reference/collection-folders.md) | The collection's cabinet (v24–v25) — the eleventh grain term, the deck groups and `Recently removed`, the conversion that made them, what a zero quantity now costs |
 | [sync.md](../docs/reference/sync.md) | `sync_pair/`, `sync_engine/` and the user-schema rungs sync owns, v29 to v31 — the pairing protocol step by step and the six digits; then the thirteen synced tables, how a row is named across devices, the three SQLite facts the capture triggers' shape follows from, §7.3's five rules against the test that proves each, the envelope measured, the relay's endpoints, and what is not built |
