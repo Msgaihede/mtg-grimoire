@@ -3602,8 +3602,8 @@ const HAND_WRITTEN_COMBOS: readonly ComboFixture[] = [
  * The second card of each filler combo — 26 names out of `cards.ts`, and the list is where the
  * ownership arithmetic is actually decided.
  *
- * **Four of them are cards the `starter` collection has a row for, and only three of those rows
- * hold anything** — the other 22 partners are cards it has no row for at all. Every filler also
+ * **Three of them are cards the `starter` collection has a row for, and every one of those rows
+ * holds copies** — the other 23 partners are cards it has no row for at all. Every filler also
  * names Boros Reckoner (declared) and Lightning Bolt (seven real copies), so a filler is fully
  * owned exactly when its partner is, where *fully owned* is {@link comboPieces}' **presence** test
  * rather than a count:
@@ -3613,23 +3613,26 @@ const HAND_WRITTEN_COMBOS: readonly ComboFixture[] = [
  *   20 of the answer: the `I own every piece` filter has to reach past seventeen rows to find
  *   them, and a filter whose survivors happened to be the first rows anyway is one a `slice`
  *   would pass.
- * * **Smuggler's Copter**, at 25, whose seeded row holds **zero copies** — and which is therefore
- *   *not* owned. It is the fixture for `combos::OWNED_CTE`'s `AND e.quantity > 0`, and the reason
- *   that clause is there at all.
  *
- * **What the Copter row is and is not.** A `collection_entries` row cannot hold zero copies in a
- * production database — `set_quantity(id, 0)` deletes the row, the v24 rung deleted every stored
- * zero, and the importer's `set` mode does the same
+ * **Smuggler's Copter, at 25, is where a fourth used to be** (2026-09-08, issue #425). It had a
+ * seeded row holding **zero copies**, and that row was this file's fixture for
+ * `combos::OWNED_CTE`'s `AND e.quantity > 0` — the clause that stops a row from counting as a
+ * copy. It was also a state the app deletes: `set_quantity(id, 0)` removes the row, the user
+ * ladder's v24 rung removed every stored zero, and the importer's `set` mode does the same
  * ([collection-folders.md](../../docs/reference/collection-folders.md), *Zero quantity deletes the
- * row*); the real dev database has none of them in 276 rows, which is also what lets
- * `collection_source::owns_printing` be an `EXISTS`. **`starterEntries` seeds one anyway**,
- * deliberately and from before that rule, to prove a zero renders. So this is a fixture standing
- * in a state the app deletes — and what it surfaced is that the crate's presence test was correct
- * only *via* an invariant a different module maintains. Unfenced, it drew `Not owned` on a piece
- * line inside a combo the same screen was offering under `I own every piece`. `OWNED_CTE` now
- * carries the clause explicitly, this fake carries it beside it, and the two agree without
- * either having to trust the collection module. **Nobody should loosen either end**: the seeded
- * row is the fence's test, not an argument that the fence is redundant.
+ * row*), and the real dev database had none of them in 276 rows. That invariant is what lets
+ * `collection_source::owns_printing` be an `EXISTS` at all. What the fixture cost is on the
+ * record: unfenced, it drew `Not owned` on a piece line inside a combo the same screen was
+ * offering under `I own every piece` — one card, one screen, two answers, and nothing erroring.
+ *
+ * **The clause stays and the seeded row is gone, which is not a loosening of either end.**
+ * `OWNED_CTE` carries the fence explicitly and this fake carries it beside it, so the two agree
+ * without either having to trust the collection module; what moved is where the fixture lives.
+ * `db.test.ts` builds the impossible row **locally**, on top of `starter`, and asserts the fence
+ * over it — a shared seed must not be the thing that makes a fence testable, because every story
+ * on that seed then stands in a state no shipped write can produce. The Copter's arithmetic here
+ * did not move: no row at all and a row holding nothing are the same answer to every question
+ * this file asks of the collection.
  *
  * So Boros Reckoner's `ownedTotal` is **5** — those three fillers, plus `3422-3587` and
  * `3422-3587--5` — against a `total` of 31 and a `matching` of 27 under the three-card chip, with
@@ -3782,19 +3785,20 @@ export const COMBO_CARD_NAMES: readonly string[] = [
  * standing in for is a collection row.
  *
  * **What forced the exception is the seed, not the derivation, and it is total rather than
- * awkward.** Walk the fixture against `starter`'s thirteen collection rows and **not one combo of
+ * awkward.** Walk the fixture against `starter`'s twelve collection rows and **not one combo of
  * the thirty-six comes out owned**: every pair has a half the reader has no row for, and the
- * nearest miss — `1268-2357`, Smuggler's Copter plus Ragavan — misses on the Copter's zero
- * ({@link FILLER_PARTNERS}). So `ownedTotal` would be `0` on every page of every card, the
- * `I own every piece` filter would empty every list it was pressed on, and neither the count nor
- * the filter would have a green-versus-red to tell apart: a handler ignoring `ownedOnly` outright
- * would pass. Boros Reckoner is the only card here with enough combos to page at all, and the
- * `starter` collection holds neither of the cards its two live combos are made of.
+ * nearest miss — `1268-2357`, Smuggler's Copter plus Ragavan — misses because the reader has no
+ * row for the Copter ({@link FILLER_PARTNERS}). So `ownedTotal` would be `0` on every page of
+ * every card, the `I own every piece` filter would empty every list it was pressed on, and
+ * neither the count nor the filter would have a green-versus-red to tell apart: a handler
+ * ignoring `ownedOnly` outright would pass. Boros Reckoner is the only card here with enough
+ * combos to page at all, and the `starter` collection holds neither of the cards its two live
+ * combos are made of.
  *
  * Making it true the honest way means two more rows in `starterEntries`, and **that array is
  * load-bearing well outside this file**: `collection_summary` answers `totalCards: 21`,
- * `uniqueCards: 12` and `entries: 13` over it, and `CollectionPage.stories.tsx` asserts
- * `aria-rowcount` `"14"` against it — a red build in a file this change does not own. So the two
+ * `uniqueCards: 11` and `entries: 12` over it, and `CollectionPage.stories.tsx` asserts
+ * `aria-rowcount` `"13"` against it — a red build in a file this change does not own. So the two
  * copies are declared here instead.
  *
  * **What it costs, stated so nobody has to discover it**: a story that adds a Boros Reckoner to
@@ -4050,7 +4054,9 @@ function matchCombos(db: FakeDb, cardIds: readonly string[] | undefined): DeckCo
  * * `present` is `combos::OWNED_CTE` — `SELECT DISTINCT k.oracle_id FROM collection_entries e
  *   JOIN cards k WHERE k.oracle_id IS NOT NULL AND e.quantity > 0` — which is what
  *   `I own every piece` tests. **A row at quantity 0 is not a copy**, and that fence is
- *   deliberate on both sides: see {@link FILLER_PARTNERS} for the fixture that made it necessary.
+ *   deliberate on both sides: see {@link FILLER_PARTNERS} for what made it necessary, and
+ *   `db.test.ts` for the impossible row it is asserted against — which is built there rather than
+ *   seeded, so no story stands in it.
  *
  * **Presence is still not quantity, and the fence does not touch that.** `all_owned` asks *does
  * the reader hold any copies of each named card*, never `owned >= quantity` — a combo wanting two
