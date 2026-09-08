@@ -52,19 +52,40 @@ export type Panel =
   | { kind: "deckSettings" }
   | { kind: "newFolder"; parentId: number | null }
   | { kind: "renameFolder"; folderId: number }
-  | { kind: "moveFolder"; folderId: number }
+  /**
+   * **There is no `moveFolder` arm, and there must not be one again** (removed 2026-09-08).
+   *
+   * It existed for one control: the heading row's `Move folder…` button and the `MoveToFolder`
+   * popup it anchored. That button is gone — the three folder verbs in the wall's heading row
+   * are one `Folder` menu now, and the menu's `Move to` row is a **lazy submenu** whose
+   * destination rows `folderMenu.tsx` builds. A submenu is drawn by the menu panel at the app
+   * root, not by this view, so there is no layer here for this union to be about: the state it
+   * would hold is `ContextMenuProvider`'s, one press deep, and a `Panel` arm beside it would be
+   * a flag nothing sets and nothing reads.
+   *
+   * The two folder verbs that *do* still raise a layer of this view's own are in here — the
+   * rename field, which the tree draws in place of a row, and the delete question, which the
+   * `Folder` button anchors. A move needs neither, which is the whole distinction: a picker
+   * that lives in a menu is not a panel.
+   *
+   * `CollectionPage` and `WishlistPage` each declare a `moveFolder` arm of their own, in their
+   * own files. Those are different unions about different screens, and neither is evidence that
+   * this one needs one back.
+   */
   /**
    * The delete question, which carries **no folder id — and must not**.
    *
    * It used to, and nothing ever read it: `DecksPage`'s `DeleteFolderConfirm` both names and
-   * deletes `openNode.folder.id`, because it is anchored to the heading row's own "Delete folder…"
-   * control and that control exists only for the folder the reader is standing in. A second id
-   * in here would be a second source of truth that no code consults — and the day one did, the
-   * two could disagree about which folder a delete was aimed at.
+   * deletes `openNode.folder.id`, because it is anchored to the heading row's `Folder` control
+   * and that control is drawn only for the folder the reader is standing in. A second id in
+   * here would be a second source of truth that no code consults — and the day one did, the two
+   * could disagree about which folder a delete was aimed at.
    *
-   * Both routes into it therefore make that folder the open one: the heading's control is
-   * already about it, and the folder row's menu opens the drawer on its way (see
-   * `DecksPage`'s `folderMenuDeps`).
+   * **Every route into it therefore makes that folder the open one**, and since 2026-09-08 both
+   * routes are the same menu: `folderMenuDeps.askDelete` does `setSelectedFolderId(folder.id)`
+   * on its way in, whether the menu was opened on a tree row or on the wall's own `Folder`
+   * button. That is what puts the wall the sentence is about behind the sentence, and what
+   * guarantees there is a button on screen to anchor the panel to.
    */
   | { kind: "deleteFolder" }
   | null;

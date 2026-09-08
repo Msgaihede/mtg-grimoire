@@ -53,8 +53,16 @@
 export const DROP_RING = "ring-1 ring-inset ring-accent/45";
 
 /**
- * The same claim on a surface that **already has an edge**: the four folder cards, whose
- * `border border-dashed border-border` is drawn for them all day.
+ * The same claim on a surface that **already has an edge**: the four folder cards, each of which
+ * draws a `border border-…-border` all day.
+ *
+ * **Not all four of those edges are dashed any more, and the argument below never depended on
+ * it.** The deck gallery's folder card was redrawn in the deck tile's own format — a solid
+ * frame with the folder's crops filling it — so its edge is `border-border` rather than
+ * `border-dashed border-border`, while the wishlist's, the collection's and the two parent
+ * cards keep the dash that says *provisional*. What matters here is only that an edge is
+ * already on screen: this constant recolours whatever is there, so a card that turned solid
+ * needed no change and got none.
  *
  * **A ring inside a dash would be two lines 1px apart, which is the reported bug drawn smaller.**
  * A card that already owns an outline does not need a second one to say a drag could land on it

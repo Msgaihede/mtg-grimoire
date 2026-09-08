@@ -7,7 +7,7 @@ import {
   type CSSProperties,
   type RefObject,
 } from "react";
-import { ArrowUp, ChevronRight, Plus } from "lucide-react";
+import { ArrowUp, ChevronDown, ChevronRight, Plus } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
 import type { DropdownOption } from "@/components/Dropdown/types";
@@ -20,8 +20,9 @@ import {
 } from "@/components/FilterChips";
 import { useContextMenu } from "@/components/menu/useContextMenu";
 import { useTooltip } from "@/components/tooltip/useTooltip";
-import { atLeast, scaled } from "@/lib/cardZoom";
+import { atLeast, cardScaleVars, scaled } from "@/lib/cardZoom";
 import { plural } from "@/lib/counts";
+import { ART_ASPECT } from "@/lib/images";
 import type { FolderDrag, FolderEdge } from "@/lib/folderDrag";
 import { reorderedLevel } from "@/lib/folderOrder";
 import { FOCUS } from "@/lib/focus";
@@ -54,7 +55,6 @@ import {
   folderDescendants,
   FOLDER_ROW_ATTR,
   FolderTree,
-  MoveToFolder,
   ROOT_LABEL,
   useDeckDragging,
   type DeckDrag,
@@ -217,9 +217,17 @@ export function DecksPage() {
   const decks = useDecks();
   const folders = useDeckFolders();
   const { query } = decks;
-  /** The gallery's two right-click surfaces — the tile's menu is built in {@link DeckTile}, the
-   *  folder row's here, because a row's menu reads writes only this component has. */
-  const { menu, menuKey } = useContextMenu();
+  /**
+   * The gallery's right-click surfaces — the tile's menu is built in {@link DeckTile}, the
+   * folder row's here, because a row's menu reads writes only this component has.
+   *
+   * **`menuClick` is the third door and it is not a right-click at all**: the wall's heading row
+   * has one `Folder` control whose entire job is to open that same folder menu, and a button
+   * reached by Tab fires a `click` carrying no coordinates. `menuClick` anchors under the
+   * pointer for a press that had one and at the button's own bottom-left for a press that did
+   * not, which is the failure its doc comment was written to prevent.
+   */
+  const { menu, menuKey, menuClick } = useContextMenu();
   /**
    * What format a deck made from this screen starts on — the one the reader last created a deck
    * in, else Commander.
@@ -1072,6 +1080,32 @@ export function DecksPage() {
     [menu, menuKey, folderMenuDeps],
   );
 
+  /**
+   * The heading row's `Folder` control — **the same menu, from the same builder, opened by a
+   * plain press.**
+   *
+   * The wall's heading row used to carry three trigger buttons: `Rename folder…`, `Move
+   * folder…` with an inline `MoveToFolder` popup, and `Delete folder…` with the delete
+   * question. Every one of those writes was already on the folder's own row menu one column to
+   * the left, so the screen spelled one vocabulary twice — and the two spellings did not even
+   * agree: the row menu offers `New deck here` and `New subfolder…` as well, so the folder a
+   * reader right-clicked could do more than the folder they were standing *in*. Collapsing the
+   * three into {@link buildFolderMenu} makes the two drawings of one folder offer one list, in
+   * one order, with one set of words.
+   *
+   * **It also gives the row back two buttons' worth of width**: three verbs out, one control in,
+   * beside a heading, a count, `New folder`, `Import deck` and `New deck` in a column that is
+   * ~548px at the app's 1024px floor. See {@link DeckFilterRow}'s own note on what a row that
+   * cannot shrink costs this view.
+   *
+   * A factory taking the folder, like {@link folderRowMenu} beside it, and the item list is a
+   * **thunk** for the same reason: nothing is built until the button is pressed.
+   */
+  const openFolderMenu = useCallback(
+    (folder: DeckFolder) => menuClick(() => buildFolderMenu(folder, folderMenuDeps)),
+    [menuClick, folderMenuDeps],
+  );
+
   /** The tree's one field, as the tree needs to know it. */
   const naming: FolderNaming | null =
     panel?.kind === "newFolder"
@@ -1149,6 +1183,44 @@ export function DecksPage() {
     .filter((part): part is string => part !== null)
     .join(" · ");
 
+  /**
+   * **An open folder holding nothing still draws the wall** — the way out, and the way to fill
+   * it.
+   *
+   * It used to draw a centred paragraph: *"Nothing is filed in X yet. Drag a deck onto it, or
+   * use the Move control on a tile."* Two things were wrong with it. It described a gesture
+   * instead of offering one — the `ParentDeckFolderCard` that every non-empty folder puts first
+   * on the wall was the reader's way back out, and it was withheld from precisely the folder
+   * with nothing else on screen to press. And it named "the Move control on a tile", which is a
+   * control on a *different* wall from the one the reader is looking at; there are no tiles here
+   * to have one.
+   *
+   * So an empty drawer gets two tiles instead: the up-tile it was already denied, and a dashed
+   * `New deck` placeholder that files into this folder. The words that survive are the ones the
+   * paragraph could not offer — *or drag one onto this folder* is still the second way in, and
+   * it is written on the thing you would otherwise press.
+   *
+   * **The root is deliberately not in this**: at the top level the folder cards *are* the wall,
+   * so "Every deck you have is filed in a folder" sits over a screen with something on it, and
+   * there is no level above the root for an up-tile to climb to.
+   *
+   * **A named boolean rather than a fifth clause on the grid's gate**, because the four empty
+   * states below have to stay legible as four — the condition each of them turns on is the
+   * whole of what tells them apart, and a gate that grew a disjunction inline would make the
+   * wall's own condition the one nobody could read.
+   *
+   * `here` rather than `shown`: a drawer emptied by the *filter* is the fourth empty state and
+   * keeps its own sentence. `archivedHere` is not consulted either — a folder holding nothing
+   * but filed decks is still a folder with nothing on its wall, and the disclosure below says
+   * where they went.
+   */
+  const emptyFolder =
+    !status &&
+    decks.decks.length > 0 &&
+    openNode !== null &&
+    childFolders.length === 0 &&
+    here.length === 0;
+
   return (
     <section ref={wallRef} className="flex h-full flex-col gap-3">
       {/* Not drawn: the ribbon's `h1` already names the view, and a second "Decks" under it
@@ -1206,101 +1278,106 @@ export function DecksPage() {
             <span className="font-mono text-[0.7rem] tabular-nums text-dim">{counts}</span>
 
             <div className="ml-auto flex items-center gap-2">
+              {/* **One control for every verb, where there were three.**
+
+                  `Rename folder…`, `Move folder…` and `Delete folder…` each stood here as a
+                  trigger of its own, and each named a write the folder's own row menu — one
+                  column to the left, on the very same folder — already offered. That is one
+                  vocabulary spelled twice on one screen, and the two spellings did not even
+                  agree: the row menu also carries `New deck here` and `New subfolder…`, so a
+                  folder a reader right-clicked could do more than the folder they were standing
+                  *in*. `Folder` opens {@link buildFolderMenu} verbatim, so the two drawings of
+                  one folder now offer one list, in one order, in one set of words.
+
+                  **It also halves the row.** Six buttons stood here at the widest — the three
+                  verbs, `New folder`, `Import deck`, `New deck` — beside a heading and a count,
+                  in a column that is ~548px at the app's own 1024px floor. Four do now, and
+                  that is the same argument {@link DeckFilterRow} makes about why the filter
+                  gets a row of its own: this column has no width to spend saying anything
+                  twice.
+
+                  The caret glyph is the affordance rather than an ellipsis, and that is a
+                  distinction the three removed buttons drew for themselves — their ellipsis
+                  meant "this opens something that asks you a question", which is true of a
+                  rename field and a delete confirmation and false of a menu. */}
               {openNode !== null && (
-                <>
-                  {/* The pointer's route to a rename. The field it opens is in the tree, where
-                      the folder is — the trigger is here because a 208px row with an indent, a
-                      glyph, a name, a count and a "new folder" control has no width left for a
-                      second one, and because this is already where the three things you do
-                      *to* a folder live. F2 on the row is the keyboard's shortcut. */}
-                  {/* The ellipsis is the row's own convention and it is load-bearing here:
-                      each of these three opens something and the thing it opens carries a
-                      control named for the write itself ("Rename folder", "Delete folder"). A
-                      trigger sharing that name would be two controls with one name on screen at
-                      once — which is exactly what a screen reader would have to disambiguate by
-                      position. */}
+                <div className="relative">
+                  {/* **`aria-haspopup="menu"` and no `aria-expanded`** — `WishFolderCard`'s
+                      ruling for its reasons, and this is the second plain-click menu trigger in
+                      the app rather than the first. The popup *kind* is a fact about this
+                      button and is free. The expanded *state* is `ContextMenuProvider`'s: it
+                      holds the one open menu and publishes only `openMenu`/`closeMenu`, and a
+                      static `aria-expanded="false"` would be an assertion that is wrong for
+                      exactly as long as the menu is up.
+
+                      **The stash on the first line is load-bearing and is not optional.** Every
+                      row of this menu that raises a layer — `Rename…`, `New subfolder…`,
+                      `Delete…`, `New deck here` — reads {@link menuOpenerRef} to decide what the
+                      caret comes back to, because a `MenuAction.onSelect` is a bare callback
+                      with no element behind it. It is the same line the deck tile and every
+                      folder row write on their own handlers, and their comments carry the whole
+                      reading. */}
+                  {/* **`Folder actions`, and never the bare word this button prints.** The
+                      create-deck dialog has a `Folder` control of its own — the drawer a new
+                      deck lands in — and that dialog opens *over this row*, so for as long as
+                      it is up two controls on one screen answer to one name. That is not a WCAG
+                      failure; it is a control that cannot be addressed unambiguously, by a
+                      screen reader walking the page, by anyone driving the app by voice, or by
+                      a `getByRole("button", { name: "Folder" })` that starts throwing "found
+                      multiple". It is the third time this exact collision has been ruled on in
+                      this feature — `Sort decks` over the deck editor's `Sort`, `Filter decks
+                      by name` over its `Filter this deck`, and the format chips' `Modern
+                      format` over a *folder* somebody called Modern — and it is settled the
+                      same way each time: the name says what kind of thing the control is
+                      about.
+                      **Found by the suite rather than by design**, which is the point of that
+                      rule having a test at all: the collision only exists while a dialog is
+                      open, so nothing about reading this row would have shown it.
+                      The visible word stays the first word of the name, which is what WCAG
+                      2.5.3 asks and what keeps "click Folder" working for a voice user. */}
                   <button
                     type="button"
-                    onClick={() => startRename(openNode.folder.id)}
-                    className={HEADING_BUTTON}
+                    aria-haspopup="menu"
+                    aria-label="Folder actions"
+                    onClick={(e) => {
+                      menuOpenerRef.current = e.currentTarget;
+                      openFolderMenu(openNode.folder)(e);
+                    }}
+                    className={cn(HEADING_BUTTON, "inline-flex items-center gap-1.5")}
                   >
-                    Rename folder…
+                    Folder
+                    <ChevronDown className="size-3.5" aria-hidden="true" />
                   </button>
+                  {/* **The delete question stayed, and it is anchored here now.**
 
-                  <div className="relative">
-                    <button
-                      type="button"
-                      aria-expanded={panel?.kind === "moveFolder"}
-                      aria-haspopup="dialog"
-                      onClick={(e) =>
-                        panel?.kind === "moveFolder"
-                          ? dismiss()
-                          : open(
-                              { kind: "moveFolder", folderId: openNode.folder.id },
-                              e.currentTarget,
-                            )
-                      }
-                      className={HEADING_BUTTON}
-                    >
-                      Move folder…
-                    </button>
-                    {panel?.kind === "moveFolder" && (
-                      <MoveToFolder
-                        label={`Move ${openNode.folder.name} into a folder`}
-                        nodes={nodes}
-                        currentId={openNode.folder.parentId}
-                        forbidden={
-                          new Set([
-                            openNode.folder.id,
-                            ...folderDescendants(folders.folders, openNode.folder.id),
-                          ])
-                        }
-                        forbiddenReason="A folder cannot go inside itself, or inside anything it holds."
-                        pending={folders.move.isPending}
-                        onPick={(parentId) => {
-                          folders.move.mutate(
-                            { id: openNode.folder.id, parentId },
-                            { onSuccess: dismiss },
-                          );
-                        }}
-                        onClose={close}
-                      />
-                    )}
-                  </div>
+                      The menu's `Delete…` row raises this rather than deleting, and it works
+                      from either route for one reason `folderMenuDeps.askDelete` states at its
+                      own site: it does `setSelectedFolderId(folder.id)` on the way, so by the
+                      time this panel renders the folder in question *is* the open one — which
+                      is what puts the wall the sentence is about behind the sentence, and what
+                      guarantees this button exists to anchor it.
 
-                  <div className="relative">
-                    <button
-                      type="button"
-                      aria-expanded={panel?.kind === "deleteFolder"}
-                      aria-haspopup="dialog"
-                      onClick={(e) =>
-                        panel?.kind === "deleteFolder"
-                          ? dismiss()
-                          : open({ kind: "deleteFolder" }, e.currentTarget)
+                      `right-0`, unchanged: the group is `ml-auto`, so this trigger's near edge
+                      is still the column's right-hand one and a 288px panel grows leftward into
+                      the row it came out of. */}
+                  {panel?.kind === "deleteFolder" && (
+                    <DeleteFolderConfirm
+                      node={openNode}
+                      pending={folders.remove.isPending}
+                      onConfirm={() =>
+                        folders.remove.mutate(openNode.folder.id, {
+                          onSuccess: () => {
+                            openerRef.current = null;
+                            setPanel(null);
+                            setSelectedFolderId(openNode.folder.parentId);
+                          },
+                        })
                       }
-                      className={cn(HEADING_BUTTON, "hover:text-destructive")}
-                    >
-                      Delete folder…
-                    </button>
-                    {panel?.kind === "deleteFolder" && (
-                      <DeleteFolderConfirm
-                        node={openNode}
-                        pending={folders.remove.isPending}
-                        onConfirm={() =>
-                          folders.remove.mutate(openNode.folder.id, {
-                            onSuccess: () => {
-                              openerRef.current = null;
-                              setPanel(null);
-                              setSelectedFolderId(openNode.folder.parentId);
-                            },
-                          })
-                        }
-                        onCancel={dismiss}
-                        onClose={close}
-                      />
-                    )}
-                  </div>
-                </>
+                      onCancel={dismiss}
+                      onClose={close}
+                    />
+                  )}
+                </div>
               )}
 
               <button
@@ -1370,12 +1447,13 @@ export function DecksPage() {
 
           {/* **A row of its own, beneath the heading rather than inside it.**
 
-              The row above already carries a heading, a count, up to three folder verbs, New
-              folder, Import deck and New deck — seven things at the widest. Five more in it wrap
-              badly at the app's 1024px floor, where this column is ~548px wide, and a heading
-              that shares a line with a text box has stopped being a heading. Its own row is also
-              what the app does everywhere else: `FilterBar` is a row, on all five surfaces that
-              draw it.
+              The row above already carries a heading, a count and four controls — `Folder`, New
+              folder, Import deck and New deck, where it was six until the three folder verbs
+              became that one menu. Five more in it wrap badly at the app's 1024px floor, where
+              this column is ~548px wide, and a heading that shares a line with a text box has
+              stopped being a heading. The collapse changes neither of those, so this row stays
+              where it is; it is also what the app does everywhere else, since `FilterBar` is a
+              row on all five surfaces that draw it.
 
               Drawn only where there is a wall to narrow — a filter row over "No decks" is chrome
               about nothing — and the gate is the **unfiltered** drawer, so the row cannot vanish
@@ -1417,32 +1495,47 @@ export function DecksPage() {
             <p className="py-16 text-center text-sm text-dim">No decks</p>
           )}
 
-          {!status && decks.decks.length > 0 && childFolders.length === 0 && here.length === 0 && (
-            <p className="mx-auto max-w-prose py-12 text-center text-sm text-dim">
-              {openNode === null
-                ? "Every deck you have is filed in a folder. Open one on the left."
-                : `Nothing is filed in ${openNode.folder.name} yet. Drag a deck onto it, or use the Move control on a tile.`}
-            </p>
-          )}
+          {/* **The root's own sentence, and it is a sentence where the folder's is now a wall.**
 
-          {/* **The fourth empty state, and it exists because the other three would be read as
-              lies here.** "Every deck you have is filed in a folder" and "Nothing is filed in X
-              yet" are both sentences about a *drawer*, and a wall emptied by a filter is a full
-              drawer the reader has narrowed to nothing — told either of those, they would go
-              looking for decks that are exactly where they left them.
+              The second arm this used to carry — "Nothing is filed in X yet. Drag a deck onto
+              it, or use the Move control on a tile." — is gone, and {@link emptyFolder} carries
+              the argument. What is left is the root, which is a different state wearing the same
+              shape: a reader standing at the top level with every deck filed is looking at a
+              screen that has the folder cards on it, so nothing is being withheld and there is
+              no level above for a way *out* to point at. It stays a sentence. */}
+          {!status &&
+            decks.decks.length > 0 &&
+            openNode === null &&
+            childFolders.length === 0 &&
+            here.length === 0 && (
+              <p className="mx-auto max-w-prose py-12 text-center text-sm text-dim">
+                Every deck you have is filed in a folder. Open one on the left.
+              </p>
+            )}
+
+          {/* **The fourth empty state, and it exists because the others would be read as lies
+              here.** "Every deck you have is filed in a folder" is a sentence about a *drawer*,
+              and a wall emptied by a filter is a full drawer the reader has narrowed to nothing
+              — told that, they would go looking for decks that are exactly where they left them.
+
+              **The empty-folder tiles are in this rule now that they have replaced the sentence
+              that used to be** ("Nothing is filed in X yet…"), and {@link emptyFolder} is gated
+              on `here` rather than on `shown` for exactly that reason. A dashed `New deck` box
+              on a wall the reader has just narrowed says the same wrong thing the sentence would
+              have: this drawer is bare, when what happened is that they asked for less of it.
 
               The condition needs no `filtering` beside it and deliberately does not carry one:
               `shown` is `here` narrowed, so the two lengths can only differ while something is
               narrowing them. A second guard would be a second thing to keep in step.
 
-              The voice is the other three's — short, no pitch (see the placeholder note above,
-              which used to be a paragraph). No way out is offered because the way out is the box
-              the reader typed into, one row up and still holding their words. */}
+              The voice is the others' — short, no pitch (see the placeholder note above, which
+              used to be a paragraph). No way out is offered because the way out is the box the
+              reader typed into, one row up and still holding their words. */}
           {!status && here.length > 0 && shown.length === 0 && (
             <p className="py-12 text-center text-sm text-dim">No decks match this filter</p>
           )}
 
-          {(childFolders.length > 0 || shown.length > 0) && (
+          {(childFolders.length > 0 || shown.length > 0 || emptyFolder) && (
             // Named, the way the search's wall of art is (`CardGrid`'s `role="group"` +
             // `aria-label`) — but left a list rather than made a group, because these tiles are
             // countable and a list says how many there are on the way in.
@@ -1457,6 +1550,7 @@ export function DecksPage() {
               {up !== null && (
                 <ParentDeckFolderCard
                   label={up.label}
+                  zoom={zoom}
                   drag={drag}
                   onOpen={() => setSelectedFolderId(up.id)}
                   canDrop={(d) => canFile(d, up.id)}
@@ -1513,6 +1607,94 @@ export function DecksPage() {
                   onClosePanel={close}
                 />
               ))}
+              {/* **Last on the wall, and only on a wall with nothing else on it** — see
+                  {@link emptyFolder}. It is not an always-present `+ New deck` tile: the
+                  heading row's own primary control is two lines up on every visit, so a
+                  permanent twin of it would be the gallery's one accent drawn twice, and a wall
+                  of forty decks would end in a dashed box nobody was looking for. It is the
+                  *empty* drawer that has nothing to press.
+
+                  The dash is the collection's and the wishlist's vocabulary, borrowed exactly:
+                  dashed means **container, not a thing you own** — a folder card is dashed, a
+                  deck tile is not — and a drawer with nothing in it is the one place on this
+                  wall where "put something here" is the whole content. */}
+              {emptyFolder && openNode !== null && (
+                <li style={cardScaleVars(zoom)}>
+                  <button
+                    type="button"
+                    // Named for the drawer rather than left as "New deck", because the heading
+                    // row's primary control is that string already and two buttons with one
+                    // accessible name on one screen is exactly what a reader has to
+                    // disambiguate by position. It also makes the promise the tile is here to
+                    // make: this one files *here*, where that one merely defaults to it.
+                    aria-label={`New deck in ${openNode.folder.name}`}
+                    onClick={(e) => {
+                      // `reset()` first for {@link openCreate}'s reason — a refusal from the
+                      // last attempt is not news about this one — and `open` rather than
+                      // `setPanel` so Escape hands the caret back to this tile.
+                      decks.create.reset();
+                      open({ kind: "createDeck", folderId: openNode.folder.id }, e.currentTarget);
+                    }}
+                    // The padding is the **mana band's** 20px, scaled by the reader's zoom the
+                    // way everything else drawn on a tile is: a deck tile is a crop with that
+                    // band fused to its bottom, so a placeholder that stopped at the crop would
+                    // stand 20px short of the object beside it and the track would be ragged.
+                    // Written as an inline `calc` rather than a Tailwind arbitrary value for
+                    // `DeckTile`'s reason — the variable is inherited, and this is the one
+                    // number that keeps every object in the track the same height.
+                    style={{ paddingBottom: "calc(1.25rem * var(--mark-scale, 1))" }}
+                    className={cn(
+                      "block w-full rounded-lg border border-dashed border-border bg-transparent",
+                      "text-dim transition-colors duration-150",
+                      "hover:border-accent hover:text-accent motion-reduce:transition-none",
+                      FOCUS,
+                    )}
+                  >
+                    {/* The crop's own box, so the glyph and the words centre where a picture
+                        would be rather than in the middle of the whole tile. */}
+                    <span
+                      className="grid place-items-center px-2 text-center"
+                      style={{ aspectRatio: ART_ASPECT }}
+                    >
+                      <span
+                        className={cn(
+                          "grid justify-items-center",
+                          "gap-[calc(0.25rem*var(--mark-scale,1))]",
+                        )}
+                      >
+                        <Plus
+                          className="size-[calc(1.25rem*var(--mark-scale,1))]"
+                          aria-hidden="true"
+                        />
+                        {/* The tile's name line, at the deck tile's own size and leading. */}
+                        <span
+                          className={cn(
+                            "text-[calc(0.875rem*var(--mark-scale,1))]",
+                            "leading-[calc(1.25rem*var(--mark-scale,1))]",
+                          )}
+                        >
+                          New deck
+                        </span>
+                        {/* The caption size, and the second way in written where the first one
+                            is. A folder takes a deck dropped on it — on its card, on its tree
+                            row, on this drawer's own way-out tile — and a drop is the one
+                            gesture on this screen that nothing on screen can advertise. The
+                            sentence this replaced said the same thing by naming "the Move
+                            control on a tile", which is a control on a *different* wall from
+                            the one the reader is looking at. */}
+                        <span
+                          className={cn(
+                            "text-[calc(0.75rem*var(--mark-scale,1))]",
+                            "leading-[calc(1rem*var(--mark-scale,1))]",
+                          )}
+                        >
+                          or drag one onto this folder
+                        </span>
+                      </span>
+                    </span>
+                  </button>
+                </li>
+              )}
             </ul>
           )}
 

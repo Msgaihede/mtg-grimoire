@@ -12,8 +12,8 @@
  *
  * | The row | Tier | The number it carries |
  * | --- | --- | --- |
- * | Its `(cardId, finish)` is a slot in the plan | `exact` | `live − planned` at the `(cardId, finish)` grain |
- * | Its **name** is in the plan, but this `(cardId, finish)` is not | `name` | `live − planned` with every printing and finish of that name summed on both sides |
+ * | Its `(cardId, finish)` is a slot in the plan | `exact` | `planned − live` at the `(cardId, finish)` grain |
+ * | Its **name** is in the plan, but this `(cardId, finish)` is not | `name` | `planned − live` with every printing and finish of that name summed on both sides |
  * | Neither | — | none |
  *
  * **That the grain follows the tier is the whole rule**, and it is why {@link theoryMatchMark} is
@@ -21,8 +21,21 @@
  * printing the plan named and its number is about that printing; a `name` row is another printing
  * of a planned card and its number is about the *card*. The reader was shown the case it costs
  * the most in — a plan asking for eight Forests of one printing against a list holding eight over
- * four printings, so the planned rows read `-6` and the other six read `0` — and chose it over one
+ * four printings, so the planned rows read `+6` and the other six read `0` — and chose it over one
  * name-grain number on both tiers.
+ *
+ * ## The sign is the action, since 2026-09-08
+ *
+ * The number is **`planned − live`**: `+2` is two copies to add, `-3` is three to remove, and `0`
+ * is the tick. It was `live − planned` from 2026-08-26 (issue #212) until
+ * [issue #400](https://github.com/Msgaihede/mtg-grimoire/issues/400), from the same reader: a
+ * `+3` on a card they held three too many of said what the count *was* and left them to work out
+ * what to do about it, on the one list in the app that is being sleeved up *against* a plan —
+ * where what a reader wants at a glance is the next move. The words follow the sign:
+ * `CardMarks.tsx`'s `theoryMatchLabel` says "2 to add" and "3 to remove" rather than "more" and
+ * "fewer than planned", because a `+2` heard as "2 fewer than planned" is the sign and the
+ * sentence pointing opposite ways. Nothing about the grain, the summing or the floor moved;
+ * `floored` is the one line that subtracts, and it is the whole of the flip.
  *
  * **The maps are built once and read; nothing is consumed.** Every one of those eight Forests
  * carries a mark, which is a property a lookup that deleted an entry as it served it would not
@@ -71,13 +84,13 @@
  *
  * **Since 2026-08-26 the mark carries a number too, and that does not collapse the two.**
  * [Issue #212](https://github.com/Msgaihede/mtg-grimoire/issues/212) asked for the shortfall on
- * the card — a live 2-of against a planned 4-of drawing `-2` where an exact match draws a tick —
- * so this module now subtracts as well. What keeps it a different question is *which rows it is
- * asked about*: the diff lists only what the plan is short of, in one direction, while this
- * answers for **every** planned card, a surplus (`+2`) included, and answers `0` rather than
- * nothing for the card that matches. The diff is still what the reader buys from; this is still
- * what tells the real card from the proxy standing in for it. {@link theoryMatchPlan} carries the
- * arithmetic, at both grains.
+ * the card — a live 2-of against a planned 4-of drawing a number where an exact match draws a
+ * tick (`+2` since issue #400; `-2` before it) — so this module now subtracts as well. What keeps
+ * it a different question is *which rows it is asked about*: the diff lists only what the plan is
+ * short of, in one direction, while this answers for **every** planned card, a surplus (`-2`, two
+ * to remove) included, and answers `0` rather than nothing for the card that matches. The diff is
+ * still what the reader buys from; this is still what tells the real card from the proxy standing
+ * in for it. {@link theoryMatchPlan} carries the arithmetic, at both grains.
  */
 import type { DeckCard, TheorySlot } from "@/lib/ipc";
 
@@ -88,7 +101,8 @@ export type TheoryTier = "exact" | "name";
  *  **at that tier's grain**. `0` is the tick; anything else is drawn as a signed number. */
 export interface TheoryMark {
   tier: TheoryTier;
-  /** `live − planned` at {@link TheoryMark.tier}'s own grain. */
+  /** `planned − live` at {@link TheoryMark.tier}'s own grain — **the action**, not the count:
+   *  positive is copies the reader has to add, negative is copies to remove (issue #400). */
   delta: number;
 }
 
@@ -111,9 +125,9 @@ export interface TheoryMarkSwitches {
 
 /** The plan as two lookups and the switches that decide which of them a row may use. */
 export interface TheoryPlan {
-  /** {@link theorySlot}'s key → `live − planned` at the printing-and-finish grain. */
+  /** {@link theorySlot}'s key → `planned − live` at the printing-and-finish grain. */
   exact: ReadonlyMap<string, number>;
-  /** {@link theoryNameKey}'s key → `live − planned` with every printing and finish summed.
+  /** {@link theoryNameKey}'s key → `planned − live` with every printing and finish summed.
    *  A slot with no name is not in here at all; see {@link theoryNameKey}. */
   byName: ReadonlyMap<string, number>;
   /** The deck's own switches, carried so that {@link theoryMatchMark} needs no second argument
@@ -177,7 +191,7 @@ export function theoryNameKey(name: string): string {
  * a rule stated as "only above one" is the one a future edit cannot quietly widen. It is also the
  * fence around the one state that *can* exist — an inactive live pile summing to zero against a
  * plan that asks for one (see {@link theoryMatchPlan} on why the live side excludes those piles),
- * where `-1` on a row visibly holding a card would read as a bug rather than as a fact.
+ * where `+1` on a row visibly holding a card would read as a bug rather than as a fact.
  *
  * **It is applied per tier, at that tier's own sums**, which is the same sentence as the grain
  * following the tier: a Commander singleton is a 1-of at both grains and meets no number on
@@ -185,9 +199,15 @@ export function theoryNameKey(name: string): string {
  */
 const DIFFERENCE_FLOOR = 1;
 
-/** `live − planned` where the pair is worth a number, and `0` — the tick — where it is not. */
+/**
+ * `planned − live` where the pair is worth a number, and `0` — the tick — where it is not.
+ *
+ * `wanted - have` and not `have - wanted`: the number is what the reader has to *do*, so two
+ * sleeved against four planned is `+2` (add two) and four against two is `-2` (remove two). This
+ * is the one line the sign lives on — issue #400 flipped it here and nowhere else.
+ */
 function floored(have: number, wanted: number): number {
-  return Math.max(have, wanted) > DIFFERENCE_FLOOR ? have - wanted : 0;
+  return Math.max(have, wanted) > DIFFERENCE_FLOOR ? wanted - have : 0;
 }
 
 /**
@@ -206,13 +226,13 @@ function floored(have: number, wanted: number): number {
  * views take it optional and draw nothing for the absent case, which is `violations`' own
  * arrangement one prop over.
  *
- * ## The value is `live − planned`, at each grain and never at a row's
+ * ## The value is `planned − live`, at each grain and never at a row's
  *
  * Both sides are summed across the piles they are filed in before they are subtracted, which is
  * this module's grain (the category is the term it must not keep) and `deck_theory.rs`'s
  * `grouped_diff`'s. Doing it per **row** instead is the version that looks simpler and is wrong
  * on the ordinary case: a plan calling for four Bolts in Main deck and one in the Sideboard,
- * matched exactly, would draw `-1` on the first row and `-4` on the second — two numbers, both
+ * matched exactly, would draw `+1` on the first row and `+4` on the second — two numbers, both
  * false, about a card the reader has got exactly right.
  *
  * So every live row of one slot wears the **same** mark, which is the honest reading: the fact is
@@ -235,7 +255,7 @@ function floored(have: number, wanted: number): number {
  *
  * That leaves the one state {@link DIFFERENCE_FLOOR} is a fence around, and it is why the fence
  * is not merely a formality: a plan that asks for one copy of a card the reader has filed only in
- * a switched-off pile sums to `0 − 1`, and `-1` printed on a row visibly holding a card would
+ * a switched-off pile sums to `1 − 0`, and `+1` printed on a row visibly holding a card would
  * read as a broken mark. `max(live, planned) > 1` is `false` there, so the tick is drawn instead
  * — "this is the card you planned", which is true, said without a number nobody can act on.
  */
@@ -290,7 +310,7 @@ export function theoryMatchPlan(
  *
  * That is the whole rule, and it is why this is one function rather than a tier test beside a
  * delta lookup. An **exact** row is the printing the plan named, and its number is about that
- * printing: two of the eight planned Forests of that art is `-6`, which is true. A **name** row is
+ * printing: two of the eight planned Forests of that art is `+6`, which is true. A **name** row is
  * another printing of a planned card, and its number is about the *card*: eight Forests against
  * eight planned is `0`, which is also true. The reader chose this arrangement on 2026-09-07 over
  * one name-grain number for both tiers, having been shown the case it costs the most in.

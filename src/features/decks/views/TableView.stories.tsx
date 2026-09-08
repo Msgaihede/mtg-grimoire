@@ -101,11 +101,11 @@ export const TheoryMatches: Story = {
     expect(canvasElement.querySelectorAll(`[${THEORY_MATCH_ATTR}]`)).toHaveLength(4);
 
     // **Two of the four are counts rather than ticks** (issue #212), and the twin is where this
-    // view earns its keep: `+1` and `-2` are two characters that mean nothing spoken, so the
+    // view earns its keep: `+2` and `-1` are two characters that mean nothing spoken, so the
     // sentence beside them has to carry the number too. Two rows match exactly and say the bare
-    // sentence; the other two say it with the difference on the end.
+    // sentence; the other two say it with the press it is asking for on the end.
     expect(canvas.getAllByText(THEORY_MATCH_LABEL)).toHaveLength(2);
-    expect(canvas.getByText(`${THEORY_MATCH_LABEL} · 2 fewer than planned`)).toBeInTheDocument();
-    expect(canvas.getByText(`${THEORY_MATCH_LABEL} · 1 more than planned`)).toBeInTheDocument();
+    expect(canvas.getByText(`${THEORY_MATCH_LABEL} · 2 to add`)).toBeInTheDocument();
+    expect(canvas.getByText(`${THEORY_MATCH_LABEL} · 1 to remove`)).toBeInTheDocument();
   },
 };
