@@ -7,6 +7,7 @@ import type { DeckFolder, DeckRow, FormatSpec, ImportMatch, SyncStatus } from "@
 import { cardImageUrl } from "@/lib/images";
 import { isWebTarget } from "@/pwa/target";
 import { openDropdown, pickOption } from "@/test-dropdown";
+import { FOLDER_GUIDE_ATTR } from "./FolderTree";
 import { spec } from "./validation/fixtures";
 
 /**
@@ -303,6 +304,29 @@ const tileFor = (name: string) => screen.findByRole("button", { name: new RegExp
  */
 async function rightClick(target: HTMLElement) {
   target.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+  await screen.findByRole("menu");
+}
+
+/**
+ * The wall's own door to the folder menu — the heading row's one `Folder` control.
+ *
+ * **`userEvent.click`, not a hand-built `MouseEvent` like {@link rightClick} above.** This
+ * trigger is `menuClick`, which reads `detail` to tell a pointer press from a keyboard
+ * activation, and `userEvent` supplies it: a press with a pointer behind it anchors under the
+ * pointer, one without anchors at the button. Dispatching a bare `MouseEvent` here would test
+ * the anchor a reader never gets.
+ *
+ * Drawn only inside a folder, which is why every caller opens one first.
+ *
+ * **The name is `Folder actions` and the button prints `Folder`**, which is not a slip in either
+ * direction. `CreateDeckDialog`'s own folder select is named exactly `Folder`, and that dialog
+ * opens *over* this row — so while it is up, a bare `Folder` matched two controls and
+ * `getByRole` threw "found multiple". The fix is on the button rather than in here: a name that
+ * says what kind of thing the control is about, the same ruling `Sort decks` and `Filter decks
+ * by name` already carry on this screen. This helper is what found it.
+ */
+async function openFolderMenu() {
+  await userEvent.click(screen.getByRole("button", { name: "Folder actions" }));
   await screen.findByRole("menu");
 }
 
@@ -1072,11 +1096,21 @@ describe("DecksPage", () => {
       expect(within(commander).getByText("Blue")).toBeInTheDocument();
       expect(within(modern).getByText("White")).toBeInTheDocument();
 
+      // **The caption no longer carries the bracket, and the pill is where it went.** It is the
+      // tile's least important line and the first to truncate in a narrow column, so the number
+      // moved onto the picture — bottom-right of the art, opposite the theory badge — where it
+      // is read at a glance rather than at the end of a string. Both halves are asserted,
+      // because a bracket that vanished from the caption and never arrived on the art would
+      // leave this case green over a fact the tile stopped telling.
       expect(within(commander).getByText(/^Commander ·/)).toHaveTextContent(
-        "Commander · Bracket 3 · 40 cards",
+        "Commander · 40 cards",
       );
-      // …and nothing for the deck whose format has no command zone, `decks.bracket` or not.
-      expect(within(modern).getByText(/^Modern ·/)).not.toHaveTextContent("Bracket");
+      // `uppercase` is `text-transform`, so the pill's `textContent` is still the mixed-case
+      // label `DecksPage` handed the tile — a query for `BRACKET 3` would find nothing.
+      expect(within(commander).getByText("Bracket 3")).toBeInTheDocument();
+      // …and nothing at all for the deck whose format has no command zone, `decks.bracket` or
+      // not: no pill on the art, and nothing left in the caption either.
+      expect(within(modern).queryByText(/Bracket/)).not.toBeInTheDocument();
     });
 
     /**
@@ -1780,9 +1814,20 @@ describe("DecksPage folders", () => {
     const commander = within(tree).getByRole("button", { name: "Commander, 2 decks" });
     // Commander holds one deck directly and one through Legends.
     const legends = within(tree).getByRole("button", { name: "Legends, 1 deck" });
-    // The indent *is* the nesting: there is no twisty, so a level is 14px of padding.
-    expect(commander).toHaveStyle({ paddingLeft: "22px" });
-    expect(legends).toHaveStyle({ paddingLeft: "36px" });
+    // **The indent moved out of the button and into a gutter beside it**, and the row's own
+    // padding is a constant now. That is what lets the tree *draw* the nesting: a hairline
+    // trunk under a hover fill or a focus ring is a hairline the reader cannot see, so the
+    // guides live in a box the button never covers. There is still no twisty — the guides are
+    // disclosure's picture without its mechanism, and every folder is still always on screen.
+    //
+    // 16px a level plus the 10px the tick runs into the glyph, written out rather than computed:
+    // an assertion that re-derives the number under test agrees with a component that got it
+    // wrong. Which hairline goes where is `FolderTree`'s own suite's; this is the page checking
+    // that the tree it mounted is nested at all.
+    const gutter = (row: HTMLElement) =>
+      row.parentElement?.querySelector<HTMLElement>(`[${FOLDER_GUIDE_ATTR}="gutter"]`);
+    expect(gutter(commander)).toHaveStyle({ width: "26px" });
+    expect(gutter(legends)).toHaveStyle({ width: "42px" });
   });
 
   /** One drawer at a time. The top level holds the decks filed nowhere and the folders in it;
@@ -1913,19 +1958,25 @@ describe("DecksPage folders", () => {
 
   /**
    * Renamed **in place**, at the indent it already has — the field stands where the folder is.
-   * The trigger is in the wall's heading row beside the other two things you do to a folder,
-   * because a 208px row has no width for a second control; `F2` below is the keyboard's own
-   * route, and a rename only a mouse can reach would be half a feature.
+   * The trigger is the wall's heading row's `Folder` menu, because a 208px tree row has no width
+   * for a control of its own; `F2` below is the keyboard's own route, and a rename only a mouse
+   * can reach would be half a feature.
+   *
+   * **It was a `Rename folder…` button of its own until 2026-09-08**, beside `Move folder…` and
+   * `Delete folder…` — three buttons naming three writes the folder's own row menu already
+   * offered. The field they opened is unchanged and this is the same one: what moved is where
+   * the press is made, not what it does.
    *
    * The current name arrives **selected**, `metaRows.tsx`'s `RenameField` ruling for its reason:
    * the commonest rename replaces the word rather than edits inside it.
    */
-  it("renames a folder in place, from the wall's own control", async () => {
+  it("renames a folder in place, from the wall's own Folder menu", async () => {
     withFolders();
 
     wrap(<DecksPage />);
     await userEvent.click(await screen.findByRole("button", { name: "Commander, 2 decks" }));
-    await userEvent.click(screen.getByRole("button", { name: "Rename folder…" }));
+    await openFolderMenu();
+    await userEvent.click(screen.getByRole("menuitem", { name: "Rename…" }));
 
     const field = await screen.findByLabelText("Rename Commander");
     expect(field).toHaveFocus();
@@ -1939,8 +1990,8 @@ describe("DecksPage folders", () => {
     await userEvent.keyboard("EDH");
     expect(field).toHaveValue("EDH");
 
-    // The field's own control, named for the write. The trigger that opened it is
-    // "Rename folder…" — the ellipsis is what keeps two controls with one name off the screen.
+    // The field's own control, named for the write — and it is the only thing on screen called
+    // that now: the menu row that opened it is `Rename…`, and the trigger above it is `Folder`.
     await userEvent.click(screen.getByRole("button", { name: "Rename folder" }));
 
     expect(deckFolderRename).toHaveBeenCalledWith(1, "EDH");
@@ -1985,7 +2036,8 @@ describe("DecksPage folders", () => {
 
     wrap(<DecksPage />);
     await userEvent.click(await screen.findByRole("button", { name: "Commander, 2 decks" }));
-    await userEvent.click(screen.getByRole("button", { name: "Rename folder…" }));
+    await openFolderMenu();
+    await userEvent.click(screen.getByRole("menuitem", { name: "Rename…" }));
     await screen.findByLabelText("Rename Commander");
 
     await userEvent.keyboard("{Escape}");
@@ -1999,15 +2051,21 @@ describe("DecksPage folders", () => {
    * The opposite of what a reader will fear. `decks.folder_id` is `ON DELETE SET NULL`, so the
    * decks inside surface at the top level; `deck_folders.parent_id` cascades onto itself, so
    * the folders inside do go. The confirmation says both, reassuring half first.
+   *
+   * **The question is still anchored to the heading row**, which is the half the collapse into
+   * a menu could have taken away: `folderMenuDeps.askDelete` opens the drawer on its way, so by
+   * the time the panel renders the folder it is about *is* the open one and the `Folder` button
+   * that raised it is on screen to hang it from.
    */
   it("says the decks in a folder are kept when the folder is deleted", async () => {
     withFolders();
 
     wrap(<DecksPage />);
     await userEvent.click(await screen.findByRole("button", { name: "Commander, 2 decks" }));
-    await userEvent.click(screen.getByRole("button", { name: "Delete folder…" }));
+    await openFolderMenu();
+    await userEvent.click(screen.getByRole("menuitem", { name: "Delete…" }));
 
-    const confirm = screen.getByRole("dialog", { name: "Delete Commander" });
+    const confirm = await screen.findByRole("dialog", { name: "Delete Commander" });
     expect(confirm).toHaveTextContent("The 2 decks in it are kept — they move to the top level.");
     expect(confirm).toHaveTextContent("The 1 folder inside goes with it.");
 
@@ -2021,19 +2079,40 @@ describe("DecksPage folders", () => {
    * because `parent_id` cascades onto itself and a cycle is a graph SQLite would walk forever.
    * The offer is greyed rather than left to be refused: the refusal is a fence, not the
    * affordance.
+   *
+   * **The destinations are the menu's `Move to` submenu now, and the fence moved with them.**
+   * The `Move folder…` button raised a `MoveToFolder` popup that drew one sentence under the
+   * list — *"A folder cannot go inside itself, or inside anything it holds"* — where
+   * `folderDestinations` marks each refused row with the reason that applies to *it*. That is
+   * the reason to prefer the menu: the popup said which two rules existed and left the reader
+   * to work out which row each one was about.
+   *
+   * **The names are matched as prefixes because a greyed row's accessible name carries its
+   * reason.** `ActionRow` draws it as a sibling span inside the button, so `Legends` alone
+   * matches nothing here — the row is called `Commander › LegendsCannot go inside what it
+   * holds` under jsdom, which computes no `display` and therefore joins the parts with nothing.
    */
   it("will not offer a folder its own descendant as a destination, and says why", async () => {
     withFolders();
 
     wrap(<DecksPage />);
     await userEvent.click(await screen.findByRole("button", { name: "Commander, 2 decks" }));
-    await userEvent.click(screen.getByRole("button", { name: "Move folder…" }));
+    await openFolderMenu();
+    await userEvent.click(screen.getByRole("menuitem", { name: "Move to" }));
 
-    const picker = screen.getByRole("dialog", { name: "Move Commander into a folder" });
-    expect(within(picker).getByRole("button", { name: /^Commander/ })).toBeDisabled();
-    expect(within(picker).getByRole("button", { name: "Legends" })).toBeDisabled();
-    expect(picker).toHaveTextContent(
-      "A folder cannot go inside itself, or inside anything it holds.",
+    const itself = await screen.findByRole("menuitem", { name: /^Commander(?! ›)/ });
+    expect(itself).toHaveAttribute("aria-disabled", "true");
+    expect(itself).toHaveTextContent("Cannot go inside itself");
+
+    const held = screen.getByRole("menuitem", { name: /^Commander › Legends/ });
+    expect(held).toHaveAttribute("aria-disabled", "true");
+    expect(held).toHaveTextContent("Cannot go inside what it holds");
+
+    // The top level is where this folder already is, so it is offered and inert too — the
+    // no-op write that bumps `updated_at` and changes nothing.
+    expect(screen.getByRole("menuitem", { name: /^All decks/ })).toHaveAttribute(
+      "aria-disabled",
+      "true",
     );
     expect(deckFolderMove).not.toHaveBeenCalled();
   });
@@ -2041,6 +2120,9 @@ describe("DecksPage folders", () => {
   /**
    * And when the fence is jumped anyway — another surface re-parented something between the
    * read and the press — the refusal is surfaced rather than swallowed.
+   *
+   * `Legends` is inside `Commander`, so `All decks` is a live destination for it and the write
+   * really is attempted; the banner is `writeFailure`'s, over `folders.move`.
    */
   it("says so when a folder move is refused", async () => {
     withFolders();
@@ -2048,13 +2130,63 @@ describe("DecksPage folders", () => {
 
     wrap(<DecksPage />);
     await userEvent.click(await screen.findByRole("button", { name: "Legends, 1 deck" }));
-    await userEvent.click(screen.getByRole("button", { name: "Move folder…" }));
-    const picker = screen.getByRole("dialog", { name: "Move Legends into a folder" });
-    await userEvent.click(within(picker).getByRole("button", { name: "All decks" }));
+    await openFolderMenu();
+    await userEvent.click(screen.getByRole("menuitem", { name: "Move to" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "All decks" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "A folder cannot be moved inside itself.",
     );
+  });
+
+  /**
+   * **One vocabulary about a folder, wherever the reader reaches it** — the whole point of the
+   * collapse.
+   *
+   * The heading row used to carry three buttons naming three of these five, and the folder's own
+   * row menu named all five; a reader standing *in* a folder could do less to it than a reader
+   * right-clicking it in the tree. The rows here are `buildFolderMenu`'s, verbatim, so the two
+   * lists cannot drift — and the three buttons are gone, which is asserted because a control
+   * left behind would be the second spelling this exists to remove.
+   */
+  it("offers one Folder menu in the heading row, and not three buttons", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Commander, 2 decks" }));
+
+    for (const gone of ["Rename folder…", "Move folder…", "Delete folder…"]) {
+      expect(screen.queryByRole("button", { name: gone })).not.toBeInTheDocument();
+    }
+
+    await openFolderMenu();
+
+    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+      "New deck here",
+      "New subfolder…",
+      "Rename…",
+      "Move to",
+      "Delete…",
+    ]);
+  });
+
+  /**
+   * The control is drawn only where it has a folder to be about.
+   *
+   * At the root there is no folder to rename, move or delete — `openNode` is `null` and the
+   * heading says `All decks`, which is the tree's level rather than a row of `deck_folders`. A
+   * `Folder` menu there would be five rows every one of which had nothing to act on.
+   */
+  it("draws no Folder control at the top level", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await screen.findByRole("heading", { name: "All decks" });
+
+    expect(screen.queryByRole("button", { name: "Folder actions" })).not.toBeInTheDocument();
+    // And the two controls that are about the level rather than about a folder are still there.
+    expect(screen.getByRole("button", { name: "New folder" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "New deck" })).toBeInTheDocument();
   });
 
   /**
@@ -2074,6 +2206,120 @@ describe("DecksPage folders", () => {
     expect(
       screen.getByText(/Could not read your folders — The card database is busy/),
     ).toBeInTheDocument();
+  });
+
+  /**
+   * **An empty drawer draws the wall, not a paragraph about the wall.**
+   *
+   * It used to be a centred sentence — *"Nothing is filed in Ideas yet. Drag a deck onto it, or
+   * use the Move control on a tile."* — and two things were wrong with it. The
+   * `ParentDeckFolderCard` that every *non-empty* folder puts first on its wall was withheld
+   * from precisely the folder with nothing else on screen to press; and it named "the Move
+   * control on a tile", which is a control on a different wall from the one the reader is
+   * looking at, since there are no tiles here to have one. So the way out and the way to fill it
+   * are both tiles now, on the wall they are about.
+   *
+   * `Ideas` is a folder at the top level holding nothing, so the level above it is the root and
+   * the drawer's own name is what the placeholder is called.
+   */
+  it("draws a way out and a way to fill an empty folder, rather than a sentence", async () => {
+    const empty: DeckFolder = { id: 3, parentId: null, name: "Ideas", sortOrder: 1 };
+    deckFolderList.mockResolvedValue([EDH, LEGENDS, empty]);
+    deckList.mockResolvedValue([BURN, { ...DRAFT, folderId: 1 }]);
+
+    wrap(<DecksPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Ideas, 0 decks" }));
+    await screen.findByRole("heading", { name: "Ideas" });
+
+    const wall = await screen.findByRole("list", { name: "Your decks" });
+    expect(
+      within(wall).getByRole("button", { name: "Up one level to All decks" }),
+    ).toBeInTheDocument();
+    expect(within(wall).getByRole("button", { name: "New deck in Ideas" })).toBeInTheDocument();
+    // The second way in is written on the tile, because a drop is the one gesture an empty
+    // drawer cannot advertise any other way.
+    expect(wall).toHaveTextContent("or drag one onto this folder");
+    // And the sentence it replaced is gone.
+    expect(screen.queryByText(/^Nothing is filed in/)).not.toBeInTheDocument();
+  });
+
+  /**
+   * The placeholder's whole promise: the deck lands **here**.
+   *
+   * `CreateDeckDialog` seeds `folderId` at mount and never again, so a tile that merely opened
+   * the dialog would make the deck at the top level and the reader would have to move it — the
+   * failure [#332](https://github.com/Msgaihede/mtg-grimoire/issues/332) reported about the
+   * heading row's own control. This is the same fix asserted from the wall.
+   *
+   * The Folder select is read `within(form)`: the dialog's own control is called `Folder`, and
+   * so is the heading row's menu trigger standing behind the scrim.
+   */
+  it("makes the deck in this folder when the empty wall's placeholder is pressed", async () => {
+    const empty: DeckFolder = { id: 3, parentId: null, name: "Ideas", sortOrder: 1 };
+    deckFolderList.mockResolvedValue([EDH, LEGENDS, empty]);
+    deckList.mockResolvedValue([BURN, { ...DRAFT, folderId: 1 }]);
+
+    wrap(<DecksPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Ideas, 0 decks" }));
+    await userEvent.click(await screen.findByRole("button", { name: "New deck in Ideas" }));
+
+    const form = await screen.findByRole("dialog", { name: "New deck" });
+    await waitFor(() =>
+      expect(within(form).getByRole("button", { name: "Folder" })).toHaveTextContent("Ideas"),
+    );
+
+    await userEvent.type(within(form).getByLabelText("Name"), "Sunday Cube");
+    await userEvent.click(within(form).getByRole("button", { name: "Create deck" }));
+
+    await waitFor(() =>
+      expect(deckCreate).toHaveBeenCalledWith({
+        name: "Sunday Cube",
+        formatKey: "commander",
+        gameKey: "any",
+        theoryEnabled: false,
+        folderId: 3,
+      }),
+    );
+  });
+
+  /**
+   * **The placeholder is a folder's, not emptiness's**, and this is what says so.
+   *
+   * Standing at the top level with every deck filed away in drawers, the wall holds the folder
+   * cards and nothing else — and that is not the state the tiles above exist for: nothing is
+   * being withheld, and there is no level above the root for a way *out* to point at. The
+   * heading row's own `New deck` is two lines up, where it is on every visit, so a second one
+   * on the wall would be this gallery's single accent drawn twice.
+   */
+  it("draws no placeholder tile at the top level", async () => {
+    deckFolderList.mockResolvedValue([EDH]);
+    deckList.mockResolvedValue([{ ...DRAFT, folderId: 1 }]);
+
+    wrap(<DecksPage />);
+    await screen.findByRole("heading", { name: "All decks" });
+
+    const wall = await screen.findByRole("list", { name: "Your decks" });
+    // One tile, and it is the folder card. Counted as list items rather than named, because what
+    // this case is about is the two tiles that are *not* here.
+    expect(within(wall).getAllByRole("listitem")).toHaveLength(1);
+    expect(within(wall).queryByRole("button", { name: /^New deck in/ })).toBeNull();
+    expect(within(wall).queryByRole("button", { name: /^Up one level/ })).toBeNull();
+  });
+
+  /**
+   * A folder emptied by the **filter** is the fourth empty state and keeps its own line — the
+   * placeholder would be a second thing on screen agreeing that the drawer is bare, when what
+   * happened is that the reader narrowed it.
+   */
+  it("does not offer the empty-folder tiles when a filter is what emptied the wall", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Commander, 2 decks" }));
+    await userEvent.type(screen.getByLabelText("Filter decks by name"), "nothing");
+
+    expect(await screen.findByText("No decks match this filter")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "New deck in Commander" })).not.toBeInTheDocument();
   });
 });
 
@@ -2607,12 +2853,17 @@ describe("the folder row's menu", () => {
   /**
    * The five things you do to a folder, on the folder — where three of them have never been.
    *
-   * `Rename folder…`, `Move folder…` and `Delete folder…` speak only for the drawer the reader
-   * is *standing in*, from the heading row above the wall; the tree's own controls are one
-   * "New folder in …" per row and F2. So this is the first surface where a folder that is not
-   * open can be acted on at all, and what the cases below assert is the **wiring** — that this
-   * screen's own writes and layers are what `buildFolderMenu` was built with, which is the half
-   * a pure builder's test cannot see.
+   * Three of the five were the heading row's own buttons, and they spoke only for the drawer the
+   * reader was *standing in*; the tree's own controls are one "New folder in …" per row and F2.
+   * So this is the first surface where a folder that is not open can be acted on at all, and
+   * what the cases below assert is the **wiring** — that this screen's own writes and layers are
+   * what `buildFolderMenu` was built with, which is the half a pure builder's test cannot see.
+   *
+   * **Since 2026-09-08 those three buttons are one `Folder` control opening this same menu**,
+   * so the list below is now the whole vocabulary rather than a superset of a second one. The
+   * heading row's own case ("offers one Folder menu in the heading row, and not three buttons")
+   * asserts the same five rows from the other door, deliberately: two spellings of one list is
+   * exactly what that change removed, and two assertions are what keep them from coming back.
    */
   it("offers the five things you do to a folder, on the row itself", async () => {
     withFolders();

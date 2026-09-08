@@ -1,12 +1,20 @@
 /**
  * The folder row's right-click menu, and the "Move to" list both gallery menus share.
  *
- * **Pure reuse, and that is the whole of it.** Every action here already exists as a button in
- * `FolderTree` or in the wall's heading row — new deck, new sub-folder, rename, move, delete —
- * every write is already written in `useDeckFolders`, and `folderDescendants` already computes
- * what a folder may not be moved into. What the menu adds is that all five are in one place, on
- * the row itself, instead of spread between a 208px tree that has no width for a second control
- * and a heading row that only speaks for the folder the reader is standing in.
+ * **Pure reuse, and that is the whole of it.** Every write here is already written in
+ * `useDeckFolders`, and `folderDescendants` already computes what a folder may not be moved
+ * into. What the menu adds is that all five are in one place, on the row itself, instead of
+ * spread between a 208px tree that has no width for a second control and a heading row that
+ * only speaks for the folder the reader is standing in.
+ *
+ * **It is now the *only* place, and it has two doors rather than one.** The wall's heading row
+ * used to carry `Rename folder…`, `Move folder…` and `Delete folder…` as three buttons of its
+ * own — one vocabulary spelled twice on one screen, and the two spellings did not even agree,
+ * since this list also offers `New deck here` and `New subfolder…`. Those three buttons are
+ * gone: the heading's `Folder` control opens this same list through `menuClick`, so a folder a
+ * reader right-clicks in the tree and the folder they are standing in offer one list, in one
+ * order, in one set of words. Nothing about this file changed to make that true, which is the
+ * point — a menu built for a row turned out to be the menu the page wanted.
  *
  * **A menu is data.** These builders answer a `MenuItem[]` and draw nothing; the panel in
  * `src/components/menu` draws it. The one exception is {@link moveToFolderContent}, which is a
@@ -232,8 +240,9 @@ function Note({
 /**
  * Everything the folder menu does that is not the folder — one callback per row.
  *
- * Every one of these is a write the gallery already makes, reached from the row instead of from
- * the heading row above the wall.
+ * Every one of these is a write the gallery already makes. They are reached from a folder's row
+ * in the tree **and** from the `Folder` control in the wall's heading row, which opens this same
+ * list rather than spelling three of them out as buttons of its own — see this file's head.
  */
 export interface FolderMenuDeps {
   /**

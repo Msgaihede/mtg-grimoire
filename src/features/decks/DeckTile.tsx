@@ -27,7 +27,7 @@ import type { PipCounts } from "@/lib/mana";
 import { PRESS } from "@/lib/motion";
 import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
-import { DeckColorBar } from "./DeckColorBar";
+import { DeckColorBar, hasColorBar } from "./DeckColorBar";
 import { buildDeckMenu, type DeckMenuDeps } from "./deckMenu";
 import { deckColorsLabel } from "./deckPips";
 import { deckDraggable, MoveToFolder, type FolderNode } from "./FolderTree";
@@ -60,6 +60,34 @@ const ICON_BUTTON = cn(
  * end of the ladder and overflow it at the other.
  */
 const ICON = "size-[calc(0.875rem*var(--control-scale,1))]";
+
+/**
+ * The box both of the art's marks are drawn in — the theory badge at its bottom-left, the bracket
+ * pill at its bottom-right.
+ *
+ * **One constant because they are one mark drawn twice**, rather than two that happen to agree
+ * today: they sit at the two ends of the same edge of the same picture, so a padding, a face or a
+ * radius changed on one of them alone is two vocabularies in one corner. That is `src/CLAUDE.md`'s
+ * *N independent decisions* rule met at the smallest scale it can be met at, and the pair had two
+ * class lists for exactly as long as it took to notice they were the same list.
+ *
+ * **Every size in it scales with `--mark-scale`, and the inset is the reason.** A mark drawn *on*
+ * a picture is read against that picture: 6px in from a 200px crop is a corner, 6px in from a
+ * 400px one is a smudge against the edge. Its type and padding follow for the same reason, and
+ * the variable is inherited from the tile's root so no call site is involved — `cardZoom.ts`'s
+ * arrangement.
+ *
+ * Accent on both, where the dim arm used to be the one-list deck's: every badge left is a deck
+ * that keeps two lists, and a bracket is a reading worth pointing at. What is *not* shared is the
+ * dash — see {@link deckBadge} and the pill's own comment.
+ */
+const TILE_MARK = cn(
+  "absolute bottom-[calc(0.375rem*var(--mark-scale,1))] rounded-sm border bg-bg/70",
+  "px-[calc(0.375rem*var(--mark-scale,1))]",
+  "font-mono tracking-wide",
+  "text-[calc(0.6rem*var(--mark-scale,1))] leading-[calc(1rem*var(--mark-scale,1))]",
+  "border-accent text-accent",
+);
 
 /**
  * Which of a deck's two lists exist — the one thing a tile can say about a deck that a
@@ -170,11 +198,23 @@ function coverUrl(deck: DeckRow): string | null {
  * **The colours and the bracket arrived 2026-09-07 and the credit line left in the same pass**
  * (issue #387). The tile said four things about a deck and one about its illustrator, and the
  * two facts a reader actually browses a wall by — what colours it is, and how strong it is —
- * were reachable only by opening it. {@link DeckColorBar} is the first and the caption's
- * bracket segment is the second; the credit became a tooltip on the picture it belongs to,
- * which is a row of chrome off every tile and a name that has moved *closer* to the thing it
- * names. `docs/superpowers/plans/2026-09-07-deck-gallery-overview.md` carries the whole
- * argument, including the policy reading behind the move.
+ * were reachable only by opening it. {@link DeckColorBar} is the first and the bracket is the
+ * second; the credit became a tooltip on the picture it belongs to, which is a row of chrome off
+ * every tile and a name that has moved *closer* to the thing it names.
+ * `docs/superpowers/plans/2026-09-07-deck-gallery-overview.md` carries the whole argument,
+ * including the policy reading behind the move.
+ *
+ * **The bracket spent that one iteration inside the caption and is a pill on the art since**, and
+ * the redesign moved it for what the caption is: the tile's least important line, truncating from
+ * the end, in a column narrow enough that a fourth segment is the segment that goes. A bracket is
+ * not the fourth thing about a format — it is the one number on the tile a reader compares decks
+ * by — so it is a mark on the picture beside the badge, and the caption is back to the three
+ * terms that describe the *list* (`Commander · Paper · 100 cards`).
+ *
+ * **So the tile has marks that belong to the art rather than to the tile, and they live in one
+ * overlay** — the badge bottom-left, the pill bottom-right. Both stay outside the `<button>` for
+ * the badge's own long-standing reason (see the overlay below), and the art's bottom is not the
+ * tile's bottom, which is the whole of why that box exists.
  */
 export function DeckTile({
   deck,
@@ -225,8 +265,13 @@ export function DeckTile({
    * what the cards read as and what the reader told the deck it is; a gallery that spelled a
    * reading differently would teach the mark twice, and a reader who has had the bracket
    * conversation at their table would see their own answer hedged on the wall. It is drawn and
-   * not spoken — a screen reader says "tilde three" or nothing at all — which is why the
-   * caption around it stays plain text a reader can also see.
+   * not spoken — a screen reader says "tilde three" or nothing at all — which is why the mark it
+   * is drawn in stays plain visible text rather than a glyph with an `sr-only` twin.
+   *
+   * **The string is this prop and the pill only shapes it.** `BRACKET ~3` is `text-transform`
+   * over `Bracket ~3`, never a second string built here: the page owns the words, the tile owns
+   * the type, and a spelling that existed in two places is a spelling that would eventually be
+   * corrected in one.
    */
   bracketLabel: string | null;
   decks: Decks;
@@ -357,13 +402,20 @@ export function DeckTile({
         data-deck-id={deck.id}
         className={cn("block w-full rounded-lg text-left", FOCUS)}
       >
-        <Cover deck={deck} />
+        {/* The crop loses its bottom corners exactly when a band is coming — see {@link Cover}. */}
+        <Cover deck={deck} fused={hasColorBar(pips)} />
         {/* What colours the deck is, between the picture and the name — **inside the button**,
             because it is part of the tile's flow rather than a mark laid on the art, and the
             reader who is about to press this tile is reading it in that order: the picture, the
             colours, the name.
+            **In the flow is also what makes it sit flush**: the band carries no top margin and
+            the crop above it no bottom radius, so the two abut with nothing between them and read
+            as one object. Nothing may be introduced here that reopens that seam — an element, a
+            margin or a gap on the button would put a hairline of page between a picture and the
+            band it belongs to.
             Absent on a deck with no pips, and the component argues why: an all-lands pile has
-            nothing to say and an empty rule saying so is worse than silence.
+            nothing to say and an empty band saying so is worse than silence — which is the same
+            fact {@link hasColorBar} answers for the crop's corners one line up.
             **It is `aria-hidden`, and the words are the `sr-only` span under the name.** The
             picture may sit above the name; the *sentence* may not, and that is the badge's rule
             below applied one element up — a tile is named for its deck, and a bar that named
@@ -373,7 +425,13 @@ export function DeckTile({
         {/* The deck's name, and the first of the four sizes on this tile that move with the
             zoom. Written as a `calc` off `--mark-scale` rather than as a scaled pixel prop for
             `cardZoom.ts`'s reason: the variable is inherited, so the marks drawn inside a tile
-            follow it with no call site involved. 0.875rem is `text-sm`, 1.25rem its leading. */}
+            follow it with no call site involved. 0.875rem is `text-sm`, 1.25rem its leading.
+            **The 8px above it is measured from a band now rather than from a hairline, and it
+            stays 8px.** The colour bar used to leave 4px above itself and take 5px, so this
+            margin was air under a rule that was air under a picture; the band abuts the crop and
+            is 20px tall, so what these 8px now separate is the *picture* — crop and band, one
+            object — from the words under it. That is the design's number and it is the one this
+            line was always about. */}
         <span
           className={cn(
             "mt-[calc(0.5rem*var(--mark-scale,1))] block truncate",
@@ -407,18 +465,18 @@ export function DeckTile({
             badge above makes about the lists a deck keeps — a deck with only the one list wears
             none.
 
-            **`Commander · Bracket ~3 · 100 cards` since 2026-09-07**, and the bracket obeys
-            that same rule from the other end: it is drawn only where there is one, which is a
-            format with a command zone whose number has arrived. A `null` is both "this deck
-            cannot have a bracket" and "nothing has answered yet", and the caption treats them
-            alike on purpose — neither is a fact about the deck worth a word, and a placeholder
-            for the second would be a segment that appears a beat after the wall does.
+            **The bracket was a fourth segment here for one iteration and is a pill on the art
+            now** — see the overlay below. What sent it there is this line's own weakness: it is
+            the tile's least important line, it truncates from the end in a narrow column, and a
+            fourth segment is the segment that goes. The three that are left all describe the
+            *list* — what rules it is built to, where it is played, how big it is — where a
+            bracket describes how strong it is, which is a different question and now has a
+            different place to be asked in.
 
-            **The truncation in a narrow column is the existing behaviour and is correct.** A
-            fourth segment makes it likelier, and the answer is not a shorter format name or a
-            wider tile: the caption is the tile's least important line, it truncates from the
-            end, and the deck's name above it is what a reader is scanning. The full string is a
-            hover away on any surface that needs it. */}
+            **The truncation is the existing behaviour and is still correct.** The answer was
+            never a shorter format name or a wider tile: the deck's name above this is what a
+            reader is scanning, and the full string is a hover away on any surface that needs
+            it. */}
         <span
           className={cn(
             "mt-[calc(0.125rem*var(--mark-scale,1))] block truncate text-dim",
@@ -426,36 +484,86 @@ export function DeckTile({
           )}
         >
           {deck.formatName ?? deck.formatKey}
-          {deck.gameKey !== ANY_GAME && ` · ${gameLabel(deck.gameKey)}`}
-          {bracketLabel !== null && ` · ${bracketLabel}`} ·{" "}
+          {deck.gameKey !== ANY_GAME && ` · ${gameLabel(deck.gameKey)}`} ·{" "}
           <span className="font-mono tabular-nums">{deck.cardCount}</span> {unit}
         </span>
       </button>
 
-      {/* That this deck keeps a plan, over its own art. Outside the button rather than in it:
-          `aria-label` would otherwise read the badge before the name, and the tile is named
-          for its deck. `pointer-events-none` so a corner of the picture is not a dead spot.
-          Absent on a deck with one list — {@link deckBadge} argues why. */}
-      {badge !== null && (
-        <span
-          className={cn(
-            // The badge sits *on* the art, so its inset scales with the picture it is tucked
-            // into: 6px in from a 200px crop is a corner, and 6px in from a 400px one is a
-            // smudge against the edge. Its own type and padding follow for the same reason.
-            "pointer-events-none absolute rounded-sm border bg-bg/70",
-            "left-[calc(0.375rem*var(--mark-scale,1))] top-[calc(0.375rem*var(--mark-scale,1))]",
-            "px-[calc(0.375rem*var(--mark-scale,1))]",
-            "font-mono tracking-wide",
-            "text-[calc(0.6rem*var(--mark-scale,1))] leading-[calc(1rem*var(--mark-scale,1))]",
-            // Accent on both, where the dim arm used to be the one-list deck's: every badge left
-            // is a deck that keeps two lists, and that is the thing worth pointing at.
-            "border-accent text-accent",
-            // Dashed means provisional, here as on a folder card: a theory list is a plan.
-            badge === "THEORY ONLY" && "border-dashed",
-          )}
+      {/* The art's two marks — which lists this deck keeps, and what bracket it reads as — in one
+          box that *is* the art.
+
+          **Both stay outside the `<button>`, and that is the badge's own rule rather than a new
+          one.** An accessible name is computed from a button's contents, so a mark inside it is
+          read *before* the deck: the tile is named for its deck, and `getByRole("button", { name:
+          /^Zoo/ })` is the assertion that catches it. What is new is only that there are two of
+          them and that the badge has moved down to join the second.
+
+          **The box is a sibling of the button and exactly the cover's box**: full tile width from
+          the top, on {@link ART_ASPECT}, so its height resolves to the picture's height with
+          nothing measured — no ref, no `ResizeObserver`, and no frame of disagreement. Both boxes
+          are driven by the same grid track, so it stays exact at every stop on the zoom ladder,
+          which a copied pixel height could not be. It has to be its own box because the art's
+          bottom is *not* the tile's bottom — under the picture sit the colour band, the name and
+          the caption, and a mark anchored to the `<li>`'s bottom would land on the caption.
+
+          **Not `aria-hidden`, deliberately, and the design source says otherwise.** On the canvas
+          both marks duplicated caption text, so hiding them was right there and is wrong here:
+          the badge has always been announced, and the caption has *lost* the bracket, so this
+          pill is now the only place the bracket is said at all. Hiding it would take a fact off
+          the wall for a screen reader and leave it on for everybody else. A later reader
+          comparing this against the canvas will want to "restore" the attribute — this paragraph
+          is the answer.
+
+          `pointer-events-none` on the wrapper, so a corner of the picture is not a dead spot, and
+          the two marks inside inherit it rather than repeating it. That is also what settles the
+          pill's hint: `pointer-events` inherits, so a tooltip bound in here could never open
+          (`src/CLAUDE.md`), and the way `FoilOverlay` buys one back — `pointer-events-auto` on
+          the mark itself — is not available to a mark that is a *sibling* of the button rather
+          than a child of it. There the press still opens the card; here it would open nothing.
+          The pill says its words in visible type anyway, which is exactly what the caption gave
+          before it, so the hint would buy a sentence at the price of a hole in the picture. */}
+      {(badge !== null || bracketLabel !== null) && (
+        <div
+          className="pointer-events-none absolute inset-x-0 top-0"
+          style={{ aspectRatio: ART_ASPECT }}
         >
-          {badge}
-        </span>
+          {/* That this deck keeps a plan. Absent on a deck with one list — {@link deckBadge}
+              argues why. */}
+          {badge !== null && (
+            <span
+              className={cn(
+                TILE_MARK,
+                "left-[calc(0.375rem*var(--mark-scale,1))]",
+                // Dashed means provisional, here as on a folder card: a theory list is a plan.
+                badge === "THEORY ONLY" && "border-dashed",
+              )}
+            >
+              {badge}
+            </span>
+          )}
+          {/* What the deck reads as, in the opposite corner of the same edge — one mark for what
+              the deck *is* and one for how strong it is, which is the pair a reader browses a
+              wall by.
+
+              **Never dashed, and that is the one thing it does not take from the badge.** The
+              dash means provisional — a plan, a container, something not yet standing for itself
+              — and a bracket is an estimate, which is a different word: it is the deck's real
+              strength as the cards read today, not a strength the deck intends to have.
+
+              **`null` draws nothing, exactly as the caption's segment did.** It covers both "this
+              format has no command zone" and "nothing has answered yet", and the two are treated
+              alike on purpose — neither is a fact about the deck worth a mark, and a placeholder
+              for the second would be a pill that appeared a beat after the wall did. Never
+              `Bracket ?`, never a skeleton, never a dash.
+
+              `uppercase` rather than a second string: the words are {@link bracketLabel}'s and
+              the page's, the shape is the tile's. */}
+          {bracketLabel !== null && (
+            <span className={cn(TILE_MARK, "right-[calc(0.375rem*var(--mark-scale,1))] uppercase")}>
+              {bracketLabel}
+            </span>
+          )}
+        </div>
       )}
 
       {/* Renaming a deck, in the tile it belongs to.
@@ -607,6 +715,26 @@ export function DeckTile({
  * would throw away a crop the browser has already decoded and leave the tile blank while it came
  * back, for a rename.
  *
+ * ## The bottom corners, which belong to whatever is under the picture
+ *
+ * **`fused` is the frame's half of the join with {@link DeckColorBar}.** The colour band is a
+ * 20px solid fused to the bottom edge of this crop, so for the two to read as one object the crop
+ * must stop rounding the edge they share: `rounded-t-lg` where a band is coming, `rounded-lg`
+ * where none is.
+ *
+ * **The conditional is not a leftover, and a deck with no band is the case it exists for.** A
+ * deck with no pips — an all-lands pile, a deck of nothing but generic costs, or a read still in
+ * flight — draws no band at all ({@link hasColorBar}), and its picture then has nothing under it
+ * to be fused *to*. Squaring its bottom unconditionally would leave two hard corners sitting on
+ * the page under a frame that is rounded everywhere else, on the tiles that are hardest to
+ * explain: the reader cannot see the missing band, so what they would see is a cover that had
+ * gone wrong. So the picture keeps all four of its own corners exactly when it is on its own.
+ *
+ * **A prop rather than a test made here**, because the fact belongs to the band: whether one
+ * renders is `DeckColorBar`'s rule and its two silences, and a copy of that rule in this frame
+ * would be a second place to correct it — where the symptom is a *radius*, which jsdom cannot see
+ * (no layout engine, no stylesheet) and which no test of this component alone could reach.
+ *
  * ## The illustrator's name, which is this frame's since 2026-09-07
  *
  * **It is a tooltip on the picture now, where it was a line of text under the tile — and this is
@@ -644,7 +772,7 @@ export function DeckTile({
  * decorative, the deck's name is two lines down, and putting the illustrator into the tile's
  * accessible name would announce a painter before the deck on every tile on the wall.
  */
-function Cover({ deck }: { deck: DeckRow }) {
+function Cover({ deck, fused }: { deck: DeckRow; fused: boolean }) {
   const tip = useTooltip();
   const url = coverUrl(deck);
   // Not `url === null`: on web those are two different states — see {@link hasCover}.
@@ -657,7 +785,14 @@ function Cover({ deck }: { deck: DeckRow }) {
       // credit is a frame with no hint, which is the same silence {@link coverUrl} answers with
       // for the picture itself. The two cannot come apart: they are one test on one field.
       {...tip(deck.coverArtist && `Art by ${deck.coverArtist}`)}
-      className="grid w-full place-items-center overflow-hidden rounded-lg bg-surface"
+      className={cn(
+        "grid w-full place-items-center overflow-hidden bg-surface",
+        // The whole of {@link fused}, and it is the join rather than a decoration: a rounded
+        // corner over a square band is a picture sitting *on* something, and the two are meant to
+        // be one object. `overflow-hidden` above is what makes it reach the crop as well as the
+        // frame.
+        fused ? "rounded-t-lg" : "rounded-lg",
+      )}
       style={{ aspectRatio: ART_ASPECT }}
     >
       {image.src ? (
