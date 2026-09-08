@@ -276,9 +276,20 @@ CREATE TABLE shares (
   created_at  INTEGER NOT NULL,
   updated_at  INTEGER NOT NULL
 );
-CREATE UNIQUE INDEX shares_folder ON shares (group_id, coalesce(folder_uid, ''));
+CREATE UNIQUE INDEX shares_folder ON shares (group_id, coalesce(folder_uid, ''))
+  WHERE state <> 'revoked';
 CREATE INDEX      shares_group  ON shares (group_id);
 ```
+
+⚠️ **`WHERE state <> 'revoked'` was added on 2026-09-08 and this design carried the total index
+until then.** A revoked row **stays** — it is what answers a viewer 410 *"withdrawn"* rather than
+the 404 that says they mistyped — and re-sharing that folder mints a **new** id, because a revoked
+link must stay dead. Those two sentences are together a second row on the folder's key, which the
+total index refuses: measured against real SQLite, the publish after any revoke dies with `UNIQUE
+constraint failed: index 'shares_folder'`. The partial index is exactly decision 7 — at most one
+*serving* share per folder — and lets the tombstones accumulate beside it. The lookup in front of
+it carries the same predicate, or it answers the tombstone and mints a third id on the third
+press.
 
 `state` is a **state and not a `revoked_at` stamp**, and decision 5 is why: a lapsed membership
 darkens a link, and a membership that revives must light it again. A timestamp can only be set.
@@ -306,9 +317,9 @@ a month, egress free.
 
 | Route | Body | Answer | Guard |
 | --- | --- | --- | --- |
-| `POST {share}/g/{group}/share` | metadata | `200 { id }` | bearer |
+| `POST {share}/g/{group}/share` | metadata | `200 { id, url }` | bearer |
 | `PUT {share}/g/{group}/share/{id}` | gzip | `200 { hash }` | bearer |
-| `GET {share}/g/{group}/shares` | | `200 [ … ]` | bearer |
+| `GET {share}/g/{group}/shares` | | `200 { shares: [ … ] }` | bearer |
 | `DELETE {share}/g/{group}/share/{id}` | | `204` | bearer |
 | `GET {share}/s/{id}` | | `200` HTML, or `410` | **public** |
 | `GET {share}/s/{id}/{hash}.json.gz` | | `200`, immutable | **public** |

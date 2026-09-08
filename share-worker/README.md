@@ -101,8 +101,16 @@ name is collected by **nothing**, and `vitest run` answers `No test files found`
 to read as a pass.
 
 `fakeD1` models column keys and not expression indexes, so `shares_folder` — the partial unique
-index that makes one share per folder true — is **not** enforced there. `handleCreate` decides it
-by reading the folder's row rather than by catching a constraint failure, and `schema.sql` was
-checked against real SQLite with `node:sqlite` on 2026-09-08: the index refuses a second live
-share of one folder and a second whole-collection share, and admits a fresh row beside a revoked
-tombstone.
+index that makes one share per folder true — is **not** enforced there. `handleCreate` therefore
+decides it by *reading* the folder's row, and catches a constraint violation only as the backstop
+for two devices publishing at once: the loser re-reads and is answered the winner's id rather than
+a 500. Neither half can be checked against the fake, so both were driven against real SQLite with
+`node:sqlite` on 2026-09-08 — the index refuses a second live share of one folder and a second
+whole-collection share, admits a fresh row beside a revoked tombstone, and the sequence
+publish → revoke → publish → publish → publish answers one stable id from the second press on.
+
+⚠️ **That last sequence is the shape of the bug this Worker shipped for one commit.** The lookup
+in front of the index has to carry the index's own `state <> 'revoked'` predicate; without it the
+tombstone is what `first()` answers, every later publish takes the mint-a-new-id branch, and the
+third press is an uncaught 500 for ever. Two publishes cannot see it — the second is *supposed*
+to mint a new id — which is why the test publishes four times.

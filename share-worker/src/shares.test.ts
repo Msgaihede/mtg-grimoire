@@ -206,9 +206,15 @@ describe("POST /g/{group}/share", () => {
     }
     const res = await worker.fetch(post("g1", await token(), { ...META, folderUid: "uid-over" }), env);
     expect(res.status).toBe(403);
+    const refusal = (await res.json()) as { error: string; code: string };
     // The number comes out of the message and never out of the binding — an assertion that read
     // `MAX_SHARES_PER_GROUP` would be green at any cap.
-    expect(JSON.stringify(await res.json())).toContain("20");
+    expect(JSON.stringify(refusal)).toContain("20");
+    // **And the code is asserted as a literal, because the code is the contract.** 403 already
+    // means other things to a caller, `share/publish.rs` branches on this string, and the
+    // sentence beside it is copy that is *meant* to be improvable — so renaming the code has to
+    // be what goes red, exactly as the relay pins `device_limit`.
+    expect(refusal.code).toBe("share_limit");
 
     // And the cap counts what is live rather than what was ever minted: a revoked share has to
     // give its slot back, or a reader who publishes and withdraws twenty times is locked out for
@@ -229,6 +235,9 @@ describe("POST /g/{group}/share", () => {
       { ...META, folderUid: 5 },
       { ...META, fields: "condition" },
       { ...META, fields: ["condition", "notes"] },
+      // Every element is a known field and the array is still a megabyte. The element check does
+      // not bound the array, and this lands in a column of a D1 the whole account shares.
+      { ...META, fields: new Array(100_000).fill("condition") as string[] },
     ]) {
       const res = await worker.fetch(post("g1", await token(), bad), env);
       expect(res.status, JSON.stringify(bad)).toBe(400);
@@ -323,6 +332,96 @@ describe("GET /g/{group}/shares and DELETE", () => {
       shares: { id: string }[];
     };
     expect(body.shares.map((s) => s.id)).toEqual([again]);
+  });
+
+  it("goes on refreshing a folder that was once revoked", async () => {
+    // ⚠️ **Three publishes, and the third is the whole test.** A revoked row stays on this
+    // folder's key for ever — it is what answers a viewer 410 — so a lookup that does not exclude
+    // it finds the tombstone on every later publish and takes the mint-a-new-id branch again. Two
+    // publishes cannot see that: the second one is *supposed* to mint a new id. The third is what
+    // separates "the tombstone was skipped" from "the tombstone is answered every time", and
+    // against the real partial index the wrong answer is `UNIQUE constraint failed: index
+    // 'shares_folder'` — an uncaught 500 on every Refresh of that folder, permanently.
+    const env = shareEnv();
+    const first = await idOf(await worker.fetch(post("g1", await token(), META), env));
+    expect((await worker.fetch(revoke("g1", await token(), first), env)).status).toBe(204);
+
+    const second = await idOf(await worker.fetch(post("g1", await token(), META), env));
+    expect(second).not.toBe(first);
+    const third = await idOf(await worker.fetch(post("g1", await token(), META), env));
+    expect(third).toBe(second);
+    const fourth = await idOf(
+      await worker.fetch(post("g1", await token(), { ...META, title: "Renamed" }), env),
+    );
+    expect(fourth).toBe(second);
+
+    // And one folder is still one share, rather than a row per press.
+    const body = (await (await worker.fetch(list("g1", await token()), env)).json()) as {
+      shares: { id: string; title: string }[];
+    };
+    expect(body.shares).toEqual([expect.objectContaining({ id: second, title: "Renamed" })]);
+  });
+
+  it("answers the winner's id when two devices publish one folder at once", async () => {
+    // Both devices read no row and both insert; `shares_folder` refuses the second, which is the
+    // guarantee working. What must not happen is the loser being handed a 500 for losing a race
+    // it could not see.
+    //
+    // **The race is staged, because `fakeD1` models column keys and not expression indexes** —
+    // it would let both rows land. The stub writes the winner's row and then raises what D1
+    // raises, which is the state the loser's handler actually meets.
+    const env = shareEnv();
+    const real = env.DB;
+    const WINNER = "WINNERWINNERWINN";
+    let raced = false;
+    const db = {
+      prepare: (sql: string) => {
+        const statement = real.prepare(sql);
+        if (!sql.trimStart().startsWith("INSERT")) return statement;
+        return {
+          bind: (...values: unknown[]) => ({
+            run: async () => {
+              if (raced) return real.prepare(sql).bind(...values).run();
+              raced = true;
+              await real
+                .prepare(sql)
+                .bind(WINNER, ...values.slice(1))
+                .run();
+              throw new Error("D1_ERROR: UNIQUE constraint failed: index 'shares_folder'");
+            },
+          }),
+        };
+      },
+    };
+
+    const res = await worker.fetch(post("g1", await token(), META), {
+      ...env,
+      DB: db,
+    } as unknown as Env);
+    expect(res.status).toBe(200);
+    expect(await idOf(res)).toBe(WINNER);
+  });
+
+  it("rethrows a failure that is not the race", async () => {
+    // The catch above asks "is a share serving this folder now?" and never matches on the error's
+    // text. The other half of that rule is this one: a write that failed for any other reason
+    // must not be swallowed into a 200 pointing at nothing.
+    const env = shareEnv();
+    const db = {
+      prepare: (sql: string) => {
+        const statement = env.DB.prepare(sql);
+        if (!sql.trimStart().startsWith("INSERT")) return statement;
+        return {
+          bind: () => ({
+            run: () => Promise.reject(new Error("D1_ERROR: no such table: shares")),
+          }),
+        };
+      },
+    };
+
+    await expect(
+      worker.fetch(post("g1", await token(), META), { ...env, DB: db } as unknown as Env),
+    ).rejects.toThrow(/no such table/);
   });
 
   it("refuses to revoke a share belonging to another group", async () => {

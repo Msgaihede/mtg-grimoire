@@ -100,6 +100,14 @@ export function metaProblem(body: unknown): string | null {
   if (!optionalText(currency)) return "that is not a currency";
   if (!optionalText(marketplace)) return "that is not a marketplace";
   if (!Array.isArray(fields)) return "malformed share";
+  // ⚠️ **The ceiling is the format's own arity rather than a number somebody picked**: `fields` is
+  // a set over three known names, so anything longer is duplicates or junk. Checking each element
+  // does not bound the array — `["condition"] × 100_000` passes that check and is a megabyte of
+  // JSON text in a column of a D1 database the whole account shares, which is the same thing
+  // [`MAX_TEXT_CHARS`] exists to stop one field away.
+  if (fields.length > KNOWN_FIELDS.length) {
+    return "that is not a list of fields this format carries";
+  }
   for (const field of fields) {
     if (typeof field !== "string" || !KNOWN_FIELDS.includes(field)) {
       return "that is not a field this format carries";
@@ -145,13 +153,38 @@ function mintId(): string {
 }
 
 /**
+ * Which row a folder's next publish is about: this group's, this folder's, **and not a
+ * tombstone**.
+ *
  * ⚠️ **The folder key is `coalesce(folder_uid, '')` and never `folder_uid` on its own.** SQLite
  * treats NULLs as distinct, so `WHERE folder_uid = ?` matches nothing for a whole-collection
  * share and every republish of the whole collection would mint a second link — and a bare unique
  * index would let it. The empty string is *bound* rather than written as a literal so the
  * statement is one shape whichever kind of share it is about.
+ *
+ * ⚠️ **`state <> 'revoked'` is the other half and it was missing for one commit.** A revoked row
+ * *stays* — it is what answers a viewer 410 rather than 404 — so after a withdrawal there are two
+ * rows on this key and `first()` answers the tombstone. `handleCreate` then took the mint-a-new-id
+ * branch on **every** later publish: the second publish looked right, and the third raised
+ * `UNIQUE constraint failed: index 'shares_folder'` against the real index, for ever. That is one
+ * uncaught 500 on every Refresh of a folder that has ever been revoked, and the test that was
+ * supposed to cover it published only twice. With this clause the answer is the live-or-lapsed
+ * row or nothing at all, which is what the partial index guarantees is unambiguous.
  */
-const FOLDER_KEY = `group_id = ? AND coalesce(folder_uid, ?) = ?`;
+const FOLDER_KEY = `group_id = ? AND coalesce(folder_uid, ?) = ? AND state <> ?`;
+
+/**
+ * The share this group is serving for this folder, or `null` for a folder it has never shared —
+ * or has withdrawn.
+ *
+ * `shares_folder` is unique over exactly this predicate, so there is at most one row to find and
+ * no `ORDER BY` can change the answer.
+ */
+async function serving(env: Env, group: string, key: string): Promise<{ id: string } | null> {
+  return env.DB.prepare(`SELECT id FROM shares WHERE ${FOLDER_KEY}`)
+    .bind(group, "", key, REVOKED)
+    .first<{ id: string }>();
+}
 
 /** The columns a share crosses the wire as, in the order the list answers them. */
 interface ShareRow {
@@ -247,13 +280,12 @@ export async function handleCreate(
   const meta = readMeta(body);
   const key = meta.folderUid ?? "";
 
-  const existing = await env.DB.prepare(
-    `SELECT id, state FROM shares WHERE ${FOLDER_KEY}`,
-  )
-    .bind(group, "", key)
-    .first<{ id: string; state: string }>();
+  // **`serving` excludes the tombstone**, so there is no `state` to branch on here: a row means
+  // this folder has a live or lapsed share and `null` means it has none — including the folder
+  // that had one and had it withdrawn, which is the case that mints a new id.
+  const existing = await serving(env, group, key);
 
-  if (existing !== null && existing.state !== REVOKED) {
+  if (existing !== null) {
     await env.DB.prepare(
       `UPDATE shares SET title = ?, owner_name = ?, card_count = ?, total_value = ?,
          currency = ?, marketplace = ?, fields = ?, updated_at = ?
@@ -294,29 +326,46 @@ export async function handleCreate(
   }
 
   const id = mintId();
-  await env.DB.prepare(
+  const insert = env.DB.prepare(
     `INSERT INTO shares (id, group_id, folder_uid, title, owner_name, card_count, total_value,
        currency, marketplace, fields, object_key, bytes, state, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  )
-    .bind(
-      id,
-      group,
-      meta.folderUid,
-      meta.title,
-      meta.ownerName,
-      meta.cardCount,
-      meta.totalValue,
-      meta.currency,
-      meta.marketplace,
-      JSON.stringify(meta.fields),
-      null,
-      null,
-      "live",
-      now,
-      now,
-    )
-    .run();
+  ).bind(
+    id,
+    group,
+    meta.folderUid,
+    meta.title,
+    meta.ownerName,
+    meta.cardCount,
+    meta.totalValue,
+    meta.currency,
+    meta.marketplace,
+    JSON.stringify(meta.fields),
+    null,
+    null,
+    "live",
+    now,
+    now,
+  );
+
+  try {
+    await insert.run();
+  } catch (error) {
+    // **Two devices in one group publishing the same folder at once both read `null` above.**
+    // `shares_folder` refuses the second row, which is the guarantee working — a folder can never
+    // hold two serving shares — but the loser must not be handed a 500 for having lost a race it
+    // could not see. Re-reading answers the winner's id, which is the id it would have been given
+    // a moment earlier or a moment later, so the operation is idempotent from the app's side.
+    //
+    // **The error's text is never matched on.** Every driver spells a constraint violation
+    // differently (`D1_ERROR: UNIQUE constraint failed: index 'shares_folder': SQLITE_CONSTRAINT`
+    // on D1 today), and a Worker branching on that string breaks silently on a runtime update.
+    // The question asked instead is the one that actually matters: *is a share serving this
+    // folder now?* If not, this was not the race and the failure is rethrown untouched.
+    const won = await serving(env, group, key);
+    if (won === null) throw error;
+    return json({ id: won.id, url: shareUrl(env, won.id) });
+  }
 
   return json({ id, url: shareUrl(env, id) });
 }
