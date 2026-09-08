@@ -402,8 +402,8 @@ export function deckCardName(
     // constant is written as a tooltip (a fragment on its own) and this is a sentence.
     //
     // `theoryMatchLabel` is the same sentence the mark's own tooltip and the table's `sr-only`
-    // twin say, so a reader who cannot see the `-8` still gets "8 fewer than planned" rather than
-    // the bare "in the theory list" this said before issue #212 — and, since the mark grew a
+    // twin say, so a reader who cannot see the `-8` still gets "8 to remove" rather than the
+    // bare "in the theory list" this said before issue #212 — and, since the mark grew a
     // second tier, the same sentence names **which** tier, because that half of the mark is drawn
     // as a colour and a colour is the one thing a screen reader is told nothing about.
     theoryMark === null
