@@ -30,12 +30,12 @@ deliberately**: no screenshots are stored.
 - **Seeds and faults are state, not response stubs**: `parameters: { fake: { seed, fault } }`.
   **Seven** seeds
   (`empty`/`starter`/`needsReview`/`large`/`bracketMismatch`/`combosMissing`/`paired`),
-  **twenty-four** faults
+  **twenty-five** faults
   (`busy`/`syncing`/`syncError`/`imageFailures`/`gone`/`indexCold`/`deckMeta`/`updateAvailable`/
   `updateError`/`errorLog`/`feedFetchError`/`oracleTagsMissing`/`oracleTagsFetchError`/
   `artTagsMissing`/`artTagsFetchError`/`imageUrisMissing`/`exportWriteError`/
   `mirrorRootUnwritable`/`combosFetchError`/`pairingReadError`/`patreonDeclined`/
-  `patreonLapsed`/`patreonGroupEntitled`/`wishGone`); saying
+  `patreonLapsed`/`patreonGroupEntitled`/`wishGone`/`scannerMissing`); saying
   nothing gets `starter` with no fault. A
   fault is set on the _world_, so a story shows what the **app** does with a refusal rather than
   what one mocked call returns. **`syncing` is `busy`'s neighbour and reaches exactly one
