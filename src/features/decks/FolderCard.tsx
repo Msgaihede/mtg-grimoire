@@ -513,17 +513,19 @@ export function ParentDeckFolderCard({
         aria-label={upCardName(label)}
         onClick={onOpen}
         className={cn(
-          // `h-full` on a stretched grid item, so the tile is as tall as the drawers beside it
-          // whatever the reader's zoom has done to them — the aspect box below sets the shape and
-          // this sets the height. `justify-center` is what keeps the three lines in the middle of
-          // a cell that has grown past them; pinned to the top they read as a card whose picture
-          // failed to load, which is `components/ParentFolderCard`'s own finding.
+          // **No `h-full`, and its removal is the fix rather than a tidy-up** (2026-09-08). This
+          // tile is a grid item and the wall stretches its cells, so `h-full` made the way out as
+          // tall as the tallest thing in the row — which is a *deck* tile, and a deck tile is a
+          // crop plus a band plus two lines of type under both. Beside a 186px folder card the
+          // way out stood at 232px, and the row read as one object that had gone wrong. Its
+          // height now comes from the same two things every other framed box on this wall gets it
+          // from: the {@link ART_ASPECT} box below, and {@link BAND_PAD}.
           // Centred rather than `text-left`, which is the one thing about this tile's contents
           // that is not a folder card's: a folder card's caption is a line of type under three
           // pictures and reads from the left like every other caption on the wall, and this box
           // holds nothing but the destination, so anything but the middle of it reads as a
           // picture that failed to arrive beside the words.
-          "flex h-full w-full flex-col justify-center overflow-hidden rounded-lg bg-surface",
+          "flex w-full flex-col overflow-hidden rounded-lg bg-surface",
           // Dashed, and accented rather than the border colour: the drawers on this wall are
           // solid framed boxes now, so the dash is free to mean the one thing left that is not a
           // place. 55% is the canvas's `color-mix(in oklab, var(--color-accent) 55%, transparent)`

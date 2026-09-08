@@ -3138,6 +3138,53 @@ describe("the deck's two views and their one zoom section", () => {
 
 describe("TableView", () => {
   /**
+   * **The last view to read the deck in the order the deck is laid out** (2026-09-08).
+   *
+   * This one mapped `groups` straight through, so on a real Commander deck its bands read
+   * `Commander → Sideboard → Maybeboard → the deck` — the piles played *beside* the deck, and the
+   * ones switched off entirely, above it, because they are seeded early in
+   * `PREDEFINED_CATEGORIES` and the list arrives in `sortOrder`. Every other view has taken them
+   * out through `splitRail` for a while; the table was the last one left, so a reader's Sideboard
+   * was in a different place depending on which of four drawings of one deck they were looking at.
+   *
+   * **A table has one axis, so what the split decides here is only *when* a band is reached** —
+   * there is no rail column and there is not meant to be one. The assertion is therefore the band
+   * order and nothing else: the command zone, the deck's own piles in the reader's `sortOrder`,
+   * then `side`, `maybe` and the switched-off tail.
+   *
+   * Read as the **whole list in order** rather than as "the Sideboard is last", because the
+   * weaker claim passes against a view that has dropped a band or re-sorted the deck's own piles
+   * — which is the mistake the rail's own sweep in this file already documents.
+   *
+   * **{@link DRAW} is in the fixture for one reason and it is the whole of what makes this case
+   * real.** Its `sortOrder` is 3, which is *after* the Sideboard's 2 — so straight through the
+   * bands read `Commander · Ramp · Sideboard · Draw · Maybeboard` and split they read
+   * `Commander · Ramp · Draw · Sideboard · Maybeboard`. Without a pile of the reader's own sorted
+   * past a railed one, the seeded order already agrees with the split and the assertion passes
+   * against both implementations: checked by reverting the view to `groups.flatMap` with a
+   * `[COMMANDER, RAMP, SIDE, MAYBE]` fixture, where it stayed green.
+   */
+  it("reads the deck first and the piles played beside it last", () => {
+    const groups = buildGroups(
+      [...CARDS, card({ name: "Rest in Peace", categoryKind: "side" })],
+      [COMMANDER, RAMP, SIDE, DRAW, MAYBE],
+      "category",
+      "alphabetical",
+    );
+    render(<TableView groups={groups} marketplace={TCG} />);
+
+    // A band is the row whose single cell spans every column — `aria-colspan` is what says so,
+    // and it is the one thing about a band that is structural rather than a class. The name is
+    // the first `<span>` in it, which is `GroupHeader`'s own; this view passes no `handle`, so
+    // nothing precedes it.
+    const bands = [...document.querySelectorAll("[aria-colspan]")].map((cell) =>
+      cell.querySelector("span")?.textContent?.trim(),
+    );
+
+    expect(bands).toEqual(["Commander", "Ramp", "Draw", "Sideboard", "Maybeboard"]);
+  });
+
+  /**
    * **The badge and its `sr-only` twin are two elements that must agree, and nothing but this
    * makes them.**
    *
