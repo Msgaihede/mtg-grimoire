@@ -11,12 +11,15 @@
  * back up, drawn in the same frame with a dashed accent edge so that the one tile that is not a
  * place cannot be mistaken for one.
  */
-import { useRef } from "react";
-import { Folder, FolderUp } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import type { MouseEventHandler, ReactNode } from "react";
+import { Check, Folder, FolderUp, MoreHorizontal, Pencil, X } from "lucide-react";
 import { CardImage } from "@/components/CardImage";
 import { FolderDropLine } from "@/components/FolderDropLine";
+import { useFolderFieldReturn } from "@/components/FolderNameField";
 import { UP_ONE_LEVEL, upCardName } from "@/components/ParentFolderCard";
 import { useTooltip } from "@/components/tooltip/useTooltip";
+import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { cardScaleVars } from "@/lib/cardZoom";
 import { plural } from "@/lib/counts";
 import { DROP_EDGE, DROP_OVER } from "@/lib/dropMarks";
@@ -24,6 +27,7 @@ import { useFolderDropTarget, type FolderDrag, type FolderEdge } from "@/lib/fol
 import { FOCUS } from "@/lib/focus";
 import { ART_ASPECT, cardArtSrc, cardImageUrl } from "@/lib/images";
 import type { DeckRow } from "@/lib/ipc";
+import { PRESS } from "@/lib/motion";
 import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
 import {
@@ -75,6 +79,287 @@ const BAND_PAD = "pb-[calc(1.25rem*var(--mark-scale,1))]";
  */
 function deckUnit(n: number): string {
   return plural(n, "deck").slice(`${n} `.length);
+}
+
+/**
+ * The card's menu, with the `⋯`'s own door **required**.
+ *
+ * {@link FolderRowMenu} leaves `onClick` optional because a tree row draws no trigger to put it
+ * on; this card does, so a page handing it a menu with only the two keyboard-and-right-click doors
+ * would build a `⋯` that opens nothing. Required here, optional there, one builder either way.
+ */
+export type FolderCardMenu = FolderRowMenu & { onClick: MouseEventHandler<HTMLButtonElement> };
+
+/**
+ * The tray of controls over the art's top-right corner, and its two buttons — `DeckTile`'s, at the
+ * same insets, the same felt and the same scale variable.
+ *
+ * **The resemblance is the point rather than a saving.** A folder card and a deck tile share one
+ * grid track and are drawn in one frame, so a reader who has learnt that a tile's controls live in
+ * that corner has learnt it about the wall and not about deck tiles. Written out here rather than
+ * imported from `DeckTile.tsx` because that module is the deck's — it would be an import from the
+ * tile to the drawer for four class strings — and because the two hold different controls: a
+ * folder's tray is two buttons wide where a deck's is four or five.
+ *
+ * `--control-scale` rather than `--mark-scale`, `DeckTile`'s reason: these are drawn *on* a
+ * picture and take `CONTROL_SHRINK`'s 85% with the tray around them.
+ */
+const TRAY = cn(
+  "absolute flex rounded-md bg-bg/85",
+  "right-[calc(0.25rem*var(--control-scale,1))] top-[calc(0.25rem*var(--control-scale,1))]",
+  "gap-[calc(0.125rem*var(--control-scale,1))] p-[calc(0.125rem*var(--control-scale,1))]",
+);
+
+/** One control in that tray. */
+const TRAY_BUTTON = cn(
+  "grid size-[calc(1.5rem*var(--control-scale,1))] place-items-center rounded-md",
+  "text-dim hover:text-text",
+  PRESS,
+  FOCUS,
+);
+
+/** The glyph inside one — 14px at 100%, on the button's own variable so the two cannot part. */
+const TRAY_ICON = "size-[calc(0.875rem*var(--control-scale,1))]";
+
+/**
+ * The tick, which is the one control in the tray that greys.
+ *
+ * A real `disabled` rather than `aria-disabled`, {@link FolderNameField}'s ruling verbatim: the
+ * house rule is about controls that grey as the reader types *and still have something to say*,
+ * and this one is a submit whose whole meaning is the field beside it.
+ */
+const TRAY_SUBMIT = cn(
+  "grid size-[calc(1.5rem*var(--control-scale,1))] place-items-center rounded-md",
+  "text-accent transition-colors duration-150",
+  "hover:bg-accent hover:text-accent-foreground",
+  "disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-accent",
+  "motion-reduce:transition-none",
+  FOCUS,
+);
+
+/**
+ * What a card draws inside its frame — the aspect spacer, the member crops and the caption's
+ * second line — so the resting card and the renaming one cannot come to draw two different
+ * drawers.
+ *
+ * **Only the name line differs between the two states**, which is the whole claim the design makes
+ * about this interaction: the frame, the pictures and the figures stay exactly where they are and
+ * the caption's first line becomes a field. Sharing the rest is what makes that true of the
+ * pixels rather than only of the intention — a second copy of the crops would be a second place
+ * for `FOLDER_ARTS`, the seams and the empty word to drift.
+ *
+ * It is a function rather than a component so that both branches keep their own single element
+ * tree: the caption is one `<span>` whose *first child* is the only thing that swaps.
+ */
+function folderFace(
+  node: FolderNode,
+  arts: readonly { id: number; cardId: string; artUrl: string | null; artist: string }[],
+  nameLine: ReactNode,
+): ReactNode {
+  return (
+    <>
+      {/* The shape, and it draws nothing at all. A deck tile's cover is a full-width box on
+          `ART_ASPECT` and takes its height from the grid track for free; three crops side by side
+          have no aspect of their own to follow, so the card borrows the cover's by holding an
+          empty box of exactly it and letting {@link BAND_PAD} add the band's 20px underneath. */}
+      <span className="block w-full" style={{ aspectRatio: ART_ASPECT }} />
+      {/* The pictures **are** the card, so they are laid over the whole frame — the band's 20px
+          included, which is what makes the crop reach the bottom edge rather than stopping short
+          of a strip of surface nothing is drawn on. The 2px seams scale, so three pictures stay
+          three pictures rather than becoming one at 2×. */}
+      <span className="absolute inset-0 flex gap-[calc(2px*var(--mark-scale,1))]">
+        {arts.length === 0 ? (
+          <span
+            aria-hidden="true"
+            className="grid w-full place-items-center text-[calc(0.7rem*var(--mark-scale,1))] text-dim"
+          >
+            {node.count === 0 ? "Empty" : "No cover art"}
+          </span>
+        ) : (
+          arts.map((art) => (
+            <MemberArt key={art.id} cardId={art.cardId} artUrl={art.artUrl} artist={art.artist} />
+          ))
+        )}
+      </span>
+      {/* The caption, on the art rather than under it — `bg-bg/72` over the pictures, which is
+          `color-mix(in oklab, var(--color-bg) 72%, transparent)` written the way this app spells
+          an opacity on a token. It is what buys the card its height back: the name and the count
+          used to be two lines of layout below the strip, and printing them over the crops is how a
+          folder comes to be exactly a deck tile tall. */}
+      <span
+        className={cn(
+          "absolute inset-x-0 bottom-0 bg-bg/72",
+          "px-[calc(0.5rem*var(--mark-scale,1))] py-[calc(0.375rem*var(--mark-scale,1))]",
+        )}
+      >
+        {nameLine}
+        <span
+          className={cn(
+            "flex items-center gap-[calc(0.25rem*var(--mark-scale,1))] text-dim",
+            "text-[calc(0.75rem*var(--mark-scale,1))] leading-[calc(1rem*var(--mark-scale,1))]",
+          )}
+        >
+          {/* The one accent thing on the card, and it is the word's own glyph rather than an
+              ornament: a caption that says `Folder` beside a folder is what tells a drawer from
+              the deck tiles it is now shaped exactly like. */}
+          <Folder
+            aria-hidden="true"
+            className="size-[calc(0.75rem*var(--mark-scale,1))] flex-none text-accent"
+          />
+          <span className="truncate">
+            Folder · <span className="font-mono tabular-nums">{node.count}</span>{" "}
+            {deckUnit(node.count)}
+          </span>
+        </span>
+      </span>
+    </>
+  );
+}
+
+/**
+ * The card **as the field** — same frame, same pictures, same figures line, with the name's own
+ * line become an input and the tray's two answers in the corner.
+ *
+ * **The `<form>` replaces the `<button>` rather than standing under it**, which is the whole
+ * difference between this and the deck tile beside it. A tile's name is already in flow *under*
+ * its picture, so a field can take that line with the picture untouched; a folder's name is set
+ * **on** the art, inside the button, and a form inside a button is not markup a browser will
+ * build. So the button goes for the length of the edit and the form draws the same box.
+ *
+ * **The input is a real box rather than the name line with a caret in it** — 1px of accent over
+ * the page's own felt — because the caption is drawn over somebody's artwork, and a bare caret on
+ * a crop is a field a reader cannot find the edges of. That is the one place this diverges from
+ * {@link FolderNameField}, whose tile *is* the field because there is no picture under it.
+ *
+ * **Escape is deliberately not handled here**, `FolderNameField`'s ruling for its reason: the
+ * field is one arm of the page's `Panel`, so the page's `"inner"` rung already closes it, and a
+ * handler here would be a second registration for one layer that could never run first anyway.
+ * Enter is the form's own implicit submission; blur discards.
+ */
+function FolderRenameForm({
+  node,
+  arts,
+  rename,
+  mark,
+}: {
+  node: FolderNode;
+  arts: readonly { id: number; cardId: string; artUrl: string | null; artist: string }[];
+  rename: { pending: boolean; onSubmit: (name: string) => void; onCancel: () => void };
+  /**
+   * The two drags' marks, as the card's own edge — {@link DROP_EDGE} and {@link DROP_OVER}, in
+   * that order, resolved by the caller.
+   *
+   * **The targets stay registered through a rename and so must the marks.** A deck dropped on a
+   * folder whose name is being typed files perfectly well, so a card that stopped *advertising*
+   * would make the wall answer a drag differently depending on a state the dragger cannot see —
+   * `CollectionFolderCard` records the same rule and pays for it with a ring on its `<li>`,
+   * because its renaming tile has no border to recolour. This one does: the `<div>` below is the
+   * card's frame, character for character the button's, so the mark goes exactly where it goes at
+   * rest and there is no second outline to fail to line up with.
+   */
+  mark: string | false | undefined;
+}) {
+  const rootRef = useRef<HTMLFormElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [name, setName] = useState(node.folder.name);
+
+  // Both calls, in this order. The spec says `select()` only sets the selection, and jsdom
+  // implements the spec — where Chromium focuses on select, which is what makes a missing
+  // `focus()` look sufficient in the shipped window and fail in the suite. The name arrives
+  // selected because the commonest rename replaces the word rather than edits inside it. This repo
+  // has got the pair wrong twice; `metaRows.tsx`'s `RenameField` carries the account.
+  useEffect(() => {
+    const input = inputRef.current;
+    if (input === null) return;
+    input.focus();
+    input.select();
+  }, []);
+
+  const trimmed = name.trim();
+
+  return (
+    <form
+      ref={rootRef}
+      // **`data-no-drag` on the whole form, not on each control.** `NOT_A_DRAG` is matched with
+      // `closest()`, so one mark on the root covers the input, the tick and the cross at once —
+      // and it is load-bearing, because the box under this form is the folder's own drag source:
+      // without it, pressing into the field and moving five pixels files the folder somewhere
+      // instead of placing the caret, and the press that was meant is never delivered.
+      data-no-drag=""
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (!trimmed || rename.pending) return;
+        rename.onSubmit(trimmed);
+      }}
+      // Clicking or tabbing away discards a half-typed name, exactly as every other layer in this
+      // app discards its half-made decision. Suspended while the write is in flight: the tick
+      // disables itself on the press, and a control the browser disables is blurred with no
+      // `relatedTarget` at all — which would otherwise read as the reader looking away.
+      onBlur={(e) => {
+        if (rename.pending) return;
+        if (!rootRef.current?.contains(e.relatedTarget)) rename.onCancel();
+      }}
+    >
+      <div
+        className={cn(
+          // The resting card's frame, with the border gone accent — which is the whole of what
+          // says *this tile is live*. Every other class is the button's, character for character,
+          // so nothing about the box moves when the field opens or closes.
+          "relative block w-full overflow-hidden rounded-lg border border-accent bg-surface",
+          "text-left",
+          BAND_PAD,
+          // Written last, `tailwind-merge`'s argument order: the field's own accent edge is what
+          // this card wears all the time it is being typed in, and a drag's mark has to be able to
+          // pull it back to 45% or take it to the full-strength `DROP_OVER`.
+          mark,
+        )}
+      >
+        {folderFace(
+          node,
+          arts,
+          <span className="flex items-center">
+            <input
+              ref={inputRef}
+              aria-label={`Rename ${node.folder.name}`}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className={cn(
+                "min-w-0 flex-1 rounded-md border border-accent bg-bg",
+                "px-[calc(0.375rem*var(--mark-scale,1))]",
+                // **Exactly the name line's leading**, so the caption is the same box in both
+                // states: the frame's height is the art's and does not move, but a taller field
+                // would grow the caption *upward* over the pictures and shift the figures line
+                // under it — the one thing on this card that is supposed to hold still while a
+                // reader checks they have the right drawer. `DeckTile`'s field carries the same
+                // number for the harder reason (its name is in flow, so a taller field grows the
+                // tile and the grid row with it); the two are one rule and move together.
+                "h-[calc(1.25rem*var(--mark-scale,1))]",
+                "text-[calc(0.875rem*var(--mark-scale,1))] leading-[calc(1.25rem*var(--mark-scale,1))]",
+                "text-text caret-accent outline-none",
+              )}
+            />
+          </span>,
+        )}
+      </div>
+      {/* The corner the resting card gives its pencil and its `⋯`, holding the two answers this
+          field has — never the caption's own line, which is the deck tile's constraint read one
+          object over: a tile's tray is the only place it *can* put them, so a folder answering a
+          rename somewhere else would make one wall answer one gesture two ways. */}
+      <div className={TRAY}>
+        <button
+          type="submit"
+          aria-label="Rename folder"
+          disabled={!trimmed || rename.pending}
+          className={TRAY_SUBMIT}
+        >
+          <Check className={TRAY_ICON} aria-hidden="true" />
+        </button>
+        <button type="button" aria-label="Cancel" onClick={rename.onCancel} className={TRAY_BUTTON}>
+          <X className={TRAY_ICON} aria-hidden="true" />
+        </button>
+      </div>
+    </form>
+  );
 }
 
 /** Every live deck filed in a folder **or in anything under it** — what a folder card draws
@@ -137,6 +422,8 @@ export function FolderCard({
   canDropFolder,
   onDropFolder,
   onOpen,
+  onStartRename,
+  rename,
   rowMenu,
 }: {
   node: FolderNode;
@@ -194,11 +481,47 @@ export function FolderCard({
    * — a ref read inside a callback handed to a function during render is, to the rule, a ref read
    * during render. It fails only at `npm run verify`, never at `tsc`.
    */
-  rowMenu: (folder: FolderNode["folder"]) => FolderRowMenu;
+  /**
+   * The pencil's press — the *visible* way into a rename, where the menu is the discoverable one.
+   *
+   * A card had no rename affordance at all until 2026-09-08: the verb was on the right-click menu
+   * and on the heading row's `Folder` control, and neither is a thing on the card. The tray this
+   * opens with is the deck tile's own, so a wall of drawers and decks answers a rename the same
+   * way whichever kind of tile the pointer is over.
+   */
+  onStartRename: (folderId: number) => void;
+  /**
+   * `Rename…`, answered **on the card** rather than in the tree beside it.
+   *
+   * `active` is the page's and not the card's, because one field is open at a time across the
+   * whole wall — and because the page is the only thing that knows *where* the reader asked. A
+   * rename started on a tree row draws its field there and leaves every card resting; see
+   * `panels.ts`'s `FolderRenameAt`.
+   *
+   * **The card keeps its pictures and its figures line while the field is open** (see the render),
+   * which is the whole reason this is not a bare input dropped where the caption was: a reader
+   * renaming *Commander* is looking at the drawer holding four decks, and a box that lost the
+   * count would make them check they had the right one.
+   */
+  rename: {
+    active: boolean;
+    /** The write is in flight — holds the field open and greys the tick. */
+    pending: boolean;
+    onSubmit: (name: string) => void;
+    onCancel: () => void;
+  };
+  rowMenu: (folder: FolderNode["folder"]) => FolderCardMenu;
 }) {
   const ref = useRef<HTMLLIElement>(null);
   const folderRef = useRef<HTMLDivElement>(null);
+  const tip = useTooltip();
   const menu = rowMenu(node.folder);
+  // The caret's way back out of the field, and it has to be a ref taken here rather than the
+  // element the page remembered when the rename was started: the pencil this restores to is a
+  // *new* element, built by the render that closed the field, so the one the page is holding is a
+  // detached node whose `focus()` is a silent no-op. `CollectionFolderCard`'s arrangement, and
+  // `useFolderFieldReturn` carries the reasoning.
+  const renameRef = useFolderFieldReturn<HTMLButtonElement>(rename.active);
   const over = useDeckDropTarget({ ref, canDrop, onDrop: onDropDeck });
   useFolderDragSource(folderRef, node.folder);
   const { armed, edge } = useFolderDropTarget({
@@ -289,111 +612,129 @@ export function FolderCard({
           holding* — about different payloads, and no card can be answering both at once. The
           third landing is what a deck has no equivalent of, and it is the line below. */}
       <div ref={folderRef} className="relative rounded-lg">
-        <button
-          type="button"
-          // Starts with the visible label, then says the two things the card's marks say — WCAG
-          // 2.5.3, and the reason the count is not spliced into the middle of the name.
-          aria-label={`${node.folder.name} folder, ${plural(node.count, "deck")}`}
-          onClick={() => onOpen(node.folder.id)}
-          onContextMenu={menu.onContextMenu}
-          onKeyDown={menu.onKeyDown}
-          className={cn(
-            // The frame, and it is a deck tile's: the same border, the same radius, the same
-            // surface under it. `relative` is load-bearing rather than tidy — the crops and the
-            // caption are laid over this box with `absolute`, and an `overflow` clips an
-            // absolutely positioned descendant only where the clipping box is in its
-            // containing-block chain. Without it they would resolve against the `<div>` above,
-            // whose whole job is to be a drop target's rectangle, and the pictures would hang
-            // square-cornered over a rounded frame.
-            "relative block w-full overflow-hidden rounded-lg border border-border bg-surface",
-            "text-left",
-            BAND_PAD,
-            "transition-colors duration-150 hover:border-accent motion-reduce:transition-none",
-            // Both drags' *eligible* mark, on the card's own edge rather than around it — and it
-            // has to be written **before** the line below, because `tailwind-merge` resolves the
-            // border colour by argument order: the card the pointer is actually over would
-            // otherwise have its full-strength edge pulled back down to 45% by the wider claim.
-            (eligible || armed) && DROP_EDGE,
-            (over || edge === "inside") && cn("border-accent", DROP_OVER),
-            FOCUS,
-          )}
-        >
-          {/* The shape, and it draws nothing at all. A deck tile's cover is a full-width box on
-              `ART_ASPECT` and takes its height from the grid track for free; three crops side by
-              side have no aspect of their own to follow, so the card borrows the cover's by
-              holding an empty box of exactly it and letting {@link BAND_PAD} add the band's 20px
-              underneath. The same constant as the cover uses, imported rather than respelled —
-              two spellings of one ratio is how the deck's Grid view came to disagree with the
-              wall docked beside it. */}
-          <span className="block w-full" style={{ aspectRatio: ART_ASPECT }} />
-          {/* The pictures **are** the card, so they are laid over the whole frame — the band's
-              20px included, which is what makes the crop reach the bottom edge rather than
-              stopping short of a strip of surface nothing is drawn on. They were a fixed 96px
-              band above the name until 2026-09-08.
-              The 2px seams scale, so three pictures stay three pictures rather than becoming one
-              at 2×. */}
-          <span className="absolute inset-0 flex gap-[calc(2px*var(--mark-scale,1))]">
-            {arts.length === 0 ? (
-              <span
-                aria-hidden="true"
-                className="grid w-full place-items-center text-[calc(0.7rem*var(--mark-scale,1))] text-dim"
+        {rename.active ? (
+          /* **The card becomes the field, and keeps its pictures and its figures line.** The name
+             is edited on the line it is drawn on, in the same frame at the same track, so nothing
+             reflows when the field opens and nothing moves when it closes — and only the border
+             changes colour, which is the whole of what says *this tile is live*.
+
+             The two drop targets above are left registered on purpose: a deck dropped onto a
+             folder whose name is being edited files perfectly well, and tearing the targets down
+             would make the wall answer a drag differently depending on a state the dragger cannot
+             see. What the field *does* suppress is this card as a drag **source** — its `<form>`
+             carries `data-no-drag`, so pressing into the name places a caret instead of picking
+             the folder up. */
+          <FolderRenameForm
+            node={node}
+            arts={arts}
+            rename={rename}
+            // The same pair the resting card's button wears, resolved here so the two states read
+            // one expression rather than two that have to agree.
+            mark={
+              over || edge === "inside"
+                ? cn("border-accent", DROP_OVER)
+                : (eligible || armed) && DROP_EDGE
+            }
+          />
+        ) : (
+          <>
+            <button
+              type="button"
+              // Starts with the visible label, then says the two things the card's marks say —
+              // WCAG 2.5.3, and the reason the count is not spliced into the middle of the name.
+              aria-label={`${node.folder.name} folder, ${plural(node.count, "deck")}`}
+              onClick={() => onOpen(node.folder.id)}
+              onContextMenu={menu.onContextMenu}
+              onKeyDown={menu.onKeyDown}
+              className={cn(
+                // The frame, and it is a deck tile's: the same border, the same radius, the same
+                // surface under it. `relative` is load-bearing rather than tidy — the crops and
+                // the caption are laid over this box with `absolute`, and an `overflow` clips an
+                // absolutely positioned descendant only where the clipping box is in its
+                // containing-block chain. Without it they would resolve against the `<div>`
+                // above, whose whole job is to be a drop target's rectangle, and the pictures
+                // would hang square-cornered over a rounded frame.
+                "relative block w-full overflow-hidden rounded-lg border border-border bg-surface",
+                "text-left",
+                BAND_PAD,
+                "transition-colors duration-150 hover:border-accent motion-reduce:transition-none",
+                // Both drags' *eligible* mark, on the card's own edge rather than around it — and
+                // it has to be written **before** the line below, because `tailwind-merge`
+                // resolves the border colour by argument order: the card the pointer is actually
+                // over would otherwise have its full-strength edge pulled back down to 45% by the
+                // wider claim.
+                (eligible || armed) && DROP_EDGE,
+                (over || edge === "inside") && cn("border-accent", DROP_OVER),
+                FOCUS,
+              )}
+            >
+              {folderFace(
+                node,
+                arts,
+                // The name is at the deck tile's own name size and the row under it at the
+                // caption size, off the same variable and in the same order — the two cards sit
+                // in one grid track, and a name that disagreed about its own size would be the
+                // first thing a reader saw.
+                <span
+                  className={cn(
+                    "block truncate",
+                    "text-[calc(0.875rem*var(--mark-scale,1))] leading-[calc(1.25rem*var(--mark-scale,1))]",
+                  )}
+                >
+                  {node.folder.name}
+                </span>,
+              )}
+            </button>
+
+            {/* Invisible until the card is hovered or holds the caret — a wall of art is not a
+                wall of buttons — and always in the tab order, because "visible on hover" is not a
+                state a keyboard has. The deck tile's tray, at the same insets on the same felt,
+                because the two tiles share a grid track and a reader learns one corner for the
+                wall rather than one per kind of tile.
+
+                **Siblings of the `<button>` rather than children of it**: a button inside a
+                button is not markup a browser will build, and a control inside it would join the
+                card's accessible name ahead of the folder. */}
+            <div className={cn(TRAY, REVEAL_ON_HOVER)}>
+              <button
+                ref={renameRef}
+                type="button"
+                // The card is a folder drag source, so a press on this plus five pixels of travel
+                // would file the folder instead of opening the field — `FolderNameField`'s own
+                // note, one control earlier in the same gesture.
+                data-no-drag=""
+                // **`Rename the X folder`, never the bare `Rename X` the field answers to.** The
+                // tree draws a rename field of its own, and a rename started on a *row* leaves
+                // every card on the wall resting — so a card's pencil and that field are on screen
+                // together, and both would answer to one name. Two controls with one accessible
+                // name is what `getByLabelText` cannot tell apart and what a screen-reader user
+                // meets as two identical rows; the fix is `Folder actions`' ruling verbatim — the
+                // name says what *kind* of thing the control is about. It was the collision the
+                // suite found the day the pencil landed.
+                aria-label={`Rename the ${node.folder.name} folder`}
+                {...tip("Rename", { describes: false })}
+                onClick={() => onStartRename(node.folder.id)}
+                className={TRAY_BUTTON}
               >
-                {node.count === 0 ? "Empty" : "No cover art"}
-              </span>
-            ) : (
-              arts.map((art) => (
-                <MemberArt
-                  key={art.id}
-                  cardId={art.cardId}
-                  artUrl={art.artUrl}
-                  artist={art.artist}
-                />
-              ))
-            )}
-          </span>
-          {/* The caption, on the art rather than under it — `bg-bg/72` over the pictures, which
-              is `color-mix(in oklab, var(--color-bg) 72%, transparent)` written the way this app
-              spells an opacity on a token. It is what buys the card its height back: the name and
-              the count used to be two lines of layout below the strip, and printing them over the
-              crops is how a folder comes to be exactly a deck tile tall.
-              The name is at the deck tile's own name size and the row under it at the caption
-              size, off the same variable and in the same order — the two cards sit in one grid
-              track, and a name that disagreed about its own size would be the first thing a
-              reader saw. */}
-          <span
-            className={cn(
-              "absolute inset-x-0 bottom-0 bg-bg/72",
-              "px-[calc(0.5rem*var(--mark-scale,1))] py-[calc(0.375rem*var(--mark-scale,1))]",
-            )}
-          >
-            <span
-              className={cn(
-                "block truncate",
-                "text-[calc(0.875rem*var(--mark-scale,1))] leading-[calc(1.25rem*var(--mark-scale,1))]",
-              )}
-            >
-              {node.folder.name}
-            </span>
-            <span
-              className={cn(
-                "flex items-center gap-[calc(0.25rem*var(--mark-scale,1))] text-dim",
-                "text-[calc(0.75rem*var(--mark-scale,1))] leading-[calc(1rem*var(--mark-scale,1))]",
-              )}
-            >
-              {/* The one accent thing on the card, and it is the word's own glyph rather than an
-                  ornament: a caption that says `Folder` beside a folder is what tells a drawer
-                  from the deck tiles it is now shaped exactly like. */}
-              <Folder
-                aria-hidden="true"
-                className="size-[calc(0.75rem*var(--mark-scale,1))] flex-none text-accent"
-              />
-              <span className="truncate">
-                Folder · <span className="font-mono tabular-nums">{node.count}</span>{" "}
-                {deckUnit(node.count)}
-              </span>
-            </span>
-          </span>
-        </button>
+                <Pencil className={TRAY_ICON} aria-hidden="true" />
+              </button>
+              {/* The visible way into the menu the right-click already opens. `menuClick` rather
+                  than `menu`, because a plain press carries no coordinates worth trusting — it is
+                  a pointer's or the Enter key's, and only that door knows to ask. */}
+              <button
+                type="button"
+                data-no-drag=""
+                aria-label={`Manage ${node.folder.name}`}
+                aria-haspopup="menu"
+                {...tip("Folder actions", { describes: false })}
+                onClick={menu.onClick}
+                className={TRAY_BUTTON}
+              >
+                <MoreHorizontal className={TRAY_ICON} aria-hidden="true" />
+              </button>
+            </div>
+          </>
+        )}
 
         {/* Drawn straight off `edge`, which is `null` both when the pointer is elsewhere and when
             it is over a part of this card that would refuse — so no line means no drop, rather than

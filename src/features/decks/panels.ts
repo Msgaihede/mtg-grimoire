@@ -14,6 +14,16 @@
  */
 
 /**
+ * Which of a folder's two drawings is holding the rename field — see {@link Panel}'s
+ * `renameFolder` arm, which carries the whole argument.
+ *
+ * A union of two words rather than a boolean, because neither name is the other's negation: a
+ * reader meeting `at: "wall"` learns where the field is, where `inTree: false` only says where it
+ * is not.
+ */
+export type FolderRenameAt = "tree" | "wall";
+
+/**
  * The one dismissible layer this view can have open, and there is deliberately only ever one.
  *
  * **At most one of these is ever meant to be open**, and modelling every panel on this screen as
@@ -51,7 +61,23 @@ export type Panel =
    */
   | { kind: "deckSettings" }
   | { kind: "newFolder"; parentId: number | null }
-  | { kind: "renameFolder"; folderId: number }
+  /**
+   * The folder rename field, and **which drawing of the folder became it**.
+   *
+   * A folder is drawn twice on this screen — as a row in the sidebar's tree and as a card on the
+   * wall — and since 2026-09-08 both can put a field in place of themselves. One `folderId` cannot
+   * say which, so wiring the card to a bare `renameFolder` opened *two* identical fields at once,
+   * each answering to `Rename X` and each committing the same write.
+   *
+   * `at` is therefore the opener rule stated as data: **the field stands where the reader started
+   * it.** A press on the wall — the card's pencil, its right-click, its `⋯` — is `"wall"`; the
+   * tree's row menu and its F2 are `"tree"`, and so is the heading row's `Folder` control, because
+   * that one renames the folder the reader is *standing in* and an open folder has no card on its
+   * own wall. It also decides where the caret goes afterwards: a tree row is found by attribute
+   * after the render that redraws it (`refocusFolderRef`), where a card hands itself back through
+   * `useFolderFieldReturn`.
+   */
+  | { kind: "renameFolder"; folderId: number; at: FolderRenameAt }
   /**
    * **There is no `moveFolder` arm, and there must not be one again** (removed 2026-09-08).
    *

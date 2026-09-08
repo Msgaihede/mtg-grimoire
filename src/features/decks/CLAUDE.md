@@ -2904,6 +2904,85 @@ price | type`). An **inactive category stays its own group in all three grouping
   untouched: those walls draw a folder as a 62px line of type, where an edge is the only thing
   separating a container from a control. `src/lib/dropMarks.ts` described all four as dashed and
   was corrected in the same commit.
+- **Renaming happens where the reader asked, and `Panel`'s `at` is the whole of what says where**
+  (2026-09-08). A folder is drawn twice on this screen — a row in the sidebar's tree, a card on the
+  wall — and both can now put a field in place of themselves. The card's is new: it had no rename
+  affordance at all, and its right-click's `Rename…` opened a field in the **sidebar**, which is a
+  reader pressing something on the wall and watching a box appear across the window. So
+  `{ kind: "renameFolder"; folderId; at: "tree" | "wall" }`, and the routes divide as follows.
+  **`"wall"`** is the card's pencil, its right-click and its `⋯`; **`"tree"`** is the tree's row
+  menu, its F2, **and the heading row's `Folder` control** — that last one renames the folder the
+  reader is *standing in*, and an open folder is never a card on its own wall (its children are), so
+  it has a row and nothing else. Four things bind an implementer here:
+  - **Without `at` the two drawings both draw a field.** They read one `folderId`, so the naive
+    wiring put two inputs on screen answering to one `Rename Commander`, each committing the same
+    write — and `findByLabelText` throws *found multiple* rather than either being wrong.
+    `the folder card's own rename`'s two containment cases are what hold it, and they name the two
+    boxes (`nav[aria-label="Folders"]`, `ul[aria-label="Your decks"]`) rather than counting DOM
+    order.
+  - **The page builds two `FolderMenuDeps`, differing only in `startRename`.** `folderMenuActions`
+    is the four rows that do not care, and `treeMenuDeps` / `wallMenuDeps` close the origin over the
+    fifth. A `FolderRenameAt` threaded through `buildFolderMenu` was refused: a menu row is a bare
+    callback, so the origin has to be closed over somewhere, and closing it here means
+    `folderMenu.tsx` goes on knowing nothing about a wall.
+  - **The caret comes back two different ways and `dismiss` picks by `at`.** A tree row is found by
+    attribute after the render that redraws it (`refocusFolderRef`); a card hands itself back
+    through `useFolderFieldReturn`, because the pencil the caret belongs on is a *new* element and
+    the one the page is holding is detached. `startRename` writes `openerRef = null` either way, so
+    the wall's branch is `focus()` on nothing followed by the hook.
+  - **`FolderRowMenu.onClick` is optional and `FolderCardMenu` requires it.** Only the card draws a
+    `⋯`, and only `menuClick` knows to ask whether a plain press came from a pointer or from Enter.
+    Optional in the tree's type, required in the card's: a page handing the card a two-door menu
+    would build a trigger that opens nothing.
+- **The two pencils are `Rename the X folder` / `Rename the X deck`, never the bare `Rename X` the
+  fields answer to** — and on the folder card that is a collision the suite actually caught. A
+  rename started on a tree *row* leaves every card on the wall resting, so the tree's field and the
+  card's pencil are on screen together and both would answer to one name. It is `Folder actions`'
+  ruling reached a fifth time: the name says what **kind** of thing the control is about. The deck
+  tile's pencil takes the same shape for a weaker reason — its field and its pencil are never both
+  drawn — but a query that cannot tell them apart reports the pencil as the field, which is how a
+  cancelled rename read as a field that never closed.
+- **The folder card renames *as the card* and the deck tile renames *on the name's line*, and the
+  difference is where each name is set** (2026-09-08). A folder's name is drawn **on** the art
+  inside its `<button>`, and a form inside a button is not markup a browser will build — so the
+  whole button is replaced by a `<form>` drawing the same box, and `folderFace()` is what keeps the
+  two from drifting: the aspect spacer, the crops and the figures line are one function, and only
+  the caption's first child swaps. A deck's name is already in flow **under** its picture, so the
+  field simply takes that line and the button stays. Three consequences worth knowing:
+  - **The deck tile's name and caption go `sr-only` rather than away.** A button's accessible name
+    is computed from its contents, so removing the name would leave a tile named for its format and
+    its card count — one control answering to two sentences depending on whether somebody is typing
+    in it. Hidden that way they take no space (`sr-only` is `position: absolute`), the field opens
+    exactly where the name was, and the visible caption drawn beside the field is `aria-hidden`
+    because the button already carries those words.
+  - **The two answers are ✓ / ✕ in the tray over the art, on both tiles.** The folder card *could*
+    put them on the caption's own line and the deck tile cannot — its tray is the only place it has
+    — so one wall answering one gesture two ways is what the tray avoids. The design canvas exposes
+    both (`renameControls`); `corner` is what shipped. On the deck tile the ✓ is a
+    `type="button"` with an `onClick`, because it is outside the form; `submitRename` is the one
+    place either route sends.
+  - **The deck tile's blur is measured against the whole `<li>`, not the form.** The ✓ and the ✕
+    live outside the form, so a press on either is a blur that must not cancel first — and both
+    fields suspend the discard while the write is in flight, because a control the browser disables
+    on the press is blurred with no `relatedTarget` at all.
+  - **Both fields are `h-[calc(1.25rem*var(--mark-scale,1))]` — exactly the name line's leading —
+    and on the deck tile that number is what keeps the wall still.** A tile's name is in flow, so a
+    field any taller grows the tile and the whole grid row with it. Measured in the shipped window
+    (`npm run tauri dev`, a **debug** build, 1920×1080, at the wall's own 1.2×): a 26px field under
+    a 20px line took the tile from **266px to 273** and pushed the row down 7px the moment a reader
+    started typing — the one thing this arrangement promises not to do, and invisible to both
+    suites, because jsdom lays nothing out. At the matched height every tile reads 266 in both
+    states, 112 at 0.5× and 442 at 2×, with `scrollHeight === clientHeight` on the input at every
+    stop. The folder card carries the same number for a smaller reason: its frame's height is the
+    art's and does not move, but a taller field grows the *caption* upward over the pictures and
+    shifts the figures line under it.
+  - **`metaRows.tsx`'s `RenameField` is no longer the deck tile's field**, and it was until this.
+    That component survives for `CategoriesDialog` and `LabelsDialog`, which is what it was written
+    for — a 32px row inside a dialog with `Save` and `Cancel` spelled out in words. What it was
+    wrong for is a wall: it drew a bordered strip *under* the tile, below the object it was about,
+    reflowing every tile after it. **Escape is still nobody's job here**: both fields are arms of
+    the page's `Panel`, so the page's `"inner"` rung closes them, and a handler in either would be a
+    second registration for one layer that could never run first anyway.
 - **20px is the number three objects share, and it is what keeps one grid track level.** The mana
   band's height, `FolderCard`'s `BAND_PAD` (`pb-[calc(1.25rem*var(--mark-scale,1))]`) and the empty
   drawer's `New deck` placeholder (`paddingBottom: "calc(1.25rem * var(--mark-scale, 1))"` in
