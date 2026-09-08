@@ -236,6 +236,36 @@ describe("DeckColorBar", () => {
   });
 
   /**
+   * **The glyph's size is on the field, and writing it on the `<i>` is the mistake this pins.**
+   *
+   * `mana-font`'s `.ms` declares `font: … 14px Mana` and then `font-size: inherit`. That is a
+   * class selector, exactly as specific as a Tailwind utility, and `main.tsx` imports
+   * `mana.css` after `index.css` — so on a tie, source order hands the font the win and a
+   * `text-[…]` written on the `<i>` is present in the markup, present in the stylesheet, and
+   * doing nothing at all. The symbol takes whatever its parent is.
+   *
+   * **It shipped that way and three green suites said nothing**, which is why this case is
+   * worth its own name. jsdom loads no stylesheet, so a computed-style assertion here is blind;
+   * a `classList.contains` on the `<i>` would have passed over the defect, because the class
+   * really was there. It was found by measuring the shipped window — `fontSize: "16px"` on a
+   * rule asking for 12 — and by stepping the gallery's zoom, where the band went 20px → 14px
+   * and the symbol stayed 16px inside it.
+   *
+   * So this asserts the *placement*: the size belongs to the segment, whose `font-size: inherit`
+   * the font itself then honours, and the `<i>` carries no size of its own to be ignored. Both
+   * halves, because either one alone passes over the bug.
+   */
+  it("sizes the symbol from the field, where the font's own `inherit` will honour it", () => {
+    const { container } = render(<DeckColorBar pips={pips({ R: 1 })} />);
+    const [field] = segments(container);
+    const symbol = field.querySelector("i");
+    if (symbol === null) throw new Error("no symbol drawn");
+
+    expect(field.classList.contains("text-[calc(0.75rem*var(--mark-scale,1))]")).toBe(true);
+    expect([...symbol.classList].filter((name) => name.startsWith("text-["))).toEqual([]);
+  });
+
+  /**
    * The band is the tile's foot rather than a rule under a picture, and every size on it moves
    * with `--mark-scale` like the other four sizes on a deck tile.
    *

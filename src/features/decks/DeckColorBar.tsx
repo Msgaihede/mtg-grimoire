@@ -232,7 +232,26 @@ export function DeckColorBar({ pips }: { pips: PipCounts | null }): ReactElement
           // stay legible. `overflow-hidden` on the parent is what makes the band's rounded foot
           // belong to the band rather than to the first and last colour, and what absorbs the
           // floors when a five-colour deck's minimums add past a narrow tile.
-          className="grid min-w-[calc(1.625rem*var(--mark-scale,1))] place-items-center"
+          // **The glyph's size is set here, on the field, and not on the `<i>` that draws it.**
+          // `mana-font`'s own `.ms` rule declares `font: … 14px Mana` and then `font-size:
+          // inherit` — a class selector, exactly as specific as a Tailwind utility, and
+          // `main.tsx` imports `mana.css` after `index.css`, so on a tie source order hands the
+          // font the win. A `text-[…]` written on the `<i>` is therefore in the markup, in the
+          // stylesheet, and doing nothing: the symbol takes whatever its parent is, which was
+          // the page's 16px. **Nothing can see that** — the class is present so a source
+          // assertion passes, jsdom applies no stylesheet so a computed-style assertion is
+          // blind, and at 100% zoom a 16px symbol in a 20px band merely looks bold. It was
+          // found by measuring the shipped window, where the tell was `fontSize: "16px"` on a
+          // rule asking for 12.
+          // Setting it on the field is not a workaround for that but the arrangement the font
+          // asks for: `font-size: inherit` is `.ms`'s own declaration, so the glyph follows its
+          // parent by design, and the parent is the one element here that already knows how big
+          // the band is. It also puts the size on the same element as the floor it has to fit
+          // inside. `text-black` stays on the `<i>`: `.ms` sets no colour, so nothing contests it.
+          className={cn(
+            "grid min-w-[calc(1.625rem*var(--mark-scale,1))] place-items-center",
+            "text-[calc(0.75rem*var(--mark-scale,1))] leading-none",
+          )}
           style={{ width: `${(pips[key] / total) * 100}%`, backgroundColor: MANA_FILL[key] }}
         >
           {/* The printed symbol, in near-black on its own fill — the arrangement `index.css`
@@ -249,13 +268,7 @@ export function DeckColorBar({ pips }: { pips: PipCounts | null }): ReactElement
               field, its width and its `data-deck-color` are the segment, and the symbol is what
               the band adds on top of them. `mana.test.ts` is what would go red, since it asserts
               every class this app names against the shipped stylesheet. */}
-          <i
-            className={cn(
-              manaSymbolClass(key),
-              "text-[calc(0.75rem*var(--mark-scale,1))] leading-none text-black",
-            )}
-            aria-hidden="true"
-          />
+          <i className={cn(manaSymbolClass(key), "text-black")} aria-hidden="true" />
         </span>
       ))}
     </span>
