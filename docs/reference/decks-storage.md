@@ -2054,11 +2054,61 @@ quick add's reason: this write **creates** rows, so `ownedQuantity` moves from 0
 `staleTime` would otherwise keep saying the old number for half a minute. `["wishlist"]` in that
 set is load-bearing here rather than incidental, because the write can delete a wish outright.
 
-### Nothing in this section has been measured in the shipped window
+### The live pass, 2026-09-08 (debug build, Windows, 1920×1080)
 
-The same debt the quick add's section carries. What the live pass owes: the footer's count against
-the steppers, the band's missing count dropping by exactly what was recorded, the copies appearing
-in the deck's own folder, and an ambiguous wish genuinely left standing.
+Driven over CDP against a copy of the real database. The scenario was built on an empty scratch
+deck so nothing real was written: **Chimil, the Inner Sun** short 4 with one wish for 2 at the
+root, **Firemane Commando** short 3 with two wishes (root and `Backordered`), **The One Ring**
+foil short 2 with none. The band read `9 of 9 missing`.
+
+**The band.** All three presses on one row at 1920 wide — identical `top`, and their class lists
+byte-identical as a set. At the app's **1024** floor they still fit on one row, rightmost edge at
+**796** of a 1024 client width, and `scrollWidth` never exceeded `clientWidth`. The `flex-wrap` is
+therefore insurance rather than something the third button spends.
+
+**The dialog opened** with every row ticked and steppers at `4 / 3 / 2`, each `min=1` and
+`max=short`. The three wish shapes drew as designed: `Clears 2 copies off a wish in Wishlist` on
+Chimil (the wish holds 2, so `min(4, 2)`), `2 wishlist lines match — left alone` on Firemane, and
+nothing at all on The One Ring.
+
+**The arithmetic tracks the controls.** Footer `9 copies across 3 cards · 2 copies off your
+wishlist`; untick The One Ring → `7 copies across 2 cards` and the press relabels to
+`Add 7 copies to collection`; step Chimil 4 → 1 → `4 copies across 2 cards · 1 copy off your
+wishlist`, and its row line becomes `Clears 1 copy off a wish in Wishlist` — the clamp and the
+singular both, on one gesture.
+
+**The press was deliberately partial** — 1 of Chimil's 4 and all 3 of Firemane's, with The One
+Ring switched off — because that is the shape that can go wrong silently. It answered
+*"Recorded 4 copies of 2 cards into Test Deck. 1 copy off your wishlist."* and the database agreed
+with every clause of it:
+
+| Claim | After |
+| --- | --- |
+| Chimil recorded 1 | `ownedQuantity` 0 → 1, plan `short` 4 → 3 |
+| Firemane recorded 3 | `ownedQuantity` 0 → 3, row gone from the plan |
+| The One Ring untouched | `ownedQuantity` 0, `short` still 2 |
+| the lone wish decremented | Chimil's wish 2 → 1 |
+| **the ambiguous pair left standing** | both Firemane wishes still 1, after a 3-copy press |
+| one history row for the press | `move`, `card` NULL, `{"quickAdd":{"copies":4,"wishes":1}}`, `delta` 0 |
+
+`ownedQuantity` is the proof the copies landed in the deck's **own** group rather than at the
+root, because `owned_by_printing` counts only rows filed there. The band re-read `5 of 9 missing`
+— down by exactly the four recorded — and the drawer worded the row *"Recorded 4 copies for this
+deck / 1 copy off your wishlist"* with **no change to `auditText.ts`**, which is the reuse of
+`move` paying off rather than merely being asserted in a test.
+
+Escape closed the dialog and returned the caret to the button that opened it.
+
+**One behaviour worth writing down because it surprises on first sight and is correct**: a
+successful press leaves the dialog **open**, and it re-plans. The reader's departures survive that
+refetch — a row they had unticked stays unticked, a count they lowered stays lowered — so the
+footer immediately after the press above read `1 copy across 1 card`, which is Chimil's *new*
+shortfall of 3 still carrying the reader's stepper of 1, with The One Ring still switched off.
+That is `MissingChoice` holding only departures working exactly as designed, and it is the pull's
+behaviour too. Nothing about it is a bug; it is only unintuitive if you expect the dialog to reset.
+
+**No defects found.** That is worth stating plainly rather than leaving as silence, because every
+other UI task in this repo's plans found something the suite could not.
 
 ## The gallery's two second reads, and the order it opens in (2026-09-07, issue #387)
 
