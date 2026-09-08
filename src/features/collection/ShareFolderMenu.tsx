@@ -42,12 +42,12 @@ import { useContextMenu } from "@/components/menu/useContextMenu";
 import type { MenuItem } from "@/components/menu/types";
 import { ConfirmDialog } from "@/features/settings/ConfirmDialog";
 import { BUTTON } from "@/features/settings/controls";
-import { SUPPORTER_KEY, supporterState } from "@/features/settings/SyncPanel";
 import { OpenShareDialog } from "@/features/share/OpenShareDialog";
 import { SHARE_KEY, useShares } from "@/features/share/useShares";
 import { copyText } from "@/lib/clipboard";
 import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError, type CollectionFolder, type ShareFields, type ShareRow } from "@/lib/ipc";
+import { SUPPORTER_KEY, supporterState } from "@/lib/query";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
@@ -178,14 +178,15 @@ export function ShareFolderMenu({ target }: { target: ShareTarget | null }): JSX
   const setActiveView = useAppStore((s) => s.setActiveView);
 
   /**
-   * The membership, read through the Settings panel's own key and its own reading of the four
-   * fields.
+   * The membership, through the one key and the one reading of the four fields.
    *
    * **Imported rather than re-spelled**: `SUPPORTER_KEY` sits under `SYNC_KEY`, which is what
-   * makes a finished round trip re-read it, and a second literal `["sync", "supporter"]` in this
-   * file would be two features spelling one prefix two ways. `supporterState` comes with it
-   * because `entitled` and `groupBound` have to be asked in that order — a build that asked
-   * `status` first drew *Membership ended* at a paid-up supporter's second device.
+   * makes a finished round trip re-read it, and a second literal `["sync", "supporter"]` here
+   * would be two features spelling one prefix two ways. `supporterState` comes with it because
+   * `entitled` and `groupBound` have to be asked in that order — a build that asked `status`
+   * first drew *Membership ended* at a paid-up supporter's second device. Both live in
+   * `@/lib/query` beside `RELAY_KEY`, which is where `SyncPanel`'s own comment said they would
+   * go the moment a second surface read them; this control is that surface.
    */
   const supporter = useQuery({ queryKey: SUPPORTER_KEY, queryFn: () => ipc.syncSupporterStatus() });
   const membership = supporterState(supporter.data ?? null);
@@ -206,6 +207,11 @@ export function ShareFolderMenu({ target }: { target: ShareTarget | null }): JSX
   /** The one line under the buttons: what the last press did, or why it did not. */
   const [note, setNote] = useState<string | null>(null);
   const shareRef = useRef<HTMLButtonElement | null>(null);
+
+  /** The caret goes back to the button the layer was raised from — `Dialog` cannot know which
+   *  control that was, and there is exactly one here. Declared above the writes because every
+   *  one of them closes a layer. */
+  const back = useCallback(() => shareRef.current?.focus(), []);
 
   const existing = useMemo(
     () => (target === null ? null : shareFor(shares.data ?? [], target)),
@@ -231,12 +237,18 @@ export function ShareFolderMenu({ target }: { target: ShareTarget | null }): JSX
   });
   const revoke = useMutation({
     mutationFn: (id: string) => ipc.shareRevoke(id),
+    // **`back()` on both arms, because a confirmed press is still a layer closing.**
+    // `ConfirmDialog` names `onDismiss` as the focus-return hook and *confirming* does not go
+    // through it, so without this the caret lands on `<body>` and the reader's next Tab starts
+    // at the top of the page. The publish path already did this; these two now agree with it.
     onSuccess: () => {
       setWithdrawing(false);
+      back();
       settle("Sharing stopped. The link no longer answers.");
     },
     onError: (e: unknown) => {
       setWithdrawing(false);
+      back();
       setNote(ipcError(e));
     },
   });
@@ -343,10 +355,6 @@ export function ShareFolderMenu({ target }: { target: ShareTarget | null }): JSX
     },
     [menuClick, rows],
   );
-
-  /** The caret goes back to the button the layer was raised from — `Dialog` cannot know which
-   *  control that was, and there is exactly one here. */
-  const back = useCallback(() => shareRef.current?.focus(), []);
 
   const shareName =
     target === null
@@ -520,7 +528,23 @@ function PublishForm({
   onPublished: () => void;
   onClose: () => void;
 }): JSX.Element {
-  const [name, setName] = useState(suggestedName);
+  /**
+   * The reader's own answer, and `null` until they have typed one.
+   *
+   * ⚠️ **`useState(suggestedName)` is what this must not be**, and the bug is a race rather than
+   * a style: `Dialog` mounts nothing while it is closed, so the seed is read once — on the open —
+   * and `share_list` reaches the *relay* before it answers. A reader who opened this dialog
+   * before that round trip landed would have got an empty *Your name* **for good**, and re-typed
+   * a name their group already publishes under (spec §4.3). Harmless only while
+   * `publish.rs`'s placeholder base short-circuits every publish; a real bug on deploy day.
+   *
+   * `null` rather than a `key` on this component, which was the other fix on the table: re-keying
+   * remounts the form, so an answer landing *while the reader is typing* would throw their draft
+   * away. Here the first keystroke wins permanently and a deliberately emptied field stays empty
+   * — the suggestion is a suggestion, never a value that comes back.
+   */
+  const [typed, setTyped] = useState<string | null>(null);
+  const name = typed ?? suggestedName;
   const [fields, setFields] = useState<ShareFields>({
     condition: false,
     lang: false,
@@ -555,7 +579,7 @@ function PublishForm({
           type="text"
           value={name}
           onChange={(e) => {
-            setName(e.target.value);
+            setTyped(e.target.value);
             setRefusal(null);
           }}
           placeholder="The name on the page"

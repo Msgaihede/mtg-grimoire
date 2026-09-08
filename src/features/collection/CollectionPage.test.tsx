@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { isWebTarget } from "@/pwa/target";
 
 // The build flag `cardArtSrc` branches on. `false` is what `__CORE__` already answers under
@@ -5784,12 +5784,23 @@ describe("sharing from the cabinet", () => {
     const user = userEvent.setup();
     wrap(<CollectionPage />);
 
+    // **The presence first, in this same case.** An absence asserted over a page that never drew
+    // the control passes for the wrong reason — the shape that has produced vacuous tests in
+    // this repo more than once — so the root's own control is what proves the mount, the
+    // membership read and the query all answered.
+    await screen.findByRole("button", { name: "Share your collection" });
+
     // A deck group is a `PinnedFolders` entry rather than a folder card, so it is named `deck`
     // rather than `folder` — the pinned strip is the whole of how a reader reaches one.
-    await user.click(await screen.findByRole("button", { name: /^Mono-Red Aggro deck/ }));
+    await user.click(screen.getByRole("button", { name: /^Mono-Red Aggro deck/ }));
     await waitFor(() => expect(shareControl()).toBeNull());
     // …and the way into somebody else's binder is still there, because viewing needs nothing.
     expect(screen.getByRole("button", { name: "Open a shared collection" })).toBeInTheDocument();
+
+    // The other app-owned kind, from the same page rather than from a second case: they are one
+    // rule (`kind <> 'user'`) and a reader reaches both from the same strip.
+    await user.click(screen.getByRole("button", { name: /^Recently removed/ }));
+    await waitFor(() => expect(shareControl()).toBeNull());
   });
 
   /**
@@ -5836,6 +5847,13 @@ describe("sharing from the cabinet", () => {
    *  panel is where the connection story lives, and a control that only ever produced a sentence
    *  saying so would teach nothing its absence does not. */
   it("hides the Share control when nothing is connected", async () => {
+    // **The presence first**, so the absence below is about the membership rather than about a
+    // page that never drew the control. `cleanup` between, because two mounts in one document
+    // would put two of every button on screen.
+    wrap(<CollectionPage />);
+    await screen.findByRole("button", { name: "Share your collection" });
+    cleanup();
+
     syncSupporterStatus.mockResolvedValue({
       entitled: false,
       status: "dead",

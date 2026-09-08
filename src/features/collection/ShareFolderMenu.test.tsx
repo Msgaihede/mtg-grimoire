@@ -32,7 +32,7 @@ import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import type { CollectionFolder, ShareRow, SupporterStatus } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
-import { ShareFolderMenu, shareTargetFor, type ShareTarget } from "./ShareFolderMenu";
+import { shareFor, ShareFolderMenu, shareTargetFor, type ShareTarget } from "./ShareFolderMenu";
 
 /* ------------------------------------------------------------------ fixtures ---------- */
 
@@ -166,6 +166,30 @@ describe("which level offers a Share control", () => {
   });
 });
 
+/* ---------------------------------------------------- which row belongs to a level ---------- */
+
+describe("the share a level already has", () => {
+  /**
+   * **A withdrawn row survives its own revocation** until the next reconcile drops it, so the
+   * menu can say *withdrawn* rather than having the fact vanish with no explanation — which
+   * means one folder can carry two rows for a moment. The live one wins, or the menu would
+   * offer *Share…* over a link that is still answering.
+   */
+  it("prefers a live row over a withdrawn one for the same folder", () => {
+    const dead = share({ id: "old", state: "revoked" });
+    const live = share({ id: "new" });
+    expect(shareFor([dead, live], BINDER)?.id).toBe("new");
+    expect(shareFor([live, dead], BINDER)?.id).toBe("new");
+    // With nothing but the withdrawn row, that row is still the answer — it is what the
+    // *Withdrawn* line is drawn from.
+    expect(shareFor([dead], BINDER)?.id).toBe("old");
+    // And a row belongs to the level it names: the whole collection is `folderUid: null`, which
+    // is a destination rather than an omission.
+    expect(shareFor([live], COLLECTION)).toBeNull();
+    expect(shareFor([share({ folderUid: null })], COLLECTION)?.id).toBe("testshareid00000");
+  });
+});
+
 /* ------------------------------------------------------------ the greyed row ---------- */
 
 describe("a folder the reader has set aside", () => {
@@ -255,6 +279,94 @@ describe("a share whose folder was locked afterwards", () => {
 
     expect(shareRefresh).not.toHaveBeenCalled();
     expect(shareRevoke).not.toHaveBeenCalled();
+  });
+});
+
+/* ------------------------------------------------------------------- refreshing ---------- */
+
+describe("updating a share that already exists", () => {
+  /**
+   * **The live half of the row the stale case only greys.** `share_refresh` re-publishes under
+   * the name and fields the cached row carries and **keeps the link** — a reader who has handed
+   * the URL out never hands out a second one — so the id it is given is the whole of what makes
+   * it the right share.
+   */
+  it("re-publishes this level's share, by its own id, and says so", async () => {
+    // Two rows, so an implementation that reached for the first of the list rather than for
+    // this level's would send the wrong id.
+    shareList.mockResolvedValue([share({ id: "whole", folderUid: null }), share()]);
+    const user = userEvent.setup();
+    mount(<ShareFolderMenu target={BINDER} />);
+
+    await user.click(await shareButton());
+    await user.click(await screen.findByRole("menuitem", { name: /Update now/ }));
+
+    await waitFor(() => expect(shareRefresh).toHaveBeenCalledWith("testshareid00000"));
+    expect(shareRefresh).toHaveBeenCalledTimes(1);
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent("Snapshot updated."),
+    );
+  });
+
+  /** A failed upload keeps the old snapshot serving and the link alive, so the report is a
+   *  sentence rather than a state change — spec §10's *upload dies mid-`PUT`* row. */
+  it("reports a refused update rather than claiming one", async () => {
+    shareList.mockResolvedValue([share()]);
+    shareRefresh.mockRejectedValue("The upload did not finish. The old snapshot is still live.");
+    const user = userEvent.setup();
+    mount(<ShareFolderMenu target={BINDER} />);
+
+    await user.click(await shareButton());
+    await user.click(await screen.findByRole("menuitem", { name: /Update now/ }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent(/old snapshot is still live/),
+    );
+  });
+});
+
+/* ---------------------------------------------------------- the other two states ---------- */
+
+describe("a share the reader is not publishing to any more", () => {
+  /**
+   * **`lapsed` is the relay's daily pass talking** — a membership that stopped paying, whose
+   * shares stop answering (spec §6). It is the one state an entire Worker cron exists to
+   * produce, and it is the one a reader has to be told about before their friends tell them.
+   */
+  it("says a lapsed share is paused, and why", async () => {
+    shareList.mockResolvedValue([share({ state: "lapsed" })]);
+    const user = userEvent.setup();
+    mount(<ShareFolderMenu target={BINDER} />);
+
+    await user.click(await shareButton());
+    const paused = await screen.findByRole("menuitem", { name: /Paused/ });
+    expect(paused).toHaveAttribute("aria-disabled", "true");
+    expect(paused).toHaveAccessibleName(/your membership ended/);
+    // The link is still worth copying — a lapse is reversible, and the reader may want to hand
+    // it out again after renewing rather than publish a second one.
+    expect(screen.getByRole("menuitem", { name: /Copy link/ })).toBeInTheDocument();
+  });
+
+  /**
+   * **Withdrawal is terminal**, and the row is kept until the next reconcile drops it so the
+   * fact does not vanish with no explanation. Sharing the folder again is a fresh publish, which
+   * is why `Share this folder…` is live under it rather than greyed.
+   */
+  it("says a withdrawn share is withdrawn, and offers to share again", async () => {
+    shareList.mockResolvedValue([share({ state: "revoked" })]);
+    const user = userEvent.setup();
+    mount(<ShareFolderMenu target={BINDER} />);
+
+    await user.click(await shareButton());
+    const gone = await screen.findByRole("menuitem", { name: /Withdrawn/ });
+    expect(gone).toHaveAttribute("aria-disabled", "true");
+    expect(gone).toHaveAccessibleName(/the link stopped answering/);
+
+    const again = screen.getByRole("menuitem", { name: /Share this folder/ });
+    expect(again).not.toHaveAttribute("aria-disabled");
+    // …and nothing offers to copy or refresh a link that has stopped answering.
+    expect(screen.queryByRole("menuitem", { name: /Copy link/ })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: /Update now/ })).toBeNull();
   });
 });
 
@@ -374,6 +486,57 @@ describe("publishing", () => {
     await user.click(screen.getByRole("menuitem", { name: /Share this folder/ }));
     expect(await screen.findByLabelText("Your name")).toHaveValue("Giradeli");
   });
+
+  /**
+   * ⚠️ **…even when the list answers *after* the dialog is already open.**
+   * `share_list` is the one `share_*` read that reaches the relay, so it is slow by
+   * construction — and `Dialog` mounts nothing while it is closed, so a field seeded once at
+   * mount would have stayed empty for good and made the reader re-type a name their group
+   * already publishes under. The suggestion is a *fallback for an untouched field* rather than
+   * a seed, which is what makes a late answer arrive rather than be missed.
+   */
+  it("takes the group's name even when the list answers after the dialog opened", async () => {
+    let answer: (rows: ShareRow[]) => void = () => {};
+    shareList.mockReturnValue(
+      new Promise<ShareRow[]>((resolve) => {
+        answer = resolve;
+      }),
+    );
+    const user = userEvent.setup();
+    mount(<ShareFolderMenu target={BINDER} />);
+
+    await user.click(await shareButton());
+    await user.click(screen.getByRole("menuitem", { name: /Share this folder/ }));
+    expect(screen.getByLabelText("Your name")).toHaveValue("");
+
+    answer([share({ folderUid: null, title: "Collection" })]);
+
+    await waitFor(() => expect(screen.getByLabelText("Your name")).toHaveValue("Giradeli"));
+  });
+
+  /** …and the reader's own first keystroke wins permanently, which is the half a `key` on the
+   *  form would have got wrong: a late answer would have thrown their draft away. */
+  it("keeps what the reader typed when the list answers underneath them", async () => {
+    let answer: (rows: ShareRow[]) => void = () => {};
+    shareList.mockReturnValue(
+      new Promise<ShareRow[]>((resolve) => {
+        answer = resolve;
+      }),
+    );
+    const user = userEvent.setup();
+    mount(<ShareFolderMenu target={BINDER} />);
+
+    await user.click(await shareButton());
+    await user.click(screen.getByRole("menuitem", { name: /Share this folder/ }));
+    await user.type(screen.getByLabelText("Your name"), "Bob");
+
+    answer([share({ folderUid: null, title: "Collection" })]);
+
+    // A wait long enough for the answer to have landed and re-rendered, and the value is still
+    // the reader's.
+    await waitFor(() => expect(shareList).toHaveBeenCalled());
+    expect(screen.getByLabelText("Your name")).toHaveValue("Bob");
+  });
 });
 
 /* ----------------------------------------------------------------- withdrawing ---------- */
@@ -392,6 +555,27 @@ describe("withdrawing", () => {
 
     await user.click(screen.getByRole("button", { name: "Stop sharing" }));
     await waitFor(() => expect(shareRevoke).toHaveBeenCalledWith("testshareid00000"));
+  });
+
+  /**
+   * **The caret comes back to the control the layer was raised from.**
+   * `ConfirmDialog` names `onDismiss` as its focus-return hook and *confirming* does not go
+   * through it, so a press that succeeds would otherwise drop the caret on `<body>` and start
+   * the reader's next Tab at the top of the page. A dialog that Escape closed already hands
+   * focus back; a dialog the reader answered must not be the one that does not.
+   */
+  it("hands the caret back to the Share button after a withdrawal", async () => {
+    shareList.mockResolvedValue([share()]);
+    const user = userEvent.setup();
+    mount(<ShareFolderMenu target={BINDER} />);
+
+    const opener = await shareButton();
+    await user.click(opener);
+    await user.click(await screen.findByRole("menuitem", { name: /Stop sharing/ }));
+    await user.click(screen.getByRole("button", { name: "Stop sharing" }));
+
+    await waitFor(() => expect(shareRevoke).toHaveBeenCalled());
+    await waitFor(() => expect(document.activeElement).toBe(opener));
   });
 });
 

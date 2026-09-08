@@ -16,7 +16,14 @@ import {
   type RelayStatus,
   type SupporterStatus,
 } from "@/lib/ipc";
-import { PAIRING_KEY, RELAY_KEY, SYNC_KEY } from "@/lib/query";
+import {
+  PAIRING_KEY,
+  RELAY_KEY,
+  SUPPORTER_KEY,
+  SYNC_KEY,
+  supporterState,
+  type SupporterState,
+} from "@/lib/query";
 import { ago } from "@/lib/relativeTime";
 import { useDeviceSyncLive } from "@/lib/useDeviceSyncLive";
 import { nowSeconds } from "@/lib/useMarketplace";
@@ -522,64 +529,16 @@ export function outcomeText(outcome: RelayOutcome | null): string {
 }
 
 /**
- * This device's membership, under one key.
- *
- * Local for the reason `PAIRING_KEY` used to be, before it moved to `@/lib/query`: nothing else
- * in the window reads this one, so there is nothing yet for two features to spell two ways. The
- * moment a second surface does read it, it moves too, for `COMBOS_KEY`'s reason in that file. It
- * sits **under** `SYNC_KEY`, which is what makes a finished round trip re-read it — a trip
- * refused with a 401 is how a lapse reaches a reader who never opened Patreon.
+ * `SUPPORTER_KEY`, `SupporterState` and `supporterState` **moved to `@/lib/query` on
+ * 2026-09-08**, and this note is here because what stood in their place pre-committed to the
+ * move: *"nothing else in the window reads this one… the moment a second surface does read it,
+ * it moves too, for `COMBOS_KEY`'s reason"*. The second surface is the collection cabinet's
+ * Share control (`features/collection/ShareFolderMenu.tsx`), which hides itself for a reader who
+ * has connected nothing, so it asks the same question this panel asks and must not derive its
+ * own answer from the four fields — the ordering inside `supporterState` is load-bearing and a
+ * second copy would not carry the argument for it. `PAIRING_KEY` made the same trip one comment
+ * up, on a trigger that turned out never to have fired; this one fired.
  */
-export const SUPPORTER_KEY: QueryKey = ["sync", "supporter"];
-
-/**
- * The membership in one word — and the three that must never be spelled the same way.
- *
- * `never` and `ended` arrive from the backend as the **same two fields**: `entitled: false`
- * with `status: "dead"`. They are not the same state and they do not get the same sentence. A
- * reader who has not connected is looking at a button; a reader whose pledge stopped is looking
- * at a renewal and at a paragraph saying their collection is untouched (spec §7.1), and telling
- * them *Not connected* would be this panel forgetting they were ever here.
- *
- * **`groupBound` is the whole of what separates them, and `since` cannot do it.** That is the
- * trap the Rust names at `SupporterStatus::group_bound` and it was worth one bug here before
- * this comment existed: `entitlement::revoke` stores `("dead", None)`, so a lapsed device and a
- * device out of the box read the *same three fields* — `entitled: false`, `status: "dead"`,
- * `since: null`. `group_bound` is `entitlement::membership_ended` crossing the wire, and it is
- * the only signal that remembers this device was ever bound to an entitlement.
- *
- * **A `"dead"` status on an *entitled* device is not an ending either**, and that is the second
- * trap. It is reachable from both sides of the grant: the device that pressed Connect holds a
- * refresh secret, and `store_grant` and `store_status` are separate calls, so a status row can
- * be absent while the secret is live — and an absent row defaults to `"dead"`. It is
- * supporting; it simply has not been told a date yet, which is what {@link supporterNote}'s
- * dateless *Supporting* line is for.
- *
- * **`grace` is a third thing and not a gentler `dead`** (spec §7.2). Patreon is retrying a card;
- * tokens are still minted and sync still works. Drawn as a cancellation it would punish a reader
- * for something they did not decide, and hiding *Sync now* would make that punishment real.
- *
- * `unknown` is the read in flight or refused, and it is why {@link relayState} takes this rather
- * than a boolean: `false` for "not answered yet" and `false` for "not a supporter" are the same
- * value and very different sentences.
- */
-export type SupporterState = "unknown" | "active" | "grace" | "ended" | "never";
-
-export function supporterState(status: SupporterStatus | null): SupporterState {
-  if (status === null) return "unknown";
-  // **`entitled` is asked first, and the order is load-bearing rather than tidy.** It is the
-  // question the relay's own answer settles — will it mint this device a token — and a device
-  // it will mint for has not ended anything. A build that asked `status` first read the second
-  // device as lapsed: `store_grant` and `store_status` are separate calls, `supporter_state`
-  // defaults an absent row to `"dead"`, and a phone whose desktop had just paid drew
-  // *Membership ended*. The order matters more now, not less: `entitlement::membership_ended`
-  // is `refresh_secret.is_none() && SUPPORTER_STATUS.is_some()`, which a device entitled
-  // through its *group* satisfies — so `groupBound` below reads `true` for a membership that
-  // has not ended at all, and this line is the whole of what stops it being drawn as one.
-  if (status.entitled) return status.status === "grace" ? "grace" : "active";
-  // `groupBound`, never `since` — see above. A revoked grant deletes the date with the secret.
-  return status.groupBound ? "ended" : "never";
-}
 
 /** A date rather than "3 days ago": a start date is a fact about a subscription, where `ago`'s
  *  coarsest-unit-still-true rule is about freshness. `en-US` is `DeckHistoryDialog`'s stamp. */
