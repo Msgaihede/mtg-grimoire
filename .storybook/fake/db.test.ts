@@ -4454,9 +4454,14 @@ describe("the two reads a folder rule is answered from", () => {
    * workbench nobody can use.
    *
    * Deck 1 — `Modern Goodstuff`, the deck every editor story opens — plays **18** cards, and its
-   * Collection Search tab can still file six of the reader's thirteen rows. The four it now
+   * Collection Search tab can still file six of the reader's twelve rows. The four it now
    * refuses are the ones the deck genuinely does not play; `mh2 267` and `mh2 138` keep
    * answering `ALREADY_HERE`, which is the older refusal and still ahead of nothing.
+   *
+   * **The fourth refusal is asked for rather than seeded** (2026-09-08, issue #425). `NOT_ENOUGH`
+   * used to be the seed's zero-quantity row answering a request for one copy — a row the app
+   * deletes on sight, kept in a shared fixture. Every row here holds copies now, so the way to
+   * reach that refusal is the way a reader reaches it: ask a row for more copies than it has.
    *
    * **`sta 105` appears twice in the filed list, and that is the schema v35 row** — the seed's
    * ungraded etched Bolt, a second grade of a printing already here. A grade is not part of the
@@ -4469,17 +4474,17 @@ describe("the two reads a folder rule is answered from", () => {
    * press now refuses. No story's `play` presses it (`CrossDeckConfirm` stops at the question),
    * so nothing goes red — which is exactly why it is measured here instead.
    */
-  it("still lets the starter seed's deck file six of the reader's thirteen rows", () => {
+  it("still lets the starter seed's deck file six of the reader's twelve rows", () => {
     const db = seed("starter");
     const main = db.deckCategories.find((c) => c.deckId === 1 && c.kind === "main")!;
     // A fresh world per row: a filing that succeeds changes what the next one is asked about.
-    const fileIntoDeckOne = (entryId: number) => {
+    const fileIntoDeckOne = (entryId: number, quantity = 1) => {
       try {
         writeHandlers(seed("starter")).collection_to_deck({
           entryId,
           deckId: 1,
           categoryId: main.id,
-          quantity: 1,
+          quantity,
         });
         return "filed";
       } catch (refusal) {
@@ -4510,10 +4515,16 @@ describe("the two reads a folder rule is answered from", () => {
       "mp2 8",
       "lea 232",
     ]);
-    // And the two older refusals are untouched: the copies already in this deck's group, and
-    // the row the reader has stepped to zero.
+    // And the older refusal is untouched: the copies already in this deck's group.
     expect(outcome((a) => a.includes("already in this deck"))).toEqual(["mh2 267", "mh2 138"]);
-    expect(outcome((a) => a.includes("not that many"))).toEqual(["kld 235"]);
+    // Nothing here is refused for want of copies, because nothing here holds none — the three
+    // outcomes above account for all twelve rows.
+    expect(outcome((a) => a.includes("not that many"))).toEqual([]);
+    // The refusal itself, reached the way a reader reaches it: `lea 161` is one copy, files at
+    // one — asserted above — and refuses at two. Stated as a pair so the second answer is not
+    // one a filing this deck would have refused anyway.
+    expect(fileIntoDeckOne(2, 1)).toBe("filed");
+    expect(fileIntoDeckOne(2, 2)).toContain("not that many");
   });
 });
 
@@ -12169,34 +12180,46 @@ describe("the combos one card is in", () => {
   /**
    * **A row holding no copies is not a card the reader has** — `combos::OWNED_CTE`'s
    * `AND e.quantity > 0`, and the one-line mutation this catches is dropping that clause (here,
-   * the `if (e.quantity > 0)` in `collectionReach`). Without it `3587-9146--25` joins the list
-   * above and `ownedTotal` reads 6.
+   * the `if (e.quantity > 0)` in `collectionReach`). Without it `3587-9146--25` joins the owned
+   * list and `ownedTotal` reads 6.
    *
-   * **What it is guarding is a state the app deletes.** `set_quantity(id, 0)` removes the row,
-   * the v24 rung removed every stored zero and the importer's `set` mode does the same, so a
-   * healthy database has none — which is what lets `collection_source::owns_printing` be an
-   * `EXISTS`. `starterEntries` seeds one anyway, from before that rule, to prove a zero renders;
-   * and unfenced, that fixture drew `Not owned` on a piece line inside a combo the same screen
-   * was offering under `I own every piece`. One card, one screen, two answers, no error. The
-   * clause is redundant against a healthy database and cheap against a broken one, and this is
-   * the test that keeps both ends of it honest.
+   * **What it is guarding is a state the app deletes**, which is why the row is built here and
+   * not seeded (2026-09-08, issue #425). `set_quantity(id, 0)` removes the row, the v24 rung
+   * removed every stored zero and the importer's `set` mode does the same, so a healthy database
+   * has none — which is what lets `collection_source::owns_printing` be an `EXISTS`.
+   * `starterEntries` carried one anyway, from before that rule, and unfenced that fixture drew
+   * `Not owned` on a piece line inside a combo the same screen was offering under `I own every
+   * piece`: one card, one screen, two answers, no error. The seed is clean now and this test
+   * stands the row up on top of it, which is the honest arrangement — the clause is worth
+   * testing, and a shared seed is not the place to make it testable.
+   *
+   * **The lines after `zero.quantity = 1` are what stop the fixture being inert.** A pushed row
+   * naming a card nothing asks about would satisfy every assertion above it while proving
+   * nothing, so the same row at one copy has to flip both answers and the total.
    */
   it("does not count a row holding no copies", () => {
     const db = seed("starter");
     const copter = CARDS.find((c) => c.name === "Smuggler's Copter")!;
-    // The seeded row, so the premise is stated rather than assumed.
-    expect(db.collectionEntries.filter((e) => e.cardId === copter.id).map((e) => e.quantity)).toEqual(
-      [0],
-    );
+    // The premise, stated rather than assumed — and the seed's side of it is now *no* row.
+    expect(db.collectionEntries.some((e) => e.cardId === copter.id)).toBe(false);
+    const zero = entry({ id: 900, cardId: copter.id, quantity: 0 });
+    db.collectionEntries.push(zero);
+
+    const pieceOf = (page: ReturnType<typeof ask>) =>
+      page.combos
+        .find((c) => c.id === "3587-9146--25")!
+        .pieces.find((p) => p.name === "Smuggler's Copter")!;
 
     const page = ask(db);
-    const piece = page.combos
-      .find((c) => c.id === "3587-9146--25")!
-      .pieces.find((p) => p.name === "Smuggler's Copter")!;
-
-    expect(piece.owned).toBe(0);
+    expect(pieceOf(page).owned).toBe(0);
     expect(idsOf(ask(db, { ownedOnly: true }))).not.toContain("3587-9146--25");
     expect(page.ownedTotal).toBe(5);
+
+    zero.quantity = 1;
+    const held = ask(db);
+    expect(pieceOf(held).owned).toBe(1);
+    expect(idsOf(ask(db, { ownedOnly: true }))).toContain("3587-9146--25");
+    expect(held.ownedTotal).toBe(6);
   });
 
   /**

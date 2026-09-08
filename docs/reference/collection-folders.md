@@ -1306,6 +1306,23 @@ Two things simplify with it, and both were previously ways for the app to disagr
 count rows) stops being able to diverge, and the search facet's `owned` dimension — with
 `collection_source::owns_printing`'s `EXISTS` — stops reading a zero row as owned.
 
+**The workbench held a row that contradicted this until 2026-09-08**
+([issue #425](https://github.com/Msgaihede/mtg-grimoire/issues/425)), and it is worth reading as
+what the two simplifications above actually rest on. Neither reader checks the quantity; both are
+licensed by the *absence* of zero rows, maintained by a different module. `.storybook/fake/`'s
+`starter` seed carried one anyway — from before this reversal, under a comment stating the old rule
+verbatim — so the fake and the crate disagreed wherever *owned* was asked as an existence question.
+What that cost was one screen contradicting itself about one card: the combo panel's
+`ComboPiece.owned` sums quantities while its *I own every piece* filter tests presence, both correct
+against a healthy database, and against that fixture the two answered differently — **Not owned** on
+a piece line inside a combo the same screen was offering as fully owned, with nothing erroring. The
+symptom was closed by fencing `combos::OWNED_CTE` with `AND e.quantity > 0`, deliberately redundant
+and documented as such; the fixture followed later. The measurement the rule is checked against is
+the live dev database's **0 zero-quantity rows out of 276**, and the rule the fake now carries is
+that a shared seed states what the app can produce and nothing else — a test that needs the
+impossible row builds it locally. `.storybook/CLAUDE.md` has it, and `world.test.ts` sweeps every
+seed for it.
+
 The wishlist has been the opposite since it shipped, by table CHECK (`quantity > 0`): a wish for
 none of something is not a wish. The two tables now agree, where they used to be a deliberate
 asymmetry.

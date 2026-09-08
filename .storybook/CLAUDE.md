@@ -27,6 +27,27 @@ deliberately**: no screenshots are stored.
 - **The fake stores table rows and derives DTOs** (`fake/db.ts`), because `ownedQuantity` means
   three different things on three DTOs. A fake that stored DTOs would make all three agree, and
   teach a reader a model the app does not have.
+- **No seed holds a `collection_entries` row at quantity zero, and a test that needs one builds it
+  locally** (2026-09-08, issue #425). `starter` carried one for months, under a comment stating the
+  pre-v24 rule: the row survives the day the reader owns none of the card, and deleting is
+  `collection_remove` and only ever that. **That rule was reversed** — `set_quantity(id, 0)` deletes
+  and answers `EntryChange { removed: true }`, the user ladder's v24 rung deleted every stored zero,
+  the importer's `set` mode does the same, and `collection_update`, the one write left that would
+  keep such a row, has no caller in `src/`. The live dev database had none in 276 rows.
+  **What a seeded zero costs is agreement with the crate wherever _owned_ is asked as an existence
+  question**: `collection_source::owns_printing` is an `EXISTS`, and the search facet's `owned`
+  dimension is allowed to be one, *because* those rows are gone. A fake holding one makes every
+  such reader look right in the app and wrong here — or the reverse, which is the expensive
+  direction, because the workbench is where a reader is trusted. It had already cost one screen
+  contradicting itself about one card: `ComboPiece.owned` summed quantities while
+  `I own every piece` tested presence, so a combo panel drew **Not owned** on a piece line inside a
+  combo it was simultaneously offering as fully owned, with nothing erroring.
+  `world.test.ts` sweeps **every** seed for it now, and `db.test.ts`'s `OWNED_CTE` fence stands the
+  impossible row up on top of `starter` rather than asking the seed to carry it — with the same row
+  at one copy asserted beside it, so a fixture the reach never saw cannot pass as a fence working.
+  **`deck_tokens`' `quantity: 0` is a different table and a real stored value** — a reader stepping
+  a derived token to none — and is left alone. **The rule it is an instance of: a shared seed
+  states what the app can produce, and nothing else.**
 - **Seeds and faults are state, not response stubs**: `parameters: { fake: { seed, fault } }`.
   **Eight** seeds
   (`empty`/`starter`/`needsReview`/`large`/`bracketMismatch`/`combosMissing`/`paired`/
