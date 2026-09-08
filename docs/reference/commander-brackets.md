@@ -898,6 +898,30 @@ Every timing below is against that worst card unless it says otherwise:
 bytes of prose on **every** row — deliberately an over-estimate, since most rows in the real feed
 carry `""`: **~123 ms** first page, **~185 ms** at offset 6 000.
 
+### What the real migrated corpus then measured — 2026-09-08, and it beat the estimate
+
+The figures above were taken **before** corpus schema 2 existed, so the prose bound was a
+projection. It has since been taken on the real thing: a copy of the dev pair at corpus
+`user_version` **1** with the seven-column `combos`, migrated by launching the app, which dropped
+the combo tables, re-downloaded the feed and re-ingested it. Same method as above — Node's
+`node:sqlite` over each statement's own SQL, median of 9.
+
+| | |
+| --- | --- |
+| Counts pass (the histogram) | **28.3 ms** (min 27.0, max 29.2) |
+| Page of 25, no filters | **28.0 ms** (min 27.2, max 29.3) |
+| The two together | **56.3 ms** |
+
+So the populated columns cost **less** than the 301-byte-per-row projection, because the feed
+really is mostly empty in three of the four: of 107 016 rows, **all** carry `description`, 47 612
+carry `notable_prerequisites`, 43 484 a `mana_needed` and 21 694 an `easy_prerequisites`.
+
+**One figure on that run was 552.9 ms and it is not a result.** It was the first read after the
+re-ingest, against a database SQLite had just rewritten end to end — a cold page cache and a
+full WAL, not a query plan. It is written down because it is the number a careless pass would
+have reported: taken once, immediately after the thing that made it meaningless. Warm it up
+before believing it.
+
 ### `CROSS JOIN` is worth 65 ms, and two other shapes were rejected
 
 All three were measured against the same 6 044 rows on the same day:
@@ -990,6 +1014,33 @@ Three states above and beside those four are not empties at all and are drawn as
 card detail still loading, a printing the corpus has since dropped (`card_detail` answers `null`,
 which a collection or deck holding a retired printing reaches honestly), and a failed read, which
 says so and names the error rather than reading as an absence.
+
+### Driven in the shipped window — 2026-09-08, debug build
+
+Not the suite and not Storybook: a `tauri dev` window over a **copy of the real dev pair**, taken
+at corpus `user_version` 1 with the seven-column `combos`, 107 016 combo rows and 117 628 cards.
+The whole rung ran on launch, unattended.
+
+**The migration, end to end.** `user_version` 1 → **2**; the four columns present and in the
+feed's order between `produces` and `popularity`; `cards` still holding all **117 628** rows,
+which is the assertion that the drop stayed narrow and did not take the corpus with it; and
+`combo_meta.fetched_at` moved, so the launch refresh really did re-download 27.5 MB and re-ingest
+it uninvited, arriving back at **107 016** rows. The prose is genuinely stored rather than
+defaulted — the census in the timing section above is that check, and it is the one the widened
+`combos_staging` INSERT would have failed silently.
+
+**The dialog, on Ashnod's Altar.** The chips read `All · 6 044`, `2 cards · 61`, `3 cards · 1 999`,
+`4 cards · 3 016`, `5 cards · 968` — the same census this document measured off SQL, arrived at
+independently through the command, the IPC mirror and the component. Pressing `2 cards` gave
+`SHOWING 25 OF 61` **with every chip's count unmoved**, which is the census-versus-`matching`
+distinction working where a reader can see it; `Show more` went to `SHOWING 50 OF 61`; and
+`I own every piece · 0` on top of it drew **"No combo matches that filter."** rather than the
+never-fetched or the nothing-on-record sentence, which is the fourth empty state doing the one
+job it exists for.
+
+**What could not be driven.** The never-downloaded state, because this corpus has the feed and
+the launch refresh fetches it uninvited — it is reachable only through Settings' *Clear combos*
+without a relaunch, and it is covered in the suite and in Storybook instead.
 
 ## Where each piece lives
 
