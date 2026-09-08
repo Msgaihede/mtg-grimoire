@@ -25,7 +25,7 @@ import type { DeckFolder } from "@/lib/ipc";
 import { statusLine } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import { useDeckDropTarget, type DeckDrag } from "./deckDrag";
-import { flattenFolders, indent, type FolderNode } from "./folders";
+import type { FolderNode } from "./folders";
 
 /**
  * The filing cabinet: the tree the deck gallery is read through, drawn as rows.
@@ -40,6 +40,15 @@ import { flattenFolders, indent, type FolderNode } from "./folders";
  * tens of folders at most, so every folder is always on screen and the indent is the whole of
  * the nesting. A collapsed branch would be somewhere a deck could hide with no number pointing
  * at it, which is the one thing a filing cabinet must never do.
+ *
+ * **The nesting is _drawn_ now, and that sentence above is untouched by it.** The indent used to
+ * be the whole of it, and three levels in a reader was measuring whitespace to tell a child from
+ * its parent's next sibling — the one thing an indent alone cannot say is where a run of rows
+ * *ends*. So each row carries a gutter of hairlines beside its button: a trunk down every
+ * ancestor level that still has siblings below this row, the row's own trunk, and a tick from
+ * that trunk into the row's glyph. **That is disclosure's picture without disclosure's
+ * mechanism**: there is still no twisty, nothing to collapse, and no branch a deck can be hidden
+ * in. The guides say where a row sits; they never say a branch could be shut.
  */
 
 /**
@@ -82,6 +91,66 @@ export type FolderNaming =
  *  closes. An attribute for `data-deck-id`'s reason: the row the layer replaced is a *different
  *  element* by the time the layer is gone, so a ref taken when it opened points at nothing. */
 export const FOLDER_ROW_ATTR = "data-folder-id";
+
+/**
+ * How a test finds one hairline of the nesting, and which piece of the drawing it found.
+ *
+ * Every mark in here is `aria-hidden` and has no role, no name and no text — the shape of the
+ * tree is something a screen reader already hears, as the order of the rows and the counts on
+ * them, and narrating a trunk would be describing a picture to a reader who is not looking at
+ * one. So nothing about a guide is reachable through the accessibility tree. Its **offsets are
+ * inline styles** (they are computed, and Tailwind emits nothing for an interpolated class) and
+ * its colour is a class, and jsdom applies no stylesheet — so a class assertion would be a check
+ * on source text rather than on the drawing. An attribute is the only honest handle, in the shape
+ * {@link FOLDER_ROW_ATTR} above, `DeckColorBar`'s `DECK_COLOR_SEGMENT_ATTR` and
+ * `FolderDropLine`'s `FOLDER_DROP_LINE_ATTR` already use.
+ *
+ * **It carries which piece as its value**, for `DECK_COLOR_SEGMENT_ATTR`'s reason: a row draws up
+ * to four of these and they are not interchangeable, so a handle that could only be counted would
+ * be satisfied by an ancestor's trunk standing where the row's own belongs. Five values —
+ * `gutter` (the box the guides live in, and the whole of the row's indent), `ancestor` (one per
+ * ancestor level that still has siblings below this row), `trunk` (this row's own level), `tick`
+ * (the hairline from that trunk into the row's glyph) and `root` (the line under "All decks" that
+ * every top-level folder descends from).
+ *
+ * **The selected row's rail is on this same handle, as `rail`**, though it says nothing about
+ * nesting. It is the same kind of thing — an `aria-hidden` mark that is nothing but a position
+ * and a colour, over a row whose currency is already spelled in `aria-current` — so a second
+ * constant would be a second name for one question: what did this row draw that the
+ * accessibility tree cannot see.
+ */
+export const FOLDER_GUIDE_ATTR = "data-folder-guide";
+
+/**
+ * The step the guides are drawn on, and the room the tick needs to the right of a trunk.
+ *
+ * **16 rather than `folderTree.ts`'s 14, and the two deliberately no longer share a number.**
+ * `folderTree.ts`'s `indent()` is still 14, still exported and still `MoveToFolder`'s — that one
+ * is a *picker*, a flat list of destinations with no guides in it, so its step is free to be what
+ * reads well. A step that draws hairlines is not: the row's glyph is 16px wide at 8px of padding,
+ * so a trunk for level L wants to be centred on `x = 16·L` — drawn at `16·L − 0.5`, which is where
+ * a 1px line starts if its middle is to land there — and at L = 1 that is exactly the centre of
+ * the "All decks" row's own glyph, which is the line every top-level folder hangs from. Pulling
+ * the tree back to 14 would put every trunk half a glyph off the row above it; pushing the picker
+ * out to 16 would move a list that gets nothing for it.
+ */
+const GUIDE_STEP = 16;
+const GUIDE_TICK = 10;
+
+/**
+ * Where a row's content starts, as an inline style — the offset the button already sits at with
+ * its gutter in front of it, so a "New folder in …" field lines up with the rows around it.
+ *
+ * An inline style for the reason `indent()` is one, unchanged: Tailwind v4 scans source text for
+ * whole class names, so a `pl-[${n}px]` built by interpolation emits no rule at all.
+ *
+ * Deliberately **not** `indent(depth)` any more. A field that stood two pixels out of the column
+ * it is being typed into is exactly the kind of drift the guides were added to make visible, and
+ * the two functions answer different questions now — see {@link GUIDE_STEP}.
+ */
+function treeIndent(depth: number) {
+  return { paddingLeft: GUIDE_STEP * depth + GUIDE_TICK };
+}
 
 /**
  * What the gallery calls the top level — the row this tree draws above every folder, and the
@@ -222,6 +291,47 @@ export interface FolderTreeProps {
 }
 
 /**
+ * One row of the tree as the guides need it — the folder, and the two facts about its *position*
+ * that a flat list of nodes cannot carry.
+ */
+interface DrawnFolder {
+  node: FolderNode;
+  /** Whether this folder is the last of its own siblings. It is what stops the row's trunk at
+   *  the elbow instead of running past the last child of a branch into nothing. */
+  last: boolean;
+  /**
+   * For each ancestor level, whether that ancestor still has siblings **after** it — which is
+   * whether a trunk carries on down past this row at that level, or the branch is finished and
+   * the column is blank.
+   *
+   * 0-based and one short of the row's own depth: `trail[0]` is the top-level ancestor, which is
+   * level 1, so `trail.length === depth - 1` and a top-level folder's own trail is empty.
+   */
+  trail: readonly boolean[];
+}
+
+/**
+ * The tree in draw order, each row carrying what its gutter has to know.
+ *
+ * **Module-local rather than a widening of `flattenFolders`, deliberately.** That walker lives in
+ * `lib/folderTree.ts` and is read by the wishlist's tree, the collection's cabinet and
+ * `MoveToFolder` as well as by this file — and not one of those draws a guide. Growing
+ * `FolderNode`, or the flattener's answer, for two facts that only this drawing uses is a change
+ * four surfaces pay for and one benefits from. What is not given up is the *order*: this is the
+ * same depth-first, parents-before-children walk `flattenFolders` answers, which is what let the
+ * call be replaced rather than joined.
+ *
+ * `nodes` is one **level**, so "is this the last of its siblings" is `i === nodes.length - 1` and
+ * needs no lookup at all; the trail grows by exactly that answer, negated, as the walk descends.
+ */
+function drawOrder(nodes: readonly FolderNode[], trail: readonly boolean[] = []): DrawnFolder[] {
+  return nodes.flatMap((node, i) => {
+    const last = i === nodes.length - 1;
+    return [{ node, last, trail }, ...drawOrder(node.children, [...trail, !last])];
+  });
+}
+
+/**
  * The sidebar: every folder there is, indented, each row saying what is in it — and every row
  * a place a deck can be dropped.
  */
@@ -247,7 +357,7 @@ export function FolderTree({
   menuOpenerRef,
 }: FolderTreeProps) {
   const tip = useTooltip();
-  const flat = flattenFolders(nodes);
+  const rows = drawOrder(nodes);
   /** Where a "new folder" field is open, or `undefined` when the open field is a rename. */
   const newAt = naming?.kind === "new" ? naming.parentId : undefined;
 
@@ -320,9 +430,10 @@ export function FolderTree({
           canDropFolder={(d, at) => canDropFolder(d, null, at)}
           onDropFolder={(d, at) => onDropFolder(d, null, at)}
           onSelect={() => onSelect(null)}
+          trunkBelow={rows.length > 0}
         />
 
-        {flat.map((node) =>
+        {rows.map(({ node, last, trail }) =>
           // Renaming replaces the row rather than opening a field under it: the folder already
           // has a place in the tree, and correcting its name is not a new thing arriving.
           naming?.kind === "rename" && naming.folderId === node.folder.id ? (
@@ -344,6 +455,8 @@ export function FolderTree({
               label={node.folder.name}
               count={node.count}
               depth={node.depth + 1}
+              last={last}
+              trail={trail}
               selected={selectedId === node.folder.id}
               Glyph={selectedId === node.folder.id ? FolderOpen : Folder}
               drag={drag}
@@ -387,7 +500,7 @@ export function FolderTree({
           </li>
         )}
 
-        {!pending && !failure && flat.length === 0 && naming === null && (
+        {!pending && !failure && rows.length === 0 && naming === null && (
           <li className="px-1 pt-2 text-[0.7rem] leading-relaxed text-dim">
             Folders file decks the way drawers file paper. Make one, then drag a deck onto it.
           </li>
@@ -408,6 +521,9 @@ function FolderRow({
   label,
   count,
   depth,
+  last = false,
+  trail = [],
+  trunkBelow = false,
   selected,
   Glyph,
   drag,
@@ -428,7 +544,24 @@ function FolderRow({
   folder?: DeckFolder;
   label: string;
   count: number;
+  /** 0 for "All decks" and `node.depth + 1` for a folder, so the guide arithmetic reads a
+   *  top-level folder as level 1 — see {@link GUIDE_STEP}. */
   depth: number;
+  /** {@link DrawnFolder.last}. Absent on "All decks", which draws no gutter and has no siblings
+   *  to be the last of. */
+  last?: boolean;
+  /** {@link DrawnFolder.trail} — which ancestor levels still have a branch running past this
+   *  row. Absent on "All decks" for the same reason. */
+  trail?: readonly boolean[];
+  /**
+   * The line every top-level folder hangs from, drawn in **this** row's `<li>`.
+   *
+   * Only "All decks" passes it, and only when there is a folder under it. That row has no gutter
+   * of its own — it is not in the tree, it *is* the top — so the level-1 trunk has nowhere else
+   * to start from, and a line drawn under an empty cabinet would promise a branch the tree does
+   * not have.
+   */
+  trunkBelow?: boolean;
   selected: boolean;
   Glyph: typeof Folder;
   drag: DeckDrag | null;
@@ -471,7 +604,21 @@ function FolderRow({
   const eligible = drag !== null && canDrop(drag);
 
   return (
-    <li>
+    <li className={trunkBelow ? "relative" : undefined}>
+      {/* **The root's own trunk, drawn in its `<li>` because the row itself has no gutter.**
+          "All decks" is the top rather than a row of the tree, so it is not indented and has
+          nowhere to draw a guide beside itself — but every top-level folder's trunk has to come
+          from somewhere, and this is it. It starts at `50% + 12px`, which is the row's midline
+          plus half a 16px glyph and 4px of air, so the line begins just under the glyph rather
+          than out of the middle of it, and it runs 2px past the row to meet the first folder's
+          own overhang (see {@link FolderGuides} for why the overhangs exist). */}
+      {trunkBelow && (
+        <span
+          aria-hidden="true"
+          {...{ [FOLDER_GUIDE_ATTR]: "root" }}
+          className="absolute bottom-[-2px] left-[15.5px] top-[calc(50%+12px)] w-px bg-border"
+        />
+      )}
       {/* **Two boxes for two drags, and it is the drag library that insists.**
           `dropTargetForElements` keeps **one** registration per element — a second `set` on the
           same key replaces the first in its `WeakMap` and warns in dev — so the deck drop and the
@@ -481,7 +628,16 @@ function FolderRow({
           where the folder is picked up, so one element is the whole of what the folder gesture
           reads and writes. They are the same rectangle — no padding between them — which matters
           because the inner one is *measured*: `folderEdge` divides its box into the three
-          landings, and a box that was not the row would put the thresholds somewhere else. */}
+          landings, and a box that was not the row would put the thresholds somewhere else.
+          **The gutter went _inside_ the measured box rather than in front of it**, and that is
+          what keeps the sentence above true: the flex row is the inner box itself, so both
+          registrations still span the whole row and are still the same rectangle they always
+          were. Wrapping the pair in a flex box *outside* `folderRef` would have narrowed the
+          folder's own box to the button — the row's leading 26–58px would stop being part of the
+          target a folder is let go on, and would stop being part of the thing a folder is picked
+          up by. Nothing about `folderEdge`'s thresholds moves either way: `axis="vertical"`
+          divides the box by **height**, and a `flex-none` gutter of absolutely positioned
+          hairlines adds none. */}
       <div
         ref={ref}
         className={cn("group relative rounded-md", eligible && DROP_RING, over && DROP_OVER)}
@@ -501,12 +657,19 @@ function FolderRow({
         <div
           ref={folderRef}
           className={cn(
-            "relative rounded-md",
+            "relative flex rounded-md",
             armed && DROP_RING,
             edge === "inside" && DROP_OVER,
           )}
         >
           <FolderDropLine edge={edge} axis="vertical" />
+          {/* **The guides live beside the button and never under it**, which is the whole reason
+              this row is a flex of two things rather than a button with a bigger indent. The
+              button's own fill is what a hover and a selection paint, and it starts where the
+              gutter ends — so a hairline can never end up under a wash, and the focus ring the
+              button draws stands clear of the tree's own lines. The root draws none: it has no
+              level to be at. */}
+          {depth > 0 && <FolderGuides depth={depth} last={last} trail={trail} />}
           <button
             type="button"
             // How the page hands the caret back to this row after the rename field that replaced
@@ -557,16 +720,35 @@ function FolderRow({
               e.preventDefault();
               onRename();
             }}
-            style={indent(depth)}
+            // **No indent at all any more** — a constant 8px of padding, and the gutter beside it
+            // is the whole of the nesting. `relative` for the rail below, which is `absolute`
+            // against this box; `min-w-0 flex-1` where this used to be `w-full`, because it is a
+            // flex item now and a percentage width beside a gutter overflows the row.
             className={cn(
-              "flex w-full items-center gap-2 rounded-md py-1.5 pr-8 text-left text-sm",
+              "relative flex min-w-0 flex-1 items-center gap-2 rounded-md py-2.5 pl-2 pr-8",
+              "text-left text-sm",
               "transition-colors duration-150 motion-reduce:transition-none",
               selected ? "bg-surface text-text" : "text-dim hover:bg-surface/60 hover:text-text",
               FOCUS,
             )}
           >
+            {/* **The rail down the leading edge of the row the wall is showing.** The fill and
+                `aria-current` already say a row is current, and neither is *findable*: a fill of
+                that weight is what a hover paints too, so in a rail of twenty rows the reader
+                has to read the names to find where they are. Two pixels of accent at the edge is
+                the one mark on this row that only the selected row wears — the same accent the
+                open-folder glyph beside it already uses, so it is not a new colour with a new
+                meaning to learn. Inside the button rather than on the box around it, so it sits
+                within the fill it belongs to and can never be drawn over a guide. */}
+            {selected && (
+              <span
+                aria-hidden="true"
+                {...{ [FOLDER_GUIDE_ATTR]: "rail" }}
+                className="absolute bottom-2 left-0 top-2 w-0.5 rounded-full bg-accent"
+              />
+            )}
             <Glyph
-              className={cn("size-3.5 flex-none", selected && "text-accent")}
+              className={cn("size-4 flex-none", selected && "text-accent")}
               aria-hidden="true"
             />
             <span className="min-w-0 flex-1 truncate">{label}</span>
@@ -586,8 +768,12 @@ function FolderRow({
               aria-expanded={addingChild}
               {...tip(`New folder in ${label}`, { describes: false })}
               onClick={(e) => onNewChild(e.currentTarget)}
+              // `top-2` follows the row's own padding rather than being a number of its own: a
+              // 24px control in a 32px row (`py-1.5` around a 20px line) was centred at `top-1`,
+              // and the row is 40px now (`py-2.5`), so the same centring is 8px. It is one
+              // arithmetic, written twice — if the row's padding moves again, this moves with it.
               className={cn(
-                "absolute right-1 top-1 grid size-6 place-items-center rounded-md text-dim",
+                "absolute right-1 top-2 grid size-6 place-items-center rounded-md text-dim",
                 "transition-colors duration-150 hover:text-accent motion-reduce:transition-none",
                 REVEAL_ON_HOVER,
                 FOCUS,
@@ -600,6 +786,75 @@ function FolderRow({
       </div>
       {children}
     </li>
+  );
+}
+
+/**
+ * The hairlines that draw the nesting — one row's worth, in a box of its own beside the button.
+ *
+ * The arithmetic, with {@link GUIDE_STEP} at 16 and the row's glyph 16px wide at 8px of padding:
+ * a trunk for level L is centred on `x = 16·L`, so a 1px line is drawn at `16·L − 0.5`, and the
+ * box is `16·depth + 10` wide — the last trunk plus {@link GUIDE_TICK}, which is the run the tick
+ * needs before the button starts.
+ *
+ * **The 2px overhangs at each end are what make a trunk read as one line.** The list is
+ * `gap-0.5`, so consecutive rows stand 2px apart, and a guide drawn to its own row's edges would
+ * stop and restart at every row — a dashed line down the tree, which says something the tree does
+ * not mean. Each vertical therefore overhangs by exactly that gap at both ends and meets its
+ * neighbour's.
+ *
+ * **A last child's own trunk stops at the elbow**, `bottom: 50%`, which is where the tick meets
+ * it: below it there is nothing at this level for a line to lead to, and a trunk running on past
+ * the last child of a branch promises a sibling that is not there. Every other row's runs
+ * through. This is the one number in here that is easy to write backwards — hence the first case
+ * in `FolderTree.test.tsx`.
+ *
+ * **An ancestor contributes a vertical only where it still has siblings after it.** That is what
+ * `trail` carries and it is the whole of what an indent could never say: two rows at the same
+ * depth look identical, and the difference between them is whether the branch above continues.
+ *
+ * Every offset is an inline style rather than a class, for `folderTree.ts`'s `indent()`'s reason
+ * — Tailwind v4 scans source text for whole class names, so a `left-[${n}px]` built from `depth`
+ * emits no rule at all and the guides would simply never be drawn. The colour is a class, because
+ * a colour in this app is a `--color-*` token and nothing here invents one.
+ */
+function FolderGuides({
+  depth,
+  last,
+  trail,
+}: {
+  depth: number;
+  last: boolean;
+  trail: readonly boolean[];
+}) {
+  return (
+    <span
+      aria-hidden="true"
+      {...{ [FOLDER_GUIDE_ATTR]: "gutter" }}
+      className="relative flex-none"
+      style={{ width: GUIDE_STEP * depth + GUIDE_TICK }}
+    >
+      {trail.map((more, level) =>
+        more ? (
+          <span
+            key={level}
+            {...{ [FOLDER_GUIDE_ATTR]: "ancestor" }}
+            className="absolute w-px bg-border"
+            style={{ left: GUIDE_STEP * (level + 1) - 0.5, top: -2, bottom: -2 }}
+          />
+        ) : null,
+      )}
+      <span
+        {...{ [FOLDER_GUIDE_ATTR]: "trunk" }}
+        className="absolute w-px bg-border"
+        style={{ left: GUIDE_STEP * depth - 0.5, top: -2, bottom: last ? "50%" : -2 }}
+      />
+      <span
+        {...{ [FOLDER_GUIDE_ATTR]: "tick" }}
+        className="absolute h-px bg-border"
+        style={{ top: "50%", left: GUIDE_STEP * depth + 0.5, right: 0 }}
+      />
+    </span>
   );
 }
 
@@ -682,7 +937,9 @@ function TreeNameField({
   return (
     <div
       ref={rootRef}
-      style={indent(depth)}
+      // {@link treeIndent} rather than `indent()`: the field stands in the column the rows around
+      // it stand in, and since the guides landed those are two different numbers.
+      style={treeIndent(depth)}
       className="py-1 pr-1"
       // Clicking or tabbing away discards a half-typed name, exactly as every other popup in
       // this app discards its half-made decision — and not while the write is in flight, the

@@ -131,7 +131,20 @@ const meta = {
           "So a cover is never orphaned at the moment it is chosen; it becomes orphaned when a " +
           "sync takes its printing away, and it heals on the next one that brings it back. " +
           "A deck with **no cover at all** is the other, separate state, and it is every new " +
-          "deck — {@link NewDeck} is that one.",
+          "deck — {@link NewDeck} is that one.\n\n" +
+          "**The heading row's three folder verbs are one `Folder` menu** (2026-09-08). " +
+          "`Rename folder…`, `Move folder…` and `Delete folder…` each named a write the " +
+          "folder's own row menu already offered, so the screen spelled one vocabulary twice — " +
+          "and not even the same way, since the row menu also carries `New deck here` and " +
+          "`New subfolder…`. One control opening `buildFolderMenu` is the whole change, and it " +
+          "takes the row from six buttons to four in a column that is ~548px at the app's " +
+          "1024px floor. {@link FolderMenu} is that story; the delete question is still " +
+          "anchored to the heading row, because `askDelete` opens the drawer on its way in.\n\n" +
+          "**And an empty folder draws the wall rather than a sentence about it** — the " +
+          "up-tile it used to be denied, and a dashed `New deck` placeholder that files into " +
+          "the drawer the reader is standing in. {@link EmptyFolder}. The **root** keeps its " +
+          "sentence: there the folder cards are the wall, so nothing is withheld and there is " +
+          "no level above for a way out to point at.",
       },
     },
   },
@@ -553,8 +566,10 @@ export const NewDeckInFolder: Story = {
     const tree = await canvas.findByRole("navigation", { name: "Folders" });
     await userEvent.click(within(tree).getByRole("button", { name: /^Ideas/ }));
     await expect(canvas.getByRole("heading", { name: "Ideas" })).toBeInTheDocument();
-    // An empty drawer says so, which is the state this story is standing in.
-    await expect(canvas.getByText(/^Nothing is filed in Ideas yet/)).toBeInTheDocument();
+    // An empty drawer draws a wall rather than saying it is empty — {@link EmptyFolder} is that
+    // story. This one presses the *heading row's* control over it, which is the press #332 was
+    // about, so the two ways in are driven separately.
+    await expect(canvas.getByRole("button", { name: "New deck in Ideas" })).toBeInTheDocument();
 
     await userEvent.click(canvas.getByRole("button", { name: "New deck" }));
     const form = canvas.getByRole("dialog", { name: "New deck" });
@@ -571,11 +586,98 @@ export const NewDeckInFolder: Story = {
 
     // The other end of the default, and the half a select cannot show: the deck the write
     // answered with is filed **here**, so it is on the wall the reader was already looking at
-    // rather than at the root behind them — and the drawer has stopped saying it is empty.
+    // rather than at the root behind them — and the drawer has stopped being empty, which the
+    // placeholder tile leaving is what says.
     await waitFor(async () => {
       await expect(canvas.getByText("Sunday Cube")).toBeInTheDocument();
     });
-    await expect(canvas.queryByText(/^Nothing is filed in Ideas yet/)).toBeNull();
+    await expect(canvas.queryByRole("button", { name: "New deck in Ideas" })).toBeNull();
+  },
+};
+
+/**
+ * **An empty drawer draws the wall: the way out, and the way to fill it.**
+ *
+ * `Ideas` is the seed's empty root folder. It used to draw one centred sentence — *"Nothing is
+ * filed in Ideas yet. Drag a deck onto it, or use the Move control on a tile."* — and both halves
+ * of that were the wrong shape. The `ParentDeckFolderCard` every *non-empty* folder puts first on
+ * its wall was withheld from precisely the folder with nothing else on screen to press; and the
+ * sentence named "the Move control on a tile", which is a control on a different wall from the
+ * one the reader is looking at, since there are no tiles here to have one.
+ *
+ * So there are two tiles instead, in the wall's own track and at the wall's own zoom: the up-tile,
+ * and a dashed `New deck` placeholder that files **into this folder**. The dash is the cabinet's
+ * vocabulary borrowed exactly — dashed means *container, not a thing you own*, and the one place
+ * on this wall where "put something here" is the whole content is a drawer with nothing in it.
+ * The words the sentence used to carry survive on the tile itself, where the second way in is
+ * written on the thing you would otherwise press.
+ *
+ * **The placeholder stands as tall as a deck tile's picture**, because its padding is the mana
+ * band's 20px scaled by the reader's zoom — a track whose objects disagree about their height is
+ * the thing this number exists to prevent.
+ */
+export const EmptyFolder: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const tree = await canvas.findByRole("navigation", { name: "Folders" });
+    await userEvent.click(within(tree).getByRole("button", { name: /^Ideas/ }));
+    await expect(canvas.getByRole("heading", { name: "Ideas" })).toBeInTheDocument();
+
+    // The wall is drawn, where an empty drawer used to draw a paragraph instead of one.
+    const wall = await canvas.findByRole("list", { name: "Your decks" });
+    await expect(
+      within(wall).getByRole("button", { name: "Up one level to All decks" }),
+    ).toBeVisible();
+    // Named for the drawer, not "New deck": the heading row's primary control is that string
+    // already, and two buttons with one accessible name on one screen is what a reader would
+    // have to tell apart by position.
+    await expect(within(wall).getByRole("button", { name: "New deck in Ideas" })).toBeVisible();
+    await expect(wall).toHaveTextContent("or drag one onto this folder");
+    await expect(canvas.queryByText(/^Nothing is filed in/)).toBeNull();
+  },
+};
+
+/**
+ * **One `Folder` menu where the heading row carried three buttons.**
+ *
+ * `Rename folder…`, `Move folder…` and `Delete folder…` each stood in this row naming a write the
+ * folder's own row menu — one column to the left, on the very same folder — already offered. That
+ * is one vocabulary spelled twice on one screen, and the two spellings did not even agree: the row
+ * menu also carries `New deck here` and `New subfolder…`, so a folder a reader right-clicked could
+ * do more than the folder they were standing *in*. `Folder` opens `buildFolderMenu` verbatim, so
+ * the two drawings of one folder offer one list in one order.
+ *
+ * It also halves the row: six buttons stood here at the widest, in a column that is ~548px at the
+ * app's own 1024px floor.
+ *
+ * `menuClick` is what anchors the panel — under the pointer for a press that had one, at the
+ * button's own bottom-left for a keyboard activation, which is the failure a plain `menu()` on a
+ * button walks into.
+ */
+export const FolderMenu: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const tree = await canvas.findByRole("navigation", { name: "Folders" });
+    await userEvent.click(within(tree).getByRole("button", { name: /^Constructed/ }));
+    await expect(canvas.getByRole("heading", { name: "Constructed" })).toBeInTheDocument();
+
+    // The three that left. A control still here would be the second spelling this removed.
+    for (const gone of ["Rename folder…", "Move folder…", "Delete folder…"]) {
+      await expect(canvas.queryByRole("button", { name: gone })).toBeNull();
+    }
+
+    // `Folder actions`, not the `Folder` this button prints: the create dialog's own folder
+    // select answers to that word, and a name matching both is a control neither a screen
+    // reader nor a `getByRole` can address. The button's own comment carries the ruling.
+    await userEvent.click(canvas.getByRole("button", { name: "Folder actions" }));
+    // The panel is `ContextMenuProvider`'s, mounted by `.storybook/preview.tsx` exactly where
+    // `App.tsx` mounts it — inside the decorated tree, so `canvas` reaches it.
+    const menu = await canvas.findByRole("menu");
+    await expect(
+      within(menu)
+        .getAllByRole("menuitem")
+        .map((item) => item.textContent),
+    ).toEqual(["New deck here", "New subfolder…", "Rename…", "Move to", "Delete…"]);
   },
 };
 
@@ -708,9 +810,18 @@ export const NewDeck: Story = {
     // over the same empty `deck.cards`, and says `Bracket ~2` too. Hiding it here to spare a new
     // deck a number would be the one thing this feature exists not to do — one deck answering the
     // same question two ways on two screens.
+    //
+    // **It is printed on the art now rather than in the caption**, which is where this
+    // redesign moved it: bottom-right of the crop, opposite the theory badge. Both halves are
+    // checked, because a bracket that left the caption and never arrived on the picture is
+    // exactly the silence the paragraph above argues against — and this deck's crop is the
+    // empty `No cover` frame, so the pill has to be legible over that too.
     await expect(within(made).getByText(/^Commander ·/)).toHaveTextContent(
-      "Commander · Bracket ~2 · 0 cards",
+      "Commander · 0 cards",
     );
+    // Mixed case: the pill is uppercased with `text-transform`, which leaves `textContent`
+    // exactly the label `DecksPage` handed the tile.
+    await expect(within(made).getByText("Bracket ~2")).toBeInTheDocument();
     // **No credit line anywhere on the wall** — not because this deck has no artist, which was
     // the old claim, but because the line itself is gone since 2026-09-07. The illustrator is the
     // crop's tooltip now, and a deck with no cover has no crop to carry one.
