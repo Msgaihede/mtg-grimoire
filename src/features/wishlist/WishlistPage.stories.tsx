@@ -157,10 +157,16 @@ const pageControl = (canvas: ReturnType<typeof within>, name: RegExp | string): 
 /**
  * Five wishes, and the one number the view exists for.
  *
- * The total is counted over what is **missing** rather than over what is wanted: a figure that
- * charged the reader for cards already in the binder is a number nobody can act on. So the
- * fulfilled Sol Ring contributes nothing, and $158.06 is Counterspell's two missing copies plus
- * Jace plus the foil Ragavan plus Rhystic Study.
+ * The total is counted over what each wish **wants**, which reverses what this story asserted
+ * until 2026-09-08: it was summed over what was still missing, on the argument that a figure
+ * charging the reader for cards already in the binder is a number nobody can act on. That
+ * argument assumed the list knew what was in the binder, and it no longer asks. So $163.96 is all
+ * four Counterspells plus Jace plus the foil Ragavan plus Rhystic Study.
+ *
+ * **And the unpriced note is on screen here now**, which is the same reversal from the other end:
+ * the seed's Sol Ring has no price, and it used to be left out of the count because the binder
+ * already covered it — a wish with nothing left to buy being nothing for a "could not price" note
+ * to qualify. Every wish is a wish to buy now, so the one nobody quoted is counted.
  *
  * **One tile, not the two this story used to assert.** The page drew `Still to buy (USD)` beside
  * `Still to buy (EUR)` while there was no way for a reader to say which they were shopping in;
@@ -172,21 +178,23 @@ const pageControl = (canvas: ReturnType<typeof within>, name: RegExp | string): 
  *
  * The unpriced counters stay two fields behind it, because the two currencies do not have the
  * same holes — `eur_etched` does not exist in Scryfall's data, so the same card can be priced in
- * dollars and unpriced in euros. Neither counter shows here: every wish with copies still to
- * find is priced in both.
+ * dollars and unpriced in euros.
  */
 export const Default: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByText("$158.06")).toBeInTheDocument();
-    await expect(canvas.getByText("Still to buy (USD)")).toBeInTheDocument();
+    await expect(await canvas.findByText("$163.96")).toBeInTheDocument();
+    await expect(canvas.getByText("Total cost (USD)")).toBeInTheDocument();
+    await expect(canvas.getByText("1 unpriced")).toBeInTheDocument();
     await expect(canvas.queryByText("€94.62")).not.toBeInTheDocument();
 
     // Five wishes, five tiles. One per **wish** and never per card, which is the reverse of the
     // collection's wall: there two entries for one printing are one piece of art, and here a
     // foil wish and a nonfoil wish are two wishes with two prices.
     await expect(canvas.getByRole("group", { name: "Your wishlist" })).toBeInTheDocument();
-    await expect(canvas.getByText("2/4")).toBeInTheDocument();
+    // How many copies the reader wants, in the tile's bottom-left corner. It read `2/4` — owned
+    // over wanted — until 2026-09-08.
+    await expect(canvas.getByText("×4")).toBeInTheDocument();
 
     // The one thing a picture must not settle: Sol Ring's wish names no printing, so it is drawn
     // as one — the newest of its oracle card — and captioned as what it actually is.
@@ -220,7 +228,12 @@ export const Table: Story = {
       "aria-rowcount",
       "6",
     );
-    await expect(canvas.getByText("2 of 4 owned")).toBeInTheDocument();
+    // The Wanted column's stepper, which is what the table says about copies now: it drew an
+    // `Owned` column reading `2 of 4 owned` beside it until 2026-09-08.
+    await expect(
+      canvas.getByRole("spinbutton", { name: /Copies wanted of Counterspell/ }),
+    ).toHaveValue(4);
+    await expect(canvas.queryByText(/owned/i)).toBeNull();
   },
 };
 
@@ -541,27 +554,27 @@ export const FlaggedOnTheWall: Story = {
 /**
  * A foil wish reading nothing owned, with a nonfoil of the same printing in the binder.
  *
- * This is why finish is part of what makes two wishes two wishes. `db.ts`'s `ownedAgainstWish`
- * narrows by the wish's `preferredFinish` when it names one, so the nonfoil Damaged Ragavan
- * `starterEntries` seeds fills none of the foil wish `starterWishes` seeds — 0 of 1, beside a
- * collection that holds one.
+ * This is why finish is part of what makes two wishes two wishes: the printing column carries
+ * set, number **and** finish, because those three together are what identify a wish.
  *
- * Condition is deliberately *not* a term in that count: a wishlist has nowhere to say "and in
- * NM", so a Damaged copy would fill a finish-blind wish completely.
+ * **The count that used to prove it is gone.** This story asserted `0 of 1 owned` on the foil
+ * wish beside a binder holding one nonfoil Ragavan — `ownedAgainstWish` narrowing by the wish's
+ * `preferredFinish`. The wishlist compares itself to the collection nowhere since 2026-09-08, so
+ * what is left to assert here is the statement itself: the row says which finish it is for, in
+ * words, and no row on this page says anything about the binder.
  */
 export const FoilWishUnfilled: Story = {
   args: { view: "table" },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    // Found by its printing rather than by "0 of 1 owned", which is **three** of the five seeded
-    // wishes — Jace and Rhystic Study read the same because nothing in the binder covers them
-    // either, and only this one reads it with a copy of the card sitting a view away. The
-    // printing column carries set, number **and** finish, because those three together are what
-    // identify a wish; it is the one column here that cannot be given a fixed width and stay
-    // honest.
+    // The printing column is the one column here that cannot be given a fixed width and stay
+    // honest, because it carries three facts.
     const row = (await canvas.findByText("MH2 · 138 · Foil")).closest('[role="row"]');
     await expect(row).not.toBeNull();
-    await expect(within(row as HTMLElement).getByText("0 of 1 owned")).toBeInTheDocument();
+    // The row states the finish and says nothing about the nonfoil Damaged Ragavan sitting one
+    // view away in the binder — which the seed still holds, so this is an absence with a fixture
+    // behind it rather than one that would pass over an empty collection.
+    await expect(within(row as HTMLElement).queryByText(/owned/i)).toBeNull();
     // And the same three ride in the stepper's accessible name, which is the half no screenshot
     // shows: two wishes for one card differ only by printing and finish, so "Copies wanted of
     // Ragavan, Nimble Pilferer" alone would be two identical controls in one list as far as a
@@ -575,45 +588,29 @@ export const FoilWishUnfilled: Story = {
 };
 
 /**
- * The `fulfilled` chip, both ways round.
+ * **The filter tray offers no way to ask about the collection**, which is what replaced the
+ * `FulfilledAndUnfulfilled` story that stood here.
  *
- * One chip and three states, and **the word on it is what says which is on** — an unpressed chip
- * cannot mean "still missing" and also be the same chip that means it when pressed. "Still
- * missing" is the first press because that is the question a shopping list is usually open for;
- * the search's twin starts from the other end for the same reason.
- *
- * The two halves are a partition of the same five wishes, so the story asserts a named row on
- * each side rather than a count: the any-printing Sol Ring is the one the collection covers (2 of
- * 1), and Counterspell is one of the four it does not (2 of 4).
+ * That one drove the `Fulfilled` / `Still missing` chip both ways round — one chip, three states,
+ * the word on it saying which was on. The chip is gone with every other comparison this list made
+ * against the binder: a wishlist is the reader's own, and they take a card off it when they
+ * acquire one. A story that merely stopped pressing the chip would prove nothing, so this opens
+ * the tray and asserts the absence, alongside a chip that **is** there — without which the play
+ * would pass over a tray that failed to open at all.
  */
-export const FulfilledAndUnfulfilled: Story = {
+export const NoCollectionFilter: Story = {
   args: { view: "table" },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await canvas.findByText("Sol Ring");
-    await expect(canvas.getByText("Counterspell")).toBeInTheDocument();
 
-    // Off → still missing. Behind the Filters disclosure since this page started drawing the
-    // shared row — the box, the colours, the order and the layout pair are what stay on the bar.
+    // Behind the Filters disclosure since this page started drawing the shared row — the box, the
+    // colours, the order and the layout pair are what stay on the bar.
     await userEvent.click(pageControl(canvas, /^Show filters/));
 
-    await userEvent.click(canvas.getByRole("button", { name: "Still missing" }));
-    await waitFor(async () => {
-      await expect(canvas.queryByText("Sol Ring")).toBeNull();
-    });
-    await expect(canvas.getByText("Counterspell")).toBeInTheDocument();
-
-    // Still missing → fulfilled. The chip is pressed either way, so it is the label that has
-    // just changed, and it is the label the next press has to be addressed by.
-    await userEvent.click(canvas.getByRole("button", { name: "Still missing" }));
-    await waitFor(async () => {
-      await expect(canvas.getByText("Sol Ring")).toBeInTheDocument();
-    });
-    await expect(canvas.queryByText("Counterspell")).toBeNull();
-    await expect(canvas.getByRole("button", { name: "Fulfilled" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    await expect(canvas.getByRole("button", { name: "Needs review" })).toBeInTheDocument();
+    await expect(canvas.queryByRole("button", { name: "Still missing" })).toBeNull();
+    await expect(canvas.queryByRole("button", { name: "Fulfilled" })).toBeNull();
   },
 };
 

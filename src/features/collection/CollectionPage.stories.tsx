@@ -101,13 +101,13 @@ const meta = {
           "over the same filters** (`useCollection` keeps the summary on a key with no sort in " +
           "it), both answered by `db.ts`'s `collection_list` and `collection_summary`, and the " +
           "stepper writes through `collection_set_quantity`.\n\n" +
-          "**The `starter` seed is 13 entries holding 21 copies**, and the two numbers " +
+          "**The `starter` seed is 12 entries holding 21 copies**, and the two numbers " +
           "disagreeing is the whole grammar of this view: a row is a *thing owned* — a foil and " +
-          "a played nonfoil of one printing are two rows — and one of the thirteen holds zero " +
-          'copies. Re-measured 2026-09-07 by calling `readHandlers(seed("starter")).' +
-          "collection_summary`: `totalCards: 21`, `uniqueCards: 12`, `entries: 13`.\n\n" +
-          "**`uniqueCards` did not move with the other two, and that is the seed's newest row " +
-          "saying what it is for**: a second `sta 105`, etched like the graded one above it and " +
+          "a played nonfoil of one printing are two rows — and four of the twelve hold more than " +
+          'one copy. Re-measured 2026-09-08 by calling `readHandlers(seed("starter")).' +
+          "collection_summary`: `totalCards: 21`, `uniqueCards: 11`, `entries: 12`.\n\n" +
+          "**`uniqueCards` sits one below `entries`, and that is the seed's newest row saying " +
+          "what it is for**: a second `sta 105`, etched like the graded one above it and " +
           "recorded at `NONE`, so the table draws `Etched · Near mint` beside a bare `Etched` and " +
           "the Finish sort has a real not-set pair inside one finish. Same printing, so the " +
           "*card* count is unchanged — and one tile on the wall rather than two, since a tile is " +
@@ -118,21 +118,28 @@ const meta = {
           "what the previous rule was preserving. The collection is now the record of what the " +
           "reader physically has, so a row holding no copies is not a card they have — the same " +
           "answer the wishlist has always given, reached from a different argument.\n\n" +
-          "**The seeded zero-copy row above is therefore a state no shipped write can reach.** " +
-          "It stays because `collection_update` can still produce one — an edit form sends eight " +
-          "fields at once and must not delete its own subject — and it is what the Folder " +
-          "column's removal control exists for.\n\n" +
+          "**So a row holding no copies is a state no shipped write can reach, and since " +
+          "2026-09-08 the seed holds none** (issue #425). It carried one for months, under a " +
+          "comment stating the pre-v24 rule, and what that cost is agreement between the fake " +
+          "and the crate wherever *owned* is asked as an existence question — " +
+          "`collection_source::owns_printing` is an `EXISTS` precisely *because* zero rows are " +
+          "gone. `collection_update` could still write one (an edit form sends eight fields at " +
+          "once and must not delete its own subject) and it has no caller in `src/`, which is " +
+          "what leaves the Folder column's removal control as the escape hatch for a row nothing " +
+          "in the app produces. `CollectionTable.stories.tsx`'s `ZeroQuantity` is where " +
+          "that row is drawn, from rows handed to the component rather than from a " +
+          "database.\n\n" +
           "**The page opens flattened — every copy, wherever it is filed — and the root it is " +
-          "ignoring is six of those thirteen.** The root asks `rootOnly` since the Flatten switch " +
+          "ignoring is five of those twelve.** The root asks `rootOnly` since the Flatten switch " +
           "landed, where an absent `folderId` used to mean every folder; that narrowing is the " +
           "reason the switch defaults **on**, because since schema v25 every card in a deck sits " +
           "in that deck's group folder, and on the maintainer's own database 275 of 275 entries " +
           "are filed in one — an unflattened first launch there draws `Cards 0 · Unique 0` over " +
           "a full binder. So {@link Default} is the flattened list, and {@link TheCabinet} is " +
           "the one press that puts the filing back on screen: four rows in the reader's binders " +
-          "and three in two deck groups behind folder cards, six left at the root. The seed is " +
+          "and three in two deck groups behind folder cards, five left at the root. The seed is " +
           "what makes the difference visible: `collection_summary` still reads `totalCards: 21` " +
-          "over `entries: 13` when it is asked *nothing*, which is what the export dialog's " +
+          "over `entries: 12` when it is asked *nothing*, which is what the export dialog's " +
           '"ignoring the filters and folders" offer reaches.\n\n' +
           "**One state has no story: a page-load failure.** The `busy` fault is honoured by " +
           "write handlers only — deliberately, because reads go through a second, read-only " +
@@ -158,7 +165,7 @@ type Story = StoryObj<typeof meta>;
  * **The list is every copy the reader owns, wherever it is filed — because that is what the page
  * opens on.** `collectionFlattened` starts `true`: the root was narrowed to mean "filed nowhere",
  * and since schema v25 every card in a deck sits in that deck's group, so the unflattened root is
- * a screen a reader with decks would meet empty. All thirteen of the seed's entries are here,
+ * a screen a reader with decks would meet empty. All twelve of the seed's entries are here,
  * including the Black Lotus in `Trade binder` and the three in two deck groups, each naming its
  * own drawer in the Folder column.
  *
@@ -187,10 +194,10 @@ export const Default: Story = {
     await expect(canvas.getByText("Black Lotus")).toBeInTheDocument();
     // What assistive tech is told the list is: every matching row plus the header
     // (`VirtualTable.tsx:181`), not the two dozen rows a virtualised table keeps in the DOM.
-    // The whole seed, so 13 entries plus the header.
+    // The whole seed, so 12 entries plus the header.
     await expect(canvas.getByRole("table", { name: "Your collection" })).toHaveAttribute(
       "aria-rowcount",
-      "14",
+      "13",
     );
     // And no cabinet: no drawers to open, no doors into the levels this list is ignoring.
     await expect(canvas.queryByRole("list", { name: "Folders" })).toBeNull();
@@ -216,7 +223,7 @@ export const Default: Story = {
  *
  * **And the list narrows, which is the half worth a story of its own.** `CollectionQuery.folderId`
  * absent used to mean "every folder"; it is `rootOnly` now, so the root is the copies filed
- * *nowhere* — six of the seed's thirteen. The other seven are one folder card away: Black Lotus in
+ * *nowhere* — five of the seed's twelve. The other seven are one folder card away: Black Lotus in
  * `Trade binder`, three more in two decks' groups. That reversal is the requested behaviour rather
  * than a regression, and it is exactly why {@link Default} opens with the switch on.
  *
@@ -232,12 +239,12 @@ export const TheCabinet: Story = {
 
     await userEvent.click(canvas.getByRole("button", { name: "Flatten" }));
 
-    // Six unfiled entries plus the header. The count is what says the root narrowed; a named
+    // Five unfiled entries plus the header. The count is what says the root narrowed; a named
     // row alone could not tell "filed away" from "scrolled past".
     await waitFor(async () => {
       await expect(canvas.getByRole("table", { name: "Your collection" })).toHaveAttribute(
         "aria-rowcount",
-        "7",
+        "6",
       );
     });
     await expect(canvas.queryByText("Black Lotus")).toBeNull();
@@ -253,7 +260,7 @@ export const TheCabinet: Story = {
 };
 
 /**
- * The same thirteen entries as **twelve** pieces of art — the seed's two `sta 105` rows are one
+ * The same twelve entries as **eleven** pieces of art — the seed's two `sta 105` rows are one
  * printing in one finish, which is exactly the wall's grain — and **a drag source**, which
  * reverses what this
  * story asserted until 2026-08-26.
@@ -276,7 +283,7 @@ export const TheCabinet: Story = {
  * **Flattened, like every story here that does not say otherwise** — so this is the wall a reader
  * meets, and each tile carries the drawer its copies are in as its caption (`captionFor`), which
  * is the wall's answer to the table's Folder column. {@link TheCabinet} is the other state, where
- * the wall is five tiles under a row of folder cards.
+ * the wall is four tiles under a row of folder cards.
  */
 export const CardMode: Story = {
   args: { view: "grid", flatten: true },
@@ -286,8 +293,8 @@ export const CardMode: Story = {
     // A card the reader filed away, on the wall anyway — the tile-side proof of what the switch
     // does, and the one that would go red if the wall started asking `rootOnly` again.
     //
-    // **Early in the alphabet on purpose.** Flattened, this wall is twelve tiles rather than
-    // five, and `stories.test.tsx`'s layout stub gives the virtualiser a window that holds about
+    // **Early in the alphabet on purpose.** Flattened, this wall is eleven tiles rather than
+    // four, and `stories.test.tsx`'s layout stub gives the virtualiser a window that holds about
     // two rows of them — so a card named late in `COLLECTION_DEFAULT_ORDER` is simply not in the
     // DOM, which reads exactly like the filing having eaten it. (`Urza's Saga` stood here and
     // did that.) Name a row, never count them: `.storybook/CLAUDE.md`'s rule.
@@ -597,7 +604,9 @@ export const NamingAFolder: Story = {
  * The seeded orphan is a `collection_entries` row naming an id `cards` has no row for, so its
  * name comes back null and the table draws an em dash under the set and collector number the
  * entry recorded at write time — which is the whole reason those three columns are denormalised.
- * The sentence is `reconcile::sweep_orphans`', copied verbatim into `.storybook/fake/seeds.ts:473`.
+ * The sentence is `reconcile::sweep_orphans`', copied verbatim into `.storybook/fake/seeds.ts`'s
+ * `MISSING_NOTE` — named rather than numbered, because a line number in prose routes to neither
+ * CI job and this one had already drifted onto an unrelated row.
  */
 export const NeedsReview: Story = {
   args: { view: "table", flatten: true },
@@ -666,7 +675,7 @@ export const Large: Story = {
  *
  * `db.ts:1479`'s `BUSY` is `collection::BUSY` verbatim, raised by `refuseIfBusy` at the top of
  * every write handler and by no read handler — which is why the list underneath is untouched and
- * still counting thirteen. The alert is a `role="alert"` of its own rather than a line folded into
+ * still counting twelve. The alert is a `role="alert"` of its own rather than a line folded into
  * the status above it: that one describes the list, and this one describes something the reader
  * just did to it.
  *

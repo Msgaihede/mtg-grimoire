@@ -33,6 +33,7 @@ import resetRs from "../../src-tauri/src/reset.rs?raw";
 import searchRs from "../../src-tauri/src/search.rs?raw";
 import syncCommandsRs from "../../src-tauri/src/sync_engine/commands.rs?raw";
 import syncLiveRs from "../../src-tauri/src/sync_engine/live.rs?raw";
+import wishlistFoldersRs from "../../src-tauri/src/wishlist_folders.rs?raw";
 import wishlistRs from "../../src-tauri/src/wishlist.rs?raw";
 import wishlistOptimizeRs from "../../src-tauri/src/wishlist_optimize.rs?raw";
 // The scanner's seven. Six are in the `card-scanner` crate rather than under `src-tauri/src` —
@@ -393,10 +394,14 @@ describe("ipc argument names match the Rust command signatures", () => {
     await ipc.wishlistFolderReorder(null, [4, 1]);
     expect(invoke).toHaveBeenCalledWith("wishlist_folder_reorder", { parentId: null, ids: [4, 1] });
 
+    // `needsReview` rather than the `fulfilled` this carried until 2026-09-08: that field is off
+    // `WishlistQuery` entirely, because the wishlist compares itself to the collection nowhere.
+    // A three-state boolean is still what this pin is for — `false` is a real question and has to
+    // reach the wire, where `undefined` must not.
     invoke.mockResolvedValue({ items: [], total: 0 });
-    await ipc.wishlistList({ fulfilled: false, limit: 100, offset: 0 });
+    await ipc.wishlistList({ needsReview: false, limit: 100, offset: 0 });
     expect(invoke).toHaveBeenCalledWith("wishlist_list", {
-      query: { fulfilled: false, limit: 100, offset: 0 },
+      query: { needsReview: false, limit: 100, offset: 0 },
     });
   });
 
@@ -3445,6 +3450,12 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     // simply never remembers a fold. Both are a green build, a drawable page and a setting that
     // silently stopped working.
     ["DeckFolderPane", deckpaneRs, "DeckFolderPane"],
+    // Added 2026-09-08 by a rename that this table would have caught and nothing else could.
+    // `missing` became `copies` on both sides by hand when the wishlist stopped subtracting the
+    // collection, and a rename reaching only one of them is the quiet kind: every folder card
+    // reads `undefined` for the field, `face()` takes its "not counted yet" arm, and the whole
+    // cabinet draws an em dash over drawers that are full. Green build, drawable page, no figure.
+    ["WishlistFolderSummary", wishlistFoldersRs, "WishlistFolderSummary"],
   ];
 
   it.each(plainMirrors)(

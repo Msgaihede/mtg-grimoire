@@ -17,6 +17,7 @@ import { installWorld } from "./world";
 import { invoke, resetCommands } from "./core";
 import { emitFake, listen } from "./event";
 import { seed } from "./seeds";
+import type { SeedName } from "./seeds";
 import { CARDS } from "./cards";
 import { CLOCK_BASE } from "./db";
 import type { FakeDb, FakeDeck, FakeDeckCard, FakeEntry } from "./db";
@@ -289,9 +290,9 @@ describe("the seeds", () => {
     expect(db.deckCards).toHaveLength(0);
   });
 
-  it("starter spans every finish and every condition, and keeps a row at zero", () => {
+  it("starter spans every finish and every condition, and holds more copies than rows", () => {
     const rows = seed("starter").collectionEntries;
-    expect(rows).toHaveLength(13);
+    expect(rows).toHaveLength(12);
     expect(new Set(rows.map((e) => e.finish))).toEqual(new Set(["nonfoil", "foil", "etched"]));
     // **Six, and the sixth is the one no grade at all.** A seed that spanned only the five real
     // grades would leave every surface drawing a not-set row — the table's `Finish · condition`
@@ -301,8 +302,12 @@ describe("the seeds", () => {
       new Set(["NONE", "NM", "LP", "MP", "HP", "DMG"]),
     );
     expect(rows.filter((e) => e.condition === "NONE")).toHaveLength(1);
-    expect(rows.filter((e) => e.quantity === 0)).toHaveLength(1);
-    // 21 copies over 13 entries: the two numbers a summary shows separately.
+    // **This asserted a row at zero until 2026-09-08** (issue #425), which was a state the app
+    // deletes; the sweep over every seed below is what stands in its place. What the two numbers
+    // disagree by now is copies stacked on rows rather than a row holding none: four of the
+    // twelve hold more than one.
+    expect(rows.filter((e) => e.quantity > 1)).toHaveLength(4);
+    // 21 copies over 12 entries: the two numbers a summary shows separately.
     expect(rows.reduce((n, e) => n + e.quantity, 0)).toBe(21);
   });
 
@@ -489,6 +494,26 @@ describe("the seeded rows agree with the cards they name", () => {
     "large",
   ];
 
+  /**
+   * Every member of `SeedName`, for the invariants that hold in all of them rather than in the
+   * four above.
+   *
+   * **Through a `satisfies Record<SeedName, true>` rather than a bare array**, because a
+   * `SeedName[]` happily accepts a list missing half the union: a seed added tomorrow would join
+   * `SeedName` and skip every sweep here with nothing going red. Written this way, `tsc` refuses
+   * the object until the new name is in it.
+   */
+  const ALL_SEEDS = Object.keys({
+    empty: true,
+    starter: true,
+    needsReview: true,
+    large: true,
+    bracketMismatch: true,
+    combosMissing: true,
+    virtualDeck: true,
+    paired: true,
+  } satisfies Record<SeedName, true>) as SeedName[];
+
   it.each(names)("%s denormalises set, collector and language faithfully", (name) => {
     const db = seed(name);
     const byId = new Map(db.cards.map((c) => [c.id, c]));
@@ -571,6 +596,40 @@ describe("the seeded rows agree with the cards they name", () => {
       expect(grain.has(key)).toBe(false);
       grain.add(key);
     }
+  });
+
+  /**
+   * **No seed holds a collection row at quantity zero, and this is the fence that keeps it that
+   * way** (2026-09-08, issue #425).
+   *
+   * `starter` carried one for months, under a comment stating the pre-v24 rule — that the row
+   * survives the day the reader owns none of the card and that only `collection_remove` takes it
+   * away. That rule was reversed: `set_quantity(id, 0)` deletes the row and answers
+   * `EntryChange { removed: true }`, the user ladder's v24 rung deleted every stored zero, the
+   * importer's `set` mode does the same, and `collection_update` — the one write left that would
+   * keep such a row — has no caller in `src/`. The live dev database has none in 276 rows.
+   *
+   * **What a seeded zero costs is agreement between the fake and the crate**, wherever *owned* is
+   * asked as an existence question rather than as a sum. `collection_source::owns_printing` is an
+   * `EXISTS` and the search facet's `owned` dimension is allowed to be one *because* zero rows are
+   * gone; a fixture holding one makes every such reader look correct in the app and wrong in
+   * Storybook, or the reverse — which is the expensive direction, because the workbench is where a
+   * reader is trusted. It had already cost one: a combo panel drawing `Not owned` on a piece line
+   * inside a combo it was simultaneously offering under `I own every piece`.
+   *
+   * **Every seed rather than the four above**, because the cost is the same in any of them — and a
+   * test that needs the impossible row builds it locally, as `db.test.ts`'s `OWNED_CTE` fence
+   * does. The wishlist and `deck_cards` are stricter still and say so in the DDL (`CHECK
+   * (quantity > 0)`, the test above); the collection is the one table where the rule lives in the
+   * write path instead, which is exactly how a fixture came to sit outside it unnoticed.
+   */
+  it.each(ALL_SEEDS)("%s holds no collection row at quantity zero", (name) => {
+    const db = seed(name);
+    const zeros = db.collectionEntries
+      .filter((e) => e.quantity <= 0)
+      .map((e) => `${e.setCode} ${e.collectorNumber}`);
+
+    expect(zeros).toEqual([]);
   });
 
   /**

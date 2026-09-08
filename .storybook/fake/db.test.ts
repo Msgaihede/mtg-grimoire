@@ -1,9 +1,12 @@
 /**
  * What the row store has to get right, and nothing that merely restates it.
  *
- * The first block is the whole reason `db.ts` stores rows: `ownedQuantity` is three
+ * The first block is the whole reason `db.ts` stores rows: `ownedQuantity` is two
  * different questions with one name, and a fake that stored DTOs would answer them
- * identically and be plausible every time.
+ * identically and be plausible every time. It was three until 2026-09-08, when the wishlist
+ * stopped asking the collection anything at all and `WishRow` lost its copy of the field —
+ * the block is one `it` shorter and the argument for it is unchanged, because two answers
+ * under one name is already one too many to hard-code.
  */
 import { describe, expect, it } from "vitest";
 import { invoke, registerCommands, resetCommands } from "./core";
@@ -59,7 +62,6 @@ import type {
   SearchSortKey,
   TransferImportMode,
   WishlistImportItem,
-  WishlistPage,
   WishlistQuery,
   WishlistSortKey,
 } from "@/lib/ipc";
@@ -308,7 +310,7 @@ function bulkCards(n: number): FakeCard[] {
   }));
 }
 
-describe("the three ownedQuantity derivations", () => {
+describe("the two ownedQuantity derivations", () => {
   it("is finish-BLIND on a search row: a foil and a nonfoil of one printing sum", () => {
     const db = makeDb({
       collectionEntries: [
@@ -320,17 +322,6 @@ describe("the three ownedQuantity derivations", () => {
       req: { text: "Lightning Bolt", limit: 10, offset: 0 },
     }) as { items: CardSummary[] };
     expect(page.items.find((i) => i.id === BOLT.id)!.ownedQuantity).toBe(3);
-  });
-
-  it("is finish-AWARE on a wish: a foil wish is not filled by the nonfoil in the binder", () => {
-    const db = makeDb({
-      collectionEntries: [entry({ id: 1, cardId: BOLT.id, finish: "nonfoil", quantity: 4 })],
-      wishlistEntries: [wish({ id: 1, cardId: BOLT.id, preferredFinish: "foil", quantity: 1 })],
-    });
-    const page = readHandlers(db).wishlist_list({
-      query: { limit: 10, offset: 0 },
-    }) as WishlistPage;
-    expect(page.items[0].ownedQuantity).toBe(0);
   });
 
   it("is what THIS DECK'S GROUP holds, and an inactive category is never attributed to", () => {
@@ -1465,38 +1456,36 @@ describe("ordering", () => {
         .wishlist_list({ query: { sort, limit: 10, offset: 0 } })
         .items.map((i) => i.id);
 
-    it("sorts `owned` by the finish-aware count the row prints", () => {
+    /**
+     * **`cost` is the whole wish, not a shortfall** — `unit_price * quantity`, since the
+     * wishlist stopped asking the collection anything on 2026-09-08. It used to be
+     * `unit_price * max(0, quantity - owned)`, and the test that stood here was about the one
+     * row that arithmetic made strange: a wish the binder already filled sorted to the bottom of
+     * `cost` and stayed at the top of `price`, dearest card in the fixture or not.
+     *
+     * So the fixture had to be rebuilt rather than renumbered. The two keys still have to
+     * disagree in **both** directions or neither assertion is about anything, and the only thing
+     * left to disagree over is the quantity: ten cheap copies outrank one dear one by `cost` and
+     * lose to it by `price`. That is the collection's own `value`-against-`price` pair one table
+     * over, which is what the wishlist's two money columns now are.
+     */
+    it("sorts `cost` by every copy wanted and `price` by one copy", () => {
       const db = makeDb({
-        collectionEntries: [entry({ id: 1, cardId: BOLT_2X2.id, finish: "nonfoil", quantity: 3 })],
         wishlistEntries: [
-          // No finish named, so the three nonfoils in the binder count.
-          wish({ id: 1, cardId: BOLT_2X2.id }),
-          // For the foil, which those three do not fill.
-          wish({ id: 2, cardId: BOLT_2X2.id, preferredFinish: "foil" }),
-        ],
-      });
-      expect(idsFor(db, [{ key: "owned", dir: "desc" }])).toEqual([1, 2]);
-      expect(idsFor(db, [{ key: "owned", dir: "asc" }])).toEqual([2, 1]);
-    });
-
-    it("sorts `cost` by what is still missing and `price` by one copy", () => {
-      const db = makeDb({
-        collectionEntries: [entry({ id: 1, cardId: at("2ed", "48").id, quantity: 1 })],
-        wishlistEntries: [
-          // Fulfilled: one wanted, one owned. `max(0, 1 - 1)` is 0, so the dearest card in
-          // the fixture costs nothing to finish.
-          wish({ id: 1, cardId: at("2ed", "48").id, quantity: 1 }),
-          // Two wanted at usd 2.50 and none owned: 5.00 still to spend.
-          wish({ id: 2, cardId: at("2x2", "117").id, quantity: 2 }),
-          // A null `usd`, so the cost is a hole and not a zero.
+          // `2x2 117` nonfoil is usd 2.50; ten copies are 25.00 to buy.
+          wish({ id: 1, cardId: at("2x2", "117").id, quantity: 10 }),
+          // `sta 105` nonfoil is usd 17.85; one copy is 17.85.
+          wish({ id: 2, cardId: at("sta", "105").id, quantity: 1 }),
+          // A null `usd`, so both columns are a hole for it and never a zero.
           wish({ id: 3, cardId: at("sld", "913").id, quantity: 4 }),
         ],
       });
-      expect(idsFor(db, [{ key: "cost", dir: "desc" }])).toEqual([2, 1, 3]);
-      expect(idsFor(db, [{ key: "cost", dir: "asc" }])).toEqual([1, 2, 3]);
-      // The same three rows, ordered by what one copy costs: the fulfilled wish is first
-      // rather than second, which is the whole difference between the two keys.
-      expect(idsFor(db, [{ key: "price", dir: "desc" }])).toEqual([1, 2, 3]);
+      expect(idsFor(db, [{ key: "cost", dir: "desc" }])).toEqual([1, 2, 3]);
+      expect(idsFor(db, [{ key: "cost", dir: "asc" }])).toEqual([2, 1, 3]);
+      // The same three rows the other way round, which is the whole difference between the two
+      // keys — and the hole stays last in both directions, because `nullsLast` is not reversible.
+      expect(idsFor(db, [{ key: "price", dir: "desc" }])).toEqual([2, 1, 3]);
+      expect(idsFor(db, [{ key: "price", dir: "asc" }])).toEqual([1, 2, 3]);
     });
 
     it("reads `quantity` and `added` in the direction they were asked for", () => {
@@ -3409,57 +3398,60 @@ describe("the wishlist's folders", () => {
       wishlistEntries: [
         wish({ id: 1, cardId: BOLT.id, quantity: 2, folderId: 1 }),
         wish({ id: 2, cardId: BOLT_2X2.id, quantity: 1, folderId: 2 }),
+        // At the root, and nine copies of it: the row that would swamp both folders if the
+        // `WHERE folder_id IS NOT NULL` were ever dropped.
         wish({ id: 3, cardId: BOLT.id, quantity: 9, folderId: null }),
       ],
-      collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 1 })],
     });
     const rows = readHandlers(db).wishlist_folder_summary({});
     // Two rows: the root is not a folder and draws no tile, and an empty folder has no row at
     // all — which is why a page has to build its tree from `wishlist_folder_list`.
     expect(rows.map((r) => r.folderId)).toEqual([1, 2]);
-    expect(rows[0]).toMatchObject({ wishes: 1, missing: 1 });
-    expect(rows[1]).toMatchObject({ wishes: 1, missing: 1 });
+    // The wish's own `quantity`, whole. The binder used to be subtracted out of this and a
+    // seeded Bolt made both folders read 1; nothing on the wishlist asks the collection
+    // anything now, so what the reader put on the list is what the tile counts.
+    expect(rows[0]).toMatchObject({ wishes: 1, copies: 2 });
+    expect(rows[1]).toMatchObject({ wishes: 1, copies: 1 });
   });
 
   /**
    * The other two figures on a folder card, which the summary test above leaves unasserted.
    *
-   * `cost` is **what is still to buy**, never what is wanted: a folder charging the reader for
-   * copies already in the binder is a subtotal they cannot act on, and it is the same
-   * subtraction {@link toWishRow} makes so the card and the page header cannot disagree.
+   * `cost` is **every copy filed here**, priced at the summary's own marketplace: since
+   * 2026-09-08 nothing on the wishlist subtracts the binder, so what the reader put on the list
+   * is what the tile charges them for. It is the same multiplication {@link toWishRow}'s
+   * `unitPrice` feeds, which is what keeps a folder card and the page header from disagreeing.
    *
-   * `unpriced` is the non-obvious one and the reason this test exists. It counts a row only when
-   * that row has copies **still to buy** *and* no price — `unit === null && missing > 0`. Drop
-   * the second half and every folder holding a finished wish for an unpriceable printing grows a
-   * "could not price" note about a card the reader already owns, which reads as a hole in the
-   * marketplace's data rather than as the nothing it is.
+   * `unpriced` is the non-obvious one and the reason this test exists. **An unpriced row is left
+   * out of `cost` rather than dropping the folder's whole subtotal**, so a folder can answer a
+   * real number *and* a note saying the number is short — the two figures travel together
+   * precisely because neither is honest alone. It used to carry a second clause,
+   * `unit === null && missing > 0`, so that a folder of wishes the binder had already filled
+   * drew no "could not price" note about cards the reader owned; no wish can be filled by the
+   * binder any more, so that clause could only ever be true and it is gone with the subtraction
+   * that gave it something to say.
    *
-   * The fixture is two folders and three wishes, chosen so each clause fails loudly on its own:
+   * The fixture is two folders and three wishes, chosen so each half fails loudly on its own:
    *
    * - `Ordered` wants two Alpha Bolts (`lea 161`, `usd` 620.00, nonfoil only) and two Invocation
-   *   Consecrated Sphinxes (`mp2 8`, foil-only — `usd` is null, `usd_foil` 164.95), one of which
-   *   is in the binder. The Sphinx wish names no finish, so it is priced at `nonfoil` and cannot
-   *   be priced at all: three copies still to find, `$1240.00` of Bolts, and **one** unpriced.
-   * - `Backordered` wants one of the same Sphinx, and the binder's copy covers it. Nothing to
-   *   buy, so nothing to price and **nothing** unpriced.
-   *
-   * That one copy answering both folders is the model rather than a fixture bug:
-   * {@link ownedAgainstWish} asks what the binder holds *against this wish*, and two wishes for
-   * one card are two intentions — the wishlist has nowhere to say which of them a copy on the
-   * shelf belongs to, and no folder to file it into either.
+   *   Consecrated Sphinxes (`mp2 8`, foil-only — `usd` is null, `usd_foil` 164.95). The Sphinx
+   *   wish names no finish, so it is priced at `nonfoil` and cannot be priced at all: four copies
+   *   wanted, `$1240.00` of Bolts and **one** unpriced row beside it.
+   * - `Backordered` wants one of the same Sphinx and nothing else, which is the folder the
+   *   dropped clause used to hide: one copy wanted, `0` to show for it, and **one** unpriced —
+   *   a tile that says `—` and explains itself rather than one that reads as free.
    */
-  it("prices only the missing copies, and calls a row unpriced only while it has some", () => {
+  it("prices every copy wanted, and counts a row the marketplace cannot quote", () => {
     const db = filing({
       wishlistEntries: [
         wish({ id: 1, cardId: BOLT.id, quantity: 2, folderId: 1 }),
         wish({ id: 2, cardId: FOIL_ONLY.id, quantity: 2, folderId: 1 }),
         wish({ id: 3, cardId: FOIL_ONLY.id, quantity: 1, folderId: 2 }),
       ],
-      collectionEntries: [entry({ id: 1, cardId: FOIL_ONLY.id, finish: "foil", quantity: 1 })],
     });
     expect(readHandlers(db).wishlist_folder_summary({})).toEqual([
-      { folderId: 1, wishes: 2, missing: 3, cost: 620 * 2, unpriced: 1 },
-      { folderId: 2, wishes: 1, missing: 0, cost: 0, unpriced: 0 },
+      { folderId: 1, wishes: 2, copies: 4, cost: 620 * 2, unpriced: 1 },
+      { folderId: 2, wishes: 1, copies: 1, cost: 0, unpriced: 1 },
     ]);
   });
 
@@ -4454,9 +4446,14 @@ describe("the two reads a folder rule is answered from", () => {
    * workbench nobody can use.
    *
    * Deck 1 — `Modern Goodstuff`, the deck every editor story opens — plays **18** cards, and its
-   * Collection Search tab can still file six of the reader's thirteen rows. The four it now
+   * Collection Search tab can still file six of the reader's twelve rows. The four it now
    * refuses are the ones the deck genuinely does not play; `mh2 267` and `mh2 138` keep
    * answering `ALREADY_HERE`, which is the older refusal and still ahead of nothing.
+   *
+   * **The fourth refusal is asked for rather than seeded** (2026-09-08, issue #425). `NOT_ENOUGH`
+   * used to be the seed's zero-quantity row answering a request for one copy — a row the app
+   * deletes on sight, kept in a shared fixture. Every row here holds copies now, so the way to
+   * reach that refusal is the way a reader reaches it: ask a row for more copies than it has.
    *
    * **`sta 105` appears twice in the filed list, and that is the schema v35 row** — the seed's
    * ungraded etched Bolt, a second grade of a printing already here. A grade is not part of the
@@ -4469,17 +4466,17 @@ describe("the two reads a folder rule is answered from", () => {
    * press now refuses. No story's `play` presses it (`CrossDeckConfirm` stops at the question),
    * so nothing goes red — which is exactly why it is measured here instead.
    */
-  it("still lets the starter seed's deck file six of the reader's thirteen rows", () => {
+  it("still lets the starter seed's deck file six of the reader's twelve rows", () => {
     const db = seed("starter");
     const main = db.deckCategories.find((c) => c.deckId === 1 && c.kind === "main")!;
     // A fresh world per row: a filing that succeeds changes what the next one is asked about.
-    const fileIntoDeckOne = (entryId: number) => {
+    const fileIntoDeckOne = (entryId: number, quantity = 1) => {
       try {
         writeHandlers(seed("starter")).collection_to_deck({
           entryId,
           deckId: 1,
           categoryId: main.id,
-          quantity: 1,
+          quantity,
         });
         return "filed";
       } catch (refusal) {
@@ -4510,10 +4507,16 @@ describe("the two reads a folder rule is answered from", () => {
       "mp2 8",
       "lea 232",
     ]);
-    // And the two older refusals are untouched: the copies already in this deck's group, and
-    // the row the reader has stepped to zero.
+    // And the older refusal is untouched: the copies already in this deck's group.
     expect(outcome((a) => a.includes("already in this deck"))).toEqual(["mh2 267", "mh2 138"]);
-    expect(outcome((a) => a.includes("not that many"))).toEqual(["kld 235"]);
+    // Nothing here is refused for want of copies, because nothing here holds none — the three
+    // outcomes above account for all twelve rows.
+    expect(outcome((a) => a.includes("not that many"))).toEqual([]);
+    // The refusal itself, reached the way a reader reaches it: `lea 161` is one copy, files at
+    // one — asserted above — and refuses at two. Stated as a pair so the second answer is not
+    // one a filing this deck would have refused anyway.
+    expect(fileIntoDeckOne(2, 1)).toBe("filed");
+    expect(fileIntoDeckOne(2, 2)).toContain("not that many");
   });
 });
 
@@ -12169,34 +12172,46 @@ describe("the combos one card is in", () => {
   /**
    * **A row holding no copies is not a card the reader has** — `combos::OWNED_CTE`'s
    * `AND e.quantity > 0`, and the one-line mutation this catches is dropping that clause (here,
-   * the `if (e.quantity > 0)` in `collectionReach`). Without it `3587-9146--25` joins the list
-   * above and `ownedTotal` reads 6.
+   * the `if (e.quantity > 0)` in `collectionReach`). Without it `3587-9146--25` joins the owned
+   * list and `ownedTotal` reads 6.
    *
-   * **What it is guarding is a state the app deletes.** `set_quantity(id, 0)` removes the row,
-   * the v24 rung removed every stored zero and the importer's `set` mode does the same, so a
-   * healthy database has none — which is what lets `collection_source::owns_printing` be an
-   * `EXISTS`. `starterEntries` seeds one anyway, from before that rule, to prove a zero renders;
-   * and unfenced, that fixture drew `Not owned` on a piece line inside a combo the same screen
-   * was offering under `I own every piece`. One card, one screen, two answers, no error. The
-   * clause is redundant against a healthy database and cheap against a broken one, and this is
-   * the test that keeps both ends of it honest.
+   * **What it is guarding is a state the app deletes**, which is why the row is built here and
+   * not seeded (2026-09-08, issue #425). `set_quantity(id, 0)` removes the row, the v24 rung
+   * removed every stored zero and the importer's `set` mode does the same, so a healthy database
+   * has none — which is what lets `collection_source::owns_printing` be an `EXISTS`.
+   * `starterEntries` carried one anyway, from before that rule, and unfenced that fixture drew
+   * `Not owned` on a piece line inside a combo the same screen was offering under `I own every
+   * piece`: one card, one screen, two answers, no error. The seed is clean now and this test
+   * stands the row up on top of it, which is the honest arrangement — the clause is worth
+   * testing, and a shared seed is not the place to make it testable.
+   *
+   * **The lines after `zero.quantity = 1` are what stop the fixture being inert.** A pushed row
+   * naming a card nothing asks about would satisfy every assertion above it while proving
+   * nothing, so the same row at one copy has to flip both answers and the total.
    */
   it("does not count a row holding no copies", () => {
     const db = seed("starter");
     const copter = CARDS.find((c) => c.name === "Smuggler's Copter")!;
-    // The seeded row, so the premise is stated rather than assumed.
-    expect(db.collectionEntries.filter((e) => e.cardId === copter.id).map((e) => e.quantity)).toEqual(
-      [0],
-    );
+    // The premise, stated rather than assumed — and the seed's side of it is now *no* row.
+    expect(db.collectionEntries.some((e) => e.cardId === copter.id)).toBe(false);
+    const zero = entry({ id: 900, cardId: copter.id, quantity: 0 });
+    db.collectionEntries.push(zero);
+
+    const pieceOf = (page: ReturnType<typeof ask>) =>
+      page.combos
+        .find((c) => c.id === "3587-9146--25")!
+        .pieces.find((p) => p.name === "Smuggler's Copter")!;
 
     const page = ask(db);
-    const piece = page.combos
-      .find((c) => c.id === "3587-9146--25")!
-      .pieces.find((p) => p.name === "Smuggler's Copter")!;
-
-    expect(piece.owned).toBe(0);
+    expect(pieceOf(page).owned).toBe(0);
     expect(idsOf(ask(db, { ownedOnly: true }))).not.toContain("3587-9146--25");
     expect(page.ownedTotal).toBe(5);
+
+    zero.quantity = 1;
+    const held = ask(db);
+    expect(pieceOf(held).owned).toBe(1);
+    expect(idsOf(ask(db, { ownedOnly: true }))).toContain("3587-9146--25");
+    expect(held.ownedTotal).toBe(6);
   });
 
   /**

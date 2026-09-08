@@ -519,20 +519,32 @@ export const InEuros: Story = {
 /**
  * A row the user owns none of — **and the row stays**.
  *
- * Zero is a state the stepper can reach and nothing else can leave. The backend keeps the row
- * with its condition, its purchase price and its acquisition story until something says delete,
- * and the only thing in the app that does is the trash button in the last column — which is
- * offered **on an empty row and nowhere else**. On a row that still holds cards it would be a
- * one-click way to lose the lot from a list that scrolls under the pointer.
+ * **Nothing a reader can press produces this row, and that is the point of drawing it here.**
+ * Since schema v24 `collectionSetQuantity(id, 0)` deletes outright, the v24 rung swept away every
+ * stored zero and the importer's `set` mode does the same; `collectionUpdate` is the one write
+ * left that would keep a row at zero — an edit form sends eight fields at once and must not delete
+ * its own subject — and it has no caller in `src/`. So the row below is **handed to the
+ * component**, never seeded: `.storybook/fake/`'s seeds hold no such row since 2026-09-08 (issue
+ * #425), because a shared fixture standing in a state the app deletes makes the fake and the crate
+ * disagree wherever *owned* is asked as an existence question, and it had already cost one screen
+ * contradicting itself about one card.
+ *
+ * What the row is for is the escape hatch: the trash button in the last column, offered **on an
+ * empty row and nowhere else**, which is the only way out if one ever does appear — a hand-edited
+ * database, a future entry editor, a command added without this table in mind. On a row that still
+ * holds cards it would be a one-click way to lose the lot from a list that scrolls under the
+ * pointer. The backend keeps such a row with its condition, its purchase price and its acquisition
+ * story until something says delete.
  *
  * The row recedes rather than disappearing: `rowClassName` puts `text-dim` on it, applied last
  * so it wins over the selection colour. The Value cell is a real `$0.00` here and not an em
  * dash — the price is known and the quantity is zero, which is a different fact from "this
  * finish has no price".
  *
- * The wishlist and `deck_cards` are the opposite by table CHECK (`quantity > 0`): a wish for
- * none of something is not a wish, and a deck's category slot at zero holds no condition, no price and no
- * story. Only the collection's zero is worth keeping.
+ * The wishlist and `deck_cards` say the same thing in the DDL, by table CHECK (`quantity > 0`): a
+ * wish for none of something is not a wish, and a deck's category slot at zero holds no condition,
+ * no price and no story. The collection is the one of the three where the rule lives in the write
+ * path instead — which is exactly how a fixture came to sit outside it unnoticed.
  */
 export const ZeroQuantity: Story = {
   args: {

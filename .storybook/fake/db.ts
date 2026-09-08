@@ -2,17 +2,25 @@
  * The fake backend's store: **table rows**, and the read handlers that derive the DTOs from
  * them exactly as `src-tauri/src` does.
  *
- * Rows, not DTOs, and the whole design turns on one field. `ownedQuantity` appears on three
- * DTOs in `src/lib/ipc.ts` and answers three different questions: on `CardSummary` it is
- * every copy of one *printing* and finish-blind; on `WishRow` it is the copies filling one
- * *wish* and finish-aware; on `DeckCard` it is what this deck's **own group** physically
- * holds — printing-and-finish-grained, condition-blind, and attributed neither to a category
- * the user has switched off nor to the `theory` list, whatever the category is called. Since
- * 2026-09-07 that is the same grain `deck_pull_plan` reads its candidates at, so a deck's
- * missing count and its Pull dialog finally agree. A fixture that
- * stored DTOs would hard-code all three, they would agree, and every story built on it would
+ * Rows, not DTOs, and the whole design turns on one field. `ownedQuantity` appears on two
+ * DTOs in `src/lib/ipc.ts` and answers two different questions: on `CardSummary` it is
+ * every copy of one *printing* and finish-blind; on `DeckCard` it is what this deck's **own
+ * group** physically holds — printing-and-finish-grained, condition-blind, and attributed
+ * neither to a category the user has switched off nor to the `theory` list, whatever the
+ * category is called. Since 2026-09-07 that is the same grain `deck_pull_plan` reads its
+ * candidates at, so a deck's missing count and its Pull dialog finally agree. A fixture that
+ * stored DTOs would hard-code both, they would agree, and every story built on it would
  * teach a reader a model the app does not have. Derived from rows they come out right
  * without anyone deciding that they should.
+ *
+ * **`WishRow` was the third of them until 2026-09-08, and the wishlist asks the collection
+ * nothing at all now.** A wishlist is a list the reader keeps: they take a card off it when
+ * they acquire one, and no amount of arithmetic over `collection_entries` knows better than
+ * that press. So the wish row carries no owned count, `WishlistQuery` has no `fulfilled`
+ * filter, `WishlistSortKey` has no `owned` key, and every wishlist money figure is priced
+ * over the copies **wanted** rather than over a shortfall. Two questions with one name is
+ * still one too many to store as a DTO, which is why the rule above outlives the third
+ * derivation that first made it worth writing down.
  *
  * Where a derivation came from is named on each handler. `ipc.ts` is the shape; the Rust
  * file named is the behaviour.
@@ -3594,8 +3602,8 @@ const HAND_WRITTEN_COMBOS: readonly ComboFixture[] = [
  * The second card of each filler combo — 26 names out of `cards.ts`, and the list is where the
  * ownership arithmetic is actually decided.
  *
- * **Four of them are cards the `starter` collection has a row for, and only three of those rows
- * hold anything** — the other 22 partners are cards it has no row for at all. Every filler also
+ * **Three of them are cards the `starter` collection has a row for, and every one of those rows
+ * holds copies** — the other 23 partners are cards it has no row for at all. Every filler also
  * names Boros Reckoner (declared) and Lightning Bolt (seven real copies), so a filler is fully
  * owned exactly when its partner is, where *fully owned* is {@link comboPieces}' **presence** test
  * rather than a count:
@@ -3605,23 +3613,26 @@ const HAND_WRITTEN_COMBOS: readonly ComboFixture[] = [
  *   20 of the answer: the `I own every piece` filter has to reach past seventeen rows to find
  *   them, and a filter whose survivors happened to be the first rows anyway is one a `slice`
  *   would pass.
- * * **Smuggler's Copter**, at 25, whose seeded row holds **zero copies** — and which is therefore
- *   *not* owned. It is the fixture for `combos::OWNED_CTE`'s `AND e.quantity > 0`, and the reason
- *   that clause is there at all.
  *
- * **What the Copter row is and is not.** A `collection_entries` row cannot hold zero copies in a
- * production database — `set_quantity(id, 0)` deletes the row, the v24 rung deleted every stored
- * zero, and the importer's `set` mode does the same
+ * **Smuggler's Copter, at 25, is where a fourth used to be** (2026-09-08, issue #425). It had a
+ * seeded row holding **zero copies**, and that row was this file's fixture for
+ * `combos::OWNED_CTE`'s `AND e.quantity > 0` — the clause that stops a row from counting as a
+ * copy. It was also a state the app deletes: `set_quantity(id, 0)` removes the row, the user
+ * ladder's v24 rung removed every stored zero, and the importer's `set` mode does the same
  * ([collection-folders.md](../../docs/reference/collection-folders.md), *Zero quantity deletes the
- * row*); the real dev database has none of them in 276 rows, which is also what lets
- * `collection_source::owns_printing` be an `EXISTS`. **`starterEntries` seeds one anyway**,
- * deliberately and from before that rule, to prove a zero renders. So this is a fixture standing
- * in a state the app deletes — and what it surfaced is that the crate's presence test was correct
- * only *via* an invariant a different module maintains. Unfenced, it drew `Not owned` on a piece
- * line inside a combo the same screen was offering under `I own every piece`. `OWNED_CTE` now
- * carries the clause explicitly, this fake carries it beside it, and the two agree without
- * either having to trust the collection module. **Nobody should loosen either end**: the seeded
- * row is the fence's test, not an argument that the fence is redundant.
+ * row*), and the real dev database had none of them in 276 rows. That invariant is what lets
+ * `collection_source::owns_printing` be an `EXISTS` at all. What the fixture cost is on the
+ * record: unfenced, it drew `Not owned` on a piece line inside a combo the same screen was
+ * offering under `I own every piece` — one card, one screen, two answers, and nothing erroring.
+ *
+ * **The clause stays and the seeded row is gone, which is not a loosening of either end.**
+ * `OWNED_CTE` carries the fence explicitly and this fake carries it beside it, so the two agree
+ * without either having to trust the collection module; what moved is where the fixture lives.
+ * `db.test.ts` builds the impossible row **locally**, on top of `starter`, and asserts the fence
+ * over it — a shared seed must not be the thing that makes a fence testable, because every story
+ * on that seed then stands in a state no shipped write can produce. The Copter's arithmetic here
+ * did not move: no row at all and a row holding nothing are the same answer to every question
+ * this file asks of the collection.
  *
  * So Boros Reckoner's `ownedTotal` is **5** — those three fillers, plus `3422-3587` and
  * `3422-3587--5` — against a `total` of 31 and a `matching` of 27 under the three-card chip, with
@@ -3774,19 +3785,20 @@ export const COMBO_CARD_NAMES: readonly string[] = [
  * standing in for is a collection row.
  *
  * **What forced the exception is the seed, not the derivation, and it is total rather than
- * awkward.** Walk the fixture against `starter`'s thirteen collection rows and **not one combo of
+ * awkward.** Walk the fixture against `starter`'s twelve collection rows and **not one combo of
  * the thirty-six comes out owned**: every pair has a half the reader has no row for, and the
- * nearest miss — `1268-2357`, Smuggler's Copter plus Ragavan — misses on the Copter's zero
- * ({@link FILLER_PARTNERS}). So `ownedTotal` would be `0` on every page of every card, the
- * `I own every piece` filter would empty every list it was pressed on, and neither the count nor
- * the filter would have a green-versus-red to tell apart: a handler ignoring `ownedOnly` outright
- * would pass. Boros Reckoner is the only card here with enough combos to page at all, and the
- * `starter` collection holds neither of the cards its two live combos are made of.
+ * nearest miss — `1268-2357`, Smuggler's Copter plus Ragavan — misses because the reader has no
+ * row for the Copter ({@link FILLER_PARTNERS}). So `ownedTotal` would be `0` on every page of
+ * every card, the `I own every piece` filter would empty every list it was pressed on, and
+ * neither the count nor the filter would have a green-versus-red to tell apart: a handler
+ * ignoring `ownedOnly` outright would pass. Boros Reckoner is the only card here with enough
+ * combos to page at all, and the `starter` collection holds neither of the cards its two live
+ * combos are made of.
  *
  * Making it true the honest way means two more rows in `starterEntries`, and **that array is
  * load-bearing well outside this file**: `collection_summary` answers `totalCards: 21`,
- * `uniqueCards: 12` and `entries: 13` over it, and `CollectionPage.stories.tsx` asserts
- * `aria-rowcount` `"14"` against it — a red build in a file this change does not own. So the two
+ * `uniqueCards: 11` and `entries: 12` over it, and `CollectionPage.stories.tsx` asserts
+ * `aria-rowcount` `"13"` against it — a red build in a file this change does not own. So the two
  * copies are declared here instead.
  *
  * **What it costs, stated so nobody has to discover it**: a story that adds a Boros Reckoner to
@@ -4042,7 +4054,9 @@ function matchCombos(db: FakeDb, cardIds: readonly string[] | undefined): DeckCo
  * * `present` is `combos::OWNED_CTE` — `SELECT DISTINCT k.oracle_id FROM collection_entries e
  *   JOIN cards k WHERE k.oracle_id IS NOT NULL AND e.quantity > 0` — which is what
  *   `I own every piece` tests. **A row at quantity 0 is not a copy**, and that fence is
- *   deliberate on both sides: see {@link FILLER_PARTNERS} for the fixture that made it necessary.
+ *   deliberate on both sides: see {@link FILLER_PARTNERS} for what made it necessary, and
+ *   `db.test.ts` for the impossible row it is asserted against — which is built there rather than
+ *   seeded, so no story stands in it.
  *
  * **Presence is still not quantity, and the fence does not touch that.** `all_owned` asks *does
  * the reader hold any copies of each named card*, never `owned >= quantity` — a combo wanting two
@@ -5774,28 +5788,6 @@ function cheapestPrinting(
 }
 
 /**
- * `wishlist::OWNED_SQL` — copies the collection holds **against this wish**.
- *
- * Every term of the wish narrows it: the printing if it names one, else every printing of
- * the oracle card; and the finish if it names one, because a foil wish is not satisfied by
- * the nonfoil in the binder. Condition is deliberately not a term — a wishlist has nowhere
- * to say "and in NM". `sum(quantity)`, so a collection row stepped to zero contributes
- * nothing: a wish is filled by copies, not by paperwork.
- */
-function ownedAgainstWish(db: FakeDb, w: FakeWish): number {
-  // `wishlist::owned_sql`. Every term of the wish narrows it.
-  const matches = (cardId: string, finish: FakeEntry["finish"]): boolean => {
-    if (w.preferredFinish !== null && finish !== w.preferredFinish) return false;
-    if (w.cardId !== null) return cardId === w.cardId;
-    if (w.oracleId === null) return false;
-    return db.cards.some((c) => c.id === cardId && c.oracleId === w.oracleId);
-  };
-  return db.collectionEntries
-    .filter((e) => matches(e.cardId, e.finish))
-    .reduce((n, e) => n + e.quantity, 0);
-}
-
-/**
  * `WishRow.elsewhere` — the **other** wishes for the same oracle card, over the whole table.
  *
  * Deliberately narrowed to neither the folder nor the page, because the answer this field is
@@ -5842,7 +5834,6 @@ function toWishRow(db: FakeDb, w: FakeWish, mp: MarketplaceId): WishRow {
     // subtotals and the optimise preview are quoted from too, so no two of the three can
     // disagree about what one copy of one printing costs this wish.
     unitPrice: wishPriceAt(db, card, w.preferredFinish, mp),
-    ownedQuantity: ownedAgainstWish(db, w),
     elsewhere: elsewhereWishes(db, w),
     notes: w.notes,
     needsReview: w.needsReview,
@@ -5872,11 +5863,6 @@ function wishlistScope(db: FakeDb, q: WishlistQuery): FakeWish[] {
     // Matched against the **stored name**, not through the card: a wish may have no card row
     // at all. `LIKE` is case-insensitive over ASCII, which is what `toLowerCase` gives.
     if (text !== null && !w.name.toLowerCase().includes(text.toLowerCase())) return false;
-    if (q.fulfilled !== undefined) {
-      const owned = ownedAgainstWish(db, w);
-      if (q.fulfilled && owned < w.quantity) return false;
-      if (!q.fulfilled && owned >= w.quantity) return false;
-    }
     if (q.needsReview === true && w.needsReview === null) return false;
     if (q.needsReview === false && w.needsReview !== null) return false;
     return true;
@@ -6780,9 +6766,13 @@ function collectionOrder(
  * an any-printing wish names no set, and a list where half the rows sort under the same blank
  * is not an order.
  *
- * Both derived figures are taken once per row, which is again where the real query takes
- * them — `owned_quantity` is a scalar subquery and `unit_price_usd` a `json_extract` over the
- * joined printing, and both are output aliases the `ORDER BY` then names.
+ * **There is no `owned` key either, and that one was taken away rather than never written.**
+ * The wishlist stopped asking the collection anything on 2026-09-08 — a reader takes a card off
+ * the list when they buy it — so there is no count for a header to sort by.
+ *
+ * The one derived figure is taken once per row, which is again where the real query takes
+ * it: `unit_price_usd` is a `json_extract` over the joined printing, and it is an output alias
+ * the `ORDER BY` then names.
  */
 function wishlistOrder(
   db: FakeDb,
@@ -6790,11 +6780,9 @@ function wishlistOrder(
   spec: SortSpec<WishlistSortKey> | undefined,
   mp: MarketplaceId,
 ): Compare<FakeWish> {
-  const ownedBy = new Map(rows.map((w) => [w.id, ownedAgainstWish(db, w)]));
   const priceBy = new Map(
     rows.map((w) => [w.id, wishPriceAt(db, wishCard(db, w), w.preferredFinish, mp)]),
   );
-  const owned = (w: FakeWish) => ownedBy.get(w.id) ?? 0;
   /** The cheapest way to satisfy the wish, per copy: the preferred finish's price if it names
    *  one, else the nonfoil price of the printing the wish is about. */
   const unitPrice = (w: FakeWish) => priceBy.get(w.id) ?? null;
@@ -6802,16 +6790,20 @@ function wishlistOrder(
     spec,
     {
       name: reversible((a, b) => cmp(a.name, b.name)),
-      // `OWNED_SQL`'s finish-aware count — the figure the Owned cell prints, and the one a
-      // foil wish does not get from the nonfoil in the binder.
-      owned: reversible((a, b) => owned(a) - owned(b)),
       quantity: reversible((a, b) => a.quantity - b.quantity),
-      // `unit_price_usd * max(0, w.quantity - owned_quantity)` — what finishing the wish
-      // still costs, which is 0 for a fulfilled wish however dear the card is, and a hole
-      // when the printing has no price for that finish.
+      // `unit_price_usd * w.quantity` — what the whole wish costs to buy, which is the only
+      // figure left once the binder is out of the arithmetic: every copy on the list is a copy
+      // the reader still intends to pay for, however many of the card they already have.
+      //
+      // **This is what separates `cost` from `price` beside it**, and the separation is now the
+      // quantity alone: a cheap card wanted eight times outranks a dear one wanted once here,
+      // and the two keys swap them back the other way.
+      //
+      // The hole is unchanged — `NULL * anything` is NULL, so a printing this marketplace does
+      // not quote at the wish's finish sorts last in **both** directions rather than as a zero.
       cost: nullsLast((w) => {
         const p = unitPrice(w);
-        return p === null ? null : p * Math.max(0, w.quantity - owned(w));
+        return p === null ? null : p * w.quantity;
       }, numeric),
       price: nullsLast(unitPrice, numeric),
       // Simplification 4, exactly as the collection's `added`.
@@ -7346,8 +7338,10 @@ export function readHandlers(db: FakeDb) {
         }
         if (!matchesCardFilters(db, c, { ...req, text: undefined }, null)) return false;
         // An **entry**, not a copy: a row emptied to zero is a row the collection keeps, and
-        // this filter counts it as owned. The wishlist's `fulfilled` is the one that counts
-        // copies, because a wish is filled by copies rather than by paperwork.
+        // this filter counts it as owned. The chip asks *is this card in my collection*, and a
+        // row that still carries its condition and its purchase price answers yes — a
+        // `sum(quantity) > 0` here would file a traded-away playset under Missing while the
+        // collection page went on listing it, which is the one place the two screens must agree.
         // {@link ownsPrinting} is `collection_source::owns_printing`, so the filter follows
         // whichever source the collection is — the same swap the badge beside it makes.
         if (req.owned !== undefined && req.owned !== ownsPrinting(db, c.id, forDeck)) {
@@ -7871,9 +7865,9 @@ export function readHandlers(db: FakeDb) {
      *
      * **The moves come back in `list_wishes`' *fallback* order — name, then id — and not in the
      * reader's chosen sort**, which is the crate's call rather than a simplification: the money
-     * sorts order by output aliases (`unit_price`, `owned_quantity`) this statement does not
-     * select, so honouring `sort` would mean selecting columns a preview has no use for. A
-     * preview is a list of changes, not a second rendering of the page.
+     * sorts order by an output alias (`unit_price`) this statement does not select, so honouring
+     * `sort` would mean selecting a column a preview has no use for. A preview is a list of
+     * changes, not a second rendering of the page.
      *
      * **No marketplace on the answer, deliberately**, and no fault of its own: this is a read,
      * so it answers through every second of a sync like every other read in this table, and every
@@ -8030,13 +8024,20 @@ export function readHandlers(db: FakeDb) {
      * the root, which is not a folder, has no tile to draw. What is at the root is what the
      * unfiltered list already shows.
      *
-     * Every figure is the wishlist's own arithmetic rather than a second spelling of it:
-     * `missing` is {@link ownedAgainstWish} subtracted exactly as {@link toWishRow} subtracts
-     * it, and the unit price is {@link finishPriceAt} over the same finish, so a folder's
-     * subtotal and the page header's total can never disagree about what one copy costs.
-     * `unpriced` counts a row only when it has copies **still to buy** and no price: a wish the
-     * binder already satisfies costs nothing whether the marketplace can quote it or not, and
-     * counting it would put a "could not price" note on a folder with nothing left to buy.
+     * **Every copy on the list is a copy still to buy, since 2026-09-08.** The subtraction that
+     * used to stand here — `max(0, quantity - owned)`, the collection asked what it holds
+     * against each wish — is gone with the rest of the wishlist's questions about the binder: a
+     * reader takes a card off the list when they acquire it, so the list's own `quantity` *is*
+     * the shortfall and a second, derived answer could only disagree with the press. `missing`
+     * is therefore `sum(quantity)`, and the whole of what it still means is "copies filed here".
+     *
+     * The unit price is {@link wishPriceAt} over the same finish {@link toWishRow} prices at, so
+     * a folder's subtotal and the page header's total can never disagree about what one copy
+     * costs. `unpriced` counts a row the marketplace cannot quote, full stop — it used to carry
+     * an `&& missing > 0` guard so that a folder holding nothing but finished wishes drew no
+     * "could not price" note, and with no wish able to be finished any more that clause could
+     * only ever be true. Dropped rather than left standing, because a condition that cannot fail
+     * reads as a rule somebody still has to think about.
      */
     wishlist_folder_summary: (args: { marketplace?: MarketplaceId }): WishlistFolderSummary[] => {
       const mp = marketplaceOf(args.marketplace);
@@ -8046,16 +8047,15 @@ export function readHandlers(db: FakeDb) {
         const row = byFolder.get(w.folderId) ?? {
           folderId: w.folderId,
           wishes: 0,
-          missing: 0,
+          copies: 0,
           cost: 0,
           unpriced: 0,
         };
-        const missing = Math.max(0, w.quantity - ownedAgainstWish(db, w));
         const unit = wishPriceAt(db, wishCard(db, w), w.preferredFinish, mp);
         row.wishes += 1;
-        row.missing += missing;
-        row.cost += unit === null ? 0 : missing * unit;
-        row.unpriced += unit === null && missing > 0 ? 1 : 0;
+        row.copies += w.quantity;
+        row.cost += unit === null ? 0 : w.quantity * unit;
+        row.unpriced += unit === null ? 1 : 0;
         byFolder.set(w.folderId, row);
       }
       return [...byFolder.values()].sort((a, b) => a.folderId - b.folderId);
@@ -8572,14 +8572,17 @@ export function readHandlers(db: FakeDb) {
      * `deck_quick_add::wishes` — every wishlist line a quick add of this printing could take
      * copies off, best first.
      *
-     * **The predicate is `wishlist::OWNED_SQL`'s own first arm with the any-printing arm
-     * dropped** — `w.card_id = ?1 AND (w.preferred_finish IS NULL OR w.preferred_finish = ?2)` —
-     * rather than a second opinion about what fills a wish. So the narrowing is on the
-     * **printing**, exactly as {@link pullCandidates} leaves an Alpha Bolt out of an M10 line and
-     * for the same trade: nothing is ever taken off a shopping list that is not the piece of
-     * cardboard the reader has just recorded. A wish for *any* printing is left standing, which
-     * is why the `card_id` test is a plain equality — `null` is not a card id, and the arm that
-     * would have to be written to include one is as absent here as it is in the SQL.
+     * **The predicate is `deck_quick_add`'s own and is written out in one line** —
+     * `w.card_id = ?1 AND (w.preferred_finish IS NULL OR w.preferred_finish = ?2)`. It used to be
+     * described as `wishlist::OWNED_SQL`'s first arm with the any-printing arm dropped, and that
+     * borrowed reading died with the constant when the wishlist stopped asking the collection
+     * anything; the line itself never changed, because it was never about what *fills* a wish. It
+     * is about which wish a press the reader has just made can take copies off, so the narrowing
+     * is on the **printing**, exactly as {@link pullCandidates} leaves an Alpha Bolt out of an
+     * M10 line and for the same trade: nothing is taken off a shopping list that is not the piece
+     * of cardboard just recorded. A wish for *any* printing is left standing, which is why the
+     * `card_id` test is a plain equality — `null` is not a card id, and the arm that would have
+     * to be written to include one is as absent here as it is in the SQL.
      *
      * **A NULL `preferred_finish` still matches**, because the list itself says a wish that names
      * no finish takes any of them; excluding it would refuse the commonest wish there is. The

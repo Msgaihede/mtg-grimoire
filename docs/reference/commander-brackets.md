@@ -1071,6 +1071,16 @@ contradicting itself about one card, with no error anywhere. **The Storybook fak
 state on the first try**, off a seed written before the zero-row rule changed. A guard that costs
 nothing on 276 rows is cheaper than an invariant two modules have to keep agreeing about.
 
+**That seed stopped carrying the row on 2026-09-08**
+([issue #425](https://github.com/Msgaihede/mtg-grimoire/issues/425)), and the clause is untouched by
+that. What was wrong with the fixture was its reach rather than its content: a shared seed is what
+every story on it stands in, so one row the app deletes put every reader of *owned* in the workbench
+into a state the window cannot produce — and the workbench is where a reader is trusted. The fence
+is still tested, from a row `db.test.ts` stands up on top of `starter` itself, with the same row at
+one copy asserted beside it so an inert fixture cannot pass as a fence working. Which is the general
+shape: **a fence worth keeping is not an argument for a fixture that breaks the invariant for
+everybody else.**
+
 ### Ownership is presence, never copies
 
 `all_owned` asks whether the reader owns **any** copies of each card the combo names, and never

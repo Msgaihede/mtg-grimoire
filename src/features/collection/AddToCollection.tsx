@@ -341,15 +341,20 @@ function AddForm({
         text: `Added ${quantity} × ${target.name} to your ${mode}.`,
         seq: (prev?.seq ?? 0) + 1,
       }));
-      // The list this write belongs to, and its summary. Which one that is depends on the
-      // destination, and only one direction crosses over: a collection add changes what
-      // every *wish* for that card counts as owned (`WishRow.ownedQuantity` is summed from
-      // `collection_entries`, finish-aware), while a wish changes nothing the collection
-      // shows. So a wishlist add leaves `["collection"]` alone rather than refetching a
-      // list and a summary that cannot have moved.
-      void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
+      // The list this write belongs to, and its summary — **and only that list, in either
+      // direction, which is a narrowing this popup carried the opposite of until now.**
+      //
+      // A collection add used to fire `["wishlist"]` as well, because every *wish* for the card
+      // counted what the collection already held (`WishRow.ownedQuantity`, summed from
+      // `collection_entries` and finish-aware), so a copy landing here moved a figure on rows
+      // nobody had touched. The wishlist asks that question of nothing now: it is the reader's
+      // own list, kept by hand, and no figure on a wish is derived from a collection row. So the
+      // two destinations are symmetrical — a wishlist add leaves `["collection"]` alone and a
+      // collection add leaves `["wishlist"]` alone, each because the other list cannot have moved.
+      void queryClient.invalidateQueries({
+        queryKey: [mode === "collection" ? "collection" : "wishlist"],
+      });
       if (mode === "collection") {
-        void queryClient.invalidateQueries({ queryKey: ["collection"] });
         // And every deck, for the collection add only. **`collection_add` does take a folder**
         // — `EntryInput.folderId` has been on the wire since the cabinet landed, and this popup
         // names one whenever a page hands it one; what was only ever true is that *this call
