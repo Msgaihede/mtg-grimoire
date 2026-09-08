@@ -95,6 +95,41 @@ sentence, and **no `<link>`** — its absence is the signal the viewer reads.
 template engine.** One `esc()` covers every value; a new field rendered without it is an XSS on a
 page strangers open.
 
+## The lapse, and why the public read stays one lookup
+
+`src/lapse.ts` is a **daily cron on this Worker**, `30 3 * * *`. It reads `entitlements` — the
+relay's table, in the D1 database the two Workers share — and writes `shares.state`: a group whose
+subject is `dead` has its **live** shares darkened to `lapsed`, and a group whose subject is
+`active` or in `grace` has its **lapsed** shares lit again.
+
+**It reads the stored `status` and does not re-run `decide`.** `relay/src/claim.ts`'s `reconcile`
+is what moves a subject through `active → grace → dead` against Patreon; a second opinion here
+would be one account with two answers to when a membership ended. `grace` **serves** — a declined
+card is a failed payment Patreon retries, not a cancellation the reader chose.
+
+**`revoked` is never touched.** The reader's own press is terminal and the cron's flip is
+reversible, which is the whole reason `state` is a state rather than a `revoked_at` stamp. The
+`AND state = ?` clause in the one `UPDATE` is what enforces it, and the candidate query ahead of
+it is deliberately **not** narrowed to the rows that can move — narrowing it would be free,
+correct, and would make that clause unreachable for a group whose only share is a tombstone, which
+is exactly the case it exists for.
+
+**A group with no entitlement row at all is not serving, and goes dark.** That is a real state
+rather than a hypothesis: `/claim` *moves* a binding rather than refusing one, so a subject who
+reconnects on another group leaves this one entitled by nothing. Fail closed, because `lapsed` is
+reversible — a group that should not have gone dark lights again on the next pass, where a group
+that should have gone dark and did not, never does.
+
+Two things follow for a deploy. `30` and not `0` because `relay/wrangler.jsonc` already owns
+`0 3 * * *` and there is nothing to be gained by having both passes write the same D1 on the same
+minute; this is the account's **second** cron trigger of the free plan's five. And because the
+verdict is written into the column, **`GET /s/{id}` reads one row and branches on `state`** — no
+join to `entitlements`, no second query — so a link that goes viral costs a single-table read on
+the budget every paying reader's sync shares.
+
+A lapsed share **keeps its R2 object**. Reclaiming that storage is a sweep for later (spec §13),
+not a retention rule invented here: a revived membership wants the snapshot back.
+
 ## Deploying
 
 ⚠️ **No agent may run `wrangler deploy`, `wrangler d1 execute --remote` or `wrangler secret put`.**

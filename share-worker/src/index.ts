@@ -1,5 +1,6 @@
 import { handleSnapshot, handleUpload } from "./blob";
 import { authorised, json, type Env } from "./env";
+import { sweepLapsed } from "./lapse";
 import { handleShell, notFound } from "./page";
 import { handleCreate, handleList, handleRevoke } from "./shares";
 
@@ -157,6 +158,26 @@ export default {
     if (id === undefined) return handleCreate(request, env, group, now);
     if (request.method === "PUT") return handleUpload(request, env, group, id, now);
     return handleRevoke(env, group, id, now);
+  },
+
+  /**
+   * The daily lapse pass (spec §6), fired by `wrangler.jsonc`'s `30 3 * * *`.
+   *
+   * **This Worker's own cron and not the relay's**, which is §5.1's blast-radius argument
+   * applied to the schedule: the relay's source and deploy stay untouched, and the free plan
+   * allows five triggers per account against the one the relay uses. The half hour is the whole
+   * reason for `30` rather than `0` — the two passes write the same D1 and there is nothing to
+   * be gained by having them do it at the same instant.
+   *
+   * Awaited rather than handed to `ctx.waitUntil`, so a pass that throws is reported against the
+   * scheduled invocation that caused it rather than against nothing — and `ctx` is deliberately
+   * absent from the signature for the reason `relay/src/index.ts` states: there is nothing to
+   * keep alive past the return, and eslint's `no-unused-vars` runs `args: "after-used"`, which
+   * forgives a leading `_controller` in front of a parameter that is used and refuses a trailing
+   * one that is not.
+   */
+  async scheduled(_controller: ScheduledController, env: Env) {
+    await sweepLapsed(env);
   },
 } satisfies ExportedHandler<Env>;
 

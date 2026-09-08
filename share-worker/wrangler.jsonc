@@ -26,6 +26,19 @@
     },
   ],
 
+  // The daily lapse pass (spec §6) — `src/lapse.ts`, which darkens a lapsed membership's links
+  // and lights them again if the membership revives.
+  //
+  // ⚠️ **`30 3` and not `0 3`, because `relay/wrangler.jsonc` already owns `0 3`.** The two
+  // Workers write the same D1 database, and there is nothing to be gained by having both passes
+  // start on the same minute. The free plan allows five cron triggers per account; this is the
+  // second.
+  //
+  // **A trigger on this Worker rather than a second job inside the relay's `reconcile`**, for
+  // spec §5.1's reason: the relay's source and deploy stay untouched, and a flip written there
+  // would break exactly that claim.
+  "triggers": { "crons": ["30 3 * * *"] },
+
   // The snapshots (spec §5.3). R2 and not D1, KV or a Durable Object: D1's free tier allows
   // 100,000 row writes a day account-wide, which one 3,000-card share would spend thirty times
   // over; KV allows 1,000, the limit `relay/wrangler.jsonc` already rejected KV for. R2 is 10 GB

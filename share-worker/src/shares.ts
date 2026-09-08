@@ -41,6 +41,15 @@ const SHARE_LIMIT = "share_limit";
 export const REVOKED = "revoked";
 
 /**
+ * The state a share serves in: what a publish writes, and the only state the daily pass can take
+ * a lapsed one back to.
+ *
+ * Exported for `lapse.ts`, which writes it, so the string has one spelling in this Worker rather
+ * than one here and one in the pass that undoes it.
+ */
+export const LIVE = "live";
+
+/**
  * The state the daily pass writes when a membership ends, and the only one it can take back.
  *
  * Exported beside `REVOKED` because the two public routes have to tell them apart: they are the
@@ -397,7 +406,7 @@ export async function handleCreate(
     JSON.stringify(meta.fields),
     null,
     null,
-    "live",
+    LIVE,
     now,
     now,
   );
