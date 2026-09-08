@@ -208,6 +208,7 @@ import type {
   SearchRequest,
   SearchSortKey,
   SetSummary,
+  ShareRow,
   SupporterStatus,
   SwapResult,
   SyncOutcome,
@@ -244,10 +245,12 @@ import { hasVariableCost } from "@/lib/mana";
 import {
   DEFAULT_MARKETPLACE,
   FEED_MARKETPLACES,
+  MARKETPLACES,
   MARKETPLACE_IDS,
   isMarketplaceId,
   type MarketplaceId,
 } from "@/lib/marketplace";
+import type { ShareSnapshot } from "@/lib/shareSnapshot";
 import type { SortSpec } from "@/lib/sort";
 
 /* ------------------------------------------------------------------ the rows ---------- */
@@ -1090,6 +1093,20 @@ export interface FakeUpdate {
  *
  * **`scannerMissing`** is the three scanner assets being absent and `scanner_status` naming their
  * paths — not a failure, the state every installation is in until a reader places the files.
+ *
+ * **`shareLapsed`** is a shared collection link that has gone dark, and it is `pairingReadError`'s
+ * split one feature over: **the one refusal in the viewer's flow a reader cannot produce by
+ * typing.** Every other way `share_open` fails is reachable from the paste box — a pasted
+ * non-link earns `NOT_A_LINK` before a request is made, a mistyped id earns `NO_SUCH_SHARE`, a
+ * publish that died between its two steps earns `SHARE_NOT_READY` — and each of those is a
+ * *shape* the handler can raise from what it was given. What is left is a link that was real and
+ * has stopped answering, which the Worker reports as **410** and this side draws as
+ * {@link SHARE_IS_GONE}. It is `share_open`'s alone and deliberately not `share_list`'s: the
+ * *publisher's* half of a membership ending is `collection_shares.state`, a stored word a seed
+ * can carry, so it needs no fault to be storyable. **One sentence for two causes on purpose** —
+ * the crate's own comment says the difference between withdrawn and darkened is in the rendered
+ * HTML rather than in a code, so an app that claimed to know which had happened would be reading
+ * prose.
  */
 export type Fault =
   | "busy"
@@ -1116,7 +1133,8 @@ export type Fault =
   | "patreonLapsed"
   | "patreonGroupEntitled"
   | "wishGone"
-  | "scannerMissing";
+  | "scannerMissing"
+  | "shareLapsed";
 
 /**
  * What the picture cache costs, as the Settings page's one button sees it.
@@ -1611,6 +1629,26 @@ export interface FakeDb {
    * still perfectly readable.
    */
   supporter: FakeSupporter;
+  /**
+   * `collection_shares` — **the cache of what this group has published**, and empty for a reader
+   * who never has, which is every world but the `shared` seed.
+   *
+   * A table like everything else here rather than a canned answer, so a story can press *Share*
+   * and watch the row arrive, press *Update* and watch its stamp move, and press *Withdraw* and
+   * watch it go grey without going away — which is what `share_revoke` does and what a canned
+   * list could show none of.
+   */
+  shares: FakeShare[];
+  /**
+   * What the **relay** is holding, which is the one thing in this fake that is not the reader's
+   * database.
+   *
+   * A share this device published lands in both this and {@link FakeDb.shares}, which is what
+   * makes the round trip storyable: publish a drawer, then paste its own link into the shared
+   * view and read the document back. A share published by somebody *else* is in here alone —
+   * that is what a link in a chat window is, and viewing needs no membership at all.
+   */
+  relayShares: FakeRelayShare[];
   fault: Fault | null;
 }
 
@@ -1712,6 +1750,97 @@ export interface FakeSupporter {
   since: number | null;
   /** `entitled || membership_ended` — see the table above. */
   groupBound: boolean;
+}
+
+/**
+ * One row of `collection_shares` — **the cache of what this group has published**, not the
+ * document itself.
+ *
+ * Every field here is a *column*, which is what makes two of them look derivable and not be. The
+ * crate's own DDL argues both: `url` is `{SHARE_BASE}/s/{id}` **as the relay built it**, stored so
+ * a link the reader has already handed out is remembered rather than recomputed and so a share
+ * list drawn with no network still carries the links it is for; and `ownerName` is what the
+ * *next* device in the group publishes under (spec §4.3), which it inherits from
+ * `GET /g/{group}/shares` and could never derive locally. `title` is stored for the same reason
+ * one step quieter — a second device has never read the folder this share names.
+ *
+ * **`fields` is the wire form**, a subset of `condition`/`lang`/`value`, because that is the
+ * column: the three-boolean {@link ShareFieldsArg} the dialog sends is turned into these names on
+ * the way in and back into booleans by {@link fieldsFromNames} on the way out. Two spellings of
+ * one vocabulary, exactly as the crate has them.
+ */
+export interface FakeShare {
+  id: string;
+  /** `collection_folders.sync_uid`, and `null` for a whole-collection share. A **uid** and never
+   *  a row id: a share outlives the device that made it. */
+  folderUid: string | null;
+  title: string;
+  ownerName: string;
+  url: string;
+  fields: string[];
+  /** `live` | `lapsed` | `revoked`. A stored word rather than a union, {@link ShareRow.state}'s
+   *  reason: it can arrive from the *relay* rather than from this build. */
+  state: string;
+  /** When **this device** last uploaded, or `null` for one that never has — which is what a
+   *  second device in the group reads before it offers *Update* rather than *Share*. */
+  published: number | null;
+  updatedAt: number;
+}
+
+/**
+ * One shared collection **the relay is holding**, as rows — the far end of a link, and the only
+ * thing in this fake that stands for somebody else's database.
+ *
+ * ⚠️ **Rows, not a `ShareSnapshot`.** Storing the document would make the one thing this format's
+ * readers have to know unrepresentable: `fields` says which *question* the publisher answered and
+ * never that every card has an answer, so an ungraded copy carries no `c`, an unquoted finish
+ * carries no `p`, and a folder whose parent is outside the share carries `parent: null`. All
+ * three of those are **derived** by {@link toShareSnapshot} out of what is here, which is what
+ * lets a story stand in front of each of them — and what stops a fixture asserting a document the
+ * publisher could not have written.
+ *
+ * **The prices are not here either.** A copy's `p` is looked up in {@link FakeDb.marketplacePrices}
+ * at this share's own marketplace, so a snapshot published at Card Kingdom and one published at
+ * Mana Pool carry different numbers and different holes — which is the state the em-dash rule
+ * exists for and the one no amount of currency arithmetic could produce.
+ */
+export interface FakeRelayShare {
+  /** The share id, and the last segment of the link that reaches it. */
+  id: string;
+  /** What the owner typed. Never derived from Patreon. */
+  owner: string;
+  /** The folder's own name, or `Collection` for a whole-collection share. */
+  title: string;
+  /** Seconds — what the viewer draws as *as of …*. */
+  updatedAt: number;
+  /** Which feed the prices were read from when this was published. */
+  marketplace: string;
+  /** The three switches, as the publisher set them. Turned into the wire's names on the way out
+   *  ({@link ShareFields}'s own `names()`), because that is what the format carries. */
+  fields: { condition: boolean; lang: boolean; value: boolean };
+  /** The published tree. A `parent` outside this list is narrowed to `null` on the way out. */
+  folders: { uid: string; name: string; parent: string | null }[];
+  /** One copy each, in `collection_entries`' own shape — which is where the three absences
+   *  come from. */
+  copies: {
+    cardId: string;
+    finish: string;
+    quantity: number;
+    /** The uid of the folder it sits in, `null` for the share's root. */
+    folderUid: string | null;
+    /** `NONE` is **ungraded** and carries no `c` at all, whatever `fields` says. */
+    condition: string;
+    lang: string;
+  }[];
+  /**
+   * What `GET /s/{id}` answers for it — `live`, `revoked`, or `pending` for a publish that
+   * posted its metadata and died before the blob landed.
+   *
+   * A **stored word** rather than a boolean, because the three are three different sentences on
+   * this side ({@link SHARE_IS_GONE}, {@link SHARE_NOT_READY}) and a link nobody minted is a
+   * fourth state that needs no row at all.
+   */
+  state: string;
 }
 
 /** One row of `marketplace_prices`: what one feed quotes for one printing in one finish. */
@@ -2351,6 +2480,10 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // because there is no `supporter_status` row to have been left behind. `entitled` is
     // derived from the first two and is therefore `false` without being asserted here.
     supporter: { refreshSecret: false, status: "dead", since: null, groupBound: false },
+    // Nothing published and nothing on the relay, which is every world but the `shared` seed's:
+    // publishing needs a membership and a press, and the `starter` reader has made neither.
+    shares: [],
+    relayShares: [],
     fault: null,
     ...init,
   };
@@ -16936,7 +17069,542 @@ export function writeHandlers(db: FakeDb) {
       db.relay.pending += 1;
       return reviewRows(db);
     },
+
+    /**
+     * `share::commands::share_list` — every share the group has published.
+     *
+     * **All five `share_*` commands are in `writeHandlers`, and two of them are reads.** That is
+     * `sync_relay_status`' call one feature over and it is the crate's own words rather than an
+     * inference: every one of the five goes through `on_the_write_connection`, so a running sync
+     * really does refuse them. Which table a handler sits in here is a fact about the *lock*,
+     * never about whether the command sounds like a read.
+     *
+     * **It reconciles first when it can and answers the cache either way**, which is the whole
+     * point of `collection_shares` being a cache: a device with no membership makes no request at
+     * all, and a device whose request fails answers what it last heard. Only the reconcile is
+     * optional — the list never is. The half spec §4.3 needs it for is `ownerName`: the *second*
+     * device in a group inherits the name the first published under rather than asking the reader
+     * to type it again, and there is no other press that could ever fill it.
+     *
+     * `title, id` is `cache::list`'s own order.
+     */
+    share_list: (): ShareRow[] => {
+      refuseIfBusy(db);
+      if (isEntitled(db) && db.pairing.group !== null) {
+        for (const row of db.shares) {
+          const held = db.relayShares.find((s) => s.id === row.id);
+          // The relay is the authority on **state** and on the owner's name; everything else on
+          // the row is this device's own. A share the relay no longer holds is left exactly as
+          // it is, because a list that dropped rows on a failed lookup would lose the links the
+          // cache exists to keep.
+          if (held === undefined) continue;
+          row.state = held.state === "revoked" ? "revoked" : row.state;
+          row.ownerName = held.owner;
+        }
+      }
+      return [...db.shares]
+        .sort((a, b) => cmp(a.title, b.title) || cmp(a.id, b.id))
+        .map(toShareRow);
+    },
+
+    /**
+     * `share::commands::share_create` — publish a folder, or the whole collection for a `null`
+     * `folderUid`.
+     *
+     * ⚠️ **`null` is the whole collection and is a destination rather than an omission.** `invoke`
+     * matches by name, so a misspelt argument is *dropped* rather than refused and the press
+     * publishes every card the reader owns instead of the one drawer they picked. Nothing in this
+     * fake can catch that — `ipc.test.ts` pins the three names against `commands.rs` itself.
+     *
+     * The order is the crate's and each step of it is a decision: the **name** first, because it
+     * is the box the reader left empty; then the folder's three refusals, because a refusal about
+     * *this drawer* is the more actionable one and the read that produces it is local and free;
+     * then the membership, because minting a grant for a press with nowhere to send it is a round
+     * trip spent on nothing.
+     *
+     * **The row is written only once the upload has landed**, which is `commit_publish`'s single
+     * `?`. There is no network here to die mid-flight, so what stands in for it is the ordering:
+     * the document reaches {@link FakeDb.relayShares} and the cache row is written in the same
+     * breath, and every refusal above happens before either.
+     */
+    share_create: (args: {
+      folderUid: string | null;
+      ownerName: string;
+      fields: ShareFieldsArg;
+    }): ShareRow => {
+      refuseIfBusy(db);
+      const ownerName = args.ownerName.trim();
+      if (ownerName === "") throw refuse(SHARE_OWNER_NAME_REQUIRED);
+      const at = stamp(db);
+      // Built before the membership is checked, so a locked or app-owned folder is refused
+      // without a token ever being minted for it — the crate's order, and the reason is that a
+      // refusal about *this drawer* is the more actionable of the two.
+      const held = buildRelayShare(db, mintShareId(db), args.folderUid, ownerName, args.fields, at);
+      refuseIfNotSharing(db);
+      return toShareRow(commitShare(db, held, args.folderUid, args.fields, at));
+    },
+
+    /**
+     * `share::commands::share_refresh` — upload a fresh snapshot for a share that already
+     * exists, **keeping its link**, so a reader who has handed the URL out never has to hand out
+     * a second one.
+     *
+     * It republishes under the name and the fields the cache row carries, which is why
+     * {@link shareFieldsFromNames} exists at all: the row stores the wire's *words* and a
+     * publish takes the three *booleans*, so a refresh is the one press that goes through that
+     * vocabulary backwards.
+     */
+    share_refresh: (args: { id: string }): ShareRow => {
+      refuseIfBusy(db);
+      const row = db.shares.find((s) => s.id === args.id);
+      if (row === undefined) throw refuse(SHARE_UNKNOWN);
+      refuseIfNotSharing(db);
+      const at = stamp(db);
+      const fields = shareFieldsFromNames(row.fields);
+      const held = buildRelayShare(db, row.id, row.folderUid, row.ownerName, fields, at);
+      return toShareRow(commitShare(db, held, row.folderUid, fields, at));
+    },
+
+    /**
+     * `share::commands::share_revoke` — withdraw a share. Terminal, and the reader's own press.
+     *
+     * **The row survives its own revocation** and goes `revoked` rather than away, so the page can
+     * say *withdrawn* instead of the folder's badge vanishing with no explanation. The next
+     * reconcile is what drops it.
+     *
+     * The refusal for an id this device does not know is `UNKNOWN_SHARE` rather than anything the
+     * relay would say, and that is the one place this handler is not a mirror: the crate reaches
+     * the relay first and takes a 404 from it, and here the relay and the cache are the same
+     * process — so the only failure this can honestly make is the local one.
+     */
+    share_revoke: (args: { id: string }): void => {
+      refuseIfBusy(db);
+      const row = db.shares.find((s) => s.id === args.id);
+      if (row === undefined) throw refuse(SHARE_UNKNOWN);
+      refuseIfNotSharing(db);
+      const held = db.relayShares.find((s) => s.id === args.id);
+      if (held !== undefined) held.state = "revoked";
+      row.state = "revoked";
+      row.updatedAt = stamp(db);
+    },
+
+    /**
+     * `share::commands::share_open` — read somebody else's binder from its link.
+     *
+     * **No membership and no token** (spec §9): viewing is open to everyone and the link is the
+     * whole of the capability, so this is the one command here that never asks
+     * {@link refuseIfNotSharing}. It is still in `writeHandlers` because the crate still takes
+     * the write connection for it — `publish::open` records a failure in `error_log` like every
+     * other network path in that module.
+     *
+     * ⚠️ **It answers a `ShareSnapshot` where `ipc.shareOpen` declares `unknown`, and that is not
+     * a mismatch.** The crate answers `serde_json::Value` on purpose — spec §10 wants a document
+     * published by a *newer* build told about rather than refused at the wrong layer — and
+     * `parseSnapshotValue` is the one thing entitled to say what it is. Typing the fake's own
+     * answer is what keeps {@link toShareSnapshot}'s three absences honest against the format;
+     * a story still goes through the same parse the app does.
+     */
+    share_open: (args: { url: string }): ShareSnapshot => {
+      refuseIfBusy(db);
+      const id = shareIdIn(args.url);
+      // Before any request, exactly as the crate refuses it: this is the shape check, and it is
+      // the refusal a reader produces by pasting the wrong thing.
+      if (id === null) throw refuse(SHARE_NOT_A_LINK);
+      // **The fault, and it sits here rather than after the lookup on purpose.** `shareLapsed`
+      // is a link that was real and has stopped answering — the Worker's 410 — so it is about
+      // the *far end* rather than about which document this world happens to hold. Below the
+      // shape check, so a mistyped paste still earns its own sentence.
+      if (db.fault === "shareLapsed") throw refuse(SHARE_IS_GONE);
+      const held = db.relayShares.find((s) => s.id === id);
+      if (held === undefined) throw refuse(NO_SUCH_SHARE);
+      if (held.state === "revoked") throw refuse(SHARE_IS_GONE);
+      // Metadata posted, blob never uploaded — a publish that died between its two steps. It
+      // resolves within seconds of the owner trying again, which is why the sentence says *yet*.
+      if (held.state === "pending") throw refuse(SHARE_NOT_READY);
+      return toShareSnapshot(db, held);
+    },
   } satisfies Record<string, CommandHandler>;
+}
+
+/* ------------------------------------------------------------------ sharing ----------- */
+
+/**
+ * Where this workbench's share Worker lives.
+ *
+ * ⚠️ **The crate's `share::publish::SHARE_BASE` is still the placeholder `<set on first deploy>`,
+ * and this is deliberately not a copy of it.** That constant refuses every request through
+ * `endpoint`, because a placeholder is not a URL — so a fake that mirrored it would answer
+ * `NOT_DEPLOYED` to every press and put the entire feature out of a story's reach. The crate's
+ * own way through that is `sync_state.share_url`, the test/dev override it keeps precisely
+ * because "until `SHARE_BASE` is real, every request here goes to a string that is not a URL";
+ * this host is that override, standing in for the day the constant is.
+ *
+ * `share.example` and not a plausible workers.dev name, for the reason the crate gives for its
+ * hole: a guessed host is what gets copied into documentation and deployed against. It is also
+ * the host the golden's own links carry.
+ */
+const SHARE_HOST = "https://share.example";
+
+/** `share::publish::OWNER_NAME_REQUIRED`, verbatim. */
+const SHARE_OWNER_NAME_REQUIRED = "That share needs a name to publish it under.";
+/** `share::publish::NOT_CONNECTED`, verbatim. */
+const SHARE_NOT_CONNECTED =
+  "Sharing a collection needs a supporter membership. Connect Patreon in Settings - any device " +
+  "in your group will do.";
+/** `share::publish::UNKNOWN_SHARE`, verbatim — Refresh and Withdraw both address an id. */
+const SHARE_UNKNOWN =
+  "That shared collection is not one this device knows about. Open the share list to load it, " +
+  "then try again.";
+/** `share::publish::NOT_A_LINK`, and the one refusal a *paste* earns before any request.
+ *  `OpenShareDialog` spells it a second time on purpose — the same paste can be refused on
+ *  either side of the boundary and a reader must not be told two different things. */
+const SHARE_NOT_A_LINK = "That is not a shared collection link.";
+/** `share::publish::SHARE_IS_GONE` — **one sentence for two causes**, because `GET /s/{id}`
+ *  answers 410 with the difference in the rendered HTML rather than in a code. */
+const SHARE_IS_GONE = "That shared collection is no longer available.";
+/** `share::publish::NO_SUCH_SHARE` — a link nobody minted, which is a mistyped or truncated
+ *  paste that still had the right shape. */
+const NO_SUCH_SHARE = "That link does not point at a shared collection.";
+/** `share::publish::SHARE_NOT_READY` — metadata posted, blob never uploaded. It resolves within
+ *  seconds of the owner trying again, which is why the sentence says *yet*. */
+const SHARE_NOT_READY = "That shared collection has not finished publishing yet.";
+/** `share::snapshot::FOLDER_NOT_FOUND` — checked **first**, so a folder that is not there never
+ *  reports as locked. */
+const SHARE_FOLDER_NOT_FOUND = "That folder is not in this collection.";
+/** `share::snapshot::FOLDER_NOT_SHAREABLE` — a deck's group or `Recently removed`. */
+const SHARE_FOLDER_NOT_SHAREABLE = "Only your own folders can be shared.";
+/** `share::snapshot::FOLDER_IS_LOCKED`. **Not {@link FOLDER_IS_LOCKED}**, which is the *delete*
+ *  refusal one cabinet over and ends "before deleting it" — two presses, two sentences. */
+const SHARE_FOLDER_IS_LOCKED = "That folder is locked. Unlock it before sharing it.";
+/** `share::snapshot::WHOLE_COLLECTION_TITLE`. */
+const WHOLE_COLLECTION_TITLE = "Collection";
+/** `share::snapshot::SNAPSHOT_VERSION`. */
+const SNAPSHOT_VERSION = 1;
+
+/** The three switches as the dialog sends them — `share::commands::ShareFieldsArg`. */
+export interface ShareFieldsArg {
+  condition: boolean;
+  lang: boolean;
+  value: boolean;
+}
+
+/**
+ * `ShareFields::names()` — the booleans as the wire's words, in the crate's own order.
+ *
+ * The order is not cosmetic: it is what `collection_shares.fields` stores and what the golden
+ * snapshot carries, so a viewer comparing arrays sees the same list this app writes.
+ */
+function shareFieldNames(fields: ShareFieldsArg): string[] {
+  const names: string[] = [];
+  if (fields.condition) names.push("condition");
+  if (fields.lang) names.push("lang");
+  if (fields.value) names.push("value");
+  return names;
+}
+
+/** `share::publish::fields_from_names` — the inverse, and the half a **refresh** goes through.
+ *  Two spellings of one vocabulary in two directions; drift here republishes a binder with a
+ *  column silently stripped. */
+function shareFieldsFromNames(names: readonly string[]): ShareFieldsArg {
+  return {
+    condition: names.includes("condition"),
+    lang: names.includes("lang"),
+    value: names.includes("value"),
+  };
+}
+
+/** One cache row as the page draws it. Every field is a column — {@link FakeShare} says why two
+ *  of them look derivable and are not. */
+function toShareRow(share: FakeShare): ShareRow {
+  return {
+    id: share.id,
+    folderUid: share.folderUid,
+    title: share.title,
+    ownerName: share.ownerName,
+    url: share.url,
+    fields: [...share.fields],
+    state: share.state,
+    published: share.published,
+    updatedAt: share.updatedAt,
+  };
+}
+
+/** `{SHARE_BASE}/s/{id}` — built here because this fake **is** the relay, which is the one place
+ *  that link is legitimately minted rather than remembered. */
+function shareUrl(id: string): string {
+  return `${SHARE_HOST}/s/${id}`;
+}
+
+/**
+ * The share id inside a pasted link, or `null` for something that is not one.
+ *
+ * `OpenShareDialog.shareLinkFrom`'s shape check, made a second time — which is exactly what the
+ * crate does and for the crate's reason: this one is what a caller that is **not** that dialog
+ * still meets. The host is deliberately not checked, because a reader who forked the relay has
+ * their own and a viewer that refused an unfamiliar host would refuse the links a fork exists to
+ * serve.
+ */
+function shareIdIn(url: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url.trim());
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return null;
+  const segments = parsed.pathname.split("/").filter((s) => s !== "");
+  if (segments.length < 2 || segments[segments.length - 2] !== "s") return null;
+  return segments[segments.length - 1];
+}
+
+/**
+ * The folders one share publishes — the named folder and everything under it, or the whole
+ * cabinet's `user` folders for a whole-collection share.
+ *
+ * `share::snapshot::read_folders`' subtree, and it drops **locked** folders the same way that
+ * query's `<LOCKED>` term does: a drawer set aside is not offered, and a sub-drawer of one is
+ * not either. The `deck` and `removed` kinds never appear at all — those are the app's own
+ * folders and are not the reader's to publish.
+ */
+function shareFolders(db: FakeDb, folderUid: string | null): FakeCollectionFolder[] {
+  const locked = (f: FakeCollectionFolder) => collectionFolderLocked(db, f.id);
+  const mine = db.collectionFolders.filter(
+    (f) => f.kind === COLLECTION_USER_KIND && !locked(f) && uidOfFolder(f) !== null,
+  );
+  if (folderUid === null) return mine;
+  const kept: FakeCollectionFolder[] = [];
+  const wanted = new Set<string>([folderUid]);
+  // Breadth first over the flat rows, which is `WITH RECURSIVE`'s own shape: a child is kept
+  // once its parent has been, so a locked drawer takes its sub-tree with it.
+  for (let pass = 0; pass < MAX_FOLDER_DEPTH; pass += 1) {
+    for (const folder of mine) {
+      const uid = uidOfFolder(folder);
+      if (uid === null || kept.includes(folder)) continue;
+      const parentUid =
+        folder.parentId === null ? null : uidOfFolder(collectionFolderById(db, folder.parentId));
+      if (wanted.has(uid) || (parentUid !== null && wanted.has(parentUid))) {
+        kept.push(folder);
+        wanted.add(uid);
+      }
+    }
+  }
+  return kept;
+}
+
+/** A folder's cross-device name, derived exactly as {@link toCollectionFolder} derives it — so a
+ *  share and the folder list can never disagree about what a drawer is called on the wire. An
+ *  explicit `null` is *not shareable yet* and is why this can answer `null`. */
+function uidOfFolder(folder: FakeCollectionFolder | undefined): string | null {
+  if (folder === undefined) return null;
+  return folder.syncUid === undefined ? `folder-uid-${folder.id}` : folder.syncUid;
+}
+
+/**
+ * The document one press publishes, built out of the reader's **own** rows.
+ *
+ * This is `share::snapshot::snapshot` reading `collection_folders` and `collection_entries`, and
+ * it stores rows rather than the finished DTO for {@link FakeRelayShare}'s reason: the three
+ * absences the format has are derived on the way *out*, so a story can stand in front of each.
+ *
+ * The three refusals come first and in the crate's order, before a single card is read — a
+ * folder about to be refused must never leave a row on the relay.
+ */
+function buildRelayShare(
+  db: FakeDb,
+  id: string,
+  folderUid: string | null,
+  ownerName: string,
+  fields: ShareFieldsArg,
+  at: number,
+): FakeRelayShare {
+  let title = WHOLE_COLLECTION_TITLE;
+  if (folderUid !== null) {
+    const named = db.collectionFolders.find((f) => uidOfFolder(f) === folderUid);
+    if (named === undefined) throw refuse(SHARE_FOLDER_NOT_FOUND);
+    if (named.kind !== COLLECTION_USER_KIND) throw refuse(SHARE_FOLDER_NOT_SHAREABLE);
+    // The **effective** lock, so a share and the folder's own badge cannot disagree about which
+    // drawers are set aside.
+    if (collectionFolderLocked(db, named.id)) throw refuse(SHARE_FOLDER_IS_LOCKED);
+    title = named.name;
+  }
+
+  const folders = shareFolders(db, folderUid);
+  const ids = new Set(folders.map((f) => f.id));
+  const published = new Set(folders.map((f) => uidOfFolder(f)));
+  return {
+    id,
+    owner: ownerName,
+    title,
+    updatedAt: at,
+    marketplace: marketplaceOf(db.marketplace),
+    fields,
+    folders: folders.map((f) => {
+      const parent = f.parentId === null ? null : uidOfFolder(collectionFolderById(db, f.parentId));
+      // A parent outside the published set is no parent here — the format's third absence, and
+      // applied against the *share* rather than against the table.
+      return {
+        uid: uidOfFolder(f) ?? "",
+        name: f.name,
+        parent: parent !== null && published.has(parent) ? parent : null,
+      };
+    }),
+    copies: db.collectionEntries
+      // The root's copies are members of a **whole-collection** share and of no other: a named
+      // folder never carries them.
+      .filter((e) =>
+        e.folderId === null ? folderUid === null : ids.has(e.folderId),
+      )
+      .map((e) => ({
+        cardId: e.cardId,
+        finish: e.finish,
+        quantity: e.quantity,
+        folderUid: e.folderId === null ? null : uidOfFolder(collectionFolderById(db, e.folderId)),
+        condition: e.condition,
+        lang: e.lang,
+      })),
+    state: "live",
+  };
+}
+
+/**
+ * One held document as the wire carries it — `share_open`'s answer, and the **whole** of where
+ * this format's three absences come from.
+ *
+ * ⚠️ Each of the three is a key that is simply **not written**, never a `null` and never a zero:
+ *
+ * 1. An **ungraded** copy carries no `c`, whatever `fields` says. `NONE` is this app's *not set*
+ *    sentinel and putting it on the wire would ship a value every reader of the format would
+ *    then have to decode.
+ * 2. A finish the marketplace does not quote carries no **`p`**. A `0` would be this app claiming
+ *    a shop offered the card for nothing, and a foil priced only in `usd` is the common case.
+ * 3. A folder whose parent is outside the share carries `parent: null` — applied when the
+ *    document was built, above.
+ *
+ * A card that has left the corpus carries no `img` either, which is the fourth thing a viewer
+ * has to survive and the one the format's own header does not count as an absence: the id is
+ * still the card's identity and the name still travels.
+ */
+function toShareSnapshot(db: FakeDb, held: FakeRelayShare): ShareSnapshot {
+  const mp = marketplaceOf(held.marketplace);
+  return {
+    v: SNAPSHOT_VERSION,
+    id: held.id,
+    title: held.title,
+    owner: held.owner,
+    updatedAt: held.updatedAt,
+    marketplace: mp,
+    // Upper case, which is what the crate writes and what the golden carries; the viewer
+    // lower-cases it again for its own formatter.
+    currency: MARKETPLACES[mp].currency.toUpperCase(),
+    fields: shareFieldNames(held.fields),
+    folders: held.folders.map((f) => ({ uid: f.uid, name: f.name, parent: f.parent })),
+    cards: held.copies.map((copy) => {
+      const card = cardById(db, copy.cardId);
+      const price = held.fields.value ? finishPriceAt(db, card, copy.finish, mp) : null;
+      return {
+        id: copy.cardId,
+        // The denormalised name, exactly as `collection_entries` would answer it for a printing
+        // that has left the corpus — the id is the identity and the name still travels.
+        n: card?.name ?? copy.cardId,
+        s: card?.setCode ?? "",
+        cn: card?.collectorNumber ?? "",
+        f: copy.finish,
+        q: copy.quantity,
+        fo: copy.folderUid,
+        ...(card?.normalUrl ? { img: card.normalUrl } : {}),
+        ...(held.fields.condition && copy.condition !== "NONE" ? { c: copy.condition } : {}),
+        ...(held.fields.lang ? { l: copy.lang } : {}),
+        ...(price !== null ? { p: price } : {}),
+      };
+    }),
+  };
+}
+
+/**
+ * The next share id this relay would mint.
+ *
+ * Counted off what it already holds, so the ids a story sees are `share1`, `share2`, … — stable
+ * across runs, which a random one would not be, and the only thing a page ever does with an id
+ * is print the link that ends in it.
+ */
+function mintShareId(db: FakeDb): string {
+  return `share${db.relayShares.length + 1}`;
+}
+
+/**
+ * Step 4 and **only** step 4: put the document on the relay and write the cache row.
+ *
+ * `commit_publish`'s half of the crate, and it is one function rather than two call sites for
+ * the reason a seed exists at all: {@link publishShare} below starts a world *after* a publish,
+ * and a story makes one by pressing the button. Written twice, the two would be free to disagree
+ * about what a published share leaves behind — which is the one thing a fixture must never do,
+ * because the workbench is where a reader is trusted.
+ */
+function commitShare(
+  db: FakeDb,
+  held: FakeRelayShare,
+  folderUid: string | null,
+  fields: ShareFieldsArg,
+  at: number,
+): FakeShare {
+  db.relayShares = [...db.relayShares.filter((s) => s.id !== held.id), held];
+  const existing = db.shares.find((s) => s.id === held.id);
+  const row: FakeShare = {
+    id: held.id,
+    folderUid,
+    title: held.title,
+    ownerName: held.owner,
+    url: shareUrl(held.id),
+    fields: shareFieldNames(fields),
+    // **`live` and never anything else from here.** A membership that has lapsed is the relay's
+    // daily pass talking and arrives on the next list; a publish the gate let through has no
+    // business writing that state itself. A **republish** keeps whatever state the row is in,
+    // for the same reason read the other way: this press did not decide it.
+    state: existing?.state ?? "live",
+    published: at,
+    updatedAt: at,
+  };
+  db.shares = [...db.shares.filter((s) => s.id !== held.id), row];
+  return row;
+}
+
+/**
+ * Publish one share out of the world's own rows — a whole press, for a seed to start *after*.
+ *
+ * Exported for `seeds.ts` alone, and for `errorLogSeed`'s reason: a seed is built before anything
+ * has been pressed, so a world in which sharing has already happened cannot be reached through
+ * the handler. Going through the same two functions the press goes through is what stops the
+ * seeded row and the pressed one drifting.
+ */
+export function publishShare(
+  db: FakeDb,
+  args: {
+    folderUid: string | null;
+    ownerName: string;
+    fields: ShareFieldsArg;
+    at: number;
+  },
+): FakeShare {
+  const held = buildRelayShare(
+    db,
+    mintShareId(db),
+    args.folderUid,
+    args.ownerName,
+    args.fields,
+    args.at,
+  );
+  return commitShare(db, held, args.folderUid, args.fields, args.at);
+}
+
+/**
+ * Whether this device may reach the share service at all.
+ *
+ * **The membership is the group's**, so this is `isEntitled` and not "holds a refresh secret" —
+ * a second device in a group whose first device connected publishes perfectly well, which is the
+ * `patreonGroupEntitled` state read from the sharing side.
+ */
+function refuseIfNotSharing(db: FakeDb): void {
+  if (!isEntitled(db)) throw refuse(SHARE_NOT_CONNECTED);
 }
 
 /* ------------------------------------------------------------------ review queue ------- */

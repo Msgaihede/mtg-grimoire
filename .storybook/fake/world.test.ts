@@ -512,6 +512,7 @@ describe("the seeded rows agree with the cards they name", () => {
     combosMissing: true,
     virtualDeck: true,
     paired: true,
+    shared: true,
   } satisfies Record<SeedName, true>) as SeedName[];
 
   it.each(names)("%s denormalises set, collector and language faithfully", (name) => {
@@ -630,6 +631,45 @@ describe("the seeded rows agree with the cards they name", () => {
       .map((e) => `${e.setCode} ${e.collectorNumber}`);
 
     expect(zeros).toEqual([]);
+  });
+
+  /**
+   * **Nothing is published in a world nobody has published in**, which is the fence that keeps
+   * `shared` a seed rather than a shape every story inherits.
+   *
+   * `collection_shares` is written by one press and that press needs a membership, so a seeded
+   * row anywhere else would be a world the app cannot produce — `starter`'s reader has connected
+   * nothing. The `relayShares` half is the same claim about the far end: a document on the relay
+   * is either one this device published or one a friend's link points at, and a world that had
+   * neither cannot be holding one.
+   */
+  it.each(ALL_SEEDS.filter((n) => n !== "shared"))("%s has published nothing", (name) => {
+    const db = seed(name);
+    expect(db.shares).toEqual([]);
+    expect(db.relayShares).toEqual([]);
+  });
+
+  /**
+   * And `shared` is both halves of sharing at once, which is what makes it one seed rather than
+   * two.
+   *
+   * The publish went through the same `publishShare` the button goes through, so what is asserted
+   * here is the *pairing* — one cache row, one document behind it, and a second document nobody
+   * on this device published. A seed carrying the row without the document would draw a share
+   * list whose own link answered nothing.
+   */
+  it("shared holds one published drawer and one link from somebody else", () => {
+    const db = seed("shared");
+
+    expect(db.shares.map((s) => s.title)).toEqual(["Binder"]);
+    expect(db.shares[0].url).toBe(`https://share.example/s/${db.shares[0].id}`);
+    // Both documents: this device's, and Giradeli's.
+    expect(db.relayShares.map((s) => s.owner).sort()).toEqual(["Ada", "Giradeli"]);
+    expect(db.relayShares.map((s) => s.id)).toContain(db.shares[0].id);
+    // Publishing needs a membership, so the seed carries one — this is the one seed that
+    // arrives connected, and `paired` deliberately does not.
+    expect(db.supporter.status).toBe("active");
+    expect(db.pairing.group).not.toBeNull();
   });
 
   /**

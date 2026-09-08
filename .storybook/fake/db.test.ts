@@ -41,7 +41,7 @@ import type {
   FakeWish,
 } from "./db";
 import { DECK_CATEGORIES } from "./fixtures";
-import { seed } from "./seeds";
+import { FRIEND_SHARE_ID, FRIEND_SHARE_URL, seed } from "./seeds";
 import { CARDS, type FakeCard } from "./cards";
 import type {
   CardCombosPage,
@@ -8720,6 +8720,22 @@ describe("the busy fault", () => {
       // Its `picks` are the pull's, above: two writes now share that key and take different
       // shapes of pick — `items`' collision one feature over, and harmless for the same reason.
       clearWishes: true,
+      // The five `share_*` commands' own arguments. None of them is read on this path —
+      // `refuseIfBusy` is the first statement in all five — but every one is named because
+      // `invoke` matches by name, which is this record's whole rule.
+      //
+      // All four are **valid**, for `root`'s reason: `share_create` refuses a blank `ownerName`
+      // and `share_open` refuses a paste that is not a link, so a handler that checked either
+      // before taking the lock would fail this loop by answering that sentence instead of BUSY —
+      // which is exactly the ordering mistake this sweep looks for. `folderUid: null` is the
+      // **whole collection** and is a destination rather than an omission; an all-false `fields`
+      // is a share of names, quantities and printings and is a legitimate answer rather than a
+      // degenerate one (spec §3). The `id` those two of them also take is already on this record,
+      // from the row writes.
+      url: "https://share.example/s/share1",
+      folderUid: null,
+      ownerName: "Ada",
+      fields: { condition: false, lang: false, value: false },
     };
     // The five above excluded, this is every command that really takes the write lock —
     // re-counted 2026-08-12 **after a merge in which three branches had each added one**,
@@ -9056,7 +9072,22 @@ describe("the busy fault", () => {
     // **This delta is arithmetic against one tree**, which every paragraph above says is the
     // thing that keeps going wrong at a merge — so re-run the sweep after the next one rather
     // than adding to whichever figure is here. 99 was taken by running it and reading `left`.
-    expect(names).toHaveLength(99);
+    //
+    // Sharing a collection then added **five**, 99 → 104 — the largest single move since the
+    // wishlist's six — and **two of them are reads**: `share_list` and `share_open`. That is
+    // the relay's own entry above happening a second time, and it is the crate's words rather
+    // than an inference: all five `share_*` commands go through
+    // `share::commands::on_the_write_connection`, which is `sync::with_write` on a blocking
+    // worker, so every one of them really does answer BUSY while a sync holds the connection.
+    // Which table a handler sits in here is a fact about the **lock** and never about whether
+    // the command sounds like a read — `share_open` fetches somebody else's document over the
+    // network and still takes the write connection, because `publish::open` records a failure in
+    // `error_log` like every other network path in that module.
+    //
+    // Nothing joined `unlocked`, and no `share_*` read went to `readHandlers`: this feature's
+    // whole command surface is in one table for one reason, which is the first time that has
+    // been true of a branch here. Re-counted by running the sweep and reading `left`.
+    expect(names).toHaveLength(104);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -12994,5 +13025,322 @@ describe("deck tokens", () => {
     expect(db.deckTokens.filter((t) => t.deckId === 1)).toEqual([]);
     // Deck 2's are untouched, which is what makes the sweep a filter and not a truncate.
     expect(db.deckTokens.filter((t) => t.deckId === 2)).toHaveLength(1);
+  });
+});
+
+/**
+ * Sharing a collection — the five commands, the document they put on the relay, and the three
+ * absences a viewer has to survive.
+ *
+ * The point of these is the **derivation**. `FakeRelayShare` stores rows and `share_open` builds
+ * the wire document out of them, exactly as `share::snapshot` builds it out of SQLite — so what
+ * is asserted below is which keys a card carries and which it does not, which is the one thing a
+ * fake that stored the finished snapshot could never be wrong about and could never be right
+ * about either.
+ */
+describe("sharing a collection", () => {
+  /** A world that may publish: the `shared` seed is `starter` connected, in a group, with one
+   *  drawer already published and a friend's link waiting. */
+  const shared = () => seed("shared");
+
+  /** A connected world with nothing published — what a reader has the moment before the press. */
+  function connected(): FakeDb {
+    const db = shared();
+    db.shares = [];
+    db.relayShares = [];
+    return db;
+  }
+
+  it("publishes a drawer, and the link ends in the id the relay minted", () => {
+    const db = connected();
+    const row = writeHandlers(db).share_create({
+      folderUid: "folder-uid-1",
+      ownerName: "  Ada  ",
+      fields: { condition: true, lang: false, value: true },
+    });
+
+    // The folder's own name is the title, and the trimmed name is what the page prints.
+    expect(row).toMatchObject({ title: "Binder", ownerName: "Ada", state: "live" });
+    expect(row.url).toBe(`https://share.example/s/${row.id}`);
+    // The wire's words, in the crate's order — `ShareFields::names()`, which is what the column
+    // stores and what a refresh reads back through.
+    expect(row.fields).toEqual(["condition", "value"]);
+    // Both halves of a publish: the cache row this device draws, and the document the relay is
+    // now holding for everybody else.
+    expect(db.shares.map((s) => s.id)).toEqual([row.id]);
+    expect(db.relayShares.map((s) => s.id)).toEqual([row.id]);
+  });
+
+  it("refuses a folder that is not there before it reports one as locked", () => {
+    const db = connected();
+    const w = writeHandlers(db);
+    const fields = { condition: false, lang: false, value: false };
+
+    // The order the crate checks in, and it is the order that matters: a folder that is not
+    // there must never report as locked.
+    expect(() => w.share_create({ folderUid: "nope", ownerName: "Ada", fields })).toThrow(
+      /not in this collection/,
+    );
+    // `Someday` is the seed's locked drawer.
+    const locked = db.collectionFolders.find((f) => f.name === "Someday")!;
+    expect(() =>
+      w.share_create({ folderUid: `folder-uid-${locked.id}`, ownerName: "Ada", fields }),
+    ).toThrow(/Unlock it before sharing it/);
+    // A deck's group is the app's own and is not the reader's to publish.
+    const group = db.collectionFolders.find((f) => f.kind === "deck")!;
+    expect(() =>
+      w.share_create({ folderUid: `folder-uid-${group.id}`, ownerName: "Ada", fields }),
+    ).toThrow(/Only your own folders can be shared/);
+    // And nothing reached the relay for any of the three.
+    expect(db.relayShares).toEqual([]);
+  });
+
+  it("refuses a blank name before it asks about the membership", () => {
+    const db = connected();
+    // Disconnected as well as blank, so the assertion is about which refusal comes **first**:
+    // the box the reader left empty is the more actionable of the two, and the crate checks it
+    // before it mints a grant for a press that has nowhere to go.
+    db.supporter = { refreshSecret: false, status: "dead", since: null, groupBound: false };
+    expect(() =>
+      writeHandlers(db).share_create({
+        folderUid: null,
+        ownerName: "   ",
+        fields: { condition: false, lang: false, value: false },
+      }),
+    ).toThrow(/needs a name to publish it under/);
+  });
+
+  it("refuses a device with no membership, in the crate's own words", () => {
+    const db = connected();
+    db.supporter = { refreshSecret: false, status: "dead", since: null, groupBound: false };
+    expect(() =>
+      writeHandlers(db).share_create({
+        folderUid: null,
+        ownerName: "Ada",
+        fields: { condition: false, lang: false, value: false },
+      }),
+    ).toThrow(/needs a supporter membership/);
+  });
+
+  /** The membership is the **group's**, so a device entitled through its group publishes — which
+   *  is the state no press can reach and the whole of the reader's item 3. */
+  it("publishes from a device that holds no secret of its own", () => {
+    const db = connected();
+    db.supporter = { refreshSecret: false, status: "active", since: SUPPORTING_SINCE, groupBound: true };
+    expect(() =>
+      writeHandlers(db).share_create({
+        folderUid: null,
+        ownerName: "Ada",
+        fields: { condition: false, lang: false, value: false },
+      }),
+    ).not.toThrow();
+  });
+
+  it("reads its own published drawer back through the link it minted", () => {
+    const db = shared();
+    const row = writeHandlers(db).share_list().find((s) => s.title === "Binder")!;
+    const snapshot = writeHandlers(db).share_open({ url: row.url });
+
+    expect(snapshot).toMatchObject({ v: 1, title: "Binder", owner: "Ada", currency: "USD" });
+    // A drawer publishes itself **and everything under it**: `Trade binder` is inside `Binder`,
+    // so both folders and both drawers' copies travel.
+    expect(snapshot.folders.map((f) => f.name)).toEqual(["Binder", "Trade binder"]);
+    expect(snapshot.cards.map((c) => `${c.s} ${c.cn}`)).toEqual([
+      "lea 161",
+      "sld 913",
+      "mp2 8",
+      "lea 232",
+    ]);
+    // …and nothing at the **root** of the collection, which is a member of a whole-collection
+    // share and of no other. `2x2 117` is `starter`'s unfiled playset and is the row that would
+    // arrive if this read the wrong `folder_id` arm.
+    expect(snapshot.cards.map((c) => c.cn)).not.toContain("117");
+    // Each copy says which drawer it is in, by uid — the id is local and would name a row no
+    // other device has ever seen.
+    expect(snapshot.cards.map((c) => c.fo)).toEqual([
+      "folder-uid-1",
+      "folder-uid-2",
+      "folder-uid-1",
+      "folder-uid-2",
+    ]);
+    // The share's own root has no parent **inside the share**, which is the format's third
+    // absence: a folder shared out of the middle of a cabinet is the root of what it publishes.
+    expect(snapshot.folders[0].parent).toBeNull();
+    expect(snapshot.folders[1].parent).toBe("folder-uid-1");
+  });
+
+  /**
+   * The format's **third** absence, and the only one that needs a share published out of the
+   * *middle* of a cabinet to be visible at all.
+   *
+   * `Trade binder` sits inside `Binder`, so its stored `parentId` names a drawer this document
+   * does not carry. A tree walk may assume every non-null `parent` resolves within `folders`; it
+   * may not assume a null one means the top of the owner's collection.
+   */
+  it("cuts an edge that points at a drawer the share does not carry", () => {
+    const db = connected();
+    const row = writeHandlers(db).share_create({
+      folderUid: "folder-uid-2",
+      ownerName: "Ada",
+      fields: { condition: false, lang: false, value: false },
+    });
+    const snapshot = writeHandlers(db).share_open({ url: row.url });
+
+    expect(snapshot.title).toBe("Trade binder");
+    expect(snapshot.folders).toEqual([
+      { uid: "folder-uid-2", name: "Trade binder", parent: null },
+    ]);
+    // And only that drawer's copies — `Binder`'s own two are the parent's, not this share's.
+    expect(snapshot.cards.map((c) => `${c.s} ${c.cn}`)).toEqual(["sld 913", "lea 232"]);
+  });
+
+  it("leaves out the column a share did not answer, and the value a copy has not got", () => {
+    const db = shared();
+    const friend = writeHandlers(db).share_open({ url: FRIEND_SHARE_URL });
+    const by = (name: string) => friend.cards.find((c) => c.n.startsWith(name))!;
+
+    // All three columns are advertised…
+    expect(friend.fields).toEqual(["condition", "lang", "value"]);
+    // …and `fields` is still not a promise that every card carries them. The **first** absence:
+    // an ungraded copy carries no `c` at all, because `NONE` is this app's *not set* sentinel
+    // rather than a grade anybody would print.
+    expect(by("Jace")).not.toHaveProperty("c");
+    expect(by("Rhystic Study").c).toBe("NM");
+    // The **second**: `sld 913` has no `usd` key at all, so the marketplace quotes nothing for
+    // it — and a `0` would be this app claiming a shop offered the card for nothing.
+    expect(by("Sol Ring")).not.toHaveProperty("p");
+    expect(by("Rhystic Study").p).toBeGreaterThan(0);
+    // The language column *was* answered, so every card carries it: `l` has no per-copy absence
+    // of its own, which is what makes the two above worth separating.
+    expect(friend.cards.every((c) => c.l !== undefined)).toBe(true);
+  });
+
+  it("writes no column at all for a share that answered no question", () => {
+    const db = connected();
+    const row = writeHandlers(db).share_create({
+      folderUid: null,
+      ownerName: "Ada",
+      // Spec §3: none ticked is a share of names, quantities and printings, and is a legitimate
+      // answer rather than a degenerate one.
+      fields: { condition: false, lang: false, value: false },
+    });
+    const snapshot = writeHandlers(db).share_open({ url: row.url });
+
+    expect(snapshot.fields).toEqual([]);
+    for (const card of snapshot.cards) {
+      expect(card).not.toHaveProperty("c");
+      expect(card).not.toHaveProperty("l");
+      expect(card).not.toHaveProperty("p");
+    }
+    // And the things a share always carries are still there, which is what stops this passing
+    // over an empty document.
+    expect(snapshot.cards.length).toBeGreaterThan(0);
+    expect(snapshot.cards.every((c) => c.id !== "" && c.q > 0)).toBe(true);
+  });
+
+  it("leaves a locked drawer out of the whole collection it is inside", () => {
+    const db = connected();
+    const row = writeHandlers(db).share_create({
+      folderUid: null,
+      ownerName: "Ada",
+      fields: { condition: false, lang: false, value: false },
+    });
+    const snapshot = writeHandlers(db).share_open({ url: row.url });
+
+    // `Someday` is set aside, and a drawer set aside is not offered — the same answer the
+    // *refusal* above gives when it is named directly, reached from the other end.
+    expect(snapshot.folders.map((f) => f.name)).not.toContain("Someday");
+    // And the app's own folders are never published, whatever is in them.
+    expect(snapshot.folders.map((f) => f.name)).not.toContain("Recently removed");
+  });
+
+  it("keeps the link across a refresh and moves the stamp", () => {
+    const db = shared();
+    const before = writeHandlers(db).share_list().find((s) => s.title === "Binder")!;
+    const after = writeHandlers(db).share_refresh({ id: before.id });
+
+    // **The link is the whole point of Refresh**: a reader who has handed the URL out must never
+    // have to hand out a second one.
+    expect(after.url).toBe(before.url);
+    expect(after.published!).toBeGreaterThan(before.published!);
+    // One document on the relay, not two.
+    expect(db.relayShares.filter((s) => s.id === before.id)).toHaveLength(1);
+  });
+
+  it("refuses a refresh for a share this device has never heard of", () => {
+    expect(() => writeHandlers(shared()).share_refresh({ id: "nope" })).toThrow(
+      /not one this device knows about/,
+    );
+  });
+
+  it("withdraws a share without dropping its row", () => {
+    const db = shared();
+    const row = writeHandlers(db).share_list().find((s) => s.title === "Binder")!;
+    writeHandlers(db).share_revoke({ id: row.id });
+
+    // The row survives its own revocation, so the page can say *withdrawn* rather than the
+    // folder's badge vanishing with no explanation.
+    expect(db.shares.map((s) => s.id)).toContain(row.id);
+    expect(writeHandlers(db).share_list().find((s) => s.id === row.id)!.state).toBe("revoked");
+    // And the link stops answering, which is the half a viewer meets.
+    expect(() => writeHandlers(db).share_open({ url: row.url })).toThrow(/no longer available/);
+  });
+
+  it("tells a paste that is not a link from a link nobody minted", () => {
+    const w = writeHandlers(shared());
+    // Refused on the **shape**, before any request — which is the refusal a reader produces by
+    // pasting the wrong thing, and the reason `OpenShareDialog` spells the same sentence.
+    expect(() => w.share_open({ url: "hello" })).toThrow(/not a shared collection link/);
+    expect(() => w.share_open({ url: "javascript:alert(1)" })).toThrow(
+      /not a shared collection link/,
+    );
+    // The right shape and nothing behind it is the other sentence.
+    expect(() => w.share_open({ url: "https://share.example/s/nope" })).toThrow(
+      /does not point at a shared collection/,
+    );
+  });
+
+  it("says a publish that never finished is not ready yet", () => {
+    const db = shared();
+    db.relayShares.find((s) => s.id === FRIEND_SHARE_ID)!.state = "pending";
+    expect(() => writeHandlers(db).share_open({ url: FRIEND_SHARE_URL })).toThrow(
+      /has not finished publishing yet/,
+    );
+  });
+
+  /**
+   * The `shareLapsed` fault — the one refusal in the viewer's flow a reader cannot produce by
+   * typing.
+   */
+  it("darkens a link that was real, and still refuses a bad paste on its own terms", () => {
+    const db = seed("shared");
+    db.fault = "shareLapsed";
+    const w = writeHandlers(db);
+
+    expect(() => w.share_open({ url: FRIEND_SHARE_URL })).toThrow(/no longer available/);
+    // Below the shape check, so the fault does not swallow the sentence a typo earns.
+    expect(() => w.share_open({ url: "not a link" })).toThrow(/not a shared collection link/);
+  });
+
+  it("answers the cache when there is no membership to reconcile with", () => {
+    const db = shared();
+    const before = writeHandlers(db).share_list();
+    db.supporter = { refreshSecret: false, status: "dead", since: null, groupBound: false };
+    // A device with no membership makes no request at all — and the list is still the list,
+    // which is the whole point of the table being a cache.
+    expect(writeHandlers(db).share_list()).toEqual(before);
+  });
+
+  it("takes the owner's name and a withdrawal from the relay on the next list", () => {
+    const db = shared();
+    const row = db.shares.find((s) => s.title === "Binder")!;
+    // What a *second* device in the group inherits (spec §4.3): the relay holds the name, and
+    // this device has only ever seen it there.
+    db.relayShares.find((s) => s.id === row.id)!.owner = "Ada Lovelace";
+    db.relayShares.find((s) => s.id === row.id)!.state = "revoked";
+
+    const listed = writeHandlers(db).share_list().find((s) => s.id === row.id)!;
+    expect(listed.ownerName).toBe("Ada Lovelace");
+    expect(listed.state).toBe("revoked");
   });
 });
