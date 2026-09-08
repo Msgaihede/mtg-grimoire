@@ -8403,9 +8403,10 @@ export const ipc = {
    * `serde_json::Value` on purpose — spec §10 wants a snapshot published by a *newer* build told
    * about rather than refused, which a strict Rust struct turns into a parse error at the wrong
    * layer, with no sentence a reader could act on. So the conclusion is drawn one module over:
-   * **hand the answer to `parseSnapshot` in `@/lib/shareSnapshot`**, which is the one reader of
-   * this format on this side and the only thing entitled to say what it is. Note that it takes
-   * the body as *text*, so the value is re-serialised on the way in.
+   * **hand the answer to `parseSnapshotValue` in `@/lib/shareSnapshot`**, which is the one reader
+   * of this format on this side and the only thing entitled to say what it is. It takes a parsed
+   * value, so nothing is re-serialised on the way in — `parseSnapshot` is its sibling, for the
+   * web viewer, which has a response body and therefore has text.
    *
    * A `ShareSnapshot` return type here would be this file claiming a shape it has not checked,
    * and a second implementation of the format's rules to keep in step with the writer and both

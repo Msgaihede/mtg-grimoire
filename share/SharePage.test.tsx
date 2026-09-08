@@ -59,7 +59,13 @@ const folders = () => screen.getByRole("list", { name: "Folders" });
 describe("SharePage", () => {
   it("names the owner and says the view is read-only", () => {
     mount(snapshot());
-    expect(screen.getByText(/Giradeli/)).toBeInTheDocument();
+    // **The computed name, not the two texts.** The heading is two `block` spans, and accessible
+    // -name computation concatenates them with nothing between — `block` is layout, which the
+    // accname spec does not read. Asserting each span separately is what let `Giradeli’sTrade
+    // binder` ship as the first thing a screen reader says on this page.
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Giradeli’s Trade binder" }),
+    ).toBeInTheDocument();
     expect(screen.getByText(/read-only/i)).toBeInTheDocument();
     // "anyone with this link" in words — spec §5.1 requires the privacy claim be worded this
     // way and never "private" or "encrypted", because the relay stores these snapshots in the
@@ -163,6 +169,34 @@ describe("SharePage", () => {
     expect(screen.queryByRole("list", { name: "Cards" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Reset all" }));
     expect(tiles()).toHaveLength(2);
+  });
+
+  /**
+   * **A cycle has no root at all**, so a walk that only descends from `null` finds none of the
+   * drawers in the loop — and every card inside them becomes unreachable with nothing on the page
+   * saying so.
+   *
+   * `parseSnapshot` guarantees nothing about the folder graph, deliberately, and this page parses
+   * a document it did not write. Not producible by the current writer; that is exactly why only a
+   * fixture can find it.
+   */
+  it("keeps every drawer when the folder graph has a cycle", async () => {
+    const user = userEvent.setup();
+    mount(
+      edited((s) => {
+        // `Trade binder` ← `Duals` ← `Trade binder`. Both parents now resolve, so neither is a root.
+        s.folders[0].parent = s.folders[1].uid;
+      }),
+    );
+
+    const rail = within(folders());
+    expect(rail.getByRole("button", { name: /Trade binder/ })).toBeInTheDocument();
+    expect(rail.getByRole("button", { name: /Duals/ })).toBeInTheDocument();
+    expect(tiles()).toHaveLength(2);
+
+    // And the cards inside the loop are still reachable through it.
+    await user.click(rail.getByRole("button", { name: /Duals/ }));
+    expect(within(wall()).getByAltText("Tundra")).toBeInTheDocument();
   });
 
   /**

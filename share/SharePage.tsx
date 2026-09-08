@@ -114,8 +114,10 @@ interface FolderNode extends ShareFolder {
  * The drawers, flattened depth-first with a recursive count on each.
  *
  * A non-null `parent` always resolves within `folders` (the format's third documented absence),
- * so the roots are exactly the `null` ones — but a cycle or a dangling edge would otherwise hang
- * the page, and `seen` is what makes that impossible rather than merely unlikely.
+ * so on a document the writer produced the roots are exactly the `null` ones. Neither half of
+ * that is *guaranteed* — `parseSnapshot` says nothing about this graph on purpose — so a dangling
+ * edge is re-rooted above and a cycle is caught twice: `seen` stops the walk running forever, and
+ * the sweep at the end is what stops a drawer inside the loop from vanishing.
  */
 function folderRail(snapshot: ShareSnapshot): FolderNode[] {
   const uids = new Set(snapshot.folders.map((f) => f.uid));
@@ -136,19 +138,30 @@ function folderRail(snapshot: ShareSnapshot): FolderNode[] {
 
   const rail: FolderNode[] = [];
   const seen = new Set<string>();
+  const visit = (folder: ShareFolder, depth: number): number => {
+    // `seen` is what makes a cycle impossible rather than merely unlikely: a drawer is drawn
+    // once and the walk stops there instead of running forever.
+    if (seen.has(folder.uid)) return 0;
+    seen.add(folder.uid);
+    const node: FolderNode = { ...folder, depth, count: 0 };
+    rail.push(node);
+    node.count = (own.get(folder.uid) ?? 0) + walk(folder.uid, depth + 1);
+    return node.count;
+  };
   const walk = (parent: string | null, depth: number): number => {
     let total = 0;
-    for (const folder of children.get(parent) ?? []) {
-      if (seen.has(folder.uid)) continue;
-      seen.add(folder.uid);
-      const node: FolderNode = { ...folder, depth, count: 0 };
-      rail.push(node);
-      node.count = (own.get(folder.uid) ?? 0) + walk(folder.uid, depth + 1);
-      total += node.count;
-    }
+    for (const folder of children.get(parent) ?? []) total += visit(folder, depth);
     return total;
   };
   walk(null, 0);
+  // **Whatever the walk did not reach is a root too, and this line is the difference between a
+  // malformed document losing a drawer and merely mis-nesting one.** A cycle has no root at all —
+  // every folder in it names a parent that *resolves* — so a walk from `null` finds none of them
+  // and the rail silently loses every drawer in the loop along with the way to the cards inside
+  // it. `parseSnapshot` promises nothing about this graph by design, and this page parses a
+  // document it did not write; a drawer that vanishes without a word is worse than one drawn at
+  // the wrong depth. Nothing the current writer can produce reaches this loop.
+  for (const folder of snapshot.folders) visit(folder, 0);
   return rail;
 }
 
@@ -281,7 +294,21 @@ export function SharePage({ snapshot }: { snapshot: ShareSnapshot }) {
               that before the title is read. */}
           {/* A `ch` cap would be measured in the h1's own inherited size and not in Cinzel's, so
               a two-word title wrapped at 1280 the first time this was drawn in a browser. */}
-          <h1 className="max-w-[34rem]">
+          {/* ⚠️ **The `aria-label` is the whole of the accessible name, and it is not
+              decoration.** The two spans below are `block`, and name computation concatenates
+              them with **nothing** between — `block` is a layout fact and the accname spec does
+              not read layout — so the first thing a screen reader announced on this page was
+              `Giradeli’sTrade binder`. That is this repo's own `Missing2` bug
+              (`css-gap-breaks-the-accessible-name`), arriving on the one page strangers open.
+              A trailing space inside the first span does **not** fix it: name computation trims
+              each element's contribution before appending it, measured here 2026-09-08. So the
+              phrase is spelled once, from the same two strings the spans draw, and
+              `SharePage.test.tsx` asserts the **computed name** rather than the two texts —
+              asserting the parts is exactly what let this ship. */}
+          <h1
+            className="max-w-[34rem]"
+            aria-label={owner === "" ? title : `${owner}’s ${title}`}
+          >
             {owner !== "" && <span className="block text-sm text-dim">{owner}’s</span>}
             <span className="block font-heading text-[1.75rem] leading-tight sm:text-[2.125rem]">
               {title}
