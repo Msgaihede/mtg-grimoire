@@ -1,3 +1,4 @@
+import { Crown } from "lucide-react";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { cn } from "@/lib/utils";
 
@@ -49,9 +50,11 @@ export const COUNT_TAG_SLANT =
  * widest along its bottom, two banners leaning opposite ways. That is what was reported: "bigger
  * towards the bottom, whereas the quantity badge is bigger towards the top".
  *
- * It is the same idea `GameChangerBanner` states for its forked tail ("the notch is cut into the
- * *right* edge, so the banner points away from the tag it emerges from"): the geometry is
- * oriented to where the mark sits, and only the orientation changes.
+ * The rule it is an instance of: **a mark's geometry is oriented to the corner it is pinned to,
+ * and only the orientation changes** — never the taper, and never which corner the bite is taken
+ * out of *relative to* that pin. The deck stack's gold ribbon stated the same rule about its own
+ * forked tail until 2026-09-08, when the game changer folded into {@link CountTag.crowned} and
+ * that ribbon went; this pair is where the rule is drawn now.
  */
 export const COUNT_TAG_SLANT_MIRRORED =
   "polygon(0 0, 100% 0, 100% 100%, calc(10px*var(--mark-scale,1)) 100%)";
@@ -81,6 +84,12 @@ const COUNT_TAG_FACE = cn(
  * pair is the drift this repo has already paid for once. It is deliberately *not* a `glyph` prop
  * on {@link CountTag}: that component's whole contract is "a number, alone, never `×N`", and a
  * second content mode inside it would be a branch through the one thing it promises.
+ *
+ * **{@link CountTag.crowned} is not that prop and does not weaken the refusal**, which is worth
+ * saying here because it is the sentence a reader will come to this block holding. A `glyph` prop
+ * is a way of making this box say something that is *not* a count; the crown is drawn beside the
+ * number rather than instead of it, so a crowned tag still says a number and nothing else. The
+ * paddings are untouched by it either way — see that prop's own doc for the arithmetic.
  *
  * `pr` is larger than `pl` because the slant eats the right edge — the two paddings are what
  * centre the content inside the visible trapezium rather than inside the box. A mark cut with
@@ -181,6 +190,12 @@ export const COUNT_TAG_BOX_MIRRORED = cn(
  * `OwnedBadge` keeps its `×` — that one is a run of inline text in a caption, where the sign is
  * what tells a count from a set number.
  *
+ * **One glyph shares the box since 2026-09-08, and it is a mark rather than content** — the crown
+ * a game changer wears, drawn *before* the number in the tag's own foreground colour. It is the
+ * `×`'s refusal answered rather than reversed: the multiplication sign is a second reading of the
+ * digits and buys nothing, where the crown is a second **fact about the card** the digits are
+ * printed on. {@link CountTag.crowned} carries the whole argument.
+ *
  * ## It is `aria-hidden`, and that is deliberate
  *
  * `FoilOverlay`'s rule, for `FoilOverlay`'s reason. Every surface that draws this draws a card as
@@ -194,6 +209,7 @@ export function CountTag({
   count,
   title,
   paint = NEUTRAL_COUNT_PAINT,
+  crowned = false,
   className,
 }: {
   count: number;
@@ -202,6 +218,66 @@ export function CountTag({
   /** What to fill it with. Absent is {@link NEUTRAL_COUNT_PAINT}, which is the honest answer for
    *  a count that is only a count. */
   paint?: { css: string; fg: string };
+  /**
+   * Whether the count is **crowned** — a game changer, said as a crown drawn before the number
+   * rather than as a second object beside this tag (2026-09-08). Defaults to `false`, which is
+   * the tag this component has always drawn.
+   *
+   * ## The crown is the tag's own foreground and emphatically not gold
+   *
+   * It is stroked in `currentColor`, so it takes {@link paint}'s `fg`: an azure label's tag draws
+   * an azure crown, an unlabelled card's grey one draws the neutral foreground. Gold belongs to
+   * the crown drawn **on its own** — `components/GameChangerMark` on every wall of `CardArt`
+   * tiles, and the crown the deck's two row views draw beside their quantity column — because an
+   * unfilled glyph laid over somebody's artwork or a line of type has nothing but its colour
+   * saying which fact it is. Here it is printed *on* a fill the reader chose, which already says
+   * something (the card's **label**), so a fixed gold would be a second colour inside one object
+   * — the one glyph in the strip ignoring what it stands on, and invisible on a Gold-labelled
+   * card.
+   *
+   * ## One fact, one glyph, and the difference is no longer of room
+   *
+   * The rule this replaces read *one fact, three drawings — a difference of room, never of
+   * meaning*: a stamped `Game Changer` ribbon where the stacked card had a spare row, two gold
+   * letters (`GC`) where a table cell had a column, and a bare crown wherever a card was drawn as
+   * a face with no room for a sentence. **One fact, never two meanings** is the half that
+   * survives. *Room* is the half that has gone, because the ribbon and the letters have gone with
+   * it: a deck draws one glyph on all four of its views now — this crown, folded into the count on
+   * the two card faces and into the row views' own quantity column — so nothing about the deck's
+   * game changer is a width argument any more. `GameChangerMark` is not a fourth drawing but that
+   * same glyph, drawn on its own wherever there is no tag to print it on.
+   *
+   * ## The 14px it costs, and where each pixel goes
+   *
+   * An 11px crown and a 3px gap, **both scaled**: `--mark-scale` is the card's own factor
+   * (`lib/cardZoom.ts`) and the reader zooms 0.5×–2×, so a mark that held still would be a sticker
+   * on a doubled card and a smudge on a halved one — the same rule every number in
+   * {@link COUNT_TAG_FACE} obeys, and the `, 1` fallback is what any surface outside a zoomable
+   * card gets. The one scaled pixel of `mb` is optical rather than structural: `items-center`
+   * centres the glyph's *box*, and mono digits sit on a baseline above the middle of theirs, so a
+   * geometrically centred crown reads a hair low against them.
+   *
+   * **The gap rides on this flag rather than on the box, and it would be inert without it.** An
+   * uncrowned tag holds one (anonymous) flex item, so a `column-gap` there draws between nothing —
+   * and the reason not to write it unconditionally anyway is that this box is on every card of
+   * every deck, where *inert* is a claim about today's content rather than a property of the
+   * class. Off, the box is what it has always been, class for class.
+   *
+   * **It moves no padding and cannot.** {@link COUNT_TAG_BOX}'s `pl − pr = 5px` is a derivation
+   * about the *box* — the content width `c` cancels out of it — so putting 14px more between the
+   * two paddings leaves the content's centre exactly on the visible trapezium's. Nothing there
+   * needs re-deriving, and the numbers are unchanged.
+   *
+   * ## The words are the caller's, exactly as they are for the count
+   *
+   * The whole tag is `aria-hidden` (see the block above), so the crown announces nothing at all: a
+   * pointer gets {@link title} and a screen reader gets whatever names the card. **A caller
+   * passing `true` therefore owes the fact in words somewhere** — in this `title` and in the
+   * accessible name of whatever the tag is drawn inside — or the game changer is drawn for sighted
+   * readers alone. `QuantityTag` in `features/decks/CardMarks.tsx` is where that is done for the
+   * deck's two card-face views.
+   */
+  crowned?: boolean;
   /** Where the caller puts it. The corner is the surface's, never this mark's. */
   className?: string;
 }) {
@@ -211,8 +287,25 @@ export function CountTag({
       aria-hidden="true"
       {...tip(title, { describes: false })}
       style={{ backgroundColor: paint.css, color: paint.fg, clipPath: COUNT_TAG_SLANT }}
-      className={cn(COUNT_TAG_BOX, className)}
+      className={cn(COUNT_TAG_BOX, crowned && "gap-[calc(3px*var(--mark-scale,1))]", className)}
     >
+      {crowned ? (
+        <Crown
+          // `strokeWidth` above lucide's 2 default, for the reason the theory tick opposite is
+          // (`features/decks/CardMarks.tsx`): a crown at 11px is outline and no fill, so on card
+          // art it needs the weight a filled glyph gets from its body. Not the tick's 3 — that is
+          // three strokes and this is a row of spikes, which closes up if it is drawn heavier.
+          // The `mb` is the optical centring the prop's doc derives; `block` takes the glyph off
+          // the text baseline it would otherwise sit on, and `shrink-0` keeps it whole in a box
+          // whose digits can grow.
+          className={cn(
+            "mb-[calc(1px*var(--mark-scale,1))] block shrink-0",
+            "size-[calc(11px*var(--mark-scale,1))]",
+          )}
+          strokeWidth={2.75}
+          aria-hidden="true"
+        />
+      ) : null}
       {count}
     </span>
   );

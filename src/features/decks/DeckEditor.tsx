@@ -54,6 +54,7 @@ import { cn } from "@/lib/utils";
 import { newestWrite, writeFailure } from "@/lib/writes";
 import {
   DECK_CARD_VARIANT,
+  deckSpotlightProps,
   focusDeckGroup,
   keepsSelection,
   type DeckCardActions,
@@ -3423,6 +3424,32 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   );
 
   /**
+   * **The game-changer spotlight**, in two facts and one derivation.
+   *
+   * The ledger's count is a press as well as a readout (`DeckLedger`): hovering it, or the caret
+   * landing on it, fades every card in the deck that is not a game changer to a quarter, and a
+   * click latches the same state so it survives the pointer leaving. Two gestures, so two pieces
+   * of state — a latch the reader set and a hover the pointer is making — and `gcSpotlight` is
+   * the `||` of them, **derived at render and never stored**. A third `useState` synced in an
+   * effect would be the derived-state pattern this repo's lint refuses (and refuses only at
+   * `npm run verify`), and it would also make hover-while-latched a write that could turn the
+   * latch off when the pointer left.
+   *
+   * **The `gameChangers > 0` gate is the fence a latch can outlive its own control.** The chip is
+   * drawn only for a deck that has one — so it cannot be *pressed* on a deck with none — but the
+   * latch is this component's state and the count is a `useMemo` over the deck's rows: an edit
+   * that removes the last game changer takes the chip away and leaves `gcLatched` standing, which
+   * would be a whole deck stuck at a quarter with nothing on screen to press to get it back.
+   * Gating the derivation rather than clearing the flag keeps that a *read*: the flag is
+   * meaningless while there is nothing to spotlight and means what it always did the moment a
+   * game changer comes back, so a reader who steps a card to zero and undoes it finds the
+   * spotlight exactly where they left it.
+   */
+  const [gcLatched, setGcLatched] = useState(false);
+  const [gcHovered, setGcHovered] = useState(false);
+  const gcSpotlight = (gcLatched || gcHovered) && gameChangers > 0;
+
+  /**
    * Where the docked panel's adds land, and the quick add with them — **the deck row's answer**
    * (`decks.default_category_id`), read here and handed down.
    *
@@ -4043,6 +4070,14 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           marketplace={marketplace}
           formatName={spec?.displayName ?? row.formatName ?? null}
           gameChangers={gameChangers}
+          // **The latch and never `gcSpotlight`.** `aria-pressed` describes a toggle, and the
+          // pointer resting on the chip is not a press — the chip draws that state for itself
+          // with a `hover:` variant, which is also what keeps its three appearances (off,
+          // touched, latched) distinguishable. The composite is what the *deck* is drawn under,
+          // one element down.
+          spotlight={gcLatched}
+          onSpotlightToggle={() => setGcLatched((on) => !on)}
+          onSpotlightHover={setGcHovered}
           tight={tightHeader}
           // Four terms rather than five on a Virtual deck — the `Owned` figure is the one thing
           // on this line that is about a *binder* rather than about the deck. See {@link tracks}.
@@ -4490,7 +4525,18 @@ export function DeckEditor({ deckId }: { deckId: number }) {
            * below is unconditional, and all four views are drawn in one box with one rule — which
            * is also what the reader asked for, a table at its full height with no scrollbar on it.
            */}
-          <div className={cn("min-w-0 flex-1", DECK_HEIGHT_FLOOR)}>
+          <div
+            // **The game-changer spotlight is armed here, and this box is the one that may take
+            // it.** `deckSpotlightProps` stamps an attribute the stylesheet reads as *fade every
+            // `deck-gc-dimmed` under me*, so what it must not contain is any card that is not in
+            // the deck. This box holds the four views and nothing else — the docked search
+            // column is its **sibling** inside the desk row above, so its tiles (cards the reader
+            // is shopping for, most of which are not game changers of anything) are outside the
+            // attribute by construction. The desk row would have been the wrong ancestor for
+            // exactly that reason, and the editor's own root worse again.
+            {...deckSpotlightProps(gcSpotlight)}
+            className={cn("min-w-0 flex-1", DECK_HEIGHT_FLOOR)}
+          >
             {/* Neither `columnHeight` nor a measured height reaches a view any more. `StackView`
                 packs nothing — every pile is a flex item that wraps on width — and `TextView`
                 still packs, to a fixed readable target rather than to the desk, which is as tall

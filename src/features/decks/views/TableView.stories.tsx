@@ -128,9 +128,12 @@ export const OnAVirtualDeck: Story = {
  * words as well.
  *
  * A row is not an `aria-label`-ed button, so a cell's text is really read: this view draws
- * `TheoryMatchBadge` beside the name **and** an `sr-only` twin, exactly as it already does for
- * the `GC` badge. The other three views fold the same word into `deckCardName` instead, because
- * a label replaces everything inside the control it names. `CardMarks.tsx` has the rule.
+ * `TheoryMatchBadge` beside the name **and** an `sr-only` twin — the same pairing it makes for
+ * the game changer, which since 2026-09-08 is a gold crown in the **quantity** cell with the
+ * words beside it there. (It was the gold `GC` badge in this column until then, and the badge is
+ * deleted; only the pairing survived it.) The other three views fold the same word into
+ * `deckCardName` instead, because a label replaces everything inside the control it names.
+ * `CardMarks.tsx` has the rule.
  *
  * **Since 2026-09-08 every row carries a badge**: four are the plan and the other six wear the
  * red X, which says the plan does not ask for that card at all. The twin follows it — a glyph

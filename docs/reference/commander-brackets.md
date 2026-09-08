@@ -190,6 +190,25 @@ that failed — so each reader of it below says what the estimate does then.
 2026 additions arrived without a code change. `gameChanger` is `boolean | null` and a `null` — an
 orphaned row that knows nothing about itself — is counted in **neither** direction.
 
+**It is the one bracket signal a reader can see on a card, and since 2026-09-08 it is one glyph
+everywhere** — a crown. The deck's two card-face views print it inside the quantity tag, the two
+row views draw it in gold in the quantity column, and every wall of card tiles draws it bare and
+gold in `FoilOverlay`'s corner chip; `GameChangerBanner`'s ribbon and `GameChangerBadge`'s gold
+`GC` are deleted. The drawing rules and the measurement that forced the change are in
+[frontend-design.md](frontend-design.md). Two consequences for this document. **The other three
+signals still have no per-card mark and are not owed one** — mass land denial, extra turns and a
+combo are findings about text or about an *interaction*, and the panel's `What this read` is where
+they are named. And **the deck header's `N game changers` chip is a control now**: hovering or
+latching it fades every card that is not a game changer to 25 %, which is the one place this
+column is asked *where* rather than *how many*.
+**It drops a switched-off pile exactly as `estimateBracket` does** (`gameChanger === true &&
+categoryActive`), so the two cannot disagree about which cards are in the conversation — but they
+count different things and are free to print different numbers. The chip sums **copies**; the
+estimate dedupes by **name** (`seen`, so a card filed in two piles is one Game Changer against the
+1–3 / ≥ 4 thresholds, which is what the bracket rules mean). In a singleton Commander deck with no
+card in two piles those are the same number, which is every deck the bracket applies to and most
+of the rest.
+
 ### Mass land denial — an oracle-text grep, read one sentence at a time
 
 `isMassLandDenial` reads every face's text, lowercased, split into rough sentences, and asks for
