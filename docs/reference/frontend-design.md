@@ -1422,6 +1422,59 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   shell and was reported against one of them, and **jsdom can see none of it** — no layout engine,
   every box 0px — so the suite pins the two classes and the numbers come from a browser.
 
+  **A clamped panel is not yet a floating one, and 5vh of glass is what makes it one**
+  (2026-09-08). Once the clamp above worked, a dialog whose body outgrows the window drew to
+  `max-h-full` — the scrim's padded box, which was a flat 24px (`sm:p-6`). So the panel stopped
+  **24px** short of the window's top edge, hard against the title bar, and read as a page rather
+  than as a panel over the app. It was reported against `AllPrintingsDialog`, whose body is a
+  wall — 865 printings of Forest is not an edge case, and the ceiling binds on most of the presses
+  that reach it — and it was fixed there first, in that host's own `size` string, on the same day.
+  That fix lasted two days and was one dialog too narrow: Categories on a long deck, History, Pull
+  from collection and Import all reach the same wall, so the rule moved to the shell.
+
+  **It is the ceiling stated as an inset, which is this scrim's existing rule rather than a second
+  one.** The scrim is `p-0 sm:px-6 sm:py-[max(1.5rem,5vh)]`: 24px across as before, and
+  `max(1.5rem,5vh)` down. The panel's `max-h-full` did not change and did not need to — what moved
+  is the box it is a percentage *of*, and `max(1.5rem,5vh)` a side leaves it
+  `min(100% − 3rem, 90vh)` of the window. **The `max()` floor is load-bearing rather than
+  decoration**: below 480px tall, 5vh is the *smaller* inset, and a bare `5vh` would draw the panel
+  **351px at y 19.5** on a phone in landscape at 844×390 — 4.5px inside the 24px the scrim keeps
+  across, on the one class of window that still has an inset at all. Below `sm` there is no ceiling
+  at all, by the same `p-0` that takes the frame off: a phone's dialog fills the glass, and 5vh of
+  scrim over a 358px-wide panel is the inset that fold exists to delete, spelled on the other axis.
+
+  **Doing it as a `max-h` on the panel instead would have silently outranked the card modal.**
+  `CardDetailModal`'s `PANEL_SIZE` carries `min-[640px]:max-h-[min(825px,80vh)]`, and Tailwind
+  emits named variants (`sm:`) as a **later** group than arbitrary `min-[…]` ones — so a
+  `sm:max-h-…` on the shell's panel would win at every width ≥640 and replace that host's own
+  ceiling with the shell's. That is the mixed-families trap `PANEL_SIZE`'s own doc comment was
+  written to record, met from the other end. As an inset it does not arise: the card modal's cap
+  is tighter than 90vh at every window, so it still binds and its numbers are unmoved.
+
+  Measured 2026-09-08 in headless Chrome over the built `dist/assets/index-*.css`, with the scrim
+  and panel class strings pasted verbatim from `Dialog.tsx` and a 4000px spacer in the body
+  standing in for a wall taller than any window. The before column is the same frame with
+  `padding-block: 1.5rem` forced inline — the fix and the fault in one pass. The first four rows
+  reproduce the host-level fix's own table to the tenth of a pixel, which is the check that the
+  inset and the `max-h` say the same thing where both applied.
+
+  | Window | Before: top, height | After: top, height |
+  | --- | --- | --- |
+  | 2560×1440 | 24, 1392 | **72, 1296** |
+  | 1998×1088 — the reporter's own | 24, 1040 | **54.4, 979.2** |
+  | 1280×800 | 24, 752 | **40, 720** |
+  | 1024×700 — the window floor | 24, 652 | **35, 630** |
+  | 844×390 — a phone in landscape | 24, 342 | **24, 342** |
+  | 500×844 — below the 640 fold | 0, 844 | **0, 844** |
+
+  The fifth row is the `max()` floor doing its work and the sixth is the fold: full bleed, and the
+  panel *is* the window. At 1280×800 the body scrolled its own 4040px inside a 645px box, so the
+  clamp is a real ceiling rather than a number in a stylesheet. The old host-level
+  `max-h-[min(100%,90vh)]` came off `AllPrintingsDialog` in the same commit, and removing it was
+  not merely tidying: `cn`'s `tailwind-merge` deletes the shell's `max-h-full` the moment a host
+  names a `max-h-…`, so left in place it would have capped that one dialog at **759.6px at y 42.2**
+  on the phone row while every other dialog filled the glass.
+
   **A dialog's tallest block opens shut when it is not what the reader came for** (2026-08-18),
   which is `DeckSearchPanel`'s collapsed default one rung down. `ExportDialog`'s decklist preview
   is a disclosure starting closed: the presses that do the work are Copy and Save as…, and a
@@ -3016,7 +3069,7 @@ from twelve surfaces, and the card under most of those presses has fewer than te
 So the request is a proportion between a floor and a ceiling, and both guards are load-bearing:
 
 - **`100%` is the ceiling**, which is `w-full`'s old meaning kept as a limit rather than a
-  request. The panel never asks for more than the grid area the shell worked out — `p-4 sm:p-6`
+  request. The panel never asks for more than the grid area the shell worked out — `p-0 sm:px-6`
   off the scrim plus `FLANK_COLUMNS`' 3.5rem either side whenever a walk asks for chevrons — so
   the flanks keep their room by construction. A `calc(100vw - 10rem)` would have had to restate
   both constants and would have parted company with them the first time either moved.
@@ -3045,47 +3098,25 @@ panel **1920**, centred, wall 1852, **10** tiles across, and the flanked story's
 frame is what the before column of the table above is — the fix and the fault photographed in one
 pass rather than in two builds.
 
-### And a height, which is the only one on this shell spelled by a host
+### But no height — the ceiling this dialog reported belongs to the shell
 
-`AllPrintingsDialog` asks for `max-h-[min(100%,90vh)]` since 2026-09-08, beside the width above in
-the same `size` string. It is the **one** host on this shell that names a height, and the shell's
-own rule is not weakened by it — read the two together.
+For two days, 2026-09-08 to 2026-09-08, this host named a height beside the width above:
+`max-h-[min(100%,90vh)]`, the **one** height any host on this shell had ever spelled. It was the
+right fix aimed one dialog too narrowly. The wall this modal draws is what makes the ceiling bind
+on nearly every open — 865 printings of Forest is not an edge case — but Categories on a long
+deck, History, Pull from collection and Import all reach it too, and every one of them drew to
+24px of the window's top edge. So the rule moved into `Dialog`'s scrim as a vertical inset
+(`sm:py-[max(1.5rem,5vh)]`) and every dialog in the app floats. The argument, the mixed-variant
+trap it avoids, and the measured table are with the shell's own clamp — search this file for
+*A clamped panel is not yet a floating one*.
 
-`Dialog`'s `max-h-full` (2026-08-16, and the section on it further up) settled three hand-rolled
-percentages, and its argument still holds for every host it was written about: a form or a list is
-shorter than the window most of the time, so the clamp never binds, and a percentage would only
-have moved a gap nobody sees — a gap that grows with the window at that. This body is a **wall**,
-and it is the only one. 865 printings of Forest is not an edge case; the ceiling binds on every
-open of a card with more printings than a screen holds, which is most of the presses that reach
-the modal. So the constant gap the shell's rule buys is the constant gap a reader reports: the
-panel drew to **24px** of the window's top edge — the scrim's `sm:p-6` exactly — hard against the
-title bar, and stopped reading as a panel over the app.
-
-**`min(100%,90vh)` is both rules rather than a replacement for one.** `100%` is the shell's clamp
-kept verbatim, a percentage against the grid area the scrim's `grid-rows-[minmax(0,1fr)]` bounds;
-`90vh` is the ceiling above it. They swap over at **480px** tall — below that the scrim's 24px
-inset is the smaller of the two — which the desktop's 700px `minHeight` forbids and a phone in
-landscape does not. That last case is what makes the `100%` half load-bearing rather than
-decoration, and it was measured rather than reasoned: see the bottom row.
-
-Measured 2026-09-08 in the `Card/All printings` story, its decorator's `translateZ(0)` and
-`h-[44rem]` nulled so the scrim resolves against the viewport as it does in the app, and a 4000px
-spacer in the panel standing in for a wall taller than any window. The before column is the same
-frame with `max-height: 100%` forced inline — the fix and the fault in one pass, as the width
-table above was taken.
-
-| Window | Before: top, height | After: top, height |
-| --- | --- | --- |
-| 2560×1440 | 24, 1392 | **72, 1296** |
-| 1998×1088 — the reporter's own | 24, 1040 | **54.4, 979.2** |
-| 1280×800 | 24, 752 | **40, 720** |
-| 1024×700 — the window floor | 24, 652 | **35, 630** |
-| 844×390 — a phone in landscape | 24, 342 | **24, 342** |
-
-The last row is the guard doing its work. There `90vh` is 351 and the padded area is 342, so a
-bare `max-h-[90vh]` would have drawn the panel **351px tall at y 19.5** — 4.5px into the scrim's
-own inset at each end, which is the shell's clamp quietly undone on the one class of window that
-still has an `sm:p-6`. `min(100%,90vh)` reads identically to `max-h-full` there.
+`size` here is therefore a width and nothing else again. **Re-adding a height would be wrong
+rather than redundant**, and in one direction: `cn`'s `tailwind-merge` deletes the shell's
+`max-h-full` the moment a host names a `max-h-…`, so below `sm` — where the scrim is `p-0` and
+every other dialog fills the phone's glass — this one alone would keep a 90vh cap and float on a
+358px-wide screen. Measured at 500×844: 844px tall with the shell's rule, **759.6 at y 42.2** with
+the old host string forced back on. Above `sm` the two agree exactly, which is why nothing else
+about this modal moved.
 
 ### What the walk does, confirmed live
 

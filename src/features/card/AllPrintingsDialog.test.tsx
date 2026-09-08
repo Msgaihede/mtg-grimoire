@@ -392,33 +392,35 @@ describe("AllPrintingsDialog", () => {
   });
 
   /**
-   * **Both halves of the panel's ceiling, and neither is optional.**
+   * **The ceiling is the shell's, and this host takes it by naming no height at all.**
    *
-   * `Dialog`'s own class is `max-h-full`, and `tailwind-merge` *deletes* it when a host names a
-   * `max-h-…` of its own — so the string this file hands the shell is the panel's whole height
-   * rule and there is nothing behind it. `90vh` is the ceiling the reader asked for: at the
-   * window the report came from the panel drew to 24px of the top edge, hard against the title
-   * bar. `100%` is the shell's clamp carried over, and it is the one that binds on a window
-   * shorter than 480px, where 90vh is *taller* than the scrim's padded area — a phone in
-   * landscape at 844×390 draws 351px at y 19.5 without it, 4.5px into the inset at each end.
+   * This is the dialog the 90vh cap was reported against — its body is a wall, so the clamp binds
+   * on most of the presses that reach it — and for two days it carried `max-h-[min(100%,90vh)]`
+   * in its own `size`. On 2026-09-08 the rule moved to `Dialog`'s scrim as a vertical inset
+   * (`sm:py-[max(1.5rem,5vh)]`), so every dialog in the app floats and this one has nothing left
+   * to say.
+   *
+   * **So the assertion is an absence, and it is the load-bearing half.** `cn`'s `tailwind-merge`
+   * *deletes* the shell's `max-h-full` the moment a host names a `max-h-…`. Above `sm` that would
+   * be harmless — the old string and the new inset agree exactly — but below it the scrim is
+   * `p-0` and every other dialog fills the phone's glass, so a `max-h` left here would float this
+   * one alone on a 358px screen. A host height re-added without reading that is what goes red.
    *
    * **A class assertion, for `Dialog.test.tsx`'s reason and not for want of trying**: jsdom has
    * no layout engine, so every box is 0px and the whole of this is invisible to it. The numbers
-   * above were measured in a browser and are in
-   * `docs/reference/frontend-design.md`. What goes red here is either half being dropped.
+   * were measured in a browser and are in `docs/reference/frontend-design.md`.
    */
-  it("caps the panel at 90vh without giving up the shell's own clamp", async () => {
+  it("leaves the panel's height to the shell", async () => {
     cardPrintings.mockResolvedValue(page([p("a", "lea")], 862));
     renderDialog();
     open({ cardId: "card-1", oracleId: "o1", name: "Forest", deck: null });
 
     const panel = await screen.findByRole("dialog", { name: /Forest/ });
 
-    expect(panel).toHaveClass("max-h-[min(100%,90vh)]");
-    // The shell's default is gone rather than merely outranked — assert its absence, or a
-    // `cn()` that stopped merging would leave two live rules and the loser would be chosen by
-    // stylesheet order.
-    expect(panel).not.toHaveClass("max-h-full");
+    // `classList` rather than a substring test, which would pass on a `sm:max-h-full` this host
+    // has no business carrying either — and the sweep is what states the absence: the shell's
+    // own class present, and no second `max-h-` beside it at any variant.
+    expect([...panel.classList].filter((c) => c.includes("max-h-"))).toEqual(["max-h-full"]);
   });
 
   /** A capped page must say what it is a page *of*, or the wall claims to be the whole list. */

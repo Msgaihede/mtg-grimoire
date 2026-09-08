@@ -377,7 +377,7 @@ export function PullFromCollectionDialog({
       // Wider than the difference list's `w-[47.5rem]`, because a row here carries a sentence the
       // shopping list does not: a source naming a folder, a condition and up to four traits is
       // longer than any price column. Still inside the app's 1024px window floor once the scrim's
-      // `sm:p-6` is taken off both sides.
+      // `sm:px-6` is taken off both sides.
       size="w-[52rem]"
       // **One callback for both rungs, because the host is given one.** `Dialog` tells Escape and
       // the ✕ (which hand focus back to whatever opened the dialog) from a press on the scrim
