@@ -88,7 +88,17 @@ function folder(
   // `NOT NULL DEFAULT 0`, so the upgrade is invisible. The cases that lock a drawer say so
   // through the card's `locked` **prop**, which is the *effective* answer the page computes over
   // the whole cabinet — this flag is the folder's own and the card never reads it.
-  return { parentId: null, kind: "user", deckId: null, sortOrder: over.id, locked: false, ...over };
+  // `syncUid` is the row's cross-device name, which every creation path mints. Defaulted here
+  // because this card never reads it — a share is named by it, and that control is the page's.
+  return {
+    parentId: null,
+    kind: "user",
+    deckId: null,
+    sortOrder: over.id,
+    locked: false,
+    syncUid: `uid-${over.id}`,
+    ...over,
+  };
 }
 
 const BINDER = folder({ id: 3, name: "Trade binder" });

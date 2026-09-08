@@ -101,12 +101,33 @@ const collectionSetFolder = vi.hoisted(() => vi.fn());
 const searchCards = vi.hoisted(() => vi.fn());
 const searchOpen = vi.hoisted(() => vi.fn());
 const setSearchOpen = vi.hoisted(() => vi.fn());
+/**
+ * The Share control's own two reads, and the three writes behind its menu.
+ *
+ * **Answered on every mount rather than only by the cases that name them**, for the sidebar's
+ * reason one comment up: the control is drawn in the figures band of every render below, and an
+ * `ipc` mock is an object literal — a command it does not carry is `undefined` called as a
+ * function, which is a synchronous `TypeError` from inside a hook rather than a query this page
+ * could fail gracefully over.
+ */
+const shareList = vi.hoisted(() => vi.fn());
+const shareCreate = vi.hoisted(() => vi.fn());
+const shareRefresh = vi.hoisted(() => vi.fn());
+const shareRevoke = vi.hoisted(() => vi.fn());
+const shareOpen = vi.hoisted(() => vi.fn());
+const syncSupporterStatus = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
     searchCards,
     searchOpen,
     setSearchOpen,
+    shareList,
+    shareCreate,
+    shareRefresh,
+    shareRevoke,
+    shareOpen,
+    syncSupporterStatus,
     // The panel's filter row asks for facet counts beside the page's. Answered **cold** —
     // `ready: false`, every map empty — so nothing greys and every control keeps its name.
     facetCards: vi.fn().mockResolvedValue({
@@ -309,6 +330,10 @@ const BINDER: CollectionFolder = {
   deckId: null,
   sortOrder: 0,
   locked: false,
+  // The cross-device name, which every creation path mints and which is the only thing a share
+  // can be addressed by — a row id names a row in a database no other device has seen. Nullable
+  // in the DDL, so the sharing block near the end has a fixture for that state too.
+  syncUid: "uid-binder",
 };
 const FOILS: CollectionFolder = {
   id: 9,
@@ -318,6 +343,7 @@ const FOILS: CollectionFolder = {
   deckId: null,
   sortOrder: 0,
   locked: false,
+  syncUid: "uid-foils",
 };
 
 /** A **second** drawer at the top level, so the wall has a *level* to rearrange rather than one
@@ -331,6 +357,7 @@ const SEALED: CollectionFolder = {
   deckId: null,
   sortOrder: 1,
   locked: false,
+  syncUid: "uid-sealed",
 };
 
 /** A drawer whose parent this list does not carry — another window deleted it between the two
@@ -344,6 +371,7 @@ const ORPHAN: CollectionFolder = {
   deckId: null,
   sortOrder: 2,
   locked: false,
+  syncUid: "uid-orphan",
 };
 
 /**
@@ -367,6 +395,9 @@ const DECK_GROUP: CollectionFolder = {
   // Never anything but `false` for either of these two: `collection_folder_set_locked` calls
   // `user_folder` first, so the app's own folders refuse the write in words.
   locked: false,
+  // The app's own folders carry a uid like any other row — and are still unshareable, which is
+  // the point: `kind` is what refuses them, never the absence of a name to refuse.
+  syncUid: "uid-deck-group",
 };
 const REMOVED: CollectionFolder = {
   id: 21,
@@ -376,6 +407,7 @@ const REMOVED: CollectionFolder = {
   deckId: null,
   sortOrder: 0,
   locked: false,
+  syncUid: "uid-removed",
 };
 
 const summary = (over: Partial<CollectionSummary> = {}): CollectionSummary => ({
@@ -775,6 +807,18 @@ beforeEach(() => {
   // back to `DEFAULT_SEARCH_OPEN` — and naming the section is what makes the fixture readable.
   searchOpen.mockReset().mockResolvedValue({ collection: true });
   setSearchOpen.mockReset().mockResolvedValue(undefined);
+  // **A supporter is the default**, so the Share control is on screen for every case below and
+  // the block that is about its absence says otherwise for itself. Nothing published yet: an
+  // empty list is what a device that has never pressed Share reads back, and `share_list`
+  // answers its cache rather than refusing when there is no membership behind it.
+  shareList.mockReset().mockResolvedValue([]);
+  shareCreate.mockReset().mockResolvedValue(undefined);
+  shareRefresh.mockReset().mockResolvedValue(undefined);
+  shareRevoke.mockReset().mockResolvedValue(undefined);
+  shareOpen.mockReset().mockResolvedValue(undefined);
+  syncSupporterStatus
+    .mockReset()
+    .mockResolvedValue({ entitled: true, status: "active", since: 1_750_000_000, groupBound: true });
   useAppStore.setState({
     collectionView: "table",
     selectedCardId: null,
@@ -4479,6 +4523,7 @@ describe("locking a folder", () => {
     deckId: null,
     sortOrder: 1,
     locked: false,
+    syncUid: "uid-sleeved",
   };
 
   beforeEach(() => {
@@ -5701,5 +5746,120 @@ describe("the docked card search", () => {
     // And the *other* write did not happen: a card nobody owns has no `collection_entries` row
     // for `collection_set_folder` to address.
     expect(collectionSetFolder).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The Share control, as the page mounts it.
+ *
+ * `ShareFolderMenu.test.tsx` drives the menu, the publish form and the withdrawal; what is left
+ * for this file is the one thing only the page can answer — **which level gets a control at
+ * all** — plus the entry point that spec decision 6 left nowhere else to put.
+ */
+describe("sharing from the cabinet", () => {
+  beforeEach(() => useAppStore.setState({ collectionFlattened: false }));
+
+  const shareControl = () => screen.queryByRole("button", { name: /^Share/ });
+
+  /** The same drawer with no cross-device name — `collection_folders.sync_uid` is nullable in
+   *  the DDL, and the fence below is what that state is for. */
+  const UNNAMED: CollectionFolder = { ...BINDER, syncUid: null };
+
+  /** The root is a target: `share_create`'s `null` `folderUid` is the whole collection, and a
+   *  destination rather than an omission. */
+  it("offers Share at the root of the cabinet", async () => {
+    collectionFolderList.mockResolvedValue([BINDER]);
+    wrap(<CollectionPage />);
+    await screen.findByRole("button", { name: /^Trade binder folder/ });
+
+    expect(await screen.findByRole("button", { name: "Share your collection" })).toBeInTheDocument();
+  });
+
+  /**
+   * **The app's own two kinds get no Share control at all**, as they get no other folder write —
+   * `PinnedFolders`' rule, and `share::snapshot::FOLDER_NOT_SHAREABLE` on the far side.
+   */
+  it("offers no Share control inside a deck group or Recently removed", async () => {
+    collectionFolderList.mockResolvedValue([DECK_GROUP, REMOVED]);
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+
+    // A deck group is a `PinnedFolders` entry rather than a folder card, so it is named `deck`
+    // rather than `folder` — the pinned strip is the whole of how a reader reaches one.
+    await user.click(await screen.findByRole("button", { name: /^Mono-Red Aggro deck/ }));
+    await waitFor(() => expect(shareControl()).toBeNull());
+    // …and the way into somebody else's binder is still there, because viewing needs nothing.
+    expect(screen.getByRole("button", { name: "Open a shared collection" })).toBeInTheDocument();
+  });
+
+  /**
+   * **A drawer the reader has opened is what the control is about**, and the breadcrumb above the
+   * wall is what says which drawer that is. The level rather than a row of the wall, because the
+   * root is a target too and the root has no card to hang a control on.
+   */
+  it("offers Share in a drawer the folder list names", async () => {
+    collectionFolderList.mockResolvedValue([BINDER]);
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+
+    await screen.findByRole("button", { name: "Share your collection" });
+    await user.click(screen.getByRole("button", { name: /^Trade binder folder/ }));
+
+    expect(await screen.findByRole("button", { name: "Share Trade binder" })).toBeInTheDocument();
+  });
+
+  /**
+   * ⚠️ **The fence that keeps a missing uid from becoming the whole collection.**
+   * `share_create`'s `null` `folderUid` means *the whole collection*, so a folder whose
+   * `sync_uid` is absent quietly becoming `null` would publish every card the reader owns
+   * instead of the one binder they picked, and succeed while doing it — the failure `ipc.ts`
+   * warns about at `shareCreate` in as many words.
+   *
+   * So the control is **absent** in such a drawer rather than wrong, and this case is what would
+   * go red the day somebody reaches for the tidier `?? null`. The column is nullable in the DDL,
+   * so this is a state and not only a transitional one.
+   */
+  it("offers no Share control in a drawer with no sync uid", async () => {
+    collectionFolderList.mockResolvedValue([UNNAMED]);
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+
+    // At the root it is there, so the absence below is about the drawer rather than about the
+    // membership or the read.
+    await screen.findByRole("button", { name: "Share your collection" });
+    await user.click(screen.getByRole("button", { name: /^Trade binder folder/ }));
+
+    await waitFor(() => expect(shareControl()).toBeNull());
+  });
+
+  /** Hidden and not greyed, for a reader who has connected nothing (spec §9). The Settings sync
+   *  panel is where the connection story lives, and a control that only ever produced a sentence
+   *  saying so would teach nothing its absence does not. */
+  it("hides the Share control when nothing is connected", async () => {
+    syncSupporterStatus.mockResolvedValue({
+      entitled: false,
+      status: "dead",
+      since: null,
+      groupBound: false,
+    });
+    wrap(<CollectionPage />);
+
+    await screen.findByRole("button", { name: "Open a shared collection" });
+    expect(shareControl()).toBeNull();
+  });
+
+  /**
+   * **The entry point the plan had nowhere to put.** Decision 6 hides the *Shared* rail row until
+   * a reader has opened a share, and this page's other half is for *publishing* — so without this
+   * button the in-app viewer is reachable by `Ctrl+6` and discoverable by nothing. Beside the
+   * Share control, because both halves are one idea read in two directions.
+   */
+  it("opens somebody else's share from the collection page", async () => {
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+
+    await user.click(await screen.findByRole("button", { name: "Open a shared collection" }));
+
+    expect(await screen.findByLabelText("Link to a shared collection")).toBeInTheDocument();
   });
 });

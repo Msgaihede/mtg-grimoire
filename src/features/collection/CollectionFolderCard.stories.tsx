@@ -35,7 +35,17 @@ function folder(
   // existed. A drawer set aside says so through the card's `locked` **prop** — the *effective*
   // answer the page computes over the whole cabinet — rather than through this flag, which is the
   // folder's own and which the card deliberately never reads.
-  return { parentId: null, kind: "user", deckId: null, sortOrder: over.id, locked: false, ...over };
+  // `syncUid` is the row's cross-device name, which every creation path mints. Defaulted here
+  // because this card never reads it — a share is named by it, and that control is the page's.
+  return {
+    parentId: null,
+    kind: "user",
+    deckId: null,
+    sortOrder: over.id,
+    locked: false,
+    syncUid: `uid-${over.id}`,
+    ...over,
+  };
 }
 
 /** The drawer every story below draws, and the one a copy is dropped into. */
