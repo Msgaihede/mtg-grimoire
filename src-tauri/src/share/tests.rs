@@ -89,13 +89,26 @@ fn card(conn: &rusqlite::Connection, id: &str, name: &str) {
     .unwrap();
 }
 
+/// **Every private column carries a distinctive value, and that is what makes
+/// [`no_private_field_can_reach_the_wire`] a real sweep.** A column left unset is a column that
+/// test fences by *key name* only — and a key name is the half a `#[serde(rename)]` or a short
+/// key like `p` would not carry anyway. So the four text columns spec §3 names, the two the
+/// grain adds and the free-text `tags` all hold a `private-…` marker here, and the string sweep
+/// looks for each. The four booleans (`altered`, `signed`, `proxy`, `misprint`) are set to 1 so
+/// the columns are non-default, but a `1` is not distinctive and only their key names are swept.
 fn entry(conn: &rusqlite::Connection, card_id: &str, folder: Option<i64>, qty: i64) {
     conn.execute(
         "INSERT INTO collection_entries
            (card_id, set_code, collector_number, lang, finish, condition, quantity,
-            tradelist_quantity, purchase_price, notes, tags, folder_id, created_at, updated_at)
-         VALUES (?1, 'tsp', '157', 'en', 'nonfoil', 'NM', ?2, 0, 9.99, 'bought at a GP', '[]',
-                 ?3, 0, 0)",
+            tradelist_quantity, purchase_price, purchase_currency, acquired_at,
+            acquisition_source, notes, tags, serial_number, grading,
+            altered, signed, proxy, misprint, folder_id, created_at, updated_at)
+         VALUES (?1, 'tsp', '157', 'en', 'nonfoil', 'NM', ?2, 7, 9.99,
+                 'private-currency-DKK', 'private-acquired-2019-08-02',
+                 'private-source GP Copenhagen', 'private-notes bought at a GP',
+                 '[\"private-tag\"]', 'private-serial-042/500',
+                 '{\"company\":\"private-grader\",\"grade\":10}',
+                 1, 1, 1, 1, ?3, 0, 0)",
         params![card_id, qty, folder],
     )
     .unwrap();
@@ -201,6 +214,32 @@ fn publishing_a_locked_folder_is_refused_by_name() {
     assert_eq!(err, FOLDER_IS_LOCKED);
 }
 
+/// The **inherited** lock, which is the half that fails quietly if `effectively_locked` ever
+/// becomes a plain `locked <> 0`. `SUBTREE` would drop the folder on its own, `ids` would come
+/// back empty, and the caller would get a perfectly valid **empty snapshot** — spec §4's named
+/// failure, "uploading an empty snapshot that reads as *this person owns nothing*". The refusal
+/// is what must survive, not merely the exclusion.
+#[test]
+fn an_unlocked_folder_under_a_locked_one_is_refused_rather_than_published_empty() {
+    let conn = test_db();
+    let (locked, _) = folder(&conn, None, "Display case", true);
+    let (child, child_uid) = folder(&conn, Some(locked), "Top shelf", false);
+    card(&conn, "c1", "Black Lotus");
+    entry(&conn, "c1", Some(child), 1);
+
+    let err = snapshot(
+        &conn,
+        "x",
+        "Giradeli",
+        Some(&child_uid),
+        all(false),
+        crate::sorting::Marketplace::Tcgplayer,
+        0,
+    )
+    .unwrap_err();
+    assert_eq!(err, FOLDER_IS_LOCKED);
+}
+
 /// The two refusals beside [`FOLDER_IS_LOCKED`], and the **order** between them: a folder that
 /// is not there may never report as locked, because "unlock it" is advice a reader cannot act
 /// on for a drawer that does not exist.
@@ -275,6 +314,37 @@ fn a_whole_collection_share_carries_the_root_and_drops_locked_drawers() {
     let mut names: Vec<&str> = s.cards.iter().map(|c| c.n.as_str()).collect();
     names.sort_unstable();
     assert_eq!(names, vec!["Fury Sliver", "Tundra"]);
+    // Spec §3's title for this share, spelled here rather than read back from
+    // `WHOLE_COLLECTION_TITLE` — an assertion that reads its own constant proves only that the
+    // constant exists. The constant is checked against the same literal below.
+    assert_eq!(s.title, "Collection");
+    assert_eq!(WHOLE_COLLECTION_TITLE, "Collection");
+}
+
+/// **The negative half of the root arm, and the highest-consequence silent failure this module
+/// has.** `read_cards` adds `e.folder_id IS NULL OR` only for a whole-collection share; without
+/// that condition a share of one small binder carries every unfiled card the reader owns, with
+/// no error and nothing on screen to show it. Every other fixture here either files at the root
+/// *and* shares the whole collection, or shares a named folder and files nothing at the root —
+/// so deleting the `if` leaves them all green. This one is the fence.
+#[test]
+fn a_named_folder_share_leaves_the_root_where_it_is() {
+    let conn = test_db();
+    let (binder, uid) = folder(&conn, None, "Binder", false);
+    card(&conn, "c1", "Tundra");
+    card(&conn, "c2", "Black Lotus");
+    entry(&conn, "c1", Some(binder), 1);
+    // Unfiled — the root of the collection, which this share does not include.
+    entry(&conn, "c2", None, 1);
+
+    let s = snap(&conn, Some(&uid));
+
+    let names: Vec<&str> = s.cards.iter().map(|c| c.n.as_str()).collect();
+    assert_eq!(
+        names,
+        vec!["Tundra"],
+        "a named folder's share must not carry the reader's unfiled cards: {names:?}"
+    );
 }
 
 /// The shared folder is the **root of its own tree**, whatever it is nested under at home.
@@ -387,25 +457,76 @@ fn the_front_face_picture_travels_with_the_card() {
     assert_eq!(s.cards[0].img.as_deref(), Some(display_uri("c1").as_str()));
 }
 
+/// The `LEFT JOIN`'s whole reason: a printing that has left the corpus is still a card the
+/// reader owns, so the row falls back to `e.card_id` rather than being dropped. Nothing else
+/// here seeds an entry with no `cards` row, and an inner join would pass every other test in
+/// this file while silently shortening a real reader's binder.
+#[test]
+fn a_copy_whose_printing_left_the_corpus_travels_under_its_id() {
+    let conn = test_db();
+    const GONE: &str = "0000579f-7b35-4ed3-b44c-db2a538066fe";
+    // No `card()` call — `collection_entries.card_id` is a soft reference with no foreign key,
+    // which is exactly what makes this state reachable in the field.
+    entry(&conn, GONE, None, 2);
+
+    let s = snap(&conn, None);
+
+    assert_eq!(
+        s.cards.len(),
+        1,
+        "an orphan is still a card the reader owns"
+    );
+    assert_eq!(s.cards[0].id, GONE);
+    assert_eq!(s.cards[0].n, GONE, "the id stands in for the name");
+    assert_eq!(s.cards[0].img, None, "and there is no picture to carry");
+    assert_eq!(s.cards[0].q, 2);
+}
+
 /// Must hold for **every** input, which is why it sweeps the serialised text rather than the
 /// struct: a field added to `ShareCard` in a year fails this without anyone remembering the rule.
+///
+/// **This is the fence the whole feature's privacy claim rests on, so it sweeps twice.** The
+/// first list is spec §3's two lists of key names — the six columns that are *absent from the
+/// format* and the eight that are absent because nothing draws them. The second is the
+/// distinctive **values** [`entry`] writes into every one of those columns that can hold a
+/// string: a key-name sweep alone passes over a field renamed on the way out, and over a short
+/// key like `p` that carries a private number under a public name.
 #[test]
 fn no_private_field_can_reach_the_wire() {
     let conn = test_db();
+    let (binder, _) = folder(&conn, None, "Binder", false);
     card(&conn, "c1", "Fury Sliver");
+    card(&conn, "c2", "Tundra");
     entry(&conn, "c1", None, 3);
+    entry(&conn, "c2", Some(binder), 1);
     let json = serde_json::to_string(&snap(&conn, None)).unwrap();
     for forbidden in [
+        // Spec §3's first list — absent from the format, never switched off in it.
         "purchase",
         "acquired",
         "acquisition",
         "notes",
         "tags",
+        // Spec §3's second list — absent because nothing in the viewer draws them.
         "needsReview",
+        "needs_review",
         "tradelist",
         "grading",
         "serial",
+        "altered",
+        "signed",
+        "proxy",
+        "misprint",
+        // The values themselves, one per column `entry` can write a string into.
+        "private-currency-DKK",
+        "private-acquired-2019-08-02",
+        "private-source GP Copenhagen",
+        "private-notes bought at a GP",
+        "private-tag",
+        "private-serial-042/500",
+        "private-grader",
         "bought at a GP",
+        "9.99",
     ] {
         assert!(
             !json.contains(forbidden),
