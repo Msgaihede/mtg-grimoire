@@ -1,13 +1,21 @@
 /**
  * The card modal's right-hand options rail — spec §7's list, and the grimoire figures under it.
  *
- * **It is a list rather than a fixed set of slots, and that is the whole design.** Four entries
- * are every surface's (`Legality`, `Oracle tags`, `Card text`, `Open on Scryfall`) and whatever
- * else a surface contributes arrives as {@link RailAction}s — so the deck editor's six and the
- * search wall's four are one component drawing a longer or a shorter list, rather than a
- * component with four named slots plus a hole for the extras. A rail built the other way makes
- * "how many options does this surface have" a fact about *this file*, which is the one place it
- * cannot be known.
+ * **It is a list rather than a fixed set of slots, and that is the whole design.** Six entries
+ * are every surface's (`Legality`, `Oracle tags`, `Card text`, `Open on Scryfall`, `Open on
+ * EDHREC`, `Open on <marketplace>`) and whatever else a surface contributes arrives as
+ * {@link RailAction}s — so the deck editor's seven and the search wall's six are one component
+ * drawing a longer or a shorter list, rather than a component with six named slots plus a hole
+ * for the extras. A rail built the other way makes "how many options does this surface have" a
+ * fact about *this file*, which is the one place it cannot be known.
+ *
+ * **The three `Open on` rows are a ladder, not a list, and are deliberately not alphabetical**
+ * — the context menu's `Open on` submenu's own argument. Scryfall is where the card's data came
+ * from and EDHREC is the same entry on every card, so both hold still; the marketplace row
+ * changes name with a Settings choice, and it goes last so the two rows a reader has learnt the
+ * position of never move when they change marketplace. It is **the selected marketplace and
+ * only that one**: a rail offering all five would be a marketplace picker, which Settings
+ * already is. The two joined Scryfall on 2026-09-08 for issue #402.
  *
  * **It is a column at every rung and a column in two different places.** At `@min-[900px]/card`
  * and above it is the panel's third grid column; below `@min-[640px]/card` there are no columns
@@ -22,9 +30,15 @@
  */
 import { ExternalLink } from "lucide-react";
 import { useId } from "react";
-import { openExternal, scryfallCardUrl } from "@/lib/externalLinks";
+import {
+  edhrecCardUrl,
+  marketplaceSearchUrl,
+  openExternal,
+  scryfallCardUrl,
+} from "@/lib/externalLinks";
 import { FOCUS } from "@/lib/focus";
 import type { CardDetail, DeckVariant } from "@/lib/ipc";
+import type { Marketplace } from "@/lib/marketplace";
 import { PRESS_SOFT } from "@/lib/motion";
 import { useAppStore, type CardOverlay } from "@/lib/store";
 import { cn } from "@/lib/utils";
@@ -101,13 +115,22 @@ export function CardModalRail({
   scope,
   actions,
   counts,
+  marketplace,
 }: {
   card: CardDetail;
   scope: CardModalScope;
-  /** Surface-specific entries, appended after the four common ones. */
+  /** Surface-specific entries, appended after the six common ones. */
   actions: readonly RailAction[];
   /** owned / wished / decks, and the deck line when there is one. */
   counts: RailCounts;
+  /**
+   * The marketplace Settings quotes prices from — the one the last `Open on` row is named after.
+   *
+   * A prop rather than `useMarketplace()` called here, for `cardMenu`'s reason: the host already
+   * holds it (every priced read in the modal carries it in its key), and a rail that read a
+   * query of its own would need a provider under every test and story that draws it alone.
+   */
+  marketplace: Marketplace;
 }) {
   const optionsId = useId();
   const grimoireId = useId();
@@ -132,6 +155,21 @@ export function CardModalRail({
       // `scryfallCardUrl`, which lowercases the set code and escapes a collector number like
       // `1556★`; assembling it here would be a second spelling of a documented permalink.
       onSelect: () => void openExternal(scryfallCardUrl(card.setCode, card.collectorNumber)),
+    },
+    {
+      label: "Open on EDHREC",
+      external: true,
+      // By name, to EDHREC's own router — the shape Scryfall publishes as a card's EDHREC link.
+      // `edhrecCardUrl` says why the name goes whole; nothing here slugs it.
+      onSelect: () => void openExternal(edhrecCardUrl(card.name)),
+    },
+    {
+      // `Open on TCGplayer`, `Open on Card Kingdom`… — the label follows the setting, which is
+      // why this row is last (see the file comment). A search for the name rather than a product
+      // page, for `externalLinks`' reason: no priced site publishes one this app can derive.
+      label: `Open on ${marketplace.label}`,
+      external: true,
+      onSelect: () => void openExternal(marketplaceSearchUrl(marketplace.id, card.name)),
     },
     ...actions,
   ];
