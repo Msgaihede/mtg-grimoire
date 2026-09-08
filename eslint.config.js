@@ -68,9 +68,12 @@ export default tseslint.config(
   // Developer tooling that runs in Node rather than in the webview. Listed by hand rather
   // than pulled from the `globals` package: half a dozen names is not worth a dependency,
   // and the list being short is itself a fence — anything in `scripts/` that needs more of
-  // Node than this should be asked why.
+  // Node than this should be asked why. **The card scanner's own scripts are the same kind
+  // of file one directory down** (`crates/card-scanner/scripts/`: the page check, the model
+  // fetch, the camera-less drive), and `eslint .` reaches them — found 2026-09-08 as 27
+  // `no-undef` errors the first time `npm run verify` ran with the crate in the tree.
   {
-    files: ["scripts/**/*.mjs"],
+    files: ["scripts/**/*.mjs", "crates/*/scripts/**/*.mjs"],
     languageOptions: {
       globals: {
         process: "readonly",
@@ -82,6 +85,8 @@ export default tseslint.config(
         // press and a few moves spread over time, and dispatched back to back they arrive as
         // a click. `cdp.mjs drag` sleeps between moves for that reason and no other.
         setTimeout: "readonly",
+        // `drive-frames.mjs` times each round trip; Node 22 has it as a global.
+        performance: "readonly",
       },
     },
   },

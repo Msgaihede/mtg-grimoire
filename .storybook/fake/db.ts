@@ -97,6 +97,7 @@ import { isSearchView } from "@/lib/store";
 import { DEFAULT_GROUP_BY } from "@/features/decks/grouping";
 import { DEFAULT_SORT_BY } from "@/features/decks/sorting";
 import { SPECS } from "@/features/decks/validation/fixtures";
+import { STATUS, VERDICTS } from "@/features/scanner/fixtures";
 // The app's own list of the four sizes the cache stores, borrowed rather than re-spelled for
 // `hasVariableCost`'s reason below: `card_image_uri` refuses a variant that is not one of them,
 // and a second hand-typed list here would let the workbench and the window disagree about which
@@ -189,6 +190,9 @@ import type {
   ReleaseNote,
   ReviewRow,
   ReviewTable,
+  ScannerCaptured,
+  ScannerStatus,
+  ScannerVerdict,
   SearchRequest,
   SearchSortKey,
   SetSummary,
@@ -1030,6 +1034,9 @@ export interface FakeUpdate {
  * write connection being held, and this refusal is checked before the connection is ever asked
  * for, so the two produce different sentences from different places. Nothing else here reads
  * it: a sync's *other* effects on a story are already `busy`'s.
+ *
+ * **`scannerMissing`** is the three scanner assets being absent and `scanner_status` naming their
+ * paths — not a failure, the state every installation is in until a reader places the files.
  */
 export type Fault =
   | "busy"
@@ -1055,7 +1062,8 @@ export type Fault =
   | "patreonDeclined"
   | "patreonLapsed"
   | "patreonGroupEntitled"
-  | "wishGone";
+  | "wishGone"
+  | "scannerMissing";
 
 /**
  * What the picture cache costs, as the Settings page's one button sees it.
@@ -16057,6 +16065,26 @@ function fakeQrMatrix(code: string): QrMatrix {
   return { width, modules };
 }
 
+/* -------------------------------------------------------------------- the scanner ---- */
+
+/**
+ * The scanner's four commands. **No store**: nothing here mirrors a table, and a Storybook
+ * has no camera, so `scanner_frame` answers the decided fixture whatever bytes it is handed
+ * and the panel stories are driven from fixtures directly.
+ */
+export function scannerHandlers(db: FakeDb) {
+  return {
+    /** `scanner::scanner_status`. */
+    scanner_status: (): ScannerStatus => (db.fault === "scannerMissing" ? STATUS.missing : STATUS.present),
+    /** `scanner::scanner_frame`. */
+    scanner_frame: (): ScannerVerdict => VERDICTS.decided,
+    /** `scanner::scanner_reset`. */
+    scanner_reset: (): void => undefined,
+    /** `scanner::scanner_capture`. */
+    scanner_capture: (): ScannerCaptured => ({ saved: "live-1757300000.jpg" }),
+  } satisfies Record<string, CommandHandler>;
+}
+
 /* --------------------------------------------------------------- the three plugins ---- */
 
 /** Where a story's save dialog pretends to put a file — `SYNC_DATA_DIR`'s drive, since both
@@ -16124,18 +16152,21 @@ export function pluginHandlers() {
 }
 
 /**
- * Reads ∪ writes ∪ the plugins: the whole command table, which is what a story registers.
+ * Reads ∪ writes ∪ the scanner ∪ the plugins: the whole command table, which is what a story
+ * registers.
  *
  * The first two halves close over the one `db`, so a write is visible to the next read — the
- * property that makes a story clickable rather than a snapshot. The third takes **no** store,
- * and that is the shape of what it is: three commands that mirror no table here and no module
- * in the crate, none of which can see the reader's rows or change them.
+ * property that makes a story clickable rather than a snapshot. The scanner and the plugin
+ * tables each take **no store**: the scanner reads `db.fault` alone and mirrors no table, and
+ * the plugin table mirrors no table and no module in the crate — neither can see the reader's
+ * rows or change them.
  */
 export function allHandlers(db: FakeDb) {
   return {
     ...readHandlers(db),
     ...journalled(db, writeHandlers(db)),
     ...undoHandlers(db),
+    ...scannerHandlers(db),
     ...pluginHandlers(),
   };
 }

@@ -29,6 +29,15 @@ const QUERY = `(max-width: ${PHONE_PX}px)`;
  * and the test to apply to a *second* one is the same: name the box the question is about, and if
  * it is not the window, this is not the mechanism.
  *
+ * **`ScannerPage` reads it, and reads it as _this_ branch rather than as a second one.** A phone
+ * stacks the camera above the verdict where a desk stands them side by side, and the answer it
+ * wants is the shell's own — am I in the phone shape — rather than a measurement of its own box.
+ * That is `CollectionPage`'s sentence and it is the shape every consumer here takes: the reason
+ * a *branch* needs is the one the paragraph above sets, and consuming an answer the shell has
+ * already decided needs no new one. **This names the reader rather than counting them**, because
+ * a count in a doc comment is a fact about a tree that every branch has a different version of;
+ * `grep -n "useNarrowWindow()" src/` is the census, and it answers with more than one.
+ *
  * **The first `matchMedia` in shipped code.** `useSyncExternalStore` rather than an effect that
  * sets state — `src/CLAUDE.md`'s rule against `setState` inside an effect makes that alternative
  * a lint failure at `npm run verify` rather than at edit time, and React's own subscription

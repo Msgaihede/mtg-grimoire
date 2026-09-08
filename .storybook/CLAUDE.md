@@ -30,25 +30,27 @@ deliberately**: no screenshots are stored.
 - **Seeds and faults are state, not response stubs**: `parameters: { fake: { seed, fault } }`.
   **Seven** seeds
   (`empty`/`starter`/`needsReview`/`large`/`bracketMismatch`/`combosMissing`/`paired`),
-  **twenty-four** faults
+  **twenty-five** faults
   (`busy`/`syncing`/`syncError`/`imageFailures`/`gone`/`indexCold`/`deckMeta`/`updateAvailable`/
   `updateError`/`errorLog`/`feedFetchError`/`oracleTagsMissing`/`oracleTagsFetchError`/
   `artTagsMissing`/`artTagsFetchError`/`imageUrisMissing`/`exportWriteError`/
   `mirrorRootUnwritable`/`combosFetchError`/`pairingReadError`/`patreonDeclined`/
-  `patreonLapsed`/`patreonGroupEntitled`/`wishGone`); saying
+  `patreonLapsed`/`patreonGroupEntitled`/`wishGone`/`scannerMissing`); saying
   nothing gets `starter` with no fault. A
   fault is set on the _world_, so a story shows what the **app** does with a refusal rather than
   what one mocked call returns. **`syncing` is `busy`'s neighbour and reaches exactly one
   command**: `cache_clear` refuses outright while a card update is in flight, because
   `data/tmp/` is where the corpus download puts 77 MB the ingest then reads back — and it is
   checked *before* the write connection is asked for, which is why it is not `busy`.
-  **Seven of the twenty-four are not failures at all** — `indexCold` is
+  **Eight of the twenty-five are not failures at all** — `indexCold` is
   the search index mid-build; `oracleTagsMissing` is the Oracle tag taxonomy having never
   been ingested, which is every install's first launch and the state the type-line fallback
   exists for; `artTagsMissing` is the same thing one dataset over, where the honest floor is a
-  Tags page that says it has nothing yet; and `imageUrisMissing` is a corpus whose
+  Tags page that says it has nothing yet; `imageUrisMissing` is a corpus whose
   `cards.image_uris` is NULL throughout, so
-  `card_image_uri` answers `null` for every printing and "Copy card image" copies nothing.
+  `card_image_uri` answers `null` for every printing and "Copy card image" copies nothing; and
+  `scannerMissing` is the three scanner assets never having been placed, which is every
+  installation's state until a reader does.
   **`patreonDeclined`, `patreonLapsed` and `patreonGroupEntitled` are the other three, and they
   are the three supporter states no press can reach.** Connecting *is* reachable — paste a claim
   code, press Connect — so there is neither fault nor seed for it; what a reader can never

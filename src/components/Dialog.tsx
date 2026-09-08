@@ -155,8 +155,9 @@ export interface DialogProps {
    *
    * ## Why the shell reserves the room rather than the host hanging a button off the panel
    *
-   * The panel is `max-w-full` inside a scrim whose padding is the whole inset (`p-0 sm:p-6`), so
-   * a wide panel already *is* the window — `AllPrintingsDialog`'s width bottoms out at `100%` of
+   * The panel is `max-w-full` inside a scrim whose padding is the whole inset — `p-0 sm:px-6`
+   * across, and the vertical half is the ceiling's — so a wide panel already *is* the window.
+   * `AllPrintingsDialog`'s width bottoms out at `100%` of
    * this column, and at the app's **1024px floor** even the fixed widths above it (`w-[55rem]` is
    * 880) have nothing left over. A button positioned off that panel's edge is therefore off the
    * window: unreachable by pointer, and scrollable to by nothing, since a horizontal scrollbar is
@@ -364,7 +365,7 @@ export function Dialog({
  * **3.5rem is one 36px control plus the 8px it stands off the panel, plus 12px of slack** — the
  * app's own control height, which is what `AllPrintingsDialog`'s chevrons are drawn at and what
  * every other button in the deck builder measures. The slack is the window edge's: at the 1024px
- * floor the scrim's `sm:p-6` is already 24px, so a chevron never sits against the glass.
+ * floor the scrim's `sm:px-6` is already 24px, so a chevron never sits against the glass.
  *
  * Written out whole rather than composed, because **Tailwind scans source text for whole class
  * names** and a template built from a length matches nothing the scanner knows — it emits no rule
@@ -480,8 +481,31 @@ function Panel({
       // question about the window and nothing else. `sm` is 640px, which is this fold exactly:
       // an intermediate `min-[640px]:p-4` would be the same breakpoint spelled twice and would
       // emit `p-4` for a zero-width range.
+      //
+      // **The vertical inset is `max(1.5rem,5vh)` rather than 24px, and that is where every
+      // dialog's 90vh ceiling lives** (2026-09-08). A panel with a body taller than the window
+      // draws to `max-h-full`, which is this padded box — so at 24px it stopped 24px short of the
+      // title bar and read as a page rather than as a panel over the app. `AllPrintingsDialog`
+      // reported it and it is not that dialog's: Categories, History, Pull from collection and
+      // Import all reach the same wall on a short window or a long list.
+      //
+      // **It is the ceiling stated as an inset, which is this scrim's rule rather than a second
+      // one.** `max(1.5rem,5vh)` a side leaves the panel `min(100% - 3rem, 90vh)` of the window,
+      // so `90vh` binds on anything taller than 480px and the 24px floor binds below it — a phone
+      // in landscape at 844×390, where 5vh is 19.5 and a bare 90vh would put the panel *into* the
+      // inset at each end. The panel's `max-h-full` is untouched and stays the one height rule;
+      // what changed is the box it is a percentage of. Doing it the other way — a `sm:max-h-…` on
+      // the panel — would have put a named variant on the same property as the card modal's
+      // `min-[640px]:max-h-[min(825px,80vh)]`, which is the mixed-families trap
+      // `CardDetailModal`'s `PANEL_SIZE` was written to document, and the shell would have
+      // silently outranked that host's own ceiling at every width.
+      //
+      // **Below `sm` there is no ceiling at all, by the same `p-0` that takes the frame off.** A
+      // phone's dialog fills the glass; 5vh of scrim over a 358px-wide panel is the inset this
+      // fold exists to delete, spelled on the other axis.
       className={cn(
-        "fixed inset-0 grid grid-rows-[minmax(0,1fr)] place-items-center bg-bg/75 p-0 sm:p-6",
+        "fixed inset-0 grid grid-rows-[minmax(0,1fr)] place-items-center bg-bg/75",
+        "p-0 sm:px-6 sm:py-[max(1.5rem,5vh)]",
         // **Only when a host asked for flanks**, and the `undefined` test is doing real work: with
         // no flanks this string has to be what it was before the prop existed, because every other
         // dialog in the builder is drawn by this line and a third column would narrow all of them
@@ -546,17 +570,27 @@ function Panel({
         // into this shell arrived carrying `max-h-[85%]` and `max-h-[80%]` against this
         // `max-h-full`, which is three answers to one question — and the percentages are the
         // weaker two, because the scrim above already states the inset as padding
-        // (`p-0 sm:p-6`). A percentage of the *padded* box is a second, smaller inset stacked on
-        // the first, so the gap a reader sees is the padding plus a fraction of the window and
-        // grows with the window: at 800px it is 16 + ~115, at 1400px it is 24 + ~206. One rule —
-        // the scrim's padding is the inset, and the panel takes what is left — is a constant gap
-        // at every size, which is what the four dialogs already on this shell draw.
+        // (`p-0 sm:px-6 sm:py-[max(1.5rem,5vh)]`). A percentage of the *padded* box is a second
+        // inset stacked on the first — the gap a reader sees becomes the padding plus a fraction
+        // of the window, in a rule nobody stated: at 800px it was 16 + ~115, at 1400px 24 + ~206.
+        // One rule — the scrim's padding is the inset, and the panel takes what is left — is what
+        // every dialog on this shell draws, and it is where a proportion belongs when one is
+        // wanted at all: the vertical inset *is* `5vh` now, so the ceiling above is stated once,
+        // on the scrim, rather than by each host clamping itself out of the box it was given.
         //
         // **And for its first two days it clamped nothing at all** — `100%` of an implicit,
         // auto-sized grid row is `100%` of the panel's own content. The scrim's
         // `grid-rows-[minmax(0,1fr)]` is the other half of this rule and the two only work
         // together; whichever of them is edited next, the panel's height is what the edit is
         // about.
+        //
+        // **The scrim's vertical padding is the third piece, and since 2026-09-08 it is what makes
+        // a tall dialog float** (`sm:py-[max(1.5rem,5vh)]`, argued at that site). This class did
+        // not change and did not need to: 90vh is a statement about how much glass to leave, the
+        // scrim is where this shell states insets, and a `sm:max-h-…` here would additionally
+        // have collided with the card modal's `min-[640px]:max-h-…` under Tailwind's variant
+        // ordering. Below `sm` the scrim is `p-0`, so this reads 100% of the window and the
+        // phone's dialog fills the screen — which is the fold, not an exception to it.
         //
         // **This panel does not clip its content, and something on the shell depends on it now**
         // (2026-08-18). Two of the three dialogs folded in on 2026-08-16 arrived carrying a clip
@@ -581,7 +615,7 @@ function Panel({
           // against and no edge for a border to separate it from. A radius and a hairline drawn
           // hard against the four sides of a phone is chrome that says the panel is a card
           // floating over something, at the one width where it is not. The same 640px fold as
-          // the scrim's `p-0 sm:p-6`, and for the same reason spelled at that site.
+          // the scrim's `p-0 sm:px-6`, and for the same reason spelled at that site.
           "sm:rounded-xl sm:border sm:border-border",
           // Opt-in, for {@link DialogProps.container}'s reason: this makes the panel the
           // containing block for every `fixed` descendant under it, so it is switched on by the

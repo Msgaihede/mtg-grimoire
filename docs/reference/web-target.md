@@ -77,11 +77,12 @@ the real 43-column one, `raw` included**.
   `Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy: require-corp` and
   it passed both ways. **Do not add those headers**, and do not let a future service worker
   re-attach them.
-- **139 commands of 176**, re-derived 2026-09-07 with `node scripts/routed-census.mjs` and
+- **144 commands of 185**, re-derived 2026-09-08 with `node scripts/routed-census.mjs` and
   correct only for as long as nobody adds one; the script is the answer, this line is a
   reminder that there is one. (It read **115 of 156**, then **120 of 155**, then **123 of 160**,
+  then **139 of 176**,
   each written by hand beside a script that prints both — and each pair was already stale when the
-  next branch found it, four times on one line now. Run the script.) The first four are the browse —
+  next branch found it, five times on one line now. Run the script.) The first four are the browse —
   `sync_status`, `search_cards`, `list_sets`, `facet_cards` — which is the read path spec §8
   wanted measured in wasm rather than guessed. The rest are the Decks destination (PR 10b's
   thirteen reads and 10c's thirty-three writes), the Collection (10d's seventeen), the
@@ -97,8 +98,11 @@ the real 43-column one, `raw` included**.
   `wishlist_optimize_plan`/`wishlist_optimize_apply`. Two *renames* rode along and moved no count
   at all — the seven `deck_tag_*` became `deck_label_*` at user schema v33, and `deck_search_open`/
   `set_deck_search_open` became `search_open`/`set_search_open` on 2026-09-07 when three docked
-  search columns started sharing one `app_meta` map. Adding one, once its module is in the
-  map, is a line in `web::route::COMMANDS` and a `match` arm. **What the remaining 37 are, and
+  search columns started sharing one `app_meta` map. **Five more landed routed between
+  2026-09-07 and 2026-09-08**, and none of them is this branch's either: `combos_clear`,
+  `deck_missing_plan`, `deck_missing_to_collection`, `mark_colors` and `set_mark_color`.
+  Adding one, once its module is in the
+  map, is a line in `web::route::COMMANDS` and a `match` arm. **What the remaining 41 are, and
   why none of them is an oversight, is tabulated at the foot of this file** — grouped by file,
   exactly as the script prints them.
 
@@ -161,10 +165,11 @@ record in [text-mirror.md](text-mirror.md#web-and-android-the-same-files-as-one-
 
 **A module's column is a fact about its contents; being *routed* is a separate question.**
 Everything on the left compiles for the target. What the browser can actually call is
-`web::route::COMMANDS`, which is **139 of 176** — `node scripts/routed-census.mjs`, re-derived
-2026-09-07. (This sentence said 115 of 156, then 120 of 155, then 123 of 160, the same hand-written
+`web::route::COMMANDS`, which is **144 of 185** — `node scripts/routed-census.mjs`, re-derived
+2026-09-08. (This sentence said 115 of 156, then 120 of 155, then 123 of 160, then 139 of 176, the
+same hand-written
 pair *What the web target is* carried; two copies of a number a script prints is two chances to be
-wrong, and both have now been wrong three times.)
+wrong, and both have now been wrong four times.)
 
 `split` is the odd one in the left column. It compiles there and can never succeed —
 every path in it is `std::fs`, which builds for wasm and answers `Unsupported` — and gating it
@@ -279,7 +284,9 @@ were not sharing one database — the second had silently been given a different
 
 ## What is not built yet
 
-- **The other 132 commands**, and the modules in the right-hand column above.
+- **The other 41 commands**, and the modules in the right-hand column above. (This line read
+  **132** from the PR-10 era until 2026-09-08, when it was re-derived with the rest of this
+  file's counts; the unrouted number has been 37 and is 41 with the scanner's four.)
 - **The image cache.** On web it is Cache Storage, which is a rewrite rather than a port.
 - **The price feeds**, and **Mana Pool is unavailable on web at all** (spec §5.3): it sends no
   `Access-Control-Allow-Origin`. Card Kingdom does. *(PR 11 built the path; the CORS finding
@@ -892,7 +899,7 @@ backend.
   every reload — a different storage API, so a shell-cache bust costs nothing but a re-fetch of
   the bundle.
 
-## Where PR 10 got to: 139 of 176 routed, and what the other 37 are
+## Where PR 10 got to: 144 of 185 routed, and what the other 41 are
 
 **Do not hand-count this — run `node scripts/routed-census.mjs`.** It walks every
 `#[tauri::command]` in the crate (both attribute spellings, skipping doc-comment mentions),
@@ -900,9 +907,9 @@ diffs against `COMMANDS`, and prints exactly the grouping below. `--check <n>` e
 when the routed count has moved, so a stale table can be caught by running one command instead
 of by noticing.
 
-**That script exists because this table has already rotted five times, in every direction.** It
+**That script exists because this table has already rotted six times, in every direction.** It
 read **155** when the answer was 152 (that coincided with the crate total for a while, and this
-line said so; the total is 176 now, so the two numbers have parted and the "155" below is the
+line said so; the total is 185 now, so the two numbers have parted and the "155" below is the
 miscount only) — a grep counted the doc comments that *mention* the
 attribute while explaining why a command is `(async)`, and missed the seven
 `#[tauri::command(async)]` spellings, and the two errors did not cancel. Then it read **156 / 36**
@@ -910,9 +917,9 @@ for a day after `sync_group_leave` landed on another branch. Then it read **157 
 2026-08-30 until the card-art-only cover work re-derived it on 2026-08-31, and *that* one is the
 instructive rot, because the script had been sitting in the repo the whole time: the number was
 written by hand anyway, and the hand was one out on the crate total **and** one out on
-`sync_pair/pairing`, which has nine commands and was tabulated as ten. Rots four and five are
-below the table and are a different failure: nothing was *miscounted*, the number was simply not
-re-derived while sixteen commands landed around it. **A prose-only edit routes
+`sync_pair/pairing`, which has nine commands and was tabulated as ten. Rots four, five and six
+are below the table and are a different failure: nothing was *miscounted*, the number was simply
+not re-derived while commands landed around it. **A prose-only edit routes
 to neither CI job**, so not one of the five made anything go red; every one was found by
 re-deriving the number rather than by reading it. Do not hand-count the row breakdown either —
 the script prints it grouped by file, which is the grouping below.
@@ -925,28 +932,38 @@ first time that has happened: `deck_set_cover_image` was deleted with the custom
 2026-08-31. From there it climbed to 158 with the live socket, 160 with #358's two play reads, and
 **176** by 2026-09-07 — the deck's four token commands, the pull and quick-add crossings, the
 wishlist optimiser's pair, the deck sort's pair, the folder lock, the bracket and pip reads and
-`card_holdings`. **The two renames in that window moved nothing and are the reason to diff the
+`card_holdings` — and **185** by 2026-09-08: five routed (`combos_clear`, `deck_missing_plan`,
+`deck_missing_to_collection`, `mark_colors`, `set_mark_color`) and the scanner's four, which are
+the first four rows ever added to the unrouted table by a branch that also wrote this paragraph.
+**The two renames in that window moved nothing and are the reason to diff the
 *names* rather than the totals**: seven `deck_tag_*` became `deck_label_*` (user schema v33) and
 `deck_search_open`/`set_deck_search_open` became `search_open`/`set_search_open` (2026-09-07), and
 a table watching only the count would have read both as "nothing happened".
 
 | | |
 | --- | --- |
-| Commands in the crate | **176** |
-| Routed | **139** |
-| Not routed | **37** |
+| Commands in the crate | **185** |
+| Routed | **144** |
+| Not routed | **41** |
 
-**Re-derived 2026-09-07, on the search-sidebars branch** (`node scripts/routed-census.mjs
---check 139`, exit 0). ⚠️ **This is the fifth rot, and the second running where none of the drift
-was the branch that found it.** The table read 123 / 160 / 37 and the crate was already at
-176 / 139 / 37 before this branch changed a line: **+16 crate, +16 routed, +0 unrouted**, listed by
-name in *What the web target is* above and every one of them somebody else's commit. This branch's
-own contribution to all three numbers is **zero** — it renamed `deck_search_open`/
-`set_deck_search_open` to `search_open`/`set_search_open`, a 1:1 swap in `COMMANDS` — which is
-what the spec meant when it said the assertion "should not move". **The unrouted 37 has now held
-across two re-derivations while the routed number moved by 16**, which is the healthier reading of
-this table than either figure on its own: the rows below are decisions, and nothing has been added
-to them by accident.
+**Re-derived 2026-09-08, on the card-scanner branch** (`node scripts/routed-census.mjs
+--check 144`, exit 0). ⚠️ **This is the sixth rot, and it is the first one where part of the
+drift belongs to the branch that found it.** The table read 139 / 176 / 37 and the crate was
+already at **185 / 144 / 41**: **+9 crate, +5 routed, +4 unrouted**. Five of the nine are
+somebody else's commits and are routed; the other four are **this** branch's `scanner.rs`, and
+they are unrouted by construction rather than by omission — the detector is not compiled to
+wasm at all, so there is nothing behind a `COMMANDS` arm for a browser to reach. **The unrouted
+37 had held across two re-derivations while the routed number moved by 16**, which is what made
+it worth watching; the row below is the first thing added to it since, and it is a decision like
+every other row there.
+
+**Re-derived 2026-09-07, on the search-sidebars branch** (`--check 139`, exit 0), for the
+record: the table read 123 / 160 / 37 and the crate was already at 176 / 139 / 37 before that
+branch changed a line — **+16 crate, +16 routed, +0 unrouted**, listed by name in *What the web
+target is* above and every one of them somebody else's commit. That branch's own contribution to
+all three numbers was **zero**: it renamed `deck_search_open`/`set_deck_search_open` to
+`search_open`/`set_search_open`, a 1:1 swap in `COMMANDS`, which is what the spec meant when it
+said the assertion "should not move".
 
 **The fourth rot, for the record**, was 2026-09-03 on the #358 branch: the table read 120 / 155 / 35
 and the crate was already at 158 / 121 / 37 — the live-socket work added `sync_live_foreground` and
@@ -955,14 +972,14 @@ nine) and one more command was routed elsewhere. #358 then added `deck_played_ke
 `deck_ids_playing`, both routed: **+2 crate, +2 routed, +0 unrouted.** Every other number here has
 moved, every time, because nobody ran the script. `COMMANDS` membership is what it counts, and it
 is *not* the same question as "does the web target answer this command".
-**Five of the 37 below are served through `glue.rs` instead** — the four `*_refresh` and
+**Five of the 41 below are served through `glue.rs` instead** — the four `*_refresh` and
 `update_check` — because each is `async` and makes a network call while `route::call` is
 synchronous and makes neither. `src/lib/core/browser.ts` diverts those five names, so a panel
 calling one reaches the export in a browser and the Tauri command on a desktop. Read the rows
 below as "not a `COMMANDS` arm", never as "not available"; the "Why not" column says which of the
 two each one is.
 
-**The 37, and none of them is an oversight:**
+**The 41, and none of them is an oversight:**
 
 | Count | What | Why not |
 | --- | --- | --- |
@@ -974,6 +991,7 @@ two each one is.
 | **2** | `import_read_file`, `export_write_file` | §6.2's `<input type=file>` and `Blob`. The count in this row is unchanged, but **the seam behind it went from three commands to two** on 2026-08-31 — `deck_set_cover_image` took a picked path exactly as these do, and was tabulated up beside `cache_clear` instead, because a browser's missing *covers directory* was the louder reason. `picked.rs`'s module doc and [android-target.md](android-target.md)'s §4 are the other two places that "three" was written down |
 | **4** | The four `*_refresh` (oracle tags, art tags, combos, marketplace feed) | Each is `async` and downloads — so each is a `#[wasm_bindgen]` entry in `glue.rs` with its name diverted in `browser.ts`, and **all four work**. PR 11 |
 | **2** | `images.rs` | The byte cache is Cache Storage on web — a rewrite, not a port |
+| **4** | `scanner.rs` | The crate is not compiled to wasm; the page says so |
 
 **PR 10i closed the last two gaps**, so every one of these is a decision with a reason above it
 rather than something nobody got to. `marketplace_feed` got `tags`' split — the
@@ -1371,9 +1389,9 @@ caller's test is *presence*: a bare `boolean` would make `updateCheck(false)` �
 throttle-honouring call — indistinguishable from every other command in the app, and every
 `search_cards` would be posted as an update check.
 
-**`node scripts/routed-census.mjs` reads 139 / 37, and the table above says why.** It counts
+**`node scripts/routed-census.mjs` reads 144 / 41, and the table above says why.** It counts
 `COMMANDS` membership, which since PR 11 is not the same question as "does the web target answer
-this". Five of the 37 are served through `glue.rs`. The routed half moved for the first time in
+this". Five of the 41 are served through `glue.rs`. The routed half moved for the first time in
 three changes on 2026-09-03, and by exactly the two arms #358 added — PR 11 diverted names rather
 than adding arms, and the cover work deleted a command that was never in `COMMANDS`.
 

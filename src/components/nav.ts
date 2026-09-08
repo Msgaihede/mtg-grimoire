@@ -1,4 +1,4 @@
-import { Heart, Search, Settings, Tags, type LucideIcon } from "lucide-react";
+import { Heart, ScanLine, Search, Settings, Tags, type LucideIcon } from "lucide-react";
 import { CabinetFiling, Cards } from "@/components/icons";
 import type { ViewId } from "@/lib/store";
 
@@ -10,7 +10,7 @@ export interface NavEntry {
 }
 
 /**
- * The six destinations, in the order the column draws them — and the order is the point.
+ * The seven destinations, in the order the column draws them — and the order is the point.
  *
  * Two ways into the database first, then the three lists the reader owns, then Settings. Search
  * asks "which card is this"; Tagger asks "what is this card of", which is why it sits directly
@@ -24,8 +24,8 @@ export interface NavEntry {
  * does in a sentence.
  *
  * **This is a module rather than a const inside `AppShell` because the rail is no longer the
- * only thing that draws it.** A bottom tab bar copying six labels out of the rail is exactly the
- * drift the paragraph above forbids. What deliberately did *not* move is the **row**: a rail
+ * only thing that draws it.** A bottom tab bar copying seven labels out of the rail is exactly
+ * the drift the paragraph above forbids. What deliberately did *not* move is the **row**: a rail
  * entry is a full-width button with a left-anchored icon and a tooltip when narrow, and a tab is
  * a square with its word under the glyph — two drawings, not one component with a flag.
  */
@@ -35,5 +35,8 @@ export const NAV: readonly NavEntry[] = [
   { id: "decks", label: "Decks", Icon: Cards },
   { id: "collection", label: "Collection", Icon: CabinetFiling },
   { id: "wishlist", label: "Wishlist", Icon: Heart },
+  // Before Settings so Settings stays the last row — the chord that moved is `Ctrl+7`, and
+  // `docs/reference/keyboard-shortcuts.md` says so.
+  { id: "scanner", label: "Scanner", Icon: ScanLine },
   { id: "settings", label: "Settings", Icon: Settings },
 ];

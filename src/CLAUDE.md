@@ -346,6 +346,19 @@ Every one of these has its measurement and its story in
   `Dialog` paragraph above. **jsdom has no layout engine, so nothing in the suite can go red
   for this** — build a modal on `Dialog` rather than beside it, and check a new one in the
   running window at a short viewport with more content than fits.
+  **What it is clamped _to_ is 90vh above the phone fold and the whole window below it, and a host
+  spells neither** (2026-09-08). `Dialog`'s scrim is `p-0 sm:px-6 sm:py-[max(1.5rem,5vh)]`: 24px
+  across, 5vh down, so a dialog whose body outgrows the window leaves glass above and below and
+  reads as a panel over the app rather than as a page. It is stated as an **inset** rather than as
+  a `max-h` on the panel for two reasons that are both load-bearing. The scrim is where this shell
+  states insets, so `max-h-full` stays the one height rule and only the box it is a percentage of
+  moves; and a `sm:max-h-…` would sit on the same property as `CardDetailModal`'s
+  `min-[640px]:max-h-[min(825px,80vh)]`, where Tailwind emits **named variants after arbitrary
+  ones** — so the shell would have silently replaced that host's own ceiling at every width ≥640.
+  Two things follow for a host. **Do not name a `max-h` in `size`**: `cn`'s `tailwind-merge`
+  deletes the shell's `max-h-full` the moment you do, and below `sm` — where every dialog fills
+  the phone's glass — yours alone would float. And **a host that genuinely needs a tighter ceiling
+  spells it as `min-[640px]:max-h-…`**, matching the card modal's family, never `sm:`.
 - **An anchored popup is pinned to, and grows from, the corner nearest its trigger's own edge**
   — `right-0`/`origin-top-right` at the right end of a row, `left-0`/`origin-top-left` at the
   left. Nothing clips these popups, so one that overflows scrolls the whole app sideways; and
@@ -933,18 +946,57 @@ Every one of these has its measurement and its story in
 - Card images arrive over `mtgimg://`; `mtgimg:` is an `img-src` and nothing else — **read images
   with `<img>`, never with `fetch`** (a `fetch()` at it fails CORS by design).
 - **`src/lib/platform.ts` is the only place the page asks what platform it is on**, and it asks
-  the **user agent** — `src/lib/images.ts`'s `imageOrigin()` is the shipped precedent, and both
-  readers need the answer synchronously during their first render. It answers `false` for
+  the **user agent** — `src/lib/images.ts`'s `imageOrigin()` is the shipped precedent, and a
+  reader needs the answer synchronously during its first render. It answers `false` for
   anything it does not recognise, which is what keeps jsdom and Storybook on the desktop shape
   without either of them having to say so; the token is `Android` and not `Linux` or `Mobile`,
-  because an Android agent is a Linux one with one extra word. Two readers: `AppShell` (no
-  caption — three of `TitleBar`'s four verbs are `#[cfg(desktop)]` in tauri and
-  `capabilities/mobile.json` grants none of them) and `SettingsPage` (no Backup panel — the
-  mirror is desktop-only by decision). **A third reader is a reason to re-open whether this
-  belongs behind the core boundary instead**, where `ipc.ts` already knows which core it is
-  talking to. `UpdatePanel` is deliberately *not* one: it branches on the backend's own
-  `installKind`, because two independent answers to one question are free to disagree. See
-  [android-target.md](../docs/reference/android-target.md).
+  because an Android agent is a Linux one with one extra word. **Name a reader, never count
+  them** — a count is a fact about a tree and every branch has a different one;
+  `grep -n "isAndroid(" src/` is the census. `AppShell` reads it for the caption (three of
+  `TitleBar`'s four verbs are `#[cfg(desktop)]` in tauri and `capabilities/mobile.json` grants
+  none of them); `BackupPanel` reads it to fold the panel away (the mirror is desktop-only by
+  decision); and `ipc.ts`'s `scannerFrame` / `scannerCapture` read it to choose a body shape.
+  **That last one is the reader the note here used to ask to justify itself, and the answer is
+  that it does not belong behind the core boundary**: a core is a fact about the *build* and both
+  legs are the Tauri build, so a core split could not see the difference. The difference is
+  Tauri's own, per OS — raw IPC bytes "on all platforms except Android" — and it is met in the
+  one wrapper that meets it. `UpdatePanel` is deliberately *not* a reader: it branches on the
+  backend's own `installKind`, because two independent answers to one question are free to
+  disagree. See [android-target.md](../docs/reference/android-target.md).
+- **`useNarrowWindow` is the app's one viewport branch, and a new consumer is a _reader_ of it
+  rather than a second branch.** `viewports.ts` demands a reason at the site of any branch on
+  width; consuming an answer the shell has already decided needs no new one, and the test for a
+  genuinely *second* branch is unchanged — name the box the question is about, and if it is not
+  the window, this is not the mechanism. `ScannerPage` is the case that settled the wording: a
+  phone stacks the camera above the verdict where a desk stands them side by side, which is the
+  shell's own question. **The hook's doc names its readers rather than counting them**, for the
+  reason above, and `grep -n "useNarrowWindow()" src/` is that census too.
+- **`Core.call` takes `(command, args?: CallArgs, options?: CallOptions)`**, where `CallArgs` is
+  `Record<string, unknown> | Uint8Array`. It widened for one *shape* of call, which two wrappers
+  make — `ipc.scannerFrame` and `ipc.scannerCapture`, the only two that pass raw bytes and
+  headers — and **the browser core rejects a `Uint8Array` with `RAW_CALL_UNAVAILABLE` before it
+  reaches the Worker**. That constant is also the sentence the Scanner's web view draws,
+  imported rather than respelled, so a reader who somehow pressed Scan gets the message the page
+  already showed them.
+- **A JSON header value must be written with `asciiJson`, never with bare `JSON.stringify`.** A
+  header value is bytes, and three layers disagree about which bytes are allowed: `JSON.stringify`
+  leaves non-ASCII as itself, a browser sends 0x80–0xFF as Latin-1 and throws outright above
+  that, and Rust's `HeaderValue::to_str` refuses anything outside visible ASCII. So `Æther Vial`
+  in an `x-scanner-capture` either kills the call here or arrives as mojibake the far end
+  rejects. `\uXXXX` is the one spelling that survives all three hops and parses back to the same
+  character. **Both ends are tested, apart, and that is what makes this a rule rather than a
+  note.** `ipc.test.ts`'s *"escapes a non-ASCII card name into the capture header, losslessly"*
+  pins the exact escaped string, sweeps it with `/^[\x20-\x7e]*$/` and round-trips it through
+  `JSON.parse`; `scanner::tests::an_escaped_card_name_comes_back_with_its_accent` does the far
+  half in Rust. **Neither carries the other's string** — each writes its own `Æ` literal, so
+  they agree by hand. And the `x-scanner-options` case compares against plain
+  `JSON.stringify(DEFAULT_SCANNER_OPTIONS)`, which is **indistinguishable from `asciiJson` while
+  those defaults are all-ASCII**, so that header quietly dropping the escape fails no test until
+  a card name reaches it. Any new header carrying JSON goes through `asciiJson` and gets its own
+  non-ASCII case; [card-scanner.md](../docs/reference/card-scanner.md) §9 has the whole record.
+- **The Scanner's fold state is in the app store, not in the view.** `scannerFolds` /
+  `setScannerFold`, in memory only, for `openDeckId`'s reason: a reader who folded a developer
+  panel away and jumped to Settings finds it still folded coming back.
 
 ## The context menu
 

@@ -1,7 +1,16 @@
 import { clearImageCache } from "@/pwa/imageCacheClear";
 import { feedRefreshFor, updateCheckForce } from "@/workers/protocol";
 import type { FromWorker, Opened, ToWorker } from "@/workers/protocol";
-import type { Core } from "./types";
+import type { CallArgs, Core } from "./types";
+
+/**
+ * The scanner needs a real detector, and this build has none — `web::route` is a match over
+ * JSON arguments with no camera-frame arm, wasm carries no OS-level detector to call it against,
+ * and there is nothing to stream a `Uint8Array` frame to even in principle. Exported so the page
+ * can put the same sentence somewhere a reader looks before ever pressing Scan.
+ */
+export const RAW_CALL_UNAVAILABLE =
+  "The scanner needs the desktop or Android app — this build has no detector.";
 
 /**
  * The web implementation of {@link Core}: everything goes to the database Worker.
@@ -95,7 +104,17 @@ export function createBrowserCore(spawn: () => Worker): BrowserCore {
   const post = (message: ToWorker) => ensure().postMessage(message);
 
   return {
-    call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+    // No `options` parameter: nothing past the byte-payload rejection below ever reaches a
+    // point that could read headers, and TypeScript accepts a shorter implementation of a
+    // longer interface method — the same way `Array.prototype.forEach`'s callback may ignore
+    // the index and array arguments it is handed.
+    call<T>(command: string, args?: CallArgs): Promise<T> {
+      // **A byte payload cannot reach the Worker.** `web::route` is a match over JSON
+      // arguments and the scanner is not compiled for this target; the page dispatches on
+      // `isWebTarget()` before it ever calls, so this is the fence behind that, not a path a
+      // reader sees. Rejected before an id is taken, for `cache_clear`'s reason above.
+      if (args instanceof Uint8Array) return Promise.reject(RAW_CALL_UNAVAILABLE);
+
       // **The second divert in this file, and the only one that does not reach the Worker at
       // all.** `cache_clear` is the desktop's sweep of `data/images/`; on this target those
       // bytes are the service worker's Cache Storage, so there is nothing for a `web::route`

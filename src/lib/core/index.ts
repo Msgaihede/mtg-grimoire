@@ -1,9 +1,9 @@
-import { browserCore } from "./browser";
+import { browserCore, RAW_CALL_UNAVAILABLE } from "./browser";
 import { tauriCore } from "./tauri";
-import type { Core } from "./types";
+import type { CallArgs, CallOptions, Core } from "./types";
 
-export type { Core };
-export { browserCore };
+export type { CallArgs, CallOptions, Core };
+export { browserCore, RAW_CALL_UNAVAILABLE };
 
 /**
  * Which {@link Core} implementation this build talks to. Replaced at build time by the

@@ -13,6 +13,7 @@ import { CardToDeckProvider } from "@/features/card/cardMenu";
 import { CollectionPage } from "@/features/collection/CollectionPage";
 import { DeckEditor } from "@/features/decks/DeckEditor";
 import { DecksPage } from "@/features/decks/DecksPage";
+import { ScannerPage } from "@/features/scanner/ScannerPage";
 import { SearchPage } from "@/features/search/SearchPage";
 import { SettingsPage } from "@/features/settings/SettingsPage";
 import { TagsPage } from "@/features/tags/TagsPage";
@@ -29,6 +30,7 @@ function ActiveView({ update }: { update: Update }) {
   if (activeView === "tags") return <TagsPage />;
   if (activeView === "collection") return <CollectionPage />;
   if (activeView === "wishlist") return <WishlistPage />;
+  if (activeView === "scanner") return <ScannerPage />;
   if (activeView === "settings") return <SettingsPage update={update} />;
   // The gallery is the Decks view in its first state and the editor is the same view with a
   // deck open — one destination, two states, which is why the id lives in the store and not in
