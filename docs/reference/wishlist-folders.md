@@ -595,7 +595,7 @@ At 100% zoom on a 170px tile, going round it:
 | --- | --- | --- |
 | The whole tile | The gold selection ring, around art **and** chin | On the art frame alone |
 | Bottom-left | The folder pill, over a `×N` pill — copies wanted | `owned/wanted`, one chip; the folder was in the chin's caption |
-| Bottom-right | `Needs review`, over `unit × copies wanted` | Top-left, at `topLeftPlacement="clear"`, over `unit × copies missing` |
+| Bottom-right | `Needs review`, over `unit × copies wanted` — the price only above one copy | Top-left, at `topLeftPlacement="clear"`, over `unit × copies missing` |
 | Right margin | The `QuantityStepper`, with the pencil under it | The stepper alone; the pencil was in the hover strip |
 | Chin | Rarity gem · printing · duplicate mark · finish · unit price | The same, plus the folder caption |
 | The hover strip | Nothing — `action` is not passed | The pencil |
@@ -705,10 +705,39 @@ which is the regression the gate's move from the box to its children had to avoi
 **$680.21** to **$729.36** — exactly one more copy of that card. `×2` and its `2 copies wanted`
 sentence were both in the tree.
 
-**One thing to look at rather than a defect.** On a single-copy wish the corner and the chin print
-the same figure, because `unit × 1` is the unit price — two true statements about the same wish,
-and most of a real wishlist is single-copy. It reads as a repeat rather than as an error; whether
-it is worth suppressing is a design question rather than a bug, and no rule here decides it.
+**The single-copy repeat was real, and it is
+[issue #334](https://github.com/Msgaihede/mtg-grimoire/issues/334).** The live pass recorded it as
+a thing to look at rather than a defect — the corner and the chin printing the same figure on a
+wish for one copy, since `unit × 1` is the unit price. It had been reported already, in those
+words: *"the price is displayed twice: once at the bottom and once on the card art"*, expected
+*"only the bottom price"*. Two true statements is not a defence when a reader sees one number
+twice, and a wishlist is mostly single-copy wishes, so it was the common tile rather than an edge
+of one.
+
+### The corner draws a price only where that price says something new
+
+The chin says what **one copy** of this printing costs — the statement every wall's chin makes.
+The corner says what the **whole wish** costs. Where the wish is for one copy those are the same
+arithmetic, so the corner draws no figure at all and the chin is the tile's only price, which is
+exactly what the issue asked for.
+
+**The guard is `quantity > 1` and not `unitPrice !== null`**, which is the spelling that looks
+equivalent. An unpriced single-copy wish draws `—` in both places and is the same duplication, so
+it collapses too. An unpriced wish for *four* keeps its corner: `—` there says the marketplace
+could not price the **wish**, where the chin's says it could not price the **printing**, and only
+the first is a fact about what the reader is buying.
+
+**The flag is not a price and does not collapse with one.** A single-copy wish the reconciler
+flagged still draws the corner, with `Needs review` alone in it — "listed, counted, and asking to
+be looked at" is the rule `needs_review` is written under, and a tile that dropped the question
+along with the duplicate figure would be the one place in the app where a flagged wish looks fine.
+
+**The `null` return is by hand, and `empty:hidden` is not enough.** An empty wrapper is still an
+element as far as `:empty` can tell, so CSS alone would draw a bare 12×4px chip on the artwork —
+and **jsdom applies no stylesheet**, so that chip is invisible to the suite either way. The tests
+therefore assert the corner element is **absent** rather than counting prices: `bottomRightCorner`
+finds it by its two scaled offsets (`bottom` + `right`, which is that pair only here), and both
+mutations — relaxing the guard to `quantity > 0`, and dropping the `null` return — go red.
 
 ## The copies control, and the floor that stopped being 1
 
