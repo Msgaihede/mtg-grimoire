@@ -885,10 +885,19 @@ function starterFolders(): FakeDeckFolder[] {
  * All three are run through the real `validateDeck` by `world.test.ts`, which pins the exact
  * issue list each one produces (none, one, one). What follows is why those are the right three.
  *
- * **Deck 1, `modern` — 60 in the main deck, 15 in the sideboard, 2 on the Maybeboard.** Every
+ * **Deck 1, `modern` — 60 in the main deck, 15 in the sideboard, 2 on the Maybeboard, over 20
+ * rows** (14 + 5 + 1). The three *copy* totals are what `world.test.ts` pins and none of them has
+ * ever moved; the **row** count is quoted only in prose, in `DeckEditor.stories.tsx` and
+ * `DecksPage.stories.tsx`, and both say **18** — which was already one short before the
+ * sideboard's basic below arrived, because that figure was measured on 2026-08-11 and the foil
+ * `mh2 259` row joined the main deck afterwards. A prose-only edit routes to neither CI job,
+ * which is exactly how a number gets to be wrong twice. Every
  * row of those first two categories is `modern: "legal"` (measured over `CARDS` 2026-08-09),
- * no card appears in two of them, and the twenty lands are basics plus `Urza's Saga` — so it
- * validates clean, with an issue list of exactly zero. The corpus has no Plains and no
+ * **one card appears in two of them and it is a Forest**, and the twenty lands are basics plus
+ * `Urza's Saga` — so it validates clean, with an issue list of exactly zero. That one overlap is
+ * deliberate and is argued at the row itself: a basic is the only card a format's copy limit
+ * lets sit in both piles, which is what makes it the seed's fixture for a printing short in two
+ * active categories. The corpus has no Plains and no
  * Mountain, which is why a deck whose spells are mostly red runs Forests and Islands; it is a
  * fixture with a real curve and a real land count, not a list anyone would sleeve. The
  * Maybeboard row is `Ancient Tomb`, which is `modern: "not_legal"` **on purpose**: an
@@ -952,12 +961,34 @@ function starterDeckCards(categories: FakeDeckCategory[]): FakeDeckCard[] {
     main(1, printing("nph", "57"), 4),
     main(1, printing("wwk", "31"), 4),
     main(1, printing("kld", "235"), 4),
-    // 15 exactly, which is `sideboardMax` for Modern. Four cards, none of them in the main
-    // deck, because the copy limit counts main and side together.
+    // 15 exactly, which is `sideboardMax` for Modern. **Four of the five are in neither the main
+    // deck nor each other**, because the copy limit counts main and side together.
     filed(1, printing("gtc", "215"), "side", 4),
     filed(1, printing("apc", "128"), "side", 4),
     filed(1, printing("acr", "211"), "side", 4),
-    filed(1, printing("nph", "9"), "side", 3),
+    filed(1, printing("nph", "9"), "side", 2),
+    // **The fifth is the exception on purpose: the one printing this seed files in two *active*
+    // piles.** That is the shape `deck_pull_plan` and `deck_missing_plan` fold — one row whose
+    // `short` is the sum over both and whose `categories` names each of them once — and no story
+    // can build it for itself, because a seed is the world. A **basic land** is the only card
+    // that can sit in both without breaking the copy limit (`copyLimitFor` answers `Infinity`
+    // for one), and the copy comes off the Elesh Norn above rather than being added: the
+    // sideboard stays at 15, the main deck at 60, the Maybeboard at 2 — so deck 1's size, its
+    // empty issue list and its missing count are all exactly what they were.
+    //
+    // It completes the set of four this deck needs for the `Add missing to collection` dialog,
+    // and the other three were already here for their own reasons — worth naming, because each
+    // is one line away from being lost to an unrelated edit:
+    //
+    // * **One card short in two finishes** — the foil and the three regular `mh2 259` above,
+    //   which fold to two rows of one printing at `(cardId, finish)` and are ticked separately.
+    // * **A row with exactly one matching wish** — `wwk 31`, wished once at the root
+    //   ({@link starterWishes}), so the press clears it and the row says which folder it clears
+    //   from.
+    // * **A row with two matching wishes** — `mh2 267`, wished at the root *and* in
+    //   `Backordered`, which is the ambiguous case the write leaves standing: no picker, so none
+    //   or two-or-more is untouched.
+    filed(1, printing("unf", "239"), "side", 1),
     filed(1, printing("tmp", "315"), "maybe", 2),
 
     // --- deck 2: the 99, then the two cards outside it ---------------------------------

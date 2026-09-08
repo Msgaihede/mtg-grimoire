@@ -2295,6 +2295,122 @@ export interface DeckQuickAddOutcome {
 }
 
 /**
+ * One printing the live list is short of, and every wishlist line those copies could take down —
+ * `deck_missing::MissingRow`, the read half of {@link ipc.deckMissingPlan}.
+ *
+ * **The third answer to a shortfall, and the only one that _creates_ cardboard.**
+ * {@link ipc.deckPullFromCollection} moves copies the reader already owns and
+ * {@link ipc.deckMissingToWishlist} writes a shopping list; this one records copies they have
+ * just bought, so the `collection_entries` row behind it was never there.
+ *
+ * **The fold is {@link DeckPullRow}'s, term for term** — `(cardId, finish)`, the deck's own read
+ * order, inactive piles skipped, {@link categories} naming the piles for the reader and never a
+ * term in the arithmetic. Both rows come off one walk in the crate (`deck::live_shortfall`), so
+ * the two dialogs cannot come to disagree about what a deck is short of.
+ *
+ * **An orphaned printing is not in the plan at all, so this type has no "unrecordable" state.** A
+ * `cardId` with no `cards` row is exactly what the write must refuse — the backend reads the set,
+ * the collector number and the language off that row to file a copy — and a row the dialog could
+ * only draw as an apology is left out instead. That is {@link DeckPullRow}'s empty-candidates
+ * rule applied to a different reason for the same emptiness, and it is why an empty array is an
+ * ordinary answer here rather than an error: a deck whose whole shortfall is printings the corpus
+ * has dropped has nothing to record, which the dialog says in words.
+ */
+export interface DeckMissingRow {
+  /** The printing the deck lists, and half of what a {@link DeckMissingPick} names. */
+  cardId: string;
+  /** The deck row's stored name, which is the one name an orphan still has. */
+  name: string;
+  setCode: string;
+  collectorNumber: string;
+  /**
+   * The deck row's finish, where `null` is nonfoil — `deck::normalise_finish`'s translation, so
+   * this reads exactly as {@link DeckCard.finish} does. The word the copies are filed under is
+   * the collection's own `nonfoil`, and the backend does that translation.
+   *
+   * **It is the other half of the address, and that is the one structural difference from the
+   * pull**: a {@link DeckPullPick} points at a `collection_entries` row that exists, where a
+   * {@link DeckMissingPick} can only name the cardboard, because the row does not exist yet.
+   */
+  finish: DeckFinish;
+  /** Copies of this printing and finish the live list still wants, over its **active** piles. */
+  short: number;
+  /** The piles that are short, in the deck's own order. For the reader; never for the write. */
+  categories: string[];
+  /**
+   * The printing's picture, front face, exactly as {@link CardSummary.imageUris} — one per row,
+   * because a row *is* one printing.
+   */
+  imageUris?: Partial<Record<ImageVariant, string>> | null;
+  /**
+   * Every wishlist line these copies could take down, best first —
+   * {@link ipc.deckQuickAddWishes}' answer for this printing and finish, verbatim, so the
+   * per-card menu and this dialog cannot come to disagree about what fills a wish. See
+   * {@link DeckQuickAddWish} for the predicate, which is deliberately narrower than what a reader
+   * might call a match. Empty is the ordinary answer: most cards a reader records are on no
+   * shopping list.
+   *
+   * **Only a row with exactly one entry has its wish cleared.** A deck-wide press over thirty
+   * rows cannot ask thirty questions, so the write re-reads this same predicate inside its own
+   * transaction and acts only on an unambiguous answer — none, or two or more, is left standing.
+   * That is why no wish id travels on {@link DeckMissingPick}: there is nothing for the reader to
+   * pick between. The dialog states which of the three shapes a row is *before* the press, so
+   * what did not happen is read rather than discovered.
+   */
+  wishes: DeckQuickAddWish[];
+}
+
+/**
+ * Copies of one printing to record — `deck_missing::MissingPick`, the write's whole input.
+ *
+ * **Addressed by `(cardId, finish)` and never by an entry id**, which follows from what the press
+ * is for: the row it creates has no id to name yet. That is the whole structural difference from
+ * {@link DeckPullPick}, and it means both fields are load-bearing — neither can be inferred from
+ * the other side of the wire.
+ *
+ * Duplicate picks for one address are summed by the backend and *then* checked against a re-plan,
+ * so two picks of 3 against a shortfall of 4 are one refusal rather than two accepted writes.
+ */
+export interface DeckMissingPick {
+  cardId: string;
+  /** The deck row's finish, `null` for nonfoil — {@link DeckMissingRow.finish}'s spelling. */
+  finish: DeckFinish;
+  /** At least one, and never more than the deck is still short of at that address. */
+  quantity: number;
+}
+
+/**
+ * What a batch recorded — `deck_missing::MissingOutcome`.
+ *
+ * **What was written, never the argument that was sent**, which is {@link MoveOutcome}'s rule and
+ * {@link DeckQuickAddOutcome}'s: a sentence quotes this. All three numbers can be read on their
+ * own and any of them can be zero without the others being wrong.
+ */
+export interface DeckMissingOutcome {
+  /** Copies filed into the deck's own group. */
+  copies: number;
+  /**
+   * Rows of the plan that got at least one copy — so **printings *and* finishes**, at
+   * {@link DeckMissingRow}'s own grain, and not distinct printings.
+   *
+   * Spelled out for {@link DeckPullOutcome.cards}' reason exactly, because three places count it
+   * and they have to agree: the crate's own `wanted.len()`, the Storybook fake's handler, and
+   * `addMissingPlan.ts`'s `cards` — which is what the dialog's footer previews *before* the
+   * press. The distinction is only ever visible on a deck short of one printing in two finishes,
+   * which is two rows in the dialog and counts two here, so a grain mismatch would surface on
+   * that one deck as a sentence quoting a number the reader had just been shown another version
+   * of.
+   */
+  cards: number;
+  /**
+   * Copies taken off wishes, not a count of wish rows — {@link DeckQuickAddOutcome.wishCopies}'
+   * unit. `0` when the press was made with the wishlist half switched off, and `0` for every row
+   * whose match was ambiguous or absent, which is the design rather than a failure.
+   */
+  wishCopies: number;
+}
+
+/**
  * One card the plan asks for — {@link ipc.deckTheorySlots}' row, and the whole input to the deck
  * editor's theory tick.
  *
@@ -6295,10 +6411,10 @@ export const ipc = {
    * Record the copies a deck row is short of, filed straight into that deck's own group — and,
    * where `wishId` names one, take them off that wish in the same transaction.
    *
-   * **The first of the four deck-boundary crossings that _creates_ cardboard rather than moving
+   * **The first of the five deck-boundary crossings that _creates_ cardboard rather than moving
    * it.** `collection_to_deck`, `deck_to_collection` and {@link ipc.deckPullFromCollection} all
    * move a row that already exists; this one writes a `collection_entries` row that was never
-   * there. That is the whole reason its caller takes `query.ts`'s `OWNED_WRITE_KEYS` rather than
+   * there, and {@link ipc.deckMissingToCollection} is the deck-wide form of the same press. That is the whole reason its caller takes `query.ts`'s `OWNED_WRITE_KEYS` rather than
    * the narrower collection root the three movers share: `CardSummary.ownedQuantity` moves from
    * 0 to N on the very tile the press was made on.
    *
@@ -6339,6 +6455,51 @@ export const ipc = {
       quantity,
       wishId,
     }),
+  /**
+   * What this deck is short of that could be **recorded** — the read half of the deck-wide add,
+   * and the third answer to the question {@link ipc.deckPullPlan} and
+   * {@link ipc.deckMissingToWishlist} answer the other two ways: own it, just bought it, have not
+   * bought it.
+   *
+   * Read-only, so it may be asked whenever the dialog is open and re-asked after any write. It
+   * takes no variant and reads the `live` list only, for those commands' reason — a plan holds no
+   * cards — and no marketplace either, because nothing in the answer is priced.
+   *
+   * **An empty array is the ordinary answer**, not an error, and it means something specific
+   * here: the button that opens the dialog is drawn only where the deck is short of something, so
+   * zero rows is a shortfall made entirely of printings that have left the card database. See
+   * {@link DeckMissingRow} for that filter, which is the write's own precondition rather than a
+   * second opinion, and the dialog words it rather than drawing a blank panel.
+   */
+  deckMissingPlan: (deckId: number) => invoke<DeckMissingRow[]>("deck_missing_plan", { deckId }),
+  /**
+   * Record the copies this deck is short of into its own group, and take the unambiguous wishlist
+   * lines down with them — the deck-wide form of {@link ipc.deckQuickAddToCollection}.
+   *
+   * **It _creates_ cardboard**, which is what separates it from
+   * {@link ipc.deckPullFromCollection} standing beside it in the same band: a pull moves rows
+   * that already exist, and a copy bought this morning is a `collection_entries` row that was
+   * never there. The two presses overlap on purpose and the reader chooses — nothing is dropped
+   * from either plan because the other could have filled it.
+   *
+   * **All-or-nothing**, {@link ipc.deckPullFromCollection}'s rule and for its reason: this write
+   * files no `deck_undo` step, so a half-applied batch has no press that takes it back. The
+   * backend re-plans inside its own transaction and refuses the lot in words — the dialog's
+   * answer is a round trip old, and nothing the caller sent is trusted.
+   *
+   * **`clearWishes` is the whole of the wishlist half, and there is no wish id.** On, every row
+   * with *exactly one* matching line has copies taken off it; none and two-or-more are left
+   * standing, because a press over thirty rows cannot ask thirty questions. So this write has no
+   * stale-wish refusal at all: a line that vanished under the dialog is simply not among the
+   * matches and the press carries on, which is the opposite of
+   * {@link ipc.deckQuickAddToCollection}'s `WISH_GONE`. See {@link DeckMissingRow.wishes}.
+   *
+   * Answers what was actually written, which is what a sentence should quote — and the deck's
+   * history gets **one** row for the press rather than one per card, because the reader did one
+   * thing.
+   */
+  deckMissingToCollection: (deckId: number, picks: DeckMissingPick[], clearWishes: boolean) =>
+    invoke<DeckMissingOutcome>("deck_missing_to_collection", { deckId, picks, clearWishes }),
   /**
    * Every name in a decklist, resolved to a printing this app has. **Read-only**, and one call
    * for the whole list rather than one per line — ~100 names is six prepared statements and a

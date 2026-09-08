@@ -385,8 +385,21 @@ somewhere; this chooses *how many*, because they do not exist yet and the reader
 two of the four.
 
 `AddMissingPlan` carries the derived per-row state the dialog draws — `on`, `copies`, and a
-`wish: { clears: number; folderName: string | null } | "ambiguous" | null` — plus the footer
-totals `picks`, `copies`, `cards`, `wishesCleared`. Clamping lives here: a stored count above a
+`wish`, which is a **tagged union** rather than a record beside a bare string:
+
+```ts
+type RowWish =
+  | { kind: "one"; clears: number; folderName: string | null }
+  | { kind: "ambiguous"; matches: number }
+  | null;
+```
+
+`kind` on both arms, because the dialog switches on it and a `typeof wish === "string"` test
+against a `"ambiguous"` sentinel is a narrowing that reads as a mistake every time it is met. The
+ambiguous arm carries its `matches` count for the same reason the one arm carries `clears`: the
+sentence beside the row quotes a number, and a component recomputing it from `row.wishes.length`
+would be a second place that number is decided. Plus the footer totals `picks`, `copies`,
+`cards`, `wishesCleared`. Clamping lives here: a stored count above a
 row's `short` is clamped rather than honoured, so a re-read that lowered a shortfall cannot leave
 the footer previewing a press the backend will refuse.
 

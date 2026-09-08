@@ -58,6 +58,12 @@ const deckAddCard = vi.hoisted(() => vi.fn());
 const deckMissingToWishlist = vi.hoisted(() => vi.fn());
 const deckPullPlan = vi.hoisted(() => vi.fn());
 const deckPullFromCollection = vi.hoisted(() => vi.fn());
+// The shortfall's third answer, deck-wide: the read behind `Add missing to collection` and the
+// write that records the ticked copies. Like the pull's pair, the read is a **mounted** query
+// gated on the dialog being open — so a test that never presses that button asserts it was
+// never called.
+const deckMissingPlan = vi.hoisted(() => vi.fn());
+const deckMissingToCollection = vi.hoisted(() => vi.fn());
 // The `Collection ▸` submenu's read and its write (issue #350). The read is the one command in
 // this file fired **imperatively at a press** rather than by a mounted query — a right-click has
 // to cost nothing — so a test that never presses that row asserts it was never called.
@@ -155,6 +161,8 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckMissingToWishlist,
     deckPullPlan,
     deckPullFromCollection,
+    deckMissingPlan,
+    deckMissingToCollection,
     deckQuickAddWishes,
     deckQuickAddToCollection,
     deckSwapPrinting,
@@ -759,6 +767,12 @@ beforeEach(() => {
   // the empty state still draws the ✕, Cancel and Pull that the Tab sweep walks.
   deckPullPlan.mockReset().mockResolvedValue([]);
   deckPullFromCollection.mockReset().mockResolvedValue({ copies: 0, cards: 0 });
+  // **The same empty plan, and the same reason it is not a failure**: a deck short only of
+  // printings that have left the card database. Every test here is about the layer rather than
+  // about the list inside it (`AddMissingToCollectionDialog.test.tsx` owns that), and the empty
+  // state still draws the ✕, Cancel and press the Tab sweep walks.
+  deckMissingPlan.mockReset().mockResolvedValue([]);
+  deckMissingToCollection.mockReset().mockResolvedValue({ copies: 0, cards: 0, wishCopies: 0 });
   // **No wish matches, which is the commonest answer and the one that draws nothing at all.**
   // `chooseWish` writes straight through on an empty list, so the default here is the state in
   // which `Quick add N and remove from wishlist` is exactly `Quick add N` — and every test about
@@ -3018,6 +3032,145 @@ describe("DeckEditor", () => {
   });
 
   /**
+   * **Add missing to collection** — the shortfall's third answer, and the second layer in this
+   * editor opened from the stats band rather than from the header.
+   *
+   * **The whole thing in one case, because two of its three claims are only meaningful
+   * together.** "The dialog is not up" passes just as well against a button that opens nothing,
+   * and "the plan was not read" passes just as well against a gate that never opens — so the
+   * press has to follow both of them here. `deck_missing_plan` walks every hole in the live list
+   * and asks the wishlist about each one, and nothing on the screen behind the dialog draws a
+   * word of it, which is the whole of what the `enabled` gate is for.
+   */
+  it("reads no missing plan until the add press opens the dialog", async () => {
+    await open();
+    // Past the first paint and every query the editor makes for itself.
+    const trigger = await screen.findByRole("button", { name: "Add missing to collection" });
+    expect(deckMissingPlan).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("dialog", { name: "Add missing to collection" }),
+    ).not.toBeInTheDocument();
+
+    await userEvent.click(trigger);
+
+    expect(
+      await screen.findByRole("dialog", { name: "Add missing to collection" }),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(deckMissingPlan).toHaveBeenCalledWith(4));
+  });
+
+  /**
+   * **The caret goes back to the button that opened it**, which is the half worth its own case:
+   * `DeckStats` owns that button and hands no ref up, so `openAddMissing` reads
+   * `document.activeElement` at the press — `openPull`'s answer, made for its reason. A browser
+   * focuses what it presses, so the caret is on the button by the time the callback runs; if
+   * that ever stopped being true the layer would still open and only this would notice.
+   */
+  it("hands the caret back to the add press on Escape", async () => {
+    await open();
+    const trigger = await screen.findByRole("button", { name: "Add missing to collection" });
+
+    await userEvent.click(trigger);
+    await screen.findByRole("dialog", { name: "Add missing to collection" });
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(
+      screen.queryByRole("dialog", { name: "Add missing to collection" }),
+    ).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+    // One press, one layer: the deck is still open behind it, which is the floor Escape falls
+    // to once every dismissible rung above it has passed.
+    expect(useAppStore.getState().openDeckId).toBe(4);
+  });
+
+  /**
+   * **No add press on the plan, and it is the list rather than the feature** — `onPull`'s
+   * argument one button over. A theory row holds no cards, so the plan is short of nothing and
+   * `deck_missing_plan` takes no variant: it walks the live list, exactly as `deck_pull_plan`
+   * and `deck_missing_to_wishlist` do. Absent rather than greyed.
+   *
+   * The Live half is asserted in the same case, because a button absent on both tabs would pass
+   * a bare absence check while being broken everywhere.
+   */
+  it("offers the add press on the deck and not on the plan", async () => {
+    const over = { theoryEnabled: true };
+    const live = detail(over, [bolt({ quantity: 4 })]);
+    const theory = detail(over, [bolt({ quantity: 4, variant: "theory" })]);
+    deckGet.mockImplementation((_id: number, variant: string) =>
+      Promise.resolve(variant === "theory" ? theory : live),
+    );
+    await open();
+
+    expect(
+      await screen.findByRole("button", { name: "Add missing to collection" }),
+    ).toBeInTheDocument();
+
+    await userEvent.click(
+      within(screen.getByRole("group", { name: "Deck list" })).getByRole("button", {
+        name: "Theory",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: "Add missing to collection" }),
+      ).not.toBeInTheDocument(),
+    );
+    // The third answer is still there, so the absence above is this one prop rather than the
+    // whole band: a plan is exactly the list a reader wants a shopping list for.
+    expect(screen.getByRole("button", { name: "Send missing to wishlist" })).toBeInTheDocument();
+  });
+
+  /**
+   * **The press records, the editor re-reads the deck, and the dialog is still up.**
+   *
+   * Three claims, and the last is the one a reader would report. `addMissingToCollection` takes
+   * `query.ts`'s `OWNED_WRITE_KEYS`, whose fourth member is the `["decks"]` root, so a
+   * successful record refetches the deck it was made from — `ownedQuantity` is a sum over rows
+   * this write has just created, and the shortfall the dialog is about is derived from it.
+   * Closing is **not** part of the write: nothing here calls `dismiss` on success, so the reader
+   * reads the answer where they pressed it and shuts the dialog themselves, which is
+   * `PullFromCollectionDialog`'s arrangement.
+   *
+   * The footer press is matched on a pattern rather than on an exact string, because the count
+   * in its label is the dialog's own arithmetic over the ticked rows and this case is about the
+   * wiring behind it. `AddMissingToCollectionDialog.test.tsx` owns the number.
+   */
+  it("records the ticked copies and re-reads the deck, leaving the dialog up", async () => {
+    deckMissingPlan.mockResolvedValue([
+      {
+        cardId: "p1",
+        name: "Lightning Bolt",
+        setCode: "mh2",
+        collectorNumber: "12",
+        finish: null,
+        short: 1,
+        categories: ["Main deck"],
+        imageUris: null,
+        wishes: [],
+      },
+    ]);
+    deckMissingToCollection.mockResolvedValue({ copies: 1, cards: 1, wishCopies: 0 });
+    await open();
+    await userEvent.click(await screen.findByRole("button", { name: "Add missing to collection" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add missing to collection" });
+    const reads = deckGet.mock.calls.length;
+
+    await userEvent.click(await within(dialog).findByRole("button", { name: /to collection$/ }));
+
+    await waitFor(() =>
+      expect(deckMissingToCollection).toHaveBeenCalledWith(
+        4,
+        [{ cardId: "p1", finish: null, quantity: 1 }],
+        true,
+      ),
+    );
+    await waitFor(() => expect(deckGet.mock.calls.length).toBeGreaterThan(reads));
+    expect(screen.getByRole("dialog", { name: "Add missing to collection" })).toBeInTheDocument();
+  });
+
+  /**
    * **The full-window overlays are modal, and Tab cannot leave one.**
    *
    * Each paints a scrim over the whole app, which is a statement that what is behind it is not
@@ -3056,11 +3209,12 @@ describe("DeckEditor", () => {
     ["Labels", "Labels", null],
     ["History", "History", null],
     ["Deck settings", "Deck settings", null],
-    // The one row here whose control is not in the header: `Pull from collection` is drawn in
-    // the stats band at the foot of the page, beside the shortfall it acts on. It belongs in
-    // this sweep by the sweep's own rule — a full-window overlay with a control in the view —
-    // and the fixture deck is short of three copies, which is what draws that control at all.
+    // The two rows whose controls are not in the header: both are drawn in the stats band at
+    // the foot of the page, beside the shortfall they answer. They belong in this sweep by the
+    // sweep's own rule — a full-window overlay with a control in the view — and the fixture
+    // deck is short of three copies, which is what draws either control at all.
     ["Pull from collection", "Pull from collection", null],
+    ["Add missing to collection", "Add missing to collection", null],
     [
       "Compare",
       "Theory to Actual difference",
