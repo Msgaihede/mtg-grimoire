@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { openExternal } from "@/lib/externalLinks";
 import type { CardDetail } from "@/lib/ipc";
+import { MARKETPLACES, type Marketplace } from "@/lib/marketplace";
 import { useAppStore, type PaneDeckContext } from "@/lib/store";
 import { CardModalRail, type RailAction, type RailCounts } from "./CardModalRail";
 import type { CardModalScope } from "./cardModalScope";
@@ -86,6 +87,7 @@ function renderRail(
     actions?: readonly RailAction[];
     counts?: RailCounts;
     card?: CardDetail;
+    marketplace?: Marketplace;
   } = {},
 ) {
   return render(
@@ -94,6 +96,7 @@ function renderRail(
       scope={over.scope ?? searchScope}
       actions={over.actions ?? []}
       counts={over.counts ?? counts}
+      marketplace={over.marketplace ?? MARKETPLACES.tcgplayer}
     />,
   );
 }
@@ -165,7 +168,7 @@ describe("the card modal's options rail", () => {
    * "extras" hole would draw the deck's six and the search's four differently; this draws one
    * list and the surface says how long it is.
    */
-  it("appends the surface's own entries after the four every surface has", async () => {
+  it("appends the surface's own entries after the six every surface has", async () => {
     const setCommander = vi.fn();
     const user = userEvent.setup();
     renderRail({
@@ -182,6 +185,8 @@ describe("the card modal's options rail", () => {
       "Oracle tags",
       "Card text",
       "Open on Scryfall",
+      "Open on EDHREC",
+      "Open on TCGplayer",
       "Set as commander",
       "Set deck image",
     ]);
@@ -204,6 +209,41 @@ describe("the card modal's options rail", () => {
 
     expect(vi.mocked(openExternal)).toHaveBeenCalledExactlyOnceWith(
       "https://scryfall.com/card/lea/161",
+    );
+  });
+
+  /**
+   * Issue #402's first row. The URL is `edhrecCardUrl`'s, unmocked, so this reads the real
+   * builder — EDHREC's own router by card *name*, which is the shape Scryfall publishes as a
+   * card's EDHREC link — and a rail that started slugging names itself would fail here.
+   */
+  it("opens the card on EDHREC by name, through the same outbound call", async () => {
+    const user = userEvent.setup();
+    renderRail();
+
+    await user.click(screen.getByRole("button", { name: "Open on EDHREC" }));
+
+    expect(vi.mocked(openExternal)).toHaveBeenCalledExactlyOnceWith(
+      "https://edhrec.com/route/?cc=Lightning%20Bolt",
+    );
+  });
+
+  /**
+   * Issue #402's second row, and it is **the selected marketplace, not TCGplayer**: the row is
+   * named after the marketplace Settings quotes prices from and opens that site's search for the
+   * card, which is what the context menu's `Open on` ladder already does. A non-default
+   * marketplace here is what proves the label and the URL both follow the prop rather than the
+   * default — with TCGplayer both would pass against a rail that ignored it.
+   */
+  it("names the selected marketplace and opens that site's search for the card", async () => {
+    const user = userEvent.setup();
+    renderRail({ marketplace: MARKETPLACES.cardkingdom });
+
+    expect(screen.queryByRole("button", { name: "Open on TCGplayer" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Open on Card Kingdom" }));
+
+    expect(vi.mocked(openExternal)).toHaveBeenCalledExactlyOnceWith(
+      "https://www.cardkingdom.com/catalog/search?search=header&filter%5Bname%5D=Lightning%20Bolt",
     );
   });
 

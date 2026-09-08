@@ -1592,6 +1592,7 @@ function Body({
                 scope={scope}
                 actions={railActions}
                 counts={counts}
+                marketplace={marketplace}
               />
             </div>
           </div>
