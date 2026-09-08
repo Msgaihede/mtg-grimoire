@@ -516,9 +516,9 @@ describe("Dialog", () => {
    * **The second half of the caret rule**, and it exists because of a failure measured in the
    * shipped window on 2026-09-03.
    *
-   * Every layer that stacks over the card modal — the printings modal and the three card
+   * Every layer that stacks over the card modal — the printings modal and the four card
    * overlays — leaves the caret on `<body>` when it closes: the printings one hands back a deck
-   * row it swapped and otherwise nothing, and the three overlays hand back nothing at all. That
+   * row it swapped and otherwise nothing, and the four overlays hand back nothing at all. That
    * cost nothing until a panel underneath grew keys of its own; from that moment the reader's
    * ArrowLeft/ArrowRight were silently dead until they clicked the panel again, and the next Tab
    * restarted the tab order from the top of the app.

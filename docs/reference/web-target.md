@@ -935,6 +935,11 @@ wishlist optimiser's pair, the deck sort's pair, the folder lock, the bracket an
 `card_holdings` — and **185** by 2026-09-08: five routed (`combos_clear`, `deck_missing_plan`,
 `deck_missing_to_collection`, `mark_colors`, `set_mark_color`) and the scanner's four, which are
 the first four rows ever added to the unrouted table by a branch that also wrote this paragraph.
+**186 later the same day**, and the one that took it there is the paragraph's own warning made
+flesh: `combos_for_card` is routed, and it is one letter from the already-routed
+`combos_for_cards` and one line from the `combos_refresh` this target deliberately does not route
+— three names a total can never tell apart. `route.rs` asserts `COMMANDS.len()` directly, so take
+that number from the failure's `left` rather than from arithmetic here.
 **The two renames in that window moved nothing and are the reason to diff the
 *names* rather than the totals**: seven `deck_tag_*` became `deck_label_*` (user schema v33) and
 `deck_search_open`/`set_deck_search_open` became `search_open`/`set_search_open` (2026-09-07), and

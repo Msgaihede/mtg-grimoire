@@ -107,6 +107,8 @@ import { IMAGE_VARIANTS, type ImageVariant } from "@/lib/images";
 import type {
   BackupZip,
   BracketCardRow,
+  CardCombo,
+  CardCombosPage,
   CardDetail,
   CacheCleared,
   CardFace,
@@ -125,6 +127,8 @@ import type {
   CollectionSortKey,
   CollectionSummary,
   ComboBracketTag,
+  ComboCountBucket,
+  ComboPiece,
   ComboStatus,
   DeckAuditEntry,
   DeckAuditKind,
@@ -1789,6 +1793,26 @@ export interface FakeCombo {
   /** Feature names, `\n`-joined at the ingest because nothing does anything to them but print
    *  them. */
   produces: string;
+  /**
+   * **The four columns corpus schema 2 added**, in the order and the spelling
+   * `schema::COMBO_TABLES_SQL` gives them — `mana_needed`, `easy_prerequisites`,
+   * `notable_prerequisites`, `description`.
+   *
+   * Spellbook has always published all four and the ingest parsed past them, because the bracket
+   * estimate reads a letter and a card list and nothing else. "View combos" is the reader that
+   * makes them worth a column: a combo whose line a reader cannot follow is a fact about their
+   * card they can do nothing with.
+   *
+   * **`""` and never `null`**, which is the wire's own answer: the feed writes an empty string
+   * where it has nothing to say, the columns are `NOT NULL DEFAULT ''`, and a nullable field here
+   * would invent a third state for a fake to draw an em dash over. {@link ComboFixture} leaves
+   * all four off the rows that have nothing to say for the same reason — absent means `""`, and
+   * `""` means the feed said nothing.
+   */
+  manaNeeded: string;
+  easyPrerequisites: string;
+  notablePrerequisites: string;
+  description: string;
   /** How many decks Spellbook has seen it in, or `null` where the feed gives no figure. */
   popularity: number | null;
 }
@@ -1811,9 +1835,15 @@ export interface FakeComboCard {
   oracleId: string;
   name: string;
   quantity: number;
-  /** Whether the combo needs this card *in the command zone*. Stored, and deliberately not read
-   *  by the match: "contains" is all the query answers, and whether a card really is the
-   *  commander is a domain question this side does not ask. */
+  /**
+   * Whether the combo needs this card *in the command zone*.
+   *
+   * **Stored since the feed landed, read by nothing until `combos_for_card`** — and still not
+   * read by the *match*: "contains" is all that query answers, and whether a card really is the
+   * commander is a domain question that side does not ask. What the card-side read does with it
+   * is draw it, which is a different thing again: {@link ComboPiece.mustBeCommander} is display
+   * only, so this column now has a reader and still has no arbiter.
+   */
   mustBeCommander: boolean;
 }
 
@@ -3088,6 +3118,69 @@ const MAX_COMBO_CARD_IDS = 1_000;
 const TOO_MANY_COMBO_CARDS =
   "That is more cards than one combo check can look at. Ask about 1000 or fewer.";
 
+/** `combos::MAX_PAGE` — the largest page `combos_for_card` will answer, and the ceiling a caller
+ *  does not get to raise. **Clamped and not refused**, unlike {@link MAX_COMBO_CARD_IDS} above:
+ *  that bound is a fact about a deck the reader assembled, this one is a number the page composed,
+ *  and a refusal a reader cannot act on is worse than a shorter list. `CombosDialog.tsx` asks for
+ *  25, so nothing in the app is near it. */
+const MAX_CARD_COMBOS_PAGE = 100;
+
+/**
+ * One named card of a fixture combo.
+ *
+ * **A bare string is the ordinary piece** and is what almost every row below writes: one copy,
+ * not the commander, resolved against the corpus by name. The object form exists for the three
+ * things a piece can be that a name alone cannot say, and each of them earns its own row rather
+ * than being a shape the fixture carries everywhere:
+ *
+ * * **`quantity` above one** — a combo that really wants two copies of a card. The dialog draws
+ *   `×2` and grades the *piece's* line against it (`ownedNote` in `CombosDialog.tsx` says "1 of 2
+ *   owned"), so a fixture with no such row leaves that middle branch undrawn. It does **not**
+ *   grade the combo: `ownedOnly` is presence — see {@link comboPieces} — and the two fixture rows
+ *   carrying a `×2` are there to make that difference visible from one card's page.
+ * * **`mustBeCommander`** — the column `combo_cards` has stored since the feed landed and
+ *   nothing read until `combos_for_card`. {@link comboCardRows} used to say that inventing a
+ *   `true` would seed a condition nothing here reads; there is a reader now, and this is it.
+ * * **`unsyncedOracleId`** — the piece names a card **this corpus does not carry, on purpose**.
+ *   See the field.
+ *
+ * **Ownership is not one of them.** `ComboPiece.owned` is a join — {@link pieceOwnership} — and
+ * the two copies the seed cannot hold are declared once in {@link DECLARED_COMBO_COPIES} rather
+ * than on every row that names those cards, which is thirty of them.
+ */
+interface ComboPieceFixture {
+  /** The card's name, as the feed spells it. */
+  name: string;
+  /** Copies the combo asks for. Absent is `1`, which is nearly every piece Spellbook publishes. */
+  quantity?: number;
+  /** The combo wants this piece in the command zone. Absent is `false`. */
+  mustBeCommander?: boolean;
+  /**
+   * The oracle id to file this piece under **when the corpus has no card of this name** — which
+   * turns a name that does not resolve from a fixture that has rotted into a fixture that is
+   * making a point.
+   *
+   * `resolvedCombos` drops a whole combo the moment one of its names stops resolving, and that
+   * rule is right: a half-combo in `combo_cards` is a row that can never match and looks like
+   * data. But *Spellbook's corpus and the reader's `cards` table are two downloads on two
+   * schedules*, so a combo naming a card this database has never synced is an ordinary state of
+   * the real backend — `ComboPiece.cardId` is `null`, there is no picture and `owned` is `0`,
+   * and the name is the whole of what the row can draw. Declaring the id here is how the fixture
+   * says *this one is deliberate*: a name with no declaration that stops resolving still takes
+   * its combo out, loudly, exactly as before.
+   *
+   * **A well-formed UUID that resolves to nothing in `cards.ts`, and that is the point** — the
+   * inverse of {@link TOKEN_ORACLE}'s lesson, where an id resolving to no printing was the bug.
+   * It is deliberately not a real Scryfall oracle id: a real one would start resolving the day
+   * `gen-storybook-cards.mjs` picked that card up, and the fixture would silently stop covering
+   * the case it exists for.
+   */
+  unsyncedOracleId?: string;
+}
+
+/** A piece as a fixture writes it — {@link ComboPieceFixture}, or just the name. */
+type ComboFixtureCard = string | ComboPieceFixture;
+
 /**
  * One fixture combo, named by **card name** rather than by oracle id.
  *
@@ -3096,32 +3189,45 @@ const TOO_MANY_COMBO_CARDS =
  * made of cards the seeded deck actually holds. `cards.ts` is generated wholesale, so the names
  * are resolved against it at build time and a combo naming a card the corpus no longer carries
  * contributes **nothing at all** rather than a half-combo that can never match — see
- * {@link comboRows}.
+ * {@link comboRows}. The one exception, declared per piece, is
+ * {@link ComboPieceFixture.unsyncedOracleId}.
  */
 interface ComboFixture {
   id: string;
   bracketTag: ComboBracketTag;
-  /** Card names in the order the feed listed them, which is the order `DeckCombo.cards` prints
-   *  and the order `combo_cards` is inserted in. */
-  cards: readonly string[];
+  /** The named cards in the order the feed listed them, which is the order `DeckCombo.cards`
+   *  prints, the order `combo_cards` is inserted in and the order `CardCombo.pieces` answers in.
+   *  **Spellbook's editors write the steps against this order**, so nothing reorders it. */
+  cards: readonly ComboFixtureCard[];
   templateCount: number;
   identity: string;
   produces: string;
+  /** The four corpus-schema-2 columns, **absent meaning `""`** — {@link FakeCombo.manaNeeded}'s
+   *  note. A combo with nothing to say about its mana is the common case in the real feed, so
+   *  writing `""` seven times would be noise standing in for a fact. */
+  manaNeeded?: string;
+  easyPrerequisites?: string;
+  notablePrerequisites?: string;
+  description?: string;
   popularity: number | null;
 }
 
 /**
- * The combos in the fixture — seven, chosen so every branch the bracket advisory has to draw is
- * reachable from one seeded deck.
+ * The combos in the fixture, **hand-written half** — ten, chosen so every branch the bracket
+ * advisory and the card-side combo list have to draw is reachable from one seeded world.
+ * {@link fillerCombos} adds twenty-six more, and the two halves are kept apart deliberately: see
+ * {@link COMBO_FIXTURES}.
  *
- * **Two of the seven are live-verified and five are not, and the split is the corpus's fault
+ * **Two of the ten are live-verified and eight are not, and the split is the corpus's fault
  * rather than a shortcut.** `POST /find-my-combos` was asked about all 42 oracle cards in
  * `cards.ts` on 2026-08-27 and answered **two** fully-contained combos — the two `S` rows below,
  * with Spellbook's own ids, tags, feature names and popularity figures. There is no `R`, `P`,
  * `C` or `E` combo whose every card is in these 52 printings, and there is no combo with a
- * `requires[]` template either, so the other five are **constructed**: real cards from this
- * corpus, plausible interactions, and Spellbook-shaped ids that are not Spellbook's. Each says
- * so at its own line.
+ * `requires[]` template either, so the rest are **constructed**: real cards from this corpus,
+ * plausible interactions, and Spellbook-shaped ids that are not Spellbook's. Each says so at its
+ * own line. The two live rows' `description`, `manaNeeded` and both prerequisite fields are
+ * **not** live — the 2026-08-27 probe predates corpus schema 2 by ten days and did not record
+ * them — so those four are constructed even on a live row, and the rows below say where.
  *
  * **Adding Thassa's Oracle and Demonic Consultation would fix that and is out of this file's
  * reach**: the corpus is generated by `scripts/gen-storybook-cards.mjs` from a synced database,
@@ -3129,7 +3235,7 @@ interface ComboFixture {
  * would be a UUID nothing regenerates. It is a change to that script's `SELECTIONS`, not to a
  * fixture.
  *
- * What every story needs and what carries it:
+ * What every story needs and what carries it — the deck advisory's five first:
  *
  * * **`R`, two cards, no templates** — the floor-4 row, and the whole of what makes the seeded
  *   deck's stored bracket 2 a *mismatch* to report.
@@ -3140,8 +3246,37 @@ interface ComboFixture {
  * * **Two `S` rows sharing a card**, neither of which the seeded deck holds — which is what
  *   proves {@link readHandlers.combos_for_cards} is really matching rather than answering a
  *   canned list.
+ *
+ * …and the card-side list's five, every one of them hung on **Boros Reckoner**, which is the
+ * card {@link readHandlers.combos_for_card} is storyable from precisely because the two live
+ * rows already share it:
+ *
+ * * **A combo whose every piece the reader owns** (`3422-3587`) against **one they hold half of**
+ *   (`3149-3587`, where Avacyn is nobody's), which is the pair that makes the ownership mark and
+ *   the `I own every piece` filter mean anything rather than decorate a list.
+ * * **And one where the count and the mark disagree** (`3422-3587--5`, two Boros Charms against
+ *   the one they have): the piece reads *1 of 2 owned* and the combo still passes the filter,
+ *   because `combos::GRP_CTE` tests presence and not quantity. It is what fails a fake that
+ *   tightened that into a count.
+ * * **A piece the corpus has never synced** (`1183-3587`, Blasphemous Act) — `cardId: null`,
+ *   no picture, `owned: 0`, and the name is all the row can draw. A supported state, not a fault.
+ * * **The row with everything written on it** (`2331-3587-4118--7`): a template, numbered steps,
+ *   both prerequisite halves, `{2}` of mana, a piece wanted **twice** and a piece that must be
+ *   the **commander**. Four fields and two piece flags that no other row in this file exercises,
+ *   so without it the dialog's whole lower half is undrawn.
+ * * **An unranked row** (`1183-3587`, `popularity: null`), which is where the sort's NULLs-last
+ *   arm is visible — and visible *on its own*, which is why the id starts with `1183`: it sorts
+ *   **first** of Boros Reckoner's combos by id and comes back **last** of its size, so a handler
+ *   that ignored popularity entirely could not land it there by accident.
+ *
+ * **The ids are Spellbook-shaped and internally consistent**, which is worth a line because two
+ * of the five above lean on it: their scheme numbers the *cards* and sorts them, so `3587` is
+ * Boros Reckoner throughout (it is what `3422-3587` and `3149-3587` share), `3422` is Boros
+ * Charm, `3149` is Avacyn — and the constructed rows keep the convention rather than minting
+ * shapes. `3422-3587--5` is therefore visibly *another variant of the same two cards* as the live
+ * row it sits beside, which is what it is.
  */
-const COMBO_FIXTURES: readonly ComboFixture[] = [
+const HAND_WRITTEN_COMBOS: readonly ComboFixture[] = [
   // **Live**, `find-my-combos` 2026-08-27: Spellbook's id, letter, features and popularity
   // exactly as the API answered them. The most-played combo the fixture corpus can make.
   {
@@ -3228,14 +3363,303 @@ const COMBO_FIXTURES: readonly ComboFixture[] = [
     produces: "Ragavan, Nimble Pilferer with flying\nTreasure on combat damage",
     popularity: 431,
   },
+  // **Constructed**, and the interaction is real: thirteen damage to a Boros Reckoner is thirteen
+  // damage the Reckoner hands back wherever it likes. It is here for two things neither of the
+  // rows above can carry.
+  //
+  // **Blasphemous Act is not in this corpus and is not meant to be.** It is the piece whose
+  // `cardId` is `null` — a combo naming a card this database has never synced, which is what two
+  // downloads on two schedules produce all the time and is a *state* rather than a fault. The
+  // fixture declares its oracle id rather than letting the name fail to resolve, because a
+  // failure to resolve is what takes a whole combo out and that rule stays sharp.
+  //
+  // **And its popularity is `null`.** Unranked, so it is the row that proves the sort's
+  // NULLs-last arm — and the `1183` is chosen so that it proves it alone: this id sorts **first**
+  // of Boros Reckoner's combos, and the row comes back **last** of its size. A handler that
+  // forgot to sort, or that sorted `null` as zero-ish through arithmetic, cannot land it in the
+  // right place by accident.
+  {
+    id: "1183-3587",
+    bracketTag: "P",
+    cards: [
+      "Boros Reckoner",
+      {
+        name: "Blasphemous Act",
+        // A well-formed UUID that resolves to nothing in `cards.ts`, and deliberately not
+        // Blasphemous Act's real Scryfall oracle id: a real one would start resolving the day
+        // the generator picked that card up, and this row would quietly stop being about a card
+        // the corpus lacks.
+        unsyncedOracleId: "e8f0e8f0-0000-4000-8000-000000000001",
+      },
+    ],
+    templateCount: 0,
+    identity: "RW",
+    produces: "13 damage to any target",
+    popularity: null,
+  },
+  // **Constructed, and the row where the count and the mark disagree** — which is a state the
+  // backend really produces and the only row here that reaches it. It wants two Boros Charms and
+  // the reader has one, so the piece line reads *1 of 2 owned* while the combo itself passes
+  // `I own every piece`.
+  //
+  // That is not a fixture being clever, it is `combos::GRP_CTE` being explicit: ownership there
+  // is **presence and not quantity** — `min(oracle_id IN owned)` — on the argument that
+  // `match_combos` has never asked how many copies a deck lists either, and that `ComboPiece.owned`
+  // carries the number for a reader who wants to judge it themselves. So this row is what fails a
+  // fake that tightened the filter into `owned >= quantity`: it would drop a combo the window
+  // shows. It is also the only row that draws `CombosDialog.tsx`'s middle ownership branch,
+  // between *Not owned* and *Owned* — the other `×2` piece below is a Lightning Bolt and the
+  // reader has seven of those.
+  {
+    id: "3422-3587--5",
+    bracketTag: "S",
+    cards: ["Boros Reckoner", { name: "Boros Charm", quantity: 2 }],
+    templateCount: 0,
+    identity: "RW",
+    produces: "Infinite lifegain\nInfinite damage",
+    popularity: 640,
+  },
+  // **Constructed, and the row with everything written on it** — the only fixture that exercises
+  // the four columns corpus schema 2 added and the two `combo_cards` flags nothing read until
+  // `combos_for_card`. Without it the card-side dialog's whole lower half is undrawn: no steps,
+  // no prerequisites of either kind, no mana line, no `×2` and no commander mark.
+  //
+  // **The four text fields are this fixture's prose, not Spellbook's**, which is worth saying
+  // plainly because the two live rows above carry Spellbook's own figures: the 2026-08-27 probe
+  // predates these columns by ten days and recorded none of them, so every word here is written
+  // for the workbench.
+  //
+  // Its named cards are all present and it still cannot be fully checked — `templateCount: 1` —
+  // which is the shape the *possible* line exists for, said a second time on a row that is also
+  // the reader's own commander's.
+  {
+    id: "2331-3587-4118--7",
+    bracketTag: "R",
+    cards: [
+      { name: "Kenrith, the Returned King", mustBeCommander: true },
+      "Boros Reckoner",
+      // Two copies — the `×2` the dialog draws. The **second** of the fixture's two such pieces
+      // and deliberately the easy one: the reader has seven Bolts, so this row reads *Owned* while
+      // `3422-3587--5`'s two Boros Charms read *1 of 2 owned*. One badge, two readings, which is
+      // what makes `ownedNote`'s three branches all reachable from one card's page.
+      { name: "Lightning Bolt", quantity: 2 },
+    ],
+    templateCount: 1,
+    identity: "WUBRG",
+    produces: "Infinite damage\nWin the game",
+    manaNeeded: "{2}",
+    easyPrerequisites: "Boros Reckoner is on the battlefield.",
+    notablePrerequisites:
+      "Kenrith, the Returned King is your commander.\n" +
+      "You control a creature with an activated ability that untaps it.",
+    description:
+      "1. Pay {2} and activate Kenrith, the Returned King's second ability targeting Boros " +
+      "Reckoner.\n" +
+      "2. Cast Lightning Bolt targeting Boros Reckoner.\n" +
+      "3. Boros Reckoner's trigger deals 3 damage to any target.\n" +
+      "4. Untap and repeat from step 1 with the second Lightning Bolt.",
+    popularity: 5_601,
+  },
 ];
 
-/** Every card name {@link COMBO_FIXTURES} depends on, for a test that wants to prove they all
- *  still resolve against the generated corpus. A name that stops resolving takes its whole combo
- *  out of the fixture silently, which is the drift this export exists to make loud. */
-export const COMBO_CARD_NAMES: readonly string[] = [
-  ...new Set(COMBO_FIXTURES.flatMap((c) => c.cards)),
+/**
+ * The second card of each filler combo — 26 names out of `cards.ts`, and the list is where the
+ * ownership arithmetic is actually decided.
+ *
+ * **Four of them are cards the `starter` collection has a row for, and only three of those rows
+ * hold anything** — the other 22 partners are cards it has no row for at all. Every filler also
+ * names Boros Reckoner (declared) and Lightning Bolt (seven real copies), so a filler is fully
+ * owned exactly when its partner is, where *fully owned* is {@link comboPieces}' **presence** test
+ * rather than a count:
+ *
+ * * **Counterspell, Tarmogoyf and Urza's Saga** — ordinary rows, 2, 3 and 4 copies. They sit at
+ *   12, 13 and 14 of this list rather than at the front, which puts them at positions 18, 19 and
+ *   20 of the answer: the `I own every piece` filter has to reach past seventeen rows to find
+ *   them, and a filter whose survivors happened to be the first rows anyway is one a `slice`
+ *   would pass.
+ * * **Smuggler's Copter**, at 25, whose seeded row holds **zero copies** — and which is therefore
+ *   *not* owned. It is the fixture for `combos::OWNED_CTE`'s `AND e.quantity > 0`, and the reason
+ *   that clause is there at all.
+ *
+ * **What the Copter row is and is not.** A `collection_entries` row cannot hold zero copies in a
+ * production database — `set_quantity(id, 0)` deletes the row, the v24 rung deleted every stored
+ * zero, and the importer's `set` mode does the same
+ * ([collection-folders.md](../../docs/reference/collection-folders.md), *Zero quantity deletes the
+ * row*); the real dev database has none of them in 276 rows, which is also what lets
+ * `collection_source::owns_printing` be an `EXISTS`. **`starterEntries` seeds one anyway**,
+ * deliberately and from before that rule, to prove a zero renders. So this is a fixture standing
+ * in a state the app deletes — and what it surfaced is that the crate's presence test was correct
+ * only *via* an invariant a different module maintains. Unfenced, it drew `Not owned` on a piece
+ * line inside a combo the same screen was offering under `I own every piece`. `OWNED_CTE` now
+ * carries the clause explicitly, this fake carries it beside it, and the two agree without
+ * either having to trust the collection module. **Nobody should loosen either end**: the seeded
+ * row is the fence's test, not an argument that the fence is redundant.
+ *
+ * So Boros Reckoner's `ownedTotal` is **5** — those three fillers, plus `3422-3587` and
+ * `3422-3587--5` — against a `total` of 31 and a `matching` of 27 under the three-card chip.
+ * Three different numbers on one page is the whole reason the count is a triple, and a fixture
+ * where any two of them coincided would let a handler answer either with the other.
+ *
+ * **Consecrated Sphinx and Thrasios are deliberately absent**, and not because a filler could not
+ * name them: `DeckBracket.stories.tsx` says in prose that "Consecrated Sphinx is in two of the
+ * fixture's combos", and a prose-only claim in another file routes to neither CI job. Keeping
+ * them out of the generated half is cheaper than being right about that sentence twice.
+ * Basic lands and the corpus's seven tokens are absent for a different reason: a Treasure token
+ * as a combo piece would teach a reader something about this feed that is not true.
+ */
+const FILLER_PARTNERS: readonly string[] = [
+  "Ancestral Recall",
+  "Ancient Tomb",
+  "Avacyn, Angel of Hope",
+  "Bonecrusher Giant // Stomp",
+  "Brisela, Voice of Nightmares",
+  "Bruna, the Fading Light",
+  "Delver of Secrets // Insectile Aberration",
+  "Dismember",
+  "Dusk // Dawn",
+  "Elesh Norn, Grand Cenobite",
+  "Emrakul, the Aeons Torn",
+  // The three the reader owns — see above. They are consecutive so the seed's own arithmetic is
+  // readable here rather than having to be counted out of a list of 26.
+  "Counterspell",
+  "Tarmogoyf",
+  "Urza's Saga",
+  "Fire // Ice",
+  "Gisela, the Broken Blade",
+  "Jace, the Mind Sculptor",
+  "Kenrith, the Returned King",
+  "Kozilek, Compleated",
+  "Little Girl",
+  "Llanowar Elves",
+  "Lurrus of the Dream-Den",
+  "Prismatic Ending // Prismatic Ending",
+  "Rhystic Study",
+  "Smuggler's Copter",
+  "Swords to Plowshares",
 ];
+
+/** The seven letters `combos::BRACKET_TAGS` holds, cycled over the filler so the dialog's label
+ *  map is drawn against all of them. `O` and `B` are reachable from nowhere else in this
+ *  fixture — no hand-written row wears either — and neither reaches the bracket advisory, for
+ *  the reason {@link fillerCombos} gives: no Commander deck in any seed holds Boros Reckoner. */
+const FILLER_TAGS: readonly ComboBracketTag[] = ["R", "S", "P", "O", "C", "E", "B"];
+
+/**
+ * The 26 filler combos, **generated rather than typed**, and the whole of what makes a second
+ * page reachable: `CombosDialog.tsx`'s `PAGE_SIZE` is 25, so Boros Reckoner's 31 combos are the
+ * only way a story can press `Show more` and get anything — 25 on the first page and six on the
+ * second.
+ *
+ * They are kept beside the hand-written ten rather than mixed into them because the two halves
+ * are read for different things: every row above argues for its own existence, and every row
+ * here exists to make a *count* big enough. Typing 26 of them out would be 26 more chances to
+ * disagree with each other and nothing gained — but generating them into a second exported list
+ * would be the two-catalogues drift this file warns about one table over, so they join
+ * {@link COMBO_FIXTURES} and are indistinguishable to every reader downstream.
+ *
+ * Three things about them are deliberate rather than arbitrary:
+ *
+ * * **Every one names Boros Reckoner and Lightning Bolt**, so `cardCount` is 3 throughout: they
+ *   land in a bucket of their own, behind every two-card combo, and cannot disturb the order the
+ *   hand-written rows arrive in. {@link readHandlers.combos_for_card}'s
+ *   `cardCount ASC, popularity DESC, id ASC` puts all five of Boros Reckoner's hand-written
+ *   rows ahead of every one of them.
+ * * **Popularity ascends with the id** (`100 + i` against `…--01` upward), which makes the stored
+ *   order — `combos` is sorted by its own primary key — the exact **reverse** of the answer. A
+ *   handler that forgot to sort would draw the least popular filler first, and an ordering test
+ *   over rows already in the right order proves nothing.
+ * * **The bracket letters cycle through all seven**, which is the first time this fixture reaches
+ *   `O` and `B` at all. They are purely what the *dialog* draws: no bracket arithmetic ever sees
+ *   them, because nothing generated here can match a deck that has a bracket.
+ *
+ * **That last claim is the one worth checking rather than believing, and it is Boros Reckoner's
+ * doing.** Every filler names it, and no seeded **Commander** deck does: deck 2 sleeves Boros
+ * Charm and not the Reckoner, and neither does `bracketMismatch`'s testbed. Deck 1's *sideboard*
+ * holds four (`gtc 215`) and holds Lightning Bolt and half these partners besides — so deck 1's
+ * whole card list really would match a pile of these — but deck 1 is Modern, and `DeckEditor`
+ * mounts `DeckBracket` only where `spec.commanderRule != null`. **So a filler naming a card the
+ * seeded Commander decks lack is the whole of what keeps every existing bracket story answering
+ * exactly what it answered before**, and a partner list that reached for Lightning Bolt as its
+ * anchor instead would have rewritten them all.
+ */
+function fillerCombos(): ComboFixture[] {
+  return FILLER_PARTNERS.map((partner, i) => ({
+    // Spellbook's own id shape, keeping the convention the hand-written rows keep: `3587` is
+    // Boros Reckoner, and `9146` is a card number Spellbook has not issued, so nothing here can
+    // be mistaken for a variant that exists. Zero-padded because the order is a *string* order —
+    // `--9` would sort after `--10`, and the reverse-of-stored property above would be a
+    // half-truth.
+    id: `3587-9146--${String(i + 1).padStart(2, "0")}`,
+    bracketTag: FILLER_TAGS[i % FILLER_TAGS.length],
+    cards: ["Boros Reckoner", partner, "Lightning Bolt"],
+    templateCount: 0,
+    identity: "RW",
+    produces: "Infinite combat damage",
+    popularity: 100 + i,
+  }));
+}
+
+/**
+ * Every combo in the fixture — the ten that argue for themselves and the 26 that make a count.
+ *
+ * One list from here down, deliberately: {@link comboRows}, {@link comboCardRows} and
+ * {@link COMBO_CARD_NAMES} all read this and none of them knows which half a row came from.
+ */
+const COMBO_FIXTURES: readonly ComboFixture[] = [...HAND_WRITTEN_COMBOS, ...fillerCombos()];
+
+/**
+ * Every card name {@link COMBO_FIXTURES} expects the corpus to carry, for a test that wants to
+ * prove they all still resolve. A name that stops resolving takes its whole combo out of the
+ * fixture silently, which is the drift this export exists to make loud.
+ *
+ * **The pieces that declared their own oracle id are not here**, and leaving them in would have
+ * inverted the export: `Blasphemous Act` is expected *not* to resolve, so a list that included
+ * it would fail the moment the fixture was right.
+ */
+export const COMBO_CARD_NAMES: readonly string[] = [
+  ...new Set(
+    COMBO_FIXTURES.flatMap((c) =>
+      c.cards.map(pieceOf).filter((p) => p.unsyncedOracleId === undefined),
+    ).map((p) => p.name),
+  ),
+];
+
+/**
+ * Copies of a combo piece the fixture **declares** the reader holds, keyed by the card's name —
+ * the one number on {@link ComboPiece} this fake does not derive, and a compromise rather than a
+ * design.
+ *
+ * `owned` is a join everywhere else: {@link pieceOwnership} falls through to
+ * {@link collectionReach}, which sums {@link FakeDb.collectionEntries} across every printing and
+ * every finish. That is what makes a story that edits the collection change this panel too, and
+ * it is what every card not named here gets — Lightning Bolt reads **7** because the reader owns
+ * seven, and nothing had to say so. A declared piece also counts as *present*, because what it is
+ * standing in for is a collection row.
+ *
+ * **What forced the exception is the seed, not the derivation, and it is total rather than
+ * awkward.** Walk the fixture against `starter`'s thirteen collection rows and **not one combo of
+ * the thirty-six comes out owned**: every pair has a half the reader has no row for, and the
+ * nearest miss — `1268-2357`, Smuggler's Copter plus Ragavan — misses on the Copter's zero
+ * ({@link FILLER_PARTNERS}). So `ownedTotal` would be `0` on every page of every card, the
+ * `I own every piece` filter would empty every list it was pressed on, and neither the count nor
+ * the filter would have a green-versus-red to tell apart: a handler ignoring `ownedOnly` outright
+ * would pass. Boros Reckoner is the only card here with enough combos to page at all, and the
+ * `starter` collection holds neither of the cards its two live combos are made of.
+ *
+ * Making it true the honest way means two more rows in `starterEntries`, and **that array is
+ * load-bearing well outside this file**: `collection_summary` answers `totalCards: 21`,
+ * `uniqueCards: 12` and `entries: 13` over it, and `CollectionPage.stories.tsx` asserts
+ * `aria-rowcount` `"14"` against it — a red build in a file this change does not own. So the two
+ * copies are declared here instead.
+ *
+ * **What it costs, stated so nobody has to discover it**: a story that adds a Boros Reckoner to
+ * the collection does not move this number. Every other piece's does. If `starterEntries` ever
+ * grows those two rows, this map goes and nothing else has to change.
+ */
+const DECLARED_COMBO_COPIES: ReadonlyMap<string, number> = new Map([
+  ["Boros Reckoner", 1],
+  ["Boros Charm", 1],
+]);
 
 /** The corpus's first printing of each name, as an oracle id — a combo is keyed on the oracle
  *  card, so which printing answers does not matter and all four Lightning Bolts would give the
@@ -3246,18 +3670,52 @@ function oracleIdsByName(cards: readonly FakeCard[]): Map<string, string> {
   return byName;
 }
 
-/** The fixtures whose every named card resolves against a corpus. **A combo with a card the
- *  corpus does not carry is dropped whole**: half a combo in `combo_cards` would be a row that
- *  can never match, which is worse than a shorter catalogue because it looks like data. */
+/** One fixture piece with its id resolved — the shape {@link comboCardRows} writes a row from
+ *  and {@link comboRows} counts distinct ids over. */
+interface ResolvedComboPiece {
+  oracleId: string;
+  name: string;
+  quantity: number;
+  mustBeCommander: boolean;
+}
+
+/** A fixture piece as written, whichever of the two forms it took. */
+function pieceOf(card: ComboFixtureCard): ComboPieceFixture {
+  return typeof card === "string" ? { name: card } : card;
+}
+
+/**
+ * The fixtures whose every named card resolves against a corpus, with their pieces resolved.
+ *
+ * **A combo with a card the corpus does not carry is dropped whole**: half a combo in
+ * `combo_cards` would be a row that can never match, which is worse than a shorter catalogue
+ * because it looks like data.
+ *
+ * **The one exception is a piece that declared its own id**
+ * ({@link ComboPieceFixture.unsyncedOracleId}), which is not a hole in that rule but the state
+ * the rule is protecting the *accidental* version of: a combo naming a card this database has
+ * never synced is what two downloads on two schedules produce, and the fixture saying so out
+ * loud is what tells it apart from a name that has quietly stopped resolving.
+ */
 function resolvedCombos(
   cards: readonly FakeCard[],
-): { fixture: ComboFixture; oracleIds: string[] }[] {
+): { fixture: ComboFixture; pieces: ResolvedComboPiece[] }[] {
   const byName = oracleIdsByName(cards);
-  const out: { fixture: ComboFixture; oracleIds: string[] }[] = [];
+  const out: { fixture: ComboFixture; pieces: ResolvedComboPiece[] }[] = [];
   for (const fixture of COMBO_FIXTURES) {
-    const oracleIds = fixture.cards.map((name) => byName.get(name));
-    if (oracleIds.some((id) => id === undefined)) continue;
-    out.push({ fixture, oracleIds: oracleIds as string[] });
+    const pieces: ResolvedComboPiece[] = [];
+    for (const card of fixture.cards) {
+      const piece = pieceOf(card);
+      const oracleId = byName.get(piece.name) ?? piece.unsyncedOracleId;
+      if (oracleId === undefined) break;
+      pieces.push({
+        oracleId,
+        name: piece.name,
+        quantity: piece.quantity ?? 1,
+        mustBeCommander: piece.mustBeCommander ?? false,
+      });
+    }
+    if (pieces.length === fixture.cards.length) out.push({ fixture, pieces });
   }
   return out;
 }
@@ -3273,34 +3731,34 @@ function resolvedCombos(
  */
 export function comboRows(cards: readonly FakeCard[]): FakeCombo[] {
   return resolvedCombos(cards)
-    .map(({ fixture, oracleIds }) => ({
+    .map(({ fixture, pieces }) => ({
       id: fixture.id,
       bracketTag: fixture.bracketTag,
-      cardCount: new Set(oracleIds).size,
+      cardCount: new Set(pieces.map((p) => p.oracleId)).size,
       templateCount: fixture.templateCount,
       identity: fixture.identity,
       produces: fixture.produces,
+      // Absent is `''`, which is the column's own default and the feed's own answer — never
+      // `null`. See {@link FakeCombo.manaNeeded}.
+      manaNeeded: fixture.manaNeeded ?? "",
+      easyPrerequisites: fixture.easyPrerequisites ?? "",
+      notablePrerequisites: fixture.notablePrerequisites ?? "",
+      description: fixture.description ?? "",
       popularity: fixture.popularity,
     }))
     .sort((a, b) => cmp(a.id, b.id));
 }
 
 /** `combo_cards` for a corpus — **in the file's order within each combo**, which is what
- *  `match_combos` reads back with `ORDER BY rowid` and what `DeckCombo.cards` prints.
- *  `mustBeCommander` is `false` throughout: it was on all four cards the live probe returned,
- *  and inventing a `true` would seed a condition nothing here reads. */
+ *  `match_combos` reads back with `ORDER BY rowid`, what `DeckCombo.cards` prints and what
+ *  `CardCombo.pieces` answers in. `quantity` and `mustBeCommander` are the fixture's own, which
+ *  they were not until `combos_for_card` gave both columns a reader: this used to write `1` and
+ *  `false` throughout, on the argument that inventing a `true` would seed a condition nothing
+ *  read. See {@link ComboPieceFixture}. */
 export function comboCardRows(cards: readonly FakeCard[]): FakeComboCard[] {
   const rows: FakeComboCard[] = [];
-  for (const { fixture, oracleIds } of resolvedCombos(cards)) {
-    fixture.cards.forEach((name, i) => {
-      rows.push({
-        comboId: fixture.id,
-        oracleId: oracleIds[i],
-        name,
-        quantity: 1,
-        mustBeCommander: false,
-      });
-    });
+  for (const { fixture, pieces } of resolvedCombos(cards)) {
+    for (const piece of pieces) rows.push({ comboId: fixture.id, ...piece });
   }
   return rows;
 }
@@ -3428,6 +3886,264 @@ function matchCombos(db: FakeDb, cardIds: readonly string[] | undefined): DeckCo
         (a.popularity === null ? 1 : b.popularity === null ? -1 : b.popularity - a.popularity) ||
         cmp(a.id, b.id),
     );
+}
+
+/**
+ * What the collection says about a card, in the **two** shapes the combo page needs — built once
+ * per call rather than asked per piece, because a page asks about a hundred pieces and a linear
+ * scan of `collection_entries` inside each of them is the fake's cheapest way to a slow story.
+ *
+ * **They are two different questions and the crate asks them with two different statements**, so
+ * a fake carrying one and deriving the other would be inventing a rule:
+ *
+ * * `copies` is `collection_source::copies_of_oracle` at `Availability::Everything` —
+ *   `sum(quantity)` over every printing and every finish of the card, which is what
+ *   `ComboPiece.owned` prints. `Everything` and not `ForDeck` deliberately: a locked folder is a
+ *   drawer the app stops *offering* from, and this panel is stating a fact about the collection
+ *   rather than offering to move anything out of it. It is {@link ownedOfPrinting} widened to the
+ *   card, with no {@link availableToDeck} scope, because this read has no deck in front of it.
+ * * `present` is `combos::OWNED_CTE` — `SELECT DISTINCT k.oracle_id FROM collection_entries e
+ *   JOIN cards k WHERE k.oracle_id IS NOT NULL AND e.quantity > 0` — which is what
+ *   `I own every piece` tests. **A row at quantity 0 is not a copy**, and that fence is
+ *   deliberate on both sides: see {@link FILLER_PARTNERS} for the fixture that made it necessary.
+ *
+ * **Presence is still not quantity, and the fence does not touch that.** `all_owned` asks *does
+ * the reader hold any copies of each named card*, never `owned >= quantity` — a combo wanting two
+ * Altars is fully owned by a reader holding one. What the fence removes is a row holding **none**.
+ *
+ * **An orphaned entry contributes to neither**, which is the `JOIN cards` in both statements
+ * rather than a guard: a row naming a printing the corpus has never heard of has no oracle id to
+ * file under.
+ */
+interface CollectionReach {
+  copies: Map<string, number>;
+  present: Set<string>;
+}
+
+function collectionReach(db: FakeDb): CollectionReach {
+  const copies = new Map<string, number>();
+  const present = new Set<string>();
+  for (const e of db.collectionEntries) {
+    const oracleId = cardById(db, e.cardId)?.oracleId;
+    if (!oracleId) continue;
+    copies.set(oracleId, (copies.get(oracleId) ?? 0) + e.quantity);
+    // The fence, and the one line where the two sets part company: a row holding none of a card
+    // is paperwork, not a copy.
+    if (e.quantity > 0) present.add(oracleId);
+  }
+  return { copies, present };
+}
+
+/**
+ * One piece's two ownership facts — **the count the panel prints and the presence the filter
+ * tests, which are not the same question.**
+ *
+ * A piece {@link DECLARED_COMBO_COPIES} names stands in for a collection row the seed cannot
+ * carry, so it answers both: declared copies, and present.
+ */
+function pieceOwnership(
+  row: FakeComboCard,
+  reach: CollectionReach,
+): { owned: number; present: boolean } {
+  const declared = DECLARED_COMBO_COPIES.get(row.name);
+  if (declared !== undefined) return { owned: declared, present: true };
+  return { owned: reach.copies.get(row.oracleId) ?? 0, present: reach.present.has(row.oracleId) };
+}
+
+/**
+ * The printing a combo piece is addressed by, or `null` for a card the corpus has never synced.
+ *
+ * `deck_tokens::newest_printing` verbatim — {@link byPrintingRank} over `cards` for the oracle id
+ * — which is what `combos::pieces_sql` reaches for and says why: the art in this panel and the
+ * art of a token derived from the same oracle card must not disagree about which printing *is*
+ * that card, and two orderings that mean to be the same are two orderings that will not be.
+ * Deterministic is the whole requirement either way: a piece that addressed a different printing
+ * on two opens would fetch a different picture each time and nothing on screen would say why.
+ *
+ * **No `is_paper` test**, unlike {@link readHandlers.card_printings} one command over. The crate's
+ * sub-select has none, and this fixture has no digital printing to tell the difference on — so a
+ * filter here would be a rule the fake invented and the window would not honour.
+ *
+ * **`null` is an answer**, and the row it belongs to is readable and not clickable: there is no
+ * printing to open and no picture to fetch. That is the `LEFT JOIN` in the crate rather than a
+ * dropped piece. See {@link ComboPieceFixture.unsyncedOracleId} for the fixture that reaches it
+ * on purpose.
+ */
+function defaultPrintingOf(db: FakeDb, oracleId: string): string | null {
+  const printings = db.cards.filter((c) => c.oracleId === oracleId);
+  if (printings.length === 0) return null;
+  return [...printings].sort(byPrintingRank)[0].id;
+}
+
+/**
+ * One combo's pieces in `combo_cards`' own row order — the feed's order, which Spellbook's editors
+ * wrote `description` against, so nothing here resorts them — and **whether the reader owns every
+ * one of them**, which is answered here because it is a fact about the same rows.
+ *
+ * `allOwned` is `combos::GRP_CTE`: `min(oracle_id IN owned)` per combo, which is *presence* and
+ * not quantity. **A combo asking for two of a card the reader has one of counts as owned**, and
+ * the crate says why: `match_combos` has never asked how many copies a deck lists either, and
+ * `ComboPiece.owned` carries the count for a reader who wants to judge that themselves. A fake
+ * testing `owned >= quantity` here would be stricter than the window and would drop rows the
+ * app shows.
+ */
+function comboPieces(
+  db: FakeDb,
+  comboId: string,
+  reach: CollectionReach,
+): { pieces: ComboPiece[]; allOwned: boolean } {
+  let allOwned = true;
+  const pieces = db.comboCards
+    .filter((row) => row.comboId === comboId)
+    .map((row) => {
+      const cardId = defaultPrintingOf(db, row.oracleId);
+      const { owned, present } = pieceOwnership(row, reach);
+      if (!present) allOwned = false;
+      return {
+        oracleId: row.oracleId,
+        name: row.name,
+        quantity: row.quantity,
+        mustBeCommander: row.mustBeCommander,
+        cardId,
+        imageUris: frontFaceImageUris(db, cardId),
+        owned,
+      };
+    });
+  return { pieces, allOwned };
+}
+
+/**
+ * `combos::card_combos` — **every combo that names one oracle card**, and the opposite question
+ * to {@link matchCombos}.
+ *
+ * That one asks *which of these combos does a pile of cards fully contain*; this asks *what is
+ * this card part of*, and makes no claim at all about the other pieces. The two would answer
+ * differently about the same card in the same database nearly every time, which is why they are
+ * two commands rather than one with a flag.
+ *
+ * **Keyed on the oracle id, never a printing** — `combo_cards.oracle_id` is what the feed stores,
+ * so every printing of a card is the same card here and stepping between two of them in the card
+ * modal must not change this list.
+ *
+ * The three counts are three different questions and none of them can be derived from the page:
+ *
+ * * **`total`** — combos naming the card, **before either filter**. The heading's number.
+ * * **`matching`** — after `cardCount` *and* `ownedOnly`. The one the pager walks.
+ * * **`ownedTotal`** — of `total`, the combos every piece of which the reader has ({@link
+ *   comboPieces}, where *has* is presence and not quantity). **The `cardCount` filter does not
+ *   narrow it**, which is deliberate rather than an oversight: it is what the `I own every piece`
+ *   control says pressing it would leave, and a count that moved with the size chips would tell a
+ *   reader who had picked "3 cards" that they own fewer combos than they do.
+ * * **`byCardCount`** — a census of the *unfiltered* set, ascending, and **never a bucket of
+ *   zero**: a size nothing matches has no bucket, which is what makes the list drawable exactly
+ *   as it stands. Narrowing it under the current filter would empty every chip but the chosen one
+ *   and leave a reader no way back.
+ *
+ * The page itself is `cardCount ASC, popularity DESC, id ASC` — smallest combos first because a
+ * two-card line is the one a reader can actually assemble, then most-played, then the id so two
+ * reads of one card cannot answer in two orders. **An unranked combo sorts last within its
+ * size**, `matchCombos`' NULLs-last arm for its reason.
+ *
+ * **An unknown oracle id and a database with no combos at all both answer `total: 0` and an empty
+ * page.** Telling those two apart is {@link readHandlers.combos_status}' job — exactly as it is
+ * for {@link matchCombos} — because a caller that cannot will draw "this card is in no combos"
+ * over a feed that has never been fetched.
+ */
+function cardCombosPage(
+  db: FakeDb,
+  args: {
+    oracleId: string;
+    cardCount: number | null;
+    ownedOnly: boolean;
+    limit: number;
+    offset: number;
+  },
+): CardCombosPage {
+  const oracleId = args.oracleId.trim();
+  const limit = Math.min(Math.max(args.limit, 1), MAX_CARD_COMBOS_PAGE);
+  const offset = Math.max(0, args.offset);
+  const empty: CardCombosPage = {
+    total: 0,
+    matching: 0,
+    ownedTotal: 0,
+    byCardCount: [],
+    combos: [],
+  };
+  if (oracleId === "") return empty;
+
+  const named = new Set(
+    db.comboCards.filter((row) => row.oracleId === oracleId).map((row) => row.comboId),
+  );
+  if (named.size === 0) return empty;
+
+  const reach = collectionReach(db);
+  // Every naming combo, whole, **before either filter** — the set all three counts and the census
+  // are taken over. Built once because `ownedTotal` and `matching` disagree about which filters
+  // apply and a second walk would be a second chance to apply the wrong pair.
+  const all = db.combos
+    .filter((combo) => named.has(combo.id))
+    .map((combo) => {
+      const { pieces, allOwned } = comboPieces(db, combo.id, reach);
+      return {
+        combo: {
+          id: combo.id,
+          bracketTag: combo.bracketTag,
+          cardCount: combo.cardCount,
+          templateCount: combo.templateCount,
+          identity: combo.identity,
+          produces: combo.produces,
+          description: combo.description,
+          easyPrerequisites: combo.easyPrerequisites,
+          notablePrerequisites: combo.notablePrerequisites,
+          manaNeeded: combo.manaNeeded,
+          popularity: combo.popularity,
+          pieces,
+        } satisfies CardCombo,
+        owned: allOwned,
+      };
+    });
+
+  const buckets = new Map<number, number>();
+  for (const row of all) {
+    const size = row.combo.cardCount;
+    buckets.set(size, (buckets.get(size) ?? 0) + 1);
+  }
+
+  const matching = all.filter(
+    (row) =>
+      (args.cardCount === null || row.combo.cardCount === args.cardCount) &&
+      (!args.ownedOnly || row.owned),
+  );
+
+  return {
+    total: all.length,
+    matching: matching.length,
+    ownedTotal: all.filter((row) => row.owned).length,
+    byCardCount: [...buckets.entries()]
+      .map(([cards, combos]): ComboCountBucket => ({ cards, combos }))
+      .sort((a, b) => a.cards - b.cards),
+    combos: matching
+      .map((row) => row.combo)
+      .sort(
+        (a, b) =>
+          a.cardCount - b.cardCount ||
+          // `matchCombos`' three-way, and the same reason `-1` is not used as a stand-in rank.
+          (a.popularity === null
+            ? 1
+            : b.popularity === null
+              ? -1
+              : b.popularity - a.popularity) ||
+          cmp(a.id, b.id),
+      )
+      // `card_combos`' own clamp, both ends of it. **Clamped and never refused**, which is the
+      // crate's argument: every one of these numbers is a page's own and none is a reader's
+      // answer to anything, so a bound the app can meet quietly is worth more than a sentence
+      // nobody will read. `limit` is clamped **up** as well — a `0` from a page that has not
+      // finished setting itself up would otherwise be an empty list for ever — and mirroring the
+      // ceiling matters for `error_log_list`'s reason: a negative `LIMIT` is *no limit at all* in
+      // SQLite, so the two ends must agree about what a caller bug gets.
+      .slice(offset, offset + limit),
+  };
 }
 
 /* ------------------------------------------------------------- tokens and emblems ----- */
@@ -3590,8 +4306,12 @@ function tokenById(db: FakeDb, id: string): FakeCard | undefined {
  * `released_at DESC, set_code ASC, collector_number ASC, id ASC`.
  *
  * Without it one deck draws different art on two opens, and nothing in the app would say why.
+ *
+ * It was `byTokenPrintingRank` until the combo feed's card-side read wanted the same four keys
+ * to pick a printing for a combo *piece* — {@link defaultPrintingOf}. Nothing about the order is
+ * a token's; the name was.
  */
-function byTokenPrintingRank(a: FakeCard, b: FakeCard): number {
+function byPrintingRank(a: FakeCard, b: FakeCard): number {
   return (
     cmp(b.releasedAt, a.releasedAt) ||
     cmp(a.setCode, b.setCode) ||
@@ -3613,7 +4333,7 @@ function byTokenPrintingRank(a: FakeCard, b: FakeCard): number {
 function tokenPrintings(db: FakeDb, oracleId: string): FakeCard[] {
   return db.cards
     .filter((c) => c.oracleId === oracleId && c.isPaper && TOKEN_LAYOUTS.has(c.layout))
-    .sort(byTokenPrintingRank);
+    .sort(byPrintingRank);
 }
 
 /** One token the deck derives, accumulated while walking its cards. */
@@ -3677,11 +4397,11 @@ function derivedTokens(db: FakeDb, deckId: number, variant: DeckVariant): Derive
 }
 
 /** The printing the resolver names for one derived token: the most-referenced, ties broken by
- *  {@link byTokenPrintingRank}. */
+ *  {@link byPrintingRank}. */
 function defaultTokenPrinting(db: FakeDb, derived: DerivedToken): string {
   const ranked = tokenPrintings(db, derived.token.oracleId).sort(
     (a, b) =>
-      (derived.refs.get(b.id) ?? 0) - (derived.refs.get(a.id) ?? 0) || byTokenPrintingRank(a, b),
+      (derived.refs.get(b.id) ?? 0) - (derived.refs.get(a.id) ?? 0) || byPrintingRank(a, b),
   );
   return (ranked[0] ?? derived.token).id;
 }
@@ -3694,22 +4414,29 @@ function storedToken(db: FakeDb, deckId: number, oracleId: string): FakeDeckToke
 
 /**
  * `image_uri::front_face_map` over a fixture row — the picture the **web target and the phone**
- * draw, and the one DTO this fake carries it on.
+ * draw, and the field only two DTOs here carry.
  *
- * **Every other DTO here omits `imageUris` and that is still the rule**: a picture under
- * Storybook comes from the `@/lib/images` alias, so a URL on a row would be one nobody ever
- * fetches. What earns this one an exception is that `deckTokenViews` *folds* the field — a token
- * tile's `imageUrl` is `imageUris?.[WALL_CARD_VARIANT] ?? null`, so a row that omitted it would
- * make the fake the one place that view is always `null` and the panel's own resolution
- * unexercised. Nothing minted: the two URLs are the fixture's own real Scryfall ones, the same
- * pair {@link readHandlers.card_image_uri} answers with, and the same two variants
+ * **Every other DTO omits `imageUris` and that is still the rule**: a picture under Storybook
+ * comes from the `@/lib/images` alias, so a URL on a row would be one nobody ever fetches. What
+ * earns an exception is a view that ***folds*** the field instead of passing it through, and
+ * there are two of those. `deckTokenViews` reads a token tile's `imageUrl` as
+ * `imageUris?.[WALL_CARD_VARIANT] ?? null`; `CombosDialog.tsx` reads a combo piece's the same
+ * way, character for character. A row that omitted it would make the fake the one place both
+ * views are always `null` and each panel's own resolution unexercised.
+ *
+ * Nothing minted: the two URLs are the fixture's own real Scryfall ones, the same pair
+ * {@link readHandlers.card_image_uri} answers with, and the same two variants
  * `image_uri::LIST_VARIANTS` names — `display` from `normalUrl` and `art` from `artCropUrl`. The
  * corpus can answer no others, which is why `thumb` and `grid` are absent here as they are there.
+ * `WALL_CARD_VARIANT` is `display`, so both folds land on the one this can always answer.
  *
  * `null` rather than `{}` for a row with neither, which is `front_face_map`'s own answer, and
  * the {@link FakeDb.fault} `imageUrisMissing` is every row in that state.
+ *
+ * **A `null` `cardId` is a `null` picture and not a lookup**, which is the combo piece's case
+ * and never a token's: there is no printing to have one.
  */
-function tokenImageUris(db: FakeDb, cardId: string): DeckTokenRow["imageUris"] {
+function frontFaceImageUris(db: FakeDb, cardId: string | null): DeckTokenRow["imageUris"] {
   if (db.fault === "imageUrisMissing") return null;
   const card = cardById(db, cardId);
   if (card === null) return null;
@@ -3751,7 +4478,7 @@ function toDeckTokenRow(
     // picked art for, and taking the resolver's would draw the deck's default Treasure on the
     // tile the reader chose the other Treasure for. `picture_for` in `deck_tokens.rs` is the
     // same precedence, and `over` is already in hand here so it costs no second lookup.
-    imageUris: tokenImageUris(db, over?.cardId ?? defaultCardId),
+    imageUris: frontFaceImageUris(db, over?.cardId ?? defaultCardId),
   };
 }
 
@@ -7595,7 +8322,7 @@ export function readHandlers(db: FakeDb) {
      * `imageUris` is omitted, as it is from every DTO this fake builds bar one: under Storybook
      * a card picture comes from the `@/lib/images` alias rather than from a URL on the row, so a
      * hand-minted one here would be a URL nobody ever fetches. The exception is
-     * {@link tokenImageUris}, and its own comment says what earns it one — a view that *folds*
+     * {@link frontFaceImageUris}, and its own comment says what earns it one — a view that *folds*
      * the field rather than passing it through.
      */
     deck_pull_plan: (args: { deckId: number }): DeckPullRow[] => {
@@ -8468,6 +9195,43 @@ export function readHandlers(db: FakeDb) {
      * be drawn, and the estimate is supposed to degrade to three signals rather than to stop.
      */
     combos_for_cards: (args: { cardIds: string[] }): DeckCombo[] => matchCombos(db, args.cardIds),
+
+    /**
+     * `combos::combos_for_card` — every combo that **names** one oracle card, paged.
+     *
+     * **One letter from its neighbour and the opposite question**, which is the whole reason both
+     * doc comments say so: `combos_for_cards` (plural) answers *which of these combos does a pile
+     * of printings fully contain* and is the deck bracket's fourth signal; this one answers *what
+     * is this card part of* and is the card modal's list. A reader looking at a card they own one
+     * piece of wants the second, and the first would answer `[]` for it.
+     *
+     * **It takes an oracle id where that one takes printing ids**, and the difference is not a
+     * convenience: `combo_cards` is keyed on the oracle card, so this is the address the feed
+     * actually stores, while the deck read has to resolve its printings through `cards` first.
+     * A printing id sent here matches nothing and answers an empty page rather than an error —
+     * the same silence a card genuinely in no combos gets, which is why `ipc.ts` says the two
+     * must not be swapped.
+     *
+     * The arithmetic — three counts, an unfiltered census, and the page's own order — is
+     * {@link cardCombosPage}, which is where every one of those rules is argued.
+     *
+     * A read, so it answers through a sync, and **it honours no fault**, `combosFetchError`
+     * included: that fault is about a *fetch*, and this is a read of what is stored.
+     * {@link readHandlers.combos_for_cards} takes the same position for the same reason, and here
+     * it is the stronger one — a refusal would be a card page that could not list what it is
+     * part of because a download failed a week ago.
+     *
+     * **A card in no combos and a database with no combos at all answer the same empty page.**
+     * Telling them apart is {@link readHandlers.combos_status}' job and the dialog reads it for
+     * exactly that, which is the sentence its own header carries.
+     */
+    combos_for_card: (args: {
+      oracleId: string;
+      cardCount: number | null;
+      ownedOnly: boolean;
+      limit: number;
+      offset: number;
+    }): CardCombosPage => cardCombosPage(db, args),
 
     /**
      * `error_log_list` — newest first, clamped exactly as the Rust does.

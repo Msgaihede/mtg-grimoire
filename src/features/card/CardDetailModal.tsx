@@ -352,7 +352,7 @@ export function CardDetailModal() {
   const openCardFromDeck = useAppStore((s) => s.openCardFromDeck);
   const walk = useAppStore((s) => s.cardWalk);
   // **What stacks over this panel**, and the only thing the shell needs to know to take its
-  // caret back: the three rail overlays and the printings modal are every layer that can stand
+  // caret back: the four rail overlays and the printings modal are every layer that can stand
   // on top of the card modal. A boolean rather than the values, so a *change between two
   // overlays* — Legality to Card text, where the caret never reaches `<body>` — is not a re-take.
   const stackedOverlay = useAppStore((s) => s.cardOverlay);
@@ -378,7 +378,7 @@ export function CardDetailModal() {
 
   const card = useQuery({
     // **The entry every other card surface is served out of** — see {@link cardDetailKey}. The
-    // three overlays the rail opens mount an observer on this same key, so opening one is a
+    // four overlays the rail opens mount an observer on this same key, so opening one is a
     // cache read rather than a round trip.
     queryKey: cardDetailKey(shown, marketplace.id),
     queryFn: shown === null ? skipToken : () => ipc.cardDetail(shown, marketplace.id),
@@ -555,7 +555,7 @@ export function CardDetailModal() {
       // The one host that asks for this, and spec §2.2 is why nothing may render a `fixed`
       // overlay inside the panel: a layout-contained box is the containing block for its `fixed`
       // descendants, so a nested scrim drawn in here would cover the panel and nothing else. The
-      // three overlays the rail opens are `App`-level siblings for exactly that reason.
+      // four overlays the rail opens are `App`-level siblings for exactly that reason.
       container
       size={PANEL_SIZE}
       title={<Title card={card.data ?? null} pending={card.isPending} />}

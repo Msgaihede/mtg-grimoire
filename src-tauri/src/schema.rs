@@ -358,7 +358,28 @@ pub const USER_SCHEMA_VERSION: i64 = 39;
 /// "is this file's shape what this build expects", and a corpus rung is *allowed* to give up
 /// and rebuild, because what is behind it is a download. Sharing a scale would invite somebody
 /// to subtract them.
-pub const CORPUS_SCHEMA_VERSION: i64 = 1;
+///
+/// **2 is the first rung this side has ever had**, and it is the licence above spent: `combos`
+/// grows four columns Commander Spellbook has always published and this app parsed past —
+/// `mana_needed`, `easy_prerequisites`, `notable_prerequisites` and `description` — so
+/// [`rebuild_combo_tables`] drops the feed's three tables and builds them again from
+/// [`COMBO_TABLES_SQL`]. What that costs is one silent background re-download of a 27.5 MB file
+/// `crate::combos::refresh_if_due` already fetches uninvited at every launch, and nothing the
+/// reader authored: `user.db` is not touched, and neither is `cards`, `cards_fts`, either tag
+/// taxonomy, `image_cache` or `marketplace_prices` — a rung that took the whole corpus with it
+/// would charge a full Scryfall resync for four columns on one table.
+///
+/// **What this number cannot do is gate that rung, and the reason is one line in
+/// [`crate::split`].** `split::finish` stamps *this constant* onto the legacy file it renames
+/// into `corpus.db` — and what is in that file is whatever [`migrate_single_file`]'s frozen v26
+/// rung built, which is the shape of version **1**. So every converted database, and every
+/// fresh install (a fresh install is built by that ladder and split like any other), arrives
+/// here already wearing head with a v1-shaped `combos` in it. A `v < CORPUS_SCHEMA_VERSION` arm
+/// would skip exactly the population that needs it, and the first ingest after that would fail
+/// on an INSERT naming four columns the table does not have. [`migrate_corpus`] therefore asks
+/// the *shape*; this number is the record of what the shape is, and the thing a future rung
+/// will still want to have moved.
+pub const CORPUS_SCHEMA_VERSION: i64 = 2;
 
 /// Which of the two files a table lives in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3328,8 +3349,12 @@ const TAG_INDEXES_SQL: &str = "
         ON art_tag_illustrations(slug);
     CREATE INDEX IF NOT EXISTS {schema}.idx_oracle_tag_cards_slug ON oracle_tag_cards(slug);";
 
-/// The two indexes on `combo_cards`, written once because they are created twice: by the v26
-/// rung that makes the table, and by [`swap_combo_staging`] after every ingest.
+/// The two indexes on `combo_cards`, written once because they are created three times: by the
+/// v26 rung that makes the table, by [`swap_combo_staging`] after every ingest, and by
+/// [`create_combo_tables`] — which is both halves of corpus schema 2, the build from nothing and
+/// the rebuild of a corpus that already exists. **[`CORPUS_SCHEMA_SQL`] was a fourth copy until
+/// that rung**, transcribed out of `sqlite_master` with the tables it indexes; the two lines are
+/// gone from that literal and this constant is what those paths run now.
 ///
 /// **The replay is not optional and [`swap_combo_staging`] says why**: a rename carries the
 /// *staging* table's indexes rather than the live table's, and no staging DDL creates one. One
@@ -3925,12 +3950,19 @@ pub fn create_user_schema(conn: &Connection, schema: &str) -> rusqlite::Result<(
     conn.execute_batch(&USER_SCHEMA_SQL.replace("{schema}", schema))
 }
 
-/// The twenty corpus tables the DDL builds and their eleven indexes, at
+/// Seventeen of the twenty corpus tables and nine of their eleven indexes, at
 /// [`CORPUS_SCHEMA_VERSION`]'s shape, with `{schema}` where the file goes.
 ///
 /// [`USER_SCHEMA_SQL`]'s twin and every one of its rules: copied out of a migrated
 /// database's own `sqlite_master` rather than retyped, `ALTER TABLE` tails and all, and held
 /// to that by `the_corpus_schema_is_byte_identical_to_what_the_ladder_builds`.
+///
+/// **The other three tables and two indexes are the combo feed's, and they are in
+/// [`COMBO_TABLES_SQL`] because corpus schema 2 rebuilds exactly those and nothing else.**
+/// This literal cannot serve that rung: every statement in it is a bare `CREATE TABLE`, so
+/// re-running it over a corpus that already has a `cards` in it does not quietly do nothing —
+/// it raises `table cards already exists` and stops the launch. Splitting the three out is what
+/// lets one literal build them on both paths; [`create_corpus_schema`] runs both halves.
 ///
 /// `cards_fts` is not here and the four `cards_fts_*` shadow tables cannot be: the virtual
 /// table is created by [`create_fts_in`] once `cards` exists, and FTS5 makes its own shadows.
@@ -3993,51 +4025,10 @@ CREATE TABLE {schema}.image_cache (
                 PRIMARY KEY (card_id, face, variant)
              ) WITHOUT ROWID;
 
-CREATE TABLE {schema}.combos (
-                 -- Commander Spellbook's variant id, e.g. `1957-4050-7918--204`. TEXT because
-                 -- it is theirs: nothing here mints one, and a row is only ever replaced
-                 -- wholesale by the next ingest.
-                 id             TEXT PRIMARY KEY,
-                 -- One of R|S|P|O|C|E|B — Ruthless, Spicy, Powerful, Oddball, Core, Exhibition,
-                 -- Banned. No CHECK: the vocabulary is the *feed's* and may grow the day they
-                 -- add a letter, and a CHECK here would turn that into an ingest that fails
-                 -- rather than a letter this app does not raise a floor for.
-                 bracket_tag    TEXT NOT NULL,
-                 -- DISTINCT oracle ids in `combo_cards` for this combo, stored rather than
-                 -- counted: the match query compares it against what a deck holds, and a
-                 -- correlated count per candidate combo is the shape that turns a deck check
-                 -- into a scan.
-                 card_count     INTEGER NOT NULL,
-                 -- The feed's `requires[]` — *templates* like `a creature with flying`, which
-                 -- resolve to no card id. `> 0` means this app cannot fully check the combo, so
-                 -- it is shown as possible and kept out of the arithmetic.
-                 template_count INTEGER NOT NULL,
-                 -- Colour identity of the combo, the feed's own spelling.
-                 identity       TEXT NOT NULL,
-                 -- What it does: feature names, newline-joined. One column rather than a fourth
-                 -- table because nothing queries it — it is read whole, for one combo, to be
-                 -- printed.
-                 produces       TEXT NOT NULL,
-                 -- How many decks Spellbook has seen it in. NULL where the feed carries none,
-                 -- which is not the same as zero and must not be faked into it.
-                 popularity     INTEGER
-             );
-
-CREATE TABLE {schema}.combo_cards (
-                 -- **The one enforced foreign key in this rung**, and the module doc says why
-                 -- it is legal where a key on `cards.id` never is. ON DELETE CASCADE so a combo
-                 -- cannot leave its own card list behind it.
-                 combo_id          TEXT NOT NULL REFERENCES combos(id) ON DELETE CASCADE,
-                 -- `cards.oracle_id`, **softly** — the corpus is dropped and recreated on every
-                 -- sync, so a declared reference here would abort one. A combo naming a card
-                 -- this database has never synced is a row that simply never matches.
-                 oracle_id         TEXT NOT NULL,
-                 -- Denormalised for the same reason every user table denormalises a printing:
-                 -- the list has to stay readable when the id stops resolving.
-                 name              TEXT NOT NULL,
-                 quantity          INTEGER NOT NULL,
-                 must_be_commander INTEGER NOT NULL
-             );
+-- `combos`, `combo_cards` and `combo_meta` are not here: they are the three tables corpus
+-- schema 2 drops and rebuilds, so they live in COMBO_TABLES_SQL, which that rung and
+-- create_corpus_schema both run. One literal, so a climbed corpus and a built one cannot end
+-- up shaped differently.
 
 CREATE TABLE {schema}.format_specs (
                 key TEXT PRIMARY KEY,
@@ -4210,6 +4201,115 @@ CREATE TABLE {schema}.art_tag_meta (
         tagging_count INTEGER NOT NULL
     );
 
+CREATE INDEX {schema}.idx_art_tags_norm ON art_tags(slug_norm);
+
+CREATE INDEX {schema}.idx_oracle_tags_norm ON oracle_tags(slug_norm);
+
+CREATE INDEX {schema}.idx_art_tag_illustrations_slug
+        ON art_tag_illustrations(slug);
+
+CREATE INDEX {schema}.idx_oracle_tag_cards_slug ON oracle_tag_cards(slug);
+
+CREATE INDEX {schema}.idx_cards_oracle ON cards(oracle_id);
+
+CREATE INDEX {schema}.idx_cards_set_cn ON cards(set_code, collector_number);
+
+CREATE INDEX {schema}.idx_cards_name ON cards(name);
+
+CREATE INDEX {schema}.idx_cards_collapse ON cards(oracle_id, is_paper, released_at, id, name, price_usd, legal_mask, cmc, color_identity);
+
+CREATE INDEX {schema}.idx_cards_illustration ON cards(illustration_id);
+"#;
+
+/// The combo feed's three tables at head — and **the only literal that builds them**.
+///
+/// Split out of [`CORPUS_SCHEMA_SQL`] by corpus schema 2 rather than transcribed a second time,
+/// because that rung drops and rebuilds these three: a rung carrying its own copy of the DDL
+/// would be a second home for the head shape, and the two would disagree the first time a
+/// column was added to one of them. [`create_corpus_schema`] and [`rebuild_combo_tables`] both
+/// go through [`create_combo_tables`], so a corpus that was *built* and a corpus that was
+/// *climbed* cannot end up shaped differently.
+///
+/// **Pointing a rung at a head constant is legal here and would be a bug inside
+/// [`migrate_single_file`]**, where every step spells its DDL out literally ([`CARDS_COLUMNS`]'
+/// rule): a user rung is history, and a constant that moved under it would rewrite what a fresh
+/// install created yesterday. A corpus rung is not history — it is allowed to give up and
+/// rebuild, because what is behind it is a download — so aiming it at head is the whole idea.
+/// The v26 rung's own copy of this DDL stays frozen at the v1 shape for exactly that reason,
+/// and this rung is what brings the file it built up to date.
+///
+/// **The four columns between `produces` and `popularity` are corpus schema 2's**, in the
+/// feed's own order and the feed's own spelling. All four are `NOT NULL DEFAULT ''` because
+/// Spellbook writes an **empty string** rather than a null when it has nothing to say — the
+/// default matches the wire instead of inventing a third state — and because the default is
+/// what lets a caller name the six columns it has always named and still write a row.
+const COMBO_TABLES_SQL: &str = r#"
+CREATE TABLE {schema}.combos (
+                 -- Commander Spellbook's variant id, e.g. `1957-4050-7918--204`. TEXT because
+                 -- it is theirs: nothing here mints one, and a row is only ever replaced
+                 -- wholesale by the next ingest.
+                 id             TEXT PRIMARY KEY,
+                 -- One of R|S|P|O|C|E|B — Ruthless, Spicy, Powerful, Oddball, Core, Exhibition,
+                 -- Banned. No CHECK: the vocabulary is the *feed's* and may grow the day they
+                 -- add a letter, and a CHECK here would turn that into an ingest that fails
+                 -- rather than a letter this app does not raise a floor for.
+                 bracket_tag    TEXT NOT NULL,
+                 -- DISTINCT oracle ids in `combo_cards` for this combo, stored rather than
+                 -- counted: the match query compares it against what a deck holds, and a
+                 -- correlated count per candidate combo is the shape that turns a deck check
+                 -- into a scan.
+                 card_count     INTEGER NOT NULL,
+                 -- The feed's `requires[]` — *templates* like `a creature with flying`, which
+                 -- resolve to no card id. `> 0` means this app cannot fully check the combo, so
+                 -- it is shown as possible and kept out of the arithmetic.
+                 template_count INTEGER NOT NULL,
+                 -- Colour identity of the combo, the feed's own spelling.
+                 identity       TEXT NOT NULL,
+                 -- What it does: feature names, newline-joined. One column rather than a fourth
+                 -- table because nothing queries it — it is read whole, for one combo, to be
+                 -- printed.
+                 produces       TEXT NOT NULL,
+                 -- The feed's `manaNeeded`, in Scryfall's own symbol spelling: `{6}`,
+                 -- `{1}{U}{U}`. What the line costs on top of what is already on the
+                 -- battlefield, and empty on the many combos that cost nothing to fire.
+                 mana_needed    TEXT NOT NULL DEFAULT '',
+                 -- The feed's `easyPrerequisites`: setup a reader will usually already have by
+                 -- the time they are asking — the commander on the battlefield, a land
+                 -- untapped. Prose, newline-separated, shown and never parsed; nothing here
+                 -- decides whether one is met, which is the same facts/conclusions line every
+                 -- other column in this table is drawn on.
+                 easy_prerequisites TEXT NOT NULL DEFAULT '',
+                 -- The feed's `notablePrerequisites`: the setup worth calling out, which is the
+                 -- half the reader actually has to arrange. A column of its own and not one
+                 -- joined with the line above, because *which* half a prerequisite is in is
+                 -- Spellbook's editorial answer and this app has no way to re-derive it.
+                 notable_prerequisites TEXT NOT NULL DEFAULT '',
+                 -- The feed's `description`: the numbered steps that make the combo go, `\n`
+                 -- separated, verbatim. This is the column the whole of "View combos" exists to
+                 -- show — a combo a reader cannot read the line for is a fact about their deck
+                 -- they can do nothing with.
+                 description    TEXT NOT NULL DEFAULT '',
+                 -- How many decks Spellbook has seen it in. NULL where the feed carries none,
+                 -- which is not the same as zero and must not be faked into it.
+                 popularity     INTEGER
+             );
+
+CREATE TABLE {schema}.combo_cards (
+                 -- **The one enforced foreign key in this rung**, and the module doc says why
+                 -- it is legal where a key on `cards.id` never is. ON DELETE CASCADE so a combo
+                 -- cannot leave its own card list behind it.
+                 combo_id          TEXT NOT NULL REFERENCES combos(id) ON DELETE CASCADE,
+                 -- `cards.oracle_id`, **softly** — the corpus is dropped and recreated on every
+                 -- sync, so a declared reference here would abort one. A combo naming a card
+                 -- this database has never synced is a row that simply never matches.
+                 oracle_id         TEXT NOT NULL,
+                 -- Denormalised for the same reason every user table denormalises a printing:
+                 -- the list has to stay readable when the id stops resolving.
+                 name              TEXT NOT NULL,
+                 quantity          INTEGER NOT NULL,
+                 must_be_commander INTEGER NOT NULL
+             );
+
 CREATE TABLE {schema}.combo_meta (
                  -- One row, ever — `oracle_tag_meta`'s shape and its reason: this watermark and
                  -- the card sync's describe different files on different schedules, and a
@@ -4235,30 +4335,23 @@ CREATE TABLE {schema}.combo_meta (
                  -- `39 999 of 40 000 kept` are the same empty-looking result otherwise.
                  skipped     INTEGER NOT NULL DEFAULT 0
              );
-
-CREATE INDEX {schema}.idx_art_tags_norm ON art_tags(slug_norm);
-
-CREATE INDEX {schema}.idx_oracle_tags_norm ON oracle_tags(slug_norm);
-
-CREATE INDEX {schema}.idx_art_tag_illustrations_slug
-        ON art_tag_illustrations(slug);
-
-CREATE INDEX {schema}.idx_oracle_tag_cards_slug ON oracle_tag_cards(slug);
-
-CREATE INDEX {schema}.idx_cards_oracle ON cards(oracle_id);
-
-CREATE INDEX {schema}.idx_cards_set_cn ON cards(set_code, collector_number);
-
-CREATE INDEX {schema}.idx_cards_name ON cards(name);
-
-CREATE INDEX {schema}.idx_cards_collapse ON cards(oracle_id, is_paper, released_at, id, name, price_usd, legal_mask, cmc, color_identity);
-
-CREATE INDEX {schema}.idx_cards_illustration ON cards(illustration_id);
-
-CREATE INDEX {schema}.idx_combo_cards_combo  ON combo_cards(combo_id);
-
-CREATE INDEX {schema}.idx_combo_cards_oracle ON combo_cards(oracle_id);
 "#;
+
+/// The combo feed's three tables and the two indexes on them, in one place.
+///
+/// Two callers and they are the two ways a corpus can arrive at head: [`create_corpus_schema`]
+/// builds one from nothing, [`rebuild_combo_tables`] climbs one that already exists. Bare
+/// `CREATE TABLE`, no `IF NOT EXISTS`, because both callers have just made sure the tables are
+/// not there — the rung by dropping them, the builder by being handed an empty schema.
+///
+/// **The index replay is [`COMBO_INDEXES_SQL`]'s third site and it is not optional here
+/// either**: the drop takes the indexes with the tables, and a `combo_cards` that comes back
+/// unindexed turns every bracket check into a full scan of one row per card per combo, with
+/// nothing going red and nothing in the log.
+fn create_combo_tables(conn: &Connection, schema: &str) -> rusqlite::Result<()> {
+    conn.execute_batch(&on_schema(schema, COMBO_TABLES_SQL))?;
+    conn.execute_batch(&on_schema(schema, COMBO_INDEXES_SQL))
+}
 
 /// Create the corpus in `schema` — its tables, its indexes, the search index and the format
 /// rules the ladder seeds.
@@ -4269,9 +4362,14 @@ CREATE INDEX {schema}.idx_combo_cards_oracle ON combo_cards(oracle_id);
 /// that table can afford to be on this side at all.
 ///
 /// Only ever called on an *empty* schema, which is what lets the DDL be byte-identical to the
-/// ladder's rather than carrying `IF NOT EXISTS`: [`migrate_corpus`] guards it on the version.
+/// ladder's rather than carrying `IF NOT EXISTS`: [`migrate_corpus`] guards it on a version of
+/// **0**, which is what an unshaped file reads as and the only version this can survive. Every
+/// statement in [`CORPUS_SCHEMA_SQL`] is a bare `CREATE TABLE`, so calling this on a corpus that
+/// has any shape at all raises `table cards already exists` and stops the launch — which is why
+/// corpus schema 2 is [`rebuild_combo_tables`] and not a second call to this function.
 pub fn create_corpus_schema(conn: &Connection, schema: &str) -> rusqlite::Result<()> {
     conn.execute_batch(&on_schema(schema, CORPUS_SCHEMA_SQL))?;
+    create_combo_tables(conn, schema)?;
     create_fts_in(conn, schema)?;
     // Unqualified, and correct unqualified: `format_specs` exists in exactly one attached
     // database and DML resolves into it — the same reason no command changed. It is also
@@ -5553,20 +5651,157 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
 /// `ATTACH` then silently creates a new empty one in its place. A version below head here
 /// means "this file has no shape yet", which is exactly what an empty database reads as.
 ///
+/// **It is a small ladder since corpus schema 2**, and the two arms are not two spellings of
+/// one thing. A version of 0 means "no shape at all", which only [`create_corpus_schema`] can
+/// answer and only an empty schema can survive — every statement in [`CORPUS_SCHEMA_SQL`] is a
+/// bare `CREATE TABLE`, so running it over a corpus that has a `cards` in it raises `table
+/// cards already exists` and stops the launch rather than quietly doing nothing. Anything else
+/// is a file with a shape, and the only thing this rung has to say about one is that the combo
+/// feed's three tables may be a version behind.
+///
+/// **The rung is gated on the shape and not on `v < CORPUS_SCHEMA_VERSION`, and that is the
+/// trap worth writing down.** `crate::split`'s `finish` stamps [`CORPUS_SCHEMA_VERSION`] — head,
+/// whatever head is on the day the build ships — onto the legacy file it renames into
+/// `corpus.db`, and what is *in* that file is whatever [`migrate_single_file`]'s frozen v26
+/// rung built. A fresh install goes through that same conversion, so the two biggest
+/// populations there are arrive here already wearing head with a v1-shaped `combos` in them. A
+/// version gate would skip exactly them, the shape would never be repaired, and the failure
+/// would surface as an ingest raising `table combos has no column named description` on a
+/// machine nobody could reproduce from a fresh worktree. Asking the catalog costs one pragma
+/// per launch and is right for every population at once — which is [`TAG_INDEXES_SQL`]'s own
+/// argument one line down: a rung fires once, in one direction, and a shape that has to be
+/// right on *every* launch cannot be defended by one.
+///
+/// The version is still stamped, because it is the record of what the shape is and the thing
+/// the next rung will want to have moved.
+///
 /// It ends with the tag indexes, unconditionally and fatally, for the reason
 /// [`migrate_single_file`] ends with them: without `idx_art_tag_illustrations_slug` the Tags
 /// page is 531 seconds rather than 49 ms, which is a window that stops responding rather
 /// than a page that is slow. That replay moved here with the tables it indexes — the
-/// ladder's copy now only ever reaches a pre-split file.
-fn migrate_corpus(conn: &Connection) -> rusqlite::Result<()> {
+/// ladder's copy now only ever reaches a pre-split file. **It stays unconditional and stays
+/// where it is**: it is not part of either arm above, it guards four indexes neither of them
+/// touches, and the thing it defends against is a database arriving *at head* with an index
+/// missing — an interrupted swap, a restored data folder, a hand-edited file — which is a state
+/// no version number describes.
+/// **`pub(crate)` for the test fixtures, and that is the point rather than a convenience.**
+/// [`crate::index::fixtures::state_with_seeded_cards`] builds its database the way a fresh
+/// install is built — [`crate::split::convert`], which runs the frozen [`migrate_single_file`]
+/// ladder and stamps head — and then opened it without ever migrating. That is not a database
+/// any launch produces, because `prepare_database` is the door all three targets go through,
+/// and the gap was invisible until a corpus rung finally changed a table shape: the fixture
+/// carried a v26-shaped `combos` under a header claiming head, which is precisely the state
+/// [`combos_are_at_head`] exists to repair.
+pub(crate) fn migrate_corpus(conn: &Connection) -> rusqlite::Result<()> {
     let v: i64 = conn.query_row(&format!("PRAGMA {CORPUS}.user_version"), [], |r| r.get(0))?;
-    if v < CORPUS_SCHEMA_VERSION {
+    if v == 0 {
         create_corpus_schema(conn, CORPUS)?;
+    } else if !combos_are_at_head(conn, CORPUS)? {
+        rebuild_combo_tables(conn, CORPUS)?;
+    }
+    if v < CORPUS_SCHEMA_VERSION {
         conn.execute_batch(&format!(
             "PRAGMA {CORPUS}.user_version = {CORPUS_SCHEMA_VERSION};"
         ))?;
     }
     conn.execute_batch(&on_schema(CORPUS, TAG_INDEXES_SQL))
+}
+
+/// The four columns corpus schema 2 put on `combos`, and what [`migrate_corpus`] gates its rung
+/// on.
+///
+/// A named list rather than a comparison against [`COMBO_TABLES_SQL`], which is the idiom the
+/// user rungs already use — v24 and v29 both ask `pragma_table_info … WHERE name = ?` before
+/// they issue anything. The alternative was building the head table in a throwaway connection
+/// and diffing the two column lists, which cannot drift but adds a second SQLite handle to
+/// every launch on all three targets, one of which is a browser this branch cannot drive.
+///
+/// **What a stale list costs is bounded, which is why the simpler thing is the right one.** The
+/// probe only has to be able to tell the two shapes apart, and any one of these four does that;
+/// a future rung that adds a fifth column owes the same thing every rung owes — a fixture at the
+/// shape below it — and that fixture is what goes red if this list is not widened with it.
+const COMBO_V2_COLUMNS: [&str; 4] = [
+    "mana_needed",
+    "easy_prerequisites",
+    "notable_prerequisites",
+    "description",
+];
+
+/// Whether `combos` in `schema` carries [`COMBO_V2_COLUMNS`].
+///
+/// **The column names, and deliberately not the stored `CREATE TABLE` text.** After the first
+/// ingest the live `combos` *is* the table [`swap_combo_staging`] renamed over it, so what
+/// `sqlite_master` holds for it is [`COMBO_STAGING_SQL`]'s declaration rather than
+/// [`COMBO_TABLES_SQL`]'s — the two agree column for column and differ as strings. A probe on
+/// the text would call every database that has ever refreshed out of date, drop the reader's
+/// combos on every launch and re-download 27.5 MB each time. The names are what an ingest's
+/// INSERT needs and what a rung that did not fire actually breaks.
+///
+/// A `combos` that is not there at all answers `false`: `PRAGMA table_info` on a missing table
+/// is an empty result rather than an error, and "no table" is a shape to rebuild like any other.
+fn combos_are_at_head(conn: &Connection, schema: &str) -> rusqlite::Result<bool> {
+    let names = combo_column_names(conn, schema)?;
+    Ok(COMBO_V2_COLUMNS
+        .iter()
+        .all(|want| names.iter().any(|have| have == want)))
+}
+
+/// `combos`' column names in ordinal order, in whichever schema is asked.
+///
+/// Schema-qualified, because `combos` is in the corpus and both `PRAGMA table_info` unqualified
+/// and `pragma_table_info()` as a function are answers about some *other* file the day somebody
+/// reuses this on a pair.
+fn combo_column_names(conn: &Connection, schema: &str) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare(&format!("PRAGMA {schema}.table_info(combos)"))?;
+    let names = stmt.query_map([], |r| r.get::<_, String>(1))?;
+    names.collect()
+}
+
+/// Corpus schema 2: drop the combo feed's tables and build them again from head.
+///
+/// **The one rung on this side, and the licence it spends is [`CORPUS_SCHEMA_VERSION`]'s own**
+/// — a corpus rung may give up and rebuild, because what is behind it is a download. These
+/// three tables hold nothing but a 27.5 MB file `crate::combos::refresh_if_due` already fetches
+/// uninvited at every launch, so the whole cost of the drop is one silent background
+/// re-download and nothing the reader authored.
+///
+/// **Narrow on purpose.** `cards`, `cards_fts`, both tag taxonomies, `image_cache` and
+/// `marketplace_prices` are not touched, and `user.db` is not opened: a rung that took the
+/// corpus with it would charge a full Scryfall resync — the better part of a gigabyte — for
+/// four columns on one table.
+///
+/// **`combo_meta` goes with them, and it is deleted rather than emptied**, which is
+/// `crate::combos::clear_combos`' rule and the same reasoning: no row is the never-ingested
+/// state every reader of that table is already written against, and it is also what stops
+/// `conditional_etag` replaying an ETag into a 304 — a watermark that survived the drop would
+/// leave the reader told they are up to date about a table with no rows in it, for a week at a
+/// time, forever. The window before the download lands is the one state the bracket panel
+/// already has the right sentence for: its `comboState === "never"` arm, which says the list
+/// downloads on its own and nothing needs a press.
+///
+/// **The two staging tables an interrupted ingest may have left go too, and the reason is not
+/// that the next refresh would trip over one** — it would not: [`COMBO_STAGING_SQL`] opens with
+/// two `DROP TABLE IF EXISTS`, so a leftover is replaced before it is ever written to. The
+/// reason is that they are a copy of the shape this rung has just retired, and a rung whose
+/// whole claim is *this file is at head now* has no business leaving a v1-shaped `combos` in the
+/// file under a different name. Two catalog lookups on a corpus that has none. Child before
+/// parent throughout, [`swap_combo_staging`]'s rule: with foreign keys on a `DROP TABLE` is an
+/// implicit `DELETE`, so the other order drags every child row through a cascade on the way to
+/// dropping that table too.
+///
+/// One transaction, so a launch killed halfway leaves either the old three tables or the new
+/// ones and never a `combos` that is simply gone.
+fn rebuild_combo_tables(conn: &Connection, schema: &str) -> rusqlite::Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch(&format!(
+        "DROP TABLE IF EXISTS {schema}.combo_cards_staging;
+         DROP TABLE IF EXISTS {schema}.combos_staging;
+         DROP TABLE IF EXISTS {schema}.combo_cards;
+         DROP TABLE IF EXISTS {schema}.combos;
+         DROP TABLE IF EXISTS {schema}.combo_meta;"
+    ))?;
+    create_combo_tables(&tx, schema)?;
+    tx.commit()
 }
 
 /// Bring `data_dir` to a state the app can open: convert if a single file is there, and
@@ -5997,6 +6232,21 @@ pub fn swap_art_tag_staging(conn: &Connection) -> rusqlite::Result<()> {
 /// it ships while this one describes head and moves with it.
 /// `the_combo_staging_tables_match_the_live_ones` is what stops the two coming apart.
 ///
+/// **This literal and [`COMBO_TABLES_SQL`] move together or they do not move at all**, and the
+/// reason is stronger here than "two copies drift": [`swap_combo_staging`] is a *rename*, so
+/// what is declared here **becomes** the live table. A column added to one and not the other is
+/// not a mismatch that shows up as a warning — it is either an ingest that fails on its first
+/// INSERT, or a swap that lands a `combos` the live readers cannot read, on the machine of every
+/// reader who refreshed. Corpus schema 2 added four columns and had to add them twice.
+///
+/// **They carry the same `DEFAULT ''` here that they carry live**, which is the one place this
+/// family parts company with the tag one: `oracle_tags`' staging twin deliberately drops the
+/// live table's default, so an ingest that forgets a column fails loudly instead of writing a
+/// table of empty strings. That trade is not available to a table that is renamed into place —
+/// a staging twin that disagreed about a default would *change the live table's declaration* at
+/// the first refresh, which is a shape that depends on whether the reader has synced yet. So the
+/// loud failure is bought elsewhere: `crate::combos`' insert names every column it writes.
+///
 /// No `combo_meta_staging`: the watermark is one row written *with* the swap, not a table that
 /// is rebuilt.
 ///
@@ -6022,6 +6272,13 @@ const COMBO_STAGING_SQL: &str = "
         template_count INTEGER NOT NULL,
         identity       TEXT NOT NULL,
         produces       TEXT NOT NULL,
+        -- The four corpus schema 2 added, in COMBO_TABLES_SQL's order and with its defaults.
+        -- Ordinal order is part of the agreement: the shape test compares these two tables
+        -- column by column, in position.
+        mana_needed    TEXT NOT NULL DEFAULT '',
+        easy_prerequisites TEXT NOT NULL DEFAULT '',
+        notable_prerequisites TEXT NOT NULL DEFAULT '',
+        description    TEXT NOT NULL DEFAULT '',
         popularity     INTEGER
     );
     CREATE TABLE {schema}.combo_cards_staging (
@@ -6288,6 +6545,20 @@ pub(crate) mod tests {
     /// here rather than less: this is the shape a *rebuilt* corpus gets, so a column dropped
     /// in transcription would be a difference between the reader who has resynced and the
     /// reader who has not.
+    ///
+    /// **"The ladder" is both of them since corpus schema 2**, and that is what the
+    /// [`rebuild_combo_tables`] call below is — the user side's own `migrate_user` line, one
+    /// file over. [`migrate_single_file`] is frozen at [`LEGACY_SINGLE_FILE_VERSION`] and builds
+    /// the combo feed's tables in their v1 shape; the rung is what brings them to head, and
+    /// [`crate::split::convert`] hands every converted and every fresh install exactly that
+    /// pair of steps in exactly that order. Run on `main` because that is the file the
+    /// single-file ladder built, and because the rung takes its schema for this reason.
+    ///
+    /// **What this stops proving about the three combo tables is deliberate.** It used to
+    /// compare the head DDL's transcription against the v26 rung's literal; both sides now come
+    /// from [`COMBO_TABLES_SQL`], so for those three the assertion is no longer "the two copies
+    /// agree" — there is one copy — but "the rung fired". Take the call away and the ladder side
+    /// is still the v26 shape, and this goes red on `combos`.
     #[test]
     fn the_corpus_schema_is_byte_identical_to_what_the_ladder_builds() {
         let dump = |conn: &Connection, schema: &str| -> Vec<(String, String, String)> {
@@ -6316,6 +6587,7 @@ pub(crate) mod tests {
 
         let ladder = Connection::open_in_memory().unwrap();
         migrate_single_file(&ladder).unwrap();
+        rebuild_combo_tables(&ladder, "main").unwrap();
         let want = dump(&ladder, "main");
 
         let pair = memory_pair();
@@ -15736,6 +16008,352 @@ pub(crate) mod tests {
             .query_row("SELECT count(*) FROM combo_cards_staging", [], |r| r.get(0))
             .unwrap();
         assert_eq!(staged_cards, 0);
+    }
+
+    // ---- corpus schema 2: the four columns the feed always published ------------------
+
+    /// A pair whose corpus is at **corpus schema 1** — the combo feed's three tables in the
+    /// shape [`migrate_single_file`]'s frozen v26 rung builds, with rows in all three, and a
+    /// `cards` row beside them.
+    ///
+    /// Hand-written, [`v1_database`]'s idiom and its reason: head's DDL wearing a v1 label would
+    /// prove nothing at all here, because the four columns head has and this does not are the
+    /// entire subject. Only the **column list** is copied from that rung — its comments are not
+    /// something any reader of this fixture asks about, and `PRAGMA table_info` cannot see them.
+    ///
+    /// **The `cards` row is what makes "narrow" an assertion rather than an intention.** A rung
+    /// that rebuilt the corpus instead of three tables of it would look identical from the combo
+    /// side and cost the reader a full Scryfall resync.
+    fn corpus_at_schema_1() -> Connection {
+        let conn = memory_pair();
+        conn.execute_batch(&format!(
+            "DROP TABLE {CORPUS}.combo_cards;
+             DROP TABLE {CORPUS}.combos;
+             DROP TABLE {CORPUS}.combo_meta;
+             CREATE TABLE {CORPUS}.combos (
+                 id             TEXT PRIMARY KEY,
+                 bracket_tag    TEXT NOT NULL,
+                 card_count     INTEGER NOT NULL,
+                 template_count INTEGER NOT NULL,
+                 identity       TEXT NOT NULL,
+                 produces       TEXT NOT NULL,
+                 popularity     INTEGER
+             );
+             CREATE TABLE {CORPUS}.combo_cards (
+                 combo_id          TEXT NOT NULL REFERENCES combos(id) ON DELETE CASCADE,
+                 oracle_id         TEXT NOT NULL,
+                 name              TEXT NOT NULL,
+                 quantity          INTEGER NOT NULL,
+                 must_be_commander INTEGER NOT NULL
+             );
+             CREATE TABLE {CORPUS}.combo_meta (
+                 id          INTEGER PRIMARY KEY CHECK (id = 1),
+                 etag        TEXT,
+                 stamp       TEXT,
+                 fetched_at  INTEGER,
+                 checked_at  INTEGER NOT NULL,
+                 combo_count INTEGER NOT NULL DEFAULT 0,
+                 skipped     INTEGER NOT NULL DEFAULT 0
+             );"
+        ))
+        .unwrap();
+        conn.execute_batch(&on_schema(CORPUS, COMBO_INDEXES_SQL))
+            .unwrap();
+        conn.execute_batch(
+            "INSERT INTO combos
+                 (id,bracket_tag,card_count,template_count,identity,produces,popularity)
+                 VALUES ('1957-4050','R',2,0,'ub','Infinite mill',9001);
+             INSERT INTO combo_cards (combo_id,oracle_id,name,quantity,must_be_commander)
+                 VALUES ('1957-4050','oid-thoracle','Thassa''s Oracle',1,0);
+             INSERT INTO combo_meta (id,etag,stamp,fetched_at,checked_at,combo_count)
+                 VALUES (1,'\"an-etag\"','2026-09-01T00:00:00Z',1800000000,1800000000,1);
+             INSERT INTO cards (id,name,set_code,collector_number,lang,layout,raw)
+                 VALUES ('card-1','Thassa''s Oracle','thb','73','en','normal','{}');",
+        )
+        .unwrap();
+        conn.execute_batch(&format!("PRAGMA {CORPUS}.user_version = 1;"))
+            .unwrap();
+        conn
+    }
+
+    /// The four columns [`COMBO_TABLES_SQL`] added, **spelled out again rather than reading
+    /// [`COMBO_V2_COLUMNS`]**. An assertion that asked [`combos_are_at_head`], or looped over
+    /// the implementation's own list, would agree with whatever that constant currently says —
+    /// including a list with a typo in it, or an empty one.
+    const NEW_COMBO_COLUMNS: [&str; 4] = [
+        "mana_needed",
+        "easy_prerequisites",
+        "notable_prerequisites",
+        "description",
+    ];
+
+    /// The rung, over the version below it: the three tables come back at head and empty, and
+    /// the rest of the corpus is exactly where it was.
+    ///
+    /// Empty is the *point* rather than a side effect. There is no backfill available — the four
+    /// columns are the feed's and only the feed has the text — so the rung takes the rows with
+    /// the shape and `crate::combos::refresh_if_due` fetches them again at the next launch,
+    /// uninvited, which is what makes the cost one background download rather than a press
+    /// nobody knew to make.
+    #[test]
+    fn the_combo_rung_rebuilds_the_three_tables_and_leaves_the_corpus_alone() {
+        let conn = corpus_at_schema_1();
+
+        migrate_corpus(&conn).unwrap();
+
+        let version: i64 = conn
+            .query_row(&format!("PRAGMA {CORPUS}.user_version"), [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, CORPUS_SCHEMA_VERSION);
+
+        for table in ["combos", "combo_cards", "combo_meta"] {
+            let n: i64 = conn
+                .query_row(&format!("SELECT count(*) FROM {CORPUS}.{table}"), [], |r| {
+                    r.get(0)
+                })
+                .unwrap();
+            assert_eq!(n, 0, "`{table}` still holds the previous shape's rows");
+        }
+
+        let names = combo_column_names(&conn, CORPUS).unwrap();
+        for column in NEW_COMBO_COLUMNS {
+            assert!(
+                names.iter().any(|n| n == column),
+                "`combos` has no `{column}` and the next ingest will fail on it: {names:?}"
+            );
+        }
+
+        // The narrow half. A rung that took the corpus with it would charge a full Scryfall
+        // resync for four columns on one table, and nothing above would have noticed.
+        let cards: i64 = conn
+            .query_row(&format!("SELECT count(*) FROM {CORPUS}.cards"), [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(cards, 1, "the drop reached `cards`");
+        let formats: i64 = conn
+            .query_row(
+                &format!("SELECT count(*) FROM {CORPUS}.format_specs"),
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(formats > 0, "the drop reached the seeded format rules");
+    }
+
+    /// **The population a version gate would miss, and the reason
+    /// [`combos_are_at_head`] exists.**
+    ///
+    /// `crate::split`'s `finish` stamps [`CORPUS_SCHEMA_VERSION`] — *this build's* head — onto the
+    /// legacy file it renames into `corpus.db`, and what is in that file is what the frozen v26
+    /// rung built. Every converted database and every fresh install therefore reaches
+    /// [`migrate_corpus`] wearing head with a v1-shaped `combos` in it. This is that database.
+    ///
+    /// An `if v < CORPUS_SCHEMA_VERSION` arm passes every other test in this section and fails
+    /// only this one — and in the field it would fail as an ingest raising `table combos has no
+    /// column named description` on the two populations nobody can reproduce from a fresh
+    /// worktree.
+    #[test]
+    fn a_corpus_stamped_at_head_wearing_the_old_shape_is_still_repaired() {
+        let conn = corpus_at_schema_1();
+        conn.execute_batch(&format!(
+            "PRAGMA {CORPUS}.user_version = {CORPUS_SCHEMA_VERSION};"
+        ))
+        .unwrap();
+
+        migrate_corpus(&conn).unwrap();
+
+        let names = combo_column_names(&conn, CORPUS).unwrap();
+        for column in NEW_COMBO_COLUMNS {
+            assert!(
+                names.iter().any(|n| n == column),
+                "the number said head and the shape did not: {names:?}"
+            );
+        }
+    }
+
+    /// A corpus built from nothing gets the same four columns, so the ladder and a first build
+    /// cannot disagree about what `combos` is.
+    ///
+    /// The bare `ATTACH ':memory:'` is the right fixture for the same reason
+    /// `an_unshaped_user_file_is_built_by_prepare_database` uses one: an unshaped database is a
+    /// schema at `user_version = 0`, which is exactly what [`prepare_data_dir`] leaves behind
+    /// when it replaces a corpus that will not open.
+    #[test]
+    fn a_corpus_built_from_nothing_carries_the_four_columns_too() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(&format!("ATTACH DATABASE ':memory:' AS {CORPUS}"))
+            .unwrap();
+        let before: i64 = conn
+            .query_row(&format!("PRAGMA {CORPUS}.user_version"), [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(before, 0, "the fixture must start with no shape at all");
+
+        migrate_corpus(&conn).unwrap();
+
+        let version: i64 = conn
+            .query_row(&format!("PRAGMA {CORPUS}.user_version"), [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, CORPUS_SCHEMA_VERSION);
+        let names = combo_column_names(&conn, CORPUS).unwrap();
+        for column in NEW_COMBO_COLUMNS {
+            assert!(
+                names.iter().any(|n| n == column),
+                "a corpus built from the head DDL is missing `{column}`: {names:?}"
+            );
+        }
+    }
+
+    /// **The counterweight, and without it every test above is satisfied by rebuilding on every
+    /// launch.** A corpus already at head keeps its combos: the rung is the one thing here that
+    /// deletes rows, and firing it unconditionally would throw a 27.5 MB download away every
+    /// time the app started — invisibly, because the feed fetches uninvited and the panel would
+    /// simply be a few minutes behind itself.
+    ///
+    /// **The database is one that has been through a swap**, which is the case the probe is
+    /// written to survive: [`swap_combo_staging`] *renames* [`COMBO_STAGING_SQL`]'s table over
+    /// the live one, so after any ingest `combos`' stored `CREATE TABLE` is the staging literal's
+    /// and not [`COMBO_TABLES_SQL`]'s. A probe that compared the stored SQL would call every
+    /// ingested database out of date and re-download the file on every launch for ever.
+    #[test]
+    fn a_launch_over_an_ingested_corpus_leaves_the_combos_where_they_are() {
+        let conn = memory_pair();
+        create_combo_staging(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO combos_staging
+                 (id,bracket_tag,card_count,template_count,identity,produces,description)
+                 VALUES ('1957-4050','R',2,0,'ub','Infinite mill','1. Cast it. 2. Win.');
+             INSERT INTO combo_cards_staging
+                 (combo_id,oracle_id,name,quantity,must_be_commander)
+                 VALUES ('1957-4050','oid-thoracle','Thassa''s Oracle',1,0);",
+        )
+        .unwrap();
+        swap_combo_staging(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO combo_meta (id,checked_at,combo_count) VALUES (1,1800000000,1);",
+        )
+        .unwrap();
+
+        migrate_corpus(&conn).unwrap();
+
+        let combos: i64 = conn
+            .query_row(&format!("SELECT count(*) FROM {CORPUS}.combos"), [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(combos, 1, "a launch threw the reader's combo list away");
+        let steps: String = conn
+            .query_row(
+                &format!("SELECT description FROM {CORPUS}.combos"),
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(steps, "1. Cast it. 2. Win.");
+        let watermark: i64 = conn
+            .query_row(
+                &format!("SELECT count(*) FROM {CORPUS}.combo_meta"),
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            watermark, 1,
+            "and the watermark with it, which is what a 304 is replayed from"
+        );
+    }
+
+    /// The rung puts [`COMBO_INDEXES_SQL`] back, because the drop took the indexes with the
+    /// tables.
+    ///
+    /// `the_combo_indexes_survive_a_swap`'s trap, one path over and with the same silence: an
+    /// unindexed `combo_cards` is a bracket check that scans one row per card per combo, with
+    /// nothing red and nothing logged.
+    #[test]
+    fn the_combo_indexes_survive_the_rung() {
+        let conn = corpus_at_schema_1();
+
+        migrate_corpus(&conn).unwrap();
+
+        for index in ["idx_combo_cards_combo", "idx_combo_cards_oracle"] {
+            let n: i64 = conn
+                .query_row(
+                    &format!(
+                        "SELECT count(*) FROM {CORPUS}.sqlite_master
+                          WHERE type = 'index' AND name = ?1"
+                    ),
+                    [index],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 1, "{index} did not survive the rung");
+        }
+    }
+
+    /// And it takes an interrupted ingest's staging pair with it, so nothing shaped like
+    /// yesterday is left in a file the rung has just declared to be at head.
+    #[test]
+    fn the_rung_takes_a_leftover_staging_pair_with_it() {
+        let conn = corpus_at_schema_1();
+        create_combo_staging(&conn).unwrap();
+
+        migrate_corpus(&conn).unwrap();
+
+        let left: i64 = conn
+            .query_row(
+                &format!(
+                    "SELECT count(*) FROM {CORPUS}.sqlite_master
+                      WHERE type = 'table' AND name LIKE 'combo%\\_staging' ESCAPE '\\'"
+                ),
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(left, 0, "a staging table survived the rung");
+    }
+
+    /// The two literals agree about the **defaults**, which is the half
+    /// `the_combo_staging_tables_match_the_live_ones` cannot see: [`table_shape`] compares name,
+    /// type, `NOT NULL` and primary key, and a `DEFAULT` dropped from one of the four columns
+    /// passes it.
+    ///
+    /// It matters because [`swap_combo_staging`] is a *rename*: what [`COMBO_STAGING_SQL`]
+    /// declares becomes the live table's own declaration at the first refresh. A default present
+    /// on one side and not the other is a `combos` whose shape depends on whether the reader has
+    /// synced yet — and the four columns are `NOT NULL`, so the side without the default refuses
+    /// every INSERT that does not name all eleven columns, including the six-column ones in this
+    /// file.
+    #[test]
+    fn the_combo_staging_twin_declares_the_same_defaults() {
+        let conn = memory_pair();
+        create_combo_staging(&conn).unwrap();
+
+        // Schema-qualified: `pragma_table_info('combos')` as a table-valued function reads
+        // `main`, and `combos` has been in the corpus since schema 27 — the trap
+        // `src-tauri/CLAUDE.md` states about every unqualified catalog read in a test.
+        let defaults = |table: &str| -> Vec<(String, Option<String>)> {
+            let mut stmt = conn
+                .prepare(&format!("PRAGMA {CORPUS}.table_info({table})"))
+                .unwrap();
+            let rows = stmt
+                .query_map([], |r| Ok((r.get(1)?, r.get(4)?)))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            rows
+        };
+
+        let live = defaults("combos");
+        let blanks = live
+            .iter()
+            .filter(|(_, d)| d.as_deref() == Some("''"))
+            .count();
+        assert_eq!(
+            blanks,
+            NEW_COMBO_COLUMNS.len(),
+            "the four are `DEFAULT ''` because the feed writes an empty string: {live:?}"
+        );
+        assert_eq!(defaults("combos_staging"), live);
     }
 
     // ---- v19: a deck card names a finish ---------------------------------------------

@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import { invoke, registerCommands, resetCommands } from "./core";
 import {
   ART_TAGGED_PRINTINGS,
+  COMBO_CARD_NAMES,
   ORACLE_TAGGED_NAMES,
   SUPPORTING_SINCE,
   TOKEN_ORACLE,
@@ -40,6 +41,8 @@ import { DECK_CATEGORIES } from "./fixtures";
 import { seed } from "./seeds";
 import { CARDS, type FakeCard } from "./cards";
 import type {
+  CardCombosPage,
+  CardCombosQuery,
   CardSummary,
   CategoryKind,
   CollectionImportItem,
@@ -11405,6 +11408,426 @@ describe("clearing the combo table", () => {
 
     expect(db.combos).toHaveLength(before);
     expect(db.comboMeta).not.toBeNull();
+  });
+});
+
+/**
+ * `combos_for_card` — **every combo that names one card**, which is the opposite question to the
+ * `combos_for_cards` beside it and the reason both exist.
+ *
+ * Almost everything here is arithmetic over one fixture, and the fixture is built to make each
+ * number wrong in a different way if the handler is: the store is sorted by combo id and the
+ * answer is sorted by three other keys, `total`, `matching` and `ownedTotal` are three different
+ * figures on one page, and the census is over a set neither filter has touched. A fixture where
+ * any two of those coincided would let one be answered with the other and nothing would go red.
+ *
+ * **Boros Reckoner is the subject throughout**, because it is the card `COMBO_FIXTURES` hangs its
+ * card-side half on: five hand-written combos and all 26 generated ones name it, which is what
+ * makes a second page reachable at 25 a page.
+ */
+describe("the combos one card is in", () => {
+  /** The fixture's subject. Its oracle id rather than a printing's, which is the whole address
+   *  this command takes — `combo_cards` is keyed on the card and not on the picture. */
+  const RECKONER = CARDS.find((c) => c.name === "Boros Reckoner")!;
+  const AVACYN = CARDS.find((c) => c.name === "Avacyn, Angel of Hope")!;
+
+  /** The five-argument call with its ordinary answers filled in — `limit: 100` because most of
+   *  these are about *what* comes back rather than about the page, and the paging test names its
+   *  own. */
+  function ask(db: FakeDb, over: Partial<CardCombosQuery> = {}): CardCombosPage {
+    return readHandlers(db).combos_for_card({
+      oracleId: RECKONER.oracleId,
+      cardCount: null,
+      ownedOnly: false,
+      limit: 100,
+      offset: 0,
+      ...over,
+    });
+  }
+
+  const idsOf = (page: CardCombosPage): string[] => page.combos.map((c) => c.id);
+
+  /** What a card in no combos and a database with no combos both answer. */
+  const EMPTY: CardCombosPage = {
+    total: 0,
+    matching: 0,
+    ownedTotal: 0,
+    byCardCount: [],
+    combos: [],
+  };
+
+  /**
+   * **The order is the assertion the fixture was arranged for.** `combos` is stored sorted by its
+   * own primary key, and the answer is `cardCount ASC, popularity DESC, id ASC` — so the 26
+   * generated rows are stored in exactly the reverse of the order they come back in (their
+   * popularity ascends with their id, deliberately). A handler that dropped the `.sort` would
+   * therefore answer the *least* played filler first, and one that sorted by popularity without
+   * the size key first would put the 3-card `2331-3587-4118--7` (5 601) above two of the two-card
+   * rows.
+   *
+   * The `null` arm is the third claim, and the fixture's ids are chosen so it stands alone:
+   * `1183-3587` is unranked and sorts **first** of the lot by id, and it comes back **last** of
+   * its size. Nothing but the NULLs-last comparison can put it there.
+   */
+  it("orders by size, then popularity, then id — where the store's own order is the reverse", () => {
+    const db = seed("starter");
+    // The store's order, so the disagreement is stated rather than assumed: a test whose input
+    // already agreed with its expectation would pass against a handler that never sorted.
+    const named = new Set(
+      db.comboCards.filter((r) => r.oracleId === RECKONER.oracleId).map((r) => r.comboId),
+    );
+    const stored = db.combos.filter((c) => named.has(c.id)).map((c) => c.id);
+    expect(stored[0]).toBe("1183-3587");
+    expect(stored[stored.length - 1]).toBe("3587-9146--26");
+
+    const page = ask(db);
+
+    expect(idsOf(page)).toHaveLength(31);
+    expect(idsOf(page).slice(0, 5)).toEqual([
+      "3422-3587",
+      "3149-3587",
+      "3422-3587--5",
+      // Unranked, and after every ranked two-card row rather than before them.
+      "1183-3587",
+      "2331-3587-4118--7",
+    ]);
+    // The generated block, from the most played to the least — the exact reverse of the store.
+    expect(idsOf(page)[5]).toBe("3587-9146--26");
+    expect(idsOf(page)[30]).toBe("3587-9146--01");
+    // And the whole `ORDER BY` as a property, so all 31 rows are covered without 31 strings.
+    for (let i = 1; i < page.combos.length; i += 1) {
+      const before = page.combos[i - 1];
+      const after = page.combos[i];
+      expect(before.cardCount).toBeLessThanOrEqual(after.cardCount);
+      if (before.cardCount === after.cardCount) {
+        expect(before.popularity ?? -Infinity).toBeGreaterThanOrEqual(after.popularity ?? -Infinity);
+      }
+    }
+  });
+
+  /**
+   * **Three counts, three different numbers, one call** — and the fixture makes each of the three
+   * wrong answers a different figure. `total` computed after the filters would read 27;
+   * `matching` computed before them would read 31; and `ownedTotal` narrowed by the size chip
+   * would read 3, because two of the five combos the reader has every piece of are two-card ones.
+   */
+  it("counts the whole match, the filtered match and the owned match separately", () => {
+    const page = ask(seed("starter"), { cardCount: 3 });
+
+    expect(page.total).toBe(31);
+    expect(page.matching).toBe(27);
+    expect(page.ownedTotal).toBe(5);
+  });
+
+  /**
+   * The census is over the **unfiltered** set, which is what makes it a menu of what is available
+   * rather than a description of what is shown: a version recomputed under the current filter
+   * would answer `[{ cards: 2, combos: 4 }]` alone the moment the reader picked two cards, and
+   * leave them no way to see that this card has 27 three-card combos as well.
+   *
+   * Ascending, and **never a bucket of nothing** — a handler that enumerated sizes 1…n instead of
+   * grouping would emit `{ cards: 1, combos: 0 }` and draw a chip nothing is behind.
+   */
+  it("censuses every size that matches at all, ascending, over the unfiltered set", () => {
+    const db = seed("starter");
+    const census = [
+      { cards: 2, combos: 4 },
+      { cards: 3, combos: 27 },
+    ];
+
+    expect(ask(db).byCardCount).toEqual(census);
+    expect(ask(db, { cardCount: 2 }).byCardCount).toEqual(census);
+    expect(ask(db, { cardCount: 3 }).byCardCount).toEqual(census);
+    expect(ask(db, { ownedOnly: true }).byCardCount).toEqual(census);
+  });
+
+  /** The size chip. A handler that accepted the argument and ignored it answers 31 rows. */
+  it("narrows to one combo size", () => {
+    const page = ask(seed("starter"), { cardCount: 2 });
+
+    expect(idsOf(page)).toEqual(["3422-3587", "3149-3587", "3422-3587--5", "1183-3587"]);
+    expect(page.matching).toBe(4);
+    expect(page.combos.every((c) => c.cardCount === 2)).toBe(true);
+  });
+
+  /**
+   * **`I own every piece`, and *every* is the word under test.** Three mutations die here.
+   *
+   * Two die on the list itself: a handler ignoring `ownedOnly` answers 31, and one testing `some`
+   * instead of `every` answers 31 again, since the reader has Boros Reckoner and it is in all of
+   * them.
+   *
+   * The third dies on `3422-3587--5`, which is here only because `combos::GRP_CTE` tests
+   * **presence** rather than a count — `min(oracle_id IN owned)`. That row wants **two** Boros
+   * Charms against the one in the binder, so a fake tightening the rule into `owned >= quantity`
+   * would drop a combo the window shows. The fence one test down is the *other* half of that
+   * sentence and does not weaken it: a card the reader holds **none** of was never present.
+   */
+  it("narrows to the combos the reader has every piece of — presence, not copies", () => {
+    const page = ask(seed("starter"), { ownedOnly: true });
+
+    expect(idsOf(page)).toEqual([
+      "3422-3587",
+      // Two Boros Charms wanted, one held — and still owned.
+      "3422-3587--5",
+      "3587-9146--14",
+      "3587-9146--13",
+      "3587-9146--12",
+    ]);
+    expect(page.matching).toBe(5);
+  });
+
+  /**
+   * **A row holding no copies is not a card the reader has** — `combos::OWNED_CTE`'s
+   * `AND e.quantity > 0`, and the one-line mutation this catches is dropping that clause (here,
+   * the `if (e.quantity > 0)` in `collectionReach`). Without it `3587-9146--25` joins the list
+   * above and `ownedTotal` reads 6.
+   *
+   * **What it is guarding is a state the app deletes.** `set_quantity(id, 0)` removes the row,
+   * the v24 rung removed every stored zero and the importer's `set` mode does the same, so a
+   * healthy database has none — which is what lets `collection_source::owns_printing` be an
+   * `EXISTS`. `starterEntries` seeds one anyway, from before that rule, to prove a zero renders;
+   * and unfenced, that fixture drew `Not owned` on a piece line inside a combo the same screen
+   * was offering under `I own every piece`. One card, one screen, two answers, no error. The
+   * clause is redundant against a healthy database and cheap against a broken one, and this is
+   * the test that keeps both ends of it honest.
+   */
+  it("does not count a row holding no copies", () => {
+    const db = seed("starter");
+    const copter = CARDS.find((c) => c.name === "Smuggler's Copter")!;
+    // The seeded row, so the premise is stated rather than assumed.
+    expect(db.collectionEntries.filter((e) => e.cardId === copter.id).map((e) => e.quantity)).toEqual(
+      [0],
+    );
+
+    const page = ask(db);
+    const piece = page.combos
+      .find((c) => c.id === "3587-9146--25")!
+      .pieces.find((p) => p.name === "Smuggler's Copter")!;
+
+    expect(piece.owned).toBe(0);
+    expect(idsOf(ask(db, { ownedOnly: true }))).not.toContain("3587-9146--25");
+    expect(page.ownedTotal).toBe(5);
+  });
+
+  /**
+   * The pager's two calls, joined. A `slice(offset, limit)` — the off-by-a-page that looks right
+   * for the first page and answers nothing for the second — dies on the length, and a `matching`
+   * that counted the page rather than the match dies on the last assertion, which is the number
+   * `nextComboOffset` in `CombosDialog.tsx` compares against to decide there is a second page at
+   * all.
+   */
+  it("pages with no gap and no repeat", () => {
+    const db = seed("starter");
+
+    const first = ask(db, { limit: 25, offset: 0 });
+    const second = ask(db, { limit: 25, offset: 25 });
+
+    expect(first.combos).toHaveLength(25);
+    expect(second.combos).toHaveLength(6);
+    const joined = [...idsOf(first), ...idsOf(second)];
+    expect(new Set(joined).size).toBe(31);
+    expect(joined).toEqual(idsOf(ask(db)));
+    // Both pages describe the same match, not the page in hand.
+    expect(second.matching).toBe(31);
+  });
+
+  /**
+   * **The page's own numbers are clamped and never refused**, which is `card_combos`' argument:
+   * every one of them is a figure the page composed rather than a reader's answer to anything, so
+   * a bound the app can meet quietly beats a sentence nobody will read.
+   *
+   * `limit` is clamped **up** as well as down — `limit.clamp(1, MAX_PAGE)` — and the up half is
+   * the one worth a test: a `0` from a page that has not finished setting itself up would
+   * otherwise be an empty list for ever, which looks exactly like a card in no combos. The
+   * ceiling is 100 and this fixture has 31 rows, so only the floor is reachable here.
+   */
+  it("clamps the page's own numbers rather than refusing them", () => {
+    const db = seed("starter");
+
+    expect(ask(db, { limit: 0 }).combos).toHaveLength(1);
+    expect(idsOf(ask(db, { offset: -5, limit: 2 }))).toEqual(idsOf(ask(db, { offset: 0, limit: 2 })));
+  });
+
+  /**
+   * **A card in no combos and a database with no combos are the same empty page**, which is the
+   * fact the dialog reads `combos_status` for. Asserted together, because a handler that told
+   * them apart here would be inventing a distinction the backend cannot make — and because the
+   * status call is the one that can, which is the second half of this test.
+   */
+  it("answers an unknown card and a never-fetched table alike, and the status tells them apart", () => {
+    const db = seed("starter");
+    const missing = seed("combosMissing");
+
+    expect(ask(db, { oracleId: "no-such-oracle-id" })).toEqual(EMPTY);
+    expect(ask(db, { oracleId: "   " })).toEqual(EMPTY);
+    expect(ask(missing)).toEqual(EMPTY);
+
+    expect(readHandlers(db).combos_status().combos).toBeGreaterThan(0);
+    expect(readHandlers(missing).combos_status().combos).toBe(0);
+  });
+
+  /**
+   * **`owned` is a join and not a fixture column**, which this proves the only way it can be
+   * proven: by changing the collection and watching the panel move. A handler that answered a
+   * number written into `COMBO_FIXTURES` would pass every other assertion in this block.
+   *
+   * Two copies of Avacyn are added at the root, and two figures move together — the piece's own
+   * count, and `ownedTotal`, which rises by **two** rather than one because Avacyn is in a
+   * generated combo as well as in `3149-3587`. (Either figure alone would be satisfied by a
+   * handler that joined the count and hard-coded the filter, or the other way about, so the pair
+   * is the assertion.)
+   */
+  it("reads a piece's copies off the collection", () => {
+    const db = seed("starter");
+    const before = ask(db);
+    expect(before.ownedTotal).toBe(5);
+    expect(
+      before.combos.find((c) => c.id === "3149-3587")!.pieces.map((p) => p.owned),
+    ).toEqual([1, 0]);
+
+    db.collectionEntries.push(entry({ id: 99, cardId: AVACYN.id, quantity: 2 }));
+
+    const after = ask(db);
+    expect(after.combos.find((c) => c.id === "3149-3587")!.pieces.map((p) => p.owned)).toEqual([
+      1, 2,
+    ]);
+    expect(after.ownedTotal).toBe(7);
+  });
+
+  /**
+   * **A piece the corpus has never synced is a row, not a hole** — Spellbook's corpus and the
+   * reader's `cards` table are two downloads on two schedules, so this is an ordinary state and
+   * the fixture reaches it on purpose. The name is the whole of what the row can draw.
+   *
+   * The piece beside it is the control: a printing id off the corpus and the *real* Scryfall URL
+   * off that row. A handler that fell back to the oracle id for `cardId`, or that minted a URL
+   * out of one, passes nothing here.
+   */
+  it("addresses a piece by a printing, and answers null for a card the corpus lacks", () => {
+    const pieces = ask(seed("starter")).combos.find((c) => c.id === "1183-3587")!.pieces;
+
+    expect(pieces.map((p) => p.name)).toEqual(["Boros Reckoner", "Blasphemous Act"]);
+    expect(pieces[0].cardId).toBe(RECKONER.id);
+    expect(pieces[0].imageUris?.display).toBe(RECKONER.normalUrl);
+    expect(pieces[1].cardId).toBeNull();
+    expect(pieces[1].imageUris).toBeNull();
+    expect(pieces[1].owned).toBe(0);
+  });
+
+  /**
+   * `imageUrisMissing` is a corpus whose `image_uris` column is null throughout, and what it costs
+   * is the **picture** and not the printing: a piece with no art is still a piece a reader can
+   * press. A handler that nulled `cardId` alongside the URLs would make the whole row inert.
+   */
+  it("loses the pictures and keeps the printings under imageUrisMissing", () => {
+    const db = { ...seed("starter"), fault: "imageUrisMissing" as const };
+
+    const piece = ask(db).combos[0].pieces[0];
+
+    expect(piece.imageUris).toBeNull();
+    expect(piece.cardId).toBe(RECKONER.id);
+  });
+
+  /**
+   * **The feed's own order, its copies and its commander mark** — three things `combo_cards` has
+   * always stored and only this read has ever drawn. Until it existed, `comboCardRows` wrote
+   * `quantity: 1` and `mustBeCommander: false` on every row, so a handler still doing that reads
+   * as a plausible fixture and is wrong on both columns at once.
+   *
+   * The order is the feed's because Spellbook writes `description` against it: sorting the pieces
+   * by name, or by ownership, would leave the steps describing a sequence the reader is no longer
+   * looking at.
+   */
+  it("keeps the feed's piece order, copies and commander mark", () => {
+    const templated = ask(seed("starter")).combos.find((c) => c.id === "2331-3587-4118--7")!;
+
+    expect(templated.pieces.map((p) => [p.name, p.quantity, p.mustBeCommander])).toEqual([
+      ["Kenrith, the Returned King", 1, true],
+      ["Boros Reckoner", 1, false],
+      ["Lightning Bolt", 2, false],
+    ]);
+  });
+
+  /**
+   * The four columns corpus schema 2 added, at both ends: filled on the one row that fills them,
+   * and **`""` and not `null`** everywhere else. The feed writes an empty string where it has
+   * nothing to say and the columns are `NOT NULL DEFAULT ''`, so a fake answering `null` would
+   * invent a third state for the dialog to draw an em dash over.
+   */
+  it("carries the four text columns, and empties them rather than nulling them", () => {
+    const page = ask(seed("starter"));
+    const templated = page.combos.find((c) => c.id === "2331-3587-4118--7")!;
+    const plain = page.combos.find((c) => c.id === "3422-3587")!;
+
+    expect(templated.manaNeeded).toBe("{2}");
+    expect(templated.easyPrerequisites).toBe("Boros Reckoner is on the battlefield.");
+    expect(templated.notablePrerequisites).toContain("is your commander");
+    expect(templated.description).toContain("2. Cast Lightning Bolt targeting Boros Reckoner.");
+    expect(templated.templateCount).toBe(1);
+
+    expect([
+      plain.manaNeeded,
+      plain.easyPrerequisites,
+      plain.notablePrerequisites,
+      plain.description,
+    ]).toEqual(["", "", "", ""]);
+  });
+
+  /**
+   * **It honours no fault, `combosFetchError` included**, which is `combos_for_cards`' position
+   * one command over and is the stronger case here: that fault is about a *fetch*, and this is a
+   * read of what is stored. A card page that could not say what its card is part of because a
+   * download failed a week ago would be refusing over the wrong thing entirely.
+   */
+  it("answers through the combo feed's own failure", () => {
+    const failing = { ...seed("starter"), fault: "combosFetchError" as const };
+
+    expect(ask(failing)).toEqual(ask(seed("starter")));
+  });
+
+  /**
+   * **The fixture reshape must not have moved a deck's answer**, and this is where that is
+   * checked rather than hoped: the 26 generated combos all name Boros Reckoner precisely because
+   * no seeded *Commander* deck holds one, so `combos_for_cards` — the bracket advisory's read —
+   * answers exactly what it answered before they existed. A generated combo anchored on Lightning
+   * Bolt instead would put twenty rows into the bracket deck's panel and rewrite every story on
+   * it.
+   */
+  it("leaves what a deck contains exactly where it was", () => {
+    const db = seed("starter");
+    const deckTwo = db.deckCards.filter((c) => c.deckId === 2).map((c) => c.cardId);
+    expect(readHandlers(db).combos_for_cards({ cardIds: deckTwo }).map((c) => c.id)).toEqual([
+      "1268-2357",
+    ]);
+
+    const mismatch = seed("bracketMismatch");
+    const testbed = mismatch.decks.find((d) => d.name === "Bracket Testbed")!;
+    const cards = mismatch.deckCards
+      .filter((c) => c.deckId === testbed.id)
+      .map((c) => c.cardId);
+    expect(
+      readHandlers(mismatch).combos_for_cards({ cardIds: cards }).map((c) => c.id),
+    ).toEqual(["4109-1983", "1076-1174", "1983-2309", "1268-2357", "4109-2030--17"]);
+  });
+
+  /**
+   * **A combo naming a card the corpus has lost is dropped whole**, silently — which is exactly
+   * why the names it depends on are exported. This is the test that makes a corpus regeneration
+   * loud instead: a name that stops resolving fails here rather than shortening a catalogue
+   * nobody counted.
+   *
+   * The second half is the same rule from the other end. `Blasphemous Act` is expected **not** to
+   * resolve, so it is deliberately absent from that list — a version that included it would fail
+   * the moment the fixture was right — and its combo is in the store anyway, because the piece
+   * declared its own id.
+   */
+  it("depends on names the corpus still carries, and on exactly one it does not", () => {
+    const db = seed("starter");
+
+    expect(COMBO_CARD_NAMES.filter((n) => !CARDS.some((c) => c.name === n))).toEqual([]);
+    expect(COMBO_CARD_NAMES).not.toContain("Blasphemous Act");
+    expect(db.comboCards.some((r) => r.name === "Blasphemous Act")).toBe(true);
   });
 });
 

@@ -18,6 +18,7 @@ vi.mock("@/lib/platform", () => ({ isAndroid: vi.fn(() => false) }));
 // TypeScript only quotes it, so the quote is what can rot.
 import collectionRs from "../../src-tauri/src/collection.rs?raw";
 import collectionFoldersRs from "../../src-tauri/src/collection_folders.rs?raw";
+import combosRs from "../../src-tauri/src/combos.rs?raw";
 import deckRs from "../../src-tauri/src/deck.rs?raw";
 import decksortRs from "../../src-tauri/src/decksort.rs?raw";
 import deckMetaRs from "../../src-tauri/src/deck_meta.rs?raw";
@@ -52,6 +53,7 @@ import {
   ipc,
   ipcError,
   type ArtTagProgressEvent,
+  type CardCombosPage,
   type ComboProgress,
   type DeckTokenRow,
   type FeedProgressEvent,
@@ -1684,9 +1686,11 @@ describe("ipc argument names match the Rust command signatures", () => {
   });
 
   /**
-   * Three of the combo feed's four commands, and **the id name is the trap** — the one this file
+   * Three of the combo feed's five commands, and **the id name is the trap** — the one this file
    * exists for. The fourth, `combos_clear`, is the case below: it carries nothing at all, which
-   * is a different trap and gets a different assertion.
+   * is a different trap and gets a different assertion. The fifth is `combos_for_card`, two cases
+   * below, whose name is this one's with a letter taken off — so the two are pinned apart there
+   * as well as pinned individually here.
    *
    * `combos_for_cards` declares `card_ids: Vec<String>`, which Tauri fills from `cardIds`, exactly
    * as `oracle_tags_for_printings` does. A wrapper sending `card_ids`, or `cards`, or `ids` is a
@@ -1820,6 +1824,165 @@ describe("ipc argument names match the Rust command signatures", () => {
     // `combos::conditional_etag` replays the stored ETag only when there are rows behind it.
     await ipc.combosRefresh(true);
     expect(invoke.mock.calls).toEqual([["combos_clear"], ["combos_refresh", { force: true }]]);
+  });
+
+  /**
+   * The fifth combo command, whose **name is the fourth one's with a letter taken off**.
+   *
+   * `combos_for_card` and `combos_for_cards` are opposite questions over one table — which
+   * combos a pile of printings fully *contains* (the deck advisory) against what one card is
+   * *part of* — and a wrapper that routed either to the other's name would be answered rather
+   * than rejected. That is the worst shape a drift can take here: the deck read handed an oracle
+   * id in place of `card_ids` deserialises nothing and the dialog draws an empty list, which is
+   * exactly what a card in no combo looks like. So the two names are asserted together, in one
+   * `invoke.mock.calls` comparison, rather than each on its own.
+   *
+   * **`cardCount: null` is the case a number alone would pass over.** The Rust parameter is
+   * `Option<i64>`, `null` is how `None` is spelled on the wire, and Tauri fills parameters *by
+   * name* — so a mapper that dropped the key when there was no size filter (`...(size && {
+   * cardCount: size })` is the shape that writes itself) would be a rejection on every
+   * unfiltered read, which is the read the dialog opens on. A test that only ever sent a number
+   * would be green the whole time.
+   *
+   * `ownedOnly: false` carries the same trap one field over and is `combos_refresh`'s `force`
+   * argument again: an absent boolean is a refusal, not a default.
+   *
+   * The answer is read back through a typed local rather than asserted as an opaque blob,
+   * because that is the half `tsc` can see: every field named below has to exist on
+   * {@link CardCombosPage}, so a mirror spelling `owned_total` or `by_card_count` the column's
+   * way fails the build rather than reaching a caption as `undefined`.
+   */
+  it("sends `combos_for_card` under its own name, with `cardCount: null` as a key", async () => {
+    const page = {
+      total: 41,
+      matching: 12,
+      ownedTotal: 3,
+      byCardCount: [
+        { cards: 2, combos: 12 },
+        { cards: 3, combos: 29 },
+      ],
+      combos: [
+        {
+          id: "1957-4050-7918--204",
+          bracketTag: "R",
+          cardCount: 2,
+          templateCount: 0,
+          identity: "UB",
+          produces: "Win the game",
+          description: "1. Cast Demonic Consultation naming a card not in your deck.",
+          easyPrerequisites: "All permanents are untapped.",
+          notablePrerequisites: "Thassa's Oracle is on the battlefield.",
+          manaNeeded: "{U}{B}",
+          popularity: 9_001,
+          pieces: [
+            {
+              oracleId: "oracle-thassa",
+              name: "Thassa's Oracle",
+              quantity: 1,
+              mustBeCommander: false,
+              cardId: "printing-thassa",
+              imageUris: { display: "https://cards.scryfall.io/large/front/a/b/ab.jpg?1" },
+              owned: 2,
+            },
+            {
+              oracleId: "oracle-consultation",
+              name: "Demonic Consultation",
+              quantity: 1,
+              mustBeCommander: false,
+              // A piece the corpus has never synced: no printing to address, no picture, and
+              // the feed's own spelling is the whole of what the row can draw.
+              cardId: null,
+              imageUris: null,
+              owned: 0,
+            },
+          ],
+        },
+      ],
+    };
+    invoke.mockResolvedValue(page);
+
+    // The unfiltered read the dialog opens on — a size filter of `null` and the owned box off.
+    const opened: CardCombosPage = await ipc.combosForCard({
+      oracleId: "oracle-thassa",
+      cardCount: null,
+      ownedOnly: false,
+      limit: 20,
+      offset: 0,
+    });
+
+    expect(invoke).toHaveBeenCalledWith("combos_for_card", {
+      oracleId: "oracle-thassa",
+      cardCount: null,
+      ownedOnly: false,
+      limit: 20,
+      offset: 0,
+    });
+    // Said again, and not as ceremony: `toHaveBeenCalledWith` compares the way `toEqual` does,
+    // which treats a key holding `undefined` as a key that is not there. A mapper writing
+    // `cardCount: size ?? undefined` would therefore satisfy the assertion above while sending
+    // an object Tauri refuses. These two lines are about the key *existing* and about it holding
+    // `null` rather than `undefined`, which is the distinction the wire actually has.
+    const sent = invoke.mock.calls[0][1] as Record<string, unknown>;
+    expect(Object.keys(sent).sort()).toEqual([
+      "cardCount",
+      "limit",
+      "offset",
+      "oracleId",
+      "ownedOnly",
+    ]);
+    expect(sent.cardCount).toBeNull();
+
+    // Read back through the typed local: the three totals are three different questions —
+    // `total` is the card's whole match set, `matching` is what the pager pages through, and
+    // `ownedTotal` is a share of `total` and never of `matching`.
+    expect(opened.total).toBe(41);
+    expect(opened.matching).toBe(12);
+    expect(opened.ownedTotal).toBe(3);
+    // The census is over the unfiltered set, so its buckets sum past `matching` rather than to
+    // it — a bucket list that agreed with the filtered count would be the client-side filter
+    // this key exists to prevent, arriving through the back door.
+    expect(opened.byCardCount.map((b) => b.cards)).toEqual([2, 3]);
+    expect(opened.byCardCount.reduce((n, b) => n + b.combos, 0)).toBe(41);
+    // The piece fields nothing else in this file names. `mustBeCommander` is the column the
+    // ingest has always stored and no shape carried until now, and `owned` is a count across
+    // every printing and finish — `0` is an answer, so a mirror dropping it would read as
+    // "owns none" on a card the reader has four of, with nothing red anywhere.
+    const [thassa, consultation] = opened.combos[0].pieces;
+    expect(thassa.mustBeCommander).toBe(false);
+    expect(thassa.owned).toBe(2);
+    expect(thassa.cardId).toBe("printing-thassa");
+    // The unsynced piece keeps its name and loses everything a printing would have given it.
+    expect(consultation.cardId).toBeNull();
+    expect(consultation.name).toBe("Demonic Consultation");
+    expect(consultation.imageUris).toBeNull();
+
+    // A narrowed read: the size comes from a bucket and the owned box is on.
+    invoke.mockResolvedValue({ ...page, matching: 12, combos: [] });
+    await ipc.combosForCard({
+      oracleId: "oracle-thassa",
+      cardCount: 2,
+      ownedOnly: true,
+      limit: 20,
+      offset: 20,
+    });
+    expect(invoke).toHaveBeenLastCalledWith("combos_for_card", {
+      oracleId: "oracle-thassa",
+      cardCount: 2,
+      ownedOnly: true,
+      limit: 20,
+      offset: 20,
+    });
+
+    // **The two reads are pinned apart, not just each pinned.** One character between the two
+    // command names, and a wrapper sending either under the other's would be answered — the
+    // wrong question, correctly, with an empty list at the end of it.
+    invoke.mockResolvedValue([]);
+    await ipc.combosForCards(["p1"]);
+    expect(invoke.mock.calls.map((c) => c[0])).toEqual([
+      "combos_for_card",
+      "combos_for_card",
+      "combos_for_cards",
+    ]);
   });
 
   /**
@@ -3080,6 +3243,28 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     ["DeckPipCosts", deckRs, "DeckPipCosts"],
     ["BracketCardRow", deckRs, "BracketCardRow"],
     ["DeckBracketRead", deckRs, "DeckBracketRead"],
+    // **The card-side combo read's four, added with the feature** (issue #359) — and four rows
+    // for one command because the shape is **nested three deep**, which is `OptimizePrinting`'s
+    // reason arriving at its worst case: `CardCombosPage` holds `CardCombo`s, each of which
+    // holds `ComboPiece`s, and the page also holds a list of `ComboCountBucket`s. A field
+    // renamed at any level below the top leaves the outer struct agreeing field for field while
+    // everything inside it arrives `undefined`, so each level is named.
+    //
+    // `ComboPiece` is on this list and not on `mirrors` above for `PullRow`'s and `MissingRow`'s
+    // reason exactly: it carries a picture, but it is seven fields against that table's floor of
+    // ten, and the floor is a property of a card *wall's* row rather than of a mirror. The
+    // picture is asserted on its own below, beside theirs.
+    //
+    // What a drift costs here is quiet in the way this table exists for. A renamed `owned` reads
+    // `undefined` and prints as though the reader owns none of a card they have four of. A
+    // renamed `must_be_commander` is `undefined`, `=== true` takes the other branch, and the one
+    // piece a combo insists on in the command zone is drawn as an ordinary card. A renamed
+    // `matching` or `owned_total` on the page gives a caption `NaN` or a pager that stops early.
+    // Every one of those is a screen that looks like an answer.
+    ["ComboPiece", combosRs, "ComboPiece"],
+    ["CardCombo", combosRs, "CardCombo"],
+    ["ComboCountBucket", combosRs, "ComboCountBucket"],
+    ["CardCombosPage", combosRs, "CardCombosPage"],
   ];
 
   it.each(plainMirrors)(
@@ -3187,6 +3372,28 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
       tsFields(ipcSource, "DeckMissingRow"),
       "`DeckMissingRow` (ipc.ts) has no `imageUris`",
     ).toContain("imageUris");
+  });
+
+  /**
+   * A combo piece's picture, for the two above's reason and with one difference worth naming:
+   * this is not a deck-boundary read at all. It is the *card* side — every combo that names one
+   * card, most of whose pieces the reader owns nothing of — so the paragraph those two share
+   * generalises one step further than it was written. What owes this assertion is any row that
+   * **draws a card and is not on `mirrors`**, whatever it is a boundary of.
+   *
+   * The parity row above cannot make it: parity catches a field renamed on *one* side, and both
+   * sides dropping the picture together is a green table and a dialog of named, artless frames.
+   * The web build and the phone have no `mtgimg://` to fall back on, so there this field is the
+   * only picture there is.
+   */
+  it("names the front face's image URLs on both sides of the combo piece", () => {
+    expect(
+      rustFields(combosRs, "ComboPiece"),
+      "`ComboPiece` (Rust) has no `image_uris`",
+    ).toContain("image_uris");
+    expect(tsFields(ipcSource, "ComboPiece"), "`ComboPiece` (ipc.ts) has no `imageUris`").toContain(
+      "imageUris",
+    );
   });
 });
 

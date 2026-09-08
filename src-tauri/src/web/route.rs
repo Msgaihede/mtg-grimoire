@@ -213,13 +213,15 @@ pub const COMMANDS: &[&str] = &[
     "error_log_clear",
     "get_marketplace",
     "set_marketplace",
-    // **Commander Spellbook, three of four.** `combos_status` reports what the tables hold,
-    // `combos_for_cards` is the deck bracket's fourth signal, and `combos_clear` throws the
-    // stored feed away — a connection-only write with no network in it, which is what this
-    // table answers. `combos_refresh` is the fourth and is the one that downloads, so it is
-    // not here. See the arms.
+    // **Commander Spellbook, four of five.** `combos_status` reports what the tables hold,
+    // `combos_for_cards` is the deck bracket's fourth signal, `combos_for_card` is the card
+    // page's opposite question — every combo that *names* one oracle card — and
+    // `combos_clear` throws the stored feed away, a connection-only write with no network in
+    // it, which is what this table answers. `combos_refresh` is the fifth and is the one that
+    // downloads, so it is not here. See the arms.
     "combos_status",
     "combos_for_cards",
+    "combos_for_card",
     "combos_clear",
     // The last two gaps, closed. See the arms.
     "marketplace_feed_status",
@@ -1969,19 +1971,23 @@ pub fn call(
 
         // ── Commander Spellbook's combos ────────────────────────────────────────────
         //
-        // **Three of four, and `combos.rs` was ungated all along** — it is on `lib.rs`'s
+        // **Four of five, and `combos.rs` was ungated all along** — it is on `lib.rs`'s
         // every-target list because its ingest streams through `crate::feed`. Only
         // `combos_refresh` is missing, for `oracle_tags_refresh`'s reason: it downloads, and a
         // download is a `#[wasm_bindgen]` export rather than a routed command — `web::glue`'s
         // `ingest_combos`, which `src/lib/core/browser.ts` diverts that one name onto.
         //
         // `combos_status` reports what the tables hold, `combos_for_cards` is the deck
-        // bracket's fourth signal, and `combos_clear` throws the stored feed away. **The third
-        // one routes because of what it does rather than what it is named**: it deletes rows
-        // and reads the status back on the connection it already holds, which is exactly the
-        // shape this table answers — synchronous, connection-only, no network. Its name sitting
-        // one line from `combos_refresh`'s is the trap that seam warns about, and the answer is
-        // always the work and never the spelling.
+        // bracket's fourth signal, `combos_for_card` is the card page's opposite question —
+        // every combo that *names* one oracle card, however few of the other pieces the reader
+        // holds — and `combos_clear` throws the stored feed away. **The last of those routes
+        // because of what it does rather than what it is named**: it deletes rows and reads the
+        // status back on the connection it already holds, which is exactly the shape this table
+        // answers — synchronous, connection-only, no network. Its name sitting one line from
+        // `combos_refresh`'s is the trap that seam warns about, and the answer is always the
+        // work and never the spelling. **`combos_for_card` is that same trap read in the other
+        // direction** — one letter from `combos_for_cards`, and routed for the reason both of
+        // them are: a `SELECT` over tables this target already carries.
         //
         // **A database that never fetched the feed answers three signals instead of four**,
         // which the crate documents as supported rather than an error — and `combos_status` is
@@ -1996,6 +2002,28 @@ pub fn call(
             encode(
                 command,
                 crate::combos::match_combos(&conn, &card_ids).map_err(RouteError::Failed)?,
+            )
+        }
+
+        // **`cardCount` through [`optional`] and the other four through [`field`]**, which is
+        // the wire's own distinction rather than a preference: "every size" is the page not
+        // sending the key at all, and JavaScript posts an absent key rather than a `null` — so
+        // `field::<Option<i64>>` would refuse the ordinary call with "missing `cardCount`".
+        // The paging pair is required, because a page with no bound is a card in a hundred
+        // combos rendering all of them.
+        "combos_for_card" => {
+            let oracle_id: String = field(command, args, "oracleId")?;
+            let card_count: Option<i64> = optional(command, args, "cardCount")?;
+            let owned_only: bool = field(command, args, "ownedOnly")?;
+            let limit: i64 = field(command, args, "limit")?;
+            let offset: i64 = field(command, args, "offset")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::combos::card_combos(
+                    &conn, &oracle_id, card_count, owned_only, limit, offset,
+                )
+                .map_err(RouteError::Failed)?,
             )
         }
 
@@ -2347,6 +2375,83 @@ mod tests {
         assert_eq!(out[0]["combos"], json!([]));
 
         let err = call(&s, "deck_bracket_reads", &json!({ "deck_ids": [id] })).unwrap_err();
+        assert!(matches!(&err, RouteError::Args { .. }), "got {err:?}");
+    }
+
+    /// **The card page's combo read, and the half of the drift `COMMANDS` cannot see on its
+    /// own.**
+    ///
+    /// [`every_advertised_command_is_actually_routed`] walks the list and catches a name
+    /// advertised with no arm. It cannot catch the other direction: an arm added here and
+    /// left out of `COMMANDS` answers a [`call`] perfectly well and is still invisible to the
+    /// page, which reads that list to decide what a browser can do. So membership is asserted
+    /// here explicitly, beside the routing.
+    ///
+    /// `combos_for_card` is exactly the name that invites both mistakes — one letter from
+    /// `combos_for_cards`, and one line from the `combos_refresh` this target deliberately
+    /// does not route.
+    #[test]
+    fn the_card_combo_read_is_both_routed_and_advertised() {
+        let s = state("web-route-combos-for-card");
+
+        assert!(
+            COMMANDS.contains(&"combos_for_card"),
+            "an arm the page is never told about is an arm nobody can call"
+        );
+
+        // **A database that has never ingested the feed answers an empty page, never a
+        // refusal** — the state `combos_status` exists to tell apart from "this card is in no
+        // combo", and the reason this arm needs no shape of its own for it.
+        //
+        // The five keys are asserted by the camelCase names `CardCombosPage` declares in
+        // `src/lib/ipc.ts`, because that interface is what the card surface destructures and
+        // nothing else in either language compares the two spellings.
+        let out = call(
+            &s,
+            "combos_for_card",
+            &json!({
+                "oracleId": "nobody-has-a-combo-with-this",
+                "ownedOnly": false,
+                "limit": 20,
+                "offset": 0
+            }),
+        )
+        .unwrap();
+        assert_eq!(out["total"], json!(0));
+        assert_eq!(out["matching"], json!(0));
+        assert_eq!(out["ownedTotal"], json!(0));
+        assert_eq!(out["byCardCount"], json!([]));
+        assert_eq!(out["combos"], json!([]));
+
+        // `cardCount` is the one argument the page may omit — absent is every size — so
+        // sending it must reach the same arm rather than a "missing argument".
+        let sized = call(
+            &s,
+            "combos_for_card",
+            &json!({
+                "oracleId": "nobody-has-a-combo-with-this",
+                "cardCount": 2,
+                "ownedOnly": true,
+                "limit": 20,
+                "offset": 0
+            }),
+        )
+        .unwrap();
+        assert_eq!(sized["total"], json!(0));
+
+        // camelCase on the wire, the way `deck_bracket_reads` pins `deckIds`: the Rust
+        // parameter is `oracle_id` and nothing may reach this arm spelling it that way.
+        let err = call(
+            &s,
+            "combos_for_card",
+            &json!({
+                "oracle_id": "nobody-has-a-combo-with-this",
+                "ownedOnly": false,
+                "limit": 20,
+                "offset": 0
+            }),
+        )
+        .unwrap_err();
         assert!(matches!(&err, RouteError::Args { .. }), "got {err:?}");
     }
 
@@ -2905,9 +3010,14 @@ mod tests {
         // answers **144** — counted from the merged array, not reached by adding 2 and 1, which
         // is the same discipline arriving at the same number for a reason that would still hold
         // if it had not. If a later merge turns this red, take the number from `left`.
+        //
+        // **145 is the combo branch's (issue #359) one route, `combos_for_card`, counted off
+        // the merged array rather than added to 144** — which is the same arithmetic the
+        // paragraph above says not to trust, so it is written here as what it is: a number to
+        // re-read from `left` the moment a merge disagrees with it.
         assert_eq!(
             COMMANDS.len(),
-            144,
+            145,
             "update this number when a command is added"
         );
     }

@@ -29,7 +29,8 @@
  * `TagHit`/`TagRef`                              — `src-tauri/src/tags/query.rs`
  * `MutedTag`                                     — `src-tauri/src/tags/muted.rs`
  * `ComboBracketTag`/`DeckCombo`/`ComboStatus`/
- * `ComboProgress`                                — `src-tauri/src/combos.rs`
+ * `ComboProgress`/`ComboPiece`/`CardCombo`/
+ * `ComboCountBucket`/`CardCombosPage`            — `src-tauri/src/combos.rs`
  * `MirrorStatus`                                 — `src-tauri/src/mirror/settings.rs`
  * `PassReport`                                   — `src-tauri/src/mirror/run.rs`
  * `TagTerms`                                     — `src-tauri/src/filters.rs`
@@ -4778,6 +4779,251 @@ export interface DeckCombo {
 }
 
 /**
+ * One named card a combo asks for, and whether the reader holds it — a row of the card-side
+ * read, {@link CardCombosPage}.
+ *
+ * **{@link DeckCombo} carries `cards: string[]` for the same idea and that is not an oversight
+ * on either side.** The deck advisory has already established that every named card is in the
+ * deck, so a name is the whole of what it has left to print. This read establishes nothing of
+ * the sort: it answers every combo that *names* the open card, most of which the reader owns no
+ * other piece of, so each piece has to say what it is, what it looks like and whether it is in
+ * the binder. Widening the deck's shape to this one would put six fields and a picture URL on
+ * every combo of every deck in the gallery to draw a list of names.
+ */
+export interface ComboPiece {
+  /**
+   * The piece's **oracle** id — what a combo is really about, and the id everything in this feed
+   * is matched by ({@link ipc.combosForCards} states the same rule from the deck's end).
+   *
+   * All four Lightning Bolts are one piece here, which is why `owned` below can be a sum across
+   * printings without anything having to decide which printing was meant.
+   */
+  oracleId: string;
+  /**
+   * The card's name **as the feed spells it**, and the one field that survives a card this
+   * database has never heard of.
+   *
+   * Spellbook's corpus and the reader's `cards` table are two downloads on two schedules, so a
+   * combo can name a card a stale corpus does not carry — a new set's card in a combo published
+   * the week it was spoiled. That piece has `cardId: null`, no picture and `owned: 0`, and this
+   * string is the whole of what the row can draw. **Never look a card up by it**: the name is
+   * for the eye and the oracle id is the address.
+   */
+  name: string;
+  /** How many copies the combo asks for. `1` for almost every piece; above one is a combo that
+   *  really does want two of a card, and drawing it as `1` would be a lie about what to buy. */
+  quantity: number;
+  /**
+   * The combo wants this piece **in the command zone**, not merely in the ninety-nine —
+   * Spellbook's `must_be_commander`.
+   *
+   * The ingest has stored this column since the feed first landed and no shape carried it until
+   * now; {@link DeckCombo}'s own doc says so, and this is the field that ends that sentence.
+   * **It is display only.** Nothing here checks that the piece really is the reader's commander,
+   * because this read has no deck in front of it at all — it answers about a card.
+   */
+  mustBeCommander: boolean;
+  /**
+   * A printing to address the piece by — the default one — or `null` when the corpus has never
+   * synced the card.
+   *
+   * This is what a press opens and what a picture is fetched for, so `null` is the row that can
+   * be read and not clicked. It is a *printing* id where {@link ComboPiece.oracleId} is the
+   * card, and the two must not be swapped: a printing id in an oracle position matches nothing
+   * and produces an empty answer rather than an error.
+   */
+  cardId: string | null;
+  /**
+   * The front face's image URLs, exactly as {@link CardSummary.imageUris} — `Partial`, front
+   * face only, and `null` for a piece with no usable picture (which includes every piece whose
+   * {@link ComboPiece.cardId} is `null`, since there is no printing to have one).
+   *
+   * On Tauri a tile draws `mtgimg://` and ignores this; on the web build and the phone it is the
+   * only picture there is. The platform branch stays in `images.ts` — see that field's note.
+   */
+  imageUris?: Partial<Record<ImageVariant, string>> | null;
+  /**
+   * How many copies of this card the reader owns, **across every printing and every finish** —
+   * the sum the oracle key above makes possible.
+   *
+   * **`0` is an answer and not a blank.** A combo listing three pieces the reader owns none of
+   * is exactly what this read exists to show, so a row rendering `0` as an em dash would hide
+   * the ordinary case. It is also what `ownedOnly` filters on, and the filter is applied in SQL
+   * — see {@link CardCombosQuery.ownedOnly} for why that matters to the caller.
+   */
+  owned: number;
+}
+
+/**
+ * One combo that **names** the open card — the card-side read, and the opposite question to
+ * {@link ipc.combosForCards}.
+ *
+ * That one asks *which of these combos does a pile of cards fully contain*; this one asks *what
+ * is this card part of*, and makes no claim whatever about the other pieces. A reader looking at
+ * Thassa's Oracle wants the second question answered, and the first would answer `[]` for every
+ * card they own two thirds of a combo for.
+ *
+ * **So every field the deck advisory did not need is here**, because the deck's list is read
+ * beside the deck itself and this one is read beside a single card with nothing around it: the
+ * steps, the prerequisites, the mana, and one {@link ComboPiece} per named card.
+ */
+export interface CardCombo {
+  /** Commander Spellbook's variant id, e.g. `"1957-4050-7918--204"` — {@link DeckCombo.id}, the
+   *  same string and the same rows. */
+  id: string;
+  /**
+   * Which bracket the combo is for — {@link ComboBracketTag}.
+   *
+   * **A closed union, and this is that argument's second reader.** An eighth letter arriving
+   * from Spellbook is a Rust-side *skip* (the ingest drops the combo) rather than an
+   * `undefined` reaching a total label map on this side, which is what a widened union would
+   * cost: every map over the seven letters would have to grow a "some letter we do not know"
+   * arm, on a screen whose whole job is to say what a combo is for. See {@link ComboBracketTag}.
+   */
+  bracketTag: ComboBracketTag;
+  /**
+   * How many **named cards** the combo asks for — the length of {@link CardCombo.pieces}, sent
+   * rather than derived because it is also the filter key and the bucket key.
+   *
+   * A reader narrowing to two-card combos is asking about this number, and
+   * {@link CardCombosPage.byCardCount} is a census of it over the whole unfiltered match set —
+   * neither of which the page in hand could answer, because the page is a slice.
+   */
+  cardCount: number;
+  /**
+   * How many *templates* the combo also asks for — Spellbook's `requires[]`, descriptions
+   * ("a creature with flying") that resolve to no card id at all. `0` is a combo whose every
+   * requirement is a named card.
+   *
+   * {@link DeckCombo.templateCount}'s rule is a *deck* rule — above zero keeps the combo out of
+   * the bracket arithmetic, because a combo that might not be there may not raise a floor — and
+   * it does not follow here. Nothing on this screen is estimating anything; a template is one
+   * more thing the combo needs, said in words, and the honest drawing is to say so.
+   */
+  templateCount: number;
+  /** The combo's colour identity as the feed publishes it — WUBRG letters, `""` for colourless.
+   *  A string rather than an array because nothing here does anything to it but draw pips. */
+  identity: string;
+  /** What the combo does — Spellbook's feature names, one per line (`"Infinite lifegain"`).
+   *  {@link DeckCombo.produces}, joined at the ingest for its reason: nothing on either side
+   *  does anything to them but print them. */
+  produces: string;
+  /** The numbered steps, `"\n"`-separated — how the combo is actually executed. `""` when the
+   *  feed carries none, which is a real state for a combo whose editors have not written one up
+   *  yet, and not a reason to hide the row. */
+  description: string;
+  /** Set-up the combo assumes and Spellbook considers trivial ("all permanents are untapped").
+   *  `""` when there are none. */
+  easyPrerequisites: string;
+  /** Set-up the combo assumes and Spellbook considers worth stating ("Frodo is your commander").
+   *  `""` when there are none. This is the pair's *interesting* half and the one worth drawing
+   *  first where only one fits. */
+  notablePrerequisites: string;
+  /** What it costs to go off, in mana symbols (`"{6}"`). `""` when the feed names no cost, which
+   *  is not the same as free — it is the feed saying nothing. */
+  manaNeeded: string;
+  /** How many decks Spellbook has seen it in, or `null` where the feed gives no figure —
+   *  {@link DeckCombo.popularity}, and the sort this list arrives in. */
+  popularity: number | null;
+  /**
+   * Every named card of the combo, **in the feed's order** — including the card being read
+   * about, which is deliberately not filtered out: a combo is a list of pieces and one of them
+   * being the open card is a fact about where it sits in the list, not a row to delete.
+   *
+   * The order is the feed's because Spellbook's editors write the steps against it, so
+   * resorting the pieces (by owned, by name) would leave {@link CardCombo.description}
+   * referring to a sequence the reader is no longer looking at.
+   */
+  pieces: ComboPiece[];
+}
+
+/**
+ * How many combos name this card at each combo size — one bar of the size census.
+ *
+ * **Computed over the *unfiltered* match set**, so the numbers do not move as the reader
+ * narrows; see {@link CardCombosPage.byCardCount}.
+ */
+export interface ComboCountBucket {
+  /** The combo size — {@link CardCombo.cardCount}, and the value to pass back as
+   *  {@link CardCombosQuery.cardCount} to narrow to it. */
+  cards: number;
+  /** How many combos of that size name this card. Never `0`: a size nothing matches has no
+   *  bucket at all, which is what makes the list drawable as it stands. */
+  combos: number;
+}
+
+/**
+ * One page of the combos that name a card, plus the three totals a caption needs.
+ *
+ * **Three counts rather than one, because the page cannot answer any of them.** `combos` below
+ * is a slice — up to `limit` rows — so a caption counting it would say "20 combos" for a card
+ * with six hundred, and a filter chip counting it would say the same thing twice.
+ */
+export interface CardCombosPage {
+  /** Combos naming this card with **no filter applied at all** — the number the screen's
+   *  heading is about, and the denominator {@link CardCombosPage.ownedTotal} is a share of. */
+  total: number;
+  /** Combos matching after **both** filters — {@link CardCombosQuery.cardCount} *and*
+   *  `ownedOnly`. This is what the pager pages through, so it is the one to compare `offset`
+   *  against and never {@link CardCombosPage.total}. */
+  matching: number;
+  /** Of {@link CardCombosPage.total}, how many the reader owns **every piece** of — the
+   *  `ownedOnly` filter's own count, answered whether or not that filter is on, so the checkbox
+   *  can say what pressing it would leave. */
+  ownedTotal: number;
+  /**
+   * The size census — one {@link ComboCountBucket} per combo size that matches at all, ascending
+   * by `cards`.
+   *
+   * **Over the unfiltered set, which is the whole point of it.** A census recomputed under the
+   * current filter would zero every bucket but the selected one the moment a reader picked a
+   * size, leaving them no way back and no way to see that the card has forty three-card combos
+   * as well. It is a menu of what is available, not a description of what is shown.
+   */
+  byCardCount: ComboCountBucket[];
+  /** This page — at most {@link CardCombosQuery.limit} rows, starting at
+   *  {@link CardCombosQuery.offset}, in the order the backend sorts them. */
+  combos: CardCombo[];
+}
+
+/**
+ * The five arguments {@link ipc.combosForCard} takes, bundled.
+ *
+ * **Not a mirror of anything.** `combos_for_card` declares five flat parameters, so this object
+ * exists on this side alone — it is what the wrapper spreads and what a query key is built from,
+ * so the call site and `cardCombosKey` cannot disagree about what was asked. The header's list
+ * of mirrored structs deliberately does not name it, and `ipc.test.ts`'s field-parity table
+ * cannot either: there is no Rust struct to compare it with.
+ */
+export interface CardCombosQuery {
+  /** Which card — the **oracle** id, never a printing id. {@link ComboPiece.oracleId}'s rule,
+   *  and the reason `cardCombosKey` keys on it: a combo is a fact about a card, so stepping
+   *  between two printings of it must not miss the cache. */
+  oracleId: string;
+  /**
+   * An exact combo size, or `null` for every size — the value comes from a
+   * {@link ComboCountBucket}, so it is always a size that matches something.
+   *
+   * `Option<i64>` on the Rust side, and `null` is how `None` is spelled on the wire: the key
+   * has to travel even when there is no filter, because Tauri fills parameters by name and an
+   * absent one is a rejection rather than a default. `ipc.test.ts` pins exactly that.
+   */
+  cardCount: number | null;
+  /**
+   * Only combos the reader owns every piece of.
+   *
+   * **Narrowed in SQL, before the page is cut** — which is what makes it a filter and not
+   * something a caller could do to the rows it already has. See `cardCombosKey` in
+   * `lib/query.ts` for what a client-side version of this would show a reader.
+   */
+  ownedOnly: boolean;
+  /** Page size. */
+  limit: number;
+  /** Rows to skip — compared against {@link CardCombosPage.matching}, never `total`. */
+  offset: number;
+}
+
+/**
  * The combo table's own freshness — `combo_meta`, plus the shape of a database that has never
  * fetched the file.
  *
@@ -7515,6 +7761,43 @@ export const ipc = {
    * a deck with no combos in it answers. {@link ipc.combosStatus} is what tells those apart.
    */
   combosForCards: (cardIds: string[]) => invoke<DeckCombo[]>("combos_for_cards", { cardIds }),
+  /**
+   * Every combo that **names** one card — the card surface's combo list, and the opposite
+   * question to {@link ipc.combosForCards} directly above.
+   *
+   * **A second command rather than a widening of that one, and the two answer different
+   * questions about the same table.** `combos_for_cards` asks which combos a pile of printings
+   * fully *contains*: it is the deck advisory's read, it is narrow on purpose, and a reader
+   * holding one piece of a combo gets nothing from it. This one asks what a single card is part
+   * of and claims nothing about the rest of the pieces — most of what it answers is combos the
+   * reader owns no other card of, which is exactly what makes it worth drawing. Folding them
+   * together would mean one shape carrying `pieces` and their pictures for every combo of every
+   * deck in the gallery, to draw a list of names.
+   *
+   * Keyed on the **oracle** id, which is `oracleTagsKey`'s argument arriving at the same place:
+   * a combo is a fact about a card rather than about a piece of cardboard, so all four Lightning
+   * Bolts have one answer, and a printing-keyed read would fetch it again every time the reader
+   * stepped between printings of the card they are already reading about.
+   *
+   * The five arguments are named one by one rather than spread from {@link CardCombosQuery},
+   * because this is the one place the wire names are written down: a field added to that
+   * interface for this side's own use — a sort the backend does not have, say — would otherwise
+   * travel to a command that never declared it.
+   *
+   * **Both filters narrow in SQL before the page is cut**, so a filtered answer is a different
+   * question rather than a subset of the unfiltered one — see `cardCombosKey` in `lib/query.ts`,
+   * which is why they are in the key. Safe on a database that has never ingested the feed: the
+   * answer is an empty page with three zeros, which is also what a card in no combo answers, and
+   * {@link ipc.combosStatus} is what tells those two apart.
+   */
+  combosForCard: (q: CardCombosQuery) =>
+    invoke<CardCombosPage>("combos_for_card", {
+      oracleId: q.oracleId,
+      cardCount: q.cardCount,
+      ownedOnly: q.ownedOnly,
+      limit: q.limit,
+      offset: q.offset,
+    }),
   /**
    * The combo feed being fetched, phase by phase — a channel of its own beside `sync:progress`,
    * `marketplace:progress`, `update:progress` and the two tag channels.

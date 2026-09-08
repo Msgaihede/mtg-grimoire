@@ -1,13 +1,19 @@
 /**
  * The card modal's right-hand options rail — spec §7's list, and the grimoire figures under it.
  *
- * **It is a list rather than a fixed set of slots, and that is the whole design.** Six entries
- * are every surface's (`Legality`, `Oracle tags`, `Card text`, `Open on Scryfall`, `Open on
- * EDHREC`, `Open on <marketplace>`) and whatever else a surface contributes arrives as
- * {@link RailAction}s — so the deck editor's seven and the search wall's six are one component
- * drawing a longer or a shorter list, rather than a component with six named slots plus a hole
+ * **It is a list rather than a fixed set of slots, and that is the whole design.** Seven entries
+ * are every surface's (`Legality`, `Oracle tags`, `Card text`, `Combos`, `Open on Scryfall`,
+ * `Open on EDHREC`, `Open on <marketplace>`) and whatever else a surface contributes arrives as
+ * {@link RailAction}s — so the deck editor's eight and the search wall's seven are one component
+ * drawing a longer or a shorter list, rather than a component with seven named slots plus a hole
  * for the extras. A rail built the other way makes "how many options does this surface have" a
  * fact about *this file*, which is the one place it cannot be known.
+ *
+ * **The list is in two blocks and the boundary is whether the press stays in the app.** The first
+ * four rows open a surface of this app and are named for it — nouns, `Legality`, `Oracle tags`,
+ * `Card text`, `Combos`; the last three leave, and are verbs saying where to. `Combos` joined the
+ * first block on 2026-09-08 for issue #359 and went at the *end* of it for the reason the ladder
+ * below is fixed: nothing a reader has already learnt the position of moves.
  *
  * **The three `Open on` rows are a ladder, not a list, and are deliberately not alphabetical**
  * — the context menu's `Open on` submenu's own argument. Scryfall is where the card's data came
@@ -104,7 +110,7 @@ const RAIL_ENTRY = cn(
   PRESS_SOFT,
 );
 
-/** What the list draws, once the four common entries and the surface's own are one array. */
+/** What the list draws, once the seven common entries and the surface's own are one array. */
 interface RailEntry extends RailAction {
   /** Drawn after the label and `aria-hidden`, so it is never part of the accessible name. */
   external?: boolean;
@@ -119,7 +125,7 @@ export function CardModalRail({
 }: {
   card: CardDetail;
   scope: CardModalScope;
-  /** Surface-specific entries, appended after the six common ones. */
+  /** Surface-specific entries, appended after the seven common ones. */
   actions: readonly RailAction[];
   /** owned / wished / decks, and the deck line when there is one. */
   counts: RailCounts;
@@ -136,16 +142,25 @@ export function CardModalRail({
   const grimoireId = useId();
   const openOverlay = useAppStore((s) => s.openCardOverlay);
 
-  // The three overlays are one store field with one writer, so naming which is the whole of what
+  // The four overlays are one store field with one writer, so naming which is the whole of what
   // an entry does — see `AppState.cardOverlay`, where the single-field shape is argued. Nothing
   // here holds open-state of its own, which is what makes at most one of them open true by
-  // construction rather than by three call sites agreeing.
+  // construction rather than by four call sites agreeing. It is also what a test here has to
+  // assert the *argument* of: every one of these rows calls this same writer, so a check that
+  // only counts the calls passes against a row wired to the wrong overlay.
   const overlay = (which: CardOverlay) => () => openOverlay(which);
 
   const entries: RailEntry[] = [
     { label: "Legality", onSelect: overlay("legality") },
     { label: "Oracle tags", onSelect: overlay("oracleTags") },
     { label: "Card text", onSelect: overlay("cardText") },
+    // **`Combos`, not `View combos`** — issue #359. Every row in this block is a noun naming the
+    // surface it opens and every row below it is a verb saying where the press goes; a verb here
+    // would say this one leaves the app, which is the one thing the two blocks are separated to
+    // tell a reader. The combos it opens are Commander Spellbook's, which is a fact about an
+    // *interaction* rather than about this card's text — so it is the one option in this block
+    // that no amount of reading the card beside it could answer.
+    { label: "Combos", onSelect: overlay("combos") },
     {
       label: "Open on Scryfall",
       external: true,
