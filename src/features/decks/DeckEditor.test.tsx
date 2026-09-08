@@ -3590,9 +3590,10 @@ describe("DeckEditor", () => {
    * is that wiring — `deckTheorySlots`' `quantity` against `deck.cards`' own — and it is the half
    * that can be fully correct and reach nothing.
    *
-   * `withPlan` sleeves up four Bolts and this plan asks for two, so the mark says `+2` rather than
-   * the tick: the live list is two copies **over** the plan, which is a cut the reader has not
-   * made yet.
+   * `withPlan` sleeves up four Bolts and this plan asks for two, so the mark says `-2` rather than
+   * the tick: the live list is two copies **over** the plan, and since issue #400 the number is
+   * the press rather than the gap — two copies to take back out, which is a cut the reader has
+   * not made yet.
    */
   it("says how far the live count is from the plan on the card itself", async () => {
     withPlan();
@@ -3604,14 +3605,14 @@ describe("DeckEditor", () => {
       expect(document.querySelectorAll(`[${THEORY_MATCH_ATTR}]`).length).toBeGreaterThan(0),
     );
     for (const mark of document.querySelectorAll(`[${THEORY_MATCH_ATTR}]`)) {
-      expect(mark).toHaveTextContent("+2");
+      expect(mark).toHaveTextContent("-2");
       // The tier as the attribute's own value, which is what the case below turns on: this deck
       // is born with both switches on, so the printing the plan named draws the **exact** mark.
       expect(mark.getAttribute(THEORY_MATCH_ATTR)).toBe("exact");
     }
     // …and in words, on the one thing a keyboard reader gets from the card.
     expect(screen.getByRole("button", { name: /^Lightning Bolt/ })).toHaveAccessibleName(
-      expect.stringContaining("in the theory list · 2 more than planned"),
+      expect.stringContaining("in the theory list · 2 to remove"),
     );
   });
 

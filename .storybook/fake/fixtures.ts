@@ -513,10 +513,16 @@ export function deckViolations(): Map<string, ValidationIssue[]> {
  *
  * **Since issue #212 the quantities are picked to draw all three states at once**, which is the
  * other thing this fixture has to be able to answer wrongly: `lea 288` is asked for **twice** what
- * the deck holds and draws `-2`, `gtc 148` is asked for **half** of it and draws `+1`, and the
+ * the deck holds and draws `+2`, `gtc 148` is asked for **half** of it and draws `-1`, and the
  * other two match exactly and draw the tick. Two ticks and two numbers, so a story shows what the
  * mark's two drawings look like beside each other in one pile — which is the comparison neither a
  * unit test nor a screenshot of a single card can make.
+ *
+ * **The sign is the press, not the gap** (issue #400): the number is what the reader has to *do*
+ * to the live list, so a plan asking for more than is sleeved draws a `+` and one asking for
+ * fewer draws a `-`. Both signs in one fixture, because a flipped subtraction is the half of this
+ * arithmetic that goes wrong silently — every story built on this plan would still render, in the
+ * same box and the same colour, telling the reader to cut the card they are two short of.
  *
  * What is left unmarked matters as much: `dom 168` (Llanowar Elves) is the commander, and
  * `nph 57` (Dismember) is the card the reader owns none of — so a story can show that "in the
@@ -535,14 +541,16 @@ export function deckViolations(): Map<string, ValidationIssue[]> {
 export function deckTheoryMatches(): TheoryPlan {
   const slots = [
     // A plan asking for **twice** what is sleeved up, on the card that also breaks a rule: the
-    // `-2` and the `RULE BREAK` are the two marks in opposite corners, one of them now a number.
+    // `+2` and the `RULE BREAK` are the two marks in opposite corners, one of them now a number.
+    // Two copies to *add*, which is the press the plan is asking for.
     { card: printing("lea", "288"), quantity: 4 },
     // Exactly what the plan asks for — the tick, beside the gold crown chip.
     { card: printing("lea", "161"), quantity: 1 },
     // The tick again, at the far end of a strip whose other mark is a coloured quantity tag.
     { card: printing("mh2", "138"), quantity: 1 },
-    // **A surplus**, on the one card in the plan that no other mark touches, so `+1` is read
-    // against a bare card face. A 2-of the plan wants one of is a cut the reader has not made.
+    // **A cut**, on the one card in the plan that no other mark touches, so `-1` is read against
+    // a bare card face. A 2-of the plan wants one of is a copy the mark is telling the reader to
+    // take back out — the negative sign, whose own drawing nothing else in this fixture shows.
     { card: printing("gtc", "148"), quantity: 1 },
   ]
     // The wire format `deck_theory_slots` answers with, spelled the way the backend spells it

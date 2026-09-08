@@ -1507,10 +1507,13 @@ describe("CardStack marks", () => {
    * ([issue #212](https://github.com/Msgaihede/mtg-grimoire/issues/212)).
    *
    * The two halves that could each fail alone: the number is drawn *in place of* the tick — a
-   * tick and a `-2` in one 25px box would be two clauses of one sentence — and the sentence a
+   * tick and a `+2` in one 25px box would be two clauses of one sentence — and the sentence a
    * reader who cannot see it gets carries the count too, in the button's own name and in the
-   * mark's hover, both out of `theoryMatchLabel`. A surplus and a shortfall in one stack, because
-   * the sign is the half a `Math.abs` or a flipped subtraction gets wrong silently.
+   * mark's hover, both out of `theoryMatchLabel`. An add and a cut in one stack, because the sign
+   * is the half a `Math.abs` or a flipped subtraction gets wrong silently.
+   *
+   * **The sign reads as the press since issue #400**: the delta is `planned − live`, so `+2` is
+   * two copies to put in and `-3` is three to take out.
    */
   it("draws the count difference in place of the tick, with the sign both ways", async () => {
     const short = card({ name: "Mana Crypt", quantity: 2 });
@@ -1524,8 +1527,8 @@ describe("CardStack marks", () => {
           theoryPlan={exactPlan(
             new Map([
               // Four planned against two sleeved up, and one planned against four.
-              [`${short.cardId}|`, -2],
-              [`${over.cardId}|`, 3],
+              [`${short.cardId}|`, 2],
+              [`${over.cardId}|`, -3],
             ]),
           )}
         />
@@ -1536,21 +1539,19 @@ describe("CardStack marks", () => {
     expect(marks).toHaveLength(2);
     // ASCII `+` and `-`, which is what keeps the two the same width in a `tabular-nums` face —
     // a typographic minus is outside that fixed-advance run.
-    expect(marks[0]).toHaveTextContent("-2");
-    expect(marks[1]).toHaveTextContent("+3");
+    expect(marks[0]).toHaveTextContent("+2");
+    expect(marks[1]).toHaveTextContent("-3");
     // The tick is gone rather than sitting beside the number: `lucide` draws it as an `<svg>`,
     // so this is the assertion that would fail if the two were rendered together.
     expect(marks[0].querySelector("svg")).toBeNull();
 
-    expect(await openTooltip(marks[0])).toHaveTextContent(
-      "In the theory list · 2 fewer than planned",
-    );
+    expect(await openTooltip(marks[0])).toHaveTextContent("In the theory list · 2 to add");
 
     expect(screen.getByRole("button", { name: /^Mana Crypt/ })).toHaveAccessibleName(
-      expect.stringContaining("in the theory list · 2 fewer than planned"),
+      expect.stringContaining("in the theory list · 2 to add"),
     );
     expect(screen.getByRole("button", { name: /^Sol Ring/ })).toHaveAccessibleName(
-      expect.stringContaining("in the theory list · 3 more than planned"),
+      expect.stringContaining("in the theory list · 3 to remove"),
     );
   });
 

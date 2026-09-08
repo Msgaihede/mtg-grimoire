@@ -942,8 +942,9 @@ export const KeyboardWalk: Story = {
  *
  * **Two of the four marks are counts rather than ticks**, which is issue #212 and is why this
  * story is worth looking at rather than merely running: the fixture's plan asks for twice the
- * Island the deck holds and half the Boros Charm, so `-2` and `+1` are drawn in the same box, the
- * same azure and the same corner as the tick the other two wear. The tick is the card that
+ * Island the deck holds and half the Boros Charm, so `+2` and `-1` are drawn in the same box, the
+ * same azure and the same corner as the tick the other two wear. The number is the *action* the
+ * plan is asking for — two Islands to add, one Boros Charm to cut. The tick is the card that
  * matches; a number is the card that does not.
  *
  * `theoryPlan` is `undefined` in every other story in this file, which is what a deck with the
@@ -962,7 +963,7 @@ export const TheoryMatches: Story = {
     // text at all (it is an `<svg>`). The words are read off the button instead.
     const marks = [...canvasElement.querySelectorAll(`[${THEORY_MATCH_ATTR}]`)];
     expect(marks).toHaveLength(4);
-    expect(marks.map((mark) => mark.textContent).sort()).toEqual(["", "", "+1", "-2"]);
+    expect(marks.map((mark) => mark.textContent).sort()).toEqual(["", "", "+2", "-1"]);
 
     // The card carrying both marks: in the plan **and** breaking a rule. The two facts are in
     // one sentence because a button's `aria-label` replaces everything inside it.
