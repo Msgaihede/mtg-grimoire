@@ -9,7 +9,12 @@
  */
 import { describe, expect, it } from "vitest";
 import golden from "../../src-tauri/src/share/__golden__/snapshot.json?raw";
-import { parseSnapshot, SNAPSHOT_TOO_NEW, SNAPSHOT_VERSION } from "./shareSnapshot";
+import {
+  parseSnapshot,
+  SNAPSHOT_NOT_A_SNAPSHOT,
+  SNAPSHOT_TOO_NEW,
+  SNAPSHOT_VERSION,
+} from "./shareSnapshot";
 
 describe("the share snapshot mirror", () => {
   it("parses the golden the Rust writer produced", () => {
@@ -69,6 +74,22 @@ describe("the share snapshot mirror", () => {
   it("refuses a body that is not a snapshot at all", () => {
     expect(() => parseSnapshot("not json")).toThrow();
     expect(() => parseSnapshot("{}")).toThrow();
+  });
+
+  /**
+   * The refusal above reaches neither of the branches this one is about: `"not json"` never
+   * parses, and `"{}"` is a perfectly good **object** that is turned away one line further down
+   * for having no arrays. A body that parses to something other than an object was going through
+   * `parseSnapshot` nowhere at all.
+   *
+   * **`"[]"` is the case worth having**, and by name rather than merely throwing: a viewer that
+   * matches a refusal on the sentence — which is how Tasks 9 and 10 will draw one — cannot tell
+   * "refused" from "threw" and must be given the same words for every shape of not-a-snapshot.
+   */
+  it("refuses a body that parses to something other than an object, by name", () => {
+    for (const body of ["42", "null", '"a string"', "[]", "true"]) {
+      expect(() => parseSnapshot(body), body).toThrow(SNAPSHOT_NOT_A_SNAPSHOT);
+    }
   });
 
   /**

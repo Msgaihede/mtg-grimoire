@@ -159,6 +159,13 @@ export function parseSnapshot(text: string): ShareSnapshot {
   } catch (e) {
     throw new Error(SNAPSHOT_UNREADABLE, { cause: e });
   }
+  // ⚠️ **Only the `null` arm is load-bearing on its own; the other two overlap the arrays check
+  // below, and neither half may be tidied away on the strength of that.** Measured by mutation:
+  // drop `Array.isArray(parsed)` and `parseSnapshot("[]")` is still refused *by name*, because an
+  // array has no own `folders`, so the arrays guard catches it with the same sentence — and drop
+  // both and it is returned as a snapshot. `null` is different in kind: `typeof null` is
+  // `"object"`, so without that arm the next line reads a property off `null` and the reader gets
+  // a `TypeError` where a sentence was owed.
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     throw new Error(SNAPSHOT_NOT_A_SNAPSHOT);
   }
