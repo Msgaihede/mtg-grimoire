@@ -267,7 +267,7 @@ export const TheoryMatches: Story = {
     // text at all (it is an `<svg>`). The words are read off the button instead.
     const marks = [...canvasElement.querySelectorAll(`[${THEORY_MATCH_ATTR}]`)];
     expect(marks).toHaveLength(4);
-    expect(marks.map((mark) => mark.textContent).sort()).toEqual(["", "", "+1", "-2"]);
+    expect(marks.map((mark) => mark.textContent).sort()).toEqual(["", "", "+2", "-1"]);
 
     // The card that is both in the plan and breaking a rule, in one sentence.
     const both = canvas.getByRole("button", { name: new RegExp(`^${BROKEN}`) });

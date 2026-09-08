@@ -188,27 +188,34 @@ export const THEORY_MATCH_NAME_LABEL = `${THEORY_MATCH_LABEL} · a different pri
  * to word a green sentence over a substitute printing.
  *
  * The count is the second. The mark itself is two characters (`+2`, `-8`) and a sign is not a
- * word: "more than planned" and "fewer than planned" are what the glyph means, and they are the
- * only part of it a reader who cannot see the mark gets. Said here rather than at the three call
- * sites for {@link THEORY_MATCH_LABEL}'s reason.
+ * word: "to add" and "to remove" are what the glyph means, and they are the only part of it a
+ * reader who cannot see the mark gets. Said here rather than at the three call sites for
+ * {@link THEORY_MATCH_LABEL}'s reason.
  *
- * `0` is the base sentence unchanged, which is the tick's own case: adding "0 more than planned"
- * to a card that matches would be the mark explaining itself where there is nothing to explain.
- * `Math.abs` because the sign is already spelled in the words.
+ * **The words name the action because the number does** (issue #400, 2026-09-08). The number is
+ * `planned − live` — `+2` is two copies to add — and until then it was `live − planned`, worded as
+ * "2 fewer than planned". Either pair is self-consistent; what is not is mixing them, since a
+ * `+2` heard as "2 fewer than planned" is the sign and the sentence pointing opposite ways, and
+ * the sentence is the only half a screen reader gets. `theoryMatch.ts` carries why the sign
+ * flipped; this is where the words followed it.
+ *
+ * `0` is the base sentence unchanged, which is the tick's own case: adding "0 to add" to a card
+ * that matches would be the mark explaining itself where there is nothing to explain. `-delta`
+ * on the negative arm because the sign is already spelled in the word.
  *
  * **The number is at the tier's own grain and this function does not have to know that** — an
- * `exact` row's `-6` is about that printing and a `name` row's `0` is about the card, which is
+ * `exact` row's `+6` is about that printing and a `name` row's `0` is about the card, which is
  * `theoryMatchMark`'s rule and the reason the two arrive here already paired.
  */
 export function theoryMatchLabel(tier: TheoryTier, delta: number): string {
   const base = tier === "exact" ? THEORY_MATCH_LABEL : THEORY_MATCH_NAME_LABEL;
   if (delta === 0) return base;
-  const word = delta > 0 ? "more" : "fewer";
-  return `${base} · ${Math.abs(delta)} ${word} than planned`;
+  return delta > 0 ? `${base} · ${delta} to add` : `${base} · ${-delta} to remove`;
 }
 
 /**
- * The difference as the two or three characters the mark draws — `+2`, `-8`.
+ * The difference as the two or three characters the mark draws — `+2`, `-8` — where the sign is
+ * the **action**: `+2` is two copies to add, `-8` is eight to remove (`theoryMatch.ts` has why).
  *
  * ASCII `+` and `-`, never `−` or `–`: this is set in the tag's `tabular-nums` mono face beside a
  * quantity drawn in the same one, and the typographic minus is not in that face's fixed-advance
@@ -305,11 +312,14 @@ export const THEORY_MATCH_ATTR = "data-theory-match";
  *
  * ## A card the plan asks for a *different number* of says the difference instead of the tick
  *
- * `+2` where the live list holds two more than planned, `-8` where it holds eight fewer, in the
- * same box and the tier's own colour — [issue #212](https://github.com/Msgaihede/mtg-grimoire/issues/212).
- * The tick is what the **matching** card wears, so the two are never drawn together: see the
- * comment on the content below, and `theoryMatch.ts` for what is subtracted from what and for the
- * one rule about singleton decks that keeps this mark off every card of a Commander list.
+ * `+2` where the live list is two copies short of the plan, `-8` where it holds eight too many —
+ * the sign is what to *do*, add or remove — in the same box and the tier's own colour
+ * ([issue #212](https://github.com/Msgaihede/mtg-grimoire/issues/212) put the number here, and
+ * [issue #400](https://github.com/Msgaihede/mtg-grimoire/issues/400) turned its sign round on
+ * 2026-09-08; it read `+2` for two *over* the plan until then). The tick is what the **matching**
+ * card wears, so the two are never drawn together: see the comment on the content below, and
+ * `theoryMatch.ts` for what is subtracted from what and for the one rule about singleton decks
+ * that keeps this mark off every card of a Commander list.
  *
  * ## The four separations, and the one this mark has to work hardest for
  *
@@ -385,9 +395,10 @@ export function TheoryMatchMark({
    */
   tier: TheoryTier;
   /**
-   * How many copies the live list holds **over** (positive) or **short** (negative) of what the
-   * plan asks for — `theoryMatch.ts`'s `TheoryMark.delta`, which is `0` for the row that matches,
-   * where the whole mark is `null` for a card the plan does not ask for at all (drawn as no mark).
+   * How many copies the reader has to **add** (positive) or **remove** (negative) for the live
+   * list to meet the plan — `theoryMatch.ts`'s `TheoryMark.delta`, which is `0` for the row that
+   * matches, where the whole mark is `null` for a card the plan does not ask for at all (drawn as
+   * no mark).
    *
    * **It is at {@link tier}'s own grain**, which is that module's rule rather than this one's: an
    * `exact` row's number is about that printing and a `name` row's is about the card, so the two
@@ -444,7 +455,7 @@ export function TheoryMatchMark({
     >
       {/* **The number replaces the tick rather than joining it** (issue #212). A tick beside a
           `-8` would be a mark saying "this is the card you planned" next to one saying "and you
-          have eight too few" — two clauses of one sentence in a 25px box, at the end of a strip
+          have eight too many" — two clauses of one sentence in a 25px box, at the end of a strip
           whose other mark is already a number. The tick is what the *matching* card wears, and
           the difference is what a card that does not match wears instead.
 

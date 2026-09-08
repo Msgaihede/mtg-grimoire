@@ -36,6 +36,7 @@ import {
   THEORY_MATCH_NAME_LABEL,
   TheoryMatchBadge,
   TheoryMatchMark,
+  theoryDeltaText,
   theoryMatchLabel,
 } from "./CardMarks";
 
@@ -58,15 +59,27 @@ describe("theoryMatchLabel", () => {
     expect(THEORY_MATCH_NAME_LABEL).toBe("In the theory list · a different printing");
   });
 
-  it("puts the count after the tier's own clause, on both tiers", () => {
-    expect(theoryMatchLabel("exact", -2)).toBe("In the theory list · 2 fewer than planned");
-    expect(theoryMatchLabel("exact", 3)).toBe("In the theory list · 3 more than planned");
-    expect(theoryMatchLabel("name", -6)).toBe(
-      "In the theory list · a different printing · 6 fewer than planned",
+  /**
+   * The sign is the action (issue #400): a positive delta is copies to add and a negative one is
+   * copies to remove, and the sentence says the action rather than the count. Both signs on both
+   * tiers, because a `Math.abs` with the words swapped would pass half of these.
+   */
+  it("words the count as the action to take, after the tier's own clause, on both tiers", () => {
+    expect(theoryMatchLabel("exact", 2)).toBe("In the theory list · 2 to add");
+    expect(theoryMatchLabel("exact", -3)).toBe("In the theory list · 3 to remove");
+    expect(theoryMatchLabel("name", 6)).toBe(
+      "In the theory list · a different printing · 6 to add",
     );
-    expect(theoryMatchLabel("name", 1)).toBe(
-      "In the theory list · a different printing · 1 more than planned",
+    expect(theoryMatchLabel("name", -1)).toBe(
+      "In the theory list · a different printing · 1 to remove",
     );
+  });
+
+  /** The glyph and the sentence must point the same way: the characters the mark draws for a
+   *  delta and the words its tooltip says are the same sign, read off the same number. */
+  it("draws the same sign it speaks", () => {
+    expect(theoryDeltaText(2)).toBe("+2");
+    expect(theoryDeltaText(-3)).toBe("-3");
   });
 });
 

@@ -10,8 +10,20 @@
   //
   // **Order is the contract, exactly as it is in `.storybook/main.ts`.** The converter's
   // `tsconfigPathsPlugin` walks these rules in declaration order and takes the first match, so
-  // the three exact-match rules must precede the `@/*` wildcard. Move `@/*` up and `@/lib/images`
+  // every exact-match rule must precede the `@/*` wildcard. Move `@/*` up and `@/lib/images`
   // silently resolves to the real module again.
+  //
+  // **The last two rules have no twin in `main.ts`, and that is not an oversight.**
+  // Storybook needs none: its Vite builder loads the repo's root `vite.config.ts`, so it gets
+  // `__CORE__` — the build-time define that module branches on — for free. esbuild gets no
+  // defines, so the real module would throw `ReferenceError: __CORE__` as it evaluated.
+  // `core-shim.ts` re-exports the same implementation storybook lands on; its header has the
+  // whole account, including the directory-resolution trap it also steps over.
+  //
+  // `@/pwa/target` is the same define seen from the other side: `isWebTarget()` reads
+  // `__CORE__` from *function* scope, so it throws at first render rather than at module
+  // evaluation — in the design agent's canvas as readily as in a preview, since `AppShell`
+  // calls it. `target-shim.ts` sets the global and re-exports the real function.
   "compilerOptions": {
     "baseUrl": ".",
     "paths": {
@@ -19,6 +31,8 @@
       "@tauri-apps/api/event": ["../.storybook/fake/event.ts"],
       "@tauri-apps/api/window": ["../.storybook/fake/window.ts"],
       "@/lib/images": ["../.storybook/fake/images.ts"],
+      "@/lib/core": ["./core-shim.ts"],
+      "@/pwa/target": ["./target-shim.ts"],
       "@/*": ["../src/*"]
     }
   }
