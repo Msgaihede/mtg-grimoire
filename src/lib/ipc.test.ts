@@ -1664,8 +1664,9 @@ describe("ipc argument names match the Rust command signatures", () => {
   });
 
   /**
-   * The combo feed's three commands, and **the id name is the trap** — the one this file exists
-   * for.
+   * Three of the combo feed's four commands, and **the id name is the trap** — the one this file
+   * exists for. The fourth, `combos_clear`, is the case below: it carries nothing at all, which
+   * is a different trap and gets a different assertion.
    *
    * `combos_for_cards` declares `card_ids: Vec<String>`, which Tauri fills from `cardIds`, exactly
    * as `oracle_tags_for_printings` does. A wrapper sending `card_ids`, or `cards`, or `ids` is a
@@ -1748,6 +1749,57 @@ describe("ipc argument names match the Rust command signatures", () => {
     invoke.mockResolvedValue([]);
     await ipc.combosForCards([]);
     expect(invoke).toHaveBeenCalledWith("combos_for_cards", { cardIds: [] });
+  });
+
+  /**
+   * The fourth combo command, whose whole contract is that it carries **nothing**.
+   *
+   * `combos_clear` declares no parameters, so this is `prewarm_collection`'s trap and
+   * `combos_status`' assertion one command over: Tauri deserializes the argument object into the
+   * command's parameters, and a command with none refuses an object it never declared rather
+   * than ignoring it. `invoke("combos_clear", {})` is therefore a rejection with no type error
+   * anywhere on this side — and the press it breaks is the pair, so the tables would be left
+   * standing and the forced refresh after them would find nothing to do.
+   *
+   * The answer read back is the never-ingested {@link ComboStatus} — two zeros, three `null`s
+   * and `stale: true` — which is the same shape `combos_status` gives on a database that has
+   * never fetched the file, and it is checked field by field for that case's reason: one field
+   * spelled `fetched_at` here is `undefined` with no type error, and `undefined` reads as
+   * "never ingested" whether or not the clear actually ran.
+   */
+  it("sends `combos_clear` under its own name, with no arguments object at all", async () => {
+    const cleared = {
+      combos: 0,
+      cards: 0,
+      stamp: null,
+      fetchedAt: null,
+      checkedAt: null,
+      stale: true,
+    };
+    invoke.mockResolvedValue(cleared);
+
+    const after = await ipc.combosClear();
+
+    // One argument and not two. `toHaveBeenCalledWith` is exact about arity, which is the whole
+    // of what this line is for: an `{}` sent beside the name would satisfy every other
+    // assertion in this case and fail only in the running app.
+    expect(invoke).toHaveBeenCalledWith("combos_clear");
+    expect(after).toEqual(cleared);
+    // Zeros for the counts and `null` for all three stamps, which is the distinction
+    // `ComboStatus.fetchedAt` exists to keep: "never fetched" is not "fetched nothing", and this
+    // is the one command that puts a database back in the first of those on purpose.
+    expect(after.combos).toBe(0);
+    expect(after.cards).toBe(0);
+    expect(after.stamp).toBeNull();
+    expect(after.fetchedAt).toBeNull();
+    expect(after.checkedAt).toBeNull();
+    expect(after.stale).toBe(true);
+
+    // The press is a pair and the order is load-bearing: the forced refresh after the clear is
+    // what re-downloads, and it downloads rather than being told 304 because
+    // `combos::conditional_etag` replays the stored ETag only when there are rows behind it.
+    await ipc.combosRefresh(true);
+    expect(invoke.mock.calls).toEqual([["combos_clear"], ["combos_refresh", { force: true }]]);
   });
 
   /**

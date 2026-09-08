@@ -1,17 +1,25 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import type { QueryClient } from "@tanstack/react-query";
+import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import { useState } from "react";
 import { ipc } from "@/lib/ipc";
+import { COMBOS_KEY } from "@/lib/query";
 import { writeFailure, type Write } from "@/lib/writes";
-import { cacheOutcome, collectionOutcome, decksOutcome, wishlistOutcome } from "./clearOutcome";
+import { useFeedDownload } from "@/pwa/FeedDownloadProvider";
+import {
+  cacheOutcome,
+  collectionOutcome,
+  combosOutcome,
+  decksOutcome,
+  wishlistOutcome,
+} from "./clearOutcome";
 
 /**
- * The four things Settings can throw away, and what the cache has to be told afterwards.
+ * The five things Settings can throw away, and what the cache has to be told afterwards.
  *
  * Two hooks rather than one, matching the two panels: the three destructive clears share a
- * status line and are confirmed by typing a word, and the cache clear shares neither. Folding
- * them into one hook would give the cache panel three mutations it must not show and give the
- * danger zone a fourth its confirmation does not cover.
+ * status line and are confirmed by typing a word, and the two local-cache sweeps share neither.
+ * Folding them into one hook would give the cache panel three mutations it must not show and
+ * give the danger zone two more its confirmation does not cover.
  *
  * **The invalidation is the interesting half.** A clear empties a table the query cache has
  * already answered from, and — for the collection — several tables it has *joined*: every card
@@ -34,7 +42,7 @@ export interface ClearStatus {
 }
 
 /** Mark a set of roots stale; only the queries actually on screen pay for a refetch. */
-function invalidate(client: QueryClient, roots: readonly string[][]): void {
+function invalidate(client: QueryClient, roots: readonly QueryKey[]): void {
   for (const queryKey of roots) void client.invalidateQueries({ queryKey });
 }
 
@@ -80,6 +88,17 @@ const WISHLIST_ROOTS = [["wishlist"], ["cards"], ["card"]];
  * wishlist can read differently afterwards.
  */
 const DECK_ROOTS = [["decks"], ["collection"]];
+
+/**
+ * The combo feed's one root, and it is a root rather than a list of leaves on purpose.
+ *
+ * `@/lib/query` owns the literal and says why: two features read this data and neither owns it,
+ * so the prefix is spelled once or the link between a refresh here and the deck editor's bracket
+ * advisory breaks with nothing going red. Everything under it — the status line and every deck's
+ * `combos_for_cards` answer — was read out of rows this press has just replaced wholesale, and
+ * `invalidateQueries` matches by prefix, so the bare root is exactly the set.
+ */
+const COMBO_ROOTS = [COMBOS_KEY];
 
 /**
  * The three irreversible clears, and the one sentence they share.
@@ -140,14 +159,24 @@ export function useDangerZone(): {
 }
 
 /**
- * The cache sweep, which destroys nothing and invalidates nothing.
+ * The two rebuildable things the Local cache panel throws away, and the one sentence they share.
+ *
+ * **Both are `corpus.db` and `data/` rather than anything the reader made**, which is the whole
+ * of why they are one panel above the fold instead of two more rows in the danger zone: schema
+ * 27 split the reader's own tables out of the rebuildable ones precisely so that a button over
+ * this half risks nothing. `useDangerZone`'s single `outcome` is the pattern followed here for
+ * its stated reason — `@/lib/writes` settles that the most recently *started* write owns the
+ * banner, and one piece of state is what makes that structural rather than a rule each site has
+ * to remember.
+ *
+ * ## The image sweep destroys nothing and invalidates nothing
  *
  * **No query root goes stale, and that is worth saying out loud rather than leaving as an empty
  * line.** Nothing in the query cache describes the picture cache: card art is served over
  * `mtgimg://` by the protocol handler, outside TanStack Query entirely, and a picture already
  * decoded into a painted `<img>` stays correct — the bytes it was made from are simply no longer
  * on disk. The next request for a key that is gone is a miss, and a miss re-fetches. So the only
- * thing this hook does after a success is say what it freed.
+ * thing that half does after a success is say what it freed.
  *
  * **On the web target it is a different cache entirely, and that changes nothing here.**
  * `ipc.cacheClear()` is diverted in `src/lib/core/browser.ts` onto the service worker's
@@ -155,19 +184,59 @@ export function useDangerZone(): {
  * pictures come straight from `cards.scryfall.io` into an `<img>`. Both are outside TanStack
  * Query for the same reason, both answer the same `CacheCleared`, and neither this hook nor
  * `CachePanel` takes a branch. The web half is `src/pwa/imageCacheClear.ts`.
+ *
+ * ## The combo clear is two calls in one mutation, and that is the whole design
+ *
+ * **`combos_clear` downloads nothing**, so a press that stopped there would leave a reader who
+ * came here because the data looked wrong with no data at all — and the feed is fetched on a
+ * weekly schedule they cannot see, so "it will come back eventually" is not an answer. The
+ * re-download is therefore inside the same `mutationFn` rather than chained by the panel: one
+ * `isPending` that stays true across both calls, one refusal that reaches the banner whichever
+ * of the two produced it, and no window in which the button is idle over an empty table.
+ *
+ * **The invalidation is `onSettled` and not `onSuccess`, which is this hook's one departure from
+ * `useDangerZone`'s shape.** The clear lands *first*: a refresh that then fails has still emptied
+ * the tables, so every cached combo answer is describing rows that are gone. Invalidating only on
+ * success would leave the open deck's bracket advisory quoting a combo list that no longer exists
+ * for `lib/query.ts`'s 30 s, which is exactly long enough to look deliberate.
+ *
+ * **`askFirst` wraps the press rather than the mutation.** On desktop it is a synchronous
+ * pass-through and this is the press it always was; on the web target it raises the
+ * metered-connection prompt *before* 27.5 MB is spent, and a reader who answers Not now must
+ * leave `isPending` false — which it does, because nothing has been started yet.
  */
-export function useLocalCache(): { clear: ClearAction; status: ClearStatus | null } {
+export function useLocalCache(): {
+  clear: ClearAction;
+  combos: ClearAction;
+  status: ClearStatus | null;
+} {
+  const client = useQueryClient();
   const [outcome, setOutcome] = useState<string | null>(null);
+  const started = () => setOutcome(null);
+  const askFirst = useFeedDownload();
 
   const cache = useMutation({
     mutationFn: () => ipc.cacheClear(),
-    onMutate: () => setOutcome(null),
+    onMutate: started,
     onSuccess: (r) => setOutcome(cacheOutcome(r)),
+  });
+
+  const combos = useMutation({
+    // Two awaits and no `Promise.all`: the second call is what refills what the first emptied,
+    // and running them together would race a download against the delete it exists to undo.
+    mutationFn: async () => {
+      await ipc.combosClear();
+      return await ipc.combosRefresh(true);
+    },
+    onMutate: started,
+    onSettled: () => invalidate(client, COMBO_ROOTS),
+    onSuccess: (r) => setOutcome(combosOutcome(r)),
   });
 
   return {
     clear: { run: () => cache.mutate(), pending: cache.isPending },
-    status: statusOf([cache], outcome),
+    combos: { run: () => askFirst("combos", () => combos.mutate()), pending: combos.isPending },
+    status: statusOf([cache, combos], outcome),
   };
 }
 

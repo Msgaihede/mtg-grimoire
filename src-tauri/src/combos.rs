@@ -50,9 +50,12 @@
 //!   refused outright ([`ComboError::Empty`]) rather than swapped in — the same reasoning
 //!   [`crate::ingest`] applies to a bulk card file that holds no cards, and the same reasoning
 //!   [`crate::tags`] applies to a tag file that tagged nothing.
-//! * **Nothing here may break a launch.** A database that has never fetched this file is a
-//!   supported state: the three commands all answer it, the bracket estimate simply reads three
-//!   signals instead of four, and [`refresh_if_due`] does not go and get it uninvited.
+//! * **Nothing here may break a launch.** A database that has never fetched this file is still a
+//!   supported state — every command answers it and the bracket estimate simply reads three
+//!   signals instead of four — but it is no longer a state a launch leaves alone.
+//!   [`refresh_if_due`] goes and gets the file uninvited, on the same weekly schedule and for
+//!   the same reason `tags::{oracle,art}::refresh_if_due` do; a failure there is silent, leaves
+//!   whatever combos were already stored, and is retried at the next launch.
 //! * **Everything is `Option` on the way in and nothing is `deny_unknown_fields`.** This is
 //!   somebody else's catalogue, it grows keys without notice, and a variant missing a field is a
 //!   variant to skip rather than a reason to abandon the rest.
@@ -892,6 +895,62 @@ pub fn ingest_stream(
     store(db, &file, etag, fetched_at, progress)
 }
 
+/// Throw away every combo this database holds, watermark included.
+///
+/// **The `combo_meta` row is deleted rather than blanked.** No row is the never-ingested state
+/// this whole module is already written against, and it is the state every reader of that table
+/// already handles: [`read_status`] answers it with two zeros, three nulls and `stale: true`,
+/// [`due_at_startup`] reads it as due, and [`mark_checked`] deliberately writes nothing over it.
+/// A row with its columns nulled would be a fourth state, indistinguishable at a glance from the
+/// three and handled by none of them.
+///
+/// **`combo_cards` is emptied by its own statement even though `combo_id` CASCADEs**, and the
+/// child goes first. `PRAGMA foreign_keys` is per-connection and nothing about this signature
+/// says who set it on the connection handed in — so leaning on the cascade would be a clear that
+/// works or leaves a table of orphans depending on a setting made somewhere else entirely.
+/// Spelled this way the order is right whichever way that pragma happens to be.
+///
+/// One transaction, because a clear that emptied `combos` and then failed would leave a
+/// watermark describing rows that are gone. That is precisely the state [`conditional_etag`]
+/// exists to survive, and there is no reason to manufacture it here.
+///
+/// **What makes the clear honest is [`conditional_etag`], not this function.** The stored ETag
+/// is gone with the row, but even if it were not, that helper asks whether there are *rows*
+/// before replaying one — so a cleared database really re-downloads rather than being told 304
+/// into staying empty. The caller is expected to follow this with a forced refresh.
+///
+/// Takes a `&Connection` and not an [`AppState`], so the rule can be asserted against
+/// [`crate::schema::memory_pair`] with no app handle — the split every other helper here uses.
+pub fn clear_combos(conn: &Connection) -> rusqlite::Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute("DELETE FROM combo_cards", [])?;
+    tx.execute("DELETE FROM combos", [])?;
+    tx.execute("DELETE FROM combo_meta", [])?;
+    tx.commit()
+}
+
+/// Clear the combos and answer what is left, on a connection the caller already holds.
+///
+/// **The shape both targets call**, so neither holds a second copy of what "clear the combos"
+/// means: `web::route` hands it to `crate::sync::with_write`, and [`combos_clear`] runs it on
+/// the blocking pool under the same lock. The work is [`clear_combos`] above; what this adds is
+/// the answer.
+///
+/// It answers a [`ComboStatus`] rather than nothing because the page that pressed this would
+/// otherwise have to ask a second time to learn what it did — and the answer is always
+/// [`status_of`]'s never-ingested one: two zeros, three nulls and `stale: true`.
+///
+/// **Its clock comes off the connection**, [`status_of`]'s reason exactly: `SystemTime::now()`
+/// *panics* on `wasm32-unknown-unknown` rather than failing, and this function is on the
+/// Worker's path.
+pub fn clear(conn: &Connection) -> Result<ComboStatus, String> {
+    clear_combos(conn).map_err(|e| format!("could not clear the combos: {e}"))?;
+    let now = conn
+        .query_row("SELECT unixepoch()", [], |r| r.get::<_, i64>(0))
+        .unwrap_or(0);
+    Ok(read_status(conn, now))
+}
+
 /// Write a failed refresh to `error_log`, best-effort.
 ///
 /// **`Source::Database` is the closest source this schema has, and it is not a good fit** —
@@ -1357,15 +1416,20 @@ fn conditional_etag(etag: Option<&str>, populated: bool) -> Option<&str> {
 }
 
 /// Should a launch go and refresh this? See [`refresh_if_due`] for the reasoning; this is the
-/// arithmetic of it, split out so it can be asserted directly.
+/// arithmetic of it, split out so it can be asserted directly, with no network and no database.
+///
+/// **Staleness and nothing else** — `tags::{oracle,art}::refresh_if_due`'s question, asked of
+/// this feed's watermark. [`is_stale`] already reads a missing `checked_at` as stale, so a
+/// database that has never asked is due by definition and the never-ingested case needs no arm
+/// of its own. It had two of them until combos joined the tag datasets in fetching uninvited:
+/// one for no `combo_meta` row and one for a row with no `fetched_at`, both answering `false`,
+/// which together meant a database that had never fetched the file never would.
+///
+/// The function survives the collapse to a single expression because the rule is worth being
+/// able to assert on its own; that is the split every other helper in this module uses.
 #[cfg(not(target_family = "wasm"))]
 fn due_at_startup(meta: Option<&ComboMeta>, now: i64) -> bool {
-    match meta {
-        // Never ingested: not a launch's to start.
-        None => false,
-        Some(meta) if meta.fetched_at.is_none() => false,
-        Some(meta) => is_stale(meta.checked_at, now),
-    }
+    is_stale(meta.and_then(|m| m.checked_at), now)
 }
 
 /// Note that Spellbook has been asked, on a run that found nothing to ingest.
@@ -1481,20 +1545,31 @@ pub async fn refresh(
     }
 }
 
-/// Refresh the combo database at startup if it is due — **and only if it has ever been
-/// fetched**.
+/// Refresh the combo database at startup if it is due.
 ///
-/// That second condition is the difference between this and `tags::refresh_if_due`, and it is
-/// deliberate: the tag files are what the app categorises a deck add by, so a first run fetches
-/// them uninvited, while combos are the *fourth* bracket signal and a database without them
-/// simply reads three. Nothing downloads until a reader presses Refresh in Settings — which is
-/// [`crate::marketplace_feed::refresh_selected_if_due`]'s shape, where a marketplace nobody
-/// picked is never downloaded — and once they have, this keeps it current. It is also what lets
-/// the Settings panel say "never fetched" and mean it, rather than describing a state a launch
-/// quietly walks out of.
+/// **It fetches uninvited, which is a reversal.** This used to return early on a database whose
+/// `fetched_at` was NULL, so nothing downloaded until a reader pressed Refresh in Settings, on
+/// the grounds that the tag files are what a deck add is categorised by while combos are only
+/// the *fourth* bracket signal and a database without them simply reads three. The argument does
+/// not survive contact with the reader: a bracket readout that silently reads three signals
+/// instead of four — for as long as it takes somebody to find a button they have no reason to
+/// look for — is a worse failure than 27.5 MB spent on a schedule this app already spends
+/// ~18 MB on for the two tagger files. So combos join [`crate::tags::oracle::refresh_if_due`]
+/// and [`crate::tags::art::refresh_if_due`] rather than
+/// [`crate::marketplace_feed::refresh_selected_if_due`], where a marketplace nobody picked is
+/// still never downloaded because nobody has asked to be shown its prices.
+/// [`due_at_startup`] is the whole of the new rule: stale, where never asked is stale.
+///
+/// **[`REFRESH_INTERVAL_SECS`] is untouched by any of that.** The week is a statement about how
+/// often to *ask*, and its reason — a bracket readout that changes between two sessions on one
+/// afternoon, for a reason the reader cannot see — reads the same whether the first ask was a
+/// launch's or a press's.
 ///
 /// **Silent, best-effort and never blocking.** It runs before there is a window to complain in,
-/// a failure is already in `error_log`, and the honest fallback is the combos already on disk.
+/// a failure is already in `error_log`, and the honest fallback is the combos already on disk —
+/// or, on a first run that fails, the three signals the estimate had before this feed existed.
+/// A failed first fetch leaves no watermark at all, because [`mark_checked`] updates a row that
+/// is not there, so it is retried at the next launch rather than throttled out for a week.
 #[cfg(not(target_family = "wasm"))]
 pub async fn refresh_if_due(state: &Arc<AppState>, app: &tauri::AppHandle) {
     let due = {
@@ -1583,6 +1658,43 @@ pub async fn combos_refresh(
         emit(&app, phase, done, total)
     })
     .await
+}
+
+/// Throw away every stored combo and the watermark with it.
+///
+/// **A debugging affordance rather than something the ordinary reader needs.** Nothing about a
+/// bracket estimate is improved by an empty combo table; what this is for is proving the ingest
+/// still works end to end from a cold database, which is otherwise reachable only by deleting
+/// `corpus.db` and paying for a whole resync to test one feed. **The caller is expected to
+/// follow it with a forced [`combos_refresh`]** — and that refresh really downloads, because
+/// [`clear_combos`] takes the rows out from under the stored ETag and [`conditional_etag`]
+/// therefore replays nothing.
+///
+/// It answers the post-clear [`ComboStatus`], which is [`status_of`]'s never-ingested answer:
+/// two zeros, three nulls and `stale: true`. Answering the status rather than nothing means the
+/// page that pressed this has no second round trip to make to find out what it did.
+///
+/// `async`, and answered on the blocking pool, for [`combos_status`]'s reason: a sync command
+/// body runs inline on the IPC thread, and this one takes the write lock. The body itself is
+/// [`clear`], which is also what `web::route` hands to `crate::sync::with_write` — this is that
+/// same function on a pool thread, and not a second answer to the same question.
+///
+/// **A lock it could not have is reported rather than swallowed**, which is the difference
+/// between this and [`mark_checked`]. That one is a best-effort watermark nobody is waiting on;
+/// this is a press somebody is watching, and a clear that quietly did nothing would read as a
+/// database that refuses to empty.
+#[cfg(not(target_family = "wasm"))]
+#[tauri::command]
+pub async fn combos_clear(state: tauri::State<'_, Arc<AppState>>) -> Result<ComboStatus, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(conn) = crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) else {
+            return Err(crate::db::BUSY.to_owned());
+        };
+        clear(&conn)
+    })
+    .await
+    .map_err(|e| format!("could not clear the combos: {e}"))?
 }
 
 /// Every combo the given printings can make between them.
@@ -2069,23 +2181,29 @@ mod tests {
         assert_eq!(conditional_etag(None, true), None);
     }
 
-    /// **A launch refreshes what this database already has, and fetches nothing it does not.**
-    /// The tag files are what a deck add is categorised by, so a first run goes and gets them;
-    /// combos are the fourth bracket signal and a database without them reads three. Nothing
-    /// downloads until a reader presses Refresh — which is also what lets the Settings panel
-    /// say "never fetched" and have it stay true.
+    /// **A launch fetches the combos, including on a database that has never asked for them.**
+    /// This test used to pin the opposite rule, and its name was that rule's whole argument:
+    /// combos were the fourth bracket signal, so a first run left them alone. What replaced it
+    /// is `tags::{oracle,art}`'s rule — a readout that silently reads three signals instead of
+    /// four, until somebody finds a button they have no reason to look for, is the worse
+    /// failure. Staleness is the only question left, and never-asked is stale by definition.
     #[test]
-    fn a_launch_refreshes_combos_it_has_and_never_fetches_them_uninvited() {
-        assert!(!due_at_startup(None, 1_800_000_000), "never ingested");
-        let checked_only = ComboMeta {
+    fn a_launch_fetches_the_combos_even_when_it_has_never_asked_for_them() {
+        assert!(
+            due_at_startup(None, 1_800_000_000),
+            "no watermark at all: never asked, and due"
+        );
+
+        let asked_but_never_ingested = ComboMeta {
             etag: None,
             stamp: None,
             fetched_at: None,
             checked_at: Some(1_000),
         };
         assert!(
-            !due_at_startup(Some(&checked_only), 1_800_000_000),
-            "asked once, never ingested: still not a launch's to fetch"
+            due_at_startup(Some(&asked_but_never_ingested), 1_800_000_000),
+            "a watermark with no fetch behind it goes stale like any other, rather than \
+             exempting the database forever"
         );
 
         let ingested = ComboMeta {
@@ -2094,10 +2212,121 @@ mod tests {
             fetched_at: Some(1_800_000_000),
             checked_at: Some(1_800_000_000),
         };
-        assert!(!due_at_startup(Some(&ingested), 1_800_000_060), "fresh");
+        assert!(
+            !due_at_startup(Some(&ingested), 1_800_000_060),
+            "checked a minute ago: fetching uninvited is not fetching every launch"
+        );
         assert!(
             due_at_startup(Some(&ingested), 1_800_000_000 + 7 * 86_400),
-            "a week on, a database that has the file keeps it current"
+            "a week on, the file has earned another look"
+        );
+        assert!(
+            due_at_startup(Some(&ingested), 1_799_000_000),
+            "checked in the future — the clock moved — and stale is the safe reading"
+        );
+    }
+
+    /// **A clear is a clear: the combos, the cards they name and the watermark.** What is left
+    /// is exactly the never-ingested state the rest of the module is written against, which is
+    /// why the `combo_meta` row is deleted rather than having its columns blanked.
+    #[test]
+    fn clearing_the_combos_leaves_a_never_ingested_database() {
+        let db = mem_db();
+        let file = parse(&document(&[ok_variant(
+            "c1",
+            "P",
+            &[("A", "oa"), ("B", "ob")],
+        )]));
+        store(&db, &file, Some("W/\"v1\""), 1_800_000_000, &mut |_, _| {}).unwrap();
+
+        let conn = crate::db::lock_blocking(&db);
+        assert!(read_meta(&conn).is_some(), "a watermark to clear");
+        assert_eq!(read_status(&conn, 1_800_000_060).combos, 1);
+
+        clear_combos(&conn).unwrap();
+
+        assert_eq!(
+            read_meta(&conn),
+            None,
+            "the watermark row is gone, not blanked"
+        );
+        assert_eq!(
+            read_status(&conn, 1_800_000_060),
+            ComboStatus {
+                combos: 0,
+                cards: 0,
+                stamp: None,
+                fetched_at: None,
+                checked_at: None,
+                stale: true,
+            },
+            "which is the answer a database that never ingested gives"
+        );
+        let combos: i64 = conn
+            .query_row("SELECT count(*) FROM combos", [], |r| r.get(0))
+            .unwrap();
+        let cards: i64 = conn
+            .query_row("SELECT count(*) FROM combo_cards", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!((combos, cards), (0, 0), "both tables, not just the parent");
+
+        // And the half both targets actually call answers that same status, rather than
+        // leaving the page to ask a second time what the press did.
+        assert_eq!(
+            clear(&conn).unwrap(),
+            read_status(&conn, 1_800_000_060),
+            "`clear` is `clear_combos` plus the answer, and clearing twice is not an error"
+        );
+    }
+
+    /// **The child table is emptied by its own statement and not by a cascade.**
+    /// `combo_cards.combo_id` is `ON DELETE CASCADE`, but `PRAGMA foreign_keys` is
+    /// per-connection and nothing about [`clear_combos`]' signature says who set it — so this
+    /// runs on a connection with it off, which is the one where a clear leaning on the cascade
+    /// leaves a table full of rows whose combos are gone.
+    #[test]
+    fn a_clear_empties_the_card_table_with_foreign_keys_off() {
+        let db = mem_db();
+        seed_one(&db, "c1", "oa");
+        let conn = crate::db::lock_blocking(&db);
+        conn.pragma_update(None, "foreign_keys", false).unwrap();
+
+        clear_combos(&conn).unwrap();
+
+        let cards: i64 = conn
+            .query_row("SELECT count(*) FROM combo_cards", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(cards, 0, "no orphans, whatever the pragma says");
+    }
+
+    /// **A cleared database really re-downloads, and that is what makes the clear honest.**
+    /// The stored ETag describes a *file*: replayed over empty tables it earns a 304 that no
+    /// amount of refreshing gets past. [`conditional_etag`] asks whether there are rows rather
+    /// than whether there is a watermark, so a clear cannot leave a database that is told
+    /// nothing has changed while holding nothing at all — the round trip below is that
+    /// promise, from a stored ETag to an unconditional fetch.
+    #[test]
+    fn after_a_clear_the_stored_etag_is_not_replayed() {
+        let db = mem_db();
+        let file = parse(&document(&[ok_variant("c1", "P", &[("A", "oa")])]));
+        store(&db, &file, Some("W/\"v1\""), 1_800_000_000, &mut |_, _| {}).unwrap();
+
+        let conn = crate::db::lock_blocking(&db);
+        let stored = read_meta(&conn).unwrap().etag;
+        assert_eq!(stored.as_deref(), Some("W/\"v1\""));
+        assert_eq!(
+            conditional_etag(stored.as_deref(), is_populated(&conn)),
+            Some("W/\"v1\""),
+            "with rows behind it, the ETag is worth replaying"
+        );
+
+        clear_combos(&conn).unwrap();
+
+        assert!(!is_populated(&conn), "nothing behind it any more");
+        assert_eq!(
+            conditional_etag(stored.as_deref(), is_populated(&conn)),
+            None,
+            "so the next fetch is unconditional, whatever a watermark ever said"
         );
     }
 

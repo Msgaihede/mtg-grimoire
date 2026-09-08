@@ -65,7 +65,12 @@ Full record, with every measurement and the provenance of each rung:
   five combos under an unchanged bracket is the system working. **The one thing the panel may
   never do is let silence imply the deck has none**: a database that has never fetched the feed,
   a read in flight and a read that failed are three states that look like an empty list and mean
-  something else, which is why `DeckBracket`'s `ComboState` has four arms.
+  something else, which is why `DeckBracket`'s `ComboState` has four arms. **`never` kept its arm
+  when the feed became an automatic download (2026-09-08) and only its sentence changed** — it
+  says the list arrives on its own instead of naming a press in Settings, which no longer exists.
+  It is not reliably transient and must not be folded into `reading`: the launch refresh is silent
+  and best-effort, so an install with no network, or one whose download was refused, sits in
+  `never` for the whole session with nothing on its way.
 - **The card ids sent to `combosForCards` must be the same pile `estimateBracket` counts.** Both
   drop an inactive category; the combos handed to the estimate are *not* re-checked there, so a
   query built off an unfiltered list would report a combo out of a switched-off Maybeboard and

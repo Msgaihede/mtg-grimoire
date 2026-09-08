@@ -6,6 +6,7 @@ import type { LocalCache } from "./useDataReset";
 function cache(over: Partial<LocalCache> = {}): LocalCache {
   return {
     clear: { run: fn(), pending: false },
+    combos: { run: fn(), pending: false },
     status: null,
     ...over,
   };
@@ -27,9 +28,9 @@ const meta = {
     docs: {
       description: {
         component:
-          "The one button on the Settings page that deletes something and destroys nothing.\n\n" +
-          "It sweeps `data/images/` — the picture cache, measured at 5,540 files and 330 MB on " +
-          "the dev machine — and `data/tmp/`, where the three bulk downloads land. Both are " +
+          "The two buttons on the Settings page that delete something and destroy nothing.\n\n" +
+          "The first sweeps `data/images/` — the picture cache, measured at 5,540 files and 330 " +
+          "MB on the dev machine — and `data/tmp/`, where the bulk downloads land. Both are " +
           "fetched again on demand with no user action, which is the whole definition this " +
           "button works to: `Cache::get` already treats a row whose file is gone as a miss.\n\n" +
           "**What it deliberately leaves alone** is as much of the design as what it takes. " +
@@ -40,7 +41,17 @@ const meta = {
           "could take irreversibly. The price and Oracle Tag tables stay: those " +
           "re-download on a **button** rather than on demand, so emptying them would leave " +
           "every price an em dash until someone noticed.\n\n" +
-          "So the confirmation asks for no typed word — see `ConfirmDialog`'s " +
+          "**The second row is the combo table, and it is here because it is the same kind of " +
+          "thing rather than because it resembles the first.** Combos live in `corpus.db`, the " +
+          "rebuildable half of schema 27's split — the half that exists so a button over it " +
+          "risks nothing a reader made. It is not the price-and-tags exception above, because " +
+          "it does not stop at deleting: the press clears the table and fetches Commander " +
+          "Spellbook's list again in the same round trip, so it ends with more data than it " +
+          "started with. That is what makes it safe to leave un-explained. It is a debugging " +
+          "affordance — for when a deck's combo readout looks wrong — and the panel that " +
+          "explained the feed, the schedule and what a combo is went with the Refresh button it " +
+          "existed to argue for.\n\n" +
+          "So neither confirmation asks for a typed word — see `ConfirmDialog`'s " +
           "`typeToConfirm`, and the short version is that a word typed on every dialog is a " +
           "word nobody reads, which is what would make it useless on the three below.",
       },
@@ -56,6 +67,7 @@ export const Resting: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(canvas.getByText(/are not touched/)).toBeInTheDocument();
+    await expect(canvas.getByText(/Nothing needs this done/)).toBeInTheDocument();
   },
 };
 
@@ -109,7 +121,7 @@ export const SomeFilesWereInUse: Story = {
 };
 
 /**
- * The one refusal this command has, and the reason it is fenced at all: `data/tmp/` is where
+ * The one refusal the image sweep has, and the reason it is fenced at all: `data/tmp/` is where
  * the corpus download puts 77 MB that the ingest then reads back, so a sweep landing between
  * the two would fail a 90-second job the reader is watching a progress bar for.
  */
@@ -130,5 +142,88 @@ export const Working: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(canvas.getByRole("button", { name: "Clear cache" })).toBeDisabled();
+  },
+};
+
+/**
+ * The combo row's own question.
+ *
+ * The same plain confirmation as the row above — nothing here is anybody's only copy — carrying
+ * the one fact the button had no room for: 27.5 MB, and a wait. What a combo *is* and how often
+ * the feed comes down on its own are deliberately absent from both.
+ */
+export const ConfirmingCombos: Story = {
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement);
+    const page = within(document.body);
+
+    await userEvent.click(canvas.getByRole("button", { name: "Clear combos" }));
+    const dialog = await page.findByRole("dialog");
+
+    await expect(within(dialog).queryByRole("textbox")).not.toBeInTheDocument();
+    await expect(dialog).toHaveTextContent("27.5 MB");
+    await expect(args.cache.combos.run).not.toHaveBeenCalled();
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Clear combos" }));
+    await expect(args.cache.combos.run).toHaveBeenCalled();
+  },
+};
+
+/**
+ * The round trip in flight, and it is a long one: 27.5 MB gzipped over 639 MB of JSON, tens of
+ * seconds. **The images row stays live through all of it** — the two share a panel and nothing
+ * else, and one `pending` threaded through both would grey off an instant sweep for a download.
+ */
+export const CombosDownloading: Story = {
+  args: { cache: cache({ combos: { run: fn(), pending: true } }) },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await expect(canvas.getByRole("button", { name: "Clear combos" })).toBeDisabled();
+    await expect(canvas.getByRole("button", { name: "Clear cache" })).toBeEnabled();
+  },
+};
+
+/**
+ * What came back, which is what the reader pressed this for.
+ *
+ * The only outcome sentence on the page that reports arrivals rather than departures — the
+ * figures are the *new* table's, and they are Spellbook's own published scale.
+ */
+export const CombosRefilled: Story = {
+  args: {
+    cache: cache({
+      status: {
+        tone: "plain",
+        text: "Cleared and downloaded again: 105,478 combos, naming 7,310 cards between them.",
+      },
+    }),
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.getByRole("alert")).toHaveTextContent("105,478 combos");
+  },
+};
+
+/**
+ * The clear landed and the download did not, which is the one state this press can leave that is
+ * worse than the one it started from.
+ *
+ * It is drawn as a refusal and never as a count: `combosOutcome` refuses to print a zero as
+ * though it were an answer, and a rejection never reaches it at all — `writeFailure` takes the
+ * line and turns it red.
+ */
+export const CombosDownloadFailed: Story = {
+  args: {
+    cache: cache({
+      status: { tone: "problem", text: "Commander Spellbook could not be reached." },
+    }),
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const alert = canvas.getByRole("alert");
+
+    await expect(alert).toHaveTextContent("could not be reached");
+    await expect(alert).toHaveClass("text-destructive");
   },
 };

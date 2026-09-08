@@ -467,8 +467,14 @@ describe("DeckBracket", () => {
    * **The one sentence this panel must never write.** "No combos matched" is a claim about a
    * list that was consulted; a database that has never fetched the feed has consulted nothing,
    * and drawing silence there would have the panel implying the deck has none.
+   *
+   * **The second assertion is the half that changed when the feed stopped needing a reader**, and
+   * it is still load-bearing rather than a restatement of the first: the arm has to say the list
+   * is coming, because a sentence that only said nothing had been downloaded would leave a reader
+   * looking for the button that used to be in Settings. It is pinned on the promise and not on
+   * the word *launch*, so a reword of the clause is free and a deletion of it is red.
    */
-  it("says the combo list has never been downloaded, and where to get it", async () => {
+  it("says the combo list has not arrived yet, and that it comes on its own", async () => {
     combosStatus.mockResolvedValue({ ...INGESTED, fetchedAt: null, combos: 0, cards: 0 });
     wrap(<Harness cards={DECK} />);
     await userEvent.click(trigger());
@@ -477,7 +483,9 @@ describe("DeckBracket", () => {
     expect(
       await within(dialog).findByText(/No combo list has been downloaded/),
     ).toBeInTheDocument();
-    expect(within(dialog).getByText(/Settings/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/downloads on its own/)).toBeInTheDocument();
+    // Never a press to go and find: the panel it pointed at does not exist any more.
+    expect(within(dialog).queryByText(/Settings/)).toBeNull();
     expect(within(dialog).queryByText(/No two-card combo in the list matches/)).toBeNull();
   });
 
