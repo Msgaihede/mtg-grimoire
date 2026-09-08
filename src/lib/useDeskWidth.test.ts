@@ -1,7 +1,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MIN_PANEL_WIDTH_PX } from "@/features/search/CardSearchPanel";
-import { useDeskWidth } from "./useDeskWidth";
+import { useDeskWidth, type DeskOptions } from "./useDeskWidth";
 
 /**
  * **jsdom lays nothing out**, so every `clientWidth` in this environment answers `0` — the desk's
@@ -76,10 +76,22 @@ afterEach(() => {
 });
 
 /** Render the hook against a desk of a given width. The ref is a plain object because that is all
- *  a `RefObject` is, and because the element has to be in place before the effect runs. */
+ *  a `RefObject` is, and because the element has to be in place before the effect runs.
+ *
+ *  **Two arguments, literally** — no third, not even an `undefined`. That is what makes every case
+ *  in this file outside the options block below a regression fence for `CollectionPage` and
+ *  `WishlistPage`, which call it exactly this way. */
 function mount(desk: HTMLElement | null, floor = 192) {
   const ref = { current: desk };
   return renderHook(() => useDeskWidth(ref, floor));
+}
+
+/** The same row, measured by a caller that has an opinion about the gap or the floor. A separate
+ *  helper rather than a third parameter on {@link mount}, so nothing can accidentally hand the
+ *  hook a third argument in a case that is meant to prove the two-argument shape. */
+function mountWith(desk: HTMLElement | null, floor: number, options: DeskOptions) {
+  const ref = { current: desk };
+  return renderHook(() => useDeskWidth(ref, floor, options));
 }
 
 /** Tell the last observer its box changed size. The hook reads the width off the element rather
@@ -184,5 +196,115 @@ describe("useDeskWidth", () => {
     expect(watchers).toHaveLength(0);
     expect(result.current.roomy).toBe(true);
     expect(result.current.maxPanelWidth).toBe(Number.POSITIVE_INFINITY);
+  });
+
+  /**
+   * The two numbers a caller may name — the row's own `gap` and the narrowest its docked column
+   * may be drawn — added 2026-09-08 for a **third** desk that is neither of the two this hook was
+   * extracted from: the decks page's folder tree, whose row is `gap-5` and whose column is a tree
+   * rather than a wall of card tiles.
+   *
+   * **The assertion that matters most is the first one**, and it is about the callers that pass
+   * nothing: an options bag whose defaults were a pixel off would move the collection's and the
+   * wishlist's panels on every window, silently, with every existing case here still green
+   * because they would all be measuring the new number. So the defaults are pinned as *numbers*
+   * (16, and `MIN_PANEL_WIDTH_PX`) rather than as "whatever the hook does".
+   */
+  describe("the caller's gap and floor", () => {
+    it("reproduces today's numbers exactly when neither is named", () => {
+      layoutWidth(2560); // half is 1280, far more than this row has — the floor cap is the answer
+      const desk = deskBox(800);
+
+      const bare = mount(desk, 192);
+      const spelled = mountWith(desk, 192, { gap: 16, min: MIN_PANEL_WIDTH_PX });
+
+      // Whole objects, so a fourth number added to `DeskWidth` later is covered by this too.
+      expect(bare.result.current).toEqual(spelled.result.current);
+      // And the numbers themselves, so a *pair* of matching wrong answers cannot pass: `gap-4`
+      // is 16 and the panel's floor is 206, both spelled here rather than read off the hook.
+      expect(bare.result.current.maxPanelWidth).toBe(800 - 16 - 192);
+      expect(bare.result.current.roomy).toBe(true);
+      expect(bare.result.current.overWidth).toBeUndefined();
+    });
+
+    it("subtracts the gap the caller names rather than `gap-4`", () => {
+      layoutWidth(2560);
+
+      // The decks desk is `gap-5` — 20px, four more than the two rows this was extracted from.
+      const { result } = mountWith(deskBox(800), 192, { gap: 20 });
+
+      expect(result.current.maxPanelWidth).toBe(800 - 20 - 192);
+      // Named against the default rather than only as an arithmetic result: 592 is what a hook
+      // that ignored the option would answer, and it is four pixels away.
+      expect(result.current.maxPanelWidth).not.toBe(592);
+    });
+
+    /**
+     * The floor is what `roomy` is decided against, and the two answers here are opposite for one
+     * row — which is the whole reason it is a parameter. A folder tree can be drawn narrower than
+     * a card search panel can, so the same 380px desk rails one and not the other.
+     */
+    it("decides roominess against the floor the caller names", () => {
+      layoutWidth(2560);
+      const desk = deskBox(380); // 380 less `gap-4` and a 192 list floor leaves 172
+
+      const panel = mount(desk, 192);
+      expect(panel.result.current.maxPanelWidth).toBe(172);
+      expect(172).toBeLessThan(MIN_PANEL_WIDTH_PX); // the premise, spelled out
+      expect(panel.result.current.roomy).toBe(false);
+      expect(panel.result.current.overWidth).toBe(380);
+
+      const tree = mountWith(desk, 192, { min: 160 });
+      expect(tree.result.current.maxPanelWidth).toBe(172);
+      expect(tree.result.current.roomy).toBe(true);
+      expect(tree.result.current.overWidth).toBeUndefined();
+    });
+
+    /**
+     * Each half defaults on its own. A bag that filled both from one branch would make naming the
+     * gap silently move the floor — the kind of coupling nothing on screen would explain.
+     */
+    it("takes either one without the other", () => {
+      layoutWidth(2560);
+
+      const gapOnly = mountWith(deskBox(800), 192, { gap: 20 });
+      expect(gapOnly.result.current.maxPanelWidth).toBe(588);
+      // Still measured against `MIN_PANEL_WIDTH_PX`, which 588 clears.
+      expect(gapOnly.result.current.roomy).toBe(true);
+
+      const minOnly = mountWith(deskBox(800), 192, { min: 700 });
+      // Still `gap-4`, so 592 rather than 588.
+      expect(minOnly.result.current.maxPanelWidth).toBe(592);
+      expect(minOnly.result.current.roomy).toBe(false);
+      expect(minOnly.result.current.overWidth).toBe(800);
+    });
+
+    /**
+     * **`min` decides `roomy` and never clamps `maxPanelWidth`.** A row that can spare less than
+     * the column's floor has to be able to *say* so — clamping the cap up to the floor would make
+     * every desk look roomy and the rail unreachable.
+     */
+    it("lets the cap answer below the floor rather than clamping to it", () => {
+      layoutWidth(2560);
+
+      const { result } = mountWith(deskBox(380), 192, { min: 300 });
+
+      expect(result.current.maxPanelWidth).toBe(172);
+      expect(result.current.roomy).toBe(false);
+    });
+
+    /**
+     * An unmeasured row is roomy whatever it is asked for — jsdom, and the first paint before the
+     * observer has answered. A floor read as binding here would rail every desk for one commit on
+     * every load, which is what the `deskWidth === 0` arm exists to prevent; naming the option
+     * must not reach around it.
+     */
+    it("still reads an unmeasured row as roomy", () => {
+      const { result } = mountWith(deskBox(0), 192, { gap: 20, min: 4_000 });
+
+      expect(result.current.maxPanelWidth).toBe(Number.POSITIVE_INFINITY);
+      expect(result.current.roomy).toBe(true);
+      expect(result.current.overWidth).toBeUndefined();
+    });
   });
 });

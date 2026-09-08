@@ -8245,11 +8245,20 @@ describe("the busy fault", () => {
       // `deck_set_view_state`'s, and empty is a real value for it: every field is optional and
       // absent means "leave it".
       viewState: {},
-      // `set_nav_collapsed`'s. Never read on this path either — the lock comes first, as it
-      // does for every write here — and unlike `mode` and `zoom` there is no invalid value it
-      // *could* be given: a boolean has no junk state, so this write's only refusal is the one
-      // this loop is about.
+      // `set_nav_collapsed`'s, and `set_deck_folder_pane`'s since the folder tree grew a rail —
+      // a collision as harmless as every other on this record, both handlers meaning the same
+      // thing by the word. Never read on this path either — the lock comes first, as it does for
+      // every write here — and unlike `mode` and `zoom` there is no invalid value it *could* be
+      // given: a boolean has no junk state.
       collapsed: true,
+      // `set_deck_folder_pane`'s other half, and **valid for `root`'s reason** rather than
+      // merely named: that write is the first here to carry a number beside a boolean, and it
+      // has two checks on that number — a `u32` guard and the storage band — so a handler that
+      // ran either before taking the lock would otherwise fail this loop by answering "is not a
+      // u32" or "is not a folder pane width" instead of BUSY, a red that reads as a bug about
+      // the number when the bug is about the lock. `280` is a whole number inside the band with
+      // room either side, so the only thing left for this handler to refuse is the sync.
+      width: 280,
       // Schema v25's pair. Neither is read on this path — `refuseIfBusy` comes first, as it does
       // for every write here — but both are named because `invoke` matches by name, and a
       // handler that took the lock after resolving its row would fail this loop by answering
@@ -8632,7 +8641,27 @@ describe("the busy fault", () => {
     // 144. Neither delta was wrong; a count is a fact about a *tree*, and two open branches
     // are two trees. **98 was taken by running the sweep and reading `left`**, which is what
     // every paragraph here tells you to do and what neither branch could do alone.
-    expect(names).toHaveLength(98);
+    //
+    // The folder tree's remembered width then added **one**, 98 → 99: `set_deck_folder_pane` is
+    // the eleventh `app_meta` write by `set_mark_color`'s count above, and it joins for the
+    // reason all ten do — the row is in the reader's own database, so the write takes the write
+    // connection through `sync::with_write` and answers BUSY under a sync. Its read half
+    // (`deck_folder_pane`, on `db_read`) is in `readHandlers` and not in this table at all,
+    // which is the split every preference before it is on.
+    //
+    // It is the **first write here to carry a number and a boolean together** — one row, two
+    // gestures, because a command per half would have to read the other half back and two of
+    // those racing would lose one. That is also why this loop matters for it in a way it does
+    // not for the three one-line boolean writes above: this handler has **two** validations of
+    // its own — a `u32` guard standing in for the deserializer the fake does not have, and the
+    // band — so one that checked either of them first and forgot `refuseIfBusy` would still
+    // refuse something and could look busy enough to pass a careless test. The refusal order is
+    // pinned by a test of its own further down rather than by this sweep.
+    //
+    // **This delta is arithmetic against one tree**, which every paragraph above says is the
+    // thing that keeps going wrong at a merge — so re-run the sweep after the next one rather
+    // than adding to whichever figure is here. 99 was taken by running it and reading `left`.
+    expect(names).toHaveLength(99);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -9267,6 +9296,172 @@ describe("the whole command table", () => {
     // pressed at is still the shell the next read describes.
     expect(db.navCollapsed).toBe(true);
     expect(readHandlers(db).nav_collapsed()).toBe(true);
+  });
+
+  /**
+   * The newest `app_meta` row, and the one where the two halves are **one** answer — which is
+   * why it gets a test of its own rather than a line in the sidebar's above.
+   *
+   * `nav_collapsed` has a single boolean and therefore only a round trip to prove. This row has
+   * a number beside the boolean, and the number brings back two of the questions that one had no
+   * answer for: a value this build cannot use, and a "never written" that is distinguishable
+   * from a default. What is worth reading here is that neither of those reaches the **collapse**
+   * — the two fields are read one at a time, so a nonsense width costs the reader their width
+   * and leaves their rail alone. That is the next test, and it is the half that was wrong first.
+   *
+   * The round trip runs in both directions for `set_nav_collapsed`'s reason: railing is the easy
+   * half to get right, and a fake that only ever stored `true` would pass every collapse
+   * assertion and lose the un-railing for good.
+   */
+  it("opens unmeasured and expanded, and remembers a width and a rail as one row", () => {
+    // `null`, and that is the assertion rather than an incidental number: the width the tree
+    // opens at belongs to the stylesheet, so a fresh database says it has none and the page
+    // draws its own. A fake answering `208` here would make "never dragged" and "dragged to
+    // exactly the default" one state.
+    expect(readHandlers(makeDb()).deck_folder_pane()).toEqual({ width: null, collapsed: false });
+    expect(
+      readHandlers(makeDb({ deckFolderPane: { width: 320, collapsed: true } })).deck_folder_pane(),
+    ).toEqual({ width: 320, collapsed: true });
+
+    const db = makeDb();
+    const w = writeHandlers(db);
+    w.set_deck_folder_pane({ width: 300, collapsed: false });
+    expect(db.deckFolderPane).toEqual({ width: 300, collapsed: false });
+    expect(readHandlers(db).deck_folder_pane()).toEqual({ width: 300, collapsed: false });
+
+    // The rail, **and the width travels with it**: a press sends the width the page is drawing
+    // at, so a reader who un-rails gets the tree back at the size they dragged it to rather
+    // than at the default. A pair of commands would have made this two writes and a race.
+    w.set_deck_folder_pane({ width: 300, collapsed: true });
+    expect(readHandlers(db).deck_folder_pane()).toEqual({ width: 300, collapsed: true });
+
+    // The way back, which is the half a story cannot see going wrong until the *next* mount:
+    // the page reads this once at launch and owns the state afterwards.
+    w.set_deck_folder_pane({ width: 260, collapsed: false });
+    expect(readHandlers(db).deck_folder_pane()).toEqual({ width: 260, collapsed: false });
+
+    // One key/value table: dragging the folder tree must not be a way to lose a row beside it.
+    w.set_nav_collapsed({ collapsed: true });
+    w.set_deck_sort({ sort: "name:asc" });
+    w.set_deck_folder_pane({ width: 240, collapsed: false });
+    expect(readHandlers(db).nav_collapsed()).toBe(true);
+    expect(readHandlers(db).deck_sort()).toBe("name:asc");
+  });
+
+  /**
+   * The width's junk states, and **the collapse standing through every one of them** — which is
+   * the assertion this test exists for, and the one it had backwards for a wave.
+   *
+   * The crate reads the two fields independently and keeps a test named
+   * `a_junk_width_leaves_the_collapse_standing`, so `{"width": 9999, "collapsed": true}` answers
+   * `{ width: null, collapsed: true }`. The fake answered `{ width: null, collapsed: false }` —
+   * the tidier shape, reasoned from "one JSON object parses or it does not", and a fake teaching
+   * a reader that a number they never typed can silently un-rail their tree. **Asserting the
+   * collapse inside each junk case is the whole of what tells the two shapes apart**: a loop that
+   * only checked `width` passes identically against either.
+   *
+   * Each junk width is therefore run **twice**, railed and not, because the wrong handler agrees
+   * with the right one on `collapsed: false` — a test that seeded only the un-railed row would go
+   * green over the exact defect this is correcting.
+   *
+   * **The band's four edge values are written out, and that is deliberate rather than lazy.** A
+   * test that read the same two constants the handler reads would agree with it by construction:
+   * this band shipped at `160..640` for a wave, `640` refused in Storybook a drag a 2560-pixel
+   * desk allows, and a derived test would have passed over both ends. `79`/`1201` and
+   * `80`/`1200` are `deckfolderpane::MIN_PANE_WIDTH` and `MAX_PANE_WIDTH` spelled out, inclusive
+   * as the crate has them.
+   */
+  it("drops an unusable width and leaves the collapse standing", () => {
+    for (const width of [4, 9999, 207.5, NaN]) {
+      expect(
+        readHandlers(makeDb({ deckFolderPane: { width, collapsed: true } })).deck_folder_pane(),
+      ).toEqual({ width: null, collapsed: true });
+      // The same row un-railed, so the `true` above has to be the *stored* flag rather than a
+      // happy accident of a fallback that answers `true` for everything.
+      expect(
+        readHandlers(makeDb({ deckFolderPane: { width, collapsed: false } })).deck_folder_pane(),
+      ).toEqual({ width: null, collapsed: false });
+    }
+    // The row that is not there at all is the only thing that answers both defaults.
+    expect(readHandlers(makeDb()).deck_folder_pane()).toEqual({ width: null, collapsed: false });
+
+    // The band is a *storage* bound and wider than the handle's clamp: a width a reader can
+    // actually drag to is stored and answered, collapse and all, and so is one only a big
+    // monitor reaches.
+    expect(
+      readHandlers(makeDb({ deckFolderPane: { width: 280, collapsed: true } })).deck_folder_pane(),
+    ).toEqual({ width: 280, collapsed: true });
+    // Both ends, inclusive — this is the pair that would have caught `640`.
+    for (const width of [80, 1200]) {
+      expect(
+        readHandlers(makeDb({ deckFolderPane: { width, collapsed: true } })).deck_folder_pane(),
+      ).toEqual({ width, collapsed: true });
+    }
+    for (const width of [79, 1201]) {
+      expect(
+        readHandlers(makeDb({ deckFolderPane: { width, collapsed: true } })).deck_folder_pane(),
+      ).toEqual({ width: null, collapsed: true });
+    }
+
+    // And the write refuses exactly what the read drops, which is the half a fake is easiest to
+    // leave out: the read is silent, so an unchecked write would let a story drag the tree, save,
+    // read back nothing and look like it worked.
+    const db = makeDb();
+    const w = writeHandlers(db);
+    w.set_deck_folder_pane({ width: 280, collapsed: false });
+    // **Two refusals rather than one, because the crate makes two.** `width` is a `u32`, so a
+    // fraction, a negative and both non-numbers are refused as a bad *call* — the route answers
+    // `RouteError::Args` and the shipped command's body is never entered.
+    for (const width of [207.5, -1, NaN, Infinity]) {
+      expect(() => w.set_deck_folder_pane({ width, collapsed: true })).toThrow(/is not a u32/);
+    }
+    // A whole number outside the band gets into the body and is refused as a bad *value*,
+    // `RouteError::Failed`. The two ends again, from the other side.
+    for (const width of [4, 79, 1201, 9999]) {
+      expect(() => w.set_deck_folder_pane({ width, collapsed: true })).toThrow(
+        /is not a folder pane width/,
+      );
+    }
+    // And both ends themselves are accepted, which is what makes the four refusals above about
+    // the band rather than about arithmetic.
+    w.set_deck_folder_pane({ width: 80, collapsed: false });
+    w.set_deck_folder_pane({ width: 1200, collapsed: false });
+    expect(readHandlers(db).deck_folder_pane()).toEqual({ width: 1200, collapsed: false });
+    w.set_deck_folder_pane({ width: 280, collapsed: false });
+    // Refused, and the row each of them would have overwritten is still the one the reader
+    // dragged to — including its collapse, which none of those writes got to flip.
+    expect(readHandlers(db).deck_folder_pane()).toEqual({ width: 280, collapsed: false });
+  });
+
+  /**
+   * The same split every `app_meta` pair here draws, and **the order of the two refusals**.
+   *
+   * The busy sweep above already walks every write including this one; what it cannot say is
+   * that the *read* stayed live, which is the half a reader mid-sync actually sees — the tree
+   * stays drawn in the shape they left it and only the drag is turned away. What it also cannot
+   * say is which refusal wins when both apply, and that is worth pinning for this write where it
+   * was not for the sidebar's: this one has a validation of its own, so a handler that checked
+   * the number first would answer a sentence about a width to a reader whose only problem is a
+   * sync — and would still pass a test that only ever sent a good number.
+   */
+  it("refuses a drag mid-sync before it looks at the number, and still says how the tree is drawn", () => {
+    const db = makeDb({ deckFolderPane: { width: 300, collapsed: true }, fault: "busy" });
+    expect(() => writeHandlers(db).set_deck_folder_pane({ width: 420, collapsed: false })).toThrow(
+      /busy/i,
+    );
+    // The same answer for both widths the handler would otherwise have refused in its own
+    // words — the band's and the `u32`'s. `refuseIfBusy` comes first, so neither of the two
+    // checks below it has looked at the number yet.
+    expect(() => writeHandlers(db).set_deck_folder_pane({ width: 9999, collapsed: false })).toThrow(
+      /busy/i,
+    );
+    expect(() => writeHandlers(db).set_deck_folder_pane({ width: -1, collapsed: false })).toThrow(
+      /busy/i,
+    );
+    // Refused, and the row they would have overwritten is untouched — so the tree a reader
+    // dragged at is still the tree the next read describes.
+    expect(db.deckFolderPane).toEqual({ width: 300, collapsed: true });
+    expect(readHandlers(db).deck_folder_pane()).toEqual({ width: 300, collapsed: true });
   });
 
   /**

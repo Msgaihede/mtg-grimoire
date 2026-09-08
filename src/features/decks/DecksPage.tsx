@@ -33,6 +33,7 @@ import { LAYER } from "@/lib/layers";
 import { PRESS, statusLine, TRANSITION } from "@/lib/motion";
 import { useAppStore } from "@/lib/store";
 import { useCardZoomGesture } from "@/lib/useCardZoomGesture";
+import { useDeskWidth } from "@/lib/useDeskWidth";
 import { clearFieldOnEscape, useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { CreateDeckDialog } from "./CreateDeckDialog";
@@ -55,6 +56,7 @@ import {
   folderDescendants,
   FOLDER_ROW_ATTR,
   FolderTree,
+  MIN_FOLDER_TREE_WIDTH_PX,
   ROOT_LABEL,
   useDeckDragging,
   type DeckDrag,
@@ -72,6 +74,7 @@ import { useDeckFolders } from "./useDeckFolders";
 import { useDeckPips } from "./useDeckPips";
 import { useDecks, type Decks } from "./useDecks";
 import { useDeckSort } from "./useDeckSort";
+import { useFolderPane } from "./useFolderPane";
 import { useFormatSpecs } from "./useFormatSpecs";
 import { useNewDeckFormat } from "./useNewDeckFormat";
 
@@ -320,12 +323,21 @@ export function DecksPage() {
    * gesture is attached to.
    *
    * Deliberately **not** {@link wallRef}, which is the whole view: a ctrl+wheel over the folder
-   * tree is not a request to resize a wall the reader is not pointing at, and the tree is
-   * navigation chrome at a fixed rail width that has nothing to scale. It is the same rule
-   * `GridView` follows one floor down — the listener goes on the thing that scrolls, because a
-   * wheel over the gap between two tiles belongs to the scroller and not to either of them.
+   * tree is not a request to resize a wall the reader is not pointing at, and a tree row draws
+   * nothing that scales — it is navigation chrome, and the reader sizes it by pulling its edge
+   * rather than by rolling a wheel over it. It is the same rule `GridView` follows one floor down
+   * — the listener goes on the thing that scrolls, because a wheel over the gap between two tiles
+   * belongs to the scroller and not to either of them.
    */
   const tilesRef = useRef<HTMLDivElement>(null);
+  /**
+   * The desk row the tree and the wall share — measured, so the tree knows how far it may be
+   * dragged and whether there is room to draw it open at all.
+   *
+   * The row itself rather than {@link wallRef}: the section above it carries the heading and the
+   * failure banner, so the whole view is not the box the two columns are divided out of.
+   */
+  const deskRef = useRef<HTMLDivElement>(null);
   /**
    * How large the reader draws a deck, out of the one store the app keeps sizes in.
    *
@@ -345,6 +357,34 @@ export function DecksPage() {
   // WebView2 would apply its own page zoom on top of the wall's, scaling the sidebar, the ribbon
   // and the title bar out from under a reader who asked one wall of decks to get bigger.
   useCardZoomGesture(tilesRef, "deckGallery");
+  /**
+   * How wide the folder tree is and whether the reader has railed it — one `app_meta` row, held
+   * by the page because it is remembered rather than by the tree because it is drawn.
+   *
+   * The pair is `useSearchOpen`'s argument one page over: a width and a collapse are two answers
+   * to one question — how much of this row do I want spent on navigation — and a component that
+   * held either would be a component that had to know where it was stored.
+   */
+  const { width, collapsed, setWidth, setCollapsed } = useFolderPane();
+  /**
+   * What the desk row can spare, and whether it can spare anything at all.
+   *
+   * **The floor is one deck tile at the reader's own zoom**, which is the honest number rather
+   * than a constant: the wall is `auto-fill` over `scaled(TILE_MIN_WIDTH, zoom)` tracks, so a
+   * width below one track is a wall drawing a tile narrower than the reader asked for — and a
+   * reader who has zoomed *out* to fit more decks on screen has bought the tree room to be wide
+   * in the same gesture. `gap: 20` is this row's own `gap-5`, told to the hook rather than
+   * assumed by it, because the two search columns it was written for are `gap-4`.
+   *
+   * **`overWidth` is deliberately ignored.** That is the phone arrangement — the search column
+   * drawn *over* the list where the row cannot hold both — and this column does not do it: a
+   * filing cabinet laid over the wall of decks it files would cover the thing it is for, so a row
+   * too narrow for both rails the tree instead and the wall keeps every pixel.
+   */
+  const { maxPanelWidth, roomy } = useDeskWidth(deskRef, scaled(TILE_MIN_WIDTH, zoom), {
+    gap: 20,
+    min: MIN_FOLDER_TREE_WIDTH_PX,
+  });
   /** Whatever opened the layer that is up, so Escape can hand the caret back to it. */
   const openerRef = useRef<HTMLButtonElement | null>(null);
   /**
@@ -1244,8 +1284,17 @@ export function DecksPage() {
         )}
       </AnimatePresence>
 
-      <div className="flex min-h-0 flex-1 gap-5">
+      {/* The row the two columns are divided out of, and the box {@link useDeskWidth} measures.
+          Its `gap-5` is handed to that hook as a number, because Tailwind's own is not readable
+          from JavaScript and the arithmetic has to subtract it. */}
+      <div ref={deskRef} className="flex min-h-0 flex-1 gap-5">
         <FolderTree
+          width={width}
+          collapsed={collapsed}
+          maxWidth={maxPanelWidth}
+          roomy={roomy}
+          onResize={setWidth}
+          onCollapse={setCollapsed}
           nodes={nodes}
           totalDecks={live.length}
           selectedId={folderView}
@@ -1801,13 +1850,16 @@ export function DecksPage() {
  * the on/off treatment all come from that module, and the gallery contributes nothing but the
  * arrangement.
  *
- * **`flex-wrap` is not optional.** This column is `flex-1` beside a 208px folder rail, so at the
+ * **`flex-wrap` is not optional.** This column is `flex-1` beside the folder tree, so at the
  * app's own 1024px floor it is ~548px wide — narrower than the row's contents. A flex item cannot
  * shrink below its own min-content, so an unwrapped row would hang out of the column and, since
  * the column is `overflow-y-auto` (which computes `overflow-x` to `auto`), the overhang would
  * become a horizontal scrollbar across the whole gallery. Wrapping makes the row's min-content
  * one control. `src/CLAUDE.md` carries the measured version of that failure from the deck
- * editor's docked panel.
+ * editor's docked panel. **The 548 was measured against a fixed 208px tree and is a ceiling
+ * now**, not a figure: the tree is draggable, so a reader who widens it takes the difference out
+ * of this column — which is why the wrap is what makes that free rather than something the row
+ * has to be re-measured for.
  */
 function DeckFilterRow({
   filter,

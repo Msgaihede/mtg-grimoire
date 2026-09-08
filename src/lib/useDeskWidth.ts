@@ -5,12 +5,50 @@ import { MIN_PANEL_WIDTH_PX } from "@/features/search/CardSearchPanel";
  * The `gap-4` between the list and the dock, in px — spelled here because the arithmetic below has
  * to subtract it and Tailwind's number is not readable from JavaScript.
  *
- * **It is a claim about the caller's markup**, and the one thing this hook assumes that it cannot
- * measure: both desk rows are `flex min-h-0 flex-1 gap-4`. A page that gave its desk a different
- * gap would be over by the difference — so change the class and this number together, or hand the
- * gap in the way {@link useDeskWidth}'s `floor` is handed in.
+ * **It is still a claim about the caller's markup that this hook cannot measure, and it is a
+ * *default* rather than an assumption since 2026-09-08.** Both of the desk rows this was extracted
+ * from are `flex min-h-0 flex-1 gap-4`, so a caller that says nothing gets exactly the number they
+ * were written against; a row with a different gap hands its own in through
+ * {@link DeskOptions.gap}, the way {@link useDeskWidth}'s `floor` has always been handed in. The
+ * old sentence — "change the class and this number together" — now applies only to the two rows
+ * that pass no options: a *third* row's `gap-5` is its own argument and not an edit to this line.
  */
 const DESK_GAP = 16;
+
+/**
+ * The two facts about a desk row that are the caller's rather than this hook's, both defaulted to
+ * what the rows it was extracted from measure.
+ *
+ * **Defaulted rather than required, because the two existing callers must be behaviourally
+ * untouched**: `CollectionPage` and `WishlistPage` pass no options at all and get the exact
+ * arithmetic they got before this bag existed. A required bag would have been the same numbers
+ * written out at two call sites, which is the duplication this module was extracted to end.
+ *
+ * Neither is measurable from here. The gap is a Tailwind class, which is a string in the source and
+ * a computed style on an element this hook is given no handle to; the floor is a *policy* about the
+ * narrowest a docked column may be drawn, which belongs to whatever draws it.
+ */
+export interface DeskOptions {
+  /**
+   * The desk row's own flex `gap`, in px. Default 16 (`gap-4`) — see {@link DESK_GAP}.
+   *
+   * Subtracted from the row before the column's share of it is worked out, so a wrong number here
+   * is a column that overflows its row by the difference rather than anything that goes red.
+   */
+  gap?: number;
+  /**
+   * The narrowest the docked column may be drawn, in px. Default `MIN_PANEL_WIDTH_PX`.
+   *
+   * This is the number {@link DeskWidth.roomy} is decided against — *not* a clamp on
+   * {@link DeskWidth.maxPanelWidth}, which is deliberately left free to answer smaller: a row that
+   * can spare less than this is a row that cannot hold both, and saying so is the whole of what
+   * `roomy` is for.
+   *
+   * A caller whose column has a different floor from a card search panel's says so here. A folder
+   * tree is the case this was added for: its floor is a tree's own, not a wall of card tiles'.
+   */
+  min?: number;
+}
 
 /** What a desk row can tell a docked search column about the room it has. */
 export interface DeskWidth {
@@ -50,8 +88,24 @@ export interface DeskWidth {
  * after its data landed would measure `null` forever and never look again. That is the trap
  * `DeckEditor` needed `[hasRow]` for, and it is stated here rather than guarded against, because a
  * guard that runs on every render buys nothing for a caller that cannot hit it.
+ *
+ * **`options` is the third thing that is the caller's, and it arrived after the first two** — see
+ * {@link DeskOptions}. It is optional and defaulted to the numbers the two extracted rows were
+ * written against, so `useDeskWidth(desk, 192)` means today exactly what it meant before the bag
+ * existed. It is read for its two numbers during render and never named as a dependency, so a
+ * caller passing a fresh object literal every render costs nothing — the one effect below still
+ * runs once.
  */
-export function useDeskWidth(desk: RefObject<HTMLElement | null>, floor: number): DeskWidth {
+export function useDeskWidth(
+  desk: RefObject<HTMLElement | null>,
+  floor: number,
+  options?: DeskOptions,
+): DeskWidth {
+  // Pulled out as numbers rather than read off `options` below, so nothing downstream can
+  // accidentally hold the object: it is a literal at the call site and a different one every
+  // render, and a number cannot be.
+  const gap = options?.gap ?? DESK_GAP;
+  const min = options?.min ?? MIN_PANEL_WIDTH_PX;
   /** How wide that row is. `0` is *unmeasured* — jsdom, and the first paint before the observer
    *  has answered — and is read below as "roomy", never as a row of no width. */
   const [deskWidth, setDeskWidth] = useState(0);
@@ -97,7 +151,7 @@ export function useDeskWidth(desk: RefObject<HTMLElement | null>, floor: number)
    */
   const maxPanelWidth = Math.min(
     viewport > 0 ? Math.floor(viewport / 2) : Number.POSITIVE_INFINITY,
-    deskWidth > 0 ? deskWidth - DESK_GAP - floor : Number.POSITIVE_INFINITY,
+    deskWidth > 0 ? deskWidth - gap - floor : Number.POSITIVE_INFINITY,
   );
   /**
    * Whether this row can hold the list and the column side by side.
@@ -110,8 +164,12 @@ export function useDeskWidth(desk: RefObject<HTMLElement | null>, floor: number)
    * and not a thing the reader asked for, so it decides what is *drawn* and `useSearchOpen` goes
    * on holding what they chose — see `CardSearchPanel`'s own prop doc. A width change must not be
    * able to throw a typed query away.
+   *
+   * **The floor it is measured against is {@link DeskOptions.min}**, `MIN_PANEL_WIDTH_PX` unless
+   * the caller says otherwise — a docked column's narrowest is a fact about what that column
+   * draws, and a folder tree's is not a card wall's.
    */
-  const roomy = deskWidth === 0 || maxPanelWidth >= MIN_PANEL_WIDTH_PX;
+  const roomy = deskWidth === 0 || maxPanelWidth >= min;
   /**
    * How wide to draw the panel **over** the list, for a row that cannot hold both — the door out
    * of the rail, and the whole row's width because that is what the panel gets when it takes it.
