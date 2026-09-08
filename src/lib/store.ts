@@ -14,8 +14,15 @@ import type { TransferFieldId, TransferSurface } from "@/features/transfer/field
 import type { ExportFormat } from "@/features/transfer/formats";
 import type { DeckFinish, DeckVariant } from "./ipc";
 
-/** The six top-level destinations in the sidebar. */
-export type ViewId = "search" | "tags" | "collection" | "wishlist" | "decks" | "settings";
+/** The seven top-level destinations in the sidebar. */
+export type ViewId =
+  | "search"
+  | "tags"
+  | "collection"
+  | "wishlist"
+  | "decks"
+  | "scanner"
+  | "settings";
 
 /**
  * A set of picked cards **and the surface it belongs to** — `lib/multiSelect.ts`'s
@@ -90,6 +97,16 @@ export interface PaneDeckContext {
    */
   finish: DeckFinish;
 }
+
+/**
+ * The five developer panels on the Scanner view. `match` is never folded.
+ *
+ * A closed union rather than {@link CardSelection}'s open string, and for the opposite reason:
+ * the set of panels is a fact about one screen that nothing outside this feature adds to, so
+ * an exhaustive record is exactly what is wanted — a sixth panel is a compile error at the
+ * initial state below until somebody says what it starts as.
+ */
+export type ScannerPanelId = "controls" | "pipeline" | "budget" | "rectified" | "readouts";
 
 /** How the search results are laid out. */
 export type SearchView = "table" | "grid";
@@ -231,6 +248,14 @@ interface AppState {
    */
   keyMapOpen: boolean;
   setKeyMapOpen: (open: boolean) => void;
+  /**
+   * Which of the Scanner's developer panels are open. **In the store, not in the view**, so a
+   * reader who folded the pipeline out of the way and jumped to Settings finds it still folded
+   * on the way back — the same reason `openDeckId` is parked here. Session state: no `app_meta`
+   * row and no persist middleware, exactly as `keyMapOpen` above.
+   */
+  scannerFolds: Record<ScannerPanelId, boolean>;
+  setScannerFold: (id: ScannerPanelId, open: boolean) => void;
   searchView: SearchView;
   setSearchView: (view: SearchView) => void;
   /** How the collection is laid out. Separate from `searchView` on purpose — the search is
@@ -975,6 +1000,17 @@ export const useAppStore = create<AppState>((set) => ({
   // store at all rather than in either of the two components that use it.
   keyMapOpen: false,
   setKeyMapOpen: (keyMapOpen) => set({ keyMapOpen }),
+  // All five folded away on launch. The Scanner's job is the picture and the card it came to,
+  // and every one of these panels is a developer's answer to "why did it come to that" — so the
+  // column opens as one heading per question and costs a reader who is only scanning nothing.
+  scannerFolds: {
+    controls: false,
+    pipeline: false,
+    budget: false,
+    rectified: false,
+    readouts: false,
+  },
+  setScannerFold: (id, open) => set((s) => ({ scannerFolds: { ...s.scannerFolds, [id]: open } })),
   // Art by default: this is a card app, and the table is the view you switch to when you
   // are comparing prices rather than looking at cards.
   //

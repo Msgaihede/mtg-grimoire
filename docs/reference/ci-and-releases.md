@@ -6,7 +6,12 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   router (below), a `frontend`
   job (`npm run build`/`lint`/`test:run`), a `rust` matrix over `windows-latest` +
   `ubuntu-22.04` (`cargo fmt --check` on Linux only, `clippy -D warnings` and `cargo test`
-  on both, everything `--locked`), a **`wasm`** job (below) and a `powershell` job (below).
+  on both, everything `--locked`, **and since 2026-09-08 the `card-scanner` crate's own suite
+  on the Linux leg** — `cargo test --locked --features cli --manifest-path
+  crates/card-scanner/Cargo.toml`, tests only, because that crate is not rustfmt-clean and
+  carries four pre-existing clippy warnings, both listed in
+  [card-scanner.md](card-scanner.md) §8; until that step `session::tests` was fenced by
+  `npm run verify` and by nothing in CI), a **`wasm`** job (below) and a `powershell` job (below).
   **`ci-ok` is the one protected check** — branch protection
   pins names by string and a matrix job's name embeds its matrix values, so the aggregator is
   what has teeth and the matrix underneath stays free. `enforce_admins` is **false**: a red PR
@@ -21,7 +26,10 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `src/workers/**`, `src/web/**`, `src/lib/core/**`, `scripts/build-wasm.mjs` and
   `vite.web.config.ts` → `frontend` **and `wasm`**, and `src-tauri/**` → `rust` **and
   `wasm`** as well;
-  `*.ps1`/`*.psm1`/`*.psd1` → `powershell`; `ci.yml` itself → **all four**;
+  `*.ps1`/`*.psm1`/`*.psd1` → `powershell`; `ci.yml` itself → **all four**; **`crates/*` →
+  `frontend`, `rust`, `wasm` and `android`** (declared 2026-09-08 — it is what the fail-safe
+  below was already doing for the `card-scanner` crate, whose `.rs` files `ipc.test.ts` reads
+  as text and whose `scripts/*.mjs` `eslint .` lints);
   prose and editor/release bookkeeping → neither; and **anything unrecognised → every**
   build job.
   That last arm is the fail-safe that makes the lists safe to be wrong in the cheap

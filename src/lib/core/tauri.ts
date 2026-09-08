@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { Core } from "./types";
+import type { CallArgs, CallOptions, Core } from "./types";
 
 /** The desktop and Android implementation: Tauri's own IPC. */
 export const tauriCore: Core = {
@@ -8,8 +8,16 @@ export const tauriCore: Core = {
   // `undefined` second argument. Tauri cannot tell the difference, but twenty assertions
   // in `ipc.test.ts` are written `toHaveBeenCalledWith("sync_status")` and vitest compares
   // argument *lists*, so a core that always passes two arguments moves what those tests see.
-  call: <T,>(command: string, args?: Record<string, unknown>) =>
-    args === undefined ? invoke<T>(command) : invoke<T>(command, args),
+  // `options` is the same story one argument further out: nothing here has ever needed a
+  // third argument until the scanner's headers, so it stays absent unless a caller asks for it.
+  // `?? {}`: Tauri's own `InvokeOptions.headers` is a required `HeadersInit`, so a `CallOptions`
+  // that named no headers of its own still has to hand it something.
+  call: <T,>(command: string, args?: CallArgs, options?: CallOptions) =>
+    args === undefined
+      ? invoke<T>(command)
+      : options === undefined
+        ? invoke<T>(command, args)
+        : invoke<T>(command, args, { headers: options.headers ?? {} }),
 
   listen: <T,>(event: string, handler: (payload: T) => void) => {
     let stopped = false;

@@ -1,4 +1,21 @@
 /**
+ * What a call can carry. Almost every command is matched **by name**, so `Record<string,
+ * unknown>` is the ordinary shape — but the scanner sends a camera frame, and a frame is bytes
+ * with no fields to name, so the union's other arm is the raw `Uint8Array` Tauri forwards to a
+ * command's own binary argument.
+ */
+export type CallArgs = Record<string, unknown> | Uint8Array;
+
+/**
+ * Out-of-band metadata for a call, carried as HTTP-shaped headers because that is the vocabulary
+ * Tauri's own IPC already forwards a raw invoke's headers in. The scanner uses this to send the
+ * detector options a byte payload has no field of its own to hold.
+ */
+export interface CallOptions {
+  headers?: Record<string, string>;
+}
+
+/**
  * The one interface between this frontend and whatever is answering its commands.
  *
  * Two methods, because that is all `src/lib/ipc.ts` has ever needed: a request/response
@@ -12,9 +29,11 @@ export interface Core {
    *
    * `args` is matched **by name** against the Rust command's parameters, so a misspelled
    * key is a runtime deserialization error with no type error anywhere. `ipc.test.ts` pins
-   * the names that matter.
+   * the names that matter. A `Uint8Array` is the one exception — there is no name to match,
+   * it forwards as the command's own binary argument — and `options.headers` rides beside it
+   * for whatever the bytes alone cannot say.
    */
-  call<T>(command: string, args?: Record<string, unknown>): Promise<T>;
+  call<T>(command: string, args?: CallArgs, options?: CallOptions): Promise<T>;
 
   /**
    * Subscribe to a backend event. The handler receives the **payload**, not an envelope.

@@ -1,0 +1,819 @@
+<!doctype html>
+<!--
+  The live camera view. Served by `serve.rs`, which `include_str!`s this file — so nothing at
+  compile time reads it as JavaScript and `cargo build` cannot catch a mistake in it.
+
+  **After editing the script below, run `node scripts/check-live-page.mjs`.** A syntax error
+  here does not present as a syntax error: the whole script fails to parse, `start()` never
+  runs, and the only symptom is "the camera doesn't start" — which reads as a permissions or
+  hardware problem and sends you looking somewhere else entirely.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Card scanner — live</title>
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    --ground:#0d1014; --panel:#151a20; --sunk:#1c232b; --line:#28313b;
+    --ink:#e8edf2; --ink-2:#9aa7b4; --ink-3:#6b7986;
+    --accent:#54c3e0;
+    --hit:#5ed69a; --doubt:#e8b45c; --miss:#f08b85;
+    --mono:"IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; background:var(--ground); color:var(--ink);
+    font:14px/1.5 ui-sans-serif, system-ui, -apple-system, sans-serif;
+    -webkit-text-size-adjust:100%;
+  }
+  /* `align-items:start` keeps the video its own height — stretching the stage to the
+     column would letterbox a 16:9 feed against a tall panel. */
+  .app { display:grid; grid-template-columns:minmax(0,1fr) 340px; gap:14px; padding:14px;
+         min-height:100vh; align-items:start; }
+  @media (max-width:900px) { .app { grid-template-columns:1fr; } }
+
+  .stage { position:relative; background:#000; border:1px solid var(--line); border-radius:12px; overflow:hidden; }
+  .stage video, .stage canvas { display:block; width:100%; height:auto; }
+  .stage canvas { position:absolute; inset:0; }
+
+  /* The headline readout sits on the video so you can watch the card, not the panel. */
+  .hud {
+    position:absolute; left:12px; top:12px; display:flex; gap:8px; align-items:center;
+    background:rgba(13,16,20,.78); backdrop-filter:blur(8px);
+    border:1px solid var(--line); border-radius:999px; padding:6px 12px;
+    font-family:var(--mono); font-size:12px;
+  }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--miss); flex:none; }
+  .dot.hit { background:var(--hit); } .dot.doubt { background:var(--doubt); }
+  /* Reserved widths, so the pill does not resize as the verdict and rate change. */
+  .hud #verdict { min-width:12ch; }
+  .hud .fps { color:var(--ink-3); min-width:6ch; text-align:right; }
+
+  aside { display:flex; flex-direction:column; gap:12px; min-width:0; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:12px 14px; }
+  /* The heading is the control. A separate toggle would be another thing to aim at in a
+     column that is already dense, and the whole heading is a large target. */
+  .card h2 {
+    margin:0 0 10px; font-family:var(--mono); font-size:10.5px; font-weight:600;
+    letter-spacing:.12em; text-transform:uppercase; color:var(--accent);
+    display:flex; align-items:center; gap:7px; cursor:pointer; user-select:none;
+    background:none; border:0; padding:0; width:100%; text-align:left;
+  }
+  .card h2:hover { color:var(--ink); }
+  .card h2:focus-visible { outline:2px solid var(--accent); outline-offset:3px; border-radius:3px; }
+  /* A caret rather than a plus or minus: it points at where the content will appear, which
+     needs no legend. */
+  .card h2::before {
+    content:''; width:0; height:0; flex:0 0 auto;
+    border-left:4px solid currentColor; border-top:3.5px solid transparent;
+    border-bottom:3.5px solid transparent; transition:transform .12s ease;
+    transform:rotate(90deg);
+  }
+  .card[data-collapsed] h2::before { transform:rotate(0deg); }
+  .card[data-collapsed] h2 { margin-bottom:0; }
+  .card[data-collapsed] > :not(h2) { display:none; }
+
+  /* Stage timings as a stacked bar: the point is which stage owns the frame budget. */
+  .bar { display:flex; height:9px; border-radius:5px; overflow:hidden; background:var(--sunk); margin-bottom:9px; }
+  .bar i { display:block; height:100%; }
+  /* **Every varying value column is a fixed width, never `auto`.**
+     This panel is read while a card is being moved in front of a camera, so it updates
+     several times a second — and an `auto` column is re-measured on every one of those
+     updates. "1.4 ms" becoming "104.2 ms", or an em dash becoming "0.686", silently resized
+     the column and shifted the whole panel, which made the controls below it hard to hit.
+     The widths below are sized to the longest value each row can hold. */
+  .legend { display:grid; grid-template-columns:1fr 9ch; gap:2px 10px; font-family:var(--mono); font-size:11.5px; }
+  .legend .k { color:var(--ink-2); display:flex; align-items:center; gap:6px; }
+  .legend .k::before { content:""; width:8px; height:8px; border-radius:2px; background:var(--sw); flex:none; }
+  .legend .v { text-align:right; font-variant-numeric:tabular-nums; }
+  .total { border-top:1px solid var(--line); margin-top:8px; padding-top:8px; font-weight:600; }
+
+  /* 13ch holds the widest value any row carries — the 12-character dhash prefix. */
+  dl.metrics { display:grid; grid-template-columns:1fr 13ch; gap:3px 10px; margin:0; font-family:var(--mono); font-size:12px; }
+  dl.metrics dt { color:var(--ink-3); }
+  dl.metrics dd { margin:0; text-align:right; font-variant-numeric:tabular-nums; }
+  dl.metrics dd.warn { color:var(--doubt); }
+
+  /* The match panel. Every part of it is a fixed size, for the reason the rest of this
+     panel is: it updates several times a second and anything that resizes drags the controls
+     below it out from under the pointer. The candidate list is `top` rows tall whether or not
+     there are that many candidates. */
+  .match-head { display:flex; align-items:baseline; gap:8px; min-height:22px; margin-bottom:9px; }
+  .match-name {
+    font-size:15px; font-weight:600; letter-spacing:-.01em; white-space:nowrap;
+    overflow:hidden; text-overflow:ellipsis; flex:1 1 auto; min-width:0;
+  }
+  .match-conf {
+    flex:none; font-family:var(--mono); font-size:10px; font-weight:600; letter-spacing:.07em;
+    text-transform:uppercase; padding:2px 7px; border-radius:999px;
+    background:var(--sunk); color:var(--ink-3);
+  }
+  .match-conf.sure { background:#14301f; color:var(--hit); }
+  .match-conf.maybe { background:#332612; color:var(--doubt); }
+  .cands {
+    list-style:none; margin:10px 0 0; padding:9px 0 0; border-top:1px solid var(--line);
+    display:grid; grid-auto-rows:19px; gap:2px; height:114px; overflow:hidden;
+  }
+  .cands li {
+    display:grid; grid-template-columns:1fr 5ch; gap:8px; align-items:baseline;
+    font-family:var(--mono); font-size:11px; color:var(--ink-3);
+  }
+  .cands li span:first-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .cands li span:last-child { text-align:right; font-variant-numeric:tabular-nums; }
+  .cands li.best { color:var(--ink-2); }
+
+  /* The evidence bar. The share is the number that decides, so it is drawn rather than
+     printed — a bar crossing a marked threshold is readable at a glance while a card is being
+     held still, and a percentage is not. */
+  .ev { position:relative; height:8px; border-radius:4px; background:var(--sunk); margin:10px 0 8px; overflow:hidden; }
+  .ev i { display:block; height:100%; width:0; background:var(--doubt); transition:width .12s linear; }
+  .ev.on i { background:var(--hit); }
+  .ev::after {
+    content:""; position:absolute; top:-2px; bottom:-2px; width:1px;
+    background:var(--ink-3); left:70%;
+  }
+  /* Under the vote rule the bar is the tally against the bar itself, so the mark is the end. */
+  .ev.votes::after { left:calc(100% - 1px); }
+  .frames { font-family:var(--mono); font-size:10.5px; color:var(--ink-3); }
+  /* The per-frame guess, kept visible but demoted — it is the thing that flickers, and
+     watching it flicker while the answer above stays put is how you see the tracker work. */
+  .live-guess {
+    font-family:var(--mono); font-size:11px; color:var(--ink-3); margin:9px 0 0;
+    padding-top:8px; border-top:1px solid var(--line);
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-height:19px;
+  }
+
+  label.row { display:grid; grid-template-columns:76px 1fr 46px; gap:9px; align-items:center; margin-bottom:9px; font-size:12px; color:var(--ink-2); }
+  label.row output { font-family:var(--mono); text-align:right; color:var(--ink); font-variant-numeric:tabular-nums; }
+  input[type=range] { width:100%; accent-color:var(--accent); }
+  .seg { display:flex; gap:4px; background:var(--sunk); padding:3px; border-radius:8px; margin-bottom:11px; }
+  .seg button {
+    flex:1; border:0; background:transparent; color:var(--ink-2); cursor:pointer;
+    font-family:var(--mono); font-size:11.5px; padding:5px 0; border-radius:6px;
+  }
+  .seg button[aria-pressed=true] { background:var(--accent); color:#07222b; font-weight:600; }
+  .seg button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+
+  /* The card slot is always present at the size a rectified card will occupy — 120 px wide
+     at the 63:88 ratio. Swapping an image for a line of text, which is what this did at
+     first, changes the card's height by ~130 px every time a card enters or leaves frame. */
+  .rect { display:flex; gap:12px; align-items:flex-start; }
+  .rect .slot {
+    width:120px; height:168px; flex:none; border-radius:7px; background:#000;
+    border:1px solid var(--line); display:grid; place-items:center; overflow:hidden;
+  }
+  /* Both children share one grid cell. Without `grid-area`, a grid puts them in two implicit
+     rows and the slot grows by the height of whichever one is not showing. */
+  .rect .slot > * { grid-area:1 / 1; }
+  .rect .slot img { width:100%; height:100%; object-fit:contain; display:block; }
+  .rect .slot img[hidden] { display:none; }
+  .rect .slot span { font-size:11px; color:var(--ink-3); text-align:center; padding:0 10px; }
+  .rect .slot span[hidden] { display:none; }
+
+  /* The OCR panel. Fixed heights throughout: this fills in only every few frames, and a
+     block that collapses to nothing between reads would shove the whole column around —
+     the same reason every other panel here is pinned to its maximum size. */
+  .ocr h3 { margin:10px 0 4px; font-size:11px; text-transform:uppercase; letter-spacing:.08em;
+            color:var(--ink-2); font-weight:600; }
+  .ocr img { width:100%; display:block; border-radius:3px; background:#000; min-height:34px; }
+  .ocr .raw { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:11px;
+              word-break:break-all; margin:4px 0 0; min-height:2.6em; }
+  .ocr .verdict { margin:3px 0 0; min-height:1.3em; }
+  .ocr .hit { color:var(--hit); }
+  .ocr .miss { color:var(--doubt); }
+  /* The pairings the parse produced. Scrolls rather than growing, so a noisy read cannot
+     push the panels below it off the screen. */
+  .pairs { list-style:none; margin:4px 0 0; padding:0; max-height:132px; overflow-y:auto;
+           font-size:11px; }
+  .pairs li { display:flex; justify-content:space-between; gap:8px; padding:1px 0;
+              border-bottom:1px solid var(--line); }
+  .pairs li:last-child { border-bottom:0; }
+  .pairs .tok { font-family:ui-monospace,Menlo,Consolas,monospace; color:var(--ink-2);
+                white-space:nowrap; }
+  .pairs .to { text-align:right; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .pairs li.hit .to { color:var(--hit); }
+  .pairs li.hit .tok { color:var(--ink); }
+  .stages { display:grid; grid-template-columns:repeat(3,1fr); gap:7px; }
+  .stages figure { margin:0; }
+  /* A fixed box with `contain`, so a portrait mask and a landscape one occupy the same
+     space and the panel does not jump as each stage image arrives. */
+  .stages img {
+    width:100%; height:92px; object-fit:contain; border-radius:6px;
+    background:#000; border:1px solid var(--line); display:block;
+  }
+  .stages figcaption { font-family:var(--mono); font-size:10px; color:var(--ink-3); margin-top:4px; }
+  .muted { color:var(--ink-3); font-size:12px; margin:0; }
+  code { font-family:var(--mono); background:var(--sunk); padding:1px 5px; border-radius:4px; font-size:11.5px; }
+  /* Always in the layout, empty when there is nothing wrong. Two lines is the longest
+     message the detector produces ("no quadrilateral in this frame looks like a card
+     (examined N contours)"), so reserving two lines means the card never changes height. */
+  .err {
+    color:var(--miss); font-family:var(--mono); font-size:11.5px; word-break:break-word;
+    min-height:3.4em; margin:9px 0 0;
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="stage">
+    <video id="v" playsinline muted autoplay></video>
+    <canvas id="overlay"></canvas>
+    <div class="hud"><span class="dot" id="dot"></span><span id="verdict">starting camera…</span><span class="fps" id="fps"></span></div>
+  </div>
+
+  <aside>
+    <div class="card">
+      <h2 tabindex="0" role="button" aria-expanded="true">Match</h2>
+      <div class="match-head">
+        <span class="match-name" id="mt-name">&mdash;</span>
+        <span class="match-conf" id="mt-conf">no bundle</span>
+      </div>
+      <div class="ev" id="ev"><i id="ev-fill"></i></div>
+      <dl class="metrics">
+        <dt id="mt-share-k">confidence</dt><dd id="mt-share">&mdash;</dd>
+        <!-- The vote rule's margin: the leader over its best rival. It is what refuses a
+             dead heat that has reached the bar, so it gets its own row rather than a
+             clause that wrapped the votes row onto three lines. -->
+        <dt>lead</dt><dd id="mt-lead">&mdash;</dd>
+        <dt>distance &darr;</dt><dd id="mt-dist">&mdash;</dd>
+        <dt>margin</dt><dd id="mt-margin">&mdash;</dd>
+        <dt>orientation</dt><dd id="mt-rot">&mdash;</dd>
+        <dt>cardness</dt><dd id="mt-cardness">&mdash;</dd>
+        <!-- Deliberately not "margin": that row above is the gap between the top two
+             candidates. This one is background pixels cut off the rectification. -->
+        <dt>trim l/t/r/b</dt><dd id="mt-trim">&mdash;</dd>
+        <!-- The set code and collector number, which name the *printing* rather than the
+             card. Shown raw as well as resolved: when it fails it is almost always visible
+             in the raw text why, and that is not recoverable after the fact. -->
+        <dt>collector</dt><dd id="mt-col">&mdash;</dd>
+        <dt>lock</dt><dd id="mt-lock">&mdash;</dd>
+      </dl>
+      <ol class="cands" id="mt-list"></ol>
+      <p class="live-guess" id="mt-guess">&mdash;</p>
+      <div class="seg" style="margin:10px 0 0">
+        <button id="mt-reset" type="button">reset evidence</button>
+      </div>
+      <!-- Capturing a frame the scanner gets *wrong* is the point. Every accuracy figure in
+           this crate rests on 11 labelled photographs, so one bad frame with the right name
+           typed beside it is worth more than a good frame. The name field is optional: an
+           unlabelled capture is still a useful image, just not a scoreable one. -->
+      <div style="margin:10px 0 0">
+        <input id="cap-name" type="text" placeholder="what it actually is (optional)"
+               style="width:100%;box-sizing:border-box;margin-bottom:6px">
+        <div class="seg">
+          <button id="cap-add" type="button">add frame to dataset</button>
+        </div>
+        <p id="cap-status" class="live-guess" style="min-height:1.2em">&mdash;</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2 tabindex="0" role="button" aria-expanded="true">Detection</h2>
+      <dl class="metrics" id="metrics">
+        <dt>aspect</dt><dd id="m-aspect">—</dd>
+        <dt>frame area</dt><dd id="m-area">—</dd>
+        <dt>corner err</dt><dd id="m-angle">—</dd>
+        <dt>detector</dt><dd id="m-method">—</dd>
+        <dt>geometry</dt><dd id="m-via">—</dd>
+        <dt>dhash</dt><dd id="m-hash">—</dd>
+      </dl>
+      <p class="err" id="err"></p>
+    </div>
+
+    <div class="card">
+      <h2 tabindex="0" role="button" aria-expanded="true">Frame budget</h2>
+      <div class="bar" id="bar"></div>
+      <div class="legend" id="legend"></div>
+    </div>
+
+    <div class="card">
+      <h2 tabindex="0" role="button" aria-expanded="true">Rectified</h2>
+      <div class="rect">
+        <div class="slot">
+          <img id="rect" alt="rectified card" hidden>
+          <span id="rect-empty">No card<br>in frame</span>
+        </div>
+        <p class="muted">What the homography produced. If this is upside-down or stretched,
+        the quad is wrong even when the overlay looks right.</p>
+      </div>
+    </div>
+
+    <div class="card ocr">
+      <h2 tabindex="0" role="button" aria-expanded="true">OCR</h2>
+      <p class="muted" id="ocr-when">&mdash;</p>
+
+      <h3>title band</h3>
+      <img id="ocr-title-img" alt="the crop the recogniser read the title from">
+      <p class="raw" id="ocr-title-raw">&mdash;</p>
+      <p class="verdict" id="ocr-title-hit">&mdash;</p>
+
+      <h3>collector band</h3>
+      <img id="ocr-col-img" alt="the crop the recogniser read the collector line from">
+      <p class="raw" id="ocr-col-raw">&mdash;</p>
+      <p class="verdict" id="ocr-col-hit">&mdash;</p>
+      <!-- Every (set, number) the parse produced and what it resolved to. A verdict alone
+           cannot distinguish a bad crop from a misread character; this can. -->
+      <ol class="pairs" id="ocr-pairs"></ol>
+    </div>
+
+    <div class="card">
+      <h2 tabindex="0" role="button" aria-expanded="true">Controls</h2>
+      <!-- Two verdicts over one accumulator. Votes add up without decay toward the bar, and
+           a decision freezes the tally until reset, the card leaving, or the bar being
+           raised above it. Confidence is the two-way contest with the best rival, re-judged
+           every frame. -->
+      <div class="seg" id="rule">
+        <button data-v="votes" aria-pressed="true">votes</button>
+        <button data-v="confidence" aria-pressed="false">confidence</button>
+      </div>
+      <label class="row">decide at<input type="range" id="decide" min="1" max="40" step="1" value="8"><output id="decide-o">8</output></label>
+      <label class="row">lead margin<input type="range" id="margin" min="10" max="30" step="1" value="13"><output id="margin-o">1.3</output></label>
+      <div class="seg" id="method">
+        <button data-v="canny" aria-pressed="true">canny</button>
+        <button data-v="otsu" aria-pressed="false">otsu</button>
+        <button data-v="both" aria-pressed="false">both</button>
+      </div>
+      <label class="row">work edge<input type="range" id="edge" min="320" max="1600" step="64" value="1024"><output id="edge-o">1024</output></label>
+      <label class="row">canny lo<input type="range" id="lo" min="5" max="120" step="5" value="40"><output id="lo-o">40</output></label>
+      <label class="row">canny hi<input type="range" id="hi" min="20" max="300" step="10" value="100"><output id="hi-o">100</output></label>
+      <label class="row">aspect tol<input type="range" id="aspect" min="4" max="40" step="1" value="18"><output id="aspect-o">0.18</output></label>
+      <label class="row">send px<input type="range" id="send" min="480" max="1440" step="80" value="960"><output id="send-o">960</output></label>
+      <label class="row">min cardness<input type="range" id="cardness" min="0" max="80" step="5" value="0"><output id="cardness-o">0.00</output></label>
+      <div class="seg" id="stages-toggle">
+        <button data-v="0" aria-pressed="true">overlay only</button>
+        <button data-v="1" aria-pressed="false">full stages</button>
+      </div>
+      <p class="muted">Stage images roughly double the round trip, so they are off by default.</p>
+    </div>
+
+    <div class="card" id="stages-card" hidden>
+      <h2 tabindex="0" role="button" aria-expanded="true">Pipeline</h2>
+      <div class="stages">
+        <figure><img id="s-binary" alt="mask"><figcaption>02 mask</figcaption></figure>
+        <figure><img id="s-contours" alt="contours"><figcaption>03 contours</figcaption></figure>
+        <figure><img id="s-quad" alt="quad"><figcaption>04 quad</figcaption></figure>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const video = $('v'), overlay = $('overlay'), ctx = overlay.getContext('2d');
+const grab = document.createElement('canvas');
+const CARD_ASPECT = 63 / 88;
+
+// The detector runs at ~9 fps; the camera runs at 30–60. Keeping the two apart is the whole
+// design: `latest` is the most recent detection, redrawn on every animation frame, and
+// `inFlight` guarantees exactly one request is outstanding so later frames are dropped
+// rather than queued. Queuing would make the overlay drift further behind the longer you
+// watched it.
+let latest = null, inFlight = false, stopped = false;
+let detTimes = [];
+
+const opts = () => ({
+  method: document.querySelector('#method [aria-pressed=true]').dataset.v,
+  edge: +$('edge').value,
+  lo: +$('lo').value,
+  hi: +$('hi').value,
+  aspect: (+$('aspect').value / 100).toFixed(2),
+  cardness: (+$('cardness').value / 100).toFixed(2),
+  stages: document.querySelector('#stages-toggle [aria-pressed=true]').dataset.v,
+  send: +$('send').value,
+  rule: document.querySelector('#rule [aria-pressed=true]').dataset.v,
+  decide: +$('decide').value,
+  margin: (+$('margin').value / 10).toFixed(1),
+});
+
+function segment(container, onChange) {
+  container.addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    for (const x of container.querySelectorAll('button')) x.setAttribute('aria-pressed', String(x === b));
+    onChange?.(b.dataset.v);
+  });
+}
+segment($('method'));
+segment($('rule'));
+segment($('stages-toggle'), (v) => { $('stages-card').hidden = v !== '1'; });
+$('mt-reset').addEventListener('click', () => { fetch('/reset', { method: 'POST' }); });
+
+// **Captured at the camera's full resolution, not the size being sent for detection.** The
+// live path downscales every frame to keep the round trip under control; a dataset image
+// saved at that size would bake this session's `send` slider into the corpus for good, and
+// the corpus is the one thing that has to outlive the settings it was captured under.
+$('cap-add').addEventListener('click', async () => {
+  const status = (t, warn) => {
+    const el = $('cap-status');
+    el.textContent = t;
+    el.classList.toggle('warn', !!warn);
+  };
+  if (!video.videoWidth) { status('no video yet', true); return; }
+  const full = document.createElement('canvas');
+  full.width = video.videoWidth;
+  full.height = video.videoHeight;
+  full.getContext('2d').drawImage(video, 0, 0);
+  const blob = await new Promise(r => full.toBlob(r, 'image/jpeg', 0.92));
+  if (!blob) { status('could not read the frame', true); return; }
+
+  // What the panel says right now, saved alongside — so a later reader can see what the
+  // scanner believed at the moment of capture, not only what it believes today.
+  const t = latest?.tracked;
+  const lead = t?.standings?.[0];
+  const q = new URLSearchParams({
+    expected: $('cap-name').value.trim(),
+    reported: lead?.label?.name ?? '',
+    confidence: t?.confidence != null ? t.confidence.toFixed(3) : '',
+    votes: lead?.evidence != null ? lead.evidence.toFixed(2) : '',
+    distance: latest?.match?.candidates?.[0]?.distance ?? '',
+  });
+  status('saving…');
+  try {
+    const res = await fetch('/capture?' + q, { method: 'POST', body: blob });
+    const j = await res.json();
+    if (j.ok) {
+      status(`saved ${j.saved} (${Math.round(blob.size / 1024)} KB)`);
+      $('cap-name').value = '';
+    } else {
+      status(j.error ?? 'capture failed', true);
+    }
+  } catch (e) {
+    status(String(e), true);
+  }
+});
+for (const [id, fmt] of [['edge', String], ['lo', String], ['hi', String], ['send', String],
+                         ['decide', String],
+                         ['margin', (v) => (v / 10).toFixed(1)],
+                         ['aspect', (v) => (v / 100).toFixed(2)],
+                         ['cardness', (v) => (v / 100).toFixed(2)]]) {
+  const el = $(id), out = $(id + '-o');
+  const sync = () => { out.value = fmt(el.value); };
+  el.addEventListener('input', sync); sync();
+}
+
+async function start() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+      audio: false,
+    });
+    video.srcObject = stream;
+    await video.play();
+    $('verdict').textContent = 'looking…';
+    pump();
+    requestAnimationFrame(draw);
+  } catch (e) {
+    // getUserMedia on a non-secure origin never resolves or rejects with anything useful,
+    // so name the actual cause rather than echoing the exception.
+    $('verdict').textContent = 'no camera';
+    $('err').textContent = window.isSecureContext
+      ? String(e)
+      : 'This page is not a secure context, so the browser refuses the camera. Reach it on localhost — from a phone, adb reverse tcp:7777 tcp:7777.';
+  }
+}
+
+async function pump() {
+  while (!stopped) {
+    if (inFlight || video.readyState < 2) { await new Promise(r => setTimeout(r, 16)); continue; }
+    const o = opts();
+    const scale = Math.min(1, o.send / Math.max(video.videoWidth, video.videoHeight));
+    grab.width = Math.round(video.videoWidth * scale);
+    grab.height = Math.round(video.videoHeight * scale);
+    grab.getContext('2d').drawImage(video, 0, 0, grab.width, grab.height);
+    const blob = await new Promise(r => grab.toBlob(r, 'image/jpeg', 0.72));
+    if (!blob) { await new Promise(r => setTimeout(r, 16)); continue; }
+
+    inFlight = true;
+    const t0 = performance.now();
+    try {
+      const q = `edge=${o.edge}&method=${o.method}&lo=${o.lo}&hi=${o.hi}&aspect=${o.aspect}` +
+                `&cardness=${o.cardness}&stages=${o.stages}`;
+      const res = await fetch('/frame?' + q, { method: 'POST', body: blob });
+      const j = await res.json();
+      j.round_trip_ms = performance.now() - t0;
+      latest = j;
+      render(j);
+    } catch (e) {
+      $('err').textContent = String(e);
+    } finally {
+      inFlight = false;
+    }
+  }
+}
+
+function render(j) {
+  detTimes.push(j.round_trip_ms);
+  if (detTimes.length > 20) detTimes.shift();
+  const mean = detTimes.reduce((a, b) => a + b, 0) / detTimes.length;
+  $('fps').textContent = `${(1000 / mean).toFixed(1)}/s`;
+
+  const aspectOk = j.ok && Math.abs(j.score.aspect - CARD_ASPECT) / CARD_ASPECT < 0.08;
+  const state = !j.ok ? '' : aspectOk ? 'hit' : 'doubt';
+  $('dot').className = 'dot ' + state;
+  const lead = j.tracked?.standings?.[0];
+  $('verdict').textContent = j.tracked?.committed && lead?.label ? lead.label.name
+    : !j.ok ? 'no card'
+    : aspectOk ? 'card located' : 'suspect shape';
+
+  // Emptied rather than hidden: the element keeps its reserved two lines either way, so a
+  // card entering or leaving frame never changes this card's height.
+  $('err').textContent = j.ok ? '' : (j.error ?? '');
+
+  const set = (id, v, warn) => { const el = $(id); el.textContent = v; el.classList.toggle('warn', !!warn); };
+  if (j.ok) {
+    set('m-aspect', j.score.aspect.toFixed(3), !aspectOk);
+    set('m-area', (j.score.area_frac * 100).toFixed(1) + '%');
+    set('m-angle', j.score.max_angle_error.toFixed(1) + '°');
+    set('m-method', j.method);
+    set('m-via', j.score.via);
+    set('m-hash', j.hash.slice(0, 12));
+  } else {
+    for (const id of ['m-aspect', 'm-area', 'm-angle', 'm-method', 'm-via', 'm-hash']) set(id, '—');
+  }
+  // The slot is fixed-size and always in the layout; only its contents swap.
+  const rect = j.ok ? j.rectified : null;
+  if (rect) $('rect').src = rect;
+  $('rect').hidden = !rect;
+  $('rect-empty').hidden = !!rect;
+
+  renderMatch(j, j.ok, j.matcher);
+
+  if (j.stages) {
+    for (const [k, id] of [['binary', 's-binary'], ['contours', 's-contours'], ['quad', 's-quad']])
+      if (j.stages[k]) $(id).src = j.stages[k];
+  }
+
+  // Stage timings, stacked. Network and JPEG decode are shown alongside the detector's own
+  // stages because on a phone they are not a rounding error.
+  const t = j.timings ?? {};
+  const parts = [
+    ['decode', j.decode_ms ?? 0, '#54c3e0'],
+    ['resize', t.resize_ms ?? 0, '#7dd3c0'],
+    ['mask', t.mask_ms ?? 0, '#e8b45c'],
+    ['contour', t.contour_ms ?? 0, '#c3a6e0'],
+    ['rectify', t.rectify_ms ?? 0, '#5ed69a'],
+  ];
+  const acc = parts.reduce((a, [, v]) => a + v, 0);
+  const other = Math.max(0, j.round_trip_ms - acc);
+  parts.push(['transport', other, '#6b7986']);
+  const total = acc + other;
+  $('bar').innerHTML = parts.map(([, v, c]) =>
+    `<i style="width:${total ? (v / total) * 100 : 0}%;background:${c}"></i>`).join('');
+  $('legend').innerHTML = parts.map(([k, v, c]) =>
+    `<span class="k" style="--sw:${c}">${k}</span><span class="v">${v.toFixed(1)} ms</span>`).join('')
+    + `<span class="k total" style="--sw:transparent">round trip</span><span class="v total">${total.toFixed(1)} ms</span>`;
+}
+
+// **Measured against the full 113,375-printing bundle over the 43 sample scans, not guessed.**
+// The first version of these numbers was a guess (0.12 / 12 / 0.22) and it was badly wrong:
+// 0.12 would have accepted 2 of 39 matches and called the other 37 failures.
+//
+// With the rectification corrected, the distance distribution is genuinely bimodal — a
+// cluster from 12.5% to 25%, a trough at 25-28%, and a second cluster from 30% up. Splitting
+// at the trough gives two groups whose margins barely overlap:
+//
+//   distance <= 26%   24 scans   margin 8..38, median 21
+//   distance >  26%   15 scans   margin 0..8,  median 2
+//
+// So distance and margin are near-independent confirmations of the same thing, and requiring
+// both is what makes "confident" mean something. Of the eight scans with ground truth read
+// off the rectified image, seven are correct and all seven land in the accepted band; the one
+// wrong answer sits at 35.9% and is rejected.
+const SURE_DISTANCE = 0.26, SURE_MARGIN = 10, PLAUSIBLE_DISTANCE = 0.30;
+
+// Panels fold away on a click of their heading.
+//
+// **The state is remembered, and that is the point rather than a flourish.** Reading this
+// page means holding a card steady with one hand, so anything that has to be re-arranged on
+// every reload is something that will not be arranged at all. `localStorage` can throw
+// outright in a private window, so every touch of it is guarded and a failure simply means
+// the panels start open.
+for (const card of document.querySelectorAll('.card')) {
+  const h = card.querySelector('h2');
+  if (!h) continue;
+  const key = 'panel:' + h.textContent.trim();
+  const apply = (collapsed) => {
+    if (collapsed) card.setAttribute('data-collapsed', '');
+    else card.removeAttribute('data-collapsed');
+    h.setAttribute('aria-expanded', String(!collapsed));
+  };
+  try { apply(localStorage.getItem(key) === '1'); } catch { apply(false); }
+  const toggle = () => {
+    const now = !card.hasAttribute('data-collapsed');
+    apply(now);
+    try { localStorage.setItem(key, now ? '1' : '0'); } catch { /* private window */ }
+  };
+  h.addEventListener('click', toggle);
+  // A div with role=button is only a button if it answers the keyboard too.
+  h.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
+  });
+}
+
+// **Held, not cleared.** OCR runs on one frame in a few and only while the answer is
+// unsettled, so blanking this on every frame without a read would leave it empty almost
+// always — and the last read is exactly what a reader wants to look at.
+let lastOcr = null;
+
+function renderOcr(j) {
+  if (j?.ocr || j?.collector) lastOcr = j;
+  const o = lastOcr?.ocr, c = lastOcr?.collector;
+  if (!o && !c) return;
+  const fresh = !!(j?.ocr || j?.collector);
+
+  const ms = Math.round((o?.elapsed_ms ?? 0) + (c?.elapsed_ms ?? 0));
+  const flips = [o?.rotated && 'title 180', c?.rotated && 'collector 180'].filter(Boolean);
+  $('ocr-when').textContent = `${ms} ms` +
+    (flips.length ? ' \u00b7 ' + flips.join(', ') : '') +
+    (fresh ? '' : ' \u00b7 held from an earlier frame');
+
+  const img = (id, uri) => {
+    const el = $(id);
+    if (uri) { el.src = uri; el.style.visibility = 'visible'; }
+    else { el.removeAttribute('src'); el.style.visibility = 'hidden'; }
+  };
+  const verdict = (id, text, hit) => {
+    const el = $(id);
+    el.textContent = text;
+    el.className = 'verdict ' + (hit ? 'hit' : 'miss');
+  };
+
+  img('ocr-title-img', o?.band);
+  // The normalized form too when it differs: a read that looks right and matches nothing is
+  // usually a character the normalizer dropped, and that is invisible from the raw text.
+  $('ocr-title-raw').textContent = o
+    ? (o.raw || '(nothing read)') +
+      (o.normalized && o.normalized !== o.raw.toLowerCase() ? `\n\u2192 ${o.normalized}` : '')
+    : '\u2014';
+  verdict('ocr-title-hit',
+    o?.matched ? `${o.matched}${o.edits ? ` (${o.edits} edits)` : ''}` : 'no name matched',
+    !!o?.matched);
+
+  img('ocr-col-img', c?.band);
+  $('ocr-col-raw').textContent = c ? (c.raw || '(nothing read)') : '\u2014';
+  verdict('ocr-col-hit', c?.matched ?? 'no printing resolved', !!c?.matched);
+
+  const list = $('ocr-pairs');
+  list.textContent = '';
+  for (const p of c?.tried ?? []) {
+    const li = document.createElement('li');
+    if (p.matched) li.className = 'hit';
+    const tok = document.createElement('span');
+    tok.className = 'tok';
+    tok.textContent = `${p.set} ${p.number}`;
+    const to = document.createElement('span');
+    to.className = 'to';
+    to.textContent = p.matched ?? '\u2014';
+    li.append(tok, to);
+    list.append(li);
+  }
+  if (c?.more > 0) {
+    const li = document.createElement('li');
+    li.className = 'muted';
+    li.textContent = `+${c.more} more pairings not shown`;
+    list.append(li);
+  }
+}
+
+function renderMatch(j, detected, hasBundle) {
+  const m = j.match, tr = j.tracked;
+  const name = $('mt-name'), conf = $('mt-conf'), list = $('mt-list');
+
+  // **The headline is the tracker's committed leader, never this frame's top-1.** The
+  // per-frame answer flips between near-ties several times a second — which is the whole
+  // reason the tracker exists — so showing it here would reintroduce the flicker the
+  // accumulation removes. This frame's guess is still shown, demoted, at the bottom.
+  const lead = tr?.standings?.[0];
+  // **Confidence, not share.** A share is the leader's fraction of everything accumulated,
+  // and every one-off runner-up inflates that denominator — a card correctly first on every
+  // frame still read as 40-60%. Confidence is the leader against its single best rival.
+  const confidence = tr?.confidence ?? 0;
+  // The vote rule: the leader's tally against the bar is the number that decides, so the
+  // bar, the headline and the standings all read in votes. Under the confidence rule
+  // everything below is exactly as it was.
+  const votes = tr?.rule === 'votes';
+  const tally = lead?.evidence ?? 0;
+
+  if (!hasBundle) {
+    name.textContent = '—';
+    conf.textContent = 'no bundle';
+    conf.className = 'match-conf';
+  } else if (lead) {
+    name.textContent = lead.label
+      ? `${lead.label.name} — ${lead.label.set.toUpperCase()} ${lead.label.number}`
+      : lead.id.slice(0, 8);
+    conf.textContent = votes ? (tr.committed ? 'decided' : 'voting')
+                             : (tr.committed ? 'confirmed' : 'gathering');
+    conf.className = 'match-conf' + (tr.committed ? ' sure' : ' maybe');
+  } else {
+    name.textContent = '—';
+    conf.textContent = detected ? 'no match' : 'no card';
+    conf.className = 'match-conf';
+  }
+
+  $('ev').className = 'ev' + (tr?.committed ? ' on' : '') + (votes ? ' votes' : '');
+  const fill = votes ? (tr.decide_at > 0 ? tally / tr.decide_at * 100 : 0) : confidence * 100;
+  $('ev-fill').style.width = `${Math.min(100, fill).toFixed(0)}%`;
+
+  const set = (id, v, warn) => { const el = $(id); el.textContent = v; el.classList.toggle('warn', !!warn); };
+  set('mt-share-k', votes ? 'votes' : 'confidence');
+  set('mt-lead', !tr || !votes || !lead ? '—' : tr.lead == null ? 'unopposed' : `×${tr.lead.toFixed(1)}`);
+  set('mt-share', !tr ? '—'
+    : votes ? `${tally.toFixed(1)}/${tr.decide_at} · ${tr.frames}f`
+    : `${(confidence * 100).toFixed(0)}% over ${tr.frames}f`);
+
+  const best = m?.candidates?.[0];
+  const aspectOk = best && best.normalized <= SURE_DISTANCE;
+  // **Bits, never a percentage.** This is a *distance* — lower is better — and rendering it
+  // as "17.6%" next to a card's name reads as "a 17.6% match", which is the opposite of what
+  // it means. Tidings of War at 45 bits is one of the strongest matches in the corpus and was
+  // reported as terrible. Confidence above is the only percentage on this panel, and it is the
+  // one where higher is better.
+  set('mt-dist', best ? `${best.distance} / ${256} bits` : '—', best && !aspectOk);
+  set('mt-margin', m?.margin != null ? `${m.margin} bits` : '—');
+  // A run that always reports "rotated" is a card being held upside-down, which is invisible
+  // in the overlay because both orientations rectify perfectly.
+  set('mt-rot', m ? (m.rotated ? 'rotated 180°' : 'upright') : '—');
+  const lk = j.lock;
+  set('mt-lock', lk ? `${lk.phase} ${lk.agree}/3` : '—', lk && lk.phase !== 'locked');
+  const ck = j.cardness ?? j.rejected_cardness;
+  set('mt-cardness', ck ? `${ck.score.toFixed(2)} (t${ck.title.toFixed(2)}/y${ck.type_line.toFixed(2)})` : '—',
+      ck && ck.score < 0.45);
+  // Flagged when it fires: a trim on most frames means the quad is running wide, and the
+  // detector wants fixing rather than the rectification patching.
+  const col = j.collector;
+  set('mt-col', col ? (col.matched ?? `[${col.raw || '\u2014'}] no printing`) : '\u2014',
+      !!col && !col.matched);
+  renderOcr(j);
+  const tm = j.trim;
+  const cut = tm && (tm.left || tm.top || tm.right || tm.bottom);
+  set('mt-trim', cut ? `${tm.left}/${tm.top}/${tm.right}/${tm.bottom}` : '—', !!cut);
+
+  // The standings are the accumulated evidence, not this frame's ranking — so the list is
+  // stable too, and a contender climbing it is visible.
+  list.innerHTML = (tr?.standings ?? []).map((c, i) => {
+    const label = c.label ? `${c.label.name} · ${c.label.set.toUpperCase()} ${c.label.number}`
+                          : c.id.slice(0, 13);
+    const score = votes ? c.evidence.toFixed(1) : `${(c.share * 100).toFixed(0)}%`;
+    return `<li class="${i === 0 ? 'best' : ''}"><span>${esc(label)}</span><span>${score}</span></li>`;
+  }).join('');
+
+  $('mt-guess').textContent = best
+    ? `this frame: ${best.label ? best.label.name : best.id.slice(0, 8)} · d=${best.distance}`
+    : (detected ? 'this frame: no match' : 'this frame: no card');
+}
+
+function esc(s) { return s.replace(/[<&]/g, (c) => (c === '<' ? '&lt;' : '&amp;')); }
+
+// Redraws every animation frame from the most recent detection, so the box is smooth and
+// correctly placed even though it only updates when a detection lands.
+function draw() {
+  if (video.videoWidth) {
+    if (overlay.width !== video.videoWidth) { overlay.width = video.videoWidth; overlay.height = video.videoHeight; }
+    ctx.clearRect(0, 0, overlay.width, overlay.height);
+    const j = latest;
+    if (j?.quad) {
+      // The quad is in the coordinates of the frame that was *sent*, which is smaller than
+      // the video. Scaling here rather than server-side keeps the wire payload independent
+      // of the preview size.
+      const sx = overlay.width / j.frame.w, sy = overlay.height / j.frame.h;
+      if (!j.score) { /* quad from the lock's memory, not this frame's detection */ }
+      // Amber and dashed while a quad is still proving itself, solid green once it has held
+      // still long enough to trust. A box that never turns green never convinced anything.
+      const locked = j.lock?.phase === 'locked';
+      ctx.lineWidth = Math.max(2, overlay.width / 300);
+      // The raw per-frame detection, faint and thin, behind the smoothed box. The gap between
+      // the two is the jitter the lock is absorbing, and seeing it is the only way to tell a
+      // detector that is genuinely tracking from one whose box merely looks calm.
+      if (j.quad_raw) {
+        ctx.save();
+        ctx.lineWidth = Math.max(1, overlay.width / 700);
+        ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+        ctx.setLineDash([4, 6]);
+        ctx.beginPath();
+        j.quad_raw.forEach(([x, y], i) => i ? ctx.lineTo(x * sx, y * sy) : ctx.moveTo(x * sx, y * sy));
+        ctx.closePath(); ctx.stroke();
+        ctx.restore();
+      }
+      ctx.setLineDash(locked ? [] : [10, 8]);
+      ctx.strokeStyle = locked ? '#5ed69a' : '#e8b45c';
+      ctx.beginPath();
+      j.quad.forEach(([x, y], i) => i ? ctx.lineTo(x * sx, y * sy) : ctx.moveTo(x * sx, y * sy));
+      ctx.closePath(); ctx.stroke();
+      // Mark the corner the rectifier treats as top-left, so a 180° flip is visible live.
+      ctx.setLineDash([]);
+      ctx.fillStyle = '#e05ad0';
+      ctx.beginPath();
+      ctx.arc(j.quad[0][0] * sx, j.quad[0][1] * sy, ctx.lineWidth * 2.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  requestAnimationFrame(draw);
+}
+
+start();
+</script>
+</body>
+</html>

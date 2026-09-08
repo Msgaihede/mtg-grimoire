@@ -10,7 +10,10 @@ Two workflows, and every rule below was measured live. Full detail, including th
   underneath stays free. `enforce_admins` is **false**: a red PR cannot merge, a direct push to
   `main` still can.
 - **A change only builds the half it touched.** The `changes` job diffs against the base and
-  routes each path: `src-tauri/**` → `rust` **and `wasm`**; frontend sources, lockfiles,
+  routes each path: `src-tauri/**` → `rust` **and `wasm`**; **`crates/*` → all four**, which
+  is what the `*)` fail-safe was already doing and is now declared (the `card-scanner` package
+  is compiled by `rust` and `android`, and `frontend` reads six of its `.rs` files as text for
+  `ipc.test.ts`'s mirror rows and lints its `scripts/*.mjs`); frontend sources, lockfiles,
   configs and **`scripts/` because `eslint .` lints it** → `frontend`; `src/workers/`,
   `src/web/`, `src/lib/core/`, `scripts/build-wasm.mjs` and `vite.web.config.ts` → `frontend`
   and `wasm`; `*.ps1`/`*.psm1`/`*.psd1` → `powershell`; `ci.yml` itself → all four; prose and
@@ -73,8 +76,17 @@ Two workflows, and every rule below was measured live. Full detail, including th
   `frontendDist: "../dist"` and fails outright when it is missing, so a Rust-only job cannot
   compile a fresh checkout. It is also why `rust` is safe to run with `frontend` skipped: the
   frontend it needs is one file it writes itself.
+- **The `rust` job runs a second, separate package's tests and only its tests.**
+  `crates/card-scanner` is deliberately not a workspace member, so `cargo test` in `src-tauri`
+  compiles it and runs none of it — `session::tests` (the `live.html` key census, the panic
+  guard, the reader cadence) was fenced by `npm run verify` and by nothing in CI until
+  2026-09-08. One step, Linux leg, `--features cli` to match `verify`. **No `fmt --check` and
+  no `clippy -D warnings` for that package**: it is not rustfmt-clean and carries four
+  pre-existing clippy warnings, both measured and listed in
+  [card-scanner.md](../docs/reference/card-scanner.md) §8, so either gate would go red on day
+  one for something the step is not about.
 - `--locked` on every cargo call in both workflows. `cargo fmt --check` on Linux only;
-  `clippy -D warnings` and `cargo test` on both.
+  `clippy -D warnings` and `cargo test` on both — for `src-tauri` only, per the bullet above.
 
 ## `release.yml`
 
