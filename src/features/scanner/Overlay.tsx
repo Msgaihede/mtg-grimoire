@@ -64,10 +64,18 @@ export function Overlay({
       const sx = canvas.width / v.frame.w;
       const sy = canvas.height / v.frame.h;
 
+      // The widths are a fraction of the canvas rather than literal pixels, because the canvas
+      // is sized to the *video* and stretched down to the element: a 3px stroke on a 1920-wide
+      // canvas in a 640px box draws at one CSS pixel, and the 1px raw box at a third of one.
+      // `crates/card-scanner/src/bin/live.html`'s `draw()` verbatim, the `Math.max` floors
+      // included — they are what keeps the box visible on a low-resolution camera.
+      const stroke = Math.max(2, canvas.width / 300);
+      const hair = Math.max(1, canvas.width / 700);
+
       if (v.quad_raw !== null) {
         ctx.save();
         ctx.setLineDash([4, 6]);
-        ctx.lineWidth = 1;
+        ctx.lineWidth = hair;
         ctx.strokeStyle = RAW;
         trace(ctx, v.quad_raw, sx, sy);
         ctx.stroke();
@@ -75,15 +83,17 @@ export function Overlay({
       }
 
       if (v.quad !== null) {
-        ctx.lineWidth = 3;
+        ctx.lineWidth = stroke;
         ctx.strokeStyle = QUAD;
         trace(ctx, v.quad, sx, sy);
         ctx.stroke();
         const first = v.quad[0];
         if (first !== undefined) {
+          // The reference draws the dot after restoring the raw box's `save()`, so the radius is
+          // off the *smoothed* width and not the hairline.
           ctx.fillStyle = CORNER;
           ctx.beginPath();
-          ctx.arc(first[0] * sx, first[1] * sy, 6, 0, Math.PI * 2);
+          ctx.arc(first[0] * sx, first[1] * sy, stroke * 2.2, 0, Math.PI * 2);
           ctx.fill();
         }
       }
