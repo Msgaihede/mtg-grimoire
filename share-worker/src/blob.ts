@@ -212,15 +212,17 @@ function edgeCache(): Cache | undefined {
  * contents, so a republish is a different URL rather than a changed one and no viewer can be
  * handed a stale body under a live name.
  *
- * ⚠️ **What `immutable` costs is that a revocation cannot recall an edge copy.** Somebody whose
- * browser or CDN node already holds this exact URL keeps it. What revoking does stop is every
- * *new* viewer: the shell is the only thing that hands out this URL, it is `max-age=300`, and it
+ * ⚠️ **What `immutable` costs is that a revocation cannot recall a copy held somewhere this
+ * Worker is not.** A browser or an intermediary that already has this exact URL keeps it. What
+ * revoking does stop is every viewer whose request reaches here — which is every *new* one,
+ * because the shell is the only thing that hands this URL out, it is `max-age=300`, and it
  * answers 410 the moment the row moves. The alternative — a short max-age on an eight-megabyte
  * body — would put the whole snapshot back on R2's budget for every reader who reloads.
  *
- * **`caches.default` in front of R2** so a warm view costs no storage read at all. It cannot help
- * with spec §7.1's real ceiling, which is the free plan's per-*account* request budget; nothing
- * in this Worker can.
+ * **`caches.default` sits behind the row read and not in front of it**, so that residual stays a
+ * statement about somebody else's cache rather than about this one; the ordering is argued at the
+ * lookup itself. It saves the R2 fetch, which is the expensive half. It cannot help with spec
+ * §7.1's real ceiling, the free plan's per-*account* request budget; nothing in this Worker can.
  */
 export async function handleSnapshot(
   request: Request,
@@ -229,12 +231,6 @@ export async function handleSnapshot(
   hash: string,
   ctx?: ExecutionContext,
 ): Promise<Response> {
-  const cache = edgeCache();
-  // Before the D1 read and not after it: a cache that sat behind the lookup would still spend a
-  // row read on every view, which is the budget this is here to protect.
-  const hit = await cache?.match(request);
-  if (hit !== undefined) return hit;
-
   const row = await publicShare(env, id);
   if (row === null) return json({ error: "no such share" }, 404);
   if (row.state === REVOKED) return json({ error: WITHDRAWN }, 410);
@@ -245,6 +241,17 @@ export async function handleSnapshot(
   // would be undone by anyone who had kept an older link.
   const key = objectKey(id, hash);
   if (row.object_key !== key) return json({ error: "no such snapshot" }, 404);
+
+  // ⚠️ **The cache is read here and never in front of the row, and one row read is what that
+  // costs.** A `cache.match` above would answer a withdrawn snapshot's bytes to a *new* stranger
+  // for the full year the header below claims, out of this Worker's own cache, while D1 says the
+  // share is gone — and nothing could evict it, because the URL is content-addressed and the
+  // lapse beside revocation is a bulk cron (spec §6) that moves a column rather than touching
+  // storage. What the cache still saves is the expensive half: the R2 fetch and its egress. The
+  // read it costs instead is one lookup by primary key against a free tier of five million a day.
+  const cache = edgeCache();
+  const hit = await cache?.match(request);
+  if (hit !== undefined) return hit;
 
   const object = await env.SHARES.get(key);
   if (object === null) return json({ error: "no such snapshot" }, 404);

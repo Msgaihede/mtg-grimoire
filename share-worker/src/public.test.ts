@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fakeEnvOver, type Row, type Tables } from "../../relay/src/fakeD1";
 import { mint } from "../../relay/src/token";
 import worker, { type Env } from "./index";
@@ -113,6 +113,14 @@ function shareEnv(tables: Partial<Tables> = {}): Fake {
  * It stores **bytes** rather than the `Response` it was handed, which is what a real cache does
  * and what keeps the fake honest: a fake that kept the object and cloned it on the way out would
  * hide a handler that returned a body it had already consumed.
+ *
+ * ⚠️ **It is installed for every test in this file, and that is a fix rather than a
+ * convenience.** It used to be opt-in, and exactly one test opted in — so *"answers 410 for a
+ * revoked share"* was green because the setup had no cache in it, while the shipped Worker
+ * checked the cache **before** it read `state` and would have gone on serving a withdrawn
+ * snapshot for a year. A guarantee asserted with the mechanism that breaks it absent is not
+ * asserted. The default is therefore the production shape, and a test that wants the cache gone
+ * has to say so.
  */
 function fakeCache(): { entries: Map<string, { body: Uint8Array; init: ResponseInit }> } & {
   match(request: Request): Promise<Response | undefined>;
@@ -137,11 +145,9 @@ function fakeCache(): { entries: Map<string, { body: Uint8Array; init: ResponseI
   };
 }
 
-function withCache(): ReturnType<typeof fakeCache> {
-  const cache = fakeCache();
-  vi.stubGlobal("caches", { default: cache });
-  return cache;
-}
+beforeEach(() => {
+  vi.stubGlobal("caches", { default: fakeCache() });
+});
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -438,7 +444,6 @@ describe("GET /s/{id}/{hash}.json.gz", () => {
     // `caches.default` in front of R2 is what keeps a share that goes viral off the account's
     // storage budget; the request budget is spec §7.1's problem and nothing here can fix it.
     const fake = shareEnv();
-    withCache();
     const id = await publish(fake);
     const hash = await upload(fake, id, gz("snapshot one"));
 
@@ -470,9 +475,18 @@ describe("GET /s/{id}/{hash}.json.gz", () => {
   });
 
   it("answers 410 for a revoked share rather than serving its bytes", async () => {
+    // ⚠️ **The first view is what makes this test mean anything.** It warms the edge cache, and
+    // a lookup that sat in front of the `state` read would then answer those bytes to every
+    // later viewer for the full year the `immutable` header claims — a withdrawn snapshot served
+    // by this Worker's own cache, to a *new* stranger, while D1 says the share is gone. Revoking
+    // cannot evict it: the URL is content-addressed and the lapse path beside it is Task 6's
+    // bulk cron, which will not be deleting anything per object. So the cache goes **behind**
+    // the row read, and this test is the fence.
     const fake = shareEnv();
     const id = await publish(fake);
     const hash = await upload(fake, id, gz("snapshot one"));
+    expect((await worker.fetch(snapshot(id, hash), fake.env)).status).toBe(200);
+
     await worker.fetch(
       new Request(`https://share.example/g/g1/share/${id}`, {
         method: "DELETE",
@@ -483,6 +497,38 @@ describe("GET /s/{id}/{hash}.json.gz", () => {
 
     const res = await worker.fetch(snapshot(id, hash), fake.env);
     expect(res.status).toBe(410);
+    expect(await res.text()).not.toContain("snapshot one");
+  });
+
+  it("answers 410 for a share that lapsed after the cache was warmed", async () => {
+    // The half a `cache.delete` on revoke could never have covered: the lapse is written by the
+    // daily pass over every share of a subject at once (spec §6), and it darkens the link by
+    // moving a column rather than by touching R2 or the cache.
+    const fake = shareEnv();
+    const id = await publish(fake);
+    const hash = await upload(fake, id, gz("snapshot one"));
+    expect((await worker.fetch(snapshot(id, hash), fake.env)).status).toBe(200);
+
+    fake.tables.shares[0].state = "lapsed";
+
+    const res = await worker.fetch(snapshot(id, hash), fake.env);
+    expect(res.status).toBe(410);
+    expect(await res.text()).not.toContain("snapshot one");
+  });
+
+  it("answers a HEAD with the headers and no body", async () => {
+    // A link checker or a `curl -I` on the URL whose whole purpose is being unfurled.
+    const fake = shareEnv();
+    const id = await publish(fake);
+    const hash = await upload(fake, id, gz("snapshot one"));
+
+    const res = await worker.fetch(
+      new Request(`https://share.example/s/${id}/${hash}.json.gz`, { method: "HEAD" }),
+      fake.env,
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
+    expect(await res.arrayBuffer()).toEqual(new ArrayBuffer(0));
   });
 });
 
@@ -597,17 +643,50 @@ describe("GET /s/{id}", () => {
     expect(res.headers.get("content-type")).toBe("text/html; charset=utf-8");
   });
 
-  it("answers 404 to a malformed id and 405 to a method that is not GET", async () => {
+  it("answers a mistyped link with the same page and not with JSON", async () => {
+    // A truncated or mistyped id matches neither route and falls through to the router's own
+    // 404 — and a stranger who mistyped a link is exactly the reader this page exists for. The
+    // status was always right; the raw `{"error":"not found"}` body was not, and asserting only
+    // the status is what let it ship.
     const fake = shareEnv();
-    expect((await worker.fetch(shell("tooshort"), fake.env)).status).toBe(404);
+    const res = await worker.fetch(shell("tooshort"), fake.env);
+    expect(res.status).toBe(404);
+    expect(res.headers.get("content-type")).toBe("text/html; charset=utf-8");
+    expect(await res.text()).toContain("does not point at a shared collection");
+  });
 
+  it("keeps JSON for a path under the gated API", async () => {
+    // The other half of the rule: `/g/…` is the app's API and answers JSON, so a mistyped route
+    // there does not hand a Rust client an HTML page to parse.
+    const fake = shareEnv();
+    const res = await worker.fetch(
+      new Request("https://share.example/g/g1/nonsense", {
+        headers: { authorization: `Bearer ${await token()}` },
+      }),
+      fake.env,
+    );
+    expect(res.status).toBe(404);
+    expect(res.headers.get("content-type")).toBe("application/json");
+  });
+
+  it("answers a HEAD, and 405 to a method that is neither", async () => {
+    const fake = shareEnv();
     const id = await publish(fake);
+
+    const head = await worker.fetch(
+      new Request(`https://share.example/s/${id}`, { method: "HEAD" }),
+      fake.env,
+    );
+    expect(head.status).toBe(200);
+    expect(head.headers.get("content-type")).toBe("text/html; charset=utf-8");
+    expect(await head.text()).toBe("");
+
     const posted = await worker.fetch(
       new Request(`https://share.example/s/${id}`, { method: "POST", body: "{}" }),
       fake.env,
     );
     expect(posted.status).toBe(405);
-    expect(posted.headers.get("allow")).toBe("GET");
+    expect(posted.headers.get("allow")).toBe("GET, HEAD");
   });
 
   it("dates the snapshot in the OpenGraph card", async () => {

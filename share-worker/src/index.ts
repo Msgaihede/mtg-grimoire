@@ -1,6 +1,6 @@
 import { handleSnapshot, handleUpload } from "./blob";
 import { authorised, json, type Env } from "./env";
-import { handleShell } from "./page";
+import { handleShell, notFound } from "./page";
 import { handleCreate, handleList, handleRevoke } from "./shares";
 
 /**
@@ -104,16 +104,36 @@ export default {
     // request comes from one of five devices; these two come from everyone the link reaches.
     const seen = PUBLIC.exec(url.pathname);
     if (seen !== null) {
-      if (request.method !== "GET") return methodNotAllowed("GET");
+      if (request.method !== "GET" && request.method !== "HEAD") {
+        return methodNotAllowed("GET, HEAD");
+      }
       const id = seen[1];
       const hash: string | undefined = seen[2];
-      return hash === undefined
+      // ⚠️ **A HEAD is served as the GET it is asking about and then stripped.** The Cache API
+      // takes GET alone — `cache.put` throws on anything else — so a HEAD carried into
+      // `handleSnapshot` as itself would miss the cache every time and then throw trying to fill
+      // it. Rewriting it here means a link checker warms the same entry a reader would use, and
+      // neither handler needs to know the method exists.
+      const get = request.method === "HEAD" ? new Request(url.toString()) : request;
+      const answer = await (hash === undefined
         ? handleShell(env, id, Date.now())
-        : handleSnapshot(request, env, id, hash, ctx);
+        : handleSnapshot(get, env, id, hash, ctx));
+      if (request.method !== "HEAD") return answer;
+      // The unread half of the tee `handleSnapshot` handed the cache: cancelled rather than
+      // dropped, because a tee whose other branch is never read can stall the branch that is.
+      void answer.body?.cancel();
+      return new Response(null, { status: answer.status, headers: answer.headers });
     }
 
     const write = WRITE.exec(url.pathname);
-    if (write === null) return json({ error: "not found" }, 404);
+    // **`/g/…` answers JSON and everything else answers the page.** A path that is neither route
+    // is overwhelmingly a mistyped or truncated share link — a well-formed id is sixteen
+    // base64url characters and one wrong keystroke misses `PUBLIC` entirely — and that reader is
+    // exactly who the page is for. Under `/g/` the caller is the app, which parses JSON and would
+    // meet an HTML body as a decode error naming nothing.
+    if (write === null) {
+      return url.pathname.startsWith("/g/") ? json({ error: "not found" }, 404) : notFound();
+    }
 
     const group = write[1];
     const action = write[2];

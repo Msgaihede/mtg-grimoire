@@ -182,6 +182,19 @@ function shell(env: Env, row: PublicRow, now: number): Response {
 }
 
 /**
+ * The same page a well-formed id nobody minted gets, for a path that was never a route at all.
+ *
+ * **A mistyped link is the single most likely way a stranger arrives here**, and it does not
+ * reach `handleShell`: a truncated id is not sixteen base64url characters, so it matches no
+ * pattern and falls out of the router. Answering it with a raw `{"error":"not found"}` would give
+ * exactly the reader this page exists for the one response on the Worker that is written for a
+ * program. The status is 404 either way; only the body changes.
+ */
+export function notFound(): Response {
+  return gone(404, MISSING);
+}
+
+/**
  * The route. One D1 read, a branch on `state`, and no second query — spec §6's rule for keeping
  * an anonymous click cheap.
  */
