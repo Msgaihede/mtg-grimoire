@@ -14,7 +14,7 @@ import type { TransferFieldId, TransferSurface } from "@/features/transfer/field
 import type { ExportFormat } from "@/features/transfer/formats";
 import type { DeckFinish, DeckVariant } from "./ipc";
 
-/** The seven top-level destinations in the sidebar. */
+/** The nine top-level destinations in the sidebar. */
 export type ViewId =
   | "search"
   | "tags"
@@ -22,6 +22,8 @@ export type ViewId =
   | "wishlist"
   | "decks"
   | "scanner"
+  | "trade"
+  | "playtesting"
   | "settings";
 
 /**

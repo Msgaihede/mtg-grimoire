@@ -14,10 +14,12 @@ import { CardToDeckProvider } from "@/features/card/cardMenu";
 import { CollectionPage } from "@/features/collection/CollectionPage";
 import { DeckEditor } from "@/features/decks/DeckEditor";
 import { DecksPage } from "@/features/decks/DecksPage";
+import { PlaytestingPage } from "@/features/playtesting/PlaytestingPage";
 import { ScannerPage } from "@/features/scanner/ScannerPage";
 import { SearchPage } from "@/features/search/SearchPage";
 import { SettingsPage } from "@/features/settings/SettingsPage";
 import { TagsPage } from "@/features/tags/TagsPage";
+import { TradePage } from "@/features/trade/TradePage";
 import { WishlistPage } from "@/features/wishlist/WishlistPage";
 import { queryClient } from "@/lib/query";
 import { useAppStore } from "@/lib/store";
@@ -32,6 +34,8 @@ function ActiveView({ update }: { update: Update }) {
   if (activeView === "collection") return <CollectionPage />;
   if (activeView === "wishlist") return <WishlistPage />;
   if (activeView === "scanner") return <ScannerPage />;
+  if (activeView === "trade") return <TradePage />;
+  if (activeView === "playtesting") return <PlaytestingPage />;
   if (activeView === "settings") return <SettingsPage update={update} />;
   // The gallery is the Decks view in its first state and the editor is the same view with a
   // deck open — one destination, two states, which is why the id lives in the store and not in
@@ -43,9 +47,15 @@ function ActiveView({ update }: { update: Update }) {
   // id read above is already the one they left. Nothing here knows that happened, which is the
   // point of parking it in the store rather than teaching this component about a previous view.
   //
-  // Last, and with no placeholder branch after it: every `ViewId` is now a real view, so the
-  // `BLURB` map that used to catch Settings has nothing left to catch. What is still missing
-  // from Settings is a sentence *inside* Settings, where it belongs.
+  // Last, and still with no fallback branch after it: the arms above name every `ViewId`, so the
+  // `BLURB` map that used to catch whatever was left has nothing to catch.
+  //
+  // **Two of those arms are placeholders again, and they are named ones — which is the whole
+  // difference from the map.** `BLURB` was a `Record<ViewId, …>` a view *fell into* by not being
+  // implemented, so a real page shipped without its branch went on drawing a blurb with nothing
+  // red. Trade and Playtesting each return a page component that happens to draw one sentence, so
+  // the day either grows a real one this file does not change and cannot be the thing that was
+  // forgotten.
   return openDeckId === null ? <DecksPage /> : <DeckEditor key={openDeckId} deckId={openDeckId} />;
 }
 

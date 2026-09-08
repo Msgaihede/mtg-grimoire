@@ -5650,6 +5650,46 @@ tab through `http://localhost:9333/json/close/<id>` before reloading, and take t
 `adb reverse` — the server binds too narrowly for the tunnel to reach, and the failure looks like
 a broken tunnel rather than a bound socket.
 
+### The tab bar reached `--target-min` on 2026-09-08, and four of nine labels truncate
+
+The rail grew two destinations in one afternoon — `Scanner` in the morning and the `Trade` and
+`Playtesting` placeholders after it — and `BottomTabBar` draws `NAV` rather than a list of its own,
+so all of them landed in the phone row. **Nine tabs is where the floor stops being a fence and
+starts being the width.**
+
+Measured headless over this branch's built stylesheet at 390 CSS px, the way the 2026-08-29 pass
+was, with the real Geist face loaded (checked the same way: `Search` inks **38.67**, the figure
+that pass recorded).
+
+| | 7 tabs | 9 tabs |
+| --- | --- | --- |
+| Wrapper width | 55.70 | **43.33** |
+| Button width | 55.70 | **44** — `--target-min`, not the division |
+| Neighbour overlap | 0 | **0.672** |
+| Row's right edge | 390 | **390.67** |
+| Row height | 53 | 53 |
+| Labels truncated | none | **`Collection`, `Playtesting`, `Scanner`, `Settings`** |
+
+The ink at `text-xs` against a 44px content box: `Playtesting` **61.97**, `Collection` **55.23**,
+`Scanner` **45.73**, `Settings` **45.42** — and `Wishlist` **43.30**, which clears it by seven
+tenths of a pixel. `Trade` is **30.39**, the shortest word in the rail.
+
+**Then the whole row was re-read in the shipped window**, `cdp.mjs size 390 900` against a debug
+`tauri dev` on the same day, and it agrees to the digit: nine tabs, **44** wide, **0.672** of
+overlap, right edge **390.67**, row **53**, and the same four labels truncated. Headless over
+`dist` and the real WebView2 answer the same thing here, which is worth knowing because the two
+have disagreed before.
+
+**The 0.67px past the right edge is clipped rather than scrolled.** `AppShell`'s root is
+`flex h-dvh flex-col overflow-hidden`, and the shipped window puts `documentElement.scrollWidth` at
+**390** against an `innerWidth` of 390 — so the app gains no sideways scroll from it, and what a
+reader sees is neighbours overlapping by two thirds of a pixel, which is nothing. **The truncation is the
+part that shows**, and it is recorded rather than fixed: what to do about it is a decision about
+what a phone's navigation *is* — a scroller, a `More` tab, a two-row bar, or a bar that draws fewer
+destinations than the rail — and none of those is a change the two placeholders that exposed it
+should be making. **The next destination makes it worse in a way arithmetic can predict**: a tenth
+tab divides to 39, under the floor by five, so the overlap goes from 0.67 to five pixels a tab.
+
 ---
 
 ## Settings became a rail and a pane, and the two flex numbers are lopsided on purpose
