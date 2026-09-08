@@ -24,13 +24,15 @@
  *   reader every write that surface has — add to a deck, record a copy — inside a view whose
  *   promise is that it changes nothing. The snapshot carries the picture, the name, the set and
  *   the number, which is what a reader needs to recognise a card in a binder.
- * * **Nothing here files a card anywhere.** The want list (spec decision 8) is a later piece of
- *   work and will be the one place in this directory that writes, deliberately and by an explicit
- *   press.
+ * * **The want list is the one exception, and it writes the reader's _own_ wishlist.** Spec
+ *   decision 8: tick rows, press *Add to wishlist*, choose a folder they already have. Nothing
+ *   about the binder on screen moves — it belongs to somebody else and is a fetched document
+ *   besides. `AddToWishlist.tsx` is the whole of the write and `readOnly.test.ts` is where the
+ *   exception is written down; every other command this directory names is still a read.
  */
 import { useMemo, useState, type ReactNode } from "react";
 import { useQueries } from "@tanstack/react-query";
-import { Handshake, Link2, RefreshCw, X } from "lucide-react";
+import { Handshake, Heart, Link2, RefreshCw, X } from "lucide-react";
 import { CardArt } from "@/components/CardArt";
 import { CardChin } from "@/components/CardChin";
 import { CountTag } from "@/components/CountTag";
@@ -45,6 +47,7 @@ import { formatPrice } from "@/lib/prices";
 import type { ShareCard, ShareSnapshot } from "@/lib/shareSnapshot";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
+import { AddToWishlist } from "./AddToWishlist";
 import { OpenShareDialog } from "./OpenShareDialog";
 import { drawers, subtreeOf } from "./shareTree";
 import { crossReference, useOwnedIndex, type OwnedIndex } from "./useOwnedIndex";
@@ -339,6 +342,17 @@ function Binder({
   const [text, setText] = useState("");
   const [match, setMatch] = useState<Match>("all");
   const [sort, setSort] = useState<Sort>("name");
+  /**
+   * The rows the reader has ticked, by the snapshot-position key {@link rows} hands out.
+   *
+   * **Keyed on the row and folded to a card only on the way out** ({@link AddToWishlist}'s
+   * `fold`): the wall draws rows, so a tick is about the row that was under the pointer, and two
+   * rows of one printing in two of the publisher's drawers are two ticks and one wish.
+   */
+  const [picked, setPicked] = useState<ReadonlySet<string>>(() => new Set());
+  const [sending, setSending] = useState(false);
+  /** What the last add did, in the view rather than in a dialog that has closed over it. */
+  const [report, setReport] = useState<string | null>(null);
 
   const currency = shareCurrency(snapshot);
   const market = resolveMarketplace(snapshot.marketplace);
@@ -398,6 +412,26 @@ function Binder({
   }, [rows, tree, drawer, text, match, sort, index, figuresReady]);
 
   const shownCopies = useMemo(() => shown.reduce((n, r) => n + r.card.q, 0), [shown]);
+
+  /**
+   * The ticked copies, read off **`rows`** and never off `shown`.
+   *
+   * A pick is about a card and a filter is about the wall, so narrowing the wall must not quietly
+   * drop what the reader has already chosen — they tick as they scroll and then press a chip to
+   * check themselves. `rows` is the whole snapshot and the snapshot is immutable, so a key that
+   * was ticked always resolves.
+   */
+  const pickedCards = useMemo(
+    () => rows.filter(({ key }) => picked.has(key)).map(({ card }) => card),
+    [rows, picked],
+  );
+
+  const toggle = (key: string) =>
+    setPicked((was) => {
+      const next = new Set(was);
+      if (!next.delete(key)) next.add(key);
+      return next;
+    });
 
   return (
     <>
@@ -553,6 +587,51 @@ function Binder({
           : `${COUNT.format(shownCopies)} of ${COUNT.format(copies)} cards`}
       </p>
 
+      {/* The want list's bar — mounted only once something is ticked, so a reader who is only
+          browsing never sees a control they have no use for. It sits between the count and the
+          wall because that is where the count it is about changes. */}
+      {pickedCards.length > 0 && (
+        <div className="mt-3 flex flex-wrap items-center gap-2 rounded-md border border-accent/40 bg-accent/10 px-3 py-2">
+          <span className="font-mono text-sm">{COUNT.format(pickedCards.length)} picked</span>
+          <button
+            type="button"
+            onClick={() => setSending(true)}
+            className={cn(BUTTON, "ml-auto border-accent/50 text-accent")}
+          >
+            <Heart className="size-4" aria-hidden />
+            Add to wishlist
+          </button>
+          <button
+            type="button"
+            onClick={() => setPicked(new Set())}
+            className={cn(BUTTON, "border-border text-dim hover:text-text")}
+          >
+            Clear picks
+          </button>
+        </div>
+      )}
+
+      {report !== null && (
+        // `status` and not `alert`: the region is mounted only when there is something to say,
+        // but this one is the result of a press the reader has just made and watched.
+        <p role="status" className="pt-3 text-sm text-dim">
+          {report}
+        </p>
+      )}
+
+      <AddToWishlist
+        open={sending}
+        cards={pickedCards}
+        index={index}
+        onClose={() => setSending(false)}
+        onAdded={(said) => {
+          setReport(said);
+          // Put the picks down: a bar still reading *2 picked* over cards that are now on the
+          // wishlist invites exactly the same press a second time, and `wishlist_add` folds.
+          setPicked(new Set());
+        }}
+      />
+
       {shown.length === 0 ? (
         <p className="mt-8 text-sm text-dim">
           Nothing here matches. Widen the search, or pick another drawer.
@@ -574,6 +653,14 @@ function Binder({
               // an absence exactly as a refused one is, and `EMPTY_INDEX` answers both with a
               // zero that reads as a fact.
               cross={figuresReady ? crossReference(card, index) : null}
+              // **The tick is gated on the same answer the figure line is, and that is one gate
+              // rather than a coincidence.** A want list built against `EMPTY_INDEX` would offer
+              // to add cards the reader already wants and the dialog's already-wanted line would
+              // say nothing was there — a silent double-add produced by a wait. `null` draws no
+              // control at all rather than a disabled one: ten cards ticked and then found
+              // unsendable is worse than no tick to make.
+              picked={figuresReady ? picked.has(key) : null}
+              onPick={() => toggle(key)}
               currency={currency}
               showValue={showValue}
               showCondition={showCondition}
@@ -598,6 +685,8 @@ function Binder({
 function SharedTile({
   card,
   cross,
+  picked,
+  onPick,
   currency,
   showValue,
   showCondition,
@@ -606,6 +695,10 @@ function SharedTile({
   card: ShareCard;
   /** `null` when the reader's own lists could not be read — an absent figure, not a zero. */
   cross: { own: number; want: number } | null;
+  /** Whether this row is ticked, and `null` for a wall that may not be ticked at all — see the
+   *  gate at the call site. */
+  picked: boolean | null;
+  onPick: () => void;
   currency: Currency;
   showValue: boolean;
   showCondition: boolean;
@@ -633,6 +726,23 @@ function SharedTile({
     >
       <div className="relative">
         <CardArt cardId={card.id} name={card.n} imageUrl={card.img} finish={marked} />
+        {picked !== null && (
+          // Top-left, which is the corner this wall leaves free: the finish chip owns top-right
+          // everywhere in the app and the copy count owns bottom-left here. Backed the same way
+          // the count is, because a bare control on somebody's artwork reads as part of the art.
+          <span className="absolute left-1 top-1 rounded bg-bg/85 px-1 py-0.5">
+            <input
+              type="checkbox"
+              checked={picked}
+              onChange={onPick}
+              // Named for the card rather than "Select": every one of these is a checkbox in a
+              // wall of checkboxes, and the accessible name is the only thing that tells them
+              // apart. The verb is the bar's — *picked* — so one word carries the whole gesture.
+              aria-label={`Pick ${card.n}`}
+              className={cn("size-4 accent-accent", FOCUS)}
+            />
+          </span>
+        )}
         {card.q > 1 && (
           <span className="absolute bottom-1 left-1 rounded bg-bg/85 px-1.5 py-0.5">
             <CountTag count={card.q} title={`${card.q} copies`} />

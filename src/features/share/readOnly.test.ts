@@ -17,14 +17,30 @@
  * instead of importing `features/transfer/export/scope.ts`'s `sweep`: the ipc name stays inside
  * the swept files, and the fence stays total. Keep it that way.
  *
- * ## The one write that is coming, and why it must break this test
+ * **`AddToWishlist` imports one hook from outside this directory and that is not the same hole.**
+ * `useWishlistFolderList` (`features/wishlist/useWishlistFolders.ts`) calls
+ * `ipc.wishlistFolderList` in *its* file, where this glob cannot see it. What the paragraph above
+ * forbids is a helper this directory can point at an **arbitrary** command — one that takes a
+ * callback, or `ipc` itself — because then the name being swept for is chosen here and written
+ * elsewhere. That hook names one fixed read and takes no argument at all, so nothing in this
+ * directory can steer it, and reaching it is what keeps the app's wishlist folders one query
+ * rather than two cache entries that agree today. A second hand-written `useQuery` here would be
+ * exactly the drift that hook's own doc comment argues against.
+ *
+ * ## The one write, and why it had to break this test to get in
  *
  * Spec decision 8 gives this view a want list: tick rows, press *Add to wishlist*, choose a
  * folder the reader already has. That is a write, deliberately, by an explicit press, into the
  * reader's **own** wishlist — never into the binder on screen, which belongs to somebody else and
- * is a snapshot besides. When it lands it must add its command to {@link READS} in the same
- * commit, which is exactly the friction this test exists to create: one reviewed line, rather
- * than a guarantee that quietly stopped being true.
+ * is a snapshot besides. It landed on 2026-09-08 and it went red here first, which is exactly the
+ * friction this test exists to create: one reviewed line in {@link WRITES} below, rather than a
+ * guarantee that quietly stopped being true.
+ *
+ * **{@link WRITES} is a second list rather than two more entries on {@link READS}**, and the
+ * split is the whole value of what is left: the sweep is unchanged either way, so a single list
+ * would buy nothing and would cost the sentence *every one of them is a read* — which is the
+ * property a reviewer checks this file for. One list of reads that is still only reads, one list
+ * of writes with one name on it, and a diff that adds to the second is a diff about the promise.
  */
 import { describe, expect, it } from "vitest";
 
@@ -79,6 +95,22 @@ const BACK_DOORS: readonly { form: RegExp; what: string }[] = [
  */
 const READS: readonly string[] = ["shareOpen", "shareList", "collectionList", "wishlistList"];
 
+/**
+ * The commands this directory is allowed to name that are **not** reads. There is one.
+ *
+ * * `wishlistAdd` — the want list (spec decision 8), in `AddToWishlist.tsx`. It writes
+ *   `wishlist_entries`, which is the reader's **own** list, from an explicit press, into a folder
+ *   they already have. Nothing it does reaches the binder on screen, and it needs no new table,
+ *   no synced column and no schema rung — a want list is the wishlist this app has always had,
+ *   reached from a new place.
+ *
+ * **Adding a second name here is a change to what this view promises**, not a formality: the
+ * promise is that a shared collection is a document, and every write named here has to be a write
+ * to something else the reader owns. A `shareRefresh` or a `collectionAdd` on this list would be
+ * the promise gone, whatever the sweep then said.
+ */
+const WRITES: readonly string[] = ["wishlistAdd"];
+
 /** The three commands that change a share. None of them belongs on a viewer. */
 const SHARE_WRITES: readonly string[] = ["shareCreate", "shareRefresh", "shareRevoke"];
 
@@ -91,18 +123,30 @@ describe("the shared view", () => {
     expect(SOURCES.map(([path]) => path)).toContain("/src/features/share/SharedPage.tsx");
   });
 
-  it("has no write path at all", () => {
+  it("names every command it reaches, and every one of them is a read or the want list", () => {
     for (const [path, source] of SOURCES) {
       for (const [, command] of source.matchAll(IPC_CALL)) {
         expect(
-          READS,
+          [...READS, ...WRITES],
           `${path} calls ipc.${command}. Everything in src/features/share/ renders a document ` +
             "somebody else published; a command that is not a read makes the view's read-only " +
-            "promise false. If this is the want list (spec decision 8), add the command to " +
-            "READS in readOnly.test.ts in the same commit and say why.",
+            "promise false. The one exception is the want list (spec decision 8), which writes " +
+            "the reader's own wishlist — if this is that, add the command to WRITES in " +
+            "readOnly.test.ts in the same commit and say why.",
         ).toContain(command);
       }
     }
+  });
+
+  /**
+   * And the list of reads is still only reads, which is the half a merged list would have lost.
+   *
+   * Asserted rather than left to the reading, because the two lists are one `[...READS,
+   * ...WRITES]` away from being interchangeable and a write appended to the wrong one is a diff
+   * that looks exactly like a diff to the right one.
+   */
+  it("keeps the write off the list of reads", () => {
+    for (const write of WRITES) expect(READS).not.toContain(write);
   });
 
   it("never touches a share itself", () => {

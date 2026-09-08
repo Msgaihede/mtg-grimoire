@@ -13,9 +13,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const shareOpen = vi.hoisted(() => vi.fn());
 const collectionList = vi.hoisted(() => vi.fn());
 const wishlistList = vi.hoisted(() => vi.fn());
+// The want list's two, and they are the whole of what this directory adds to the read list in
+// `readOnly.test.ts` — one read of the reader's own cabinet, one write into their own wishlist.
+const wishlistFolderList = vi.hoisted(() => vi.fn());
+const wishlistAdd = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { shareOpen, collectionList, wishlistList },
+  ipc: { shareOpen, collectionList, wishlistList, wishlistFolderList, wishlistAdd },
 }));
 
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
@@ -77,6 +81,10 @@ beforeEach(() => {
   collectionList.mockResolvedValue({ items: [], total: 0 });
   wishlistList.mockResolvedValue({ items: [], total: 0 });
   shareOpen.mockResolvedValue(snapshot());
+  wishlistFolderList.mockResolvedValue([
+    { id: 7, parentId: null, name: "Trade targets", sortOrder: 0 },
+  ]);
+  wishlistAdd.mockResolvedValue({ id: 1, quantity: 1, removed: false });
   useAppStore.setState({ openedShares: [LINK] });
 });
 
@@ -290,5 +298,125 @@ describe("a shared collection, opened in the app", () => {
 
     expect(await screen.findByText(/could not be read/i)).toBeInTheDocument();
     expect(screen.queryByText("You own 0")).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * The want list — spec decision 8, and the one write this whole directory makes.
+ *
+ * The dialog's own decisions (the folder list, the already-wanted figures, the fold) are
+ * `AddToWishlist.test.tsx`'s. What is tested here is the **wall's** half: when a card can be
+ * picked at all, what a pick does, and what the reader is told afterwards.
+ */
+describe("building a want list out of somebody else's binder", () => {
+  /** The wall's tick for one card, once the cross-reference has answered. */
+  const tick = (name: string) => screen.getByRole("checkbox", { name: `Pick ${name}` });
+
+  /**
+   * ⚠️ **The tick is gated on the same answer the figure line is, and that is the point.**
+   * Until both of `useOwnedIndex`'s sweeps land the index is `EMPTY_INDEX`, so every card reads
+   * *wanted 0* — and a want list built against it would offer to add cards the reader already
+   * wants, silently, with the dialog's own already-wanted line saying nothing was there. So a
+   * card cannot be picked before the figures are real, for exactly the reason a card cannot draw
+   * one.
+   */
+  it("offers no tick until the cross-reference has answered", async () => {
+    let land!: (page: { items: CollectionRow[]; total: number }) => void;
+    collectionList.mockReturnValue(
+      new Promise<{ items: CollectionRow[]; total: number }>((resolve) => {
+        land = resolve;
+      }),
+    );
+    mount();
+    await screen.findByRole("listitem", { name: /^Lightning Bolt/ });
+
+    expect(screen.queryByRole("checkbox")).toBeNull();
+
+    land({ items: [], total: 0 });
+
+    await waitFor(() => expect(tick("Lightning Bolt")).toBeInTheDocument());
+  });
+
+  /** The other absence, for the other reason: a sweep that was refused never becomes ready. */
+  it("offers no tick when the reader's own lists could not be read", async () => {
+    wishlistList.mockRejectedValue("the database is locked");
+    mount();
+
+    expect(await screen.findByText(/could not be read/i)).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox")).toBeNull();
+  });
+
+  it("sends the picked rows to a wishlist folder and says where they went", async () => {
+    const user = userEvent.setup();
+    shareOpen.mockResolvedValue(
+      snapshot({
+        cards: [card({ id: "bolt", n: "Lightning Bolt" }), card({ id: "sol", n: "Sol Ring" })],
+      }),
+    );
+    mount();
+
+    await waitFor(() => expect(tick("Lightning Bolt")).toBeInTheDocument());
+    await user.click(tick("Lightning Bolt"));
+    await user.click(tick("Sol Ring"));
+
+    // The bar names the count rather than the cards, because the wall behind it is already
+    // showing which two are ticked.
+    expect(screen.getByText("2 picked")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Add to wishlist" }));
+
+    await screen.findByRole("option", { name: "Trade targets" });
+    await user.selectOptions(screen.getByLabelText("Add them to"), "7");
+    await user.click(screen.getByRole("button", { name: "Add 2 cards" }));
+
+    await waitFor(() => expect(wishlistAdd).toHaveBeenCalledTimes(2));
+    expect(wishlistAdd).toHaveBeenCalledWith({ cardId: "bolt", quantity: 1, folderId: 7 });
+    // Said in the view rather than left in a dialog that has closed over it — the verb the
+    // button used, in the past tense, naming the destination the reader chose.
+    expect(await screen.findByText("Added 2 cards to Trade targets.")).toBeInTheDocument();
+    // And the picks are put down, because they have been acted on: a bar still reading
+    // *2 picked* over a wall whose cards are now on the wishlist invites the same press twice.
+    expect(screen.queryByText("2 picked")).toBeNull();
+    expect(tick("Lightning Bolt")).not.toBeChecked();
+  });
+
+  /**
+   * A pick is about a *card*, not about the row it was made on — and it survives the wall being
+   * narrowed under it, which is the shape a reader produces by ticking as they scroll and then
+   * pressing a chip.
+   */
+  it("keeps a pick that the reader has since filtered off the wall", async () => {
+    const user = userEvent.setup();
+    shareOpen.mockResolvedValue(
+      snapshot({
+        cards: [card({ id: "bolt", n: "Lightning Bolt" }), card({ id: "sol", n: "Sol Ring" })],
+      }),
+    );
+    collectionList.mockResolvedValue({ items: [owned("bolt", 1)], total: 1 });
+    mount();
+
+    await waitFor(() => expect(tick("Lightning Bolt")).toBeInTheDocument());
+    await user.click(tick("Lightning Bolt"));
+    // *You do not own it* drops the very card that was ticked.
+    await user.click(screen.getByRole("button", { name: "You do not own it" }));
+
+    expect(screen.queryByRole("listitem", { name: /^Lightning Bolt/ })).toBeNull();
+    expect(screen.getByText("1 picked")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Add to wishlist" }));
+
+    expect(
+      await screen.findByRole("listitem", { name: "Lightning Bolt" }),
+    ).toBeInTheDocument();
+  });
+
+  it("puts the picks down when the reader clears them", async () => {
+    const user = userEvent.setup();
+    mount();
+
+    await waitFor(() => expect(tick("Lightning Bolt")).toBeInTheDocument());
+    await user.click(tick("Lightning Bolt"));
+    await user.click(screen.getByRole("button", { name: "Clear picks" }));
+
+    expect(screen.queryByText(/picked/)).toBeNull();
+    expect(wishlistAdd).not.toHaveBeenCalled();
   });
 });
