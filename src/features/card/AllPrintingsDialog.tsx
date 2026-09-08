@@ -469,7 +469,7 @@ export function AllPrintingsDialog() {
       // number used to do badly:
       //
       // * `100%` is `w-full`'s meaning kept as a **ceiling**, so nothing below is a length this
-      //   file has to keep in step with the shell. The grid area is `p-0 sm:p-6` off the scrim
+      //   file has to keep in step with the shell. The grid area is `p-0 sm:px-6` off the scrim
       //   and — this is the part a `calc(100vw - 10rem)` could not track — `Dialog`'s
       //   `FLANK_COLUMNS`, 3.5rem either side, whenever `flanks` are asked for. **The chevrons
       //   therefore keep their room by construction rather than by arithmetic here agreeing with
@@ -491,6 +491,19 @@ export function AllPrintingsDialog() {
       // Tiles across at 100% zoom with no walk to flank the panel: 10 at 2560 maximised (13
       // before), 7 at 1920 (9), 5 at the 1280 default (6), and 5 at the 1024 floor, where nothing
       // moves at all — 4 there once a walk buys its flank columns, as it drew before.
+      //
+      // **And no height, which is a change from the two days this string carried one.** This
+      // dialog is where the 90vh ceiling was reported and first fixed — its body is a *wall*, 865
+      // printings of Forest is not an edge case, and it drew to 24px of the window's top edge on
+      // most of the presses that reach it. But the same wall is Categories' on a long deck, and
+      // History's, and Pull from collection's, so on 2026-09-08 the ceiling moved to the shell as
+      // the scrim's own vertical inset (`sm:py-[max(1.5rem,5vh)]`) and every dialog got it.
+      //
+      // A `max-h-[min(100%,90vh)]` left here would now be **wrong rather than merely redundant**,
+      // and in one direction only: `cn`'s `tailwind-merge` deletes the shell's `max-h-full` the
+      // moment a host names a `max-h-…`, so below `sm` — where the scrim is `p-0` and every other
+      // dialog fills the phone's glass — this one alone would keep a 90vh cap and float on a
+      // 358px-wide screen. Above `sm` the two agree exactly, which is why nothing else moved.
       size="w-[min(100%,max(64rem,75vw))]"
       // **A rung is a claim about the highest thing a surface can be asked to cover, not about
       // where it usually sits** — which is why this one is the shell's `"stacked"` while every
