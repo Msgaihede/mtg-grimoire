@@ -497,10 +497,10 @@ export function deckViolations(): Map<string, ValidationIssue[]> {
  * The plan behind {@link deckGroups}, as the lookup `theoryMatch.ts` answers with — so a view
  * story can draw the theory mark beside the two it must never be confusable with.
  *
- * **Four of the ten cards and deliberately not all of them.** A fixture where every card carried
- * the mark would prove the mark renders and nothing else; the reader's question on this surface
- * is *which* of these cards is the plan, so the fixture has to be able to answer it wrongly. The
- * four are picked to put the mark against each of the other marks in turn:
+ * **Four of the ten cards are in the plan and deliberately not all of them.** A fixture where
+ * every card was *planned* would prove the mark renders and nothing else; the reader's question
+ * on this surface is *which* of these cards is the plan, so the fixture has to be able to answer
+ * it wrongly. The four are picked to put the mark against each of the other marks in turn:
  *
  * * `lea 288` (Island) is the one {@link deckViolations} reports — a 2-of in a singleton format —
  *   so this is the card carrying **both** marks, in the opposite corners `CardMarks.tsx` moved
@@ -524,9 +524,14 @@ export function deckViolations(): Map<string, ValidationIssue[]> {
  * arithmetic that goes wrong silently — every story built on this plan would still render, in the
  * same box and the same colour, telling the reader to cut the card they are two short of.
  *
- * What is left unmarked matters as much: `dom 168` (Llanowar Elves) is the commander, and
- * `nph 57` (Dismember) is the card the reader owns none of — so a story can show that "in the
- * plan" and "not yet acquired" are two different statements about one deck.
+ * **Since 2026-09-08 the other six are marked too, and what they wear is the point.** The third
+ * tier draws a red X on a card the plan does not ask for at all, so every card on this wall now
+ * carries exactly one of three marks and a story can no longer pass by drawing nothing. What the
+ * six say is what makes it worth having: `nph 57` (Dismember) is both *not in the plan* and the
+ * card the reader owns none of, so a story shows those are two different statements about one
+ * card — the X is about the plan and the em dash under the copies is about the shelf. `dom 168`
+ * (Llanowar Elves) is the commander and wears the X as well, which is honest rather than a gap:
+ * the plan holds no commander row, so the mark says exactly what the plan says.
  *
  * **The printings are named rather than the cards**, for {@link deckViolations}' reason: `CARDS`
  * is generated and may be regenerated against a newer sync, and a hardcoded name would go on
@@ -562,9 +567,10 @@ export function deckTheoryMatches(): TheoryPlan {
     .map((slot) => ({ key: `${slot.card.id}|`, nameKey: slot.card.name, quantity: slot.quantity }));
   // Through the real function over the real fixture deck, so the three states a story shows are
   // the three the shipped arithmetic produces rather than three numbers typed here — the same
-  // argument `deckGroups` makes for building its groups with `buildGroups`. Both switches on,
-  // which is what every deck is born with; a story about a deck that has turned one off passes
-  // its own `marks`.
+  // argument `deckGroups` makes for building its groups with `buildGroups`. All three switches
+  // on, which is what every deck is born with; a story about a deck that has turned one off
+  // passes its own `marks`. `unplanned` is the third and arrived 2026-09-08: it is what puts the
+  // X on the six cards the plan does not name.
   // **The cast is a narrowing and not a shortcut.** `theoryMatchPlan` answers
   // `TheoryPlan | undefined` because `undefined` is its own statement — *there is no question
   // here*, a deck with no plan — and it is reached only when `slots` is `undefined`, which the
@@ -574,6 +580,7 @@ export function deckTheoryMatches(): TheoryPlan {
   return theoryMatchPlan(slots, deckGroups().flatMap((group) => group.cards), {
     exact: true,
     name: true,
+    unplanned: true,
   }) as TheoryPlan;
 }
 

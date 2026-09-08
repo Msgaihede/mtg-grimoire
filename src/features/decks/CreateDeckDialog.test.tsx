@@ -69,6 +69,7 @@ const MADE: DeckRow = {
   theoryEnabled: false,
   theoryMarkExact: true,
   theoryMarkName: true,
+  theoryMarkUnplanned: true,
   lastVariant: "live",
   lastGroupBy: "category",
   lastSortBy: "alphabetical",
@@ -329,7 +330,7 @@ describe("the create deck dialog", () => {
   });
 
   /**
-   * **The two theory-mark switches are not drawn here, and turning the plan on does not raise
+   * **The three theory-mark switches are not drawn here, and turning the plan on does not raise
    * them.** This dialog passes no `canSetTheoryMarks`, which is the arrangement
    * `defaultCategoryId`'s "Add cards to" row already has: the question is not answerable yet
    * rather than answerable and skipped.
@@ -338,9 +339,9 @@ describe("the create deck dialog", () => {
    * the form's other gate would hide them anyway on a deck born with no plan, so a test that
    * left the switch alone would pass against a create dialog that did draw them.
    *
-   * What it prevents is a control whose press reaches nothing: `DeckInput` carries neither
-   * column, `decks.theory_mark_exact`/`_name` are `NOT NULL DEFAULT 1`, and the deck would be
-   * born with both marks on however the reader had left the switches.
+   * What it prevents is a control whose press reaches nothing: `DeckInput` carries none of the
+   * three columns, `decks.theory_mark_exact`/`_name`/`_unplanned` are `NOT NULL DEFAULT 1`, and
+   * the deck would be born with all three marks on however the reader had left the switches.
    */
   it("offers no theory-mark switches, even with the plan switched on", async () => {
     wrap(<Harness />);
@@ -350,6 +351,7 @@ describe("the create deck dialog", () => {
     expect(screen.getByRole("switch", { name: "Theory deck Enabled" })).toBeInTheDocument();
     expect(screen.queryByRole("switch", { name: /matching printing/i })).toBeNull();
     expect(screen.queryByRole("switch", { name: /different printing/i })).toBeNull();
+    expect(screen.queryByRole("switch", { name: /not in the theory list/i })).toBeNull();
   });
 
   /**

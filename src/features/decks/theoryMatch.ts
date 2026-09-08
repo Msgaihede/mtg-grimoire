@@ -6,7 +6,7 @@
  * about itself is which of its rows are *the plan* and which are the substitutes, the proxies and
  * the experiments standing in until the real card arrives. That is the whole of what this answers.
  *
- * ## Two tiers since 2026-09-07, and the number's grain follows the tier
+ * ## Three tiers since 2026-09-08, and the number's grain follows the tier
  *
  * A live row resolves to **exactly one** mark, or to none:
  *
@@ -14,7 +14,19 @@
  * | --- | --- | --- |
  * | Its `(cardId, finish)` is a slot in the plan | `exact` | `planned − live` at the `(cardId, finish)` grain |
  * | Its **name** is in the plan, but this `(cardId, finish)` is not | `name` | `planned − live` with every printing and finish of that name summed on both sides |
- * | Neither | — | none |
+ * | Neither | `unplanned` | none — an X, no number |
+ *
+ * **With the third switch on, "or to none" is a statement about the switches rather than about
+ * the deck**: every row of a live list resolves to one of the three, because the third tier is
+ * exactly the rows the first two leave over. `null` survives as what a *switched-off* tier
+ * answers and as what a deck with no plan answers for every row — which is why the sentence above
+ * still reads "or to none" rather than being reduced to three arms.
+ *
+ * The third tier was added on 2026-09-08. It carries **no number ever**: `planned − live` is
+ * undefined where nothing is planned, and a `-1` on a card the plan never asked for would be an
+ * arithmetic about an order that does not exist. What it says is one fact — *the plan does not
+ * ask for this at all* — and `CardMarks.tsx` draws it as an X rather than as a tick or a signed
+ * number for exactly that reason.
  *
  * **That the grain follows the tier is the whole rule**, and it is why {@link theoryMatchMark} is
  * one function rather than a tier test standing beside a delta lookup. An `exact` row is the
@@ -94,25 +106,33 @@
  */
 import type { DeckCard, TheorySlot } from "@/lib/ipc";
 
-/** Which of the two statements a mark is making about its row — see the module note's table. */
-export type TheoryTier = "exact" | "name";
+/** Which of the three statements a mark is making about its row — see the module note's table. */
+export type TheoryTier = "exact" | "name" | "unplanned";
 
 /** What the plan says about one live row: which tier it is in and how far it is from the plan
  *  **at that tier's grain**. `0` is the tick; anything else is drawn as a signed number. */
 export interface TheoryMark {
   tier: TheoryTier;
-  /** `planned − live` at {@link TheoryMark.tier}'s own grain — **the action**, not the count:
-   *  positive is copies the reader has to add, negative is copies to remove (issue #400). */
+  /**
+   * `planned − live` at {@link TheoryMark.tier}'s own grain — **the action**, not the count:
+   * positive is copies the reader has to add, negative is copies to remove (issue #400).
+   *
+   * **Always `0` on the `unplanned` tier, and it is not a count there at all.** Nothing is
+   * planned, so there is nothing to subtract from; the field keeps its type rather than becoming
+   * nullable, and `CardMarks.tsx` decides the glyph from the tier *before* it reads this.
+   */
   delta: number;
 }
 
 /**
- * The deck's two per-card-mark switches, both defaulting on —
- * `DeckRow.theoryMarkExact` / `DeckRow.theoryMarkName`.
+ * The deck's three per-card-mark switches, all defaulting on —
+ * `DeckRow.theoryMarkExact` / `theoryMarkName` / `theoryMarkUnplanned`.
  *
- * **Two booleans rather than one three-valued field**, which is the schema's own argument carried
- * up: `none | exact | both` cannot spell blue *without* green, and blue without green is a real
- * answer — a reader who cares that the card is present and not which printing it is.
+ * **Three booleans rather than one four-valued field**, which is the schema's own argument
+ * carried up: an ordered `none | exact | both | …` cannot spell blue *without* green, and blue
+ * without green is a real answer — a reader who cares that the card is present and not which
+ * printing it is. The third switch is independent of the other two in the same way: a reader who
+ * wants only *what is not in my plan* marked turns both of the first two off and leaves this on.
  */
 export interface TheoryMarkSwitches {
   /** Draw the **exact** tier as itself. Off, an exact row is re-resolved as a name row rather
@@ -121,6 +141,15 @@ export interface TheoryMarkSwitches {
   /** Draw the **name** tier at all. Off, a name-only row draws nothing and an exact row is
    *  unaffected. */
   name: boolean;
+  /**
+   * Draw the **unplanned** tier — a live row the plan does not ask for on either of the other
+   * two grains.
+   *
+   * Off, such a row draws nothing, which is what every deck did before 2026-09-08. It has no
+   * fallback in either direction: a row in the plan can never resolve here (see
+   * {@link theoryMatchMark}), and a row that is not in the plan can never resolve anywhere else.
+   */
+  unplanned: boolean;
 }
 
 /** The plan as two lookups and the switches that decide which of them a row may use. */
@@ -321,15 +350,27 @@ export function theoryMatchPlan(
  * so the fact survives the switch; what the switch turns off is the finer statement. This is why
  * the fallback needs no arithmetic of its own: it is the same call, one tier down.
  *
+ * ## The third tier is what the first two leave over, and it has no fallback in either direction
+ *
+ * A row in **neither** map is `unplanned` — the plan does not ask for this card at all — with a
+ * `delta` of `0` that is not a count and is never drawn as one. A row in **one** of the maps is
+ * in the plan, so it can never be unplanned however its own tier's switch is set: both switches
+ * off answers `null`, exactly as it did before the third tier existed. That asymmetry is the
+ * whole of the rule, and it is why the "is it in the plan at all" test is made against the maps
+ * rather than against whatever tier the switches let through — a row silenced by a switch would
+ * otherwise fall out of the bottom of this function wearing the one mark that means the opposite
+ * of what is true of it.
+ *
  * `null` and `0` are the distinction every caller turns on, and they are deliberately not the
- * same falsy value: `null` draws no mark, `0` draws the tick. A deck with no plan answers `null`
- * for every row, which is the honest reading of "nothing here matches the theory list", and so
- * does a deck with both switches off.
+ * same falsy value: `null` draws no mark, `0` draws the tick (or, on the third tier, the X). A
+ * deck with no plan answers `null` for every row, which is the honest reading of "there is no
+ * question here", and so does a deck with all three switches off.
  *
  * Two things this body gets right by construction rather than by a branch: a slot with
- * `nameKey === null` never entered `byName`, so an orphan can never be matched loosely; and
- * **nothing is consumed** — every read leaves both maps as they were, which is what marks all
- * eight Forests rather than the last one.
+ * `nameKey === null` never entered `byName`, so an orphan can never be matched loosely — and it
+ * is still in `exact`, so it is still *in the plan* and still never unplanned; and **nothing is
+ * consumed** — every read leaves both maps as they were, which is what marks all eight Forests
+ * rather than the last one.
  */
 export function theoryMatchMark(
   plan: TheoryPlan | undefined,
@@ -338,7 +379,14 @@ export function theoryMatchMark(
   if (plan === undefined) return null;
   const exact = plan.exact.get(theorySlot(card));
   if (exact !== undefined && plan.marks.exact) return { tier: "exact", delta: exact };
-  if (!plan.marks.name) return null;
+  // Read before either switch is consulted, because it answers a question about the *plan* rather
+  // than about what the reader has asked to see: a row in neither map is the third tier, and a
+  // row in one of them is in the plan whatever the switches then do with it. The exact hit above
+  // short-circuits, so the ordinary matching row still costs one lookup.
   const byName = plan.byName.get(theoryNameKey(card.name));
+  if (exact === undefined && byName === undefined) {
+    return plan.marks.unplanned ? { tier: "unplanned", delta: 0 } : null;
+  }
+  if (!plan.marks.name) return null;
   return byName === undefined ? null : { tier: "name", delta: byName };
 }

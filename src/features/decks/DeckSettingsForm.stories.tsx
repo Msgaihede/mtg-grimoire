@@ -103,10 +103,11 @@ function Body({
     description: row?.description ?? "",
     notes: row?.notes ?? "",
     theoryEnabled: row?.theoryEnabled ?? false,
-    // Both on for a deck that does not exist, which is the columns' own `DEFAULT 1`. The two
-    // rows they draw appear only under a switched-on theory list.
+    // All three on for a deck that does not exist, which is the columns' own `DEFAULT 1`. The
+    // three rows they draw appear only under a switched-on theory list.
     theoryMarkExact: row?.theoryMarkExact ?? true,
     theoryMarkName: row?.theoryMarkName ?? true,
+    theoryMarkUnplanned: row?.theoryMarkUnplanned ?? true,
     folderId: row?.folderId ?? null,
     // `AUTO_CATEGORY` for a deck that does not exist — the column's own `DEFAULT 0`, and the
     // only answer a deck with no categories could honestly give.

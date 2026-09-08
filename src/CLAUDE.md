@@ -858,11 +858,14 @@ Every one of these has its measurement and its story in
   app palette maps `accent` to a **text** colour (gold), so rewrite a vendored component's
   `bg-accent` surfaces to `bg-surface`. `bg-muted` needs no rewrite.
 - **A mark whose colour the reader can change reads it from a custom property, never from a
-  Tailwind class** (2026-09-07). `src/index.css` defines four — `--color-theory-exact`,
-  `--color-theory-exact-fg`, `--color-theory-name` and `--color-theory-name-fg` — and
-  `TheoryMatchMark` / `TheoryMatchBadge` set `backgroundColor` and `color` to `var(…)` inline,
+  Tailwind class** (2026-09-07). `src/index.css` defines six — `--color-theory-exact`,
+  `--color-theory-exact-fg`, `--color-theory-name`, `--color-theory-name-fg` and, since
+  2026-09-08, `--color-theory-unplanned` and `--color-theory-unplanned-fg` for the third tier's
+  red X — and `TheoryMatchMark` / `TheoryMatchBadge` set `backgroundColor` and `color` to
+  `var(…)` inline,
   reading no store and taking no colour prop. The reader's own answer is one `app_meta` row, and
-  `@/lib/useMarkColors` writes all four onto `document.documentElement` at the app root; an absent
+  `@/lib/useMarkColors`' `useMarkColorVars` writes all six onto `document.documentElement` at the
+  app root; an absent
   key writes **nothing**, so *never chosen* and *reset* are one state and the stylesheet's value
   stands. Three things this shape buys that a prop would not. **A Tailwind arbitrary value can
   emit nothing** — a mistyped `bg-[…]` compiles to no rule at all, and a mark that quietly loses
@@ -871,8 +874,12 @@ Every one of these has its measurement and its story in
   the badge, and none of the four decides a colour. And **neither suite needs a store seeded** —
   Storybook loads the real stylesheet so the defaults are simply there, vitest asserts the `var()`
   string, and a story that wants a custom colour sets one variable. The
-  `-fg` half is what the tick is printed *on*, computed with `labelFgCss`' luminance formula so a
-  pale custom green does not swallow the glyph. The defaults are **literal hexes** rather than
+  `-fg` half is what the banner's glyph is printed *on* — a tick, a signed number or the third
+  tier's X — recomputed by `useMarkColorVars` with `labelFgCss`' luminance formula so a pale
+  custom green does not swallow the tick and a custom red does not swallow the X. **It is the
+  filled banner's rule and not the badge's**: `TableView` and `TextView` draw the glyph bare, in
+  the fill colour itself on the row's own background, so those two read the `-fg` half not at all.
+  The defaults are **literal hexes** rather than
   `var(--color-ok)` / `var(--color-pie-u)`, for `LABEL_COLORS`' reason one file over: these are
   the values a colour picker opens on and a reader's choice replaces, so they cannot be a
   reference to something the palette decides later.

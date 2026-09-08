@@ -3092,18 +3092,21 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // the same line, because it is the same mistake one axis over — the gate belongs where the
   // question is asked.
   // **`row !== null` is a narrowing rather than a third gate.** `theoryEnabled` is read off that
-  // row, so it is already false without one; what the test buys is the two switches below being
-  // reachable at the type level, which is the whole of how a per-deck mark reaches the screen.
+  // row, so it is already false without one; what the test buys is the three switches below
+  // being reachable at the type level, which is the whole of how a per-deck mark reaches the
+  // screen.
   const theoryPlan = useMemo(
     () =>
       theoryEnabled && variant === "live" && row !== null
         ? theoryMatchPlan(planned.data, deck.cards, {
-            // The deck's own answer to *which of the two marks do I want drawn*, carried into the
-            // plan so `theoryMatchMark` needs no second argument at every call site in four views
-            // — `theoryMatch.ts`'s `TheoryMarkSwitches` says why it is two booleans and not one
-            // three-valued field.
+            // The deck's own answer to *which of the three marks do I want drawn*, carried into
+            // the plan so `theoryMatchMark` needs no second argument at every call site in four
+            // views — `theoryMatch.ts`'s `TheoryMarkSwitches` says why it is three booleans and
+            // not one ordered field, and why the red one is a tier below the other two rather
+            // than a third answer about a printing.
             exact: row.theoryMarkExact,
             name: row.theoryMarkName,
+            unplanned: row.theoryMarkUnplanned,
           })
         : undefined,
     [planned.data, theoryEnabled, variant, deck.cards, row],

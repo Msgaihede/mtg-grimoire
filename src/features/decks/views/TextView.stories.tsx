@@ -251,27 +251,58 @@ export const ByManaValue: Story = { args: { groups: deckGroups("manaValue", "man
  * the line is a button with an explicit `aria-label`, so the word is `deckCardName`'s — which is
  * why the assertion below reads the button's name rather than looking for text.
  *
- * **Two of the four are counts rather than ticks** (issue #212), drawn at the `GC` badge's own 9px
- * rather than the tick's 12: two characters of type beside a card's name is what that badge
- * already is, and a 12px one would out-shout the name it sits next to.
+ * **Two of the four planned marks are counts rather than ticks** (issue #212), drawn at the `GC`
+ * badge's own 9px rather than the tick's 12: two characters of type beside a card's name is what
+ * that badge already is, and a 12px one would out-shout the name it sits next to.
+ *
+ * **The other six lines wear the red X** (2026-09-08) — the plan does not ask for that card at
+ * all — so every line in this list ends in a mark. On a text list that is the version of the
+ * third tier worth seeing: a decklist is a column of names, and "this one is not the plan" said
+ * as a glyph on the line is the only way to read it without counting the lines that *do* carry
+ * something.
  */
 export const TheoryMatches: Story = {
   args: { theoryPlan: deckTheoryMatches() },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    // Four marked cards, and **two of the four are numbers rather than ticks** (issue #212): the
-    // fixture asks for twice the Island the deck holds and half the Boros Charm, so this is the
-    // one place both of the mark's drawings are seen side by side. The mark is `aria-hidden` and
-    // carries no `title` — it is bound `describes: false`, so `THEORY_MATCH_ATTR` is
-    // `CardMarks.tsx`'s own handle for finding it after the fact, and a tick's element has no
-    // text at all (it is an `<svg>`). The words are read off the button instead.
+    // Every line is marked, and six of the ten wear the third tier's X. The mark is `aria-hidden`
+    // and carries no `title` — it is bound `describes: false`, so `THEORY_MATCH_ATTR` is
+    // `CardMarks.tsx`'s own handle for finding it after the fact, and both the tick and the X
+    // have no text at all (each is an `<svg>`). The words are read off the button instead.
     const marks = [...canvasElement.querySelectorAll(`[${THEORY_MATCH_ATTR}]`)];
-    expect(marks).toHaveLength(4);
-    expect(marks.map((mark) => mark.textContent).sort()).toEqual(["", "", "+2", "-1"]);
+    expect(marks).toHaveLength(10);
+
+    const unplanned = [...canvasElement.querySelectorAll(`[${THEORY_MATCH_ATTR}="unplanned"]`)];
+    expect(unplanned).toHaveLength(6);
+    // An X and never a count: a card the plan has no row for has no difference to state.
+    for (const mark of unplanned) {
+      expect(mark.textContent).toBe("");
+      expect(mark.querySelector("svg")).not.toBeNull();
+    }
+
+    // The four that *are* the plan, read on their own — **two of them are numbers rather than
+    // ticks** (issue #212): the fixture asks for twice the Island the deck holds and half the
+    // Boros Charm, so this is the one place both of the mark's drawings are seen side by side.
+    // Scoped past the X's, whose six empty strings would otherwise drown the pair.
+    const planned = [
+      ...canvasElement.querySelectorAll(
+        `[${THEORY_MATCH_ATTR}]:not([${THEORY_MATCH_ATTR}="unplanned"])`,
+      ),
+    ];
+    expect(planned.map((mark) => mark.textContent).sort()).toEqual(["", "", "+2", "-1"]);
 
     // The card that is both in the plan and breaking a rule, in one sentence.
     const both = canvas.getByRole("button", { name: new RegExp(`^${BROKEN}`) });
     expect(both).toHaveAccessibleName(expect.stringContaining("in the theory list"));
     expect(both).toHaveAccessibleName(expect.stringContaining("rule break:"));
+
+    // And a line the plan does not ask for says so, in words — it is a *statement* now rather
+    // than a silence. The negatives are what keep it the third tier's sentence and not a planned
+    // one: green's own words are the prefix of blue's, and neither of them is this.
+    const missing = canvas.getByRole("button", { name: /^Dismember/ });
+    expect(missing).toHaveAccessibleName(expect.stringContaining("not in the theory list"));
+    expect(missing).toHaveAccessibleName(expect.not.stringContaining("in the theory list ·"));
+    expect(missing).toHaveAccessibleName(expect.not.stringContaining("to add"));
+    expect(missing).toHaveAccessibleName(expect.not.stringContaining("to remove"));
   },
 };

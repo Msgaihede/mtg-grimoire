@@ -18,6 +18,21 @@
  * instead of the top-right one it had held: the four separations are cheap to keep while the
  * marks are apart and impossible to trust while they are adjacent. See that component.
  *
+ * **The theory mark's third tier arrived on 2026-09-08 wearing a red by default, and that is the
+ * hardest case the four separations have had to carry.** `unplanned` — a live row the plan does
+ * not ask for at all — is filled from `--color-theory-unplanned`, whose default `#e2484f` is a
+ * red, and {@link RuleBreakMark} is red too. What still tells them apart is every separation but
+ * the colour, and each of them holds here as strongly as it ever did: the **place** (a filled
+ * banner in the card's top-right corner against a hairline box in the bottom-left), the **shape**
+ * (a fill with a glyph on it against an outline with two words in it), the **words** (*Not in the
+ * theory list* — a fact about the reader's own plan — against a rules finding naming a format),
+ * and the card's own **edge**, which only a rule break changes. The default is also deliberately
+ * *not* the destructive paint: `--destructive` renders `#ff6467` and this is a deeper, less
+ * chromatic red chosen so the two are not one colour even before the other three separations are
+ * counted. And as with the other two tiers the colour is the reader's to defeat in
+ * Settings → Appearance — which is exactly why the separations that are structural are the ones
+ * the rule rests on.
+ *
  * ## Every one of these is `aria-hidden`, and that is deliberate
  *
  * It is `FoilOverlay`'s rule, for `FoilOverlay`'s reason. Three of these five surfaces draw a
@@ -30,7 +45,7 @@
  *
  * Adding a mark here means asking which of those two says it in words.
  */
-import { Check, Crown } from "lucide-react";
+import { Check, Crown, X } from "lucide-react";
 import { COUNT_TAG_BOX_MIRRORED, COUNT_TAG_SLANT_MIRRORED, CountTag } from "@/components/CountTag";
 import { FinishMark } from "@/components/FinishMark";
 import { useTooltip } from "@/components/tooltip/useTooltip";
@@ -180,6 +195,23 @@ export const THEORY_MATCH_LABEL = "In the theory list";
 export const THEORY_MATCH_NAME_LABEL = `${THEORY_MATCH_LABEL} · a different printing`;
 
 /**
+ * The third tier said in words — a live row the plan does not ask for at all (2026-09-08).
+ *
+ * **Written out rather than built from {@link THEORY_MATCH_LABEL}**, which is the opposite call
+ * from {@link THEORY_MATCH_NAME_LABEL} one line up and is made for that constant's own reason.
+ * Blue's sentence is green's *plus a clause*, so composing it is what keeps a reword reaching
+ * both. This one is green's sentence **negated**, and a negation assembled out of the thing it
+ * negates (`Not ${THEORY_MATCH_LABEL.toLowerCase()}`) is a string whose meaning flips on a
+ * capital letter — the one edit nobody reviewing a palette or a wording change would look at
+ * twice.
+ *
+ * It carries **no count clause ever**, unlike the other two: there is no order to be short of or
+ * over on, so the sentence is the whole of what this tier has to say. {@link theoryMatchLabel}
+ * is where that is enforced, in one arm that never reads the delta.
+ */
+export const THEORY_UNPLANNED_LABEL = "Not in the theory list";
+
+/**
  * What a mark means, in words — the tier and then the count difference, said once so that the
  * chip's tooltip, the table's `sr-only` twin and `deckCardName`'s clause cannot drift apart.
  *
@@ -206,8 +238,15 @@ export const THEORY_MATCH_NAME_LABEL = `${THEORY_MATCH_LABEL} · a different pri
  * **The number is at the tier's own grain and this function does not have to know that** — an
  * `exact` row's `+6` is about that printing and a `name` row's `0` is about the card, which is
  * `theoryMatchMark`'s rule and the reason the two arrive here already paired.
+ *
+ * **The `unplanned` tier returns before the delta is read at all** (2026-09-08). Nothing is
+ * planned, so there is no order to be short of: `theoryMatchMark` always hands that tier a `0`,
+ * and the early return is what makes the sentence true of a caller that passes something else —
+ * a story, a Storybook control, a future arm that computes a number for a different reason.
+ * "Not in the theory list · 3 to add" would be a sentence about an order the plan does not carry.
  */
 export function theoryMatchLabel(tier: TheoryTier, delta: number): string {
+  if (tier === "unplanned") return THEORY_UNPLANNED_LABEL;
   const base = tier === "exact" ? THEORY_MATCH_LABEL : THEORY_MATCH_NAME_LABEL;
   if (delta === 0) return base;
   return delta > 0 ? `${base} · ${delta} to add` : `${base} · ${-delta} to remove`;
@@ -228,7 +267,7 @@ export function theoryDeltaText(delta: number): string {
 
 /**
  * How the tick says which one it is, for anything that has to find it **after the fact** — and
- * since 2026-09-07 **which of the two tiers it is**, as the attribute's own value.
+ * since 2026-09-07 **which tier it is**, as the attribute's own value.
  *
  * The same problem `STACK_OPEN_ATTR` and `LANDED_ATTR` solve one file over: the mark used to be
  * addressable by its `title`, and the tooltip sweep moved that text off the DOM attribute a
@@ -237,15 +276,41 @@ export function theoryDeltaText(delta: number): string {
  * live probe needs its own handle rather than `getByText`. On both {@link TheoryMatchMark} and
  * {@link TheoryMatchBadge} — one fact, two drawings, one attribute.
  *
- * **The value is the `TheoryTier`** — `"exact"` or `"name"` — rather than the empty string it
- * carried while there was one tier. That is the whole of how a test or a CDP probe tells the two
- * marks apart **without reading a colour**, which is the one thing neither can do honestly: the
- * fill is a custom property now, jsdom resolves no stylesheet, and a reader who has set their own
- * green in Settings → Appearance has moved the very value an assertion would be pinning.
- * `[data-theory-match]` still selects every mark, so a sweep that counts them is unchanged;
- * `[data-theory-match="name"]` is the new question.
+ * **The value is the `TheoryTier`** — `"exact"`, `"name"` or, since 2026-09-08, `"unplanned"` —
+ * rather than the empty string it carried while there was one tier. That is the whole of how a
+ * test or a CDP probe tells the marks apart **without reading a colour**, which is the one thing
+ * none of them can do honestly: the fill is a custom property now, jsdom resolves no stylesheet,
+ * and a reader who has set their own green in Settings → Appearance has moved the very value an
+ * assertion would be pinning. `[data-theory-match]` still selects every mark, so a sweep that
+ * counts them is unchanged; `[data-theory-match="unplanned"]` is the newest question.
  */
 export const THEORY_MATCH_ATTR = "data-theory-match";
+
+/**
+ * Which two custom properties each tier paints from — the fill, and what is legible printed on it.
+ *
+ * **The property names are spelled out in full, one row per tier, and a
+ * `--color-theory-${tier}` template is forbidden here.** The reason is a grep: these six names
+ * are read from this file and nowhere else in the app, so a name assembled at runtime is a name
+ * that cannot be found from either end. It is a table rather than a chain of ternaries because
+ * three tiers × two properties × two components is twelve branches written out, and twelve
+ * branches are twelve places for one of the six names to be wrong.
+ *
+ * It is also why the components below set an inline `style` rather than a Tailwind class: a
+ * mistyped `bg-[…]` emits no rule at all, silently, and neither the suite nor Storybook can go
+ * red for a mark drawn in nothing. (Written `[…]` rather than spelled out for a second reason:
+ * Tailwind scans comments too, so a whole class name in prose is a rule in the built sheet that
+ * nothing on screen wears.)
+ *
+ * {@link TheoryMatchBadge} takes only `fill`, and its own doc says why: it draws the glyph *in*
+ * the colour rather than printing one *on* it, so there is nothing for a foreground to be
+ * legible against.
+ */
+const THEORY_PAINT: Readonly<Record<TheoryTier, { fill: string; fg: string }>> = {
+  exact: { fill: "var(--color-theory-exact)", fg: "var(--color-theory-exact-fg)" },
+  name: { fill: "var(--color-theory-name)", fg: "var(--color-theory-name-fg)" },
+  unplanned: { fill: "var(--color-theory-unplanned)", fg: "var(--color-theory-unplanned-fg)" },
+};
 
 /**
  * A card the plan also asks for, as a tick in the shape of that surface's own quantity badge.
@@ -283,6 +348,19 @@ export const THEORY_MATCH_ATTR = "data-theory-match";
  * one-digit quantity draw the same width by construction; {@link COUNT_TAG_BOX_MIRRORED} carries
  * the arithmetic and why a floor rather than a third pair of paddings is what settles it.
  *
+ * ## A card the plan does not ask for at all says so with an X, and never with a number
+ *
+ * The third tier, since 2026-09-08. `unplanned` is the row the other two leave over — the
+ * stand-in, the spare, the experiment — and the whole of what it has to say is that the plan does
+ * not name it. **The glyph is decided by the tier before the delta is read**, so an X is what
+ * this draws whatever number arrives: `planned − live` is undefined where nothing is planned, and
+ * a `-1` on a card the plan never asked for would be arithmetic about an order that does not
+ * exist. `theoryMatchMark` answers `0` for the tier and this component does not rely on it.
+ *
+ * An X against a tick is the shape half of the tier distinction, and it is the half that survives
+ * a reader recolouring one mark into the other's hue — which is the same argument the file header
+ * makes about this tier's red and {@link RuleBreakMark}'s.
+ *
  * ## A card the plan asks for a *different number* of says the difference instead of the tick
  *
  * `+2` where the live list is two copies short of the plan, `-8` where it holds eight too many —
@@ -307,10 +385,13 @@ export const THEORY_MATCH_ATTR = "data-theory-match";
  * accident of it.
  *
  * **The colour is the one of the four a reader can defeat**, and since 2026-09-07 they can:
- * `--color-theory-exact` and `--color-theory-name` are theirs to set in Settings → Appearance, so
- * nothing stops somebody choosing a red for one of them. That is theirs to do and not this app's
- * to prevent — the other three separations are structural and hold whatever colour is picked,
- * which is exactly why there are four of them rather than one.
+ * `--color-theory-exact`, `--color-theory-name` and `--color-theory-unplanned` are theirs to set
+ * in Settings → Appearance, so nothing stops somebody choosing a red for one of them. That is
+ * theirs to do and not this app's to prevent — the other three separations are structural and
+ * hold whatever colour is picked, which is exactly why there are four of them rather than one.
+ * **The third tier ships red by default**, which makes the point rather than breaking it: the
+ * file header sets out how the place, the shape and the words keep it apart from a rule break
+ * with the colour giving nothing away at all.
  *
  * ## The fill was one azure and is now two colours, and green is no longer disqualified
  *
@@ -339,10 +420,17 @@ export const THEORY_MATCH_ATTR = "data-theory-match";
  * not one of the six**, so the exact tier pays nothing at all here; `#56bd78` is `--color-ok`
  * converted to sRGB and belongs to no label a reader can put on a card.
  *
- * Neither colour is a literal here any more. Both are `--color-theory-*` custom properties, so
+ * **The third tier's red is its own** (2026-09-08). `#e2484f` is Tailwind's red-400 — the hue
+ * `--destructive` is written in — with its chroma pulled into sRGB and taken a step deeper, so it
+ * is deliberately *not* the destructive's rendered `#ff6467`: a mark meaning "the plan does not
+ * ask for this" must not wear the app's "there is a problem here" paint, and a stand-in card is
+ * not a fault. It is not `--color-pie-r` (`#d3202a`) either, which is the Ember label colour and
+ * a thing a reader may already have put on a card in this same strip.
+ *
+ * No colour is a literal here any more. All three are `--color-theory-*` custom properties, so
  * the reader's own choice in Settings → Appearance moves every surface at once; `src/index.css`
- * holds the defaults — including the `-fg` each fill prints its tick on — and `@/lib/useMarkColors`
- * writes over them.
+ * holds the defaults — including the `-fg` each fill prints its glyph on — and
+ * `@/lib/useMarkColors` writes over them.
  *
  * ## `aria-hidden`, like every mark here
  *
@@ -359,13 +447,15 @@ export function TheoryMatchMark({
   className,
 }: {
   /**
-   * Which of the two statements this mark is making — `theoryMatch.ts`'s `TheoryTier`, and the
-   * whole of what decides its colour.
+   * Which of the three statements this mark is making — `theoryMatch.ts`'s `TheoryTier`, and the
+   * whole of what decides its colour **and its glyph**.
    *
    * **Required, and deliberately not defaulted.** A default would let a caller that has not
    * thought about the tier draw the green *this is the printing you planned* over a substitute
-   * printing, which is the exact confusion the two tiers exist to remove — and it would do it
-   * silently, on a mark whose whole job is to be believed at a glance.
+   * printing, which is the exact confusion the tiers exist to remove — and it would do it
+   * silently, on a mark whose whole job is to be believed at a glance. Since 2026-09-08 the same
+   * argument runs the other way too: `unplanned` is the one tier that draws an X, and a default
+   * would be a way of drawing a tick over a card the plan never asked for.
    */
   tier: TheoryTier;
   /**
@@ -383,6 +473,10 @@ export function TheoryMatchMark({
    * `exact` row's number is about that printing and a `name` row's is about the card, so the two
    * arrive here already paired and nothing is recomputed from a tier here.
    *
+   * **Ignored entirely on the `unplanned` tier**, where there is no order to be short of — see
+   * the X section above. `theoryMatchMark` answers `0` there, and this component does not depend
+   * on it having done so.
+   *
    * Defaults to `0`, so a caller that has not thought about counts gets the tick this component
    * has always drawn. The tier above deliberately has no such default.
    */
@@ -390,12 +484,20 @@ export function TheoryMatchMark({
   className?: string;
 }) {
   const banner = variant === "banner";
-  const exact = tier === "exact";
+  const paint = THEORY_PAINT[tier];
+  // **The glyph is the tier's, decided before the delta is read** — an unplanned row draws the X
+  // whatever number it was handed, because nothing is planned for there to be a difference from.
+  const glyph = tier === "unplanned" || delta === 0;
+  // Written out as whole class names rather than interpolated: Tailwind scans source text, so a
+  // class built from a variable emits no rule at all. Both glyphs take the same one — see below.
+  const glyphSize = banner
+    ? "size-[calc(0.75rem*var(--mark-scale,1))]"
+    : "size-[calc(0.5625rem*var(--mark-scale,1))]";
   const tip = useTooltip();
   return (
     <span
       aria-hidden="true"
-      // The tier as the value, which is how a test and a live probe tell the two marks apart
+      // The tier as the value, which is how a test and a live probe tell the three marks apart
       // without reading a colour — see {@link THEORY_MATCH_ATTR}.
       {...{ [THEORY_MATCH_ATTR]: tier }}
       // Redundant with `deckCardName`'s own clause (`theoryMatchLabel(tier, delta)`) — the words
@@ -408,17 +510,12 @@ export function TheoryMatchMark({
         // The chip has no slant at all: it is echoing a square 9px chip, and a 10px bite out of a
         // 14px box is most of the box.
         ...(banner ? { clipPath: COUNT_TAG_SLANT_MIRRORED } : null),
-        // **Two explicit branches rather than one `--color-theory-${tier}` template**, and the
-        // reason is a grep: the four property names have to be findable from this file, which is
-        // the only place they are read. It is also why this is an inline style and not a Tailwind
-        // arbitrary value — a mistyped `bg-[…]` emits no rule at all, silently, and neither suite
-        // nor Storybook can go red for a mark drawn in nothing. (Written `[…]` rather than spelled
-        // out for a second reason: Tailwind scans comments too, so a whole class name in prose is
-        // a rule in the built sheet that nothing on screen wears.)
-        backgroundColor: exact ? "var(--color-theory-exact)" : "var(--color-theory-name)",
+        // One row of {@link THEORY_PAINT}, which is where the six property names are spelled out
+        // and where the rule against a `--color-theory-${tier}` template lives.
+        backgroundColor: paint.fill,
         // The fill is the reader's to change, so what is legible on it cannot be a fixed token:
         // `useMarkColors` recomputes each `-fg` from the fill's own luminance.
-        color: exact ? "var(--color-theory-exact-fg)" : "var(--color-theory-name-fg)",
+        color: paint.fg,
       }}
       className={cn(
         banner
@@ -453,22 +550,22 @@ export function TheoryMatchMark({
           {@link COUNT_TAG_FACE}'s, so the digits are drawn at exactly the size and advance the
           quantity tag opposite draws its own in — which is the whole reason `min-w` upstream can
           be stated in `ch`. */}
-      {delta === 0 ? (
+      {glyph ? (
         // 12px on the stack is the size {@link FinishMark} is drawn at, because the two are marks
         // on one card face and a tick larger than the foil sparkle would read as the more
         // important of the two. 9px on a tile, which is the cap height of the digit this chip is
         // standing in for. `strokeWidth` above lucide's 2 default at both sizes: a tick is three
         // strokes and no fill, so on art it needs the weight the crown gets from its body.
-        <Check
-          className={cn(
-            "block shrink-0",
-            banner
-              ? "size-[calc(0.75rem*var(--mark-scale,1))]"
-              : "size-[calc(0.5625rem*var(--mark-scale,1))]",
-          )}
-          strokeWidth={3}
-          aria-hidden="true"
-        />
+        //
+        // **The X is the tick at exactly those sizes and that weight**, deliberately — the two are
+        // one mark in two states, so a heavier or a larger X would read as a louder statement
+        // rather than as a different one. Two strokes against the tick's three, at the same
+        // weight, on the same box.
+        tier === "unplanned" ? (
+          <X className={cn("block shrink-0", glyphSize)} strokeWidth={3} aria-hidden="true" />
+        ) : (
+          <Check className={cn("block shrink-0", glyphSize)} strokeWidth={3} aria-hidden="true" />
+        )
       ) : (
         theoryDeltaText(delta)
       )}
@@ -480,9 +577,10 @@ export function TheoryMatchMark({
  * The same fact for the two views that draw **no art** — the table's rows and the text columns.
  *
  * A row of type has no corner to lay a banner in, so this is the glyph alone, in the same colour
- * {@link TheoryMatchMark} is *filled* with — `--color-theory-exact` for the exact tier and
- * `--color-theory-name` for the loose one, set as text here rather than as a background. One
- * colour per tier on every surface; only the size and the box change.
+ * {@link TheoryMatchMark} is *filled* with — `--color-theory-exact` for the exact tier,
+ * `--color-theory-name` for the loose one and `--color-theory-unplanned` for a card the plan does
+ * not ask for, set as text here rather than as a background. One colour per tier on every
+ * surface; only the size and the box change.
  *
  * **It takes no `-fg`, and that is the difference between the two components rather than an
  * omission.** The banner prints its tick *on* the fill and so needs to know what is legible
@@ -511,6 +609,13 @@ export function TheoryMatchMark({
  * It keeps no box of its own for it, for this component's founding reason — a hairline box with
  * content inside reads as a control — so the number is bare type in the same colour as the glyph,
  * in the mono `tabular-nums` face every count in these two views is set in.
+ *
+ * ## The third tier draws an X and never a number, here as on the card face
+ *
+ * Same rule, same reason (2026-09-08): the glyph is the tier's and is chosen before the delta is
+ * read, so `unplanned` is an X whatever it is handed. It takes the tick's size and weight
+ * exactly, which is what makes the pair read as two states of one mark rather than as two marks —
+ * and it is the shape half of a distinction whose colour half the reader is free to defeat.
  */
 export function TheoryMatchBadge({
   tier,
@@ -518,13 +623,16 @@ export function TheoryMatchBadge({
   className,
 }: {
   /** See {@link TheoryMatchMark.tier} — required for that component's reason, and the whole of
-   *  what decides this glyph's colour. */
+   *  what decides this glyph's colour and which glyph it is. */
   tier: TheoryTier;
-  /** See {@link TheoryMatchMark.delta} — `0` is the row that matches, and the tick. */
+  /** See {@link TheoryMatchMark.delta} — `0` is the row that matches, and the tick; ignored
+   *  entirely on the `unplanned` tier, which has no order to be short of. */
   delta?: number;
   className?: string;
 }) {
   const tip = useTooltip();
+  // The tier's, before the delta is read — `TheoryMatchMark`'s rule, one surface over.
+  const glyph = tier === "unplanned" || delta === 0;
   return (
     <span
       aria-hidden="true"
@@ -532,22 +640,27 @@ export function TheoryMatchBadge({
       {...{ [THEORY_MATCH_ATTR]: tier }}
       // Redundant with `deckCardName`'s own clause, exactly as `TheoryMatchMark`'s is.
       {...tip(theoryMatchLabel(tier, delta), { describes: false })}
-      // The text colour only — there is no fill to print on. Two explicit branches and an inline
-      // style for `TheoryMatchMark`'s two reasons: the property names have to be greppable, and a
-      // mistyped Tailwind arbitrary value emits no rule at all.
-      style={{ color: tier === "exact" ? "var(--color-theory-exact)" : "var(--color-theory-name)" }}
+      // The text colour only — there is no fill to print on, which is why this takes `fill` out
+      // of {@link THEORY_PAINT} and never the `-fg` beside it.
+      style={{ color: THEORY_PAINT[tier].fill }}
       // 12px, matching `DeckFinishMark`'s glyph on the same line rather than `GC`'s 9px type —
       // a stroked tick needs the height that two letters in a box do not. The number takes the
       // 9px `GC` is set at instead, because two characters of type beside a card's name is what
-      // that badge already is and a 12px one would out-shout the name it sits next to.
+      // that badge already is and a 12px one would out-shout the name it sits next to. Keyed on
+      // the *glyph* rather than on the delta, so an unplanned row handed a stray number is not
+      // dressed in the mono face it is not going to draw.
       className={cn(
         "flex shrink-0 items-center",
-        delta !== 0 && "font-mono text-[0.5625rem] leading-3 tabular-nums",
+        !glyph && "font-mono text-[0.5625rem] leading-3 tabular-nums",
         className,
       )}
     >
-      {delta === 0 ? (
-        <Check className="block size-3" strokeWidth={3} aria-hidden="true" />
+      {glyph ? (
+        tier === "unplanned" ? (
+          <X className="block size-3" strokeWidth={3} aria-hidden="true" />
+        ) : (
+          <Check className="block size-3" strokeWidth={3} aria-hidden="true" />
+        )
       ) : (
         theoryDeltaText(delta)
       )}

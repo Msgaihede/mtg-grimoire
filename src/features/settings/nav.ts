@@ -128,7 +128,7 @@ export const PANELS: Record<PanelId, PanelMeta> = {
    * app names its own parts.
    *
    * So the group is the *other* question these two answer together: what the reader's own marks
-   * look like. The theory tick's two colours and the labels' are the same decision made twice,
+   * look like. The theory mark's three colours and the labels' are the same decision made twice,
    * and neither is about what a card is filed under.
    *
    * **Colour words lead the line, and both spellings are in it.** A reader hunting for the green
@@ -142,7 +142,7 @@ export const PANELS: Record<PanelId, PanelMeta> = {
     group: "appearance",
     keywords:
       "colour color green blue tick checkmark check match plan printing deck mark customise " +
-      "customize theory",
+      "customize theory red cross x unplanned",
   },
   labels: {
     title: "Labels",

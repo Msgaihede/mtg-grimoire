@@ -255,6 +255,9 @@ const DECK: DeckRow = {
   theoryEnabled: false,
   theoryMarkExact: true,
   theoryMarkName: true,
+  // The third mark switch (2026-09-08), on as the column's own default is: a live row the plan
+  // does not name wears the X. Every real row carries it, so the fixture does too.
+  theoryMarkUnplanned: true,
   // How the editor was last read. The defaults, so a test that says nothing about them opens on
   // Live, grouped by category, sorted alphabetically — and a test about the memory overrides the
   // one field it is about through `detail()`.
@@ -3475,10 +3478,18 @@ describe("DeckEditor", () => {
   const tab = (name: "Actual" | "Theory") =>
     within(screen.getByRole("group", { name: "Deck list" })).getByRole("button", { name });
 
-  /** Both lists on screen at once, so the pair can be read in the order they are drawn. */
-  function withPlan(deck: Partial<DeckRow> = {}) {
+  /**
+   * Both lists on screen at once, so the pair can be read in the order they are drawn.
+   *
+   * `extraLive` appends to the **live** list alone and is empty by default, which is what keeps
+   * every count already asserted against this helper true: the live deck is one card, and that
+   * card is the one every plan below names. The third mark's cases are the only ones that need a
+   * row *outside* the plan, and a fixture that carried one for everybody would have put an
+   * `unplanned` X into the "-2 on every mark" sweep (2026-09-08).
+   */
+  function withPlan(deck: Partial<DeckRow> = {}, extraLive: DeckCard[] = []) {
     const over = { theoryEnabled: true, ...deck };
-    const live = detail(over, [bolt({ quantity: 4 })]);
+    const live = detail(over, [bolt({ quantity: 4 }), ...extraLive]);
     const theory = detail(over, [
       bolt({ quantity: 2, variant: "theory" }),
       card({ name: "Bear", variant: "theory" }),
@@ -3604,10 +3615,16 @@ describe("DeckEditor", () => {
     await waitFor(() =>
       expect(document.querySelectorAll(`[${THEORY_MATCH_ATTR}]`).length).toBeGreaterThan(0),
     );
+    // **Every mark on screen, unscoped, and that is safe because `withPlan`'s live list is one
+    // card and the plan names it.** The third mark switch is on in this deck — a live row the
+    // plan did not name would wear an X with no text at all — so a sweep like this over a deck
+    // holding a stray row would read a `""` and fail here rather than where the defect was. The
+    // two cases below are the ones that add such a row, through `withPlan`'s `extraLive`.
     for (const mark of document.querySelectorAll(`[${THEORY_MATCH_ATTR}]`)) {
       expect(mark).toHaveTextContent("-2");
       // The tier as the attribute's own value, which is what the case below turns on: this deck
-      // is born with both switches on, so the printing the plan named draws the **exact** mark.
+      // is born with all three switches on, so the printing the plan named draws the **exact**
+      // mark.
       expect(mark.getAttribute(THEORY_MATCH_ATTR)).toBe("exact");
     }
     // …and in words, on the one thing a keyboard reader gets from the card.
@@ -3649,6 +3666,64 @@ describe("DeckEditor", () => {
     // of the two statements this mark is making.
     expect(screen.getByRole("button", { name: /^Lightning Bolt/ })).toHaveAccessibleName(
       expect.stringContaining("in the theory list · a different printing"),
+    );
+  });
+
+  /**
+   * **The third switch reaches the mark too, and it is the one the editor can silently drop**
+   * (2026-09-08).
+   *
+   * `theoryMarkExact` and `theoryMarkName` decide how a *planned* row is drawn, so a deck whose
+   * editor forgot them still marks the same set of cards and the failure is visible as a colour.
+   * `theoryMarkUnplanned` decides whether a row the plan says nothing about is marked **at all**,
+   * so an editor that never passed it would leave the X off every card in the app with
+   * `theoryMatch.ts` fully green — the same class of defect as the command zone that never got
+   * `theoryPlan`, and invisible for the same reason.
+   *
+   * The Bear is a live row `deckTheorySlots` does not name, which is what makes it the third
+   * tier's row: the plan's one slot is the Bolt. Asserted on the attribute's value rather than a
+   * colour, for the case above's reason — jsdom resolves no stylesheet.
+   */
+  it("passes the deck's third mark switch to the plan", async () => {
+    withPlan({ theoryMarkUnplanned: true }, [card({ name: "Bear" })]);
+    deckTheorySlots.mockResolvedValue([slot(bolt(), 4)]);
+
+    await open();
+
+    const stray = await screen.findByRole("button", { name: /^Bear/ });
+    await waitFor(() =>
+      expect(document.querySelectorAll(`[${THEORY_MATCH_ATTR}="unplanned"]`)).toHaveLength(1),
+    );
+    // In words, on the one thing a keyboard reader gets from the card. Lowercased, because the
+    // sentence is folded into the control's own name here rather than drawn as a label — and
+    // that name is what says *which* row the one X is on, which the count above cannot.
+    expect(stray).toHaveAccessibleName(expect.stringContaining("not in the theory list"));
+
+    // And the planned row is untouched by the third switch: still the exact tier, and still the
+    // sentence with no "not" in front of it — which is the discrimination that matters here,
+    // since green's words are a substring of the third tier's.
+    expect(document.querySelectorAll(`[${THEORY_MATCH_ATTR}="exact"]`)).toHaveLength(1);
+    const planned = screen.getByRole("button", { name: /^Lightning Bolt/ });
+    expect(planned).toHaveAccessibleName(expect.stringContaining("in the theory list"));
+    expect(planned).toHaveAccessibleName(expect.not.stringContaining("not in the theory list"));
+  });
+
+  /** The other half of the same switch: turned off, the row the plan says nothing about goes
+   *  back to saying nothing, and the planned row beside it does not move. Both halves, because
+   *  "no X anywhere" passes on its own for an editor that never drew one. */
+  it("draws no third mark when the deck has turned it off", async () => {
+    withPlan({ theoryMarkUnplanned: false }, [card({ name: "Bear" })]);
+    deckTheorySlots.mockResolvedValue([slot(bolt(), 4)]);
+
+    await open();
+
+    await screen.findByRole("button", { name: /^Bear/ });
+    await waitFor(() =>
+      expect(document.querySelectorAll(`[${THEORY_MATCH_ATTR}="exact"]`)).toHaveLength(1),
+    );
+    expect(document.querySelectorAll(`[${THEORY_MATCH_ATTR}="unplanned"]`)).toHaveLength(0);
+    expect(screen.getByRole("button", { name: /^Bear/ })).toHaveAccessibleName(
+      expect.not.stringContaining("theory"),
     );
   });
 

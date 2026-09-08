@@ -364,25 +364,35 @@
   --color-pie-gold-deep: #a9873c;
   --color-pie-c: #c8c4bf;
 
-  /* The deckbuilder's two theory marks (2026-09-07). Green where a live row is the printing the
-     plan named, blue where it is the same card in a printing it did not.
+  /* The deckbuilder's three theory marks (2026-09-07, a third added 2026-09-08). Green where a
+     live row is the printing the plan named, blue where it is the same card in a printing it did
+     not, red where the plan does not ask for the card at all.
 
      Literal hexes rather than `var(--color-ok)` / `var(--color-pie-u)`, for `LABEL_COLORS`'
      reason one file over: these are the values a colour picker opens on and the values a reader's
      own choice replaces, so they cannot be a reference to something the palette decides later.
      `#56bd78` is `--color-ok`'s `oklch(0.72 0.14 152)` converted to sRGB — in gamut, so exact.
 
+     `#e2484f` is `--destructive`'s own hue — `oklch(0.704 0.191 22.216)`, Tailwind's red-400,
+     which is outside sRGB and renders as `#ff6467` — with the chroma pulled into gamut and taken
+     a step deeper, so the unplanned mark is a red of its own rather than the app's *there is a
+     problem here* paint. It is not `--color-pie-r` either, which is the Ember label a reader may
+     already have put on a card in the same 27px strip. Its luma is under `labelFgCss`' 0.55
+     threshold, so the glyph on it is `--color-text` like the other two.
+
      The `-fg` pair is what is legible printed on each: the banner mark is a filled box with a
-     tick or a signed number on it. `useMarkColors` overwrites all four when the reader has
+     tick, an X or a signed number on it. `useMarkColors` overwrites all six when the reader has
      chosen, computing each foreground with `labelFgCss`' luminance formula, so a pale custom
      green does not swallow the tick.
 
      Placed after the pie deeps rather than inside them because they are not a sixth identity
-     colour: they say what a mark *means*, and only two of the app's marks wear them. */
+     colour: they say what a mark *means*, and only three of the app's marks wear them. */
   --color-theory-exact: #56bd78;
   --color-theory-exact-fg: var(--color-text);
   --color-theory-name: #0e68ab;
   --color-theory-name-fg: var(--color-text);
+  --color-theory-unplanned: #e2484f;
+  --color-theory-unplanned-fg: var(--color-text);
 
   /* Rarity, as a gem dot or tinted text. Nothing bigger — a rarity is a footnote. */
   --color-rarity-common: #9aa0a6;

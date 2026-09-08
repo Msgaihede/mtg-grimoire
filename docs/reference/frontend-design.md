@@ -2180,7 +2180,7 @@ is owed — the foot of this subsection says what is unmeasured.
 
 The mark answers two questions now instead of one — **green** where a Live row is the exact
 printing the plan named, **blue** where it is that same card in a printing the plan did not name.
-The rule, the two per-deck switches and the arithmetic are in
+The rule, the per-deck switches and the arithmetic are in
 [`src/features/decks/CLAUDE.md`](../../src/features/decks/CLAUDE.md). What belongs here is the
 **colour**, because the first bullet of this section ruled green out and that finding is now
 reversed. **It is left standing above rather than deleted**: it was right about what it was
@@ -2268,6 +2268,67 @@ is the **words**: `theoryMatchLabel` says `In the theory list · 2 to add` and
 carry *"more than planned"* / *"fewer than planned"*. A one-character swing in the box's content is
 the only thing a photograph could catch here, which is why this subsection adds no pass to the one
 the section above still owes.
+
+### The third tier, and the red it is not (2026-09-08)
+
+**A Live row the plan does not ask for at all now wears a mark of its own, and it is the first
+one in this section that is neither a tick nor a number.** `unplanned` draws lucide's **`X`** —
+never a digit, because there is no arithmetic to print: the plan wants none of this card, so a
+signed count would be a subtraction against nothing. The words are **"Not in the theory list"** in
+the tooltip, in the table's `sr-only` twin and in the card's accessible name, and the attribute is
+`data-theory-match="unplanned"`. The resolver rule, the third per-deck switch and the reason a
+*planned* row never falls through to this tier are in
+[`src/features/decks/CLAUDE.md`](../../src/features/decks/CLAUDE.md); what belongs here is the
+**red**, because this app already had two of them and neither would do.
+
+**It is not the destructive token.** `--destructive` is Tailwind red-400,
+`oklch(0.704 0.191 22.216)`, which is **outside sRGB** and renders as `#ff6467` — so the paint a
+reader actually sees from that token is a clamped colour rather than the one the stylesheet names.
+That is the app's *there is a problem here* red: the rule break's edge, the shortage figure, the
+delete confirmations. A mark meaning *not in your plan* is a note about the reader's own list and
+not a verdict on the card, so wearing the problem colour would say the wrong sentence in the
+loudest register the palette has — the same argument that ruled `--color-ok` out for a tick until
+the tick's meaning changed on 2026-09-07, arriving from the other side.
+
+**It is not `--color-pie-r` either.** `#d3202a` is the Ember label colour, and a card wearing an
+Ember label draws that hue in a `QuantityTag` at the *other* end of this same 27px strip. That
+collision is exactly what azure costs the name tier — accepted there, once, because azure was the
+right blue and the two are told apart by content and position — and there was no reason at all to
+pay it a second time on a tier that could simply pick a different red.
+
+**So `#e2484f` is its own colour: red-400's hue with the chroma pulled into gamut and taken a step
+deeper.** In gamut, so the hex is the paint rather than a clamp of it; deeper than `#ff6467`, so
+it does not read as the destructive token drawn small; and clear of `#d3202a` at the other end of
+the strip. Its luma is **under `labelFgCss`' 0.55 threshold**, so `--color-theory-unplanned-fg`
+resolves to `--color-text` at the default, and `useMarkColorVars` recomputes it by the same rule
+for whatever the reader picks in Settings → Appearance — **which is the filled banner's contract
+and not the badge's**: `TableView` and `TextView` draw the X bare, in the fill colour on the row's
+own background, exactly as they already draw the tick and the number, so those two views read the
+`-fg` half not at all.
+
+⚠️ **The unfenced duplication above is now three hexes rather than two, and the gap is still
+owed.** `MARK_COLOR_DEFAULTS` in `src/lib/useMarkColors.ts` spells `#e2484f` a second time — an
+`<input type="color">` cannot take a `var()`, so the picker needs a literal to open on — and
+`useMarkColors.test.ts` asserts that same literal, which pins the constant to itself. The one test
+in `labelColors.test.ts`' shape that would close it was owed on 2026-09-07 and is owed still; the
+third tier bought it a third way to go wrong rather than a reason to write it.
+
+**Nothing about the box moved.** `COUNT_TAG_BOX_MIRRORED`'s `8/3` over the `1ch + 1.125rem` floor
+is unchanged, the glyph is drawn *in place of* the tick and never beside it, and the corner, the
+stacking under `FoilOverlay`'s chip and the `--mark-scale` arithmetic are all the same. **The four
+separations from the `RULE BREAK` mark still hold** — place (top-right filled banner against the
+rule break's bottom-left hairline box), shape, words and the card's own edge — and colour was
+never one of the three that are structural: since 2026-09-07 a reader has been able to paint the
+exact tier the destructive red if they want to, and a third pickable colour changes nothing about
+that.
+
+**Unmeasured in the shipped window**, and it inherits the whole of the pass the two subsections
+above still owe. Nothing here has been driven in WebView2 or over a `file://` page against the
+built stylesheet: red beside the gold banner on real card art, three filled marks on one wall of
+tiles, the X at `--mark-scale` 0.5 and 1.75, and a custom red against the `-fg` the luminance
+formula chose for it are each the kind of thing this section was written by. The fixture deck's
+**Dismember (`nph 57`)** is the card that wears it in every view story, which is where a
+screenshot would start.
 
 ## The two marks a deck card carries: picked, and just landed
 

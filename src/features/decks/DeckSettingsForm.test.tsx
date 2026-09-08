@@ -41,11 +41,12 @@ const VALUE: DeckSettingsValue = {
   description: "Twenty damage, quickly.",
   notes: "Sideboard plan lives in the Maybeboard.",
   theoryEnabled: false,
-  // Both marks on, which is what `decks.theory_mark_exact`/`_name` default to — so a deck that
-  // has never been asked about them is the fixture, and switching one off is what a test does
-  // deliberately rather than what it starts from.
+  // All three marks on, which is what `decks.theory_mark_exact`/`_name`/`_unplanned` default to
+  // — so a deck that has never been asked about them is the fixture, and switching one off is
+  // what a test does deliberately rather than what it starts from.
   theoryMarkExact: true,
   theoryMarkName: true,
+  theoryMarkUnplanned: true,
   folderId: null,
   defaultCategoryId: AUTO_CATEGORY,
 };
@@ -396,23 +397,30 @@ describe("DeckSettingsForm", () => {
   });
 
   /**
-   * The two marks are drawn **under** the theory switch and only while it is on. A deck with no
-   * plan has nothing for either mark to compare against, so a control for them there would be a
+   * The three marks are drawn **under** the theory switch and only while it is on. A deck with no
+   * plan has nothing for any of them to compare against, so a control for them there would be a
    * switch that changes nothing — and the reader would have no way to find that out.
    *
    * Driven through the switch above rather than through two renders, because the transition is
-   * the case: a reader turns the plan on and the two rows have to arrive under it.
+   * the case: a reader turns the plan on and the three rows have to arrive under it.
    */
-  it("offers both mark switches only when the theory list is on", async () => {
+  it("offers every mark switch only when the theory list is on", async () => {
     form();
 
     expect(screen.queryByRole("switch", { name: /matching printing/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("switch", { name: /different printing/i })).not.toBeInTheDocument();
+    // The red tier is gated on the same switch as the other two and for the same reason: *not in
+    // the theory list* is still a statement about a list, so with no plan every row would wear
+    // it. Asserted by the heading rather than by the caption, because the heading is what names
+    // the control and what a reader would look for.
+    expect(screen.queryByText("Not in the theory list")).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("switch", { name: "Theory deck Disabled" }));
 
     expect(screen.getByRole("switch", { name: /matching printing/i })).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: /different printing/i })).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: /not in the theory list/i })).toBeInTheDocument();
+    expect(screen.getByText("Not in the theory list")).toBeInTheDocument();
     expect(
       screen.getByText("A green mark on a card that is the exact printing your plan names."),
     ).toBeInTheDocument();
@@ -424,30 +432,40 @@ describe("DeckSettingsForm", () => {
         "A blue mark on a card your plan asks for in a different printing. Turning the green one off draws this one instead.",
       ),
     ).toBeInTheDocument();
+    // And the red one's own half: it is not a third answer to *which printing*, so the caption
+    // says outright that it makes no claim about one.
+    expect(
+      screen.getByText(
+        "A red mark on a card your plan does not ask for at all — a stand-in, a spare or an experiment. It says nothing about the printing; the two marks above do.",
+      ),
+    ).toBeInTheDocument();
   });
 
   /**
    * **The second gate, and it is a different question from the first.**
    *
    * `theoryEnabled` asks whether there is a plan to compare against; this asks whether the host
-   * can write the answer down. `CreateDeckDialog` cannot — `DeckInput` carries neither column and
-   * the schema's `DEFAULT 1` owns a new deck's answer — so a reader who switched the plan on
-   * inside "New deck" would otherwise get a pair of switches whose presses reach nothing.
+   * can write the answer down. `CreateDeckDialog` cannot — `DeckInput` carries none of the three
+   * columns and the schema's `DEFAULT 1` owns a new deck's answer — so a reader who switched the
+   * plan on inside "New deck" would otherwise get a set of switches whose presses reach nothing.
    * `defaultCategoryId`'s row is absent from that host for the same shape of reason.
    */
-  it("draws neither mark switch for a host that cannot write them, plan or no plan", () => {
+  it("draws no mark switch for a host that cannot write them, plan or no plan", () => {
     form({ value: { ...VALUE, theoryEnabled: true }, canSetTheoryMarks: false });
 
     expect(screen.getByRole("switch", { name: "Theory deck Enabled" })).toBeInTheDocument();
     expect(screen.queryByRole("switch", { name: /matching printing/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("switch", { name: /different printing/i })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("switch", { name: /not in the theory list/i }),
+    ).not.toBeInTheDocument();
   });
 
   /**
-   * Two switches, two columns — `theory_mark_exact` and `theory_mark_name` — and the whole
-   * reason there are two of them is that blue without green is a real answer. A row that
-   * reported its neighbour's field would collapse them into one three-valued control that
-   * cannot spell it.
+   * Three switches, three columns — `theory_mark_exact`, `theory_mark_name` and
+   * `theory_mark_unplanned` — and the whole reason there are three of them is that blue without
+   * green is a real answer and so is red alone. A row that reported a neighbour's field would
+   * collapse them into one ordered control that cannot spell either.
    */
   it("reports each switch on its own", async () => {
     const { onChange, onCommit } = form({ value: { ...VALUE, theoryEnabled: true } });
@@ -464,12 +482,18 @@ describe("DeckSettingsForm", () => {
     await userEvent.click(screen.getByRole("switch", { name: /matching printing/i }));
 
     expect(onChange).toHaveBeenLastCalledWith({ theoryMarkExact: false });
+
+    // The red tier, the one a reader may want *without* either of the two above it.
+    await userEvent.click(screen.getByRole("switch", { name: /not in the theory list/i }));
+
+    expect(onChange).toHaveBeenLastCalledWith({ theoryMarkUnplanned: false });
+    expect(onCommit).not.toHaveBeenCalled();
   });
 
   /**
-   * The swatch carries the distinction the words *green* and *blue* only name — and it is the
-   * reader's **own** colour, because `useMarkColors` writes these two custom properties at the
-   * app root when they have chosen in Settings.
+   * The swatch carries the distinction the words *green*, *blue* and *red* only name — and it is
+   * the reader's **own** colour, because `useMarkColors` writes these three custom properties at
+   * the app root when they have chosen in Settings.
    *
    * The custom-property *name* is what is asserted: jsdom resolves no stylesheet, so a computed
    * colour here would be the empty string whatever the mark is drawn in.
@@ -482,6 +506,9 @@ describe("DeckSettingsForm", () => {
     const swatch = (id: string) => document.getElementById(id)?.firstElementChild as HTMLElement;
     expect(swatch("s-theory-mark-exact").style.backgroundColor).toBe("var(--color-theory-exact)");
     expect(swatch("s-theory-mark-name").style.backgroundColor).toBe("var(--color-theory-name)");
+    expect(swatch("s-theory-mark-unplanned").style.backgroundColor).toBe(
+      "var(--color-theory-unplanned)",
+    );
   });
 
   /** Filing, and the `""` that is a real answer rather than a placeholder. */

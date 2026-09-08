@@ -308,7 +308,7 @@ describe("visiblePanels", () => {
    * reader types the word they have, and one of the two would answer nothing at all.
    */
   it("finds the colours by the words a reader would type", () => {
-    for (const query of ["colour", "color", "green", "checkmark", "theory mark", "customize"]) {
+    for (const query of ["colour", "color", "green", "checkmark", "theory mark", "customize", "red", "cross"]) {
       expect(visiblePanels("updates", query, false)).toContain("theory-marks");
     }
   });

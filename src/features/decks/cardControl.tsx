@@ -359,17 +359,19 @@ export function deckCardName(
   ruleBreakText: string | null,
   /**
    * What the deck's plan says about this row — `theoryMatch.ts`'s `theoryMatchMark`, and `null`
-   * for every card of a deck that keeps no plan. Otherwise **which of the two tiers** the row is
-   * in and how far the live list is from the plan at that tier's own grain, where `0` is the card
-   * the plan asks for exactly and a signed number is the difference.
+   * for every card of a deck that keeps no plan. Otherwise **which of the three tiers** the row
+   * is in and how far the live list is from the plan at that tier's own grain, where `0` is the
+   * card the plan asks for exactly and a signed number is the difference.
    *
    * **The tier is said in words here and nowhere else on three of the four views.** The mark
-   * itself is `TheoryMatchMark`, whose whole statement of *which* tier is a colour — green for
-   * the printing the plan named, blue for another printing of a planned card — and a colour says
-   * nothing at all to a reader who cannot see it, so `theoryMatchLabel` is handed the tier below
-   * rather than the delta alone. **`null` and `0` are still not the same statement** and the
-   * clause turns on the difference: absent draws no mark and says nothing, `0` says the tier's
-   * sentence, and anything else says it with the count on the end.
+   * itself is `TheoryMatchMark`, whose statement of *which* tier is a colour and a glyph — green
+   * for the printing the plan named, blue for another printing of a planned card, red with an X
+   * for a card the plan does not ask for at all — and a colour says nothing to a reader who
+   * cannot see it, so `theoryMatchLabel` is handed the tier below rather than the delta alone.
+   * **`null` and `0` are still not the same statement** and the clause turns on the difference:
+   * absent draws no mark and says nothing, `0` says the tier's sentence, and anything else says
+   * it with the count on the end — except on the `unplanned` tier, which never carries a count
+   * because there is no order for the live list to be short of.
    */
   theoryMark: TheoryMark | null = null,
 ): string {
@@ -403,9 +405,11 @@ export function deckCardName(
     //
     // `theoryMatchLabel` is the same sentence the mark's own tooltip and the table's `sr-only`
     // twin say, so a reader who cannot see the `-8` still gets "8 to remove" rather than the
-    // bare "in the theory list" this said before issue #212 — and, since the mark grew a
-    // second tier, the same sentence names **which** tier, because that half of the mark is drawn
-    // as a colour and a colour is the one thing a screen reader is told nothing about.
+    // bare "in the theory list" this said before issue #212 — and, since the mark grew its
+    // second and third tiers, the same sentence names **which** tier, because that half of the
+    // mark is drawn as a colour and a glyph and a colour is the one thing a screen reader is told
+    // nothing about. On the third tier the sentence is the negation — "not in the theory list" —
+    // which is the whole of what that mark says and is why the count clause is absent there.
     theoryMark === null
       ? null
       : theoryMatchLabel(theoryMark.tier, theoryMark.delta).toLowerCase(),

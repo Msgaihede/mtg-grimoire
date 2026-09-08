@@ -65,6 +65,7 @@ const BURN: DeckRow = {
   theoryEnabled: false,
   theoryMarkExact: true,
   theoryMarkName: true,
+  theoryMarkUnplanned: true,
   lastVariant: "live",
   lastGroupBy: "category",
   lastSortBy: "alphabetical",
@@ -637,11 +638,11 @@ describe("DeckSettingsDialog", () => {
   });
 
   /**
-   * The two marks, each relayed to its own column.
+   * The three marks, each relayed to its own column.
    *
-   * They are two `deck_update` fields rather than one because blue without green is a real
-   * answer, so a relay that carried both — or that sent the wrong one — would collapse the pair
-   * into a three-valued control the columns are deliberately not.
+   * They are three `deck_update` fields rather than one because blue without green is a real
+   * answer and so is red alone, so a relay that carried the set — or that sent the wrong member
+   * of it — would collapse them into an ordered control the columns are deliberately not.
    */
   it("relays each theory mark on its own", async () => {
     deckGet.mockResolvedValue(withPlan());
@@ -653,10 +654,15 @@ describe("DeckSettingsDialog", () => {
 
     await userEvent.click(screen.getByRole("switch", { name: /Matching printing/ }));
     await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { theoryMarkExact: false }));
+
+    // The red tier, whose column this dialog reached through no arm of its own: `update` takes a
+    // whole `DeckPatch`, so the field costs one line here and nothing in `useDeck`.
+    await userEvent.click(screen.getByRole("switch", { name: /Not in the theory list/ }));
+    await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { theoryMarkUnplanned: false }));
   });
 
-  /** And a deck with no plan is offered neither, for the reason it is offered no theory clear:
-   *  there is no second list for either mark to compare a row against. */
+  /** And a deck with no plan is offered none of them, for the reason it is offered no theory
+   *  clear: there is no second list for any mark to compare a row against. */
   it("draws no mark switches on a deck with no plan", async () => {
     open();
     await loaded();
@@ -664,6 +670,7 @@ describe("DeckSettingsDialog", () => {
     expect(screen.getByRole("switch", { name: /Theory deck/ })).toBeInTheDocument();
     expect(screen.queryByRole("switch", { name: /Matching printing/ })).toBeNull();
     expect(screen.queryByRole("switch", { name: /Different printing/ })).toBeNull();
+    expect(screen.queryByRole("switch", { name: /Not in the theory list/ })).toBeNull();
   });
 
   /** The format dropdown drives the same command, and sends a key rather than a display name. */

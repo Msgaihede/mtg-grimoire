@@ -31,18 +31,26 @@ const meta = {
     docs: {
       description: {
         component:
-          "The two colours the theory marks are drawn in.\n\n" +
-          "A deck that keeps a plan marks its **live** list against it in two tiers: one colour " +
-          "where the card is the printing the plan named, another where it is the same card in " +
-          "a printing the plan did not name. `CardMarks.tsx` sets out the four separations that " +
-          "keep either from reading as the app's *there is a problem here* mark — the corner, " +
-          "the colour, the shape and the card's own edge — and says out loud that **the colour " +
-          "is the one of the four a reader can defeat**. This panel is where they defeat it.\n\n" +
+          "The three colours the theory marks are drawn in.\n\n" +
+          "A deck that keeps a plan marks its **live** list against it in three tiers: one " +
+          "colour where the card is the printing the plan named, another where it is the same " +
+          "card in a printing the plan did not name, and a third where the plan does not ask for " +
+          "the card at all. `CardMarks.tsx` sets out the four separations that " +
+          "keep any of them from reading as the app's *there is a problem here* mark — the " +
+          "corner, the colour, the shape and the card's own edge — and says out loud that **the " +
+          "colour is the one of the four a reader can defeat**. This panel is where they defeat " +
+          "it.\n\n" +
           "**Green and azure are also the pair a red-green or a blue-yellow confusion has the " +
           "hardest time telling apart**, and no palette this app ships is the right answer for " +
           "every pair of eyes. The marks' own words carry the distinction for anybody reading " +
           "them another way; this is for the reader who can see them and wants them further " +
-          "apart than we chose.\n\n" +
+          "apart than we chose. **The third mark ships red and the rule-break mark is red too**, " +
+          "so a reader who finds those two too close on their own screen has a control here " +
+          "rather than a defect to report — the place, the shape and the words keep them apart " +
+          "whatever colour is picked.\n\n" +
+          "**The unplanned row previews one mark where the other two preview two**, which is " +
+          "that tier's rule drawn rather than restated: nothing is planned, so there is no order " +
+          "to be short of, and the mark is an X in every state it has.\n\n" +
           "**Reset clears the row rather than writing today's hex.** A reader who has never " +
           "chosen and one who has just reset have to end in the same state, and they only do if " +
           "the entry is deleted — a default written into the database would freeze today's " +
@@ -63,8 +71,7 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 /**
- * The panel as it comes: both marks on the colours `index.css` gives them, and nothing to put
- * back.
+ * The panel as it comes: every mark on the colour `index.css` gives it, and nothing to put back.
  *
  * **Two previews per row and not one**, which is what this story is for looking at: the number
  * *replaces* the tick on a card the plan asks a different count of, so a preview of the tick
@@ -72,6 +79,10 @@ type Story = StoryObj<typeof meta>;
  * background rather than on the panel's card, because that is the tone they are really drawn
  * against — these marks live on card art, and a fill judged against a pale surface is judged
  * against a surface it never meets.
+ *
+ * **Except the third row, which draws one**, and that asymmetry is the thing to look at here: an
+ * unplanned card has no order to be short of, so the mark is an X at every count and a second box
+ * beside it could only hold a state the app never produces.
  *
  * The paragraph above the list **names neither colour**, which is the one thing the prose here
  * has to get right: the reader may already have replaced both, and a panel that opened by calling
@@ -81,9 +92,13 @@ export const Default: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
-    // Each row names its own controls, which is `HiddenTagsPanel`'s rule: two buttons reading
-    // "Reset" are two buttons a screen reader cannot choose between.
-    for (const noun of ["matching-printing mark", "different-printing mark"]) {
+    // Each row names its own controls, which is `HiddenTagsPanel`'s rule: three buttons reading
+    // "Reset" are three buttons a screen reader cannot choose between.
+    for (const noun of [
+      "matching-printing mark",
+      "different-printing mark",
+      "unplanned-card mark",
+    ]) {
       const swatch = canvas.getByRole("button", { name: SWATCH(noun) });
       // Shut, and saying so — the picker is a draft that opening seeds and closing throws away.
       await expect(swatch).toHaveAttribute("aria-expanded", "false");
@@ -100,6 +115,15 @@ export const Default: Story = {
       .toHaveStyle({ backgroundColor: MARK_COLOR_DEFAULTS.theoryExact });
     await expect(swatchOf(canvas.getByRole("button", { name: SWATCH("different-printing mark") })))
       .toHaveStyle({ backgroundColor: MARK_COLOR_DEFAULTS.theoryName });
+    await expect(swatchOf(canvas.getByRole("button", { name: SWATCH("unplanned-card mark") })))
+      .toHaveStyle({ backgroundColor: MARK_COLOR_DEFAULTS.theoryUnplanned });
+
+    // **Two previews on the counted rows and one on the third**, read off `data-theory-match`
+    // rather than off a colour — the fill is a custom property the reader may have replaced, so
+    // the attribute is the only handle that tells the marks apart honestly.
+    await expect(canvasElement.querySelectorAll('[data-theory-match="exact"]')).toHaveLength(2);
+    await expect(canvasElement.querySelectorAll('[data-theory-match="name"]')).toHaveLength(2);
+    await expect(canvasElement.querySelectorAll('[data-theory-match="unplanned"]')).toHaveLength(1);
 
     // The sentence a reader with two devices cannot do without: these colours are an `app_meta`
     // row, and `app_meta` is not one of the twelve tables sync carries.
@@ -156,12 +180,60 @@ export const Customised: Story = {
     await expect(
       canvas.getByRole("button", { name: RESET("different-printing mark") }),
     ).not.toHaveAttribute("aria-disabled");
-    await expect(
-      canvas.getByRole("button", { name: RESET("matching-printing mark") }),
-    ).toHaveAttribute("aria-disabled", "true");
+    for (const noun of ["matching-printing mark", "unplanned-card mark"]) {
+      await expect(canvas.getByRole("button", { name: RESET(noun) })).toHaveAttribute(
+        "aria-disabled",
+        "true",
+      );
+    }
     await expect(
       swatchOf(canvas.getByRole("button", { name: SWATCH("matching-printing mark") })),
     ).toHaveStyle({ backgroundColor: MARK_COLOR_DEFAULTS.theoryExact });
+    await expect(
+      swatchOf(canvas.getByRole("button", { name: SWATCH("unplanned-card mark") })),
+    ).toHaveStyle({ backgroundColor: MARK_COLOR_DEFAULTS.theoryUnplanned });
+
+    await expect(canvas.queryByRole("alert")).not.toBeInTheDocument();
+  },
+};
+
+/**
+ * The third mark taken off red, which is the one thing this panel exists for that no other row
+ * demonstrates.
+ *
+ * `--color-theory-unplanned` ships `#e2484f`, and the app's `RULE BREAK` mark is red too. The two
+ * are kept apart by **place** (a filled banner in the card's top-right corner against a hairline
+ * box in the bottom-left), **shape** (a fill with a glyph on it against an outline with two words
+ * in it) and **words** — three separations that hold whatever is picked here, which is exactly why
+ * `CardMarks.tsx` insists on four of them rather than one. But a reader who finds the two too
+ * close on their own screen has this control rather than a defect to report, and that is what the
+ * press below is: Slate, and the X unmistakably not the app's red any more.
+ *
+ * **Only the preview beside the swatch moves in this story**, and the row's own `previewVars`
+ * is why: the property is set on the row's group, so the draft and then the committed colour
+ * reach the mark inside it and nothing outside — the other two rows keep the stylesheet's.
+ */
+export const UnplannedRecoloured: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const trigger = canvas.getByRole("button", { name: SWATCH("unplanned-card mark") });
+
+    await userEvent.click(trigger);
+    // Named for the mark's own sentence, which is what the card says and what `deckCardName`
+    // speaks — the other two rows are named for a distinction this tier does not draw.
+    const picker = canvas.getByRole("group", { name: "Not in the theory list colour" });
+    await userEvent.click(within(picker).getByRole("button", { name: "Slate" }));
+    await userEvent.click(within(picker).getByRole("button", { name: "Done" }));
+
+    await waitFor(async () => {
+      await expect(trigger).toHaveAttribute("aria-expanded", "false");
+    });
+    await expect(swatchOf(trigger)).toHaveStyle({ backgroundColor: "#c8c4bf" });
+
+    // The row still draws one preview and it is still an X: the colour is the reader's and the
+    // glyph is the tier's, so recolouring reaches one of the two and never the other.
+    await expect(canvasElement.querySelectorAll('[data-theory-match="unplanned"]')).toHaveLength(1);
+    await expect(canvas.queryAllByText("+2")).toHaveLength(2);
 
     await expect(canvas.queryByRole("alert")).not.toBeInTheDocument();
   },

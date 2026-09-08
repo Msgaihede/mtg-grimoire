@@ -37,9 +37,17 @@ const slot = (key: string, nameKey: string | null, quantity = 1): TheorySlot => 
   quantity,
 });
 
-/** Both marks on, which is what every deck is born with and what everything but the switch block
- *  asks about. */
-const BOTH: TheoryMarkSwitches = { exact: true, name: true };
+/**
+ * Every mark on, which is what every deck is born with and what everything but the switch block
+ * asks about.
+ *
+ * **It was called `BOTH` until the third tier landed on 2026-09-08**, and the rename is the point
+ * rather than tidiness: a constant still saying "both" while it carried three switches would be a
+ * name quietly lying to every case that reads it, on exactly the axis those cases are about. What
+ * it costs is that a row the plan does not ask for now resolves to `unplanned` here where it used
+ * to resolve to nothing — which is the change, said in the fixture.
+ */
+const ALL: TheoryMarkSwitches = { exact: true, name: true, unplanned: true };
 
 /**
  * **The slots are hand-spelled rather than built with {@link theorySlot}, and that is the point.**
@@ -79,12 +87,12 @@ describe("theoryNameKey", () => {
   });
 });
 
-describe("the two tiers", () => {
+describe("the three tiers", () => {
   it("draws the exact tier for the printing the plan names", () => {
     const plan = theoryMatchPlan(
       [{ key: "bolt-lea|", nameKey: "Lightning Bolt", quantity: 4 }],
       [card({ cardId: "bolt-lea", finish: null, name: "Lightning Bolt", quantity: 4 })],
-      BOTH,
+      ALL,
     );
     expect(
       theoryMatchMark(plan, card({ cardId: "bolt-lea", finish: null, name: "Lightning Bolt" })),
@@ -95,7 +103,7 @@ describe("the two tiers", () => {
     const plan = theoryMatchPlan(
       [{ key: "bolt-lea|", nameKey: "Lightning Bolt", quantity: 4 }],
       [card({ cardId: "bolt-m10", finish: null, name: "Lightning Bolt", quantity: 4 })],
-      BOTH,
+      ALL,
     );
     expect(
       theoryMatchMark(plan, card({ cardId: "bolt-m10", finish: null, name: "Lightning Bolt" })),
@@ -106,22 +114,42 @@ describe("the two tiers", () => {
     const plan = theoryMatchPlan(
       [{ key: "bolt-lea|foil", nameKey: "Lightning Bolt", quantity: 4 }],
       [card({ cardId: "bolt-lea", finish: null, name: "Lightning Bolt", quantity: 4 })],
-      BOTH,
+      ALL,
     );
     expect(
       theoryMatchMark(plan, card({ cardId: "bolt-lea", finish: null, name: "Lightning Bolt" })),
     ).toEqual({ tier: "name", delta: 0 });
   });
 
-  it("draws nothing for a card the plan does not ask for at all", () => {
+  /**
+   * The third tier, 2026-09-08 — and this case is the one the change reverses. It asserted
+   * `null` until then, on a fixture whose switches said nothing about a tier that did not exist.
+   *
+   * `delta: 0` and not a number: nothing is planned, so there is no order for the live list to be
+   * short of or over on, and `CardMarks.tsx` draws an X rather than reading this at all.
+   */
+  it("draws the unplanned tier for a card the plan does not ask for at all", () => {
     const plan = theoryMatchPlan(
       [{ key: "bolt-lea|", nameKey: "Lightning Bolt", quantity: 4 }],
       [card({ cardId: "ring-c11", finish: null, name: "Sol Ring", quantity: 1 })],
-      BOTH,
+      ALL,
     );
     expect(
       theoryMatchMark(plan, card({ cardId: "ring-c11", finish: null, name: "Sol Ring" })),
-    ).toBeNull();
+    ).toEqual({ tier: "unplanned", delta: 0 });
+  });
+
+  /** A live row holding four copies of a card nothing plans is still `0`: the number would be an
+   *  arithmetic against an order that does not exist, so the tier carries none at any count. */
+  it("carries no number on the unplanned tier however many copies the row holds", () => {
+    const plan = theoryMatchPlan(
+      [{ key: "bolt-lea|", nameKey: "Lightning Bolt", quantity: 4 }],
+      [card({ cardId: "ring-c11", finish: null, name: "Sol Ring", quantity: 4 })],
+      ALL,
+    );
+    expect(
+      theoryMatchMark(plan, card({ cardId: "ring-c11", finish: null, name: "Sol Ring" })),
+    ).toEqual({ tier: "unplanned", delta: 0 });
   });
 });
 
@@ -140,7 +168,7 @@ describe("the number's grain follows the tier", () => {
     const live = printings.map((cardId) =>
       card({ cardId, finish: null, name: "Forest", quantity: 2 }),
     );
-    const plan = theoryMatchPlan([{ key: "forest-a|", nameKey: "Forest", quantity: 8 }], live, BOTH);
+    const plan = theoryMatchPlan([{ key: "forest-a|", nameKey: "Forest", quantity: 8 }], live, ALL);
     const marks = printings.map((cardId) =>
       theoryMatchMark(plan, card({ cardId, finish: null, name: "Forest" })),
     );
@@ -160,7 +188,7 @@ describe("the number's grain follows the tier", () => {
         card({ cardId: "bolt-m10", finish: null, name: "Lightning Bolt", quantity: 1 }),
         card({ cardId: "bolt-m10", finish: "foil", name: "Lightning Bolt", quantity: 1 }),
       ],
-      BOTH,
+      ALL,
     );
     // Two live, four planned, at the card's grain: two to add.
     expect(
@@ -174,7 +202,7 @@ describe("the number's grain follows the tier", () => {
     const plan = theoryMatchPlan(
       [slot("bolt-lea|", "Lightning Bolt", 2), slot("bolt-m10|", "Lightning Bolt", 2)],
       [card({ cardId: "bolt-2xm", name: "Lightning Bolt", quantity: 1 })],
-      BOTH,
+      ALL,
     );
 
     expect(theoryMatchMark(plan, card({ cardId: "bolt-2xm", name: "Lightning Bolt" }))).toEqual({
@@ -192,9 +220,11 @@ describe("the switches", () => {
         card({ cardId: "forest-a", finish: null, name: "Forest", quantity: 2 }),
         card({ cardId: "forest-b", finish: null, name: "Forest", quantity: 6 }),
       ],
-      { exact: false, name: true },
+      { exact: false, name: true, unplanned: true },
     );
-    // Blue, and blue's number: eight live against eight planned, not two against eight.
+    // Blue, and blue's number: eight live against eight planned, not two against eight. And
+    // **not** the third tier, with the third switch on: the row is in the plan's exact map, so
+    // the exact switch being off silences a statement rather than making the card unplanned.
     expect(
       theoryMatchMark(plan, card({ cardId: "forest-a", finish: null, name: "Forest" })),
     ).toEqual({ tier: "name", delta: 0 });
@@ -208,23 +238,70 @@ describe("the switches", () => {
     const plan = theoryMatchPlan([{ key: "bolt-lea|", nameKey: "Lightning Bolt", quantity: 4 }], live, {
       exact: true,
       name: false,
+      unplanned: true,
     });
     expect(
       theoryMatchMark(plan, card({ cardId: "bolt-lea", finish: null, name: "Lightning Bolt" })),
     ).toEqual({ tier: "exact", delta: 0 });
+    // Silenced, and **not** unplanned: the other printing's name is in the plan, so the card is
+    // asked for even though this row's own tier is switched off.
     expect(
       theoryMatchMark(plan, card({ cardId: "bolt-m10", finish: null, name: "Lightning Bolt" })),
     ).toBeNull();
   });
 
-  it("draws nothing at all with both switches off", () => {
+  /**
+   * The rule the third tier is easiest to get wrong on, so it is asserted with that switch
+   * **on**: a row the plan asks for is never unplanned, however the first two switches are set.
+   * A resolver that fell through to the third tier after silencing the first two would mark the
+   * card the reader planned most deliberately as one the plan does not want.
+   */
+  it("draws nothing at all for a planned row with the exact and loose marks off", () => {
     const plan = theoryMatchPlan(
       [{ key: "bolt-lea|", nameKey: "Lightning Bolt", quantity: 4 }],
       [card({ cardId: "bolt-lea", finish: null, name: "Lightning Bolt", quantity: 4 })],
-      { exact: false, name: false },
+      { exact: false, name: false, unplanned: true },
     );
     expect(
       theoryMatchMark(plan, card({ cardId: "bolt-lea", finish: null, name: "Lightning Bolt" })),
+    ).toBeNull();
+  });
+
+  /** The third switch off is what every deck did before 2026-09-08: a row the plan does not ask
+   *  for draws nothing at all, and the other two tiers are untouched by it. */
+  it("draws nothing for an unplanned row when the unplanned mark is off", () => {
+    const plan = theoryMatchPlan(
+      [{ key: "bolt-lea|", nameKey: "Lightning Bolt", quantity: 4 }],
+      [
+        card({ cardId: "bolt-lea", finish: null, name: "Lightning Bolt", quantity: 4 }),
+        card({ cardId: "ring-c11", finish: null, name: "Sol Ring", quantity: 1 }),
+      ],
+      { exact: true, name: true, unplanned: false },
+    );
+    expect(
+      theoryMatchMark(plan, card({ cardId: "ring-c11", finish: null, name: "Sol Ring" })),
+    ).toBeNull();
+    expect(
+      theoryMatchMark(plan, card({ cardId: "bolt-lea", finish: null, name: "Lightning Bolt" })),
+    ).toEqual({ tier: "exact", delta: 0 });
+  });
+
+  /** All three off is still a real answer and is not a second spelling of the theory switch
+   *  being off — the deck keeps its plan, and asks for none of it to be marked. */
+  it("draws nothing at all with all three switches off", () => {
+    const plan = theoryMatchPlan(
+      [{ key: "bolt-lea|", nameKey: "Lightning Bolt", quantity: 4 }],
+      [
+        card({ cardId: "bolt-lea", finish: null, name: "Lightning Bolt", quantity: 4 }),
+        card({ cardId: "ring-c11", finish: null, name: "Sol Ring", quantity: 1 }),
+      ],
+      { exact: false, name: false, unplanned: false },
+    );
+    expect(
+      theoryMatchMark(plan, card({ cardId: "bolt-lea", finish: null, name: "Lightning Bolt" })),
+    ).toBeNull();
+    expect(
+      theoryMatchMark(plan, card({ cardId: "ring-c11", finish: null, name: "Sol Ring" })),
     ).toBeNull();
   });
 });
@@ -234,33 +311,45 @@ describe("the name key", () => {
     const plan = theoryMatchPlan(
       [{ key: "bolt-lea|", nameKey: "Lightning Bolt", quantity: 1 }],
       [card({ cardId: "bolt-m10", finish: null, name: "LIGHTNING BOLT", quantity: 1 })],
-      BOTH,
+      ALL,
     );
     expect(
       theoryMatchMark(plan, card({ cardId: "bolt-m10", finish: null, name: "LIGHTNING BOLT" })),
     ).toEqual({ tier: "name", delta: 0 });
   });
 
-  /** A slot with no name is an orphan: it can still be matched exactly and can match nothing
-   *  loosely. A `null` that fell into the map as a key would make every unnamed live row match
-   *  every orphan. */
+  /**
+   * A slot with no name is an orphan: it can still be matched exactly and can match nothing
+   * loosely. A `null` that fell into the map as a key would make every unnamed live row match
+   * every orphan.
+   *
+   * **The assertion is that the row is `unplanned` rather than `name`**, which since 2026-09-08
+   * is the stronger of the two available and the one that cannot pass by accident: `null` was
+   * what an unmatched row answered before the third tier existed, so a `toBeNull()` here would
+   * agree with the orphan having entered `byName` *and* with the third switch being ignored.
+   */
   it("gives an orphan slot no loose tier", () => {
     const plan = theoryMatchPlan(
       [{ key: "gone|", nameKey: null, quantity: 1 }],
       [card({ cardId: "other", finish: null, name: "Forest", quantity: 1 })],
-      BOTH,
+      ALL,
     );
     expect(plan?.byName.size).toBe(0);
-    expect(theoryMatchMark(plan, card({ cardId: "other", finish: null, name: "Forest" }))).toBeNull();
+    expect(theoryMatchMark(plan, card({ cardId: "other", finish: null, name: "Forest" }))).toEqual({
+      tier: "unplanned",
+      delta: 0,
+    });
   });
 
   /** An orphan is still a *planned printing*, so the exact tier is untouched by its having no
-   *  name at all. */
+   *  name at all — and so is its unplanned-ness, because being in the exact map is the whole of
+   *  what "in the plan" means. A row whose printing has left the corpus must not be marked as one
+   *  the plan never asked for. */
   it("still matches an orphan slot exactly", () => {
     const plan = theoryMatchPlan(
       [{ key: "gone|", nameKey: null, quantity: 1 }],
       [card({ cardId: "gone", finish: null, name: "Whatever the row remembers", quantity: 1 })],
-      BOTH,
+      ALL,
     );
 
     expect(
@@ -269,6 +358,24 @@ describe("the name key", () => {
         card({ cardId: "gone", finish: null, name: "Whatever the row remembers" }),
       ),
     ).toEqual({ tier: "exact", delta: 0 });
+  });
+
+  /** The same orphan with the exact mark switched off: silenced, never unplanned. The name tier
+   *  cannot take it (it is in no `byName` entry) and the third tier may not, because it is in the
+   *  plan — so `null` is the honest answer and the only one. */
+  it("silences an orphan slot with the exact mark off rather than calling it unplanned", () => {
+    const plan = theoryMatchPlan(
+      [{ key: "gone|", nameKey: null, quantity: 1 }],
+      [card({ cardId: "gone", finish: null, name: "Whatever the row remembers", quantity: 1 })],
+      { exact: false, name: true, unplanned: true },
+    );
+
+    expect(
+      theoryMatchMark(
+        plan,
+        card({ cardId: "gone", finish: null, name: "Whatever the row remembers" }),
+      ),
+    ).toBeNull();
   });
 });
 
@@ -286,7 +393,7 @@ describe("the exact tier's arithmetic", () => {
         card({ cardId: "bolt-lea", name: "Lightning Bolt" }),
         card({ cardId: "ring-c21", name: "Sol Ring" }),
       ],
-      BOTH,
+      ALL,
     );
 
     expect(theoryMatchMark(plan, card({ cardId: "bolt-lea", name: "Lightning Bolt" }))).toEqual({
@@ -308,7 +415,7 @@ describe("the exact tier's arithmetic", () => {
         card({ cardId: "ring-c21", name: "Sol Ring" }),
         card({ cardId: "ring-c21", name: "Sol Ring", finish: "foil" }),
       ],
-      BOTH,
+      ALL,
     );
 
     expect(
@@ -325,7 +432,7 @@ describe("the exact tier's arithmetic", () => {
     const plan = theoryMatchPlan(
       [slot("ring-c21|", "Sol Ring")],
       [card({ cardId: "ring-c21", name: "Sol Ring" })],
-      BOTH,
+      ALL,
     );
 
     expect(theoryMatchMark(plan, card({ cardId: "ring-c21", name: "Sol Ring" }))).toEqual({
@@ -334,11 +441,20 @@ describe("the exact tier's arithmetic", () => {
     });
   });
 
-  it("marks nothing against a plan that is empty", () => {
-    const plan = theoryMatchPlan([], [card({ cardId: "bolt-lea", name: "Lightning Bolt" })], BOTH);
+  /**
+   * An empty plan is a plan that asks for nothing, which is not the same statement as there being
+   * no plan — `undefined` is that one, and it answers `null` for every row (see the last block in
+   * this file). So with the third switch on, every row of a deck whose plan is empty is
+   * `unplanned`, which is exactly true of it. This case asserted `null` until 2026-09-08.
+   */
+  it("marks every row unplanned against a plan that is empty", () => {
+    const plan = theoryMatchPlan([], [card({ cardId: "bolt-lea", name: "Lightning Bolt" })], ALL);
 
     expect(plan?.exact.size).toBe(0);
-    expect(theoryMatchMark(plan, card({ cardId: "bolt-lea", name: "Lightning Bolt" }))).toBeNull();
+    expect(theoryMatchMark(plan, card({ cardId: "bolt-lea", name: "Lightning Bolt" }))).toEqual({
+      tier: "unplanned",
+      delta: 0,
+    });
   });
 
   /** One card the plan files in two of its piles should arrive folded — the command groups — but
@@ -347,7 +463,7 @@ describe("the exact tier's arithmetic", () => {
     const plan = theoryMatchPlan(
       [slot("bolt-lea|", "Lightning Bolt", 2), slot("bolt-lea|", "Lightning Bolt", 2)],
       [card({ cardId: "bolt-lea", name: "Lightning Bolt", quantity: 4 })],
-      BOTH,
+      ALL,
     );
 
     expect(plan?.exact.size).toBe(1);
@@ -362,7 +478,7 @@ describe("the exact tier's arithmetic", () => {
     const plan = theoryMatchPlan(
       [slot("bolt-lea|", "Lightning Bolt", 4)],
       [card({ cardId: "bolt-lea", name: "Lightning Bolt", quantity: 2 })],
-      BOTH,
+      ALL,
     );
 
     expect(theoryMatchMark(plan, card({ cardId: "bolt-lea", name: "Lightning Bolt" }))).toEqual({
@@ -377,7 +493,7 @@ describe("the exact tier's arithmetic", () => {
     const plan = theoryMatchPlan(
       [slot("bolt-lea|", "Lightning Bolt", 2)],
       [card({ cardId: "bolt-lea", name: "Lightning Bolt", quantity: 4 })],
-      BOTH,
+      ALL,
     );
 
     expect(theoryMatchMark(plan, card({ cardId: "bolt-lea", name: "Lightning Bolt" }))).toEqual({
@@ -396,7 +512,7 @@ describe("the exact tier's arithmetic", () => {
         card({ cardId: "bolt-lea", name: "Lightning Bolt", quantity: 4 }),
         card({ cardId: "bolt-lea", name: "Lightning Bolt", quantity: 1 }),
       ],
-      BOTH,
+      ALL,
     );
 
     expect(theoryMatchMark(plan, card({ cardId: "bolt-lea", name: "Lightning Bolt" }))).toEqual({
@@ -413,7 +529,7 @@ describe("the exact tier's arithmetic", () => {
         card({ cardId: "ring-c21", name: "Sol Ring", quantity: 1 }),
         card({ cardId: "ring-c21", name: "Sol Ring", finish: "foil", quantity: 1 }),
       ],
-      BOTH,
+      ALL,
     );
 
     expect(theoryMatchMark(plan, card({ cardId: "ring-c21", name: "Sol Ring" }))).toEqual({
@@ -436,7 +552,7 @@ describe("an inactive pile counts on neither side of either tier", () => {
         card({ cardId: "bolt-lea", name: "Lightning Bolt", quantity: 1 }),
         card({ cardId: "bolt-lea", name: "Lightning Bolt", quantity: 3, categoryActive: false }),
       ],
-      BOTH,
+      ALL,
     );
 
     expect(theoryMatchMark(plan, card({ cardId: "bolt-lea", name: "Lightning Bolt" }))).toEqual({
@@ -452,7 +568,7 @@ describe("an inactive pile counts on neither side of either tier", () => {
         card({ cardId: "bolt-m10", name: "Lightning Bolt", quantity: 1 }),
         card({ cardId: "bolt-2xm", name: "Lightning Bolt", quantity: 3, categoryActive: false }),
       ],
-      BOTH,
+      ALL,
     );
 
     expect(theoryMatchMark(plan, card({ cardId: "bolt-m10", name: "Lightning Bolt" }))).toEqual({
@@ -472,7 +588,7 @@ describe("the difference floor", () => {
     const plan = theoryMatchPlan(
       [{ key: "ring-c11|", nameKey: "Sol Ring", quantity: 1 }],
       [card({ cardId: "ring-ltr", finish: null, name: "Sol Ring", quantity: 1 })],
-      BOTH,
+      ALL,
     );
     expect(
       theoryMatchMark(plan, card({ cardId: "ring-ltr", finish: null, name: "Sol Ring" })),
@@ -487,7 +603,7 @@ describe("the difference floor", () => {
     const plan = theoryMatchPlan(
       [slot("sol-c21|", "Sol Ring", 1)],
       [card({ cardId: "sol-c21", name: "Sol Ring", categoryActive: false })],
-      BOTH,
+      ALL,
     );
 
     expect(theoryMatchMark(plan, card({ cardId: "sol-c21", name: "Sol Ring" }))).toEqual({
@@ -502,7 +618,7 @@ describe("the difference floor", () => {
     const plan = theoryMatchPlan(
       [slot("sol-c21|", "Sol Ring", 2)],
       [card({ cardId: "sol-c21", name: "Sol Ring", categoryActive: false })],
-      BOTH,
+      ALL,
     );
 
     expect(theoryMatchMark(plan, card({ cardId: "sol-c21", name: "Sol Ring" }))).toEqual({
@@ -517,7 +633,7 @@ describe("the difference floor", () => {
     const plan = theoryMatchPlan(
       [slot("forest-a|", "Forest", 1), slot("forest-b|", "Forest", 1)],
       [card({ cardId: "forest-a", name: "Forest", quantity: 1 })],
-      BOTH,
+      ALL,
     );
 
     // Exact: one planned against one live — neither above one, so the tick.
@@ -535,7 +651,7 @@ describe("the difference floor", () => {
 
 describe("no plan", () => {
   it("answers undefined for a deck that keeps no theory list", () => {
-    expect(theoryMatchPlan(undefined, [], BOTH)).toBeUndefined();
+    expect(theoryMatchPlan(undefined, [], ALL)).toBeUndefined();
     expect(theoryMatchMark(undefined, card({ cardId: "x", finish: null, name: "X" }))).toBeNull();
   });
 });

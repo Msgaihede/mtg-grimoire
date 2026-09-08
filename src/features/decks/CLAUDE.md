@@ -952,23 +952,25 @@ reader to configure the deck they had just made; it now asks all of them.
   over a `min-w` of one digit's advance plus `COUNT_TAG_BOX`'s own paddings — the quantity tag's
   width holding a single digit, by construction. Paddings alone could not settle it, because the
   content is a glyph on one card and two characters on the next.
-  **Since 2026-09-07 the mark answers in two tiers, and the whole rule is that the number's grain
-  follows the tier.** Every Live row resolves to exactly one mark or to none:
+  **Since 2026-09-07 the mark answers in tiers, and the whole rule is that the number's grain
+  follows the tier.** Two of them until 2026-09-08 and three since. Every Live row resolves to
+  exactly one mark or, with the third switch off, to none:
 
   | The row | Tier | Colour | The number it carries |
   | --- | --- | --- | --- |
   | Its `(cardId, finish)` is a slot in the plan | `exact` | green | `planned − live` at the `(cardId, finish)` grain — the grain this mark always used |
   | Its **name** is in the plan, but this `(cardId, finish)` is not | `name` | blue | `planned − live` with **every** printing and finish of that name summed on both sides |
-  | Neither | — | — | no mark |
+  | Neither | `unplanned` | red | no number — an X |
 
-  `0` draws the tick and anything else the signed number, exactly as before. A green mark is a
+  On the two tiers that carry a number, `0` draws the tick and anything else the signed number,
+  exactly as before; the third carries neither. A green mark is a
   statement about the *printing* the plan named; a blue one is a statement about the *card*. The
   reader was shown the case it costs the most in — a plan asking for 8 Forests of one printing
   against 8 Forests over four printings, which reads **green +6** on two rows and **blue 0** on
   the other six — and chose it over one name-grain number on both tiers. Both numbers are true at
-  their own grain, and the two colours are what says which question is being answered. Green and
-  blue are **defaults**: both are `--color-theory-*` custom properties and the reader's to change
-  in Settings → Appearance, which is why no component here holds a hex.
+  their own grain, and the two colours are what says which question is being answered. Green,
+  blue and red are all **defaults**: each is a `--color-theory-*` custom property and the
+  reader's to change in Settings → Appearance, which is why no component here holds a hex.
   **The name key is `cards.name` lowercased, and the fold is written in TypeScript only** —
   `theoryNameKey`, one `trim().toLowerCase()`. SQLite's `lower()` is ASCII-only and JavaScript's
   is not, so a plan folded in SQL against a live row folded here spells two keys for
@@ -980,18 +982,52 @@ reader to configure the deck they had just made; it now asks all of them.
   Scryfall omits it on reversible cards and an identity with a fallback chain is two rules for two
   sides to disagree about; what that costs is a blue tick on two distinct oracle cards sharing a
   printed name, a pair no constructed deck holds both of.
-  **Two per-deck switches, both defaulting on, and their off states are not symmetric.**
-  `decks.theory_mark_exact` / `theory_mark_name` (user schema v38) ride `DeckPatch` and are drawn
+  **Since 2026-09-08 a row in neither map has a mark of its own, and it is the one tier that
+  never carries a number.** `unplanned` draws lucide's **`X`** — never a digit, because there is
+  no arithmetic left to do: the plan asks for none of this card, so a signed count would be a
+  subtraction against nothing, and `data-theory-match="unplanned"` is what a test or a live pass
+  addresses it by. Its words are **"Not in the theory list"** everywhere the other two tiers put
+  their sentence — the tooltip, the table's `sr-only` twin, the card's accessible name — and they
+  are the whole of the mark's meaning: *the plan does not ask for this*, which is a fact and not a
+  verdict, exactly as the other two are.
+  **The red is `#e2484f`, and the load-bearing half is which two reds it is not.** It is **not**
+  the destructive token — Tailwind red-400, `oklch(0.704 0.191 22.216)`, outside sRGB and rendered
+  as `#ff6467` — because a mark meaning *not in your plan* must not wear the app's *there is a
+  problem here* colour, and a card off-plan is a note about the reader's own list rather than a
+  rule they have broken. It is **not** `--color-pie-r` `#d3202a`, the Ember label colour, because
+  a card wearing an Ember label already draws that hue in a `QuantityTag` at the other end of the
+  same strip — which is precisely what azure costs the name tier, and there was no reason to pay
+  it twice. What it is instead is red-400's hue with the chroma pulled into gamut and taken a step
+  deeper: its own red, distinguishable from both. Its luma is under `labelFgCss`' 0.55, so
+  `--color-theory-unplanned-fg` lands on `--color-text` at the default.
+  **The four separations from the `RULE BREAK` mark still hold, and colour was never one of the
+  three that are structural.** Place (this in the top-right filled banner, the rule break's
+  hairline box in the bottom-left since 2026-08-20), shape, words and the card's own edge are
+  unchanged; the colour has been the reader's to defeat since 2026-09-07, when Settings →
+  Appearance could already paint the exact tier the destructive red. A third custom colour changes
+  nothing about that argument.
+  **Three per-deck switches, all defaulting on, and none of the off states is symmetric with
+  another.** `decks.theory_mark_exact` / `theory_mark_name` (user schema v38) and
+  `theory_mark_unplanned` (**v39**, 2026-09-08) ride `DeckPatch` and are drawn
   indented under the theory switch in `DeckSettingsForm`, each beside a swatch painted from the
   mark's own custom property. **Green off re-resolves an exact row as a name row** — blue, with
   blue's number — because an exact match *is* a name match and what the switch turns off is the
   finer statement: turning the strict mark off asks for less precision, not less information, and
   a reader who saw the row go blank would read the control as broken. Blue off silences a
-  name-only row and leaves green untouched. Both off is a real answer and is not a second spelling
-  of the theory switch above being off — which is why this is two booleans rather than one
-  three-valued field: `none | exact | both` cannot spell blue *without* green. **All of that logic
-  is in `theoryMatchMark` and none of it is in the four views**, which is what keeps the fallback
-  from being re-derived four times: a view asks for a mark and draws what it gets.
+  name-only row and leaves green untouched. **Red off silences the rows in neither map and nothing
+  else** — it is the only tier that switch can reach, because it is the only tier that answers a
+  different question. And the rule that makes the three independent rather than a ladder: **a
+  planned row whose own tier switches are off stays unmarked and never falls through to red.** It
+  is in the plan, so it is not unplanned, whatever the reader has asked to be shown about it —
+  green's fallback goes to blue and blue's goes to nothing, and neither goes here. All off is a
+  real answer and is not a second spelling of the theory switch above being off — which is why
+  this is three booleans rather than one enumerated field: `none | exact | both` cannot spell blue
+  *without* green, and no ordering of a single field spells red *without* deciding the other two.
+  Settings → Appearance carries the matching third row, **"Not in the theory list"**, with **one**
+  preview against the other two rows' pair — there is no number state to draw.
+  **All of that logic is in `theoryMatchMark` and none of it is in the four views**, which is
+  what keeps the fallback from being re-derived four times: a view asks for a mark and draws what
+  it gets.
   **The maps are built once and read, never consumed, and that is the property the land case turns
   on.** Every one of those eight Forests carries a mark. A lookup that deleted an entry as it
   served it would mark one row and pass every other case in the file, so the eight-Forest test is

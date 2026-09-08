@@ -347,12 +347,15 @@ function Settings({ deckId }: { deckId: number }) {
     // `format_key` neither here nor in Rust.
     if (patch.gameKey !== undefined) update({ gameKey: patch.gameKey });
     if (patch.theoryEnabled !== undefined) update({ theoryEnabled: patch.theoryEnabled });
-    // The two marks, relayed one field at a time for the reason there are two of them: blue
-    // without green is a real answer, so a write that carried both would make the pair a single
-    // three-valued control the columns deliberately are not. Unlike the switch above them
-    // neither moves a card — they are reading preferences, `separateXGroup`'s kind of write.
+    // The three marks, relayed one field at a time for the reason there are three of them: blue
+    // without green is a real answer and so is red alone, so a write that carried the set would
+    // make them a single ordered control the columns deliberately are not. Unlike the switch
+    // above them none of the three moves a card — they are reading preferences,
+    // `separateXGroup`'s kind of write.
     if (patch.theoryMarkExact !== undefined) update({ theoryMarkExact: patch.theoryMarkExact });
     if (patch.theoryMarkName !== undefined) update({ theoryMarkName: patch.theoryMarkName });
+    if (patch.theoryMarkUnplanned !== undefined)
+      update({ theoryMarkUnplanned: patch.theoryMarkUnplanned });
     // A select, so it settles in one act and writes here. **`0` is a value and not an absence**,
     // which is why this needs no `deckSetFolder`-shaped escape below it: `AUTO_CATEGORY` is a
     // number the patch can carry, so "back to filing by what the card does" is an ordinary
@@ -407,6 +410,7 @@ function Settings({ deckId }: { deckId: number }) {
               theoryEnabled: row.theoryEnabled,
               theoryMarkExact: row.theoryMarkExact,
               theoryMarkName: row.theoryMarkName,
+              theoryMarkUnplanned: row.theoryMarkUnplanned,
               folderId: row.folderId,
               defaultCategoryId: row.defaultCategoryId,
             }}
@@ -419,9 +423,9 @@ function Settings({ deckId }: { deckId: number }) {
             // draws the "Add cards to" row at all: the create dialog has no deck yet and passes
             // nothing.
             categories={deck.categories}
-            // This host has a deck row and an ordinary `deck_update` for both columns, so the two
-            // mark switches are answerable here — which the create dialog's is not. Drawn only
-            // where the deck also keeps a plan; the form owns that second half.
+            // This host has a deck row and an ordinary `deck_update` for all three columns, so
+            // the mark switches are answerable here — which the create dialog's are not. Drawn
+            // only where the deck also keeps a plan; the form owns that second half.
             canSetTheoryMarks
             folders={{
               paths,

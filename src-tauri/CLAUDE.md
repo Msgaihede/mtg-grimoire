@@ -116,8 +116,9 @@ both plus the frontend.
   every upgraded one, and a fresh worktree is a fresh install, so nothing else here can see it.
   The single-file ladder is frozen at **v26** — `schema::migrate_single_file`
   climbs to `schema::LEGACY_SINGLE_FILE_VERSION` and stops, and the two files carry their own
-  numbers from there (`USER_SCHEMA_VERSION` **38** since the theory mark grew a second tier —
-  one rung above decks learning which tokens they make, which is one above a deck's group
+  numbers from there (`USER_SCHEMA_VERSION` **39** since the theory mark grew a *third* tier —
+  one rung above it growing a second, which is one above decks learning which tokens they make,
+  which is one above a deck's group
   holding only copies its live list claims at `(card_id, finish)`, itself one above a
   condition learning to say nothing —
   `CORPUS_SCHEMA_VERSION` 1, deliberately
@@ -162,6 +163,13 @@ both plus the frontend.
   `capture::TABLES`' `decks` spec beside `bracket`; **that spec spells its field list by hand and
   has no fence in the other direction**, so a column added to a synced table and not to it is
   captured by nothing and goes red nowhere.
+  **v39** (2026-09-08) adds `decks.theory_mark_unplanned`, the same shape one column further:
+  the third tier, worn by a live row the plan does not ask for at all, `NOT NULL DEFAULT 1` for
+  v38's own reason and on the same hand-written `capture::TABLES` spec for the same one. **The
+  mark's colours never join that spec** — `theoryUnplanned` is a fourth `mark_colors` key in
+  `app_meta`, which no `SYNCED_TABLES` entry names, and a rendering choice belongs to the device
+  that draws it. `deck::IMAGE_COL` moves 24 → 25 with it, which is the positional trap `deck.rs`
+  warns about paid one more time.
   **v35, v36, v37 and v38 all landed within days of each other from four branches; the token rung
   was renumbered twice on its way in and the theory rung three times** — written as 35, moved to
   36 when the sixth grade landed, to 37 when the deck-group sweep did, and to 38 when the token
@@ -187,9 +195,12 @@ both plus the frontend.
   rebuild emits no sync ops**: `DROP TABLE` takes the three capture triggers with it,
   `prepare_database` reinstalls them on the next line, and the copy lands in a table that has none
   while it is being written.
-- **`UNDO_V35` maps rather than deletes, and it runs third — behind `UNDO_V38` and `UNDO_V37`, ahead of
+- **`UNDO_V35` maps rather than deletes, and it runs fourth — behind `UNDO_V39`, `UNDO_V38` and
+  `UNDO_V37`, ahead of
   everything else.** It read "and it runs first" for as long as v35 was head, which the theory
-  rung made false the same day; the chains themselves are `{UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} …`
+  rung made false the same day, and "third" for the one rung between that and the third tier;
+  the chains themselves are
+  `{UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} …`
   — **there is no `UNDO_V36`, because v36 writes no shape** — and they were
   right throughout, because they are code. The rewind carries an ungraded row
   back as `'NM'` — precisely what the old `DEFAULT` would have recorded for the same press —
@@ -200,8 +211,9 @@ both plus the frontend.
   holds in the list**: `UNDO_V29` does
   `ALTER TABLE collection_entries DROP COLUMN sync_uid`, and `DROP COLUMN` refuses a column an
   index names — so `UNDO_V35` has to have put `idx_collection_entries_uid` back before
-  `UNDO_V29` takes it away. `UNDO_V38` sitting above it changes nothing about that: it drops two
-  `decks` columns and touches no index anywhere.
+  `UNDO_V29` takes it away. `UNDO_V38` and `UNDO_V39` sitting above it change nothing about
+  that: between them they drop three
+  `decks` columns and touch no index anywhere.
 - **v24 and v25 are one spec's rung split in two, and the split is deliberate.** v24 creates
   `collection_folders` in its **final** shape — `kind` and `deck_id` columns and both partial
   unique indexes included — and files nothing into it. **v25 inserts the single `removed` folder

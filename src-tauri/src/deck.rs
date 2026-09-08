@@ -450,6 +450,13 @@ pub struct DeckPatch {
     /// carried onto the wire: `none | exact | both` cannot spell blue without green, and blue
     /// without green is a reader who cares that a card is *present* and not which printing.
     pub theory_mark_name: Option<bool>,
+    /// Whether this deck draws the **red** theory mark — schema v39, and
+    /// [`Self::theory_mark_exact`]'s rules throughout.
+    ///
+    /// **A third field for the same reason there are two above it**, one tier further out: the
+    /// three switches are independent, and a reader who wants only this one — show me what the
+    /// plan does *not* ask for — is asking a question no ladder-shaped encoding can spell.
+    pub theory_mark_unplanned: Option<bool>,
 }
 
 /// Where the reader was last looking at one deck — the editor's own tab, grouping and sort.
@@ -559,6 +566,10 @@ pub struct DeckRow {
     /// A deck with a plan and no marks at all is a reader who wants the two lists side by side
     /// and no colour on either; a deck with no plan has no second list to compare against.
     pub theory_mark_name: bool,
+    /// Whether this deck draws the **red** mark on a Live card the plan does not ask for at all
+    /// — a stand-in, a spare or an experiment. The third of three independent switches; see
+    /// [`Self::theory_mark_exact`] for the rules all three share.
+    pub theory_mark_unplanned: bool,
     /// Whether this deck files its variable-cost cards under a heading of their own — schema
     /// v13.
     ///
@@ -901,7 +912,7 @@ static DECK_SELECT: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
             d.updated_at, d.folder_id, d.notes, d.theory_enabled,
             d.last_variant, d.last_group_by, d.last_sort_by, d.separate_x_group,
             d.default_category_id, d.game_key, d.bracket, d.tokens_open,
-            d.theory_mark_exact, d.theory_mark_name,
+            d.theory_mark_exact, d.theory_mark_name, d.theory_mark_unplanned,
             {images}
        FROM decks d
        LEFT JOIN format_specs fs ON fs.key = d.format_key
@@ -911,17 +922,18 @@ static DECK_SELECT: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
 });
 
 fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
-    /// Where `DECK_SELECT`'s image columns start — one past `d.theory_mark_name`, the last
-    /// named column. Named rather than inlined for `deck_card_select`'s reason: the pairing
-    /// arithmetic below is `front_face_map`'s and only the *offset* is this function's.
+    /// Where `DECK_SELECT`'s image columns start — one past `d.theory_mark_unplanned`, the
+    /// last named column. Named rather than inlined for `deck_card_select`'s reason: the
+    /// pairing arithmetic below is `front_face_map`'s and only the *offset* is this function's.
     ///
     /// **It moves with every column added to the end of the named list**, and it has moved
-    /// twice in a week: it read 21 until schema v37 put `tokens_open` there, and 22 until v38
-    /// appended the two theory marks. Forgetting to move it is not silent for `tokens_open`'s
+    /// three times in a week: it read 21 until schema v37 put `tokens_open` there, 22 until v38
+    /// appended the first two theory marks, and 24 until v39 appended the third. Forgetting to
+    /// move it is not silent for `tokens_open`'s
     /// kind of column — the image reads are `Option<String>` and an `INTEGER` beside them makes
     /// rusqlite refuse the conversion rather than answer a plausible URL — but it *is* silent
     /// the other way round, which is what the comment on the image read itself describes.
-    const IMAGE_COL: usize = 24;
+    const IMAGE_COL: usize = 25;
     Ok(DeckRow {
         id: r.get(0)?,
         name: r.get(1)?,
@@ -989,11 +1001,19 @@ fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
         // things, and only this one is load-bearing.
         theory_mark_exact: r.get(22)?,
         theory_mark_name: r.get(23)?,
-        // **From 24**, last of all, for the reason written seven comments up — the
+        // 24, at the end of the list, for the reason written seven comments up — and the
+        // eighth proof of it. Schema v39's third tier is a `bool` over an `INTEGER` column like
+        // the pair above it, and the trap here is one grain sharper than theirs: the two
+        // columns it most reads like it belongs beside are the two it was appended after, and
+        // an index that landed on either of them would have swapped one theory mark for another
+        // — three fields all holding a `0` or a `1`, all drawn on the same list, and no way to
+        // tell from the row which switch the reader had actually moved.
+        theory_mark_unplanned: r.get(24)?,
+        // **From 25**, last of all, for the reason written eight comments up — the
         // `crate::image_uri::FRONT_FACE_COLUMNS` expressions `front_face_selects` appended, in
         // the (top-level, face) pairs `front_face_map` folds back up, one pair per variant.
         //
-        // This read carries a failure the twenty-three above it do not. Every one of those is caught
+        // This read carries a failure the twenty-four above it do not. Every one of those is caught
         // by a value of the wrong *kind* turning up in a field; here the pair is
         // (top-level, face) and `for_face` prefers the face, so a read one column out still
         // answers a perfectly real URL — the right picture from the wrong slot, or the crop
@@ -1589,6 +1609,7 @@ struct DeckBefore {
     bracket: i64,
     theory_mark_exact: bool,
     theory_mark_name: bool,
+    theory_mark_unplanned: bool,
 }
 
 /// What a `deck`/`cover` history row records as the cover: the card's id, and the word
@@ -1653,7 +1674,7 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
             "SELECT name, format_key, description, cover_card_id, cover_kind,
                     archived, folder_id, notes, theory_enabled, separate_x_group,
                     default_category_id, game_key, bracket,
-                    theory_mark_exact, theory_mark_name
+                    theory_mark_exact, theory_mark_name, theory_mark_unplanned
                FROM decks WHERE id = ?1",
             params![id],
             |r| {
@@ -1679,13 +1700,18 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                     // and `default_category_id` at 10 — six columns any one of which would take
                     // a bracket without complaint.
                     bracket: r.get(12)?,
-                    // 13 and 14, at the end, same rule — and the pair with the least standing
-                    // between it and a silent swap, `deck_row`'s note one screen up: both are
+                    // 13, 14 and 15, at the end, same rule — and the trio with the least
+                    // standing
+                    // between it and a silent swap, `deck_row`'s note one screen up: all three
+                    // are
                     // `bool` over `INTEGER`, and so are `archived` at 5, `theory_enabled` at 8
                     // and `separate_x_group` at 9. A crossed pair here would not fail, it would
-                    // record a history row saying the reader turned the *other* mark on.
+                    // record a history row saying the reader turned a *different* mark on —
+                    // which, now that there are three of them drawn side by side on one list,
+                    // is a lie the reader is in the best possible position to be confused by.
                     theory_mark_exact: r.get(13)?,
                     theory_mark_name: r.get(14)?,
+                    theory_mark_unplanned: r.get(15)?,
                 })
             },
         )
@@ -1748,6 +1774,12 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 -- and both are answers, so there is no fence for a raw field to make decorative.
                 theory_mark_exact = coalesce(?16, theory_mark_exact),
                 theory_mark_name = coalesce(?17, theory_mark_name),
+                -- `?18`, the next number at the **end**, same rule one rung later — and the
+                -- hole where getting it wrong is cheapest to do and hardest to see: `?16` and
+                -- `?17` are the two columns it reads most like a neighbour of, and all three
+                -- take the same `Option<bool>`, so a crossed number is an UPDATE that succeeds
+                -- and moves the wrong switch.
+                theory_mark_unplanned = coalesce(?18, theory_mark_unplanned),
                 updated_at = unixepoch()
               WHERE id = ?1",
             params![
@@ -1768,6 +1800,7 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 patch.tokens_open,
                 patch.theory_mark_exact,
                 patch.theory_mark_name,
+                patch.theory_mark_unplanned,
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -2033,17 +2066,19 @@ fn record_deck_edit(
     if let Some(to) = patch.bracket.filter(|b| *b != before.bracket) {
         field("bracket", json!(before.bracket), json!(to))?;
     }
-    // `theoryMarkExact` and `theoryMarkName`, camelCase — `xGroup`'s rule, and these are the
-    // third and fourth multi-word keys in this function. The `default` arm of `auditText.ts`'s
+    // `theoryMarkExact`, `theoryMarkName` and `theoryMarkUnplanned`, camelCase — `xGroup`'s
+    // rule, and these are the
+    // third, fourth and fifth multi-word keys in this function. The `default` arm of `auditText.ts`'s
     // `deckLine` answers an unrecognised field with "Changed the deck", which is true of every
     // deck edit and therefore never fails, so a spelling that drifts from that file's reads as a
     // bland history line rather than as a failure. The word is spelled once on each side and
     // pinned by `auditText.test.ts`.
     //
-    // **Two arms rather than one**, which is the schema's own two-columns-not-one argument read
+    // **Three arms rather than one**, which is the schema's own three-columns-not-one argument
+    // read
     // at the history: a reader who turned the strict mark off and the loose one on in the same
     // Save made two decisions, and one row saying "changed the theory marks" could not be worded
-    // into either of them. Two rows also make the drawer read the way every other pair of
+    // into either of them. Three rows also make the drawer read the way every other set of
     // independent switches here does.
     //
     // Booleans on both sides and `json!` straight off `before`, `xGroup`'s shape exactly:
@@ -2064,6 +2099,16 @@ fn record_deck_edit(
         .filter(|m| *m != before.theory_mark_name)
     {
         field("theoryMarkName", json!(before.theory_mark_name), json!(to))?;
+    }
+    if let Some(to) = patch
+        .theory_mark_unplanned
+        .filter(|m| *m != before.theory_mark_unplanned)
+    {
+        field(
+            "theoryMarkUnplanned",
+            json!(before.theory_mark_unplanned),
+            json!(to),
+        )?;
     }
     if let Some(to) = patch.folder_id.filter(|f| Some(*f) != before.folder_id) {
         last = Some(record_filed(tx, id, Some(to))?);
@@ -2473,20 +2518,23 @@ pub fn duplicate_deck(conn: &Connection, id: i64) -> Result<DeckRow, String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     let copy: Option<(i64, String)> = tx
         .query_row(
-            // **Schema v38's two marks are copied, not defaulted**, which is the same rule
+            // **Schema v38's two marks and v39's third are copied, not defaulted**, which is
+            // the same rule
             // `separate_x_group` and `bracket` are already on this list for and which
             // `DeckRow::separate_x_group` states in words: these are answers *about the deck*
             // that a copy inherits, where the three `last_*` columns are how the reader was
             // looking at it a moment ago and are deliberately absent. Leaving them off would
-            // not have been a no-op — both columns are `DEFAULT 1`, so a copy of a deck with a
+            // not have been a no-op — all three columns are `DEFAULT 1`, so a copy of a deck
+            // with a
             // mark switched off would have come back with it switched on.
             "INSERT INTO decks (name, format_key, description, cover_kind, cover_card_id,
                                 folder_id, notes, theory_enabled,
                                 separate_x_group, bracket, theory_mark_exact, theory_mark_name,
+                                theory_mark_unplanned,
                                 archived, created_at, updated_at)
              SELECT name || ' (copy)', format_key, description, cover_kind, cover_card_id,
                     folder_id, notes, theory_enabled, separate_x_group,
-                    bracket, theory_mark_exact, theory_mark_name,
+                    bracket, theory_mark_exact, theory_mark_name, theory_mark_unplanned,
                     0, unixepoch(), unixepoch()
                FROM decks WHERE id = ?1
              RETURNING id, name",
@@ -8931,13 +8979,20 @@ mod tests {
             folder_id: Some(7),
             notes: None,
             theory_enabled: true,
-            // **Not both `true`, and not both `false`.** Schema v38 defaults both to 1, so a
-            // matched pair would read correct on a wire that carried one field twice or neither
-            // at all — the rule the three comments in the expectation below already state about
-            // `defaultCategoryId`, `gameKey` and `bracket`, applied to the one pair of fields
-            // here that could be confused with each other.
+            // **Not all `true`, and not all `false`.** Schema v38 defaults its two to 1 and v39
+            // its one, so a matched trio would read correct on a wire that carried one field
+            // three times or none at all — the rule the three comments in the expectation below
+            // already state about `defaultCategoryId`, `gameKey` and `bracket`, applied to the
+            // one set of fields here that could be confused with each other.
+            //
+            // **Three booleans cannot all disagree**, so this fixture cannot catch every swap
+            // by value alone and does not pretend to: `exact` and `unplanned` read the same,
+            // and what separates *them* is the key each is asserted under below. The values are
+            // what catch a field that never reached the wire; the names are what catch a pair
+            // that crossed.
             theory_mark_exact: false,
             theory_mark_name: true,
+            theory_mark_unplanned: false,
             last_variant: "theory".to_owned(),
             last_group_by: "manaValue".to_owned(),
             last_sort_by: "price".to_owned(),
@@ -8973,11 +9028,14 @@ mod tests {
                 "coverArtist": "Christopher Rush", "archived": false,
                 "cardCount": 60, "updatedAt": 1800000000,
                 "folderId": 7, "notes": null, "theoryEnabled": true,
-                // Schema v38's pair, deliberately disagreeing with each other: both default to
-                // `1`, so a matched pair would be the answer whether or not either column
-                // reached the wire — and these two are the only fields on this row a crossed
-                // pair of positional reads could swap without changing a single value's type.
+                // Schema v38's pair and v39's third, not all agreeing: all three default to
+                // `1`, so a matched trio would be the answer whether or not any column
+                // reached the wire — and these three are the only fields on this row a crossed
+                // set of positional reads could swap without changing a single value's type.
+                // The **keys** are what separate `exact` from `unplanned`, which share a value
+                // because three booleans cannot be pairwise distinct.
                 "theoryMarkExact": false, "theoryMarkName": true,
+                "theoryMarkUnplanned": false,
                 // The two mode fields carry TypeScript's own vocabulary, so the fixture spells
                 // real editor words rather than placeholders: this crate never parses them, and
                 // a test written with `"x"` would hide that they are meant to round-trip.
@@ -9410,74 +9468,95 @@ mod tests {
         );
     }
 
-    /// A deck is born with both theory marks on, which is what makes schema v38 need no
-    /// backfill: the columns' own `DEFAULT 1`, never a Rust fallback.
+    /// A deck is born with all three theory marks on, which is what makes schema v38 and v39
+    /// need no backfill: the columns' own `DEFAULT 1`, never a Rust fallback.
     ///
-    /// **`create_deck` names neither column in its INSERT and must not start to**, which is
+    /// **`create_deck` names none of the three columns in its INSERT and must not start to**,
+    /// which is
     /// the sentence this asserts from the outside. `theory_enabled`'s absence is resolved in
-    /// Rust because [`DeckInput`] can carry it; these two are not on that struct at all, so the
+    /// Rust because [`DeckInput`] can carry it; these three are not on that struct at all, so
+    /// the
     /// DDL is the only thing that decides, and a Rust default beside it would be a second
     /// answer to one question.
     #[test]
-    fn a_new_deck_draws_both_theory_marks() {
+    fn a_new_deck_draws_every_theory_mark() {
         let conn = seeded();
         let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
         assert!(
-            deck.theory_mark_exact && deck.theory_mark_name,
+            deck.theory_mark_exact && deck.theory_mark_name && deck.theory_mark_unplanned,
             "on for a new deck — the columns' own DEFAULT 1"
         );
         let read = read_deck(&conn, deck.id).unwrap().unwrap();
         assert!(
-            read.theory_mark_exact && read.theory_mark_name,
+            read.theory_mark_exact && read.theory_mark_name && read.theory_mark_unplanned,
             "…including through `DECK_SELECT`'s positional reads, which is where a column \
              added anywhere but the end goes wrong silently"
         );
     }
 
-    /// Both switches survive a write and a read, **independently**.
+    /// All three switches survive a write and a read, **independently**.
     ///
-    /// A deck can draw one mark, the other, both or neither, so all four states are written and
+    /// A deck can draw any subset of the three marks, so all eight states are written and
     /// read back: the `coalesce(?n, column)` contract means a mis-numbered `?` hole writes over
-    /// its neighbour, and two adjacent `INTEGER` columns holding a `bool` are exactly the pair
-    /// where that failure has nothing to make it visible. `(true, true)` is deliberately not
-    /// first — it is the state a new deck is already in, so leading with it would let a pair of
+    /// its neighbour, and three adjacent `INTEGER` columns holding a `bool` are exactly the set
+    /// where that failure has nothing to make it visible. `(true, true, true)` is deliberately
+    /// not
+    /// first — it is the state a new deck is already in, so leading with it would let a set of
     /// holes that write nothing at all pass the first round.
     ///
-    /// **The last state is `(false, false)`** and it is left standing, which is the one a
-    /// three-valued `none | exact | both` column could have spelled and a two-valued one could
-    /// not: a reader who wants no theory mark at all has said something, and it is not the same
+    /// **The last state is all `false`** and it is left standing, which is the one a
+    /// single ladder-shaped column could not have spelled: a reader who wants no theory mark at
+    /// all has said something, and it is not the same
     /// as switching the theory list off.
     #[test]
-    fn both_theory_marks_round_trip_independently() {
+    fn every_theory_mark_round_trips_independently() {
         let conn = seeded();
         let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
-        for (exact, named) in [(false, true), (true, false), (true, true), (false, false)] {
+        for (exact, named, unplanned) in [
+            (false, true, true),
+            (true, false, true),
+            (true, true, false),
+            (false, false, true),
+            (false, true, false),
+            (true, false, false),
+            (true, true, true),
+            (false, false, false),
+        ] {
             let row = update_deck(
                 &conn,
                 deck.id,
                 &DeckPatch {
                     theory_mark_exact: Some(exact),
                     theory_mark_name: Some(named),
+                    theory_mark_unplanned: Some(unplanned),
                     ..Default::default()
                 },
             )
             .unwrap();
             assert_eq!(
-                (row.theory_mark_exact, row.theory_mark_name),
-                (exact, named),
+                (
+                    row.theory_mark_exact,
+                    row.theory_mark_name,
+                    row.theory_mark_unplanned
+                ),
+                (exact, named, unplanned),
                 "the readback is the write"
             );
             let read = read_deck(&conn, deck.id).unwrap().unwrap();
             assert_eq!(
-                (read.theory_mark_exact, read.theory_mark_name),
-                (exact, named),
+                (
+                    read.theory_mark_exact,
+                    read.theory_mark_name,
+                    read.theory_mark_unplanned
+                ),
+                (exact, named, unplanned),
                 "…including through `DECK_SELECT`'s positional reads"
             );
         }
 
         // Each field alone, which is what "independently" costs to prove: a patch naming one
-        // must leave the other exactly where it was, and with both bound to the same value in
-        // the loop above a pair of holes crossed over each other would have passed every round.
+        // must leave the other two exactly where they were, and with all three bound in the
+        // loop above a set of holes crossed over each other would have passed every round.
         let only_exact = update_deck(
             &conn,
             deck.id,
@@ -9492,13 +9571,34 @@ mod tests {
             !only_exact.theory_mark_name,
             "an absent field means leave it, and this one was off"
         );
+        assert!(
+            !only_exact.theory_mark_unplanned,
+            "…and so was the third, which is the one `?18` would have reached"
+        );
+
+        // And the newest field alone, which is the half the two lines above cannot cover: a
+        // patch naming *only* `?18` is what catches a hole bound one short of the end.
+        let only_unplanned = update_deck(
+            &conn,
+            deck.id,
+            &DeckPatch {
+                theory_mark_unplanned: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(only_unplanned.theory_mark_unplanned);
+        assert!(
+            only_unplanned.theory_mark_exact && !only_unplanned.theory_mark_name,
+            "the other two are exactly where the previous patch left them"
+        );
 
         // Every other field is untouched by them, which is the `coalesce(?n, column)` contract
         // — and the fence against a mis-numbered hole writing over the neighbour. The three
-        // named here are the ones a hole one out would actually reach: `?15` and `?16` are the
-        // last two in the list, and `game_key` and `bracket` are `?13` and `?14`.
+        // named here are the ones a hole one out would actually reach: `?16`, `?17` and `?18`
+        // are the last three in the list, and `game_key` and `bracket` are `?13` and `?14`.
         let after = update_deck(&conn, deck.id, &DeckPatch::default()).unwrap();
-        assert!(after.theory_mark_exact && !after.theory_mark_name);
+        assert!(after.theory_mark_exact && !after.theory_mark_name && after.theory_mark_unplanned);
         assert_eq!(after.name, "Burn");
         assert_eq!(after.game_key, DEFAULT_GAME);
         assert_eq!(after.bracket, AUTO_BRACKET);
@@ -9507,13 +9607,16 @@ mod tests {
     /// Each mark records its **own** history row, once per real change, and a patch that
     /// re-sends the value a field already holds records nothing.
     ///
-    /// `the_x_group_switch_round_trips_and_is_recorded_once`'s job for the pair, with the one
-    /// thing that test could not have: **both fields move in one Save**, which is how the deck
-    /// settings dialog actually sends them, and that press must land as **two** rows. One row
-    /// saying "changed the theory marks" could be worded into neither decision — which is
-    /// `auditText.ts`'s problem and the reason the keys are two.
+    /// `the_x_group_switch_round_trips_and_is_recorded_once`'s job for the trio, with the one
+    /// thing that test could not have: **all three fields move in one Save**, which is how the
+    /// deck
+    /// settings dialog actually sends them, and that press must land as **three** rows. One row
+    /// saying "changed the theory marks" could be worded into none of the three decisions —
+    /// which is
+    /// `auditText.ts`'s problem and the reason the keys are three.
     ///
-    /// The keys are asserted as literal `theoryMarkExact` / `theoryMarkName` strings, `xGroup`'s
+    /// The keys are asserted as literal `theoryMarkExact` / `theoryMarkName` /
+    /// `theoryMarkUnplanned` strings, `xGroup`'s
     /// rule: `auditText.ts`'s `default` arm answers an unrecognised field with a sentence true
     /// of every deck edit, so a spelling that drifts reads as a bland line and never fails.
     #[test]
@@ -9521,13 +9624,14 @@ mod tests {
         let conn = seeded();
         let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
 
-        // One Save moving both, which is two rows and not one.
+        // One Save moving all three, which is three rows and not one.
         update_deck(
             &conn,
             deck.id,
             &DeckPatch {
                 theory_mark_exact: Some(false),
                 theory_mark_name: Some(false),
+                theory_mark_unplanned: Some(false),
                 ..Default::default()
             },
         )
@@ -9539,6 +9643,7 @@ mod tests {
             &DeckPatch {
                 theory_mark_exact: Some(false),
                 theory_mark_name: Some(false),
+                theory_mark_unplanned: Some(false),
                 ..Default::default()
             },
         )
@@ -9553,6 +9658,17 @@ mod tests {
             },
         )
         .unwrap();
+        // The newest field alone, same shape — the row that says v39's key reaches the drawer
+        // under its own name rather than under one of its neighbours'.
+        update_deck(
+            &conn,
+            deck.id,
+            &DeckPatch {
+                theory_mark_unplanned: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         let words: Vec<serde_json::Value> = crate::deck_audit::list(&conn, deck.id, 20)
             .unwrap()
@@ -9560,29 +9676,34 @@ mod tests {
             .filter(|r| r.kind == crate::deck_audit::DECK)
             .map(|r| serde_json::from_str(&r.payload).unwrap())
             .filter(|p: &serde_json::Value| {
-                p["field"] == "theoryMarkExact" || p["field"] == "theoryMarkName"
+                p["field"] == "theoryMarkExact"
+                    || p["field"] == "theoryMarkName"
+                    || p["field"] == "theoryMarkUnplanned"
             })
             .collect();
         assert_eq!(
             words,
             vec![
+                json!({ "field": "theoryMarkUnplanned", "from": false, "to": true }),
                 json!({ "field": "theoryMarkName", "from": false, "to": true }),
+                json!({ "field": "theoryMarkUnplanned", "from": true, "to": false }),
                 json!({ "field": "theoryMarkName", "from": true, "to": false }),
                 json!({ "field": "theoryMarkExact", "from": true, "to": false }),
             ],
-            "newest first: one Save moving both is two rows, the repeat is none, \
-             and the single-field Save names only its own field"
+            "newest first: one Save moving all three is three rows, the repeat is none, \
+             and each single-field Save names only its own field"
         );
     }
 
-    /// Ctrl+Z puts both marks back, which is what putting them on
+    /// Ctrl+Z puts all three marks back, which is what putting them on
     /// [`crate::deck_undo`]'s `DECK_FIELDS` buys.
     ///
-    /// **Both moved in one press, and both come back.** A list carrying only the first would
-    /// restore half of one Save — worse than restoring none of it, because the drawer would
+    /// **All three moved in one press, and all three come back.** A list carrying only two
+    /// would
+    /// restore part of one Save — worse than restoring none of it, because the drawer would
     /// still name the change it had not undone.
     #[test]
-    fn undo_puts_both_theory_marks_back() {
+    fn undo_puts_every_theory_mark_back() {
         let conn = seeded();
         let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
         update_deck(
@@ -9591,14 +9712,19 @@ mod tests {
             &DeckPatch {
                 theory_mark_exact: Some(false),
                 theory_mark_name: Some(false),
+                theory_mark_unplanned: Some(false),
                 ..Default::default()
             },
         )
         .unwrap();
         let moved = read_deck(&conn, deck.id).unwrap().unwrap();
         assert_eq!(
-            (moved.theory_mark_exact, moved.theory_mark_name),
-            (false, false)
+            (
+                moved.theory_mark_exact,
+                moved.theory_mark_name,
+                moved.theory_mark_unplanned
+            ),
+            (false, false, false)
         );
 
         // `apply_reversal` itself rather than a second implementation of the cursor walk, which
@@ -9610,22 +9736,29 @@ mod tests {
 
         let back = read_deck(&conn, deck.id).unwrap().unwrap();
         assert_eq!(
-            (back.theory_mark_exact, back.theory_mark_name),
-            (true, true),
-            "one press moved both, so one Ctrl+Z has to move both back"
+            (
+                back.theory_mark_exact,
+                back.theory_mark_name,
+                back.theory_mark_unplanned
+            ),
+            (true, true, true),
+            "one press moved all three, so one Ctrl+Z has to move all three back"
         );
     }
 
-    /// A copy inherits both marks, `separate_x_group`'s and `bracket`'s rule and not the three
+    /// A copy inherits all three marks, `separate_x_group`'s and `bracket`'s rule and not the
+    /// three
     /// `last_*` columns': these are answers *about the deck*, not about how the reader was
     /// looking at it a moment ago.
     ///
-    /// **Both switched off on the source, which is the only setting that can fail.** The
-    /// columns are `DEFAULT 1`, so a `duplicate_deck` that named neither would answer `true`
-    /// for both and a test written over an on/on source would pass against exactly the bug it
+    /// **All three switched off on the source, which is the only setting that can fail.** The
+    /// columns are `DEFAULT 1`, so a `duplicate_deck` that named none of them would answer
+    /// `true`
+    /// for all three and a test written over an all-on source would pass against exactly the
+    /// bug it
     /// was for.
     #[test]
-    fn a_duplicate_inherits_both_theory_marks() {
+    fn a_duplicate_inherits_every_theory_mark() {
         let conn = seeded();
         let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
         update_deck(
@@ -9634,6 +9767,7 @@ mod tests {
             &DeckPatch {
                 theory_mark_exact: Some(false),
                 theory_mark_name: Some(false),
+                theory_mark_unplanned: Some(false),
                 ..Default::default()
             },
         )
@@ -9641,8 +9775,12 @@ mod tests {
 
         let copy = duplicate_deck(&conn, deck.id).unwrap();
         assert_eq!(
-            (copy.theory_mark_exact, copy.theory_mark_name),
-            (false, false),
+            (
+                copy.theory_mark_exact,
+                copy.theory_mark_name,
+                copy.theory_mark_unplanned
+            ),
+            (false, false, false),
             "the copy wears the source's marks, not the column defaults"
         );
     }
