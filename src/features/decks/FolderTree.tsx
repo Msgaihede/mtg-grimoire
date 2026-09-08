@@ -269,10 +269,19 @@ export function useFolderDragSource(
   }, [ref, id]);
 }
 
-/** A row's two doors into one menu — a right-click, and Shift+F10 or the ContextMenu key. */
+/**
+ * A row's doors into one menu — a right-click, and Shift+F10 or the ContextMenu key.
+ *
+ * **A third door is optional and only the wall's card has one**: a plain press on a `⋯` trigger,
+ * which is `menuClick`'s rather than `menu`'s because a click carries no coordinates worth
+ * trusting — it may have come from a pointer or from the Enter key, and only `menuClick` knows to
+ * ask. A tree row draws no such trigger, so the field is absent there rather than wired to
+ * nothing.
+ */
 export interface FolderRowMenu {
   onContextMenu: MouseEventHandler<HTMLButtonElement>;
   onKeyDown: KeyboardEventHandler<HTMLButtonElement>;
+  onClick?: MouseEventHandler<HTMLButtonElement>;
 }
 
 export interface FolderTreeProps {

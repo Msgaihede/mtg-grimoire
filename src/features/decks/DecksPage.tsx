@@ -48,7 +48,12 @@ import {
   type DeckSortKey,
 } from "./deckSort";
 import { DeckSettingsDialog } from "./DeckSettingsDialog";
-import { decksUnder, FolderCard, ParentDeckFolderCard } from "./FolderCard";
+import {
+  decksUnder,
+  FolderCard,
+  ParentDeckFolderCard,
+  type FolderCardMenu,
+} from "./FolderCard";
 import { buildFolderMenu, type FolderMenuDeps } from "./folderMenu";
 import {
   buildFolderTree,
@@ -68,7 +73,7 @@ import type { ImportDestination } from "@/features/transfer/import/destination";
 import { NewDeckPreview } from "@/features/transfer/import/destinations/NewDeckPreview";
 import { newDeckDestination } from "@/features/transfer/import/destinations/newDeck";
 import { ImportDialog } from "@/features/transfer/import/ImportDialog";
-import type { Panel } from "./panels";
+import type { FolderRenameAt, Panel } from "./panels";
 import { bracketLabel, useDeckBrackets } from "./useDeckBrackets";
 import { useDeckFolders } from "./useDeckFolders";
 import { useDeckPips } from "./useDeckPips";
@@ -625,10 +630,16 @@ export function DecksPage() {
   // ways (a Tab forward out of Cancel bounces backwards, and a control that disables itself
   // mid-write blurs into a hand-back nobody asked for).
   // The rename field is the one layer whose opener is not where the caret should land: it
-  // *replaced* the row, so the row is what it comes back to — see {@link refocusFolderRef}.
+  // *replaced* the thing it stands on, so that thing is what it comes back to — and **which**
+  // thing is `panel.at`'s whole job. A tree row is found by attribute after the render that
+  // redraws it ({@link refocusFolderRef}); a card hands itself back through
+  // `useFolderFieldReturn`, which refs the pencil React renders in the field's place and restores
+  // only when nothing else has taken the caret — so there is nothing for this to do on the wall,
+  // and `openerRef` is `null` there by `startRename`'s own line.
   const dismiss = useCallback(() => {
-    if (panel?.kind === "renameFolder") refocusFolderRef.current = panel.folderId;
-    else openerRef.current?.focus();
+    if (panel?.kind === "renameFolder" && panel.at === "tree") {
+      refocusFolderRef.current = panel.folderId;
+    } else openerRef.current?.focus();
     setPanel(null);
   }, [panel]);
 
@@ -743,9 +754,16 @@ export function DecksPage() {
    * The tile's own rename field, opened on the deck the caret is on.
    *
    * `decks.update.reset()` for `openCreate`'s reason — a refusal from the last attempt is not
-   * news about this one. The opener really is the tile: unlike the folder rename, this field is
-   * drawn *under* the tile rather than in place of it, so the element the caret comes back to is
-   * still mounted the whole time and `openerRef` can serve.
+   * news about this one.
+   *
+   * **Two of the three routes have an opener that outlives the field and one does not, which is
+   * why this takes a nullable one.** F2 and the tile's context menu are pressed on the tile's own
+   * `<button>`, and that button is still mounted while the field is up — the field takes the
+   * *name's* line inside it and the tray's ✓ / ✕ stand over the art — so `openerRef` serves. The
+   * tray's pencil is the third, and it is what the field replaces: by the time `dismiss` runs it
+   * is a detached node whose `focus()` is a silent no-op. It passes `null` and the tile hands the
+   * caret back itself, through `useFolderFieldReturn` on the pencil React renders in its place.
+   * `FolderCard`'s arrangement, and the same hook.
    */
   const startDeckRename = useCallback(
     (deck: DeckRow, opener: HTMLButtonElement | null) => {
@@ -1037,17 +1055,25 @@ export function DecksPage() {
   );
 
   /**
-   * Renaming, from either route.
+   * Renaming, from any of the five routes — and `at` is which **drawing** of the folder the
+   * reader asked from, because that is where the field will stand.
+   *
+   * The tree's row menu and its F2 are `"tree"`, and so is the heading row's `Folder` control:
+   * that one renames the folder the reader is *standing in*, and an open folder is never a card
+   * on its own wall — its children are. The card's pencil, its right-click and its `⋯` are
+   * `"wall"`. Wiring the card to the panel without this opened two fields at once, each answering
+   * to one `Rename X`; `panels.ts` carries the whole argument.
    *
    * `folders.rename.reset()` for `openCreate`'s reason — a refusal from the last attempt is not
-   * news about this one — and no opener, because the row the field replaces is what the caret
-   * comes back to whichever control started it.
+   * news about this one — and no opener either way, because what the field replaces is what the
+   * caret comes back to whichever control started it. See {@link dismiss} for the two ways that
+   * hand-back is made.
    */
   const startRename = useCallback(
-    (folderId: number) => {
+    (folderId: number, at: FolderRenameAt) => {
       folders.rename.reset();
       openerRef.current = null;
-      setPanel({ kind: "renameFolder", folderId });
+      setPanel({ kind: "renameFolder", folderId, at });
     },
     [folders.rename],
   );
@@ -1072,7 +1098,16 @@ export function DecksPage() {
    * after the render that redraws it.
    */
   const moveFolder = folders.move.mutate;
-  const folderMenuDeps = useMemo<FolderMenuDeps>(
+  /**
+   * The four rows that are the same wherever the menu was opened.
+   *
+   * Split from the fifth because `Rename…` is the one row whose answer depends on *which drawing*
+   * of the folder was right-clicked — see {@link startRename}. Two whole dep objects rather than a
+   * `FolderRenameAt` threaded through `buildFolderMenu` and every `MenuAction`: a menu row is a
+   * bare callback, so the origin has to be closed over somewhere, and closing it over here means
+   * `folderMenu.tsx` goes on knowing nothing about a wall.
+   */
+  const folderMenuActions = useMemo<Omit<FolderMenuDeps, "startRename">>(
     () => ({
       newDeck: (folderId) => {
         decks.create.reset();
@@ -1082,7 +1117,6 @@ export function DecksPage() {
         folders.create.reset();
         open({ kind: "newFolder", parentId }, menuOpenerRef.current);
       },
-      startRename,
       moveFolder: (folderId, parentId) => moveFolder({ id: folderId, parentId }),
       // **The drawer is opened on the way, and the question is asked over it.** The gallery
       // asks this once, in the heading row, about the folder the reader is standing in — so
@@ -1101,7 +1135,24 @@ export function DecksPage() {
         open({ kind: "deleteFolder" }, menuOpenerRef.current);
       },
     }),
-    [decks.create, folders.create, open, startRename, moveFolder],
+    [decks.create, folders.create, open, moveFolder],
+  );
+
+  /**
+   * The same five rows, twice, differing only in where `Rename…` puts its field.
+   *
+   * `wall` is what a folder **card** opens — its right-click, its `⋯` and (through
+   * {@link startRename} directly) its pencil; `tree` is what a sidebar row opens, and what the
+   * heading row's `Folder` control opens, because that one is about the folder the reader is
+   * standing *in* and an open folder has no card on its own wall.
+   */
+  const treeMenuDeps = useMemo<FolderMenuDeps>(
+    () => ({ ...folderMenuActions, startRename: (id) => startRename(id, "tree") }),
+    [folderMenuActions, startRename],
+  );
+  const wallMenuDeps = useMemo<FolderMenuDeps>(
+    () => ({ ...folderMenuActions, startRename: (id) => startRename(id, "wall") }),
+    [folderMenuActions, startRename],
   );
 
   /**
@@ -1114,10 +1165,31 @@ export function DecksPage() {
    */
   const folderRowMenu = useCallback(
     (folder: DeckFolder): FolderRowMenu => {
-      const build = () => buildFolderMenu(folder, folderMenuDeps);
+      const build = () => buildFolderMenu(folder, treeMenuDeps);
       return { onContextMenu: menu(build), onKeyDown: menuKey(build) };
     },
-    [menu, menuKey, folderMenuDeps],
+    [menu, menuKey, treeMenuDeps],
+  );
+
+  /**
+   * The same, for a folder drawn on the **wall** — and with the `⋯`'s own door beside the two.
+   *
+   * Three handlers rather than two, because the trigger's press is a third kind of door: a
+   * right-click carries the pointer's coordinates and a `ContextMenu` keypress carries none, while
+   * a plain click on the `⋯` is *either* depending on whether a pointer or the Enter key
+   * produced it — and only `menuClick` knows to ask. `CollectionFolderCard`'s arrangement, which
+   * this wall's card now matches.
+   *
+   * It is a second factory rather than a widening of {@link folderRowMenu} because the two build
+   * from different deps: a rename asked here stands on the card, and one asked in the tree stands
+   * on the row.
+   */
+  const folderCardMenu = useCallback(
+    (folder: DeckFolder): FolderCardMenu => {
+      const build = () => buildFolderMenu(folder, wallMenuDeps);
+      return { onContextMenu: menu(build), onKeyDown: menuKey(build), onClick: menuClick(build) };
+    },
+    [menu, menuKey, menuClick, wallMenuDeps],
   );
 
   /**
@@ -1142,15 +1214,23 @@ export function DecksPage() {
    * **thunk** for the same reason: nothing is built until the button is pressed.
    */
   const openFolderMenu = useCallback(
-    (folder: DeckFolder) => menuClick(() => buildFolderMenu(folder, folderMenuDeps)),
-    [menuClick, folderMenuDeps],
+    (folder: DeckFolder) => menuClick(() => buildFolderMenu(folder, treeMenuDeps)),
+    [menuClick, treeMenuDeps],
   );
 
-  /** The tree's one field, as the tree needs to know it. */
+  /**
+   * The tree's one field, as the tree needs to know it.
+   *
+   * **A rename reaches it only when the reader asked for it there** — `at === "tree"`, which is
+   * the row menu, its F2, and the heading row's `Folder` control, since that one is about the
+   * folder the reader is standing in and it has a row but no card. A rename started on the wall
+   * draws its field on the card and leaves every row of the tree resting; without the test both
+   * drew one, and two elements answered to `Rename Commander`.
+   */
   const naming: FolderNaming | null =
     panel?.kind === "newFolder"
       ? { kind: "new", parentId: panel.parentId }
-      : panel?.kind === "renameFolder"
+      : panel?.kind === "renameFolder" && panel.at === "tree"
         ? { kind: "rename", folderId: panel.folderId }
         : null;
 
@@ -1309,7 +1389,9 @@ export function DecksPage() {
             folders.create.reset();
             open({ kind: "newFolder", parentId }, opener);
           }}
-          onOpenRename={startRename}
+          // The tree's F2, which is the keyboard's route to the field the row menu opens — so
+          // `"tree"`, exactly as that menu's own row is.
+          onOpenRename={(folderId) => startRename(folderId, "tree")}
           onCloseNaming={close}
           onName={nameFolder}
           busy={folders.create.isPending || folders.rename.isPending}
@@ -1620,9 +1702,22 @@ export function DecksPage() {
                   canDropFolder={(d, at) => canDropFolder(d, node.folder.id, at)}
                   onDropFolder={(d, at) => dropFolder(d, node.folder.id, at)}
                   onOpen={setSelectedFolderId}
+                  onStartRename={(folderId) => startRename(folderId, "wall")}
+                  // The card's own field, and it is open only for the folder the reader asked
+                  // about *on the wall* — see {@link naming} for the other half of the same test.
+                  rename={{
+                    active:
+                      panel?.kind === "renameFolder" &&
+                      panel.at === "wall" &&
+                      panel.folderId === node.folder.id,
+                    pending: folders.rename.isPending,
+                    onSubmit: nameFolder,
+                    onCancel: dismiss,
+                  }}
                   // The same menu the sidebar's row opens, from the same builder — so the two
-                  // drawings of one folder cannot come to two sets of verbs.
-                  rowMenu={folderRowMenu}
+                  // drawings of one folder cannot come to two sets of verbs. What differs is the
+                  // `⋯`'s door, which only a card draws, and where a rename asked here stands.
+                  rowMenu={folderCardMenu}
                 />
               ))}
               {shown.map((deck) => (

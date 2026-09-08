@@ -13,9 +13,19 @@
  * reading it out of `DecksPage.tsx` would have been an import back into the file this was lifted
  * out of — erased at runtime, and a cycle to a reader and to `import/no-cycle` all the same.
  */
-import { useEffect, useRef, type RefObject } from "react";
-import { Archive, ArchiveRestore, Copy, FolderInput, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState, type RefObject } from "react";
+import {
+  Archive,
+  ArchiveRestore,
+  Check,
+  Copy,
+  FolderInput,
+  Pencil,
+  Trash2,
+  X,
+} from "lucide-react";
 import { CardImage } from "@/components/CardImage";
+import { useFolderFieldReturn } from "@/components/FolderNameField";
 import { useContextMenu } from "@/components/menu/useContextMenu";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
@@ -33,7 +43,6 @@ import { rowKind } from "./deckKind";
 import { buildDeckMenu, type DeckMenuDeps } from "./deckMenu";
 import { deckColorsLabel } from "./deckPips";
 import { deckDraggable, MoveToFolder, type FolderNode } from "./FolderTree";
-import { RenameField } from "./metaRows";
 import type { Panel } from "./panels";
 import type { Decks } from "./useDecks";
 import { ANY_GAME, gameLabel } from "./useFormatSpecs";
@@ -62,6 +71,35 @@ const ICON_BUTTON = cn(
  * end of the ladder and overflow it at the other.
  */
 const ICON = "size-[calc(0.875rem*var(--control-scale,1))]";
+
+/**
+ * The deck's name, and the first of the four sizes on this tile that move with the zoom.
+ *
+ * A constant because the line is drawn in two states — as the name, and `sr-only` behind the
+ * rename field that takes its place — and a second spelling would be the one that stopped scaling.
+ * `0.875rem` is `text-sm`, `1.25rem` its leading.
+ *
+ * **The 8px above it is measured from a band rather than from a hairline, and it stays 8px.** The
+ * colour bar used to leave 4px above itself and take 5px, so this margin was air under a rule that
+ * was air under a picture; the band abuts the crop and is 20px tall, so what these 8px now
+ * separate is the *picture* — crop and band, one object — from the words under it. That is the
+ * design's number and it is the one this line was always about. The rename field takes the same
+ * margin, so the field opens exactly where the name was.
+ */
+const NAME_LINE = cn(
+  "mt-[calc(0.5rem*var(--mark-scale,1))] block truncate",
+  "text-[calc(0.875rem*var(--mark-scale,1))] leading-[calc(1.25rem*var(--mark-scale,1))]",
+);
+
+/**
+ * `Modern · Arena · 60 cards` — the tile's third line, and a constant for {@link NAME_LINE}'s
+ * reason twice over: it is drawn inside the button at rest and again beside the rename field, and
+ * the two have to be one box or the tile would change height the moment a reader started typing.
+ */
+const CAPTION_LINE = cn(
+  "mt-[calc(0.125rem*var(--mark-scale,1))] block truncate text-dim",
+  "text-[calc(0.75rem*var(--mark-scale,1))] leading-[calc(1rem*var(--mark-scale,1))]",
+);
 
 /**
  * The box both of the art's marks are drawn in — the kind badge at its bottom-left, the bracket
@@ -358,6 +396,70 @@ export function DeckTile({
   const choosingFolder = panel?.kind === "moveDeck" && panel.deckId === deck.id;
   const renaming = panel?.kind === "renameDeck" && panel.deckId === deck.id;
 
+  /**
+   * What is in the rename field.
+   *
+   * Held here rather than in a component of its own because the field is three elements on this
+   * tile — the input in the caption's place and the two answers in the tray over the art — and a
+   * component drawn around them would have to be the whole tile. It is seeded on the render that
+   * opens the field and thrown away with it: the page mounts this branch off `panel`, so a
+   * cancelled rename cannot survive into the next one.
+   */
+  const [draft, setDraft] = useState(deck.name);
+  const renameRef = useRef<HTMLInputElement>(null);
+  /**
+   * The caret's way back to the pencil, and it has to be a ref taken here rather than the element
+   * the page remembered.
+   *
+   * The pencil is what the field's tray replaces, so by the time the page's `dismiss` runs it is a
+   * detached node whose `focus()` is a silent no-op — which is why {@link onStartRename} is passed
+   * `null` from that one control and the tile answers for itself. The hook restores only when
+   * nothing else has taken the caret, so F2 and the tile's menu — whose opener is the tile's own
+   * button, still mounted the whole time — are unaffected, and a click on another tile lands where
+   * the reader clicked. `CollectionFolderCard`'s arrangement, and the same hook.
+   */
+  const pencilRef = useFolderFieldReturn<HTMLButtonElement>(renaming);
+  const wasRenaming = useRef(renaming);
+  // The caret starts in the field with the current name **selected**: the commonest rename
+  // replaces the word rather than edits inside it.
+  //
+  // **Both calls, in this order, and `focus()` is not the redundant one.** Per spec
+  // `HTMLInputElement.select()` sets a selection and does not move focus; Chromium focuses anyway,
+  // which is exactly what makes the bug invisible where a person would meet it. This repo has
+  // written the pair the wrong way round twice — `metaRows.tsx`'s `RenameField` carries the
+  // account — so it is copied rather than reasoned about.
+  //
+  // Keyed on the *transition* rather than on mount, because the tile does not unmount when the
+  // field closes: it is one `<li>` that is drawing a name one render and a field the next.
+  useEffect(() => {
+    const opened = renaming && !wasRenaming.current;
+    wasRenaming.current = renaming;
+    if (!opened) return;
+    setDraft(deck.name);
+    const input = renameRef.current;
+    if (input === null) return;
+    input.focus();
+    input.select();
+  }, [renaming, deck.name]);
+
+  const trimmed = draft.trim();
+  /** The one place the rename is sent, because two controls send it: the form's Enter and the
+   *  tray's ✓, which is outside the form and therefore cannot be a `type="submit"`. */
+  const submitRename = () => {
+    if (!trimmed || decks.update.isPending) return;
+    onRename(trimmed);
+  };
+
+  /** The caption's words, drawn in the button at rest and again under the field — see
+   *  {@link CAPTION_LINE}. One node, so the two drawings cannot come to say different things. */
+  const caption = (
+    <>
+      {deck.formatName ?? deck.formatKey}
+      {deck.gameKey !== ANY_GAME && ` · ${gameLabel(deck.gameKey)}`} ·{" "}
+      <span className="font-mono tabular-nums">{deck.cardCount}</span> {unit}
+    </>
+  );
+
   return (
     // The two scale variables are set here, on the tile's own root, so everything drawn inside it
     // inherits them — including the shared marks in `components/`, which read
@@ -454,8 +556,15 @@ export function DeckTile({
             line was always about. */}
         <span
           className={cn(
-            "mt-[calc(0.5rem*var(--mark-scale,1))] block truncate",
-            "text-[calc(0.875rem*var(--mark-scale,1))] leading-[calc(1.25rem*var(--mark-scale,1))]",
+            NAME_LINE,
+            // **`sr-only` rather than gone**, while the field below stands on this line. The
+            // button's accessible name is computed from its contents, so removing the deck's name
+            // would leave a tile named for its format and its card count — one control answering
+            // to two different sentences depending on whether somebody is typing in it. Hidden
+            // this way the name takes no space (`sr-only` is `position: absolute`), so the field
+            // sits exactly where the name was, and the sentence a screen reader hears never
+            // changes.
+            renaming && "sr-only",
           )}
         >
           {deck.name}
@@ -497,17 +606,73 @@ export function DeckTile({
             never a shorter format name or a wider tile: the deck's name above this is what a
             reader is scanning, and the full string is a hover away on any surface that needs
             it. */}
-        <span
-          className={cn(
-            "mt-[calc(0.125rem*var(--mark-scale,1))] block truncate text-dim",
-            "text-[calc(0.75rem*var(--mark-scale,1))] leading-[calc(1rem*var(--mark-scale,1))]",
-          )}
-        >
-          {deck.formatName ?? deck.formatKey}
-          {deck.gameKey !== ANY_GAME && ` · ${gameLabel(deck.gameKey)}`} ·{" "}
-          <span className="font-mono tabular-nums">{deck.cardCount}</span> {unit}
-        </span>
+        <span className={cn(CAPTION_LINE, renaming && "sr-only")}>{caption}</span>
       </button>
+
+      {/* Renaming a deck, **on the line the name occupies**.
+          A tile's name is already in flow under its picture, so the field takes that line and
+          nothing above it moves: the crop, the colour band and both of the art's marks are
+          exactly where they were, which is what a reader renaming one deck out of forty needs in
+          order to see which. It replaced a bordered strip drawn *under* the whole tile with its
+          own `Save` and `Cancel` spelled out in words — a second box, below the object it was
+          about, that reflowed every tile after it on the wall.
+          **A sibling of the button rather than a child**: a form inside a button is not markup a
+          browser will build. `data-no-drag` because the tile is a drag handle — without it a
+          press into the field plus five pixels of travel files the deck.
+          **Escape is not handled here.** The field is one arm of the page's `Panel`, so the
+          page's `"inner"` rung already closes it; a handler here would be a second registration
+          for one layer that could never run first anyway. Enter is the form's own implicit
+          submission. */}
+      {renaming && (
+        <>
+          <form
+            data-no-drag=""
+            className="mt-[calc(0.5rem*var(--mark-scale,1))]"
+            onSubmit={(e) => {
+              e.preventDefault();
+              submitRename();
+            }}
+            // Looking away discards a half-typed name, and **"away" is measured against the whole
+            // tile** rather than against this form: the ✓ and the ✕ live in the tray over the
+            // art, outside the form, so a press on either is a blur that must not cancel first.
+            // Suspended while the write is in flight — a control the browser disables on the
+            // press is blurred with no `relatedTarget` at all, which would read as looking away.
+            onBlur={(e) => {
+              if (decks.update.isPending) return;
+              if (!ref.current?.contains(e.relatedTarget)) onCancelPanel();
+            }}
+          >
+            <input
+              ref={renameRef}
+              aria-label={`Rename ${deck.name}`}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              className={cn(
+                "block w-full rounded-md border border-accent bg-bg",
+                "px-[calc(0.375rem*var(--mark-scale,1))]",
+                // **Exactly the name line's leading, and that is the number the wall depends
+                // on.** A tile's name is in flow, so a field any taller than the line it replaces
+                // grows the tile — measured in the shipped window at the wall's own 1.2× zoom,
+                // a 26px field under a 20px line took the tile from 266px to 273 and pushed the
+                // whole grid row down 7px the moment a reader started typing. The box is
+                // `border-box`, so the 1px hairlines come out of these 20 and the 14px text has
+                // 18 to sit in. The folder card's field carries the same rule for its caption's
+                // sake; only the hairline does not scale, which is this app's standing exception.
+                "h-[calc(1.25rem*var(--mark-scale,1))]",
+                "text-[calc(0.875rem*var(--mark-scale,1))] leading-[calc(1.25rem*var(--mark-scale,1))]",
+                "text-text caret-accent outline-none",
+              )}
+            />
+          </form>
+          {/* The caption goes on saying what the deck is, under the field exactly as it sat under
+              the name. `aria-hidden`, because the button above still carries these words in its
+              own accessible name — the line inside it is `sr-only` rather than gone — so this is
+              a second drawing of one sentence and not a second sentence. */}
+          <span aria-hidden="true" className={CAPTION_LINE}>
+            {caption}
+          </span>
+        </>
+      )}
 
       {/* The art's two marks — what kind of deck this is, and what bracket it reads as — in one
           box that *is* the art.
@@ -596,28 +761,6 @@ export function DeckTile({
         </div>
       )}
 
-      {/* Renaming a deck, in the tile it belongs to.
-          **Under the tile rather than in place of it**, which is where the folder tree's field
-          stands — and the difference is what the two are standing over. A folder row is a name
-          and a count, so a field can replace it whole; a tile is the art the deck was built
-          around, and a reader renaming one deck out of forty needs to see which. It also has to
-          be a *sibling* of the button: `RenameField` is a `<form>`, and a form inside a button
-          is invalid HTML.
-          `metaRows.tsx`'s field, not a third rename control — the caret handling in there was
-          got wrong twice before it was written down once. `data-no-drag` because the tile is a
-          drag handle: without it a press on Save plus five pixels of travel files the deck. */}
-      {renaming && (
-        <div data-no-drag="">
-          <RenameField
-            label={`Rename ${deck.name}`}
-            initial={deck.name}
-            pending={decks.update.isPending}
-            onSave={onRename}
-            onCancel={onCancelPanel}
-          />
-        </div>
-      )}
-
       {/* Invisible until the tile is hovered or holds the caret — a wall of art is not a wall
           of buttons — and always in the tab order, because "visible on hover" is not a state a
           keyboard has. Over the art's corner on the app's own felt at 85%, which is the
@@ -637,55 +780,124 @@ export function DeckTile({
           "absolute flex rounded-md bg-bg/85",
           "right-[calc(0.25rem*var(--control-scale,1))] top-[calc(0.25rem*var(--control-scale,1))]",
           "gap-[calc(0.125rem*var(--control-scale,1))] p-[calc(0.125rem*var(--control-scale,1))]",
-          REVEAL_ON_HOVER,
+          // The tray is what the field's two answers are drawn in, so it may not fade while one
+          // is open. Focus is inside the tile whenever it is — the caret is in the input —
+          // so `group-focus-within` already holds it up; the explicit clause is what keeps it
+          // there for the beat between a press on ✓ and the write closing the panel, and for a
+          // pointer that has left the tile with the field still standing.
+          renaming ? "opacity-100" : REVEAL_ON_HOVER,
         )}
       >
-        <button
-          type="button"
-          data-no-drag=""
-          aria-label={`Move ${deck.name} to a folder`}
-          aria-expanded={choosingFolder}
-          aria-haspopup="dialog"
-          {...tip("Move to a folder", { describes: false })}
-          onClick={(e) => (choosingFolder ? onCancelPanel() : onAskMove(deck, e.currentTarget))}
-          className={ICON_BUTTON}
-        >
-          <FolderInput className={ICON} aria-hidden="true" />
-        </button>
-        <button
-          type="button"
-          data-no-drag=""
-          aria-label={`Duplicate ${deck.name}`}
-          {...tip("Duplicate", { describes: false })}
-          onClick={() => decks.duplicate.mutate(deck.id)}
-          className={ICON_BUTTON}
-        >
-          <Copy className={ICON} aria-hidden="true" />
-        </button>
-        <button
-          type="button"
-          data-no-drag=""
-          aria-label={`${deck.archived ? "Restore" : "Archive"} ${deck.name}`}
-          {...tip(deck.archived ? "Restore" : "Archive", { describes: false })}
-          onClick={() => decks.update.mutate({ id: deck.id, patch: { archived: !deck.archived } })}
-          className={ICON_BUTTON}
-        >
-          {deck.archived ? (
-            <ArchiveRestore className={ICON} aria-hidden="true" />
-          ) : (
-            <Archive className={ICON} aria-hidden="true" />
-          )}
-        </button>
-        <button
-          type="button"
-          data-no-drag=""
-          aria-label={`Delete ${deck.name}`}
-          {...tip("Delete", { describes: false })}
-          onClick={(e) => onAskDelete(deck, e.currentTarget)}
-          className={cn(ICON_BUTTON, "hover:text-destructive")}
-        >
-          <Trash2 className={ICON} aria-hidden="true" />
-        </button>
+        {renaming ? (
+          <>
+            {/* **`type="button"` and an `onClick`, not a submit.** The tray is over the art and
+                the field is on the caption's line, so the two are not in one form — and putting
+                the form around both would mean a `<form>` wrapping the tile's own `<button>`,
+                which is the arrangement the field is a sibling to avoid. `submitRename` is the
+                one place either route sends, so Enter and this press cannot part. */}
+            <button
+              type="button"
+              data-no-drag=""
+              aria-label="Save name"
+              disabled={trimmed === "" || decks.update.isPending}
+              {...tip("Save", { describes: false })}
+              onClick={submitRename}
+              className={cn(
+                "grid size-[calc(1.5rem*var(--control-scale,1))] place-items-center rounded-md",
+                "text-accent transition-colors duration-150",
+                "hover:bg-accent hover:text-accent-foreground",
+                "disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-accent",
+                "motion-reduce:transition-none",
+                FOCUS,
+              )}
+            >
+              <Check className={ICON} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              data-no-drag=""
+              aria-label="Cancel"
+              {...tip("Cancel", { describes: false })}
+              onClick={onCancelPanel}
+              className={ICON_BUTTON}
+            >
+              <X className={ICON} aria-hidden="true" />
+            </button>
+          </>
+        ) : (
+          <>
+            {/* The visible way into the field F2 and the tile's menu already open. It leads the
+                tray because a rename is the commonest thing a reader does to a tile they are
+                looking at, and because the folder card beside it puts its pencil in the same
+                place — one corner, one glyph, whichever kind of tile the pointer is over. */}
+            <button
+              ref={pencilRef}
+              type="button"
+              data-no-drag=""
+              // **`Rename the X deck`, never the bare `Rename X` the field answers to.** The two
+              // are never on screen together — the tray draws ✓ / ✕ while the field is open — but
+              // a query that cannot tell them apart is a query that reports the pencil as the
+              // field, which is how a cancelled rename read as a field that never closed. The
+              // folder card's pencil says the same thing about its own kind of tile, and there
+              // that collision is on screen: see `FolderCard.tsx`.
+              aria-label={`Rename the ${deck.name} deck`}
+              {...tip("Rename", { describes: false })}
+              // `null` rather than `e.currentTarget`: this control *is* what the field's tray
+              // replaces, so the element the page would hold is detached by the time it tries to
+              // focus it. {@link pencilRef} is the hand-back instead.
+              onClick={() => onStartRename(deck, null)}
+              className={ICON_BUTTON}
+            >
+              <Pencil className={ICON} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              data-no-drag=""
+              aria-label={`Move ${deck.name} to a folder`}
+              aria-expanded={choosingFolder}
+              aria-haspopup="dialog"
+              {...tip("Move to a folder", { describes: false })}
+              onClick={(e) => (choosingFolder ? onCancelPanel() : onAskMove(deck, e.currentTarget))}
+              className={ICON_BUTTON}
+            >
+              <FolderInput className={ICON} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              data-no-drag=""
+              aria-label={`Duplicate ${deck.name}`}
+              {...tip("Duplicate", { describes: false })}
+              onClick={() => decks.duplicate.mutate(deck.id)}
+              className={ICON_BUTTON}
+            >
+              <Copy className={ICON} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              data-no-drag=""
+              aria-label={`${deck.archived ? "Restore" : "Archive"} ${deck.name}`}
+              {...tip(deck.archived ? "Restore" : "Archive", { describes: false })}
+              onClick={() => decks.update.mutate({ id: deck.id, patch: { archived: !deck.archived } })}
+              className={ICON_BUTTON}
+            >
+              {deck.archived ? (
+                <ArchiveRestore className={ICON} aria-hidden="true" />
+              ) : (
+                <Archive className={ICON} aria-hidden="true" />
+              )}
+            </button>
+            <button
+              type="button"
+              data-no-drag=""
+              aria-label={`Delete ${deck.name}`}
+              {...tip("Delete", { describes: false })}
+              onClick={(e) => onAskDelete(deck, e.currentTarget)}
+              className={cn(ICON_BUTTON, "hover:text-destructive")}
+            >
+              <Trash2 className={ICON} aria-hidden="true" />
+            </button>
+          </>
+        )}
       </div>
 
       {choosingFolder && (
