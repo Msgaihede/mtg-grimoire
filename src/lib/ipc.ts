@@ -36,6 +36,23 @@
  * `PairingStatus`/`PairingOffer`/`PairingHandshake`/`PairingSealedKey`/
  * `PairingProgress`/`QrMatrix`/`PairedDevice`      — `src-tauri/src/sync_pair/pairing.rs`,
  *                                                  `.../identity.rs`, `.../invite.rs`
+ * `ScannerAsset`/`ScannerStatus`/`ScannerSidecar`/
+ * `ScannerCaptured`                                — `src-tauri/src/scanner.rs`
+ * `ScannerOptions`/`ScannerVerdict`/`ScannerFrameSize`/
+ * `ScannerStages`/`ScannerStanding`/`ScannerTracked`/
+ * `ScannerCollectorTry`/`ScannerCollector`/`ScannerOcr` — `crates/card-scanner/src/session.rs`
+ * `ScannerLabel`/`ScannerCandidate`/`ScannerMatch`  — `crates/card-scanner/src/reference.rs`
+ * `ScannerLock`                                    — `crates/card-scanner/src/lock.rs`
+ * `ScannerScore`/`ScannerTimings`                  — `crates/card-scanner/src/detect.rs`
+ * `ScannerCardness`                                — `crates/card-scanner/src/cardness.rs`
+ * `ScannerTrim`                                    — `crates/card-scanner/src/trim.rs`
+ *
+ * **The scanner's twenty-one are the one block here that is _not_ camelCase**, and they are the
+ * exception rather than an oversight: the detector crate carries no
+ * `#[serde(rename_all = "camelCase")]`, because its JSON was the standalone debug page's before
+ * it was this app's and that page reads `decide_at` and `best_distance` by those names. The
+ * mirror keeps the Rust spelling verbatim; `ipc.test.ts`'s `snakeMirrors` is the table that
+ * compares them with no camel step.
  *
  * **Nine settings carry no struct at all.** Each is one `app_meta` row: three answered as a
  * bare string — `getMarketplace`/`setMarketplace` (`src-tauri/src/marketplace.rs`),
@@ -98,6 +115,9 @@
  * pick between and no fallback across marketplaces — see `@/lib/marketplace`.
  */
 import { core } from "@/lib/core";
+import type { CallArgs, CallOptions } from "@/lib/core";
+import { bytesToBase64 } from "@/lib/bytes";
+import { isAndroid } from "@/lib/platform";
 import type { Condition } from "./conditions";
 import type { Finish } from "./finish";
 import type { MarketplaceId } from "./marketplace";
@@ -117,9 +137,16 @@ export type Unlisten = () => void;
 /**
  * The ~136 methods below are written as `invoke("name", { args })` and stay that way.
  * Only where the call goes has changed — {@link core} decides that, per build.
+ *
+ * **Two parameters wider than that sentence since the scanner**, and both widenings serve the
+ * one call that cannot be `{ args }`: a camera frame is bytes with no fields to name, so `args`
+ * takes {@link CallArgs}' other arm, and whatever the bytes cannot say rides in
+ * {@link CallOptions}' headers. Every other wrapper passes a record and no options, which is
+ * what keeps `core.call`'s one- and two-argument forms — and the twenty
+ * `toHaveBeenCalledWith("sync_status")` assertions that depend on them — unchanged.
  */
-const invoke = <T,>(command: string, args?: Record<string, unknown>): Promise<T> =>
-  core.call<T>(command, args);
+const invoke = <T,>(command: string, args?: CallArgs, options?: CallOptions): Promise<T> =>
+  core.call<T>(command, args, options);
 
 /**
  * The search's sortable columns. Mirrors `SEARCH_SORTS` in `src-tauri/src/search.rs`; a key
@@ -5185,6 +5212,290 @@ export interface ReviewRow {
   sentence: string;
 }
 
+/**
+ * Which edge detector runs — `Method` in `crates/card-scanner/src/session.rs`, whose
+ * `#[serde(rename_all = "lowercase")]` is the whole of the mapping.
+ */
+export type ScannerMethod = "canny" | "otsu" | "both";
+
+/**
+ * How accumulated evidence becomes an answer — `CommitRule` in
+ * `crates/card-scanner/src/track.rs`. Votes toward a bar, or the decayed two-way contest.
+ */
+export type ScannerRule = "votes" | "confidence";
+
+/**
+ * Everything a caller can change between frames — `FrameOptions` in `session.rs`.
+ *
+ * Every field has a Rust-side default and the struct is `#[serde(default)]`, so a partial
+ * object parses; this side sends all ten regardless, because the page owns a slider for each
+ * and a field it omitted would silently be the crate's default rather than the reader's.
+ */
+export interface ScannerOptions {
+  work_long_edge: number;
+  method: ScannerMethod;
+  canny_low: number;
+  canny_high: number;
+  aspect_tolerance: number;
+  min_cardness: number;
+  /** The binary and contour images as well as the quad. Roughly doubles the response time. */
+  stages: boolean;
+  rule: ScannerRule;
+  decide_at: number;
+  lead_margin: number;
+}
+
+/** One file the scanner needs, and whether it is there — `Asset` in `src-tauri/src/scanner.rs`. */
+export interface ScannerAsset {
+  path: string;
+  present: boolean;
+  loaded: boolean;
+  error: string | null;
+}
+
+/**
+ * What `scanner_status` answers — `ScannerStatus` in `src-tauri/src/scanner.rs`.
+ *
+ * The three assets are separate because they fail separately and the sentences differ: no
+ * bundle means nothing can be named, no models mean the OCR tiers stand down and the
+ * appearance match carries the frame alone.
+ */
+export interface ScannerStatus {
+  bundle: ScannerAsset;
+  detection_model: ScannerAsset;
+  recognition_model: ScannerAsset;
+  labels: number;
+  scans_dir: string;
+}
+
+/**
+ * What a captured frame is filed with — `Sidecar` in `src-tauri/src/scanner.rs`.
+ *
+ * Every field is a **string** rather than the number it reads as: this is a note written
+ * beside a JPEG for a person grading the dataset later, and a missing figure is an empty
+ * string there rather than a `null` something downstream has to render.
+ */
+export interface ScannerSidecar {
+  expected: string;
+  reported: string;
+  confidence: string;
+  votes: string;
+  distance: string;
+}
+
+/** Where the capture landed — `Captured` in `src-tauri/src/scanner.rs`. */
+export interface ScannerCaptured {
+  saved: string;
+}
+
+/** The decoded frame's own size — `FrameSize` in `session.rs`. */
+export interface ScannerFrameSize {
+  w: number;
+  h: number;
+}
+
+/** `Phase` in `crates/card-scanner/src/lock.rs`, lowercased by serde. */
+export type ScannerLockPhase = "idle" | "acquiring" | "locked";
+
+/**
+ * The quad lock across frames — `LockState` in `lock.rs`.
+ *
+ * **Three fields and not four**: the Rust struct's `quad` is `#[serde(skip)]`, so it is not on
+ * the wire at all. The smoothed quad an overlay draws is {@link ScannerVerdict.quad}.
+ */
+export interface ScannerLock {
+  phase: ScannerLockPhase;
+  /** Consecutive agreeing frames. */
+  agree: number;
+  misses: number;
+}
+
+/**
+ * One corner, in the frame's own pixels. Rust's `(f32, f32)` — a tuple, so it arrives as a
+ * two-element array rather than as an `{ x, y }`.
+ */
+export type ScannerCorner = [number, number];
+
+/** How card-shaped the chosen quad is — `QuadScore` in `crates/card-scanner/src/detect.rs`. */
+export interface ScannerScore {
+  /** `QuadSource`: which contour route produced it. */
+  via: string;
+  /** How far from a parallelogram. 0 is face-on. */
+  skew: number;
+  aspect: number;
+  area_frac: number;
+  /** Worst deviation from 90° at any corner, in degrees. */
+  max_angle_error: number;
+  total: number;
+}
+
+/** Where the detection's time went — `DetectTimings` in `detect.rs`. */
+export interface ScannerTimings {
+  resize_ms: number;
+  mask_ms: number;
+  contour_ms: number;
+  rectify_ms: number;
+  total_ms: number;
+}
+
+/** How card-like the rectification is — `Cardness` in `crates/card-scanner/src/cardness.rs`. */
+export interface ScannerCardness {
+  title: number;
+  type_line: number;
+  full_width_rows: number;
+  /** Combined, 0..1. Higher is more card-like. */
+  score: number;
+}
+
+/**
+ * Background cut off the rectification, per side, in pixels — `Margin` in
+ * `crates/card-scanner/src/trim.rs`.
+ */
+export interface ScannerTrim {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+/**
+ * The pipeline's intermediate images, as data URLs — `Stages` in `session.rs`. Present only
+ * where {@link ScannerOptions.stages} asked for them.
+ */
+export interface ScannerStages {
+  binary: string | null;
+  contours: string | null;
+  quad: string | null;
+}
+
+/** What a printing is called — `Label` in `crates/card-scanner/src/reference.rs`. */
+export interface ScannerLabel {
+  name: string;
+  set: string;
+  number: string;
+  lang: string;
+  released: string;
+}
+
+/** One ranked answer — `Candidate` in `reference.rs`. */
+export interface ScannerCandidate {
+  id: string;
+  distance: number;
+  /** Distance over the descriptor's width, so a threshold means the same at 128 and 256 bits. */
+  normalized: number;
+  /** `None` where no corpus is loaded, or the bundle names an id this corpus does not. */
+  label: ScannerLabel | null;
+  /** How many printings share this artwork — why an art hit cannot name a printing alone. */
+  printings: number | null;
+}
+
+/** One frame's match against one section — `MatchReport` in `reference.rs`. */
+export interface ScannerMatch {
+  /** `Section`: which part of the card was hashed. */
+  section: string;
+  /** Whether the 180°-rotated rectification won. A card is symmetric, so both are hashed. */
+  rotated: boolean;
+  view: number;
+  views: number;
+  candidates: ScannerCandidate[];
+  hash_ms: number;
+  /** Bits between the best and second-best answer. */
+  margin: number | null;
+  search_ms: number;
+}
+
+/** One accumulated candidate with its label resolved — `StandingView` in `session.rs`. */
+export interface ScannerStanding {
+  id: string;
+  evidence: number;
+  share: number;
+  seen: number;
+  label: ScannerLabel | null;
+  best_distance: number;
+}
+
+/** What the tracker has come to across the stream — `TrackedView` in `session.rs`. */
+export interface ScannerTracked {
+  committed: boolean;
+  confidence: number;
+  rule: ScannerRule;
+  decide_at: number;
+  lead: number | null;
+  frozen: boolean;
+  streak: number;
+  frames: number;
+  misses: number;
+  standings: ScannerStanding[];
+}
+
+/** One set/number pair the collector line was read as — `CollectorTry` in `session.rs`. */
+export interface ScannerCollectorTry {
+  set: string;
+  number: string;
+  matched: string | null;
+}
+
+/** The collector-line tier — `CollectorView` in `session.rs`. */
+export interface ScannerCollector {
+  raw: string;
+  rotated: boolean;
+  elapsed_ms: number;
+  pairings: number;
+  tried: ScannerCollectorTry[];
+  more: number;
+  band: string | null;
+  matched: string | null;
+}
+
+/** The title-band tier — `OcrView` in `session.rs`. */
+export interface ScannerOcr {
+  raw: string;
+  /** What the name lookup actually compares: punctuation and case stripped from both sides. */
+  normalized: string;
+  rotated: boolean;
+  elapsed_ms: number;
+  band: string | null;
+  matched: string | null;
+  edits: number | null;
+}
+
+/**
+ * What one frame came to — `Verdict` in `session.rs`, and the whole of what the page draws.
+ *
+ * `error` is the one optional field, because Rust's is `skip_serializing_if`: a frame that went
+ * fine carries no key at all rather than a `null`.
+ */
+export interface ScannerVerdict {
+  ok: boolean;
+  error?: string;
+  frame: ScannerFrameSize;
+  decode_ms: number;
+  /** Whether a bundle is loaded at all — "no bundle" and "no card in this frame" differ. */
+  matcher: boolean;
+  lock: ScannerLock | null;
+  /** The lock's *smoothed* quad, which is what an overlay draws. */
+  quad: ScannerCorner[] | null;
+  /** This frame's own quad, for showing the jitter the smoothing removes. */
+  quad_raw: ScannerCorner[] | null;
+  method: string | null;
+  cardness: ScannerCardness | null;
+  rejected_cardness: ScannerCardness | null;
+  trim: ScannerTrim | null;
+  /** Whether this frame's card came from the lock's quad rather than its own. */
+  from_lock: boolean;
+  score: ScannerScore | null;
+  hash: string | null;
+  /** The rectified card as a data URL — the payload a reader actually wants to see. */
+  rectified: string | null;
+  timings: ScannerTimings | null;
+  candidates_examined: number | null;
+  stages: ScannerStages | null;
+  match: ScannerMatch | null;
+  tracked: ScannerTracked | null;
+  collector: ScannerCollector | null;
+  ocr: ScannerOcr | null;
+}
+
 export const ipc = {
   searchCards: (req: SearchRequest) => invoke<SearchResponse>("search_cards", { req }),
   /**
@@ -7360,6 +7671,31 @@ export const ipc = {
    * *Membership ended*.
    */
   syncGroupLeave: () => invoke<void>("sync_group_leave"),
+  /** `scanner::scanner_status`. Lazy: the first call loads the bundle and the models. */
+  scannerStatus: () => invoke<ScannerStatus>("scanner_status"),
+  /**
+   * `scanner::scanner_frame`. **Two shapes for one command.** On desktop the JPEG is the body
+   * and the options ride in a header; on Android Tauri carries no raw bytes ("on all platforms
+   * except Android", its own doc on `Request`), so the same command takes `{ jpeg, options }`
+   * as named arguments. `isAndroid()`'s third reader, and the one its note asks to justify: the
+   * core boundary is per *build* and both legs are the Tauri build — the difference is
+   * Tauri's, per OS, and it is met here in the one wrapper that meets it.
+   */
+  scannerFrame: (jpeg: Uint8Array, options: ScannerOptions) =>
+    isAndroid()
+      ? invoke<ScannerVerdict>("scanner_frame", { jpeg: bytesToBase64(jpeg), options })
+      : invoke<ScannerVerdict>("scanner_frame", jpeg, {
+          headers: { "x-scanner-options": JSON.stringify(options) },
+        }),
+  /** `scanner::scanner_reset`. The reader pressed reset, or the next card is coming. */
+  scannerReset: () => invoke<void>("scanner_reset"),
+  /** `scanner::scanner_capture`. The same two shapes as {@link ipc.scannerFrame}. */
+  scannerCapture: (jpeg: Uint8Array, sidecar: ScannerSidecar) =>
+    isAndroid()
+      ? invoke<ScannerCaptured>("scanner_capture", { jpeg: bytesToBase64(jpeg), sidecar })
+      : invoke<ScannerCaptured>("scanner_capture", jpeg, {
+          headers: { "x-scanner-capture": JSON.stringify(sidecar) },
+        }),
 };
 
 /**

@@ -5,6 +5,13 @@ const listen = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 vi.mock("@tauri-apps/api/event", () => ({ listen }));
 
+// **Defaulted to `false`, which is the desktop shape every other assertion in this file
+// assumes.** `ipc.scannerFrame` is the one wrapper whose *call shape* depends on the OS, so
+// the two legs have to be drivable from here; a real `isAndroid()` would answer off jsdom's
+// user agent and pin only whichever leg that happens to be. Each Android case arms it with a
+// single `mockReturnValueOnce`, so the mock never leaks past the call it was written for.
+vi.mock("@/lib/platform", () => ({ isAndroid: vi.fn(() => false) }));
+
 // Read as text, not imported as a module: this pair is the only thing in the build that
 // compares the hand-written mirror below with the crate it mirrors. `viewports.test.ts`
 // reads `tauri.conf.json` the same way, for the same reason — Rust owns the fact and
@@ -26,8 +33,19 @@ import syncCommandsRs from "../../src-tauri/src/sync_engine/commands.rs?raw";
 import syncLiveRs from "../../src-tauri/src/sync_engine/live.rs?raw";
 import wishlistRs from "../../src-tauri/src/wishlist.rs?raw";
 import wishlistOptimizeRs from "../../src-tauri/src/wishlist_optimize.rs?raw";
+// The scanner's six, all in the `card-scanner` crate rather than under `src-tauri/src` — the
+// detector is a library with a CLI of its own, and the shapes the page reads are declared
+// there. `src-tauri/src/scanner.rs` is the seventh and is read below rather than imported.
+import sessionRs from "../../crates/card-scanner/src/session.rs?raw";
+import referenceRs from "../../crates/card-scanner/src/reference.rs?raw";
+import lockRs from "../../crates/card-scanner/src/lock.rs?raw";
+import detectRs from "../../crates/card-scanner/src/detect.rs?raw";
+import cardnessRs from "../../crates/card-scanner/src/cardness.rs?raw";
+import trimRs from "../../crates/card-scanner/src/trim.rs?raw";
 import ipcSource from "./ipc.ts?raw";
 import { CONDITIONS, CONDITION_NOT_SET } from "@/lib/conditions";
+import { isAndroid } from "@/lib/platform";
+import { DEFAULT_SCANNER_OPTIONS } from "@/features/scanner/scannerOptions";
 import {
   AUTO_BRACKET,
   ipc,
@@ -42,6 +60,22 @@ import {
   type SyncProgressEvent,
   type TheorySlot,
 } from "@/lib/ipc";
+
+/**
+ * **`src-tauri/src/scanner.rs` is read through a glob rather than imported**, and the reason is
+ * that a bare `?raw` import of a file that is not in the tree is a *build* error: the four rows
+ * that read it would take this whole suite down while the Tauri half of the scanner is still
+ * being written, rather than reporting themselves as unchecked. An `import.meta.glob` over a
+ * single literal path answers `{}` for an absent file and one entry for a present one, so the
+ * rows stay on the list either way and start running — unchanged — the moment the file lands.
+ */
+const scannerRs = Object.values(
+  import.meta.glob("../../src-tauri/src/scanner.rs", {
+    query: "?raw",
+    import: "default",
+    eager: true,
+  }),
+)[0] as string | undefined;
 
 beforeEach(() => {
   invoke.mockReset();
@@ -1964,6 +1998,52 @@ describe("ipc argument names match the Rust command signatures", () => {
     expect(invoke).toHaveBeenCalledWith("mirror_rebuild");
     expect(report).toEqual({ written: 142, unchanged: 208, pruned: 0, failed: 0 });
   });
+
+  /**
+   * **Two call shapes for one command, and this is the only pin either of them has.**
+   *
+   * A camera frame has no fields to name, so on desktop it is Tauri's raw byte body with the
+   * detector options riding in a header — and on Android Tauri carries no raw bytes at all
+   * ("on all platforms except Android", its own doc on `Request`), so the same command takes
+   * `{ jpeg, options }` as ordinary named arguments. Nothing type-checks either half: the
+   * desktop leg's header *name* is a string on both sides, and the Android leg's argument names
+   * are matched by `invoke` at run time. A misspelling on either is a scanner that reports
+   * "no card" for every frame on exactly one of the two platforms.
+   */
+  it("scanner_frame sends the frame as bytes with its options in a header on desktop", async () => {
+    const jpeg = new Uint8Array([1, 2, 3]);
+    await ipc.scannerFrame(jpeg, DEFAULT_SCANNER_OPTIONS);
+    expect(invoke).toHaveBeenCalledWith("scanner_frame", jpeg, {
+      headers: { "x-scanner-options": JSON.stringify(DEFAULT_SCANNER_OPTIONS) },
+    });
+  });
+
+  it("scanner_frame sends the frame as base64 arguments on Android", async () => {
+    vi.mocked(isAndroid).mockReturnValueOnce(true);
+    await ipc.scannerFrame(new Uint8Array([1, 2, 3]), DEFAULT_SCANNER_OPTIONS);
+    expect(invoke).toHaveBeenCalledWith("scanner_frame", {
+      jpeg: "AQID",
+      options: DEFAULT_SCANNER_OPTIONS,
+    });
+  });
+
+  it("scanner_capture carries the sidecar the same two ways", async () => {
+    const sidecar = { expected: "Plains", reported: "", confidence: "", votes: "8.0", distance: "74" };
+    await ipc.scannerCapture(new Uint8Array([9]), sidecar);
+    expect(invoke).toHaveBeenCalledWith("scanner_capture", new Uint8Array([9]), {
+      headers: { "x-scanner-capture": JSON.stringify(sidecar) },
+    });
+    vi.mocked(isAndroid).mockReturnValueOnce(true);
+    await ipc.scannerCapture(new Uint8Array([9]), sidecar);
+    expect(invoke).toHaveBeenCalledWith("scanner_capture", { jpeg: "CQ==", sidecar });
+  });
+
+  it("scanner_status and scanner_reset take nothing", async () => {
+    await ipc.scannerStatus();
+    expect(invoke).toHaveBeenCalledWith("scanner_status");
+    await ipc.scannerReset();
+    expect(invoke).toHaveBeenCalledWith("scanner_reset");
+  });
 });
 
 it("unwraps the sync:progress payload and returns the unlisten handle", async () => {
@@ -2684,16 +2764,46 @@ describe("pairing", () => {
  * two lists of names be compared instead of two schemas.
  */
 describe("the CardSummary mirror agrees with the Rust struct field for field", () => {
+  /**
+   * Both parsers split on `/\r?\n/` rather than on `"\n"`, and it is not tidiness.
+   *
+   * A file's line endings are not a fact about the code in it, but `body.indexOf("}")` compares
+   * a whole line — so a source checked out or written with CRLF ends every struct in `"}\r"`,
+   * the closing brace is never found, and the row fails with `has no closing brace` for a
+   * mirror that is perfectly correct. That is a *fence reporting a drift that does not exist*,
+   * which is worse than the drift: it trains a reader to disbelieve this table. Two of the
+   * `card-scanner` sources were CRLF and four were LF when the scanner rows were added
+   * (2026-09-08), which is the shape this arrives in — an editor or a generated write flips one
+   * file and nothing else in either build notices.
+   */
+  const srcLines = (text: string): string[] => text.split(/\r?\n/);
+
   /** Field names of a `pub struct` in a Rust source file, in declaration order. */
   const rustFields = (src: string, name: string): string[] => {
     const start = src.indexOf(`pub struct ${name} {`);
     expect(start, `\`pub struct ${name}\` is not in the Rust source given`).toBeGreaterThan(-1);
-    const body = src.slice(start).split("\n").slice(1);
+    const body = srcLines(src.slice(start)).slice(1);
     const end = body.indexOf("}");
     expect(end, `\`${name}\` has no closing brace`).toBeGreaterThan(0);
-    return body
-      .slice(0, end)
-      .map((line) => /^\s*pub\s+([a-z0-9_]+)\s*:/.exec(line)?.[1])
+    // **Two things the plain `pub name:` line cannot express, both of them the scanner's.**
+    //
+    // A `#[serde(skip)]` field is not in the JSON at all, so it must not be in the mirror
+    // either — `LockState::quad` is the live one, and the row for `ScannerLock` would fail for
+    // a field the page can never receive. The attribute is on the line *before* the field, so
+    // the walk needs the neighbouring line and not just its own. `skip_serializing_if` is
+    // deliberately not matched: that field *is* in the JSON whenever it has a value, and
+    // `Verdict::error` is the one that has to stay.
+    //
+    // `r#match` is the one raw identifier in either tree, because `match` is a keyword in Rust
+    // and is not one in TypeScript — the page reads `verdict.match`, so the mirror carries the
+    // bare name and the parser has to see through the prefix.
+    const lines = body.slice(0, end);
+    return lines
+      .map((line, i) =>
+        /^\s*#\[serde\(skip\)\]/.test(lines[i - 1] ?? "")
+          ? undefined
+          : /^\s*pub\s+(?:r#)?([a-z0-9_]+)\s*:/.exec(line)?.[1],
+      )
       .filter((f): f is string => f !== undefined);
   };
 
@@ -2701,7 +2811,7 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
   const tsFields = (src: string, name: string): string[] => {
     const start = src.indexOf(`export interface ${name} {`);
     expect(start, `\`export interface ${name}\` is not in ipc.ts`).toBeGreaterThan(-1);
-    const body = src.slice(start).split("\n").slice(1);
+    const body = srcLines(src.slice(start)).slice(1);
     const end = body.indexOf("}");
     expect(end, `\`${name}\` has no closing brace`).toBeGreaterThan(0);
     return body
@@ -2964,6 +3074,70 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
       expect([...ts].sort()).toEqual([...rust].sort());
     },
   );
+
+  /**
+   * **Snake case on both sides.** The scanner's JSON is the debug page's, which reads
+   * `decide_at` and `best_distance` by name and is not changing — so these mirrors keep the
+   * Rust field names verbatim and the row compares them with no camel step.
+   *
+   * That makes this the third table rather than a longer `plainMirrors`: the `camel` call in
+   * both tables above is not decoration, it is the `#[serde(rename_all = "camelCase")]` those
+   * structs carry, and none of these twenty-one does. A scanner row on `plainMirrors` would
+   * fail on every multi-word field for a spelling that is correct.
+   *
+   * **Most of this list is one command's answer**, because a `Verdict` is a tree of structs and
+   * parity on the outer one sees none of it — `OptimizePrinting`'s lesson above, at the scale
+   * the detector works at. A renamed `best_distance` inside `StandingView` leaves `Verdict`
+   * agreeing field for field while every standing in the list reads `undefined`, which draws a
+   * candidate table of `NaN`s rather than an empty one. So each level is named.
+   */
+  const snakeMirrors: [tsName: string, rustSource: string | undefined, rustName: string][] = [
+    ["ScannerAsset", scannerRs, "Asset"],
+    ["ScannerStatus", scannerRs, "ScannerStatus"],
+    ["ScannerSidecar", scannerRs, "Sidecar"],
+    ["ScannerCaptured", scannerRs, "Captured"],
+    ["ScannerOptions", sessionRs, "FrameOptions"],
+    ["ScannerVerdict", sessionRs, "Verdict"],
+    ["ScannerFrameSize", sessionRs, "FrameSize"],
+    ["ScannerStages", sessionRs, "Stages"],
+    ["ScannerStanding", sessionRs, "StandingView"],
+    ["ScannerTracked", sessionRs, "TrackedView"],
+    ["ScannerCollectorTry", sessionRs, "CollectorTry"],
+    ["ScannerCollector", sessionRs, "CollectorView"],
+    ["ScannerOcr", sessionRs, "OcrView"],
+    ["ScannerLabel", referenceRs, "Label"],
+    ["ScannerCandidate", referenceRs, "Candidate"],
+    ["ScannerMatch", referenceRs, "MatchReport"],
+    ["ScannerLock", lockRs, "LockState"],
+    ["ScannerScore", detectRs, "QuadScore"],
+    ["ScannerTimings", detectRs, "DetectTimings"],
+    ["ScannerCardness", cardnessRs, "Cardness"],
+    ["ScannerTrim", trimRs, "Margin"],
+  ];
+
+  /**
+   * A loop rather than `it.each`, and the reason is the four rows whose source is not in the
+   * tree yet: `it.each` runs one body for every row and cannot choose `it.todo` per row, so a
+   * missing `src-tauri/src/scanner.rs` would either fail four rows for something that is not a
+   * drift or make them disappear from the list — and "is this struct checked?" is answered by
+   * whether a name appears on one of these tables and by nothing else. Reported as todo, they
+   * are visibly unchecked in the run's own output. The rows themselves need no edit when the
+   * file lands; they simply start running.
+   */
+  for (const [tsName, rustSource, rustName] of snakeMirrors) {
+    const title = `the ${tsName} mirror agrees with the Rust struct field for field, snake case kept`;
+    if (rustSource === undefined) {
+      it.todo(`${title} — src-tauri/src/scanner.rs is not in the tree yet`);
+      continue;
+    }
+    it(title, () => {
+      const rust = rustFields(rustSource, rustName);
+      const ts = tsFields(ipcSource, tsName);
+      expect(rust.length, `nothing parsed out of \`${rustName}\``).toBeGreaterThan(0);
+      expect(ts.length, `nothing parsed out of \`${tsName}\``).toBeGreaterThan(0);
+      expect([...ts].sort()).toEqual([...rust].sort());
+    });
+  }
 
   /**
    * `PullRow`'s picture, named on its own — the assertion `mirrors` makes for the four card

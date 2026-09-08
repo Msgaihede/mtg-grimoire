@@ -1,12 +1,18 @@
+import { RAW_CALL_UNAVAILABLE } from "@/lib/core";
 import type { ScannerRule, ScannerStanding, ScannerStatus, ScannerTracked, ScannerVerdict } from "./types";
 
 export const CARD_ASPECT = 63 / 88;
 /** The distance gate, as a fraction of the descriptor's bits — `TrackerOptions::max_normalized`. */
 export const SURE_DISTANCE = 0.3;
 
-// TEMPORARY: re-export RAW_CALL_UNAVAILABLE from @/lib/core once Task 4 lands. That module has
-// no such export yet, so the sentence is written out here verbatim.
-export const WEB_SENTENCE = "The scanner needs the desktop or Android app — this build has no detector.";
+/**
+ * What the page says where there is no detector to call.
+ *
+ * It is the browser core's own refusal rather than a second copy of the sentence: that module
+ * rejects a `Uint8Array` call with this exact string, so a page that wrote its own would drift
+ * from the message a reader gets if they press Scan anyway.
+ */
+export const WEB_SENTENCE = RAW_CALL_UNAVAILABLE;
 
 function aspectOk(v: ScannerVerdict): boolean {
   return v.ok && v.score !== null && Math.abs(v.score.aspect - CARD_ASPECT) / CARD_ASPECT < 0.08;
