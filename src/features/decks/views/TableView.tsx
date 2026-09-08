@@ -65,6 +65,7 @@ import type { CardGroup } from "../grouping";
 import { theoryMatchMark, type TheoryMark, type TheoryPlan } from "../theoryMatch";
 import { ruleBreak } from "../violations";
 import type { ValidationIssue } from "../validation/types";
+import { splitRail } from "./columns";
 import { GroupHeader } from "./GroupHeader";
 
 /**
@@ -152,21 +153,43 @@ export function TableView({
 }) {
   const tip = useTooltip();
   const editable = actions?.setQuantity !== undefined;
-  const rows = useMemo<Row[]>(
-    () =>
-      groups.flatMap((group) => [
-        { kind: "group" as const, key: `g-${group.key}`, group },
-        ...group.cards.map((card) => ({
-          kind: "card" as const,
-          key: `c-${group.key}-${card.id}`,
-          group,
-          card,
-          ruleBreakText: ruleBreak(violations?.get(card.cardId)),
-          theoryMark: theoryMatchMark(theoryPlan, card),
-        })),
-      ]),
-    [groups, violations, theoryPlan],
-  );
+  /**
+   * The bands and their rows, flattened — **through {@link splitRail}, which makes this the last
+   * of the four views to read the deck in the order the deck is laid out** (2026-09-08).
+   *
+   * This view mapped `groups` straight through, and on a real Commander deck that read
+   * `Commander → Sideboard → Maybeboard → the deck`: the piles the reader has said are played
+   * *beside* the deck, or not played at all, came first because they are seeded early in
+   * `PREDEFINED_CATEGORIES` and this list was in `sortOrder`. `StackView` and `TextView` have
+   * called `splitRail` since it existed and `GridView` joined them earlier today, so leaving the
+   * table out would have made it the one view where a reader's Sideboard is somewhere else — one
+   * deck laid out two ways, one toolbar press apart, which is the failure this folder's rules keep
+   * naming.
+   *
+   * **The rail is drawn as bands in place, not as a column**, exactly as on the grid: a table has
+   * one axis, so what `splitRail` decides here is only *when* a band is reached — the command zone
+   * first, the deck, then the Sideboard, the Maybeboard and every switched-off pile last. Nothing
+   * inside a run is re-ordered, which is that function's own law.
+   *
+   * **It also closes the one place the arrow walk and the drawn order disagreed.**
+   * `deckWalk.ts`'s stops are derived through the same `splitRail`, so until now a caret stepping
+   * through this deck and the bands a reader was looking at could name the piles in two different
+   * orders. All four views and the walk are one answer now.
+   */
+  const rows = useMemo<Row[]>(() => {
+    const { command, flow, rail } = splitRail(groups);
+    return [...command, ...flow, ...rail].flatMap((group) => [
+      { kind: "group" as const, key: `g-${group.key}`, group },
+      ...group.cards.map((card) => ({
+        kind: "card" as const,
+        key: `c-${group.key}-${card.id}`,
+        group,
+        card,
+        ruleBreakText: ruleBreak(violations?.get(card.cardId)),
+        theoryMark: theoryMatchMark(theoryPlan, card),
+      })),
+    ]);
+  }, [groups, violations, theoryPlan]);
 
   const columns = useMemo<TableColumn<Row>[]>(
     () => [
