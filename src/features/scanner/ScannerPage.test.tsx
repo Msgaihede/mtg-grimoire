@@ -137,6 +137,13 @@ function row(container: HTMLElement): HTMLElement {
   return found as HTMLElement;
 }
 
+/** The video box — the row's first column, and the one the two arms size differently. */
+function videoBox(container: HTMLElement): HTMLElement {
+  const found = row(container).firstElementChild;
+  if (found === null) throw new Error("no video box in the layout row");
+  return found as HTMLElement;
+}
+
 let restoreCanvas = () => {};
 beforeEach(() => {
   restoreCanvas = shimCanvas();
@@ -216,11 +223,36 @@ describe("ScannerPage", () => {
     windowIsNarrow(true);
     const narrow = mount();
     expect(row(narrow.container)).toHaveClass("flex-col");
+    // The video box is sized by its own aspect ratio here rather than by what is left over. A
+    // zero-basis `flex-1` under this scrolling column yields its free space to the `shrink-0`
+    // panels beside it, so `flex-1` on a phone is a camera that collapses to nothing the moment
+    // a developer panel is opened — which is why the class must be absent and not merely
+    // outranked.
+    expect(videoBox(narrow.container)).toHaveClass("shrink-0");
+    expect(videoBox(narrow.container).classList.contains("flex-1")).toBe(false);
+    expect(videoBox(narrow.container).style.aspectRatio).not.toBe("");
     narrow.unmount();
 
     windowIsNarrow(false);
     const wide = mount();
     expect(row(wide.container).classList.contains("flex-col")).toBe(false);
+    expect(videoBox(wide.container)).toHaveClass("flex-1");
+    expect(videoBox(wide.container).classList.contains("shrink-0")).toBe(false);
+    expect(videoBox(wide.container).style.aspectRatio).toBe("");
+  });
+
+  it("gives the phone's video box the camera's own shape once the stream reports one", async () => {
+    const restore = shimVideo();
+    opens();
+    windowIsNarrow(true);
+    vi.mocked(ipc.scannerFrame).mockReturnValue(new Promise(() => {}));
+    try {
+      const { container } = mount();
+      // 4:3 is the placeholder a starting or refused camera gets; 1280×720 is `shimVideo`'s.
+      await waitFor(() => expect(videoBox(container).style.aspectRatio).toBe("1280 / 720"));
+    } finally {
+      restore();
+    }
   });
 
   it("hands the reset press straight to the command", async () => {

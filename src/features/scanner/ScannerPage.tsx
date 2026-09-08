@@ -102,7 +102,30 @@ function LiveScanner() {
             : "flex min-h-0 flex-1 gap-4"
         }
       >
-        <div className="relative min-w-0 flex-1 overflow-hidden rounded-lg bg-black">
+        {/* **The two arms size the video box by opposite mechanisms, and the narrow one has to.**
+            Wide, the row is the height and the box takes what the `w-80` column leaves. Narrow,
+            the row is a *scrolling column*: a zero-basis `flex-1` under a scrolling parent yields
+            all of its free space to a `shrink-0` sibling, so one opened developer panel whose
+            intrinsic height reached the container's would collapse the camera to ~0px. So on a
+            phone the box is `w-full shrink-0` at the camera's own aspect ratio — the picture's
+            real shape, at full width — and the panels follow it down the page. */}
+        <div
+          className={
+            narrow
+              ? "relative w-full shrink-0 overflow-hidden rounded-lg bg-black"
+              : "relative min-w-0 flex-1 overflow-hidden rounded-lg bg-black"
+          }
+          style={
+            narrow
+              ? {
+                  // 4:3 until the stream reports its own size: a starting or refused camera has
+                  // no shape to honour, and an unset ratio here is the collapse again.
+                  aspectRatio:
+                    camera.kind === "live" ? `${camera.width} / ${camera.height}` : "4 / 3",
+                }
+              : undefined
+          }
+        >
           <video ref={videoRef} muted playsInline className="h-full w-full object-contain" />
           <Overlay videoRef={videoRef} verdict={loop.verdict} />
           <div className="absolute left-3 top-3 rounded-full bg-bg/85 px-3 py-1 text-sm">
