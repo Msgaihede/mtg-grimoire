@@ -91,7 +91,7 @@ use crate::index::ID_LEN;
 use std::collections::HashMap;
 
 /// How accumulated evidence becomes an answer. See the module doc for the two.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CommitRule {
     /// Undecayed votes toward a bar; a decision freezes the tally.
@@ -296,11 +296,13 @@ impl Observation {
     /// nothing else the scanner sees is — which is why the member it names can be trusted
     /// where a hash's cannot.
     ///
-    /// Weighted above a clean title read but not beyond argument. Measured over the corpus it
-    /// resolves 12 of 39 rectifications and 11 of those are right, so roughly one resolve in
-    /// twelve is a confident wrong answer — a misread digit, which no amount of parsing fixes.
-    /// A single frame must not be able to carry that on its own; several agreeing frames
-    /// should walk away with it, and at 8.0 against appearance's 1.0 they do.
+    /// Weighted above a clean title read but not beyond argument. Measured over the corpus
+    /// with the fallback crops it resolves 15 of 39 rectifications and 14 of those are right,
+    /// so roughly one resolve in fifteen is a confident wrong answer — a misread digit, which
+    /// no amount of parsing fixes. A single frame must not be able to carry that on its own;
+    /// several agreeing frames should walk away with it, and at 2.0 against appearance's 1.0
+    /// for *which card* — with 20.0 for *which printing*, where nothing else can tell one
+    /// from another — they do.
     pub fn from_collector(key: [u8; ID_LEN], member: [u8; ID_LEN]) -> Observation {
         Observation {
             key,
@@ -309,7 +311,7 @@ impl Observation {
             // **Deliberately modest as evidence about which card.** A misread digit does not
             // produce nonsense, it produces a different real printing of a different real
             // card — `0047` read as `0017` resolved confidently to the wrong one over the
-            // corpus, and roughly one resolve in twelve is wrong that way. Appearance is the
+            // corpus, and roughly one resolve in fifteen is wrong that way. Appearance is the
             // better judge of *what card this is* and has to be able to outweigh a bad read.
             weight: 2.0,
             // And decisive about which printing of it. This is the only signal that can tell

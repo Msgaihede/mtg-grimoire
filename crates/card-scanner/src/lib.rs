@@ -15,6 +15,7 @@ pub mod index;
 pub mod lock;
 pub mod ocr;
 pub mod reference;
+pub mod session;
 pub mod track;
 pub mod trim;
 pub mod hash;

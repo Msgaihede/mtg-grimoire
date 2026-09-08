@@ -25,13 +25,10 @@
 //! camera simply never starts. Use `adb reverse tcp:7777 tcp:7777`, which makes this server
 //! *be* localhost on the handset. No certificate, no tunnel.
 
-use card_scanner::detect::{detect, DetectOptions, DetectTrace, Detection, EdgeMethod};
-use card_scanner::hash::{hash, HashKind};
-use card_scanner::index::{Bundle, Mask};
-use card_scanner::lock::QuadLock;
+use card_scanner::index::Bundle;
 use card_scanner::ocr::TitleReader;
 use card_scanner::reference::Reference;
-use card_scanner::track::{CommitRule, Tracker, TrackerOptions};
+use card_scanner::session::{FrameOptions, Method, Session, Verdict};
 use clap::Parser;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -67,12 +64,15 @@ struct Args {
     #[arg(long, default_value_t = true)]
     log_frames: bool,
 
-    /// Write each frame's rectified card and its numbers into this directory.
+    /// Write each frame's verdict into this directory, as JSON.
     ///
     /// The camera is held by one page at a time, so the live rectification cannot be
     /// inspected from a second browser — and it is the one thing that actually explains why a
     /// card matching at 45 bits as a photograph matches at 70 from a webcam. Numbers describe
-    /// the failure; the image is the failure.
+    /// the failure; the image is the failure. The rectified card is in the JSON as a data
+    /// URI, which is what the page itself renders, so there is no separate PNG: the session
+    /// hands out the preview rather than the image, and a second clone of it here would be a
+    /// megabyte a frame to say the same thing.
     #[arg(long)]
     dump_dir: Option<PathBuf>,
 
@@ -94,108 +94,41 @@ struct Args {
     ocr_models: Option<PathBuf>,
 }
 
-/// The tracker is shared rather than per-request, because it is the one deliberately stateful
+/// The session is shared rather than per-request, because it is the one deliberately stateful
 /// piece of this server: a stable answer is a property of the *stream*, not of any one frame.
-/// One camera, one page, one tracker. The app will own one per scanning session instead.
-type Shared = Arc<Mutex<Tracker>>;
-/// The quad lock is per-stream for the same reason the tracker is: staying still is a
-/// property of the sequence, not of a frame.
-type SharedLock = Arc<Mutex<QuadLock>>;
+/// One camera, one page, one session. The app owns one per scanning session instead.
+type Shared = Arc<Mutex<Session>>;
 
-/// **OCR runs only while the hash tier is still unsure, and never more than every few
-/// frames.** Reading a title costs ~250 ms against a ~80 ms frame, so running it on every
-/// frame would cut the rate by two thirds to answer a question that is usually already
-/// answered. It is a tie-breaker: it earns its cost exactly when appearance has failed — a
-/// foil under a lamp, where the hash's top five do not contain the card at all and the title
-/// is still perfectly legible.
-const OCR_EVERY: u64 = 4;
-
-/// Everything the page can change between frames, parsed from the query string.
-struct FrameOptions {
-    work_long_edge: u32,
-    method: Option<EdgeMethod>,
-    canny_low: f32,
-    canny_high: f32,
-    aspect_tolerance: f32,
-    min_cardness: f32,
-    /// Return the binary and contour images as well as the quad. Roughly doubles the
-    /// response time, so the page asks for it only while the panel is open.
-    stages: bool,
-    /// How the tracker decides — votes toward a bar, or the two-way confidence contest.
-    ///
-    /// **Chosen per frame from the page, so the two rules can be A/B'd on one held card
-    /// without a rebuild.** `Tracker::set_options` keeps the tally, so flipping the segment
-    /// or dragging a slider re-judges the evidence already gathered rather than starting
-    /// over.
-    rule: CommitRule,
-    /// Votes the leader needs under the vote rule.
-    decide_at: f32,
-    /// How far ahead of its best rival the leader must be to decide.
-    lead_margin: f32,
-}
-
-impl FrameOptions {
-    fn from_query(url: &str) -> FrameOptions {
-        let q = url.split_once('?').map(|(_, q)| q).unwrap_or("");
-        let get = |key: &str| -> Option<String> {
-            q.split('&')
-                .filter_map(|kv| kv.split_once('='))
-                .find(|(k, _)| *k == key)
-                .map(|(_, v)| v.to_string())
-        };
-        let num = |key: &str, default: f32| -> f32 {
-            get(key).and_then(|v| v.parse().ok()).unwrap_or(default)
-        };
-        FrameOptions {
-            work_long_edge: num("edge", 1024.0) as u32,
-            method: match get("method").as_deref() {
-                Some("canny") => Some(EdgeMethod::Canny),
-                Some("otsu") => Some(EdgeMethod::Otsu),
-                _ => None, // both
-            },
-            canny_low: num("lo", 40.0),
-            canny_high: num("hi", 100.0),
-            aspect_tolerance: num("aspect", 0.18),
-            min_cardness: num("cardness", card_scanner::cardness::MIN_SCORE),
-            stages: get("stages").as_deref() == Some("1"),
-            rule: match get("rule").as_deref() {
-                Some("confidence") => CommitRule::Confidence,
-                _ => CommitRule::Votes,
-            },
-            decide_at: num("decide", 8.0).clamp(0.5, 100.0),
-            lead_margin: num("margin", 1.3).clamp(1.0, 5.0),
-        }
-    }
-
-    fn tracker_options(&self) -> TrackerOptions {
-        TrackerOptions {
-            rule: self.rule,
-            decide_at: self.decide_at,
-            lead_margin: self.lead_margin,
-            ..Default::default()
-        }
-    }
-
-    fn detect_options(&self, method: EdgeMethod, settled: bool) -> DetectOptions {
-        DetectOptions {
-            method,
-            work_long_edge: self.work_long_edge.clamp(240, 2048),
-            canny_low: self.canny_low,
-            canny_high: self.canny_high,
-            aspect_tolerance: self.aspect_tolerance,
-            min_cardness: self.min_cardness,
-            // **The extra framings are dropped once the card has been named.** Measured on a
-            // 720 px frame they cost 63 ms against 112 — more than half the frame again, and
-            // almost all of it in building the descriptors rather than searching them. That is
-            // worth paying while the answer is in doubt and worth nothing after: the tracker
-            // has committed, and three framings of a card it has already identified buy a few
-            // bits of distance on a question nobody is asking any more.
-            //
-            // The same shape as the OCR tier, and for the same reason — an expensive tier
-            // stands down when the cheap one has settled it.
-            query_insets: if settled { Vec::new() } else { DetectOptions::default().query_insets },
-            ..Default::default()
-        }
+/// The page's sliders, from the query string.
+///
+/// The keys are the page's short names; the JSON spelling the app uses is `FrameOptions`' own
+/// field names, and `the_query_string_and_the_json_spell_the_same_options` below is what keeps
+/// the two saying the same thing. The clamps are the session's — see
+/// `FrameOptions::tracker_options`.
+fn options_from_query(url: &str) -> FrameOptions {
+    let q = query_pairs(url);
+    let num = |key: &str, default: f32| -> f32 {
+        q.get(key).and_then(|v| v.parse().ok()).unwrap_or(default)
+    };
+    let d = FrameOptions::default();
+    FrameOptions {
+        work_long_edge: num("edge", d.work_long_edge as f32) as u32,
+        method: q.get("method").map_or(Method::Both, |m| Method::parse(m)),
+        canny_low: num("lo", d.canny_low),
+        canny_high: num("hi", d.canny_high),
+        aspect_tolerance: num("aspect", d.aspect_tolerance),
+        min_cardness: num("cardness", d.min_cardness),
+        stages: q.get("stages").map(String::as_str) == Some("1"),
+        // **Chosen per frame from the page, so the two rules can be A/B'd on one held card
+        // without a rebuild.** `Tracker::set_options`, which the session calls with these,
+        // keeps the tally — so flipping the segment or dragging a slider re-judges the
+        // evidence already gathered rather than starting over.
+        rule: match q.get("rule").map(String::as_str) {
+            Some("confidence") => card_scanner::track::CommitRule::Confidence,
+            _ => card_scanner::track::CommitRule::Votes,
+        },
+        decide_at: num("decide", d.decide_at),
+        lead_margin: num("margin", d.lead_margin),
     }
 }
 
@@ -306,386 +239,30 @@ fn html_header() -> Header {
         .expect("static header")
 }
 
-/// A small JPEG data URI, for the stage images the panel shows.
-fn preview_uri<P, C>(img: &image::ImageBuffer<P, C>, max_edge: u32, quality: u8) -> Option<String>
-where
-    P: image::Pixel<Subpixel = u8> + 'static,
-    C: std::ops::Deref<Target = [u8]>,
-{
-    let dynamic = image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(
-        img.width(),
-        img.height(),
-        |x, y| {
-            let p = img.get_pixel(x, y).to_rgb();
-            image::Rgb([p[0], p[1], p[2]])
-        },
-    ));
-    let small = dynamic.resize(max_edge, max_edge, image::imageops::FilterType::Triangle);
-    let mut buf = Vec::new();
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, quality)
-        .encode_image(&small.to_rgb8())
-        .ok()?;
-    Some(format!("data:image/jpeg;base64,{}", base64(&buf)))
-}
-
-fn base64(data: &[u8]) -> String {
-    const A: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
-    for chunk in data.chunks(3) {
-        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
-        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
-        out.push(A[(n >> 18) as usize & 63] as char);
-        out.push(A[(n >> 12) as usize & 63] as char);
-        out.push(if chunk.len() > 1 { A[(n >> 6) as usize & 63] as char } else { '=' });
-        out.push(if chunk.len() > 2 { A[n as usize & 63] as char } else { '=' });
-    }
-    out
-}
-
+/// One frame. The session decides it; this turns the verdict into the page's JSON and writes
+/// the two developer-facing side effects — the dump directory and the log line.
 fn handle_frame(
     body: &[u8],
     opts: &FrameOptions,
-    reference: Option<&Reference>,
-    top: usize,
-    tracker: &Shared,
-    quad_lock: &SharedLock,
+    session: &Shared,
     log: bool,
     dump: Option<&std::path::Path>,
-    reader: Option<&TitleReader>,
 ) -> serde_json::Value {
-    let decode_started = std::time::Instant::now();
-    let source = match image::load_from_memory(body) {
-        Ok(i) => i,
-        Err(e) => return serde_json::json!({ "ok": false, "error": format!("decode: {e}") }),
+    let verdict: Verdict = match session.lock() {
+        Ok(mut s) => s.frame(body, opts),
+        Err(_) => {
+            return serde_json::json!({ "ok": false, "error": "the session lock is poisoned" })
+        }
     };
-    let decode_ms = decode_started.elapsed().as_secs_f32() * 1000.0;
-    let (w, h) = (source.width(), source.height());
-
-    let methods: Vec<EdgeMethod> = match opts.method {
-        Some(m) => vec![m],
-        None => vec![EdgeMethod::Canny, EdgeMethod::Otsu],
-    };
-
-    // The page's rule and bar, applied before anything reads the verdict: the tally is kept,
-    // only the judgement of it changes.
-    if let Ok(mut t) = tracker.lock() {
-        t.set_options(opts.tracker_options());
-    }
-
-    // Asked once, before the loop, so both detectors and the re-rectify below all see the
-    // same decision.
-    let settled = tracker.lock().map(|t| t.last_committed()).unwrap_or(false);
-
-    let mut best: Option<(EdgeMethod, Detection, Option<DetectTrace>)> = None;
-    let mut fallback_trace: Option<DetectTrace> = None;
-    let mut error = None;
-    for m in methods {
-        let (result, trace) = detect(&source, &opts.detect_options(m, settled));
-        match result {
-            Ok(d) => {
-                // **Card-likeness picks the method, not the geometric score.** Measured, it
-                // predicts a good match 83% of the time against geometry's 62% — and more to
-                // the point here, geometry made the winner alternate between Canny and Otsu
-                // from frame to frame, handing back a different quad each time. Nothing can
-                // lock onto a target that changes every frame, and a card that appears for one
-                // frame and vanishes is what that looks like from the outside.
-                if best
-                    .as_ref()
-                    .is_none_or(|(_, b, _): &(_, Detection, _)| {
-                        d.cardness.score > b.cardness.score
-                    })
-                {
-                    best = Some((m, d, trace));
-                }
-            }
-            Err(e) => {
-                error = Some(e.to_string());
-                if trace.is_some() {
-                    fallback_trace = trace;
-                }
-            }
-        }
-    }
-
-    let mut out = serde_json::json!({
-        "ok": best.is_some(),
-        "frame": { "w": w, "h": h },
-        "decode_ms": decode_ms,
-        // Reported on every response, and separately from `match`. "No bundle is loaded" and
-        // "a bundle is loaded but this frame held no card" are different states, and the
-        // page said the former for both until this existed.
-        "matcher": reference.is_some(),
-    });
-
-    // The lock decides whether this frame is worth believing. Nothing is rejected on
-    // appearance — a quad simply has to still be there next frame.
-    let lock_state = quad_lock
-        .lock()
-        .map(|mut l| l.observe(best.as_ref().map(|(_, d, _)| d.quad)))
-        .ok();
-    if let Some(st) = &lock_state {
-        out["lock"] = serde_json::to_value(st).unwrap_or_default();
-        // The smoothed quad is what the overlay draws: raw detection jitters by a few pixels
-        // on a perfectly still card, and a twitching box reads as a broken detector.
-        if let Some(q) = st.quad {
-            out["quad"] = serde_json::json!(q.corners);
-        }
-    }
-    let trusted = lock_state.as_ref().is_some_and(|s| s.is_trusted());
-
-    // **Rectify from the quad the lock is holding, not the one this frame found.**
-    //
-    // The two are usually within a few pixels, and the few pixels were already worth removing:
-    // the descriptor is sensitive enough to framing that a jittering quad hands the matcher a
-    // slightly different card every frame. But the case that matters is the other one. The
-    // detector sometimes returns something degenerate on an otherwise fine frame — a sliver
-    // down one edge of the card — and the lock rejects it, keeps its own quad, and draws a
-    // perfectly good box, while the rectification came from the sliver. The card being matched
-    // was then a strip of the left border, and that noise went into the tracker with the full
-    // weight of a real observation.
-    //
-    // Only once locked: while acquiring, the quad has not proved it is anything yet, and
-    // rectifying from it would be believing it early.
-    let relocked = match (&lock_state, &best) {
-        (Some(st), Some((method, d, _))) if st.is_trusted() => st
-            .quad
-            .filter(|q| q.corners != d.quad.corners)
-            .and_then(|q| {
-                card_scanner::detect::rectify_views(
-                    &source.to_rgb8(),
-                    &q,
-                    &opts.detect_options(*method, settled),
-                )
-            }),
-        _ => None,
-    };
-    // Grabbed before the match consumes `best`, and only when dumping is on — a 488x680
-    // clone is a megabyte and there is no reason to pay it otherwise.
-    let dumped = dump.and(best.as_ref().map(|(_, d, _)| d.rectified.clone()));
-
-    match best {
-        Some((method, d, trace)) => {
-            // The locked rectification when there is one, otherwise this frame's own.
-            let view = relocked.as_ref();
-            let rectified = view.map_or(&d.rectified, |v| &v.rectified);
-            let rectified_180 = view.map_or(&d.rectified_180, |v| &v.rectified_180);
-            let alternates = view.map_or(&d.alternates, |v| &v.alternates);
-            let margin = view.map_or(d.margin, |v| v.margin);
-
-            let descriptor = hash(
-                &image::DynamicImage::ImageRgb8(rectified.clone()).to_luma8(),
-                HashKind::DHash,
-                256,
-            );
-            out["method"] = method.as_str().into();
-            // **Deliberately not `d.quad`.** The lock's smoothed quad was written above and
-            // overwriting it here is what made the box wobble: raw detection moves several
-            // pixels a frame on a perfectly still card, the smoothing existed to damp exactly
-            // that, and this line threw it away one branch later. The raw quad is still
-            // reported, under its own key, so the debug view can show both.
-            out["quad_raw"] = serde_json::json!(d.quad.corners);
-            if out["quad"].is_null() {
-                out["quad"] = serde_json::json!(d.quad.corners);
-            }
-            out["cardness"] = serde_json::to_value(d.cardness).unwrap_or_default();
-            // Background cut off the rectification, per side. Worth showing rather than
-            // silently applying: a trim that fires every frame means the quad is running wide,
-            // which is a detector problem this only papers over.
-            out["trim"] = serde_json::to_value(margin).unwrap_or_default();
-            // Whether this frame's card came from the lock's quad or its own. A stream that
-            // says `true` constantly is a detector failing behind a lock that is covering
-            // for it, which is worth seeing rather than being rescued from silently.
-            out["from_lock"] = relocked.is_some().into();
-            out["score"] = serde_json::to_value(d.score).unwrap_or_default();
-            out["hash"] = descriptor.to_hex().into();
-            if let Some(t) = &trace {
-                out["timings"] = serde_json::to_value(t.timings).unwrap_or_default();
-            }
-            // The rectified card is the payload a reader actually wants to see, so it is
-            // always returned — it is one small JPEG and it is the proof the homography is
-            // right.
-            if let Some(uri) = preview_uri(rectified, 320, 78) {
-                out["rectified"] = uri.into();
-            }
-            if opts.stages {
-                if let Some(t) = &trace {
-                    out["stages"] = serde_json::json!({
-                        "binary": preview_uri(&t.binary, 300, 62),
-                        "contours": preview_uri(&t.contours, 300, 62),
-                        "quad": preview_uri(&t.quads, 300, 62),
-                    });
-                }
-            }
-
-            // The match itself. Both orientations are hashed inside `match_card`, because a
-            // card is 180°-symmetric and the quad cannot say which end is the top.
-            if let Some(r) = reference.filter(|_| trusted) {
-                // The primary framing first, then the alternates — see
-                // `DetectOptions::query_insets`. Order matters only for the reported `view`.
-                let mut views: Vec<(&image::RgbImage, &image::RgbImage)> =
-                    vec![(rectified, rectified_180)];
-                views.extend(alternates.iter().map(|(a, b)| (a, b)));
-                let report = r.match_views(&views, top, &Mask::all());
-
-                // Accumulate across frames. A per-frame top-1 flickers between near-ties
-                // several times a second; the stable answer is the one that keeps recurring.
-                // Grouped by oracle id: a card's reprints pool their evidence instead of
-                // splitting it, and the printing reported is the best-scoring member.
-                let observations: Vec<_> = report
-                    .candidates
-                    .iter()
-                    .filter_map(|c| {
-                        card_scanner::index::parse_uuid(&c.id).map(|id| {
-                            card_scanner::track::Observation::appearance(
-                                r.oracle_for(&id),
-                                id,
-                                c.normalized,
-                            )
-                        })
-                    })
-                    .collect();
-                // The OCR tier, when the hash tier has not settled it. A resolved name is
-                // much stronger evidence than a nearest neighbour — it is a reading of what
-                // the card says rather than a guess at what it looks like — so it enters the
-                // accumulator at a distance the hash tier can rarely reach.
-                let mut observations = observations;
-                let uncommitted = tracker
-                    .lock()
-                    .map(|t| !t.last_committed())
-                    .unwrap_or(true);
-                if let Some(reader) = reader.filter(|_| uncommitted) {
-                    static SEQ: std::sync::atomic::AtomicU64 =
-                        std::sync::atomic::AtomicU64::new(0);
-                    if SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % OCR_EVERY == 0 {
-                        // The collector line first: when it resolves, it has named the
-                        // printing outright and the title can only agree less specifically.
-                        let col = reader.read_collector(rectified, rectified_180);
-                        let printing = r.lookup_collector(&col.candidates);
-                        // **Every pairing the parse produced, and what each resolved to.**
-                        // "It failed" and "it read HOBEN where the card says HOB" look
-                        // identical from a verdict and are completely different problems —
-                        // one is a bad crop, the other a misread character, and only the list
-                        // of attempts tells them apart. Capped, because a noisy read can
-                        // produce dozens and the panel is for reading.
-                        const SHOWN: usize = 14;
-                        let tried: Vec<serde_json::Value> = col
-                            .candidates
-                            .iter()
-                            .take(SHOWN)
-                            .map(|(set, number)| {
-                                serde_json::json!({
-                                    "set": set,
-                                    "number": number,
-                                    "matched": r
-                                        .lookup_pair(set, number)
-                                        .and_then(|id| r.label_for(&id))
-                                        .map(|l| l.display()),
-                                })
-                            })
-                            .collect();
-                        out["collector"] = serde_json::json!({
-                            "raw": col.raw,
-                            "rotated": col.rotated,
-                            "elapsed_ms": col.elapsed_ms,
-                            "pairings": col.candidates.len(),
-                            "tried": tried,
-                            "more": col.candidates.len().saturating_sub(SHOWN),
-                            "band": col.band.as_ref().and_then(|b| preview_uri(b, 360, 70)),
-                            "matched": printing
-                                .and_then(|id| r.label_for(&id))
-                                .map(|l| l.display()),
-                        });
-                        if let Some(id) = printing {
-                            observations.insert(
-                                0,
-                                card_scanner::track::Observation::from_collector(
-                                    r.oracle_for(&id),
-                                    id,
-                                ),
-                            );
-                        }
-
-                        let read = reader.read_title(rectified, rectified_180);
-                        let hit = read
-                            .is_usable()
-                            .then(|| r.lookup_by_name(&read.normalized))
-                            .flatten();
-                        out["ocr"] = serde_json::json!({
-                            "raw": read.raw,
-                            // The form the name lookup actually compares, which is not what
-                            // the recogniser returned — punctuation and case are stripped from
-                            // both sides. A read that looks right and matches nothing is
-                            // usually a character this dropped.
-                            "normalized": read.normalized,
-                            "rotated": read.rotated,
-                            "elapsed_ms": read.elapsed_ms,
-                            "band": read.band.as_ref().and_then(|b| preview_uri(b, 360, 70)),
-                            "matched": hit.and_then(|(id, _)| r.label_for(&id)).map(|l| l.name),
-                            "edits": hit.map(|(_, d)| d),
-                        });
-                        if let Some((id, edits)) = hit {
-                            observations.insert(
-                                0,
-                                card_scanner::track::Observation::from_ocr(
-                                    r.oracle_for(&id),
-                                    id,
-                                    edits,
-                                ),
-                            );
-                        }
-                    }
-                }
-
-                if let Ok(mut t) = tracker.lock() {
-                    out["tracked"] = tracked_json(&t.observe(&observations), Some(r));
-                }
-                out["match"] = serde_json::to_value(&report).unwrap_or_default();
-            } else if reference.is_some() {
-                // Detected but not yet trusted: tell the tracker nothing was seen, so a box
-                // that never locks can never accumulate a name.
-                if let Ok(mut t) = tracker.lock() {
-                    out["tracked"] = tracked_json(&t.observe(&[]), reference);
-                }
-            }
-        }
-        None => {
-            // A frame with no card is still an observation: it is how the tracker learns the
-            // card has been taken away. Dropping it would leave stale evidence standing.
-            if reference.is_some() {
-                if let Ok(mut t) = tracker.lock() {
-                    out["tracked"] = tracked_json(&t.observe(&[]), reference);
-                }
-            }
-            out["error"] = error.unwrap_or_else(|| "no card".into()).into();
-            if let Some(t) = &fallback_trace {
-                if let Some(best) = t.candidates.first() {
-                    out["rejected_cardness"] =
-                        serde_json::to_value(best.cardness).unwrap_or_default();
-                }
-            }
-            if let Some(t) = &fallback_trace {
-                out["timings"] = serde_json::to_value(t.timings).unwrap_or_default();
-                out["candidates_examined"] = t.candidates.len().into();
-                if opts.stages {
-                    out["stages"] = serde_json::json!({
-                        "binary": preview_uri(&t.binary, 300, 62),
-                        "contours": preview_uri(&t.contours, 300, 62),
-                        "quad": preview_uri(&t.quads, 300, 62),
-                    });
-                }
-            }
-        }
-    }
+    let out = serde_json::to_value(&verdict).unwrap_or_default();
 
     if let Some(dir) = dump {
         // A rolling window, so a long session does not fill the disk and the newest frames
-        // are always the ones on top.
+        // are always the ones on top. The rectified card is in the JSON as a data URI — see
+        // `--dump-dir` — so there is no PNG beside it.
         static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 40;
         let _ = std::fs::create_dir_all(dir);
-        if let Some(img) = &dumped {
-            let _ = img.save(dir.join(format!("{n:02}-rectified.png")));
-        }
         let _ = std::fs::write(
             dir.join(format!("{n:02}-frame.json")),
             serde_json::to_vec_pretty(&out).unwrap_or_default(),
@@ -799,40 +376,6 @@ fn load_reference(args: &Args) -> Option<Reference> {
     Some(reference)
 }
 
-/// The tracker deals in ids; the page needs names. Resolved here rather than inside
-/// `track`, which is deliberately independent of the corpus.
-fn tracked_json(
-    tracked: &card_scanner::track::Tracked,
-    reference: Option<&Reference>,
-) -> serde_json::Value {
-    let standings: Vec<_> = tracked
-        .standings
-        .iter()
-        .map(|s| {
-            serde_json::json!({
-                "id": card_scanner::index::format_uuid(&s.id),
-                "evidence": s.evidence,
-                "share": s.share,
-                "seen": s.seen,
-                "label": reference.and_then(|r| r.label_for(&s.best_member)),
-                "best_distance": s.best_normalized,
-            })
-        })
-        .collect();
-    serde_json::json!({
-        "committed": tracked.committed,
-        "confidence": tracked.confidence,
-        "rule": tracked.rule,
-        "decide_at": tracked.decide_at,
-        "lead": tracked.lead,
-        "frozen": tracked.frozen,
-        "streak": tracked.streak,
-        "frames": tracked.frames,
-        "misses": tracked.misses,
-        "standings": standings,
-    })
-}
-
 fn main() {
     let args = Args::parse();
     let addr = format!("127.0.0.1:{}", args.port);
@@ -844,10 +387,8 @@ fn main() {
         }
     };
 
-    let reference = Arc::new(load_reference(&args));
-    let tracker: Shared = Arc::new(Mutex::new(Tracker::default()));
-    let quad_lock: SharedLock = Arc::new(Mutex::new(QuadLock::default()));
-    let reader = Arc::new(args.ocr_models.as_ref().and_then(|dir| {
+    let reference = load_reference(&args);
+    let reader = args.ocr_models.as_ref().and_then(|dir| {
         match TitleReader::load(
             &dir.join("text-detection.rten"),
             &dir.join("text-recognition.rten"),
@@ -861,8 +402,8 @@ fn main() {
                 None
             }
         }
-    }));
-    let top = args.top.clamp(1, 25);
+    });
+    let session: Shared = Arc::new(Mutex::new(Session::new(reference, reader, args.top)));
 
     println!("card-scanner live view: http://{addr}");
     println!();
@@ -874,13 +415,10 @@ fn main() {
     let mut handles = Vec::new();
     for _ in 0..args.workers.max(1) {
         let server = Arc::clone(&server);
-        let reference = Arc::clone(&reference);
-        let tracker = Arc::clone(&tracker);
-        let quad_lock = Arc::clone(&quad_lock);
+        let session = Arc::clone(&session);
         let log_frames = args.log_frames;
         let dump_dir = args.dump_dir.clone();
         let dataset_dir = args.dataset_dir.clone();
-        let reader = Arc::clone(&reader);
         handles.push(std::thread::spawn(move || loop {
             let Ok(mut request) = server.recv() else { return };
             let url = request.url().to_string();
@@ -892,38 +430,18 @@ fn main() {
                 let mut body = Vec::new();
                 let read = request.as_reader().read_to_end(&mut body);
                 let value = match read {
-                    // **Every frame is handled inside `catch_unwind`, and that is not
-                    // defensive padding.** The options come from a query string driven by
-                    // live sliders, and the image-processing crates below assert on
-                    // arguments they consider impossible — `edges::canny` panics outright
-                    // when the low threshold exceeds the high one. Without this, a single
-                    // bad frame took down the worker thread that handled it, and dragging
-                    // one slider killed all of them and exited the server. A dev tool that
-                    // dies while you are adjusting it is worse than one that reports the
-                    // failure and carries on.
-                    Ok(_) => {
-                        let opts = FrameOptions::from_query(&url);
-                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            handle_frame(
-                                &body,
-                                &opts,
-                                reference.as_ref().as_ref(),
-                                top,
-                                &tracker,
-                                &quad_lock,
-                                log_frames,
-                                dump_dir.as_deref(),
-                                reader.as_ref().as_ref(),
-                            )
-                        }))
-                        .unwrap_or_else(|_| {
-                            serde_json::json!({
-                                "ok": false,
-                                "error": "the detector panicked on this frame — see the \
-                                          server log for the assertion",
-                            })
-                        })
-                    }
+                    // No `catch_unwind` here any more: `Session::frame` owns the guard, and
+                    // it is not defensive padding — the options come from a query string
+                    // driven by live sliders, the image crates assert on arguments they
+                    // consider impossible, and before the guard existed one slider drag took
+                    // down every worker thread and exited the server.
+                    Ok(_) => handle_frame(
+                        &body,
+                        &options_from_query(&url),
+                        &session,
+                        log_frames,
+                        dump_dir.as_deref(),
+                    ),
                     Err(e) => serde_json::json!({ "ok": false, "error": format!("read: {e}") }),
                 };
                 Response::from_string(value.to_string()).with_header(json_header())
@@ -937,12 +455,7 @@ fn main() {
             } else if path == "/reset" {
                 // So a reader can start on a new card immediately instead of waiting for the
                 // previous one's evidence to decay.
-                if let Ok(mut t) = tracker.lock() {
-                    t.reset();
-                }
-                if let Ok(mut l) = quad_lock.lock() {
-                    l.reset();
-                }
+                let _ = session.lock().map(|mut s| s.reset());
                 Response::from_string(r#"{"ok":true}"#).with_header(json_header())
             } else {
                 Response::from_string("not found").with_status_code(404)
@@ -1006,5 +519,21 @@ mod tests {
         assert!(q.get("nothing").is_none());
         // No query string at all must not panic.
         assert!(query_pairs("/capture").is_empty());
+    }
+
+    #[test]
+    fn the_query_string_and_the_json_spell_the_same_options() {
+        // Two spellings of one struct: this page sends short query keys, the app will send
+        // `FrameOptions`' own field names as JSON. Nothing else would catch a key renamed on
+        // one side only — the query string has no schema and a JSON field that never arrives
+        // silently takes its default.
+        let from_query =
+            options_from_query("/frame?edge=800&method=otsu&decide=12&rule=confidence&stages=1");
+        let from_json: FrameOptions = serde_json::from_str(
+            r#"{"work_long_edge":800,"method":"otsu","decide_at":12,"rule":"confidence","stages":true}"#,
+        )
+        .expect("json");
+        assert_eq!(from_query, from_json);
+        assert_eq!(options_from_query("/frame"), FrameOptions::default());
     }
 }
