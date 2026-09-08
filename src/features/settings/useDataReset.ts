@@ -58,14 +58,17 @@ function invalidate(client: QueryClient, roots: readonly QueryKey[]): void {
  *   that oracle card, and the wipe just emptied every group in the app. Since schema v25 there is
  *   no claim ledger to delete: a copy is in a deck because its row is filed there, so clearing the
  *   collection is what takes it out.
- * * `["wishlist"]` — the fifth, and the one that reads as wrong: a wish is for a card the reader
- *   does *not* own, so a wishlist ought not to care. `WishRow.ownedQuantity` is why it does —
- *   it counts the copies that already fill each wish, so every row on that page has just gone
- *   to zero.
+ *
+ * **`["wishlist"]` was the fifth and is deliberately not here any more.** It was on the list
+ * because a wish counted the copies that already filled it (`WishRow.ownedQuantity`), so a wipe
+ * sent every one of those figures to zero. The wishlist reads nothing out of `collection_entries`
+ * now — it is the reader's own list, kept by hand — so a collection clear leaves every row on
+ * that page saying exactly what it said before, and refetching it would be work for a figure
+ * that cannot have moved.
  *
  * Not `["sets"]`, whose `staleTime` is `Infinity` and which only a sync can change.
  */
-const COLLECTION_ROOTS = [["collection"], ["cards"], ["card"], ["decks"], ["wishlist"]];
+const COLLECTION_ROOTS = [["collection"], ["cards"], ["card"], ["decks"]];
 
 /** The wishlist's own table, plus the two surfaces that draw a `wishlisted` flag per card. */
 const WISHLIST_ROOTS = [["wishlist"], ["cards"], ["card"]];
@@ -84,8 +87,9 @@ const WISHLIST_ROOTS = [["wishlist"], ["cards"], ["card"]];
  *
  * **The two card roots stay out, and that absence is still worth stating.** A copy that changes
  * folder is a copy the reader still owns — no quantity moves, and `CardSummary.ownedQuantity`
- * is a sum over quantities, finish-blind and folder-blind — so neither the search wall nor the
- * wishlist can read differently afterwards.
+ * is a sum over quantities, finish-blind and folder-blind — so the search wall cannot read
+ * differently afterwards. (The wishlist could not either, and no longer for this reason: it
+ * reads nothing out of `collection_entries` at all.)
  */
 const DECK_ROOTS = [["decks"], ["collection"]];
 

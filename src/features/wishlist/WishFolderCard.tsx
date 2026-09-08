@@ -94,8 +94,8 @@ import { cn } from "@/lib/utils";
 import { useWishDropTarget, type WishDrop } from "./wishDrag";
 
 /**
- * What a folder card is drawn from: the wishes in it, the copies still to find, what those cost
- * and how many of them the marketplace could not price.
+ * What a folder card is drawn from: the wishes in it, the copies they want, what those cost and
+ * how many of them the marketplace could not price.
  *
  * **Not `WishlistFolderSummary` itself, and the difference is load-bearing.** That row is
  * *direct* — this folder's own wishes, never its sub-folders' — which is right for the row and
@@ -105,7 +105,9 @@ import { useWishDropTarget, type WishDrop } from "./wishDrag";
  */
 interface WishFolderSummary {
   wishes: number;
-  missing: number;
+  /** Copies wanted here, sub-folders included. It was copies *still to find* until 2026-09-08,
+   *  when the wishlist stopped comparing itself to the collection. */
+  copies: number;
   cost: number;
   unpriced: number;
 }
@@ -128,10 +130,14 @@ interface WishFolderSummary {
  * draws (`Figure`'s own `query.isPending ? "—"`), and the spoken half says it in words because a
  * dash read aloud is punctuation.
  *
- * **A folder with nothing left to buy shows its wish count and no money at all.** `$0.00` on a
- * folder the reader has finished buying is noise — `formatPrice`'s own rule is that it is a price
- * nobody quoted — and the unpriced note goes with it, since that note exists to qualify a
- * subtotal and there is no subtotal to qualify.
+ * **An empty drawer shows its wish count and no money at all.** `$0.00` under `0 wishes` is
+ * noise — `formatPrice`'s own rule is that it is a price nobody quoted — and the unpriced note
+ * goes with it, since that note exists to qualify a subtotal and there is no subtotal to qualify.
+ *
+ * **That guard used to fire on a folder the reader had finished buying**, back when `copies` was
+ * the copies still to find and a covered drawer summed to zero. There is no such drawer now: a
+ * wish is on the list until the reader takes it off, so the only folder reaching this arm is one
+ * holding no wishes at all.
  */
 function face(
   summary: WishFolderSummary | null,
@@ -139,9 +145,9 @@ function face(
 ): { shown: string; spoken: string } {
   if (summary === null) return { shown: "—", spoken: "still counting" };
   const wishes = plural(summary.wishes, "wish", "wishes");
-  if (summary.missing === 0) return { shown: wishes, spoken: wishes };
+  if (summary.copies === 0) return { shown: wishes, spoken: wishes };
   const parts = [
-    // `null` rather than `0` where nothing in the folder could be priced: every missing copy is
+    // `null` rather than `0` where nothing in the folder could be priced: every copy in it is
     // unpriced, and an em dash beside `3 unpriced` says that where `$0.00` would claim the
     // marketplace quoted nothing for three cards.
     formatPrice(summary.cost > 0 ? summary.cost : null, currency),

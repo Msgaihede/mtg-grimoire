@@ -736,12 +736,14 @@ export const FromADeckRow: Story = {
     // What the deck plays now, read back out of `deck_get` rather than assumed.
     await expect(await canvas.findByText("Main deck · Sol Ring — C21 263")).toBeInTheDocument();
 
-    // `CardArt` rings the selected card's frame, which is the image's parent — the mark is a
-    // border on the art rather than anything in the accessibility tree, so this is the only
-    // place it can be asked about.
+    // `CardGrid` rings the selected **tile** — art and chin together, since 2026-09-08, where it
+    // was `CardArt`'s frame around the picture alone. The mark is a border rather than anything
+    // in the accessibility tree, so this is the only place it can be asked about; `data-grid-index`
+    // names the tile without counting `parentElement` hops through two components.
+    const tileOf = (img: HTMLElement) => img.closest("[data-grid-index]")!;
     const held = await modal.findByAltText("Sol Ring (C21 263)");
-    await expect(held.parentElement).toHaveClass("ring-accent");
-    await expect((await modal.findByAltText("Sol Ring (SLD 913)")).parentElement).not.toHaveClass(
+    await expect(tileOf(held)).toHaveClass("ring-accent");
+    await expect(tileOf(await modal.findByAltText("Sol Ring (SLD 913)"))).not.toHaveClass(
       "ring-accent",
     );
 

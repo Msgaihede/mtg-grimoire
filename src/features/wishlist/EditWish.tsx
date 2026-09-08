@@ -1,9 +1,14 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { ArrowLeft, Pencil, Trash2 } from "lucide-react";
 import { AnchoredPopup } from "@/components/AnchoredPopup";
-import { QuantityStepper } from "@/components/QuantityStepper";
+import {
+  BUTTON_OVER_ART,
+  QUANTITY_STEPPER_CARD_BOX,
+  QUANTITY_STEPPER_CARD_ICON,
+  QuantityStepper,
+} from "@/components/QuantityStepper";
 import { MoveToFolder } from "@/features/decks/MoveToFolder";
-import { FOCUS } from "@/lib/focus";
+import { FOCUS, FOCUS_INSET } from "@/lib/focus";
 import type { FolderNode } from "@/lib/folderTree";
 import type { WishlistFolder, WishRow } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
@@ -45,6 +50,7 @@ export function EditWishButton({
   onChangePrinting,
   onAnyPrinting,
   className,
+  size = "default",
 }: {
   row: WishRow;
   /**
@@ -62,7 +68,26 @@ export function EditWishButton({
   onChangePrinting: (row: WishRow) => void;
   onAnyPrinting: (row: WishRow) => void;
   className?: string;
+  /**
+   * How big the trigger is drawn — `"default"` everywhere but the wall's own tile.
+   *
+   * `"card"` is **`QuantityStepper`'s `size="card"` box, verbatim**, because on the wishlist tile
+   * this button stands directly under one of those steppers in a single column up the card's
+   * right-hand edge: 36px × `--control-scale` (30.6px at rest) with `rounded-lg`, the 21px glyph
+   * that stepper draws at 7/12 of its button, the `bg-bg/88` it wears over art, and an **inset**
+   * focus ring for the two reasons `tone="art"`/`focus="inset"` give at the stepper's own site —
+   * a 1px outline with nothing behind it disappears over an illustration of any brightness, and
+   * an outset ring on a box whose frame clips its corners loses the half that lands outside.
+   *
+   * The numbers are read off {@link QUANTITY_STEPPER_CARD_BOX} rather than retyped, so the two
+   * controls cannot drift apart at any stop of the zoom ladder.
+   *
+   * `"default"` is exactly what this trigger has always been and must stay so: the table's rows
+   * draw it too, and a row sets neither card variable, so it is the flat 24px it was there.
+   */
+  size?: "default" | "card";
 }) {
+  const onCard = size === "card";
   return (
     <AnchoredPopup
       // The wish, not the control: a wall of forty is forty different wishes, and "Edit" is the
@@ -70,9 +95,23 @@ export function EditWishButton({
       // themselves apart — they differ only by printing and finish.
       label={`Edit ${wishLabel(row)} on your wishlist`}
       panelLabel={`Edit ${row.name}`}
-      icon={<Pencil className="size-[calc(0.875rem*var(--control-scale,1))]" aria-hidden="true" />}
+      icon={
+        <Pencil
+          className={
+            onCard
+              ? QUANTITY_STEPPER_CARD_ICON
+              : "size-[calc(0.875rem*var(--control-scale,1))]"
+          }
+          aria-hidden="true"
+        />
+      }
       align="start"
       className={className}
+      triggerClassName={
+        onCard
+          ? cn(QUANTITY_STEPPER_CARD_BOX, BUTTON_OVER_ART, FOCUS_INSET)
+          : undefined
+      }
       // Wider than the `w-56` this was while it held one stepper and one button: three sections
       // now, and the middle one draws two controls side by side.
       panelClassName="w-72 space-y-3"

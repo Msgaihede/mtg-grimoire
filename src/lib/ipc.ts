@@ -222,11 +222,14 @@ export type CollectionSortKey =
  * The wishlist's sortable columns.
  *
  * There is no `set`: an any-printing wish names no set, so the Printing column is not
- * sortable at all. `cost` is what finishing a wish still costs — unit × copies still
- * missing, which is the figure the Cost cell prints. Mirrors `WISHLIST_SORTS` in
- * `src-tauri/src/wishlist.rs`.
+ * sortable at all. `cost` is what the wish costs — unit × copies wanted, which is the figure
+ * the Cost cell prints.
+ *
+ * **There is no `owned` either, since 2026-09-08.** It ordered by the copies the collection
+ * held against each wish, and the wishlist compares itself to the collection nowhere any more.
+ * Mirrors `WISHLIST_SORTS` in `src-tauri/src/wishlist.rs`.
  */
-export type WishlistSortKey = "name" | "owned" | "quantity" | "cost" | "price" | "added";
+export type WishlistSortKey = "name" | "quantity" | "cost" | "price" | "added";
 
 /**
  * A search as the UI asks for it.
@@ -334,8 +337,8 @@ export interface SearchRequest {
    *
    * **An entry, not a copy.** A card whose only entry holds no copies passes `owned: true`
    * while its {@link CardSummary.ownedQuantity} reads `0`, and does *not* appear under
-   * `owned: false`. The wishlist's `fulfilled` filter is the one that counts copies, because
-   * a wish is filled by copies rather than by paperwork.
+   * `owned: false`. What this filter asks is whether the collection has *paperwork* for the
+   * printing, and the count beside it is what says how much.
    *
    * Rare since schema v24 — `collectionSetQuantity` deletes at zero now — but the rule is
    * about what this filter asks rather than about what the collection happens to store, and
@@ -473,15 +476,18 @@ export interface CardSummary {
    * Copies the collection holds of **this printing, across every finish and condition** —
    * a badge on a search result, and finish-*blind*.
    *
-   * One of **four** fields in this file with this name, and only one of the other three asks
-   * the same question. {@link WishRow.ownedQuantity} is counted against one wish and *is*
-   * finish-aware, so a foil wish is not satisfied by the nonfoil in the binder;
-   * {@link DeckCard.ownedQuantity} is neither — it is what one deck's own collection group
+   * One of **three** fields in this file with this name, and only one of the other two asks
+   * the same question. {@link DeckCard.ownedQuantity} is what one deck's own collection group
    * physically holds, matched to the row's exact `(card_id, finish)` since 2026-09-07 rather
-   * than to the oracle card. The fourth,
-   * {@link ImportMatch.ownedQuantity}, **is** this number: every copy of one printing,
-   * finish-blind, asked per decklist line instead of per search row. Read each against its own
-   * row.
+   * than to the oracle card. The third, {@link ImportMatch.ownedQuantity}, **is** this number:
+   * every copy of one printing, finish-blind, asked per decklist line instead of per search
+   * row. Read each against its own row.
+   *
+   * **`WishRow` carried a fourth until 2026-09-08** — copies counted against one wish,
+   * finish-aware, so a foil wish read `0` while the nonfoil sat in a binder. It is gone with
+   * every other comparison the wishlist made against the collection: that list is the reader's
+   * own, kept by hand, and a wish leaves it when they acquire the card rather than being
+   * quietly marked as filled.
    *
    * `0` rather than `null`: "you own none of these" is a fact, not an absence, and a badge
    * that has to tell `null` from `0` is a badge with a bug waiting in it.
@@ -1468,10 +1474,6 @@ export interface WishlistImportItem {
 export interface WishlistQuery extends CardFilters {
   /** Ignored, exactly as {@link CollectionQuery.paperOnly} is, and for the same reason. */
   paperOnly?: boolean;
-  /** `true` shows only wishes the collection already covers, `false` only those it does not
-   *  — "what is still missing" being the list's usual question. Counted in **copies**, and
-   *  finish-aware. */
-  fulfilled?: boolean;
   /** `true` narrows to the wishes a Scryfall migration or a vanished printing flagged — the
    *  reconciler walks this table too, so this is {@link CollectionQuery.needsReview}'s
    *  question asked of the other list. */
@@ -1558,17 +1560,6 @@ export interface WishRow {
    *  any printing of the oracle card). `null` is unpriced there — {@link CollectionRow.unitPrice}
    *  has the rule and the two ways a hole happens. */
   unitPrice: number | null;
-  /**
-   * Copies the collection holds **against this wish** — narrowed by everything the wish
-   * says: its printing if it names one, and its finish if it names one.
-   *
-   * Not the same number as {@link CardSummary.ownedQuantity}, which is every copy of one
-   * printing, finish-blind; nor as {@link DeckCard.ownedQuantity}, which is what one deck
-   * *claimed*. This one is finish-*aware*, so a foil wish reads `0` while the nonfoil sits
-   * in a binder — which is the whole reason finish is part of what makes two wishes two
-   * wishes.
-   */
-  ownedQuantity: number;
   /**
    * How many *other* wishes exist for the same oracle card — a correlated count, `0` on an
    * orphan with no oracle id, answered on every row rather than made optional because it is
@@ -2025,14 +2016,16 @@ export interface WishlistFolderSummary {
   folderId: number;
   /** Wishes filed **directly** in this folder — not its sub-folders' wishes. */
   wishes: number;
-  /** Copies still to find here — `max(0, quantity - owned)` summed over the wishes filed
-   *  directly in this folder, {@link WishRow.ownedQuantity}'s subtraction done once per row
-   *  and added up. */
-  missing: number;
-  /** What those missing copies cost at the summary's own marketplace — the same
-   *  `price_expr` the page header prices its own total from, so a folder's figure and the
-   *  root's can never disagree about what one copy costs. Unpriced rows are left out of the
-   *  sum entirely, never quoted at another marketplace's rate. */
+  /** Copies wanted here — `sum(quantity)` over the wishes filed directly in this folder.
+   *
+   *  It was `sum(max(0, quantity - owned))` and was called `missing` until 2026-09-08. The
+   *  wishlist compares itself to the collection nowhere now, so there is no such thing as a copy
+   *  a wish no longer needs: what a drawer wants is what its wishes say they want. */
+  copies: number;
+  /** What those copies cost at the summary's own marketplace — the same `price_expr` the page
+   *  header prices its own total from, so a folder's figure and the root's can never disagree
+   *  about what one copy costs. Unpriced rows are left out of the sum entirely, never quoted at
+   *  another marketplace's rate. */
   cost: number;
   /** How many of this folder's own wishes the marketplace could not price — the folder card's
    *  own version of the page header's unpriced note, so a dashed card whose total looks low

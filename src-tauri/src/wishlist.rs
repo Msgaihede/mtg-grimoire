@@ -72,9 +72,6 @@ pub struct WishInput {
 pub struct WishlistQuery {
     #[serde(flatten)]
     pub cards: crate::filters::CardFilters,
-    /// `Some(true)` shows only wishes the collection already covers, `Some(false)` only
-    /// those it does not — "what is still missing" being the list's usual question.
-    pub fulfilled: Option<bool>,
     /// `Some(true)` narrows to the wishes a Scryfall migration or a vanished printing
     /// flagged. [`crate::collection::CollectionQuery`]'s field, verbatim: the reconciler
     /// walks both tables, so both lists answer the same question the same way.
@@ -110,6 +107,17 @@ pub struct WishlistQuery {
     pub offset: u32,
 }
 
+/// One line of the list, as the wall and the table draw it.
+///
+/// **Nothing here is a comparison against the collection, and that is the rule rather than an
+/// omission.** A wishlist is managed by the reader: they take a card off the list when they
+/// acquire it, and until they do the list goes on asking for every copy it names. So there is
+/// no owned count on this row, no "fulfilled" state derived from one, and every figure drawn
+/// from it — the Cost cell, the page header's total — is unit price × the copies **wanted**.
+/// The row carried an `owned_quantity` until 2026-09-08, a correlated sum over
+/// `collection_entries` narrowed by the wish's printing and finish; what it bought was a badge
+/// that contradicted the reader about what was still on their list, and a Cost column that
+/// totalled zero for a card they had every intention of buying another copy of.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WishRow {
@@ -166,8 +174,6 @@ pub struct WishRow {
     /// exist** — while Mana Pool, which publishes an etched column, answers with a number.
     /// [`crate::sorting::row_price_expr`]'s rule over [`WISH_PREFERRED_FINISH`].
     pub unit_price: Option<f64>,
-    /// How many copies the collection already has against this wish.
-    pub owned_quantity: i64,
     pub notes: Option<String>,
     pub needs_review: Option<String>,
     pub updated_at: i64,
@@ -229,45 +235,6 @@ pub struct WishlistPage {
 const DEFAULT_LIMIT: u32 = 100;
 const MAX_LIMIT: u32 = 500;
 
-/// How many copies the collection holds against a wish, as a scalar subquery.
-///
-/// **Every term of the wish narrows it**, which is the same statement
-/// [`WISHLIST_GRAIN`] makes about what separates one wish from another:
-///
-/// * the printing — a pinned wish counts that printing, an unpinned one counts every
-///   printing of the oracle card, which is what "any printing" means on the way back as
-///   well as on the way out;
-/// * the finish — a wish *for the foil* is not satisfied by the nonfoil sitting in a
-///   binder. That is why the finish is in the grain in the first place: a foil wish and a
-///   nonfoil wish are two wishes, and counting either against the other would make the
-///   third term of the grain a distinction the list itself does not believe in. A wish that
-///   names no finish takes any of them, which is what "no preference" means.
-///
-/// Condition is deliberately *not* a term: a wishlist has nowhere to say "and in NM", so
-/// there is nothing to match against, and a played copy is still a copy of the card.
-///
-/// `sum(quantity)`, so a collection row holding no copies contributes nothing: this figure is
-/// copies held, not entries recorded, and a wish is satisfied by copies. **Since schema v24 a
-/// row taken to zero is deleted rather than kept** ([`crate::collection::set_quantity`]), so the
-/// only zero row that can still reach this sum is one [`crate::collection::update_entry`] left —
-/// the edit form must not delete its own subject. The arithmetic is the same either way, which
-/// is why it is written as a statement about copies rather than about which rows exist.
-///
-/// **It narrows by finish and never by condition.**
-///
-/// **`pub(crate)` for one reader outside this module**: `wishlist_folders::folder_summary` sums
-/// `max(0, quantity - owned)` per folder, so a folder's subtotal and the page header's total have
-/// to be one piece of arithmetic and a second spelling would be a second thing to keep in step.
-/// The alias `w` this expression assumes is part of the contract, so anything reading it aliases
-/// `wishlist_entries` the same way.
-pub(crate) const OWNED_SQL: &str = "coalesce((
-        SELECT sum(ce.quantity) FROM collection_entries ce
-         WHERE (w.card_id IS NOT NULL AND ce.card_id = w.card_id
-                AND (w.preferred_finish IS NULL OR ce.finish = w.preferred_finish))
-            OR (w.card_id IS NULL AND ce.card_id IN
-                    (SELECT id FROM cards WHERE oracle_id = w.oracle_id)
-                AND (w.preferred_finish IS NULL OR ce.finish = w.preferred_finish))), 0)";
-
 /// The columns the wishlist's headers can sort on, plus the two the filter bar's select
 /// offers that have no column to press.
 ///
@@ -283,11 +250,6 @@ const WISHLIST_SORTS: &[crate::sorting::SortColumn] = &[
         key: "name",
         asc: "w.name ASC",
         desc: "w.name DESC",
-    },
-    crate::sorting::SortColumn {
-        key: "owned",
-        asc: "owned_quantity ASC",
-        desc: "owned_quantity DESC",
     },
     crate::sorting::SortColumn {
         key: "quantity",
@@ -308,20 +270,31 @@ const WISHLIST_SORTS: &[crate::sorting::SortColumn] = &[
 
 /// `cost` and `price` — the two keys that turn on the reader's marketplace.
 ///
-/// `cost` is what finishing the wish still costs — unit price over the copies *missing*,
-/// which is the figure the Cost cell prints and which is zero for a fulfilled wish however
-/// dear the card is. `price` is what one copy costs, and stays reachable from the select.
+/// `cost` is what the wish costs — unit price × the copies it asks for, which is the figure the
+/// Cost cell prints. `price` is what *one* copy costs, and stays reachable from the select.
 ///
-/// Both order by the **output alias** rather than by any column of either table, so a rename
-/// there is a `prepare` error at run time; `every_sort_key_prepares…` is what catches it, and
-/// it runs every key at every marketplace. Whatever hole the chosen marketplace has rides
-/// along: on Cardmarket a wish for the *etched* printing is NULL and sorts last, because
-/// there is no `eur_etched` key to quote it from.
+/// **The two are a real distinction and neither is derivable from the other**: a $5 common
+/// wanted nine times outranks a $40 foil wanted once on `cost` and trails it on `price`, so a
+/// reader shopping by budget and a reader shopping by rarity are asking different questions of
+/// the same list.
+///
+/// **It is `w.quantity` and not the copies still missing**, which is what this multiplication
+/// was until 2026-09-08. The old arithmetic subtracted a correlated count over
+/// `collection_entries`, so a wish the binder already covered sorted last however dear the card
+/// — the list quietly deciding a reader was finished shopping for something they had not taken
+/// off it. The wishlist compares itself to the collection nowhere now; [`WishRow`]'s own header
+/// carries the argument.
+///
+/// Both reach the price through the **output alias** rather than through either table's price
+/// expression, so a rename there is a `prepare` error at run time; `every_sort_key_prepares…`
+/// is what catches it, and it runs every key at every marketplace. Whatever hole the chosen
+/// marketplace has rides along: on Cardmarket a wish for the *etched* printing is NULL and
+/// sorts last, because there is no `eur_etched` key to quote it from.
 const WISHLIST_PRICE_SORTS: &[crate::sorting::PricedSort] = &[
     crate::sorting::PricedSort {
         key: "cost",
-        asc: "{price} * max(0, w.quantity - owned_quantity) ASC NULLS LAST",
-        desc: "{price} * max(0, w.quantity - owned_quantity) DESC NULLS LAST",
+        asc: "{price} * w.quantity ASC NULLS LAST",
+        desc: "{price} * w.quantity DESC NULLS LAST",
     },
     crate::sorting::PricedSort {
         key: "price",
@@ -865,8 +838,10 @@ pub(crate) fn set_printing_inner(
 /// `oracle_id` the caller holds and which is therefore never NULL.
 ///
 /// **It narrows by nothing else — not by finish, not by folder.** "How many are wished for" is
-/// a fact about the card. [`OWNED_SQL`] is where the finish matters, because that one is asking
-/// whether a *particular* wish is filled, and a foil wish is not filled by a nonfoil copy.
+/// a fact about the card, and it is the last question in this module that reaches across to
+/// another table at all — `OWNED_SQL`, which asked how much of a wish the binder already
+/// covered and was the one expression here that narrowed by finish, was deleted on 2026-09-08
+/// with every other comparison the wishlist made against the collection.
 ///
 /// `sum(quantity)` over a `CHECK (quantity > 0)` column, so there is no zero row to think about
 /// and no floor to apply: a wish for none of something is not a wish, and this table has said
@@ -959,16 +934,13 @@ pub(crate) fn wishlist_scope(
             Box::new(escape_like(text)),
         );
     }
-    // [`OWNED_SQL`] and not a second spelling of it: this filter and the `owned_quantity`
-    // column [`list_wishes`] selects have to be the same expression, or a list could hide a row
-    // whose own badge says it is still short. Naming the constant is what survived the two
-    // being pulled apart into two functions.
-    let owned = OWNED_SQL;
-    match q.fulfilled {
-        Some(true) => p.wheres.push(format!("{owned} >= w.quantity")),
-        Some(false) => p.wheres.push(format!("{owned} < w.quantity")),
-        None => {}
-    }
+    // **No filter here reads the collection**, and the absence is the rule rather than a gap. A
+    // `fulfilled` term stood next to this one until 2026-09-08, comparing a correlated
+    // `OWNED_SQL` against `w.quantity` so the page could show "what is still missing"; the
+    // constant went with it, and the reader is the only one who
+    // decides that now, by taking the card off the list. [`WishRow`]'s header carries the whole
+    // argument. Every term below is about the wish itself.
+    //
     // [`crate::collection::scope`]'s three-way match, over this table's column. Pushed
     // before the count is taken, so the header cannot count rows the list will not show.
     match q.needs_review {
@@ -1004,10 +976,6 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
     // different rules.
     let price = crate::sorting::row_price_expr(q.marketplace, WISH_PREFERRED_FINISH);
     let (from, where_sql, mut params) = wishlist_scope(q, &price);
-    // Named once for the whole statement build: the `fulfilled` filter [`wishlist_scope`]
-    // pushed and the `owned_quantity` column below have to be the same expression, or a list
-    // could hide a row whose own badge says it is still short.
-    let owned = OWNED_SQL;
 
     let total: i64 = conn
         .query_row(
@@ -1031,7 +999,6 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
         "SELECT w.id, w.oracle_id, w.card_id, w.name, w.set_code, w.collector_number, w.lang,
                 c.rarity, c.mana_cost, w.quantity, w.preferred_finish,
                 {price} AS {UNIT_PRICE_ALIAS},
-                {owned} AS owned_quantity,
                 w.notes, w.needs_review, w.updated_at,
                 -- Appended rather than placed beside `c.mana_cost` where it belongs in the
                 -- struct: every `r.get(n)` below is a positional index, so inserting a column
@@ -1055,7 +1022,7 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
                   WHERE o.id <> w.id AND o.oracle_id IS NOT NULL
                     AND o.oracle_id = w.oracle_id) AS elsewhere,
                 w.folder_id,
-                -- From 21, on the end like every appended column above, and as many as
+                -- From 20, on the end like every appended column above, and as many as
                 -- `image_uri::FRONT_FACE_COLUMNS` says. An any-printing wish
                 -- is drawn as whichever printing the join chose for it, which is the printing
                 -- `c.id` and the price beside it are already about.
@@ -1068,7 +1035,7 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
     // Where the image pair begins — the count of every column before it, which is what makes
     // it last. Written down rather than spelled inside the closure, for the reason the four
     // appended `r.get(N)`s above carry: this mapping is positional.
-    const IMAGE_COL: usize = 21;
+    const IMAGE_COL: usize = 20;
 
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = stmt
@@ -1085,19 +1052,18 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
                     lang: r.get(6)?,
                     rarity: r.get(7)?,
                     mana_cost: r.get(8)?,
-                    type_line: r.get(16)?,
-                    art_card_id: r.get(17)?,
+                    type_line: r.get(15)?,
+                    art_card_id: r.get(16)?,
                     quantity: r.get(9)?,
                     preferred_finish: r.get(10)?,
                     unit_price: r.get(11)?,
-                    owned_quantity: r.get(12)?,
-                    notes: r.get(13)?,
-                    needs_review: r.get(14)?,
-                    updated_at: r.get(15)?,
-                    legalities: r.get(18)?,
-                    elsewhere: r.get(19)?,
-                    folder_id: r.get(20)?,
-                    // From 21 — the (top-level, face) pairs `front_face_selects` added, one per
+                    notes: r.get(12)?,
+                    needs_review: r.get(13)?,
+                    updated_at: r.get(14)?,
+                    legalities: r.get(17)?,
+                    elsewhere: r.get(18)?,
+                    folder_id: r.get(19)?,
+                    // From 20 — the (top-level, face) pairs `front_face_selects` added, one per
                     // variant, folded back up by the module that added them, precedence and
                     // `soon.jpg` fence included.
                     image_uris: crate::image_uri::front_face_map(|i| {
@@ -1822,212 +1788,6 @@ mod tests {
         assert!(!err.contains("CHECK"), "{err}");
     }
 
-    /// "Owned badges appear in search once a wish is fulfilled" (spec §7) needs the count
-    /// of what is owned *against the wish*: any printing counts copies of the oracle card,
-    /// a pinned wish counts copies of that printing only.
-    #[test]
-    fn a_wish_reports_how_much_of_it_is_already_owned() {
-        let conn = seeded();
-        crate::collection::add_entry(
-            &conn,
-            &crate::collection::EntryInput {
-                card_id: "bolt-2ed".into(),
-                finish: "nonfoil".into(),
-                quantity: 2,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let any = add_wish(
-            &conn,
-            &WishInput {
-                oracle_id: Some("o1".into()),
-                quantity: 4,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let pinned = add_wish(
-            &conn,
-            &WishInput {
-                card_id: Some("bolt-lea".into()),
-                quantity: 1,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-        let rows = list_wishes(&conn, &WishlistQuery::default()).unwrap();
-        let owned_of = |id: i64| {
-            rows.items
-                .iter()
-                .find(|r| r.id == id)
-                .unwrap()
-                .owned_quantity
-        };
-        assert_eq!(owned_of(any.id), 2, "any Lightning Bolt counts");
-        assert_eq!(owned_of(pinned.id), 0, "the Alpha one is not owned");
-    }
-
-    /// "What is still missing" is the question a shopping list is usually asked, and the
-    /// answer has to move as the collection does — including through a row emptied to
-    /// zero, which the collection keeps and which owns no copies.
-    #[test]
-    fn the_fulfilled_filter_splits_the_list_by_what_is_already_held() {
-        let conn = seeded();
-        let held = crate::collection::add_entry(
-            &conn,
-            &crate::collection::EntryInput {
-                card_id: "bolt-2ed".into(),
-                finish: "nonfoil".into(),
-                quantity: 2,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let covered = add_wish(
-            &conn,
-            &WishInput {
-                oracle_id: Some("o1".into()),
-                quantity: 2,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let missing = add_wish(
-            &conn,
-            &WishInput {
-                card_id: Some("bolt-lea".into()),
-                quantity: 1,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-        let only = |fulfilled: bool| {
-            let page = list_wishes(
-                &conn,
-                &WishlistQuery {
-                    fulfilled: Some(fulfilled),
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-            assert_eq!(
-                page.total,
-                page.items.len() as i64,
-                "count agrees with page"
-            );
-            page.items.iter().map(|r| r.id).collect::<Vec<_>>()
-        };
-        assert_eq!(only(true), vec![covered.id]);
-        assert_eq!(only(false), vec![missing.id]);
-
-        // Trading the copies away un-fulfils the wish: the collection keeps the row at
-        // zero, and zero copies satisfy nothing.
-        crate::collection::set_quantity(&conn, held.id, 0).unwrap();
-        assert_eq!(only(true), Vec::<i64>::new());
-        assert_eq!(only(false).len(), 2);
-    }
-
-    /// The finish is the third term of the grain, so it has to be the third term of
-    /// "already owned" as well. A wish *for the foil* is not satisfied by the nonfoil in a
-    /// binder — and if it were, the wish would silently leave the "still missing" list the
-    /// day its cheap sibling arrived, which is the one moment a shopping list must not
-    /// lose an entry.
-    #[test]
-    fn a_wish_for_one_finish_is_not_filled_by_another() {
-        let conn = seeded();
-        crate::collection::add_entry(
-            &conn,
-            &crate::collection::EntryInput {
-                card_id: "bolt-lea".into(),
-                finish: "nonfoil".into(),
-                quantity: 3,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let wish = |card: Option<&str>, oracle: Option<&str>, finish: Option<&str>| {
-            add_wish(
-                &conn,
-                &WishInput {
-                    card_id: card.map(str::to_owned),
-                    oracle_id: oracle.map(str::to_owned),
-                    preferred_finish: finish.map(str::to_owned),
-                    quantity: 1,
-                    ..Default::default()
-                },
-            )
-            .unwrap()
-            .id
-        };
-        let foil = wish(Some("bolt-lea"), None, Some("foil"));
-        let any_finish = wish(Some("bolt-lea"), None, None);
-        // The same distinction through the oracle card rather than the printing.
-        let foil_any_printing = wish(None, Some("o1"), Some("foil"));
-
-        let rows = list_wishes(&conn, &WishlistQuery::default()).unwrap();
-        let owned_of = |id: i64| {
-            rows.items
-                .iter()
-                .find(|r| r.id == id)
-                .unwrap()
-                .owned_quantity
-        };
-        assert_eq!(owned_of(foil), 0, "three nonfoils fill no foil wish");
-        assert_eq!(owned_of(foil_any_printing), 0, "nor at any printing");
-        assert_eq!(
-            owned_of(any_finish),
-            3,
-            "a wish with no preference takes it"
-        );
-
-        // And the "still missing" list has to agree, in both directions.
-        let missing: Vec<i64> = list_wishes(
-            &conn,
-            &WishlistQuery {
-                fulfilled: Some(false),
-                ..Default::default()
-            },
-        )
-        .unwrap()
-        .items
-        .iter()
-        .map(|r| r.id)
-        .collect();
-        assert!(missing.contains(&foil), "the foil wish is still missing");
-        assert!(missing.contains(&foil_any_printing));
-        assert!(!missing.contains(&any_finish));
-
-        // A foil actually arriving is what fills it — and fills only it.
-        crate::collection::add_entry(
-            &conn,
-            &crate::collection::EntryInput {
-                card_id: "bolt-lea".into(),
-                finish: "foil".into(),
-                quantity: 1,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let rows = list_wishes(&conn, &WishlistQuery::default()).unwrap();
-        let owned_of = |id: i64| {
-            rows.items
-                .iter()
-                .find(|r| r.id == id)
-                .unwrap()
-                .owned_quantity
-        };
-        assert_eq!(owned_of(foil), 1);
-        assert_eq!(owned_of(foil_any_printing), 1);
-        assert_eq!(
-            owned_of(any_finish),
-            4,
-            "no preference counts both finishes"
-        );
-    }
-
     /// A wish is removed, never emptied: `quantity > 0` is the table's own CHECK, which is
     /// the asymmetry with the collection's zero-keeps-the-row rule.
     #[test]
@@ -2266,7 +2026,6 @@ mod tests {
             quantity: 4,
             preferred_finish: Some("foil".into()),
             unit_price: Some(40.0),
-            owned_quantity: 2,
             notes: None,
             needs_review: None,
             updated_at: 1_800_000_000,
@@ -2286,7 +2045,7 @@ mod tests {
                 "setCode": null, "collectorNumber": null, "lang": null, "rarity": "common",
                 "manaCost": "{R}", "typeLine": "Instant", "artCardId": "bolt-2ed",
                 "quantity": 4, "preferredFinish": "foil",
-                "unitPrice": 40.0, "ownedQuantity": 2, "notes": null,
+                "unitPrice": 40.0, "notes": null,
                 "needsReview": null, "updatedAt": 1800000000,
                 "legalities": "{\"timeless\":\"legal\"}",
                 "folderId": 7, "elsewhere": 1,
@@ -2309,13 +2068,10 @@ mod tests {
         .unwrap();
         assert_eq!(value, serde_json::json!({ "items": [], "total": 0 }));
 
-        let q: WishlistQuery = serde_json::from_str(
-            r#"{"text":"bolt","sets":["lea"],"fulfilled":false,"needsReview":true}"#,
-        )
-        .unwrap();
+        let q: WishlistQuery =
+            serde_json::from_str(r#"{"text":"bolt","sets":["lea"],"needsReview":true}"#).unwrap();
         assert_eq!(q.cards.text.as_deref(), Some("bolt"));
         assert_eq!(q.cards.sets.unwrap(), vec!["lea".to_owned()]);
-        assert_eq!(q.fulfilled, Some(false));
         assert_eq!(q.needs_review, Some(true), "camelCase on the way in, too");
         assert_eq!(q.limit, 0, "omitted limit means unset, not a parse error");
         assert_eq!(q.folder_id, None, "omitted is the root");
@@ -2537,9 +2293,8 @@ mod tests {
             vec![cheap, dear, unpriced],
             "cheapest first, NULL last"
         );
-        // Nothing owned, so `owned` ties every row and only the tiebreak separates them.
-        assert_eq!(ids("owned", "desc").len(), 3);
-        // Cost is unit × copies still missing: 9 unpriced (no cost), $40 × 2, $5 × 1.
+        // Cost is unit × copies wanted: $40 × 2, $5 × 1, and 9 unpriced copies of a card no
+        // marketplace quotes, which is a NULL rather than a nine.
         assert_eq!(ids("cost", "desc"), vec![dear, cheap, unpriced]);
         assert_eq!(
             by(vec![term("c.name; DROP TABLE wishlist_entries", "asc")]),
@@ -2547,14 +2302,21 @@ mod tests {
         );
     }
 
-    /// The Cost column shows unit price × copies *still missing*, so its header sorts by
-    /// that — a fulfilled wish costs nothing however dear the card is, which is the one
-    /// thing the unit-price order cannot say.
+    /// The Cost column shows unit price × the copies *wanted*, so its header sorts by that — a
+    /// $5 common wanted nine times outranks a $40 foil wanted once, which is the one thing the
+    /// unit-price order cannot say.
+    ///
+    /// **And it does not look at the collection, which is what the fixture is built to catch.**
+    /// The nine copies seeded below fill the cheap wish outright, so under the
+    /// `max(0, quantity - owned)` arithmetic this sort carried until 2026-09-08 its cost would
+    /// be **zero** and the dear wish would come first. The two arithmetics therefore disagree
+    /// about `first("cost")` on this fixture rather than merely about a number nobody reads,
+    /// which is the whole point of owning exactly the wish that would otherwise win: a wish
+    /// leaves this list when the reader takes it off, never because a binder filled up.
     #[test]
-    fn cost_sorts_by_what_is_left_to_buy_and_price_by_the_unit() {
+    fn cost_sorts_by_the_copies_wanted_and_price_by_the_unit() {
         let conn = seeded();
-        // A $40 foil, wanted once and already owned; a $5 nonfoil, wanted twice and owned
-        // not at all.
+        // A $40 foil wanted once, for $40; a $5 nonfoil wanted nine times, for $45.
         let dear = add_wish(
             &conn,
             &WishInput {
@@ -2570,17 +2332,22 @@ mod tests {
             &conn,
             &WishInput {
                 card_id: Some("bolt-2ed".into()),
-                quantity: 2,
+                quantity: 9,
                 ..Default::default()
             },
         )
         .unwrap()
         .id;
-        conn.execute(
-            "INSERT INTO collection_entries (card_id,set_code,collector_number,lang,finish,
-                 condition,quantity,created_at,updated_at)
-             VALUES ('bolt-lea','lea','161','en','foil','NM',1,0,0)",
-            [],
+        // Every copy the cheap wish asks for, in the finish it takes — the state the deleted
+        // `fulfilled` filter used to call "covered".
+        crate::collection::add_entry(
+            &conn,
+            &crate::collection::EntryInput {
+                card_id: "bolt-2ed".into(),
+                finish: "nonfoil".into(),
+                quantity: 9,
+                ..Default::default()
+            },
         )
         .unwrap();
 
@@ -2599,7 +2366,7 @@ mod tests {
         assert_eq!(
             first("cost"),
             cheap,
-            "$5 × 2 still to buy beats $40 already owned"
+            "$5 × 9 beats $40 × 1, and owning all nine changes neither figure"
         );
         assert_eq!(
             first("price"),
@@ -2984,9 +2751,8 @@ mod tests {
             "Mana Pool quotes etched, so the etched wish places rather than trails"
         );
 
-        // × the copies still missing, and nothing is owned: 10 / 1 / 2. TCGplayer
-        // $10 / $50 / $18; Cardmarket €900 / €2 / —; Card Kingdom $30 / $20 / —;
-        // Mana Pool $80 / $1 / $8.
+        // × the copies each wish asks for — 10 / 1 / 2. TCGplayer $10 / $50 / $18;
+        // Cardmarket €900 / €2 / —; Card Kingdom $30 / $20 / —; Mana Pool $80 / $1 / $8.
         assert_eq!(
             names("cost", "asc", Tcgplayer),
             order("cheap-usd,etched,dear-usd")
@@ -3029,9 +2795,7 @@ mod tests {
     fn every_sort_key_prepares_at_every_marketplace() {
         let conn = seeded_marketplaces();
         for marketplace in MARKETPLACES {
-            for key in [
-                "name", "owned", "quantity", "cost", "price", "added", "nope",
-            ] {
+            for key in ["name", "quantity", "cost", "price", "added", "nope"] {
                 for dir in ["asc", "desc"] {
                     let page = list_wishes(
                         &conn,

@@ -80,8 +80,8 @@ describe("folderId and flatten are not filters", () => {
 
     act(() => {
       result.current.setText("bolt");
-      result.current.toggleFulfilled();
       result.current.toggleNeedsReview();
+      result.current.toggleRarity("rare");
       result.current.openFolder(3);
       result.current.toggleFlatten();
     });
@@ -91,8 +91,8 @@ describe("folderId and flatten are not filters", () => {
 
     expect(result.current.activeCount).toBe(0);
     expect(result.current.text).toBe("");
-    expect(result.current.fulfilled).toBeUndefined();
     expect(result.current.needsReview).toBeUndefined();
+    expect(result.current.rarities).toEqual([]);
     // The part `resetAll` must not touch.
     expect(result.current.folderId).toBe(3);
     expect(result.current.flatten).toBe(true);
@@ -278,7 +278,6 @@ const NONE = {
   manaValues: [],
   manaX: false,
   rarities: [],
-  fulfilled: undefined,
   needsReview: undefined,
 } satisfies WishlistFilterState;
 
@@ -295,10 +294,9 @@ describe("activeFilterCount", () => {
     expect(activeFilterCount({ ...NONE, colors: ["R", "U"] })).toBe(1);
     expect(activeFilterCount({ ...NONE, sets: ["lea"] })).toBe(1);
     expect(activeFilterCount({ ...NONE, rarities: ["rare", "mythic"] })).toBe(1);
-    // `false` — "the wishes nothing covers" — is a filter too, and is the list's usual question.
-    // Compared against `undefined`, never tested for truthiness.
-    expect(activeFilterCount({ ...NONE, fulfilled: false })).toBe(1);
-    expect(activeFilterCount({ ...NONE, needsReview: true })).toBe(1);
+    // `false` — "everything the sync did not touch" — is a filter too. Compared against
+    // `undefined`, never tested for truthiness.
+    expect(activeFilterCount({ ...NONE, needsReview: false })).toBe(1);
   });
 
   /** Whitespace is not a search. */
@@ -314,9 +312,10 @@ describe("activeFilterCount", () => {
     expect(activeFilterCount({ ...NONE, manaValues: [1], manaX: true })).toBe(1);
   });
 
-  /** Eight, where it was three until the three card views started drawing one `FilterBar`.
-   *  Reset all has to reach every one of them, so the count has to see every one of them. */
-  it("sees all eight kinds the wishlist offers", () => {
+  /** Seven — three until the three card views started drawing one `FilterBar`, eight until
+   *  `fulfilled` went with the rest of this list's comparisons against the collection. Reset all
+   *  has to reach every one of them, so the count has to see every one of them. */
+  it("sees all seven kinds the wishlist offers", () => {
     expect(
       activeFilterCount({
         text: "bolt",
@@ -326,9 +325,8 @@ describe("activeFilterCount", () => {
         manaValues: [1],
         manaX: true,
         rarities: ["rare"],
-        fulfilled: false,
         needsReview: true,
       }),
-    ).toBe(8);
+    ).toBe(7);
   });
 });

@@ -907,6 +907,17 @@ describe("AllPrintingsDialog", () => {
     expect(row).toHaveAccessibleName(/you are already looking at them/);
   });
 
+  /**
+   * The tile wearing the gold ring, given the `<img>` inside it.
+   *
+   * **`CardGrid` draws the ring on the tile's root since 2026-09-08** — around the art and the
+   * chin together, so a selected printing reads as one object — where it was `CardArt`'s and sat
+   * on the frame around the picture, the `<img>`'s own parent. The three assertions below used to
+   * reach for that parent; they climb to the tile instead, and `data-grid-index` is what names it
+   * without counting `parentElement` hops through two components.
+   */
+  const tileOf = (img: HTMLElement) => img.closest("[data-grid-index]")!;
+
   /** The "you are here" mark: the printing the deck slot plays, ringed on the wall. */
   it("marks the printing the deck currently holds", async () => {
     cardPrintings.mockResolvedValue(page([p("card-1", "lea"), p("b", "leb")]));
@@ -915,9 +926,8 @@ describe("AllPrintingsDialog", () => {
 
     const held = await screen.findByAltText("Sol Ring (LEA 233)");
     const other = screen.getByAltText("Sol Ring (LEB 233)");
-    // `CardArt` rings the selected card's frame, which is the `<img>`'s parent.
-    expect(held.parentElement).toHaveClass("ring-accent");
-    expect(other.parentElement).not.toHaveClass("ring-accent");
+    expect(tileOf(held)).toHaveClass("ring-accent");
+    expect(tileOf(other)).not.toHaveClass("ring-accent");
   });
 
   /**
@@ -1217,7 +1227,7 @@ describe("AllPrintingsDialog", () => {
 
     // Before: the card the question was asked from.
     const here = await screen.findByAltText("Sol Ring (LEA 233)");
-    expect(here.parentElement).toHaveClass("ring-accent");
+    expect(tileOf(here)).toHaveClass("ring-accent");
 
     await waitFor(() => expect(dialog).toHaveFocus());
     await user.keyboard("{ArrowRight}");
@@ -1226,8 +1236,8 @@ describe("AllPrintingsDialog", () => {
     // these two printings — and the ring is what has moved.
     await screen.findByRole("dialog", { name: /Forest/ });
     const landed = await screen.findByAltText("Forest (LEB 233)");
-    expect(landed.parentElement).toHaveClass("ring-accent");
-    expect(screen.getByAltText("Forest (LEA 233)").parentElement).not.toHaveClass("ring-accent");
+    expect(tileOf(landed)).toHaveClass("ring-accent");
+    expect(tileOf(screen.getByAltText("Forest (LEA 233)"))).not.toHaveClass("ring-accent");
   });
 
   /**
