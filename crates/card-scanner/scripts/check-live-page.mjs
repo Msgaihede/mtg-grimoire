@@ -31,7 +31,6 @@ if (!script) {
   fail('no <script> block found');
 } else {
   try {
-    // eslint-disable-next-line no-new-func
     new Function(script[1]);
     console.log('ok    the inline script parses');
   } catch (e) {

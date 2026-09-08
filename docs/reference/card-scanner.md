@@ -1266,3 +1266,37 @@ workbench's Vite config folds to `"tauri"` exactly as `vite.config.ts` does for
 `stories.test.tsx`, so that view is compiled clean out of every bundle a story can run against,
 and reaching it needs `vi.mock`, which is `stories.test.tsx`'s tool and not the workbench's.
 `ScannerPage.test.tsx` is where that state is proven.
+
+### Measured in the app
+
+All taken 2026-09-08 on Windows, in the shipped window, driven over CDP with the same card on the
+desk in front of the same webcam (1920×1080, sent at 960 px). The four numbers the spec owed, and
+one it did not know it owed.
+
+| What | Build | Reading |
+| --- | --- | --- |
+| One frame's budget, the page's own rows | release exe | decode 1.1 ms · resize 1.4 · mask 13.4 · contour 3.6 · rectify 29.2 · **transport 154.0** · round trip **203 ms**, 5.1 frames/s |
+| The same frame on the debug page over HTTP (§7) | release `serve` | transport 62.6 · round trip 208 ms |
+| One frame under `tauri dev`, with only `image`/`imageproc` overridden | debug | decode 117 · mask 14 · contour 31 · **rectify 1 829** · transport 5 012 · round trip **7 004 ms**, 0.1 frames/s |
+| … with `card-scanner`, `ocrs` and the eleven `rten*` crates overridden too | debug | decode 117 · rectify 48 · transport 257 · round trip 443 ms, 2.5 frames/s; a title read 361 ms |
+| … with `zune-jpeg`/`zune-core` overridden as well (the sixteen the manifest carries) | debug | decode **1.8** · resize 1.3 · mask 17.8 · contour 5.8 · rectify 58.3 · transport 203.4 · round trip **288 ms**, 3.6 frames/s |
+| The first `scanner_status` on a fresh process — bundle parse, 117 630 labels, both models | release / debug | **798 ms** / 929 ms; the second call 1 ms in both |
+| The phone | — | **not driven on a phone this pass** — no device was on `adb` |
+
+**What the transport row says.** "Transport" is the page's own remainder — the round trip less the
+five detector stages — so it holds the hash, the search, the readers when they run, the verdict's
+JSON with its data-URI previews, and the IPC itself. Over IPC it is ~90 ms more than the debug
+page's HTTP on a frame of the same size, and the round trips still land within five milliseconds
+of each other because the detector stages happened to be cheaper on the frame the app was shown.
+The IPC path is not free, and it is not the slow part either.
+
+**What the debug rows say.** The plan named two crates to optimise in a debug build and the live
+pass found four more layers under them, each measured in: the warp is `imageproc`'s, but the
+cardness scoring, the trim and the descriptor are the crate's own loops; the readers are `rten`'s;
+and `image` 0.25 delegates JPEG decoding to `zune-jpeg`. Sixteen overrides is what it takes for a
+`tauri dev` frame to read like a slow release frame rather than a slideshow, and each row above is
+one of those layers found.
+
+**What the first-call row says.** Loading is lazy and happens once; the page's status query is
+what pays it, on the first visit to the view after a launch. Under a second on either build, so no
+progress state was added for it.

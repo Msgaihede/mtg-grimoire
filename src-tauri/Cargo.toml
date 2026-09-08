@@ -323,13 +323,52 @@ httpmock = "0.8"
 tokio = { version = "1", features = ["macros", "rt"] }
 tempfile = "3"
 
-# **The scanner's image crates at full optimisation in a debug build.** These overrides live
-# in `crates/card-scanner/Cargo.toml` too, and there they do nothing for this package: cargo
-# reads `[profile.*]` from the build root only. Measured 2026-09-08 on the debug server: one
-# rectification 2022 ms against 48 ms in release, a 960 px JPEG decode 230 ms against 4, so a
-# `tauri dev` scanner without these is a slideshow. `rten` is listed after the measurement in
-# the plan's last task decided it — remove the line if that measurement said it was not needed.
+# **The scanner's crates at full optimisation in a debug build.** The `image`/`imageproc`
+# overrides live in `crates/card-scanner/Cargo.toml` too, and there they do nothing for this
+# package: cargo reads `[profile.*]` from the build root only. Measured 2026-09-08 on the debug
+# server: one rectification 2022 ms against 48 ms in release, a 960 px JPEG decode 230 ms
+# against 3–4, so a `tauri dev` scanner without these is a slideshow.
+#
+# **The crate itself and the OCR runtime are on the list because the first live pass measured
+# them in** (2026-09-08, `tauri dev` with only the two image crates optimised): the pump's
+# budget read rectify 1 829 ms and 5 012 ms of unitemised hash, search and reader time per
+# frame — 7.0 s a frame, 0.1 frames a second. The warp is `imageproc`'s, so what stayed slow
+# was `card-scanner`'s own loops (cardness, trim, the descriptor) and `rten`'s inference. Every
+# `rten-*` crate in the lock file is named, because a graph with one unoptimised member inherits
+# its speed. **`zune-jpeg` is the JPEG decoder `image` 0.25 delegates to**, and it is the same
+# lesson one crate down: with `image` alone optimised, a 960 px frame still decoded in 117 ms
+# against release's 3–4.
 [profile.dev.package.image]
 opt-level = 3
 [profile.dev.package.imageproc]
+opt-level = 3
+[profile.dev.package.zune-jpeg]
+opt-level = 3
+[profile.dev.package.zune-core]
+opt-level = 3
+[profile.dev.package.card-scanner]
+opt-level = 3
+[profile.dev.package.ocrs]
+opt-level = 3
+[profile.dev.package.rten]
+opt-level = 3
+[profile.dev.package.rten-base]
+opt-level = 3
+[profile.dev.package.rten-gemm]
+opt-level = 3
+[profile.dev.package.rten-imageproc]
+opt-level = 3
+[profile.dev.package.rten-model-file]
+opt-level = 3
+[profile.dev.package.rten-onnx]
+opt-level = 3
+[profile.dev.package.rten-parallel]
+opt-level = 3
+[profile.dev.package.rten-shape-inference]
+opt-level = 3
+[profile.dev.package.rten-simd]
+opt-level = 3
+[profile.dev.package.rten-tensor]
+opt-level = 3
+[profile.dev.package.rten-vecmath]
 opt-level = 3
