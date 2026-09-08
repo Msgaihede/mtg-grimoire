@@ -478,7 +478,6 @@ export function CardModalArt({
                 alt={pictured}
                 src={src}
                 onError={() => setBroken(src)}
-                decoding="async"
                 // No filters and no crop: distorting, recolouring or cropping a card image is
                 // forbidden by Scryfall's usage rules. **A turn is none of those three** — it is
                 // the card at its own proportions, the way a reader would hold a plane or a split

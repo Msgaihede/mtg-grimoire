@@ -137,6 +137,62 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   argument for healing the state rather than for hunting it further. Hovering was also checked
   and does **not** remount a tile's `<img>` — the same element survives the pointer — so
   "it loads when I mouse over it" is the app being woken, not the tile being redrawn.
+
+  **That last sentence was the clue, and the paragraph above drew the wrong conclusion from it.**
+  The report came back on 2026-09-08 — the same screenshots, against a build carrying the whole
+  watchdog. What could not be reproduced could not be reproduced because **the instrument was
+  destroying the phenomenon**: `Page.captureScreenshot` forces a compositor frame, so a sweep that
+  measures by screenshotting over CDP repairs a missed paint before it can read it. Every other
+  instrument is blind for its own reason — the DOM reports the image loaded, the console is silent,
+  `error_log` is empty, and jsdom decodes nothing. The failure is not in the fetcher, not in the
+  protocol and not in `PostMessageW`: **the bytes arrive, Blink decodes them, and the frame is
+  never painted.**
+- **A picture that arrives is still not a picture that is drawn, and `decoding="async"` is why.**
+  Measured 2026-09-08 in the shipped window (debug build, 1920×1080 client, the reader's own corpus
+  and image cache) by driving real `mouseWheel` bursts and reading the **screen's own framebuffer**
+  with Win32 `CopyFromScreen` — which, unlike a CDP screenshot, asks the app to paint nothing —
+  correlated against each `<img>`'s own `complete`/`naturalWidth`.
+
+  A blank frame measures **`sd 0`, `mean 24.09`**: the exact colour of the empty frame underneath,
+  flat to the last sampled pixel, while its `<img>` reports `complete === true` and
+  `naturalWidth === 672`. It is **not** a frame of latency — the same tiles measure flat again six
+  seconds later with no CDP traffic in the gap and their rects unmoved. Three remedies, in order:
+  a pointer move far away **does not** repair it, `Page.captureScreenshot` **does not** repair it,
+  and moving the pointer **onto the tile** does. So it is a lost paint invalidation rather than a
+  frame that was never scheduled, and only re-invalidating that element brings the picture back —
+  which is exactly the reader's "they load as soon as I mouse over them".
+
+  They arrive in **contiguous right-hand blocks that break at the same column on consecutive
+  rows** — a vertical boundary through the wall, which is a raster region and not anything the app
+  can address. That shape is what the reporter's own screenshots show: last two of six on the
+  search wall, last three of seven in the printings dialog.
+
+  **The A/B, both arms driven the same way.** `CardImage` now sets `decoding="sync"` before its
+  props spread, and the ten call sites that used to pass `decoding="async"` by hand pass nothing:
+
+  | Surface | `decoding="async"` | `decoding="sync"` |
+  | --- | --- | --- |
+  | Search wall | persistent blanks at passes **3, 4 and 11** (three runs) | **432** tile-measurements / 40 passes, **zero** |
+  | `AllPrintingsDialog`, Forest (949 printings) | persistent blank at pass **13**, 231 measurements | **390** tile-measurements / 25 passes, **zero** |
+
+  **`"sync"` rather than deleting the attribute.** Absent, the value is `auto`; that arm measured
+  clean too, over a smaller sample, but `auto` is a heuristic that stays free to choose the async
+  path for a larger image or under memory pressure. The bug is that the deferred-presentation step
+  loses its paint, and `"sync"` is the one value that removes the step instead of betting on the
+  heuristic avoiding it.
+
+  **It costs nothing, which is the part that was expected to be a trade.** Same gesture (60 wheel
+  bursts), same build, `Performance.getMetrics` plus a long-task observer: `sync` **47** long tasks
+  / 2 985 ms / worst **79 ms** and `TaskDuration` **12.34 s**, against `auto`'s **48** / 3 288 ms /
+  worst **128 ms** and **12.61 s**. Inside the noise and not slower — a 672×936 WEBP decodes in
+  well under a frame, and the decode always had to happen. What `async` bought was never the
+  decode; it was the right to show the frame without it.
+
+  **Two traps for anyone measuring this again.** A CDP screenshot repairs the state it is trying to
+  photograph, so pixels have to come from the framebuffer. And `getBoundingClientRect` reports a
+  rect inside the viewport for a tile the dialog's own scroller has clipped away — hit-test with
+  `document.elementFromPoint` first, or a printings dialog hands you flat dark pixels belonging to
+  the page behind it and calls them blank tiles.
 - Images are fetched **once per key** even when a screenful asks at the same moment
   (`Cache`'s per-key mutex + a re-read of the disk). The waiter re-reads rather than being
   handed the bytes, so it degrades to a second fetch when the write connection was busy or

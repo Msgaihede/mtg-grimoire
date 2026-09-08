@@ -830,7 +830,6 @@ function Cover({ deck }: { deck: DeckRow }) {
           // See the note above the component for the key this had while a cover could be a file.
           src={image.src}
           loading="lazy"
-          decoding="async"
           onError={image.onError}
           className={cn(
             "size-full object-cover transition-transform duration-150",

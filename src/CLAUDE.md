@@ -79,6 +79,26 @@ Every one of these has its measurement and its story in
   would arm a timer against a picture that can never arrive. Nothing in jsdom can go red for the
   behaviour itself; the deadline is sized from the shipped window and the figures are in
   [image-cache.md](../docs/reference/image-cache.md).
+  **And it decodes `sync`, which is a fourth failure and the opposite of the third** (2026-09-08).
+  The watchdog above asks again when a frame has heard *nothing*, and its first question is
+  `el.complete && el.naturalWidth > 0`. The failure readers kept reporting after it shipped answers
+  that **yes**: the bytes are decoded and in memory and the frame is empty anyway, because
+  `decoding="async"` lets the browser present the frame first and paint the picture when the decode
+  lands — and that second paint is sometimes never made. So one picture that never came and one
+  that came and was not drawn look identical to a reader, and no instrument this repo owns can tell
+  them apart: the DOM says loaded, the console says nothing, `error_log` says nothing, jsdom decodes
+  nothing, and **a CDP screenshot forces a frame** — which is why the 2026-09-01 sweep of ~3 300
+  images found none and concluded the state was unreachable. It is measured by reading the
+  **screen's own framebuffer** (Win32 `CopyFromScreen`) against the DOM: flat tiles at `sd 0`,
+  `mean 24.09`, still flat six seconds later, surviving both a far-away pointer move and a forced
+  compositor frame, and repaired only by hovering the tile itself. They come in contiguous
+  right-hand blocks that break at the same column on consecutive rows — a raster region, not
+  anything the app can see. `"sync"` rather than dropping the attribute: absent, the value is
+  `auto` and the choice is a heuristic free to pick the async path again. It is **not** the trade it
+  sounds like — same gesture, same build, `sync`'s worst long task **79 ms** against `auto`'s
+  **128 ms**. Set in `CardImage` before the spread, like `draggable`; the ten call sites that used
+  to pass `decoding="async"` by hand no longer pass anything. Every figure and both A/Bs:
+  [image-cache.md](../docs/reference/image-cache.md).
 - **A card frame is `components/CardArt`** — the 5:7 box, `CardImage`, `useImageRetry`, the
   no-art fallback and the foil marking, in one place. **Every wall of card faces draws it**: the
   search's, the collection's, the wishlist's and the three docked search columns — all of them

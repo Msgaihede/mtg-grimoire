@@ -325,7 +325,6 @@ export function DeckCardFace({
           // walls — a hundred-card category really is a hundred mounted cards, and the browser's
           // gate is the only thing bounding what they ask for.
           loading="lazy"
-          decoding="async"
           onError={face.onError}
           // `relative` and not `absolute`: it has to paint over the frame above it, and a
           // positioned sibling later in the document does that with no z-index at all.

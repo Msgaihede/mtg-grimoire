@@ -618,7 +618,6 @@ function Row({
                 // Lazy, for the difference list's reason and not a wall's: this is a plain
                 // scroller, so a sixty-row plan really is sixty mounted rows.
                 loading="lazy"
-                decoding="async"
                 className="size-full object-cover"
               />
             )}
