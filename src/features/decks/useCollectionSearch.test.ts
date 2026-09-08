@@ -49,6 +49,7 @@ const THIS_GROUP: CollectionFolder = {
   deckId: DECK_ID,
   sortOrder: 0,
   locked: false,
+  syncUid: null,
 };
 /** Another deck's group — the folder the confirm exists for. */
 const OTHER_GROUP: CollectionFolder = {
@@ -59,6 +60,7 @@ const OTHER_GROUP: CollectionFolder = {
   deckId: 9,
   sortOrder: 0,
   locked: false,
+  syncUid: null,
 };
 /** A drawer the reader made. On the desk, so no confirm. */
 const BINDER: CollectionFolder = {
@@ -69,6 +71,7 @@ const BINDER: CollectionFolder = {
   deckId: null,
   sortOrder: 0,
   locked: false,
+  syncUid: null,
 };
 /** The one holding area. **On the desk too** — a card that left the collection without leaving
  *  the database is not a card a deck is using. */
@@ -80,6 +83,7 @@ const REMOVED: CollectionFolder = {
   deckId: null,
   sortOrder: 0,
   locked: false,
+  syncUid: null,
 };
 
 const FOLDERS = [THIS_GROUP, OTHER_GROUP, BINDER, REMOVED];

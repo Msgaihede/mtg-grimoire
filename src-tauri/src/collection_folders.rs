@@ -165,6 +165,25 @@ pub struct CollectionFolder {
     /// the value is for: those are read to be handed straight back to a probe, and this one is
     /// *interpreted* — see [`folder_row`] for what a hand-edited `2` means here.
     pub locked: bool,
+    /// The row's cross-device name — `collection_folders.sync_uid`, schema v29's column.
+    ///
+    /// **On the wire because a *share* names a folder by it and cannot name it by anything
+    /// else.** `share::commands::share_create` takes a `folder_uid`, and
+    /// `share::commands::ShareRow` answers one, because a published share is a cross-device
+    /// artifact: the link outlives the device that made it, the group's other devices publish
+    /// updates to it, and `collection_folders.id` is a rowid that names a row in a database
+    /// nobody else has seen. So the page needs the uid twice — once to say *this drawer*, and
+    /// again to match a `ShareRow` back to a folder for the shared badge — and a DTO that put
+    /// uids on one side of that pair and not the other would be inconsistent rather than
+    /// principled.
+    ///
+    /// **`Option`, because the column is nullable and no fence makes it otherwise.**
+    /// `capture::install`'s insert trigger mints one and `schema::mint_missing_uids` sweeps the
+    /// rows that predate it, so in practice every folder has one — but "in practice" is not what
+    /// a type says, and a `String` here would be this struct promising something the DDL does
+    /// not. A `null` reaching the page is a folder that cannot be shared *yet*, which is a state
+    /// to draw rather than an error to raise.
+    pub sync_uid: Option<String>,
 }
 
 /// What one folder tile is drawn from — the two numbers, per folder, in one round trip.
@@ -222,12 +241,13 @@ fn folder_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<CollectionFolder> {
         // `INTEGER` with no CHECK, so a hand-edited database can hold a 2 — and a 2 is locked,
         // which is the only reading of a non-zero that is not a refusal.
         locked: r.get::<_, i64>(6)? != 0,
+        sync_uid: r.get(7)?,
     })
 }
 
 fn read_folder(conn: &Connection, id: i64) -> Result<Option<CollectionFolder>, String> {
     conn.query_row(
-        "SELECT id, parent_id, name, kind, deck_id, sort_order, locked
+        "SELECT id, parent_id, name, kind, deck_id, sort_order, locked, sync_uid
            FROM collection_folders WHERE id = ?1",
         params![id],
         folder_row,
@@ -263,7 +283,7 @@ fn user_folder(conn: &Connection, id: i64) -> Result<CollectionFolder, String> {
 pub fn list_folders(conn: &Connection) -> Result<Vec<CollectionFolder>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, parent_id, name, kind, deck_id, sort_order, locked
+            "SELECT id, parent_id, name, kind, deck_id, sort_order, locked, sync_uid
                FROM collection_folders ORDER BY sort_order, id",
         )
         .map_err(|e| e.to_string())?;
@@ -1635,6 +1655,55 @@ mod tests {
                 .iter()
                 .any(|f| f.id == deck_folder && f.deck_id.is_some()),
             "a deck's folder carries the deck it stands for"
+        );
+    }
+
+    /// The folder's cross-device name reaches the page, and both arms of it do.
+    ///
+    /// **This is the whole of what [`crate::share::commands::share_create`] can address a folder
+    /// by.** A share is a cross-device artifact — the link outlives this machine and another
+    /// device in the group publishes updates to it — so `collection_folders.id`, a rowid nobody
+    /// else has ever seen, cannot be the name. Drop `sync_uid` from either `SELECT` and this is
+    /// what says so; the page's own half is `ipc.test.ts`'s `CollectionFolder` mirror row.
+    ///
+    /// **Both arms, because the column is nullable and the type says so.** A capture trigger
+    /// mints a uid on insert and `mint_missing_uids` sweeps the rows that predate it, so a real
+    /// database has one everywhere — but [`crate::schema::memory_pair`] installs no triggers,
+    /// which makes this fixture exactly the *unset* population a `String` here would have been
+    /// lying to. The uid is written by hand for that reason rather than as a shortcut.
+    #[test]
+    fn a_folder_carries_the_uid_a_share_would_name_it_by() {
+        let conn = open();
+        let binder = create_folder(&conn, None, "Trade binder").unwrap();
+
+        assert_eq!(
+            read_folder(&conn, binder.id).unwrap().unwrap().sync_uid,
+            None,
+            "no trigger here, so a fresh row has no uid yet -- a state, not an error"
+        );
+
+        conn.execute(
+            "UPDATE collection_folders SET sync_uid = ?2 WHERE id = ?1",
+            params![binder.id, "uid-a"],
+        )
+        .unwrap();
+
+        // Both reads, because they are two `SELECT`s over one `folder_row` and only one of them
+        // is the census: the page builds its tree from `list_folders`, and every folder *write*
+        // answers through `read_folder`.
+        assert_eq!(
+            read_folder(&conn, binder.id).unwrap().unwrap().sync_uid,
+            Some("uid-a".to_owned())
+        );
+        assert_eq!(
+            list_folders(&conn)
+                .unwrap()
+                .into_iter()
+                .find(|f| f.id == binder.id)
+                .unwrap()
+                .sync_uid,
+            Some("uid-a".to_owned()),
+            "the census carries it too, which is the read the page draws from"
         );
     }
 

@@ -2104,6 +2104,23 @@ export interface CollectionFolder {
    * reader's own drawer — still renameable, still movable, still a drop target both ways.
    */
   locked: boolean;
+  /**
+   * The folder's **cross-device** name — `collection_folders.sync_uid`.
+   *
+   * **On the wire because a share names a folder by it and can name it by nothing else.**
+   * {@link ipc.shareCreate} takes a `folderUid` and {@link ShareRow.folderUid} answers one,
+   * because a published share is a cross-device artifact: the link outlives the device that made
+   * it, another device in the group publishes updates to it, and {@link id} is a rowid that
+   * names a row in a database nobody else has ever seen. So a page needs this twice — to say
+   * *this drawer* when publishing, and to match a {@link ShareRow} back to a folder for the
+   * shared badge.
+   *
+   * **`null` is possible and means *not shareable yet*, not an error.** The column is nullable;
+   * a capture trigger mints a uid on insert and a migration swept the rows that predate it, so
+   * in practice every folder has one — but that is a fact about the database rather than about
+   * the type, so a surface greys the Share row for a `null` rather than sending it.
+   */
+  syncUid: string | null;
 }
 
 /**

@@ -149,6 +149,7 @@ const COLLECTION_FOLDER: CollectionFolder = {
   deckId: null,
   sortOrder: 3,
   locked: false,
+  syncUid: null,
 };
 
 const WISH_FOLDER: WishlistFolder = { id: 4, name: "Buy next", parentId: null, sortOrder: 4 };

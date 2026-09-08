@@ -441,6 +441,21 @@ export interface FakeCollectionFolder {
    * says nothing about it is a fixture whose author has not decided.
    */
   locked: boolean;
+  /**
+   * User schema v29's `sync_uid` — the folder's **cross-device** name, and what a *share*
+   * addresses it by ({@link CollectionFolder.syncUid}).
+   *
+   * **Optional here where `locked` is required, and the split is the same one that file makes.**
+   * A lock decides whether a folder's copies are offered, so a fixture saying nothing about it
+   * has not decided; a uid is minted by a trigger on every insert, so a fixture saying nothing
+   * about it is every fixture — and {@link toCollectionFolder} derives a stable one from the id
+   * rather than making every seed carry a random string it will never read.
+   *
+   * **An explicit `null` survives the projection** and is the reason this is nullable rather
+   * than merely absent: it is the *not shareable yet* state a story needs to draw a greyed
+   * Share row, and `??` would have folded it back into the derived value.
+   */
+  syncUid?: string | null;
   /** User schema v29's column — see {@link FakeDeckFolder.needsReview}. */
   needsReview?: string | null;
 }
@@ -5897,6 +5912,10 @@ function toCollectionFolder(f: FakeCollectionFolder): CollectionFolder {
     deckId: f.deckId,
     sortOrder: f.sortOrder,
     locked: f.locked,
+    // Derived rather than seeded, and `=== undefined` rather than `??`: a seed that says
+    // nothing gets a stable uid so every fake folder is shareable, and a seed that says `null`
+    // keeps it — see {@link FakeCollectionFolder.syncUid}.
+    syncUid: f.syncUid === undefined ? `folder-uid-${f.id}` : f.syncUid,
   };
 }
 
