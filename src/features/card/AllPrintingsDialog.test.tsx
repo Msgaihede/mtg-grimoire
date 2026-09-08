@@ -391,6 +391,36 @@ describe("AllPrintingsDialog", () => {
     expect(await screen.findByText("2 printings")).toBeVisible();
   });
 
+  /**
+   * **Both halves of the panel's ceiling, and neither is optional.**
+   *
+   * `Dialog`'s own class is `max-h-full`, and `tailwind-merge` *deletes* it when a host names a
+   * `max-h-…` of its own — so the string this file hands the shell is the panel's whole height
+   * rule and there is nothing behind it. `90vh` is the ceiling the reader asked for: at the
+   * window the report came from the panel drew to 24px of the top edge, hard against the title
+   * bar. `100%` is the shell's clamp carried over, and it is the one that binds on a window
+   * shorter than 480px, where 90vh is *taller* than the scrim's padded area — a phone in
+   * landscape at 844×390 draws 351px at y 19.5 without it, 4.5px into the inset at each end.
+   *
+   * **A class assertion, for `Dialog.test.tsx`'s reason and not for want of trying**: jsdom has
+   * no layout engine, so every box is 0px and the whole of this is invisible to it. The numbers
+   * above were measured in a browser and are in
+   * `docs/reference/frontend-design.md`. What goes red here is either half being dropped.
+   */
+  it("caps the panel at 90vh without giving up the shell's own clamp", async () => {
+    cardPrintings.mockResolvedValue(page([p("a", "lea")], 862));
+    renderDialog();
+    open({ cardId: "card-1", oracleId: "o1", name: "Forest", deck: null });
+
+    const panel = await screen.findByRole("dialog", { name: /Forest/ });
+
+    expect(panel).toHaveClass("max-h-[min(100%,90vh)]");
+    // The shell's default is gone rather than merely outranked — assert its absence, or a
+    // `cn()` that stopped merging would leave two live rules and the loser would be chosen by
+    // stylesheet order.
+    expect(panel).not.toHaveClass("max-h-full");
+  });
+
   /** A capped page must say what it is a page *of*, or the wall claims to be the whole list. */
   it("says what it is a truncation of when the page is capped", async () => {
     cardPrintings.mockResolvedValue(page([p("a", "lea")], 862));

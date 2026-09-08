@@ -491,7 +491,25 @@ export function AllPrintingsDialog() {
       // Tiles across at 100% zoom with no walk to flank the panel: 10 at 2560 maximised (13
       // before), 7 at 1920 (9), 5 at the 1280 default (6), and 5 at the 1024 floor, where nothing
       // moves at all — 4 there once a walk buys its flank columns, as it drew before.
-      size="w-[min(100%,max(64rem,75vw))]"
+      //
+      // **And a height, which is the one dialog on this shell that needs one spelled.** The shell
+      // settled `max-h-full` on 2026-08-16 against three hand-rolled percentages, and that reading
+      // still stands for every host it was written about: their bodies are forms and lists that
+      // are shorter than the window most of the time, so the clamp never binds and a percentage
+      // would only have moved a gap nobody sees. This body is a **wall**, and 865 Forests is not
+      // an edge case — the ceiling binds on every open of a card with more printings than a screen
+      // holds, which is most of the presses that reach it. So the constant gap the shell's rule
+      // buys is the constant gap a reader complains about: the panel drew to 24px of the window's
+      // top edge, hard against the title bar, and stopped reading as a panel over the app at all.
+      //
+      // `min(100%,90vh)` is both rules rather than a replacement for one. `100%` is the shell's
+      // own clamp kept verbatim — a percentage of the grid area the scrim's
+      // `grid-rows-[minmax(0,1fr)]` bounds, which is what stops the panel outgrowing the window on
+      // anything short and wide enough for the scrim's `sm:p-6` to be the smaller inset (below
+      // 480px tall, which the desktop's 700px `minHeight` forbids and a phone in landscape does
+      // not). `90vh` is the ceiling above it, and 5vh of glass either side is what makes the modal
+      // float. The two swap over at 480px tall and neither is ever the wrong one.
+      size="w-[min(100%,max(64rem,75vw))] max-h-[min(100%,90vh)]"
       // **A rung is a claim about the highest thing a surface can be asked to cover, not about
       // where it usually sits** — which is why this one is the shell's `"stacked"` while every
       // other dialog in the app says nothing and takes `LAYER.overlay`.
