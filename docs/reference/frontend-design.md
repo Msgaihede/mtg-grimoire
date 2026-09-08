@@ -3045,6 +3045,48 @@ panel **1920**, centred, wall 1852, **10** tiles across, and the flanked story's
 frame is what the before column of the table above is — the fix and the fault photographed in one
 pass rather than in two builds.
 
+### And a height, which is the only one on this shell spelled by a host
+
+`AllPrintingsDialog` asks for `max-h-[min(100%,90vh)]` since 2026-09-08, beside the width above in
+the same `size` string. It is the **one** host on this shell that names a height, and the shell's
+own rule is not weakened by it — read the two together.
+
+`Dialog`'s `max-h-full` (2026-08-16, and the section on it further up) settled three hand-rolled
+percentages, and its argument still holds for every host it was written about: a form or a list is
+shorter than the window most of the time, so the clamp never binds, and a percentage would only
+have moved a gap nobody sees — a gap that grows with the window at that. This body is a **wall**,
+and it is the only one. 865 printings of Forest is not an edge case; the ceiling binds on every
+open of a card with more printings than a screen holds, which is most of the presses that reach
+the modal. So the constant gap the shell's rule buys is the constant gap a reader reports: the
+panel drew to **24px** of the window's top edge — the scrim's `sm:p-6` exactly — hard against the
+title bar, and stopped reading as a panel over the app.
+
+**`min(100%,90vh)` is both rules rather than a replacement for one.** `100%` is the shell's clamp
+kept verbatim, a percentage against the grid area the scrim's `grid-rows-[minmax(0,1fr)]` bounds;
+`90vh` is the ceiling above it. They swap over at **480px** tall — below that the scrim's 24px
+inset is the smaller of the two — which the desktop's 700px `minHeight` forbids and a phone in
+landscape does not. That last case is what makes the `100%` half load-bearing rather than
+decoration, and it was measured rather than reasoned: see the bottom row.
+
+Measured 2026-09-08 in the `Card/All printings` story, its decorator's `translateZ(0)` and
+`h-[44rem]` nulled so the scrim resolves against the viewport as it does in the app, and a 4000px
+spacer in the panel standing in for a wall taller than any window. The before column is the same
+frame with `max-height: 100%` forced inline — the fix and the fault in one pass, as the width
+table above was taken.
+
+| Window | Before: top, height | After: top, height |
+| --- | --- | --- |
+| 2560×1440 | 24, 1392 | **72, 1296** |
+| 1998×1088 — the reporter's own | 24, 1040 | **54.4, 979.2** |
+| 1280×800 | 24, 752 | **40, 720** |
+| 1024×700 — the window floor | 24, 652 | **35, 630** |
+| 844×390 — a phone in landscape | 24, 342 | **24, 342** |
+
+The last row is the guard doing its work. There `90vh` is 351 and the padded area is 342, so a
+bare `max-h-[90vh]` would have drawn the panel **351px tall at y 19.5** — 4.5px into the scrim's
+own inset at each end, which is the shell's clamp quietly undone on the one class of window that
+still has an `sm:p-6`. `min(100%,90vh)` reads identically to `max-h-full` there.
+
 ### What the walk does, confirmed live
 
 - **Wall**: 0 → 1 → 2 by ArrowRight, then ArrowDown landing on 5 — the column count having dropped
