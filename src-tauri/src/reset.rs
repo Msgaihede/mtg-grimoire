@@ -230,6 +230,12 @@ const REMOVED_KIND: &str = crate::schema::COLLECTION_FOLDER_KINDS[2];
 /// flag and not a delete, so leaving them out would be the button quietly deciding which decks
 /// may hold cards afterwards.
 ///
+/// **Virtual decks do not, and that is not the same exemption read backwards** (schema v40).
+/// An archived deck is a deck about cardboard the reader has put away; a virtual one is a deck
+/// there is no cardboard for, and `deck::create_deck` gives it no group in the first place. The
+/// rebuild is putting back what a deck is *supposed* to have, so giving one to a deck that has
+/// never had one would be this button inventing a drawer rather than restoring it.
+///
 /// **The number answered stays the count of *cards*** and never counts a folder, because that is
 /// what the Settings sentence promises: a folder is where a card was kept rather than a card.
 /// The rebuilt rows are not in it either — they are the cabinet, not what was in it.
@@ -251,10 +257,20 @@ pub fn clear_collection(conn: &Connection) -> Result<CollectionCleared, String> 
     .map_err(|e| e.to_string())?;
     // `sort_order` 0 and the deck's own name, which is what both `deck::create_deck_group` and
     // v25's backfill write: a deck's group is not something the reader ordered.
+    //
+    // **`WHERE virtual_only = 0`, and it is the same `if` `deck::create_deck` carries** (schema
+    // v40). A virtual deck owns no cardboard, so it has no group — the *absence* of the row is
+    // what makes every owned readout answer 0 with no new branch anywhere — and a rebuild that
+    // gave one to every deck would hand each virtual deck a drawer back that nothing may write
+    // to, silently, on the one press whose whole promise is that the collection is empty
+    // afterwards. The paragraph above says a swept-bare database is unrecoverable because those
+    // rows are a migration's; that argument is about the decks that are *supposed* to have one,
+    // and this clause is where it stops.
     tx.execute(
         "INSERT INTO collection_folders
              (parent_id, name, kind, deck_id, sort_order, created_at, updated_at)
-         SELECT NULL, name, ?1, id, 0, unixepoch(), unixepoch() FROM decks",
+         SELECT NULL, name, ?1, id, 0, unixepoch(), unixepoch()
+           FROM decks WHERE virtual_only = 0",
         rusqlite::params![DECK_KIND],
     )
     .map_err(|e| e.to_string())?;
@@ -680,12 +696,21 @@ mod tests {
     /// **Two decks, and the reader's own binder beside them**, so the three assertions are each
     /// about something: one deck cannot tell "a group per deck" from "a group", and a
     /// `collection_folders` row that survived would make the sweep itself look like it worked.
+    ///
+    /// **A third deck joined them at schema v40, and it is the one that must come back with
+    /// nothing.** A virtual deck has no group and never had one — `deck::create_deck` skips it —
+    /// so a rebuild that gave it one would be this button *inventing* a drawer rather than
+    /// restoring one, silently, on the press whose whole promise is that the collection is empty
+    /// afterwards. It carries no group row in the fixture for the same reason, which is what
+    /// makes its absence from the answer below a fact about the rebuild and not about the sweep.
     #[test]
     fn clearing_the_collection_rebuilds_the_folders_the_app_owns() {
         let conn = db();
         conn.execute_batch(
             "INSERT INTO decks (id, name, created_at, updated_at) VALUES (1, 'Mono Red', 0, 0);
              INSERT INTO decks (id, name, created_at, updated_at) VALUES (2, 'Storm', 0, 0);
+             INSERT INTO decks (id, name, virtual_only, created_at, updated_at)
+             VALUES (3, 'Arena Burn', 1, 0, 0);
              INSERT INTO collection_folders
                 (parent_id, name, kind, deck_id, sort_order, created_at, updated_at)
              VALUES (NULL, 'Binder', 'user', NULL, 0, 0, 0),
@@ -713,7 +738,8 @@ mod tests {
                 ("deck".to_owned(), "Storm".to_owned(), Some(2)),
                 ("removed".to_owned(), REMOVED_FOLDER_NAME.to_owned(), None),
             ],
-            "one group per surviving deck, named after it, and the one holding area"
+            "one group per surviving deck that owns cardboard, named after it, and the one \
+             holding area — and nothing for the virtual deck, which never had one"
         );
         assert_eq!(
             count(&conn, "collection_folders"),

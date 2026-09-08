@@ -2838,6 +2838,21 @@ export interface DeckInput {
    * unchanged.
    */
   theoryEnabled?: boolean;
+  /**
+   * Whether the new deck is one the reader tracks without owning the cardboard. See
+   * {@link DeckRow.virtualOnly}, where the kind is argued in full.
+   *
+   * **At create this sets the column and releases nothing**, for {@link DeckInput.theoryEnabled}'s
+   * reason one field up: a deck being born holds no copies, so the transition work the patch
+   * does — filing the group's cardboard into `Recently removed` — has nothing to act on. What a
+   * create *does* skip is the deck group itself: a virtual deck is born without one, where the
+   * patch route has to take an existing one away.
+   *
+   * Sending it with `theoryEnabled: true` is a caller's bug and not a third kind. Rust writes
+   * the two columns so the pair can never both be set; there is no combination to spell here
+   * that {@link deckKind} cannot read back.
+   */
+  virtualOnly?: boolean;
 }
 
 /**
@@ -2904,8 +2919,29 @@ export interface DeckPatch {
    * Switching it off **keeps every row** — it hides a switch, it does not delete a list, and
    * nothing in the backend ever deletes a `theory` row except the ordinary card writes the
    * reader makes against it.
+   *
+   * **Setting it clears {@link DeckPatch.virtualOnly} in the same write**, because the two are
+   * one three-way choice wearing two columns — see {@link DeckRow.virtualOnly}.
    */
   theoryEnabled?: boolean;
+  /**
+   * Whether this deck is one the reader tracks without owning the cardboard. See
+   * {@link DeckRow.virtualOnly}, where the kind is argued in full.
+   *
+   * **Switching it on files the copies the deck's group holds into `Recently removed` and takes
+   * the group away**, in the same transaction. Unlike {@link DeckPatch.theoryEnabled} above it
+   * moves not one `deck_cards` row — every card stays in the list and the variant it was in,
+   * which is the whole reason a reader may press this and press it back. What moves is the
+   * *cardboard*: a deck that has stopped counting what it owns must not go on holding copies
+   * that are then invisible on the Collection page and unavailable to every other deck.
+   *
+   * **Switching it off gives the deck its group back, empty.** The copies are not fetched from
+   * `Recently removed` — that is the reader's own filing to redo, exactly where
+   * `Clear actual list…` leaves it — because nothing recorded which of them came from here.
+   *
+   * **It clears {@link DeckPatch.theoryEnabled} in the same write**, for the reason above.
+   */
+  virtualOnly?: boolean;
   /**
    * Whether this deck draws the **green** theory mark — the live row that is the printing the
    * plan named. See {@link DeckRow.theoryMarkExact}, where the whole rule is written.
@@ -3148,6 +3184,43 @@ export interface DeckRow {
    * switch *moves* the live list into theory and quite deliberately leaves live empty.
    */
   theoryEnabled: boolean;
+  /**
+   * Whether this deck is one the reader tracks **without owning the cardboard** — an MTGO or
+   * Arena list, a proxy pile, a deck they are only reading about. `decks.virtual_only INTEGER
+   * NOT NULL DEFAULT 0`, schema v40, and `false` on every deck that predates it, which is the
+   * state every existing deck is in.
+   *
+   * **It is the third deck kind, and the three are two booleans rather than an enum.** Regular
+   * is `theoryEnabled: false, virtualOnly: false`; Theory + Actual is `true, false`; Virtual is
+   * `false, true`. Rust refuses the fourth combination by writing the other column in the same
+   * patch, so `true, true` is unrepresentable — see `deckKind` in
+   * `features/decks/deckKind.ts`, which is the one place that folds the pair into a word and
+   * the only thing any surface should branch on.
+   *
+   * **A virtual deck keeps one `live` list, and that is deliberate rather than incidental.** It
+   * reads as "a plan with no actual version" — no variant switch is drawn, so the reader never
+   * meets the word *Actual* — but the rows stay in the variant every other read already counts.
+   * {@link DeckRow.cardCount} and the gallery's colour bar both count `variant = 'live'`, so a
+   * virtual deck whose cards sat in `theory` would report **0 cards under an empty bar on every
+   * tile, forever**. This is the same rule that kept `live` as the stored word when the tab was
+   * renamed `Actual`: the label moved and the value did not.
+   *
+   * **What it turns off is every reading of the collection and the wishlist**, which is the
+   * whole of the feature. There is no owned count, no missing count, no shortage mark, no
+   * `Pull from collection`, no `Add missing`, no `Send missing to wishlist`, no Collection tab
+   * in the deck's own search panel. Rust refuses each of those writes by name
+   * (`deck::VIRTUAL_HOLDS_NOTHING`) rather than answering an empty list, because an empty
+   * shortfall and a deck that owns nothing by definition are the same JSON and very different
+   * sentences.
+   *
+   * **A virtual deck has no `collection_folders` group**, and that is where the isolation
+   * actually comes from rather than from a branch at each reader: `owned_by_printing` joins the
+   * deck's group, so with none there every owned figure is `0` with nothing asking why.
+   * Switching a deck to virtual files the copies its group held into `Recently removed` first —
+   * the reader still owns the cardboard, it is simply no longer filed under a deck that has
+   * stopped counting it.
+   */
+  virtualOnly: boolean;
   /**
    * Whether this deck draws the **green** theory mark — the live row that is the printing the
    * plan named.

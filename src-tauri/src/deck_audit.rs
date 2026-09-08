@@ -155,7 +155,17 @@ pub struct DeckAuditEntry {
 /// | `label` | `{ "label": "Cut candidate", "previous": null }` |
 /// | `category` | `{ "action": "create\|rename\|delete\|activate\|deactivate\|reorder", "name": "Draw", "previousName": "Value", "cards": 7 }` |
 /// | `folder` | `{ "action": "move", "folder": "Commander › Legends" }` |
-/// | `deck` | `{ "field": "name\|format\|cover\|description\|notes\|built\|archived\|theory", "from": "…", "to": "…" }` |
+/// | `deck` | `{ "field": "name\|format\|cover\|description\|notes\|built\|archived\|theory\|virtualOnly", "from": "…", "to": "…" }` |
+///
+/// **`virtualOnly` is the second multi-word field name in that list, and the pair it belongs to
+/// writes _two_ rows** (schema v40). The three deck kinds are two columns — `theory_enabled` and
+/// `virtual_only` — and setting either clears the other, so one press on the settings group can
+/// record both a `theory` row and a `virtualOnly` one. That is two true facts about one press
+/// rather than a duplicate: the drawer words them separately, and neither carries a card delta.
+/// `src/features/decks/auditText.ts` is the renderer, and its default arm answers an
+/// unrecognised field with "Changed the deck" — true of every deck edit and therefore never a
+/// failure — which is why the spelling here and the `case` there are pinned by a test rather
+/// than by a type.
 ///
 /// **A `cover` row's `to` could be the word `custom` until 2026-08-31 and the renderer must
 /// keep reading it**, for `built`'s reason exactly one paragraph down: custom deck covers were

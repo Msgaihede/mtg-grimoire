@@ -160,6 +160,7 @@ const DECK: DeckRow = {
   archived: false,
   folderId: null,
   theoryEnabled: false,
+  virtualOnly: false,
   theoryMarkExact: true,
   theoryMarkName: true,
   theoryMarkUnplanned: true,

@@ -91,6 +91,7 @@ export type SeedName =
   | "large"
   | "bracketMismatch"
   | "combosMissing"
+  | "virtualDeck"
   | "paired";
 
 /* ------------------------------------------------------------------ row builders ------- */
@@ -738,12 +739,14 @@ const DAY = 86_400;
 const FILED_DECK_FOLDER = 2;
 
 /** The columns {@link starterDecks}' `deck` helper fills in for a deck that says nothing about
- *  them — the four schema v8 added and the three that remember where the reader was. */
+ *  them — the four schema v8 added, the three that remember where the reader was, and schema
+ *  v40's kind flag beside the theory one it pairs with. */
 type DefaultedDeckColumn =
   | "coverKind"
   | "folderId"
   | "notes"
   | "theoryEnabled"
+  | "virtualOnly"
   | "lastVariant"
   | "lastGroupBy"
   | "lastSortBy";
@@ -761,6 +764,12 @@ function starterDecks(): FakeDeck[] {
     // Off on the first three: the Theory/Live control **is** this boolean, and a deck that
     // draws one is a deck every story about it has to say which list it is looking at.
     theoryEnabled: false,
+    // Off on all four, and required on the row rather than defaulted there because it is half
+    // of the deck's *kind* — see `FakeDeck.virtualOnly`. All four of these decks track cardboard,
+    // which is what every story about owned counts, shortfalls, pulls and the collection tab was
+    // written against; the deck that does not is {@link virtualDeckSeed}, a seed of its own for
+    // {@link bracketMismatchSeed}'s stated reason.
+    virtualOnly: false,
     // The three defaults, which is what a deck nobody has touched the toolbar on holds — and
     // what keeps every story written before the editor remembered anything saying exactly what
     // it said. Deck 4 is the one that was left somewhere.
@@ -852,6 +861,10 @@ function starterDecks(): FakeDeck[] {
       // a deck that has one: the editor's Theory/Live control, `deck_theory_diff`, and the two
       // theory commands.
       theoryEnabled: true,
+      // And **not** virtual, which the pair could not have said together anyway: `deck_update`
+      // clears one column as it sets the other, so `true/true` is a state the store cannot hold
+      // and this line is what a fixture says instead of relying on that.
+      virtualOnly: false,
       // **The one deck that was left somewhere**, and all three columns say so at once: it
       // reopens on Theory, grouped by type and sorted by mana cost. Three defaults would seed
       // a memory nothing could tell from having none, which is the state the other three decks
@@ -1890,6 +1903,9 @@ function bracketMismatchSeed(): FakeDb {
       "It is a casual deck. The Thrasios line is a coincidence and I have never drawn both " +
       "halves of it.",
     theoryEnabled: false,
+    // A deck whose owner is wrong about its bracket is a deck they built out of cardboard —
+    // and a virtual one would have no owned figures for the panel beside the readout to draw.
+    virtualOnly: false,
     lastVariant: "live",
     lastGroupBy: "category",
     lastSortBy: "alphabetical",
@@ -2033,6 +2049,148 @@ function combosMissingSeed(): FakeDb {
   return db;
 }
 
+/* ------------------------------------------------------------------ virtualDeck -------- */
+
+/** The fifth deck this seed adds — a **Virtual** one, `decks.virtual_only` (schema v40). Named
+ *  because three functions have to agree about it and a bare `5` is a number no reader can
+ *  resolve. It is the same id {@link BRACKET_DECK} takes in *its* seed, and the two never meet:
+ *  each is `starter` plus one deck. */
+const VIRTUAL_DECK = 5;
+
+/**
+ * `starter`, plus a deck the reader tracks **without owning the cardboard** — issue #401's third
+ * deck kind.
+ *
+ * # Why a seed of its own rather than a fifth entry in {@link starterDecks}
+ *
+ * {@link bracketMismatchSeed}'s reason verbatim, and it is not tidiness: `db.test.ts` pins
+ * `deck_list()` at four rows for the starter world, `world.test.ts` pins `db.decks` at four, and
+ * every gallery story ever written was written against those four. A fifth deck in `starter`
+ * would also be the one deck in that world with **no `collection_folders` group**, which is the
+ * row `starterCollectionFolders` mints per deck — so the folder ids that seed hands out, and
+ * `DECK_1_GROUP`/`DECK_2_GROUP` with them, would have to be re-reasoned for a deck that must not
+ * have one at all. Two costs, both paid for nothing: a story that wants a virtual deck says so.
+ *
+ * # What makes this deck a fixture rather than a fourth copy of deck 2
+ *
+ * **It has no group, and that absence is the whole feature.** Every other deck in every seed has
+ * one; this one is created without it, which is what `deck_create` does for a virtual deck and
+ * what `deck_update` takes away on the way in to the kind. `ownedByPrinting` looks it up, finds
+ * nothing and answers an empty map, so **every row reads owned 0 with no branch anywhere** — and
+ * the nine collection and wishlist commands refuse it by name (`VIRTUAL_HOLDS_NOTHING`) rather
+ * than answering the empty shortfall that 0 would otherwise produce. A story can point at either.
+ *
+ * **Its cards are ordinary `live` rows**, which is the part that looks like an oversight and is
+ * not: a virtual deck keeps one list and it is the list every other read already counts, so the
+ * tile shows a real card count and `deck_pip_costs` gives it a real colour bar. Seeding them as
+ * `theory` would have drawn **0 cards under an empty bar, forever** — see `DeckRow.virtualOnly`,
+ * where that trade is argued. It is the same rule that kept `live` as the stored word when the
+ * tab was renamed `Actual`.
+ *
+ * **Brawl, `gameKey: "arena"`, and both are load-bearing.** `SPECS.brawl` is `games: ["arena"]`,
+ * so this is a deck in a format that has no paper printing to own in the first place — the
+ * honest reason a reader tracks a list they own nothing for, rather than a paper deck with the
+ * switch flipped. And it holds the corpus's one **Arena-rebalanced** card, `A-Vivi Ornitier`
+ * (`fin A-248`), which is `not_legal` in every paper format and carries `null` in **every**
+ * currency of its `prices` blob: a row the price strip has to draw an em dash for, in a deck
+ * that will never be bought. No other seed reaches that card.
+ *
+ * **A hundred cards exactly** — Kenrith commanding, fifteen nonbasics, and 84 basics in two rows
+ * of 42, which is `starter`'s own arrangement for deck 2 and what singleton leaves. Kenrith is
+ * `colorIdentity: "BGRUW"`, so nothing in the fixture is out of identity; the fifteen span all
+ * five colours plus a colourless artifact, so the colour bar has something to say rather than
+ * being one block.
+ */
+function virtualDeckSeed(): FakeDb {
+  const db = starterSeed();
+  db.decks.push({
+    id: VIRTUAL_DECK,
+    name: "Arena Brawl Ladder",
+    formatKey: "brawl",
+    // The one seeded deck pinned to a platform that is not paper. `starter`'s four all leave
+    // this absent, which `toDeckRow` resolves to `"any"` — so this is also the seed a story
+    // about the format picker's game filter reaches for.
+    gameKey: "arena",
+    description: "Played on Arena. There is no cardboard for it and there never will be.",
+    coverCardId: printing("fin", "A-248").id,
+    coverKind: "card_art",
+    archived: false,
+    folderId: null,
+    notes:
+      "Vivi is the rebalanced Alchemy card, so half this list has no paper printing at all. " +
+      "Nothing here is a shopping list.",
+    // **The kind, and the pair is the whole of it.** `false/true` is Virtual; `deck_update`
+    // writes the other column whenever a patch sets one, so a fixture spelling `true/true`
+    // would be a fixture of a state the store cannot hold.
+    theoryEnabled: false,
+    virtualOnly: true,
+    lastVariant: "live",
+    lastGroupBy: "category",
+    lastSortBy: "alphabetical",
+    // Newer than every other deck, so the gallery opens on it — this is the deck the seed is
+    // about — and still under `CLOCK_BASE`, which is {@link starterDecks}' rule and what keeps
+    // the first edit of any story at `CLOCK_BASE + 1`.
+    updatedAt: CLOCK_BASE - 60,
+  });
+  // The five every deck is born with, `ensure_predefined_categories`' rows — ids continuing the
+  // store's own sequence rather than restarting, which is `INTEGER PRIMARY KEY`'s behaviour and
+  // what {@link categoryOf} then resolves against. A virtual deck is born with these like any
+  // other: what it is missing is a *collection* folder, not a set of piles.
+  let nextCategory = Math.max(...db.deckCategories.map((c) => c.id));
+  for (const c of DECK_CATEGORIES) {
+    db.deckCategories.push({
+      id: (nextCategory += 1),
+      deckId: VIRTUAL_DECK,
+      name: c.name,
+      kind: c.kind,
+      isActive: c.isActive,
+      sortOrder: c.sortOrder,
+      origin: c.origin,
+    });
+  }
+  // **And no `collection_folders` row, which is the one line this function is about.** Every
+  // other seeded deck gets one here ({@link starterCollectionFolders}, and
+  // {@link bracketMismatchSeed} pushes one for its fifth deck); this deck is the deck that must
+  // not have one. Written as a comment rather than left as an absence, because an absence is
+  // exactly what a later edit adds back without noticing.
+  const main = categoryNamed(db.deckCategories, VIRTUAL_DECK, "Main deck");
+  const commander = categoryOf(db.deckCategories, VIRTUAL_DECK, "commander");
+  let nextCard = db.deckCards.length;
+  const add = (card: FakeCard, category: FakeDeckCategory, quantity: number) =>
+    db.deckCards.push(deckCard((nextCard += 1), VIRTUAL_DECK, card, category, quantity));
+  // Five colours off a mono-white card (`colorIdentity: "BGRUW"`), so nothing in the 99 is out
+  // of identity — deck 2's reason for the same commander, and the corpus offers no other legend
+  // that wide.
+  add(printing("eld", "303"), commander, 1);
+  // **The card this seed exists to be able to draw**: Arena's rebalanced Vivi, `not_legal` in
+  // every paper format and priced `null` in all six currencies. No other seed holds it.
+  add(printing("fin", "A-248"), main, 1);
+  // Blue.
+  add(printing("mh2", "267"), main, 1); // Counterspell
+  add(printing("wwk", "31"), main, 1); // Jace, the Mind Sculptor
+  add(printing("pcy", "45"), main, 1); // Rhystic Study
+  add(printing("isd", "51"), main, 1); // Delver of Secrets
+  // Red.
+  add(printing("2x2", "117"), main, 1); // Lightning Bolt
+  add(printing("mh2", "138"), main, 1); // Ragavan, Nimble Pilferer
+  add(printing("eld", "115"), main, 1); // Bonecrusher Giant
+  // Green, white, black — and the black one is the corpus's **only `{X}` printing**, so this
+  // deck is a second place the editor's `Split X` toggle has a bar to move.
+  add(printing("dom", "168"), main, 1); // Llanowar Elves
+  add(printing("fut", "153"), main, 1); // Tarmogoyf
+  add(printing("ema", "32"), main, 1); // Swords to Plowshares
+  add(printing("gtc", "148"), main, 1); // Boros Charm
+  add(printing("nph", "57"), main, 1); // Dismember
+  add(printing("znr", "90"), main, 1); // Agadeem's Awakening
+  // Colourless, so the bar has a segment that is not one of the five.
+  add(printing("kld", "235"), main, 1); // Smuggler's Copter
+  // 84 basics in two rows, which is the only thing in a singleton deck that may repeat — and
+  // what takes the list to the hundred `SPECS.brawl` asks for: 1 commander + 15 + 84.
+  add(printing("unf", "239"), main, 42);
+  add(printing("lea", "288"), main, 42);
+  return db;
+}
+
 /* ------------------------------------------------------------------ the switch --------- */
 
 /**
@@ -2053,6 +2211,8 @@ export function seed(name: SeedName): FakeDb {
       return bracketMismatchSeed();
     case "combosMissing":
       return combosMissingSeed();
+    case "virtualDeck":
+      return virtualDeckSeed();
     case "paired":
       return pairedSeed();
     default:

@@ -502,8 +502,15 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
    * this header can never disagree about a name; what this one buys is an editor that does
    * not have to mount the gallery's list query to rename the deck it is showing.
    *
-   * **A patch that moves the theory switch drops the deck's *unwatched* lists as well, and that
-   * is not tidying.** Every field of the deck row is cached once per variant — see the key — so
+   * **A patch that moves the deck's *kind* drops its unwatched lists as well, and that is not
+   * tidying.** Either column does it — `theoryEnabled` or `virtualOnly` — because the two are
+   * one three-way choice (`deckKind.ts`) and `deckKindPatch` names both on every press, so in
+   * practice the first test already fires for every kind change the settings form makes. The
+   * second is not therefore redundant: it is the fence for a caller that patches one column
+   * alone, and a condition that is true only because of how its one caller happens to spell
+   * things is a condition waiting to be wrong.
+   *
+   * Every field of the deck row is cached once per variant — see the key — so
    * `theory_enabled` has one value in the database and up to two in this cache, and an
    * invalidation only refetches what somebody is looking at. The other list keeps its old row
    * until something mounts it, and then serves it **stale before the refetch lands**: a reader
@@ -521,7 +528,7 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
   const update = useMutation({
     mutationFn: (patch: DeckPatch) => ipc.deckUpdate(opened(id), patch),
     onSuccess: (_deck, patch) => {
-      if (patch.theoryEnabled !== undefined) {
+      if (patch.theoryEnabled !== undefined || patch.virtualOnly !== undefined) {
         queryClient.removeQueries({ queryKey: ["decks", "detail", id], type: "inactive" });
       }
       invalidate();
@@ -719,12 +726,24 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
    * take the copies off the list twice — and it is the write that makes
    * {@link CUT_CARDS_NOTE}, the standing sentence at the foot of the deck, true.
    *
-   * **Three things decide which command goes**, all of them cheap and all of them necessary: the
+   * **Four things decide which command goes**, all of them cheap and all of them necessary: the
    * list has to be `live` (a plan holds no cards, and the backend refuses a theory row outright,
-   * so the UI must not ask); the quantity has to be going *down* (an increase moves no copies —
-   * putting a card *into* a deck is `collectionToDeck`, the Collection Search tab's write, which
-   * is the next PR); and the caller has to have supplied {@link CutFrom}, because the command
-   * addresses `deck_cards.id` and takes a delta while a stepper states an absolute.
+   * so the UI must not ask); **the deck has to keep cardboard at all**; the quantity has to be
+   * going *down* (an increase moves no copies — putting a card *into* a deck is
+   * `collectionToDeck`, the Collection Search tab's write, which is the next PR); and the caller
+   * has to have supplied {@link CutFrom}, because the command addresses `deck_cards.id` and
+   * takes a delta while a stepper states an absolute.
+   *
+   * **The second is the one that had to be added rather than derived, and it was a live defect
+   * for the length of one branch** (2026-09-08, issue #401). A *virtual* deck keeps its rows in
+   * `live` on purpose — the gallery's card count and colour bar both read that variant — so the
+   * first condition is satisfied on the only list it has, and `collection_alloc`'s
+   * `deck_to_collection` then refuses it by name. Every removal in the editor reaches this one
+   * route, so the stepper's zero, `Remove card` and the remove tray would all have failed on a
+   * deck the reader never owned a card of. **The fence is here rather than at the call site**
+   * because `held` is the *caller's* answer to a different question — where the copies are — and
+   * a route that only refuses when its caller remembers to withhold an argument is a route that
+   * breaks the day a fifth surface calls it.
    *
    * **The answer is a {@link QuantityResult} and its `outcome` is load-bearing**, not a
    * courtesy: a cut of a card the reader never owned moves nothing at all, and only the outcome
@@ -738,7 +757,15 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
       quantity,
       held,
     }: Slot & { quantity: number; held?: CutFrom }): Promise<QuantityResult> => {
-      if (variant === "live" && held !== undefined && quantity < held.quantity) {
+      // **The fourth condition, and the one the variant cannot answer** (2026-09-08, issue
+      // #401). A virtual deck keeps its rows in `live` like any ordinary deck and has no
+      // collection group at all, so `deck_to_collection` refuses it by name — which means every
+      // press that *removes* a card would have failed: the stepper's zero, `Remove card` and the
+      // remove tray all reach this one route. Read from the cache rather than from `query.data`,
+      // which is that value one render older; see {@link invalidate}'s note on the same choice.
+      const virtual =
+        queryClient.getQueryData<DeckDetail | null>(detailKey)?.deck.virtualOnly === true;
+      if (!virtual && variant === "live" && held !== undefined && quantity < held.quantity) {
         // The cut, and **instead of** `deckSetCardQuantity` rather than beside it: the command
         // decrements the `deck_cards` row itself, so sending both would take the copies off the
         // list twice. What it buys is the other half — the copies the group was holding are

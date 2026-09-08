@@ -28,8 +28,9 @@ deliberately**: no screenshots are stored.
   three different things on three DTOs. A fake that stored DTOs would make all three agree, and
   teach a reader a model the app does not have.
 - **Seeds and faults are state, not response stubs**: `parameters: { fake: { seed, fault } }`.
-  **Seven** seeds
-  (`empty`/`starter`/`needsReview`/`large`/`bracketMismatch`/`combosMissing`/`paired`),
+  **Eight** seeds
+  (`empty`/`starter`/`needsReview`/`large`/`bracketMismatch`/`combosMissing`/`paired`/
+  `virtualDeck`),
   **twenty-five** faults
   (`busy`/`syncing`/`syncError`/`imageFailures`/`gone`/`indexCold`/`deckMeta`/`updateAvailable`/
   `updateError`/`errorLog`/`feedFetchError`/`oracleTagsMissing`/`oracleTagsFetchError`/
@@ -92,6 +93,17 @@ deliberately**: no screenshots are stored.
   answer** — not on `sync_pairing_respond`, which no longer exists as a command: the rendezvous
   moved that read inside `poll`, and the fault moved with it. Nothing is typed here either way,
   which is the whole reason it is a fault rather than a shape.
+  **`virtualDeck` is `starter` plus a fifth deck rather than a fifth deck *in* `starter`, and the
+  reason is a cost rather than a principle** (2026-09-08, issue #401). A **Virtual** deck is the
+  third deck kind — one the reader tracks without owning the cardboard — and the whole of what
+  makes it one is that it has **no `collection_folders` group**, which is the one row
+  `starterCollectionFolders` mints per deck. So a fifth deck there is not a row: it is every
+  folder id re-reasoned, `db.test.ts`'s pinned `deck_list()` count moved, `world.test.ts`'s
+  `toHaveLength(4)` moved, and the story files that name the starter decks re-read. A seed of its
+  own costs a story one line — `parameters: { fake: { seed: "virtualDeck" } }`, exactly as
+  `bracketMismatch` is reached — and that seed's own comment already records the same finding from
+  the other end. **The rule it is an instance of: a deck that would change what every existing
+  story sees is a new seed, however small the row is.**
   **Re-count this list when you add one** — it said "four" for three faults' worth of drift, and
   then "eight" while `errorLog` had been in the union for a whole feature, because a prose-only
   edit routes to neither CI job and nothing goes red.

@@ -124,6 +124,7 @@ const BURN: DeckRow = {
   folderId: null,
   notes: null,
   theoryEnabled: false,
+  virtualOnly: false,
   theoryMarkExact: true,
   theoryMarkName: true,
   theoryMarkUnplanned: true,
@@ -169,6 +170,24 @@ const KENRITH: DeckRow = {
   cardCount: 100,
   folderId: 2,
   theoryEnabled: true,
+  virtualOnly: false,
+};
+
+/**
+ * The third kind: a deck the reader tracks without owning the cardboard.
+ *
+ * **`theoryEnabled` is spelled out as `false` rather than inherited**, even though `BURN` already
+ * carries it, because the pair is the fixture's whole point: `theory_enabled` and `virtual_only`
+ * are two columns spelling one three-way choice, and a row with both `true` is what Rust writes
+ * the other column in the same patch to keep out. A reader arriving at this fixture should be
+ * able to see which of the three rows of `deckKind.ts`'s table it is without opening `BURN`.
+ */
+const ARENA: DeckRow = {
+  ...BURN,
+  id: 9,
+  name: "Arena Mono-Red",
+  theoryEnabled: false,
+  virtualOnly: true,
 };
 
 /** Two folders, three decks: `Burn` at the top level, `Sunday draft` in Commander and
@@ -1290,8 +1309,8 @@ describe("DecksPage", () => {
     await userEvent.click(await screen.findByRole("option", { name: "Modern" }));
     await userEvent.click(screen.getByRole("button", { name: "Create deck" }));
 
-    // The whole deck in one call, and the two answers the reader left alone are the switch's
-    // `false` and nothing else: a field left empty is **absent** rather than `""`, because this
+    // The whole deck in one call, and the answers the reader left alone are the kind group's
+    // pair and nothing else: a field left empty is **absent** rather than `""`, because this
     // is an INSERT and an absent field is the column's own default. What each field does on the
     // wire is `CreateDeckDialog.test.tsx`'s subject; this one is about the gallery's own two
     // steps — the write, and going to what it made.
@@ -1303,7 +1322,12 @@ describe("DecksPage", () => {
         // format there is no `last_deck_game` to seed it from, because a filter a reader set
         // to find one format must not narrow the next dialog's list for them.
         gameKey: "any",
+        // **Both kind columns, always** — every deck is born `Regular`, and the pair is one
+        // three-way choice rather than two questions, so the create sends both even where
+        // neither was touched. `deckKind.ts` argues why the fourth combination has to be
+        // unrepresentable.
         theoryEnabled: false,
+        virtualOnly: false,
       }),
     );
     await waitFor(() => expect(useAppStore.getState().openDeckId).toBe(9));
@@ -1773,32 +1797,66 @@ describe("DecksPage", () => {
   });
 
   /**
-   * Which of a deck's two lists exist, on the tile — derived from the two fields `deck_list`
-   * already answers rather than stored, so the badge and the editor's Theory/Actual switch can
-   * never disagree. A theory list beside an empty actual one is a plan, not a deck.
+   * What kind of deck this is, on the tile — derived from fields `deck_list` already answers
+   * rather than stored, so the badge and the editor's own controls can never disagree. A theory
+   * list beside an empty actual one is a plan, not a deck; a virtual deck is one the reader owns
+   * none of.
    *
-   * **The deck with one list is asserted to wear _no_ badge**, which is the half of issue #357
-   * a reworded string would not have covered: a word every deck in the gallery carries says
-   * nothing about any of them. The pattern is the badge's whole **vocabulary** — the two words
-   * it can hold now and the one it used to — rather than the two current ones, because the claim
-   * is that this tile is unmarked and a badge reading `ACTUAL` would satisfy a narrower regex
-   * while being the exact thing that was deleted.
+   * **The ordinary deck is asserted to wear _no_ badge**, which is the half of issue #357 a
+   * reworded string would not have covered: a word every deck in the gallery carries says
+   * nothing about any of them. The pattern is the badge's whole **vocabulary** — the three words
+   * it can hold now and the one it used to — rather than today's three, because the claim is
+   * that this tile is unmarked and a badge reading `ACTUAL` would satisfy a narrower regex while
+   * being the exact thing that was deleted.
+   *
+   * **The virtual arm is asserted to answer _before_ the theory ones** by the fixture rather
+   * than by a second case: `ARENA` is a Virtual deck with sixty cards, so a `deckBadge` that
+   * tested `theoryEnabled` first would read it as `regular` and draw nothing — and one that
+   * tested `cardCount` first would call it `THEORY + ACTUAL`. Both wrong answers are a failure
+   * here.
    */
-  it("badges a deck by which of its two lists exist", async () => {
+  it("badges a deck by what kind of deck it is", async () => {
     deckList.mockResolvedValue([
       BURN,
       { ...KENRITH, folderId: null },
       { ...KENRITH, id: 8, name: "Sketch", cardCount: 0, folderId: null },
+      ARENA,
     ]);
 
     wrap(<DecksPage />);
 
     const burn = (await tileFor("Burn")).closest("li")!;
-    expect(within(burn).queryByText(/THEORY|ACTUAL|LIVE/)).not.toBeInTheDocument();
+    expect(within(burn).queryByText(/THEORY|ACTUAL|LIVE|VIRTUAL/)).not.toBeInTheDocument();
     const kenrith = (await tileFor("Kenrith Two-Drops")).closest("li")!;
     expect(within(kenrith).getByText("THEORY + ACTUAL")).toBeInTheDocument();
     const sketch = (await tileFor("Sketch")).closest("li")!;
     expect(within(sketch).getByText("THEORY ONLY")).toBeInTheDocument();
+    const arena = (await tileFor("Arena Mono-Red")).closest("li")!;
+    expect(within(arena).getByText("VIRTUAL")).toBeInTheDocument();
+  });
+
+  /**
+   * The dash means **provisional**, and a virtual deck's list is not.
+   *
+   * A class assertion, because jsdom loads no stylesheet and lays nothing out — there is no
+   * computed border style to read, so the source text of the class list is the only thing here
+   * that can go red. It is worth one case anyway: which of the two treatments a new badge takes
+   * is a *ruling* (`DeckTile.tsx` argues it at the site), and a ruling with no test is a line of
+   * prose the next `cn(…)` edit can quietly reverse. `THEORY ONLY` is asserted beside it so the
+   * case cannot pass by the class having been dropped from both.
+   */
+  it("dashes the plan's badge and not the virtual one", async () => {
+    deckList.mockResolvedValue([
+      { ...KENRITH, id: 8, name: "Sketch", cardCount: 0, folderId: null },
+      ARENA,
+    ]);
+
+    wrap(<DecksPage />);
+
+    const sketch = (await tileFor("Sketch")).closest("li")!;
+    expect(within(sketch).getByText("THEORY ONLY")).toHaveClass("border-dashed");
+    const arena = (await tileFor("Arena Mono-Red")).closest("li")!;
+    expect(within(arena).getByText("VIRTUAL")).not.toHaveClass("border-dashed");
   });
 });
 
@@ -2278,6 +2336,7 @@ describe("DecksPage folders", () => {
         formatKey: "commander",
         gameKey: "any",
         theoryEnabled: false,
+        virtualOnly: false,
         folderId: 3,
       }),
     );
@@ -3016,6 +3075,7 @@ describe("the folder row's menu", () => {
         formatKey: "commander",
         gameKey: "any",
         theoryEnabled: false,
+        virtualOnly: false,
         folderId: 1,
       }),
     );
@@ -3156,6 +3216,7 @@ describe("the folder row's menu", () => {
         formatKey: "commander",
         gameKey: "any",
         theoryEnabled: false,
+        virtualOnly: false,
         folderId: 1,
       }),
     );

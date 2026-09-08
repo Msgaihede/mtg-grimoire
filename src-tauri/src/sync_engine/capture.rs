@@ -319,6 +319,25 @@ pub const TABLES: [Spec; 13] = [
             "archived",
             "notes",
             "theory_enabled",
+            // **Schema v40's deck kind, and it travels beside the flag above it because the two
+            // of them *are* the kind** — `0/0` regular, `1/0` theory-and-actual, `0/1` virtual.
+            // A column added to a synced table and not to this hand-written list is captured by
+            // nothing and goes red nowhere (see `cover_image_path` above and the three marks
+            // below), and this is the strongest case on the list for noticing that: a deck that
+            // is virtual on the machine it was made on and an ordinary deck on every other one
+            // would have its collection integration back on those — offering to file, pull and
+            // buy cardboard for a list that exists precisely because the reader owns none of it.
+            //
+            // **Only the flag travels, and that is the whole design rather than an omission.**
+            // The group `deck::update_deck` deletes on the way in is a `collection_folders` row,
+            // which is a synced table in its own right, and the copies it releases are
+            // `collection_entries` rows — so both halves of the transition reach the other
+            // device as ops about *those* tables, made by the same press, and no receiving code
+            // has to re-derive a side effect from a boolean. `DEFAULT 0` is what makes the
+            // old-peer direction safe, `theory_mark_*`'s note below in full: a device on v39
+            // sending a deck op names no such field, `apply::creations` omits it from the
+            // INSERT, and the DDL default arrives at the only thing that device can have meant.
+            "virtual_only",
             "last_variant",
             "last_group_by",
             "last_sort_by",
@@ -955,6 +974,55 @@ mod tests {
                 spec.table
             );
         }
+    }
+
+    /// **A deck's kind travels, and this is the only thing that says so.**
+    ///
+    /// The `decks` spec spells its field list by hand and there is **no fence in the other
+    /// direction** — a column added to a synced table and left off that list is captured by
+    /// nothing and goes red nowhere, which is what `every_column_a_spec_names_exists_on_its_table`
+    /// above cannot catch because it walks the list rather than the table. So the one fence
+    /// available is a test that names the column it cares about, and this is that test for
+    /// `virtual_only` (schema v40): it drives a real write through the installed triggers and
+    /// reads the op the reader's other device would receive.
+    ///
+    /// **A deck that is virtual on one machine and ordinary on every other** is what the missing
+    /// line costs: those devices would go on offering to file, pull and buy cardboard for a list
+    /// that exists precisely because the reader owns none of it. `theory_enabled` is asserted
+    /// beside it because the two columns together *are* the kind, and half a pair on the wire is
+    /// a deck arriving as neither of the three things it can be.
+    #[test]
+    fn a_decks_kind_is_captured_on_both_of_its_columns() {
+        let conn = db();
+        // Born with a plan, so that the write below really *moves* both columns: a capture op
+        // carries the fields that changed, and a deck starting at `0/0` would leave
+        // `theory_enabled` out of the op for the honest reason that nothing happened to it.
+        conn.execute(
+            "INSERT INTO decks (id, name, format_key, theory_enabled, created_at, updated_at)
+             VALUES (1, 'Arena Burn', 'modern', 1, 0, 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute("DELETE FROM sync_ops", []).unwrap();
+
+        conn.execute(
+            "UPDATE decks SET virtual_only = 1, theory_enabled = 0 WHERE id = 1",
+            [],
+        )
+        .unwrap();
+
+        let rows = ops(&conn);
+        assert_eq!(rows.len(), 1, "one write, one op");
+        let fields: serde_json::Value = serde_json::from_str(&rows[0].2).unwrap();
+        assert_eq!(
+            fields.get("virtual_only"),
+            Some(&serde_json::json!(1)),
+            "the deck's kind must reach the reader's other devices, in {fields}"
+        );
+        assert!(
+            fields.get("theory_enabled").is_some(),
+            "and so must the other half of the pair, in {fields}"
+        );
     }
 
     /// **No captured column may be `created_at` or `updated_at`.** They are facts about when

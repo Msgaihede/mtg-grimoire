@@ -302,6 +302,10 @@ async function renderDeckView(which: "stack" | "table" | "grid") {
     marketplace: MARKETPLACES.tcgplayer,
     actions: deckActions(),
     onSelect: vi.fn(),
+    // This file is about the drag-and-drop keyboard protocol and not about what a card says it
+    // owns, so it takes the ordinary deck: `true` is the shape every one of these assertions was
+    // written against, and a virtual deck would only draw the same rows with fewer marks on them.
+    tracksCollection: true,
   };
   render(
     <TooltipProvider>

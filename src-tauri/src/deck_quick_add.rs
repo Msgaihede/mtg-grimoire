@@ -213,12 +213,21 @@ pub fn wishes(
 ///    editor's dead deck id hears [`crate::deck::GONE`] and not [`crate::collection_alloc::
 ///    NOT_IN_DECK`], because "that deck is gone" and "that deck does not play this" are
 ///    different things to be told. A quick add *is* a change to the deck — what it holds moved —
-///    so the stamp is owed on its own account.
+///    so the stamp is owed on its own account. **The virtual fence rides immediately behind it**
+///    — [`crate::deck::VIRTUAL_HOLDS_NOTHING`], issue #401 — and is a rider rather than an
+///    eighth step, because it is not part of this press: it asks whether the press applies to
+///    this deck at all, where the seven are the press. Behind the stamp for the stamp's own
+///    reason, one sentence up: a dead deck id must hear [`crate::deck::GONE`], not something
+///    about virtual decks.
 /// 3. **[`crate::deck::plays_card`]**, else [`crate::collection_alloc::NOT_IN_DECK`]. That
 ///    function reads the **live** list only, and there is deliberately no theory fence of its
 ///    own here: a card the deck merely *plans* is refused by this one check, with the sentence
 ///    that names the mistake. Spelling [`crate::collection_alloc::THEORY_HOLDS_NOTHING`] beside
-///    it would be a second rule to keep in step for a case the first already covers.
+///    it would be a second rule to keep in step for a case the first already covers. **The
+///    virtual fence is not that kind of duplicate and is owed on its own**: `plays_card` would
+///    accept a virtual deck's live row perfectly happily — the list is real, it is the cardboard
+///    that does not exist — so nothing here covers it and a refusal about the *deck* cannot be
+///    reached from a question about the *card*.
 /// 4. **[`crate::deck::deck_group`]**, else [`crate::collection_alloc::NO_DECK_GROUP`]. There is
 ///    one group per deck since schema v25, so `None` is a database somebody has edited by hand —
 ///    and filing at the root instead would record copies no deck claims.
@@ -284,6 +293,13 @@ pub fn quick_add(
 
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     crate::deck::touch_deck(&tx, deck_id)?;
+    // Step 2's rider: a virtual deck keeps no cardboard, so there is nothing for this press to
+    // record and no group of the deck's to record it into. Ahead of `plays_card`, which cannot
+    // stand in for it — a virtual deck's live list plays its cards perfectly well; what it has
+    // none of is copies.
+    if crate::deck::is_virtual(&tx, deck_id)? {
+        return Err(crate::deck::VIRTUAL_HOLDS_NOTHING.to_owned());
+    }
     if !crate::deck::plays_card(&tx, deck_id, card_id)? {
         return Err(crate::collection_alloc::NOT_IN_DECK.to_owned());
     }
@@ -437,6 +453,17 @@ pub mod commands {
     /// Fetched imperatively at the press rather than by a hook, so a right-click fires nothing —
     /// the menu is drawn from the deck row the reader clicked and this read happens only if they
     /// choose the second row.
+    ///
+    /// **There is deliberately no [`crate::deck::VIRTUAL_HOLDS_NOTHING`] fence here, and this is
+    /// where a reader looks for the missing one.** Every other entry point in this crate that
+    /// touches the collection or the wishlist on a deck's behalf refuses a virtual deck by name
+    /// (issue #401); this one takes **no deck id at all**. It is a pure read of
+    /// `wishlist_entries` for a printing and a finish — it names no deck, writes nothing, and
+    /// could not ask the question without inventing a parameter for the sole purpose of refusing
+    /// on it. What keeps it off a virtual deck is the caller: the menu row that leads here is not
+    /// offered on one, and the write it leads *to*
+    /// ([`deck_quick_add_to_collection`]) refuses on its own account. A fence added here would be
+    /// a second answer to a question this command cannot be asked.
     #[cfg(not(target_family = "wasm"))]
     #[tauri::command]
     pub async fn deck_quick_add_wishes(
@@ -755,6 +782,35 @@ mod tests {
 
         assert_eq!(err, crate::collection_alloc::NOT_IN_DECK);
         assert_eq!(entry_count(&conn), 0);
+    }
+
+    /// Turn a deck into one the reader tracks without owning — `decks.virtual_only`, schema v40.
+    ///
+    /// An `UPDATE` rather than a parameter on [`deck_with_group`], so a case that wants one says
+    /// so on its own line and every other case in this file is untouched.
+    fn make_virtual(conn: &Connection, deck: i64) {
+        conn.execute(
+            "UPDATE decks SET virtual_only = 1 WHERE id = ?1",
+            params![deck],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_virtual_deck_records_no_copies() {
+        // **`plays_card` cannot stand in for this fence, which is why it is its own.** The live
+        // list plays the card perfectly well — the setup is the ordinary accepted press, one line
+        // of four — and what does not exist is the cardboard. So the refusal has to be about the
+        // deck, and it fires before the card is asked about at all.
+        let (conn, deck, cat) = fixture();
+        live_card(&conn, deck, cat, "bolt", 4);
+        make_virtual(&conn, deck);
+
+        let err = quick_add(&conn, deck, "bolt", None, Some("NM"), 4, None).unwrap_err();
+
+        assert_eq!(err, crate::deck::VIRTUAL_HOLDS_NOTHING);
+        assert_eq!(entry_count(&conn), 0, "nothing was recorded");
+        assert_eq!(group_copies(&conn, deck, "bolt"), 0);
     }
 
     #[test]

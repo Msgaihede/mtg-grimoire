@@ -96,6 +96,7 @@ export function groupHeight(group: CardGroup): number {
 export function TextView({
   groups,
   marketplace,
+  tracksCollection,
   violations,
   theoryPlan,
   onSelect,
@@ -109,6 +110,23 @@ export function TextView({
   /** Which marketplace the group headings' totals are quoted from. The lines themselves show
    *  no price — a decklist line is a quantity, a name and its marks. */
   marketplace: Marketplace;
+  /**
+   * Does this deck read the collection at all? `deckKind.ts`'s `tracksCollection(deck)`, `false`
+   * for a **virtual** deck (issue #401).
+   *
+   * Handed down whole like `theoryPlan` and `violations` below it: one fact about the deck that
+   * every line is drawn against. **This view draws no shortage figure of its own** — a decklist
+   * line is a quantity, a name and its marks — so the whole of what it decides here is the
+   * *you own 3 of 4* clause `deckCardName` says, which on a surface with no room for the figure
+   * is the only place a shortage is stated at all. `card.variant` cannot answer it: a virtual
+   * deck's rows are ordinary `live` rows on purpose, because `DeckRow.cardCount` and the
+   * gallery's colour bar both count `variant = 'live'`.
+   *
+   * **Required, like `marketplace` above it and like every other view's** — the four views are
+   * one deck drawn four ways, and this one being the quietest about the shortage is the reason to
+   * be strictest about the flag rather than the reason to default it.
+   */
+  tracksCollection: boolean;
   violations?: Map<string, ValidationIssue[]>;
   /** The deck's plan — `theoryMatch.ts`'s two lookups and the deck's own two mark switches,
    *  handed down whole like `violations` beside it. `undefined` for a deck with no plan. */
@@ -230,6 +248,7 @@ export function TextView({
                 marketplace={marketplace}
                 violations={violations}
                 theoryPlan={theoryPlan}
+                tracksCollection={tracksCollection}
                 onSelect={onSelect}
                 actions={actions}
                 selectedSlot={selectedSlot}
@@ -275,6 +294,7 @@ export function TextView({
               marketplace={marketplace}
               violations={violations}
               theoryPlan={theoryPlan}
+              tracksCollection={tracksCollection}
               onSelect={onSelect}
               actions={actions}
               selectedSlot={selectedSlot}
@@ -294,6 +314,7 @@ function TextGroup({
   marketplace,
   violations,
   theoryPlan,
+  tracksCollection,
   onSelect,
   actions,
   selectedSlot,
@@ -305,6 +326,10 @@ function TextGroup({
   /** The deck's plan — `theoryMatch.ts`'s two lookups and the deck's own two mark switches,
    *  handed down whole like `violations` beside it. `undefined` for a deck with no plan. */
   theoryPlan?: TheoryPlan;
+  /** Handed through to the lines — see {@link TextView}'s own props. **Required here where the
+   *  view's is optional**: this group is module-private, so a hop that forgets to forward it is a
+   *  red build rather than a line that goes on announcing a shortage nobody has. */
+  tracksCollection: boolean;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
   /** Handed through to the lines — see {@link TextView}'s own props. */
@@ -346,6 +371,7 @@ function TextGroup({
               card={card}
               ruleBreakText={ruleBreak(violations?.get(card.cardId))}
               theoryMark={theoryMatchMark(theoryPlan, card)}
+              tracksCollection={tracksCollection}
               onSelect={onSelect}
               actions={actions}
               selected={deckCardMarked(card, selectedSlot, actions)}
@@ -372,6 +398,7 @@ function TextRow({
   card,
   ruleBreakText,
   theoryMark,
+  tracksCollection,
   onSelect,
   actions,
   selected,
@@ -379,6 +406,9 @@ function TextRow({
 }: {
   card: DeckCard;
   ruleBreakText: string | null;
+  /** Whether the deck reads the collection at all — see {@link TextView}'s own props. Required
+   *  here for {@link TextGroup}'s reason. */
+  tracksCollection: boolean;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
   /** What the deck's plan says about this row — `theoryMatchMark`, resolved by the group so a
@@ -423,7 +453,7 @@ function TextRow({
         type="button"
         // The stripe is the only mark this row has room for, so the name is where the words
         // are — `deckCardName` is the one definition, shared with the stack and the grid.
-        aria-label={deckCardName(card, ruleBreakText, theoryMark)}
+        aria-label={deckCardName(card, ruleBreakText, theoryMark, tracksCollection)}
         // `describes: false` — `deckCardName` already folds the rule-break sentence into the
         // accessible name above, so a default binding would describe it twice.
         {...tip(ruleBreakText ?? undefined, { describes: false })}

@@ -108,6 +108,23 @@ const DECK_FIELDS: &[&str] = &[
     "cover_image_path",
     "folder_id",
     "theory_enabled",
+    // Schema v40's deck kind, beside the other half of the pair it spells. On the list for
+    // `theory_enabled`'s reason and for one more of its own: `deck::update_deck` writes **both**
+    // columns whenever either is turned on, so a list carrying one and not the other would let
+    // Ctrl+Z put a deck's plan back while leaving it virtual — which is `1/1`, the one pair of
+    // these two booleans that names no kind at all. The two are on this list together or the
+    // journal can produce a deck nothing can read.
+    //
+    // **Undoing the flag puts the column back and nothing else, and nothing here claims
+    // otherwise.** Becoming virtual also files the deck's copies into `Recently removed` and
+    // deletes its `collection_folders` group; a step writes `decks` and `deck_cards` and no
+    // third table, so a Ctrl+Z restores the *kind* and leaves both of those where the press put
+    // them. That is the same standing `collection_alloc`'s two moves have — they record a
+    // history row and file no step at all — and it is the honest one here: an undo that rebuilt
+    // the group would have to decide which copies in a shared holding area had come from this
+    // deck, which nothing records. The way back is a second press of the switch, which makes
+    // the group again, and `Recently removed` is where the cards are waiting.
+    "virtual_only",
     "archived",
     "separate_x_group",
     "default_category_id",
@@ -1927,6 +1944,45 @@ mod tests {
                     .unwrap();
                 },
             ),
+            (
+                // Schema v40's kind, driven for the reason `game` and `bracket` above it are —
+                // [`snapshot`] sweeps [`DECK_FIELDS`], so a column added to the patch and not to
+                // that list leaves the case passing while the deck stays where the press put it
+                // — and for one more of its own. This is the only patch field whose write moves
+                // **two** columns: `deck::deck_kind` clears `theory_enabled` as it sets this, so
+                // a list carrying one of the pair and not the other would let Ctrl+Z restore the
+                // plan and leave the deck virtual, which is `1/1` — the pair that names no kind
+                // at all. The deck is switched to theory first so that both halves have
+                // somewhere to move from.
+                //
+                // **What this case does not claim** is that the cardboard comes back: becoming
+                // virtual also files the deck's copies into `Recently removed` and deletes its
+                // group, and a step writes neither table. `snapshot` reads `decks` and
+                // `deck_cards`, which is exactly the scope an undo restores.
+                "deck_update (virtual, which clears the theory flag with it)",
+                |c: &Connection, id: i64| {
+                    crate::deck::update_deck(
+                        c,
+                        id,
+                        &crate::deck::DeckPatch {
+                            theory_enabled: Some(true),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap();
+                },
+                |c, id| {
+                    crate::deck::update_deck(
+                        c,
+                        id,
+                        &crate::deck::DeckPatch {
+                            virtual_only: Some(true),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap();
+                },
+            ),
             ("deck_set_folder", nothing, |c, id| {
                 let folder = crate::deck_meta::create_folder(c, None, "Commander")
                     .unwrap()
@@ -2242,6 +2298,61 @@ mod tests {
             redo(&conn, id, audit_id).unwrap();
             assert_eq!(snapshot(&conn, id), after, "`{name}` must redo exactly");
         }
+    }
+
+    /// **The half `drive_cases` cannot show for the deck kind: that it is on [`DECK_FIELDS`] at
+    /// all.**
+    ///
+    /// [`snapshot`] iterates that constant, so a column dropped off it disappears from *both*
+    /// sides of the comparison and every case in the sweep goes on passing — an assertion that
+    /// reads the constant it is asserting about, which is exactly the shape of green that says
+    /// nothing. The `game_key` and `bracket` cases above carry comments claiming the sweep
+    /// covers them; measured on 2026-09-08 by taking `virtual_only` off the list, it does not,
+    /// and this test is what does. It reads the two columns with SQL of its own.
+    ///
+    /// **Both halves of the pair, because the write moves both.** `deck::deck_kind` clears
+    /// `theory_enabled` as it sets `virtual_only`, so a `DECK_FIELDS` carrying one and not the
+    /// other would let Ctrl+Z restore the plan and leave the deck virtual — `1/1`, the pair that
+    /// names no kind at all, arriving from the one direction no command can produce.
+    #[test]
+    fn undoing_a_kind_change_puts_both_halves_of_the_pair_back() {
+        let (conn, id) = fresh();
+        let kind = |c: &Connection| -> (i64, i64) {
+            c.query_row(
+                "SELECT theory_enabled, virtual_only FROM decks WHERE id = ?1",
+                params![id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap()
+        };
+        crate::deck::update_deck(
+            &conn,
+            id,
+            &crate::deck::DeckPatch {
+                theory_enabled: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(kind(&conn), (1, 0), "a deck with a plan");
+
+        crate::deck::update_deck(
+            &conn,
+            id,
+            &crate::deck::DeckPatch {
+                virtual_only: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(kind(&conn), (0, 1), "one press, two columns");
+        let audit_id = next_undo(&conn, id).unwrap().unwrap();
+
+        undo(&conn, id).unwrap();
+        assert_eq!(kind(&conn), (1, 0), "and one Ctrl+Z, both back");
+
+        redo(&conn, id, audit_id).unwrap();
+        assert_eq!(kind(&conn), (0, 1), "and forward again");
     }
 
     /// The half `drive_cases` cannot show: undoing an import sweeps the labels it **invented**
