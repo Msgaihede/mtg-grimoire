@@ -55,7 +55,12 @@ import { useDeckFolders } from "@/features/decks/useDeckFolders";
 import { playKey, useDecksPlaying } from "@/features/decks/useDeckPlays";
 import { useDecks } from "@/features/decks/useDecks";
 import { copyText } from "@/lib/clipboard";
-import { marketplaceSearchUrl, openExternal, scryfallCardUrl } from "@/lib/externalLinks";
+import {
+  edhrecCardUrl,
+  marketplaceSearchUrl,
+  openExternal,
+  scryfallCardUrl,
+} from "@/lib/externalLinks";
 import { FINISH_LABEL, parseFinishes, type Finish } from "@/lib/finish";
 import {
   ipc,
@@ -384,13 +389,15 @@ export function buildCardMenu(target: CardMenuTarget, deps: CardMenuDeps): MenuI
       label: "Open on",
       Icon: ExternalLink,
       /**
-       * **Scryfall first, then the one marketplace, and this pair is deliberately not
-       * alphabetical** — the app's option-list rule (`sortOptions`) orders lists a reader
-       * *searches*, and this is a two-row ladder rather than a list: Scryfall is where the
-       * card's own data came from and is the same entry on every card, while the second row
-       * changes name with a setting. Sorting them would put Card Kingdom above Scryfall and
-       * Cardmarket below it, so the row a reader has learnt the position of would move when
-       * they changed marketplace.
+       * **Scryfall, then EDHREC, then the one marketplace — and this ladder is deliberately
+       * not alphabetical** — the app's option-list rule (`sortOptions`) orders lists a reader
+       * *searches*, and this is a three-row ladder rather than a list: Scryfall is where the
+       * card's own data came from and EDHREC is the same entry on every card, so both hold
+       * still, while the last row changes name with a setting. Sorting them would put Card
+       * Kingdom above both and Cardmarket between them, so the rows a reader has learnt the
+       * position of would move when they changed marketplace. The card modal's rail draws the
+       * same three in the same order (`CardModalRail`), which is the other half of the reason:
+       * one ladder, learnt once.
        *
        * Exactly one marketplace, and it is the selected one: a menu offering all five would be
        * a marketplace picker, which Settings already is.
@@ -402,6 +409,13 @@ export function buildCardMenu(target: CardMenuTarget, deps: CardMenuDeps): MenuI
           label: "Scryfall",
           onSelect: () =>
             run(openExternal(scryfallCardUrl(target.setCode, target.collectorNumber))),
+        },
+        {
+          kind: "action",
+          id: "open-edhrec",
+          label: "EDHREC",
+          // By name, to EDHREC's own router — `edhrecCardUrl` says why the name goes whole.
+          onSelect: () => run(openExternal(edhrecCardUrl(target.name))),
         },
         {
           kind: "action",
