@@ -605,7 +605,13 @@ take their number from the message, not from the binding.
    `share::publish::tests::the_share_base_matches_the_workers_own_placeholder` reads the Worker's
    config and asserts they agree, so whoever changes one is asked about the other. Until the
    deploy, the only way to exercise the publisher at all is the `sync_state` key `share_url`,
-   which overrides the constant exactly as `relay_url` overrides `RELAY_BASE`.
+   which overrides the constant exactly as `relay_url` overrides `RELAY_BASE`. **And meanwhile
+   the app refuses in words**: `share::publish::endpoint` asks whether the effective base carries
+   an `http(s)` scheme and answers `NOT_DEPLOYED` when it does not, before any request and before
+   any `error_log` row — otherwise a connected reader pressing *Share* meets reqwest's
+   `builder error: relative URL without a base`, which is a sentence about a mistake nobody made.
+   It tests the **scheme** rather than equality against the constant, so it stops refusing on its
+   own the day that constant becomes a host.
 
 6. **Whether `caches.default` works at all on a `workers.dev` address.** Cloudflare's Cache API
    page grants functional cache operations to *custom domains* and to Pages functions on

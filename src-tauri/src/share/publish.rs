@@ -19,6 +19,15 @@
 //! [`commit_publish`] is that rule as a function, so a test can drive it with a failure and
 //! watch the cached row stay where it was.
 //!
+//! ⚠️ **What the two-step buys is the blob, the link and the cached row — and not the header
+//! above them.** `handleCreate` UPDATEs `title`, `owner_name`, `card_count`, `total_value` and
+//! `fields` on the existing row *before* the `PUT`, and `page.ts` draws its heading and its card
+//! count from that row. So a **republish** that dies between the two steps goes on serving the
+//! previous snapshot under a header describing the new one — 412 cards promised, 400 delivered,
+//! until the next successful publish. That is a strictly smaller failure than a dead link and is
+//! the trade the shape was chosen for; it is written down here because the paragraph above it
+//! reads like a stronger promise than it is.
+//!
 //! ⚠️ **The snapshot is read first even though the id comes second**, which reverses the order
 //! the plan wrote. Two things force it: the metadata the `POST` carries includes `cardCount`,
 //! which is a fact about the read; and the three refusals a locked or non-user folder earns
@@ -76,6 +85,8 @@ pub const SHARE_URL: &str = "share_url";
 /// the shape an emptied row takes, and reading it as a base would build the relative URL `/g/…`
 /// and fail with a message about nothing the reader did. Trailing slashes go because every
 /// caller appends its own path.
+///
+/// It answers whatever it was given and judges nothing; [`endpoint`] is the judgement.
 pub fn base(conn: &Connection) -> String {
     let stored = client::get_state(conn, SHARE_URL).unwrap_or_default();
     let trimmed = stored.trim().trim_end_matches('/');
@@ -84,6 +95,28 @@ pub fn base(conn: &Connection) -> String {
     } else {
         trimmed.to_owned()
     }
+}
+
+/// The base to send to, or the sentence that says there is nowhere to send.
+///
+/// ⚠️ **[`SHARE_BASE`] is a placeholder, and a placeholder is not a URL.** [`base`]'s own doc
+/// already refuses this shape for a *blank* override — "reading it as a base would build the
+/// relative URL `/g/…` and fail with a message about nothing the reader did" — and
+/// `<set on first deploy>` does exactly that while being the **default**. Without this guard a
+/// connected reader pressing *Share* meets `builder error: relative URL without a base`, which
+/// is reqwest's sentence about a mistake nobody made, and every list press folds an `error_log`
+/// row under `Source::Relay` for it.
+///
+/// **The test is the scheme rather than an equality against the constant**, and the difference
+/// matters on the day of the deploy: `base == SHARE_BASE` would refuse every request the moment
+/// that constant became a real host, because no override is the ordinary case. A mistyped
+/// override lands here too, which is the same improvement one step further.
+fn endpoint(conn: &Connection) -> Result<String, String> {
+    let base = base(conn);
+    if base.starts_with("https://") || base.starts_with("http://") {
+        return Ok(base);
+    }
+    Err(NOT_DEPLOYED.to_owned())
 }
 
 // ---------------------------------------------------------------------------------------
@@ -98,6 +131,13 @@ const SHARE_LIMIT: &str = "share_limit";
 
 /// The same for the blob cap — `413 { error, code }`.
 const BLOB_LIMIT: &str = "blob_limit";
+
+/// [`SHARE_BASE`] is still its placeholder and no override names a host, so there is nowhere to
+/// publish to. **Refused before any request and before any `error_log` row**, because a build
+/// with no address for the service is a state rather than a failure — nothing went wrong, and a
+/// row in the Errors panel would send the reader to look at a network that is fine.
+pub const NOT_DEPLOYED: &str = "Sharing a collection is not available in this build yet - \
+                                the service it publishes to has no address here.";
 
 /// No membership is connected anywhere in this group, so there is no token to mint and no
 /// request to make. **A sentence and not a 401 dressed up**: nothing has been refused, because
@@ -363,7 +403,7 @@ async fn post_meta(
     group: &Group,
     body: String,
 ) -> Result<Created, String> {
-    let url = format!("{}/g/{}/share", base(conn), group.group_id);
+    let url = format!("{}/g/{}/share", endpoint(conn)?, group.group_id);
     let (status, text) = send(
         conn,
         "share_create",
@@ -400,7 +440,7 @@ async fn put_blob(
     id: &str,
     bytes: Vec<u8>,
 ) -> Result<Uploaded, String> {
-    let url = format!("{}/g/{}/share/{id}", base(conn), group.group_id);
+    let url = format!("{}/g/{}/share/{id}", endpoint(conn)?, group.group_id);
     let (status, text) = send(
         conn,
         "share_upload",
@@ -438,7 +478,7 @@ async fn get_shares(
     token: &str,
     group: &Group,
 ) -> Result<Vec<ShareRow>, String> {
-    let url = format!("{}/g/{}/shares", base(conn), group.group_id);
+    let url = format!("{}/g/{}/shares", endpoint(conn)?, group.group_id);
     let (status, text) = send(
         conn,
         "share_list",
@@ -471,7 +511,7 @@ async fn delete_share(
     group: &Group,
     id: &str,
 ) -> Result<(), String> {
-    let url = format!("{}/g/{}/share/{id}", base(conn), group.group_id);
+    let url = format!("{}/g/{}/share/{id}", endpoint(conn)?, group.group_id);
     let (status, text) = send(
         conn,
         "share_revoke",
@@ -565,6 +605,14 @@ pub async fn publish(
     // read cannot wait for it.
     let mut snap = snapshot(conn, "", owner_name, folder_uid, fields, marketplace, at)?;
 
+    // **Below the read and above the token, and both halves of that placement are decisions.**
+    // Below, because a refusal about *this folder* — locked, missing, not the reader's — is
+    // the
+    // more actionable of the two, and the read that produces it is local and free. Above,
+    // because
+    // `credentials` posts to the relay's `/token`, and minting a grant for a press that has
+    // nowhere to send it is a round trip spent on nothing.
+    endpoint(conn)?;
     let (token, group) = credentials(conn).await?;
     let created = post_meta(
         conn,
@@ -600,16 +648,28 @@ pub async fn publish(
     )
 }
 
+/// The inverse of `ShareFields::names()`, which is private to [`super::snapshot`] and writes the
+/// array `collection_shares.fields` stores.
+///
+/// ⚠️ **Two spellings of one vocabulary, in two modules, with nothing but a test between them.**
+/// Drift is silent and costs a republish exactly the switch that moved: a `value` this stopped
+/// recognising republishes a binder with its prices stripped, and no build goes red.
+/// `a_field_set_survives_the_round_trip_through_the_wire_names` runs every one of the eight
+/// combinations through the real writer and back through here.
+fn fields_from_names(names: &[String]) -> ShareFields {
+    ShareFields {
+        condition: names.iter().any(|f| f == "condition"),
+        lang: names.iter().any(|f| f == "lang"),
+        value: names.iter().any(|f| f == "value"),
+    }
+}
+
 /// Republish one share this device already knows about, under the name and fields it carries.
 pub async fn refresh(conn: &Connection, id: &str) -> Result<ShareRow, String> {
     let Some(known) = cache::get(conn, id)? else {
         return Err(UNKNOWN_SHARE.to_owned());
     };
-    let fields = ShareFields {
-        condition: known.fields.iter().any(|f| f == "condition"),
-        lang: known.fields.iter().any(|f| f == "lang"),
-        value: known.fields.iter().any(|f| f == "value"),
-    };
+    let fields = fields_from_names(&known.fields);
     publish(conn, known.folder_uid.as_deref(), &known.owner_name, fields).await
 }
 
@@ -619,6 +679,7 @@ pub async fn refresh(conn: &Connection, id: &str) -> Result<ShareRow, String> {
 /// applied to the other direction: a withdrawal this device believes in and the relay does not
 /// is a link the reader thinks is dead.
 pub async fn revoke(conn: &Connection, id: &str) -> Result<(), String> {
+    endpoint(conn)?;
     let (token, group) = credentials(conn).await?;
     delete_share(conn, &token, &group, id).await?;
     // The row survives its own revocation until the next reconcile drops it, so the page can
@@ -638,13 +699,24 @@ pub async fn revoke(conn: &Connection, id: &str) -> Result<(), String> {
 /// request at all; a device whose request fails answers what it last heard, which is the whole
 /// point of the table being a cache. Only the *reconcile* is optional — the list never is.
 pub async fn list(conn: &Connection) -> Result<Vec<ShareRow>, String> {
-    // Not [`credentials`], because an unconnected device must not read this as a refusal: it
-    // has a perfectly good empty list, and `NOT_CONNECTED` belongs on a press to publish.
-    let token = entitlement::access_token(conn).await.ok().flatten();
-    let group = identity::group(conn).ok().flatten();
-    if let (Some(token), Some(group)) = (token, group) {
-        if let Ok(remote) = get_shares(conn, &token, &group).await {
-            return cache::reconcile(conn, &remote);
+    // **Asked before the token and never as a refusal.** `endpoint` is the only thing here that
+    // can say "there is nowhere to ask", and on a build with no host that has to stop the
+    // `/token` round trip `access_token` would otherwise make on every press of this list.
+    if endpoint(conn).is_ok() {
+        // Not [`credentials`], because an unconnected device must not read this as a refusal: it
+        // has a perfectly good empty list, and `NOT_CONNECTED` belongs on a press to publish.
+        let token = entitlement::access_token(conn).await.ok().flatten();
+        let group = identity::group(conn).ok().flatten();
+        if let (Some(token), Some(group)) = (token, group) {
+            if let Ok(remote) = get_shares(conn, &token, &group).await {
+                // ⚠️ **A reconcile that will not commit falls through to the cache like a
+                // request that did not answer.** Returning its `Err` here would make one busy
+                // database a *failed share list* on a device that is holding a perfectly good
+                // one, which is the opposite of what the paragraph above promises.
+                if let Ok(rows) = cache::reconcile(conn, &remote) {
+                    return Ok(rows);
+                }
+            }
         }
     }
     cache::list(conn)
@@ -780,6 +852,57 @@ mod tests {
 
     fn open_db() -> Connection {
         crate::schema::memory_pair()
+    }
+
+    /// A user folder — `share/tests.rs`' own fixture in two lines rather than a call into it,
+    /// because that module is `#[cfg(test)]` and private to its own file.
+    fn folder(conn: &Connection, name: &str, locked: bool) -> String {
+        let uid = format!("uid-{name}");
+        conn.execute(
+            "INSERT INTO collection_folders
+               (parent_id, name, kind, sort_order, created_at, updated_at, sync_uid, locked)
+             VALUES (NULL, ?1, 'user', 0, 0, 0, ?2, ?3)",
+            rusqlite::params![name, uid, i64::from(locked)],
+        )
+        .unwrap();
+        uid
+    }
+
+    /// One card on the wire, with only the two fields [`meta_body`] reads made interesting.
+    fn wire_card(q: i64, p: Option<f64>) -> super::super::ShareCard {
+        super::super::ShareCard {
+            id: format!("card-{q}"),
+            n: "Lightning Bolt".to_owned(),
+            s: "lea".to_owned(),
+            cn: "161".to_owned(),
+            f: "nonfoil".to_owned(),
+            q,
+            fo: None,
+            img: None,
+            c: None,
+            l: None,
+            p,
+        }
+    }
+
+    fn wire_snapshot(cards: Vec<super::super::ShareCard>) -> super::super::ShareSnapshot {
+        super::super::ShareSnapshot {
+            v: 1,
+            id: String::new(),
+            title: "Trade binder".to_owned(),
+            owner: "Giradeli".to_owned(),
+            updated_at: 0,
+            marketplace: "tcgplayer".to_owned(),
+            currency: "USD".to_owned(),
+            fields: vec!["value"],
+            folders: Vec::new(),
+            cards,
+        }
+    }
+
+    fn meta(cards: Vec<super::super::ShareCard>) -> serde_json::Value {
+        let body = meta_body(Some("uid-a"), "Giradeli", &wire_snapshot(cards)).unwrap();
+        serde_json::from_str(&body).unwrap()
     }
 
     fn row(id: &str) -> ShareRow {
@@ -966,6 +1089,162 @@ mod tests {
         assert_eq!(base(&conn), SHARE_BASE);
         client::set_state(&conn, SHARE_URL, "http://127.0.0.1:8787/").unwrap();
         assert_eq!(base(&conn), "http://127.0.0.1:8787");
+    }
+
+    // -----------------------------------------------------------------------------------
+    // The metadata body
+    // -----------------------------------------------------------------------------------
+
+    /// **Copies, not rows.** The page prints "412 cards", and a binder of four playsets is
+    /// sixteen cards rather than four.
+    #[test]
+    fn the_card_count_is_the_copies_and_not_the_rows() {
+        let body = meta(vec![wire_card(2, None), wire_card(3, None)]);
+        assert_eq!(body["cardCount"], 5);
+    }
+
+    /// **A binder no feed quotes is worth `null` and never `0`.** A zero is the page claiming
+    /// the collection is worth nothing, which is a statement about the *cards* rather than
+    /// about the marketplace that declined to price them.
+    #[test]
+    fn a_snapshot_with_no_priced_card_carries_no_total_at_all() {
+        let body = meta(vec![wire_card(2, None), wire_card(3, None)]);
+        assert!(body["totalValue"].is_null(), "{body}");
+    }
+
+    /// And a partly-priced one totals what it has, per **copy**.
+    #[test]
+    fn the_total_value_sums_the_priced_copies_and_steps_over_the_rest() {
+        let body = meta(vec![wire_card(2, Some(1.5)), wire_card(3, None)]);
+        assert_eq!(body["totalValue"], 3.0);
+    }
+
+    /// The whole collection crosses as an explicit `null`, which is what `metaProblem` reads as
+    /// "no folder" — an omitted key would mean the same thing to that Worker and to no other
+    /// reader of this body.
+    #[test]
+    fn a_whole_collection_share_names_its_folder_as_null() {
+        let body = meta_body(None, "Giradeli", &wire_snapshot(Vec::new())).unwrap();
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert!(body["folderUid"].is_null(), "{body}");
+        assert_eq!(body["ownerName"], "Giradeli");
+        assert_eq!(body["title"], "Trade binder");
+    }
+
+    // -----------------------------------------------------------------------------------
+    // The order, and the three refusals that stand ahead of the network
+    // -----------------------------------------------------------------------------------
+
+    /// **The whole of the step-order decision, pinned.** The plan had the `POST` go first;
+    /// [`publish`] reads the snapshot first, because the metadata carries a `cardCount` that is
+    /// a fact about the read *and* because a folder the app is about to refuse must never have
+    /// left a row on the relay. Reverse the two and this database — a locked folder, no
+    /// membership, no host — answers something about connecting instead of something about the
+    /// folder, which is the reader being sent to fix the wrong thing.
+    ///
+    /// **It makes no request**: `entitlement::access_token` short-circuits with neither a
+    /// refresh secret nor a group, and nothing above it opens a socket either.
+    #[tokio::test]
+    async fn a_locked_folder_is_refused_before_anything_reaches_the_network() {
+        let conn = open_db();
+        let uid = folder(&conn, "Vault", true);
+        let err = publish(&conn, Some(&uid), "Giradeli", ShareFields::default())
+            .await
+            .unwrap_err();
+        assert_eq!(err, super::super::FOLDER_IS_LOCKED);
+    }
+
+    /// One rung down: the folder is fine, so the next thing that can be wrong is that this build
+    /// has nowhere to publish to. **Ahead of the token**, because minting a grant for a press
+    /// with no destination is a round trip spent on nothing.
+    #[tokio::test]
+    async fn a_build_with_no_host_refuses_in_words_rather_than_in_reqwests() {
+        let conn = open_db();
+        let uid = folder(&conn, "Binder", false);
+        let err = publish(&conn, Some(&uid), "Giradeli", ShareFields::default())
+            .await
+            .unwrap_err();
+        assert_eq!(err, NOT_DEPLOYED);
+        assert!(
+            !err.contains("relative URL"),
+            "the reader must never meet reqwest's sentence about a mistake nobody made"
+        );
+    }
+
+    /// And the rung below that: with a host, the missing thing is the membership. Still no
+    /// socket — `access_token` answers `Ok(None)` on a device holding neither secret nor group.
+    #[tokio::test]
+    async fn a_host_with_no_membership_refuses_with_the_connect_story() {
+        let conn = open_db();
+        client::set_state(&conn, SHARE_URL, "http://127.0.0.1:1").unwrap();
+        let uid = folder(&conn, "Binder", false);
+        let err = publish(&conn, Some(&uid), "Giradeli", ShareFields::default())
+            .await
+            .unwrap_err();
+        assert_eq!(err, NOT_CONNECTED);
+    }
+
+    /// An empty name is the app's own refusal and stands ahead of all three, because it is about
+    /// the box the reader left blank rather than about anything they could not have known.
+    #[tokio::test]
+    async fn a_blank_owner_name_is_refused_before_the_folder_is_even_read() {
+        let conn = open_db();
+        let uid = folder(&conn, "Vault", true);
+        let err = publish(&conn, Some(&uid), "   ", ShareFields::default())
+            .await
+            .unwrap_err();
+        assert_eq!(err, OWNER_NAME_REQUIRED);
+    }
+
+    /// A list on a build with no host is the cache, silently — no request, no `error_log` row,
+    /// and no refusal for a reader who has simply never shared anything.
+    #[tokio::test]
+    async fn a_list_on_a_build_with_no_host_is_the_cache_and_says_nothing() {
+        let conn = open_db();
+        cache::store(&conn, &row("kQ2p7fMx9Lb0RtVw")).unwrap();
+        let rows = list(&conn).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        let logged: i64 = conn
+            .query_row("SELECT count(*) FROM error_log", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(logged, 0, "nothing went wrong, so nothing is a failure");
+    }
+
+    // -----------------------------------------------------------------------------------
+    // The field vocabulary, both ways
+    // -----------------------------------------------------------------------------------
+
+    /// **Two spellings of one vocabulary with nothing but this between them.**
+    /// `ShareFields::names()` writes the array `collection_shares.fields` stores and
+    /// [`fields_from_names`] reads it back on every *Refresh*; they agree today and drift is
+    /// silent. All eight combinations, through the real writer.
+    #[test]
+    fn a_field_set_survives_the_round_trip_through_the_wire_names() {
+        let conn = open_db();
+        for bits in 0..8u8 {
+            let want = ShareFields {
+                condition: bits & 1 != 0,
+                lang: bits & 2 != 0,
+                value: bits & 4 != 0,
+            };
+            let snap = snapshot(
+                &conn,
+                "",
+                "Giradeli",
+                None,
+                want,
+                crate::sorting::Marketplace::Tcgplayer,
+                0,
+            )
+            .unwrap();
+            let names: Vec<String> = snap.fields.iter().map(|f| (*f).to_owned()).collect();
+            let back = fields_from_names(&names);
+            assert_eq!(
+                (back.condition, back.lang, back.value),
+                (want.condition, want.lang, want.value),
+                "{names:?}"
+            );
+        }
     }
 
     /// ⚠️ The one thing about [`SHARE_BASE`] a build can check: it is still the placeholder, and
