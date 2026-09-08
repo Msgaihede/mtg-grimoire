@@ -387,8 +387,8 @@ export function keepsSelection(target: EventTarget | null): boolean {
  * Whether this row is short of the copies the deck wants — the one fact the red `3/4` figure in a
  * stacked card's chin draws, and the one clause {@link deckCardName} says in words.
  *
- * Two guards, and each is about an `ownedQuantity` that reads `0` for a reason other than an empty
- * shelf:
+ * Three guards, and each is about an `ownedQuantity` that reads `0` for a reason other than an
+ * empty shelf:
  *
  * - **An inactive category.** The allocator claims no copy for a switched-off pile, so every row
  *   in one reads 0 owned by construction — a shortage there is one the reader does not have.
@@ -399,12 +399,32 @@ export function keepsSelection(target: EventTarget | null): boolean {
  *   [issue #354](https://github.com/Msgaihede/mtg-grimoire/issues/354). The comparison a plan
  *   *can* honestly make is the shopping list's (`TheoryDiffDialog`), which subtracts quantities
  *   and is one press away on `Compare`; the deck-level figure in `DeckLedger` is untouched.
+ * - **A virtual deck** — the third deck kind, issue #401. A deck the reader tracks without owning
+ *   the cardboard has no `collection_folders` group at all, so `owned_by_printing` joins nothing
+ *   and every row reads 0 owned: the theory list's failure reached by a different route, over the
+ *   whole list rather than over one pile. **`variant` cannot answer this one**, which is why it
+ *   is a second argument and not a third clause: a virtual deck's rows are ordinary `live` rows,
+ *   deliberately, because `DeckRow.cardCount` and the gallery's colour bar both count
+ *   `variant = 'live'` and rows parked in `theory` would report `0 cards` under an empty bar on
+ *   every tile forever. So the deck's own flag has to arrive from the caller.
  *
  * One predicate rather than two spellings, because the mark and the name it is announced by must
  * never disagree about whether there is a shortage at all.
+ *
+ * @param tracksCollection `deckKind.ts`'s `tracksCollection(deck)` over the deck this row is in —
+ * whether it reads the collection at all. **Required rather than defaulted, because neither
+ * default is safe**: `true` puts a hundred red marks back on every card of every virtual deck,
+ * and `false` takes the mark off every regular one. A caller with no deck in hand genuinely
+ * cannot answer this, and the compiler saying so is the whole fence — {@link DeckCard} carries no
+ * deck-level field to read it from, every field on it being about the row or the printing.
  */
-export function deckCardShort(card: DeckCard): boolean {
-  return card.categoryActive && card.variant !== "theory" && card.ownedQuantity < card.quantity;
+export function deckCardShort(card: DeckCard, tracksCollection: boolean): boolean {
+  return (
+    tracksCollection &&
+    card.categoryActive &&
+    card.variant !== "theory" &&
+    card.ownedQuantity < card.quantity
+  );
 }
 
 /**
@@ -444,11 +464,28 @@ export function deckCardName(
    * it with the count on the end — except on the `unplanned` tier, which never carries a count
    * because there is no order for the live list to be short of.
    */
-  theoryMark: TheoryMark | null = null,
+  theoryMark: TheoryMark | null,
+  /**
+   * Whether this deck reads the collection at all — `deckKind.ts`'s `tracksCollection(deck)`,
+   * handed straight to {@link deckCardShort}.
+   *
+   * **Required here for exactly the reason it is required there**, and the requirement is the
+   * point rather than a consequence: the figure and the words are one predicate precisely so
+   * that they cannot disagree about whether there is a shortage, and a *default* on one of the
+   * two would be a second way to answer the question. A view that passed `false` to the mark
+   * and let this default to `true` would draw no red `3/4` and go on announcing *you own 0 of 4*
+   * on every card of a virtual deck — the failure this pair is written as one function to
+   * prevent, arrived at through the type instead of through a copied expression.
+   *
+   * It is the **last** parameter and {@link theoryMark} lost its `= null` to make room. Every
+   * call site already passed a mark explicitly, so nothing was relying on that default; what a
+   * defaulted parameter before a required one costs is that it cannot exist at all.
+   */
+  tracksCollection: boolean,
 ): string {
-  // Both of {@link deckCardShort}'s guards, said in words exactly where the figure is drawn —
-  // one predicate, so the name and the mark cannot come to disagree.
-  const short = deckCardShort(card);
+  // All three of {@link deckCardShort}'s guards, said in words exactly where the figure is drawn
+  // — one predicate, so the name and the mark cannot come to disagree.
+  const short = deckCardShort(card, tracksCollection);
   // Which object this row plays. Three of the four views draw it as `FoilOverlay`'s chip and
   // the text columns as a glyph, and on every one of them it is decoration once the button is
   // named — so this is where it is said. `null` for the regular copy, which is the finish a

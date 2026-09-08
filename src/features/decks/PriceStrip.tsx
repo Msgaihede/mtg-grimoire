@@ -37,6 +37,13 @@ import {
  * of the deck — the same argument that put "prices as of…" here rather than on sixty tooltips,
  * and the tray it shares a line with is the affordance it is about.
  *
+ * **It is true of a Live list of a deck that owns its cards, which is two conditions rather than
+ * the one this paragraph carried until 2026-09-08** (issue #401). A *Virtual* deck keeps one
+ * ordinary `live` list and no cardboard behind it, so `variant === "live"` stopped answering the
+ * question on its own — see the `tracksCollection` prop for the second half. The tray itself is
+ * unchanged and must stay unchanged: taking a card *off a list* is what it does, and every deck
+ * has a list.
+ *
  * **It rides the price line rather than taking a line of its own**, because a permanent second
  * row under the deck is deck height (see `DECK_HEIGHT_FLOOR`), and this sentence is not worth
  * any. It is a `<span>` of its own inside that `<p>` so each sentence stays separately
@@ -89,6 +96,7 @@ export const CUT_CARDS_NOTE = "Copies you cut from this deck go to Recently remo
 export function PriceStrip({
   marketplace,
   variant,
+  tracksCollection,
   onRemove,
 }: {
   /** Whose prices the deck was read at — its label and whether it is a feed, which is the whole
@@ -96,15 +104,39 @@ export function PriceStrip({
    *  can never name two marketplaces. */
   marketplace: Marketplace;
   /**
-   * Which of the deck's two lists is on screen, because {@link CUT_CARDS_NOTE} is true of one of
-   * them only.
+   * Which of the deck's two lists is on screen — **half of what decides whether
+   * {@link CUT_CARDS_NOTE} is true**, and no longer all of it.
    *
    * A Live row's copies are collection rows physically filed into this deck's group, so cutting
    * one returns them to `Recently removed`. A Theory row is a plan — it holds no copy, so there
    * is nothing for a cut to give back, and a standing sentence promising otherwise on that tab
    * would be the one kind of wrong a reader cannot check.
+   *
+   * **`variant === "live"` stopped being the whole test on 2026-09-08** (issue #401): a *Virtual*
+   * deck keeps one ordinary `live` list, so this prop reads `live` there and answers a different
+   * question than it used to. See {@link tracksCollection} beside it — the two are ANDed, and
+   * neither implies the other.
    */
   variant: DeckVariant;
+  /**
+   * Does this deck read the collection at all? `deckKind.ts`'s `tracksCollection(deck)`, answered
+   * by the host.
+   *
+   * `false` silences {@link CUT_CARDS_NOTE}, for the *live* list, on exactly the deck whose live
+   * list is not backed by cardboard. A Virtual deck's rows are live rows and its cuts go nowhere —
+   * there is no collection row in a group to file back — so the standing sentence would promise a
+   * reader that copies they never owned are waiting in a folder for them. That is the theory
+   * list's failure reached by the other axis, and it is the one kind of wrong this line cannot be
+   * allowed to be: a sentence about where cardboard *went* is unfalsifiable from the deck screen.
+   *
+   * **The price sentence is untouched.** A virtual deck still costs money to assemble on whatever
+   * client it lives on, and spec §5's rule — never a price without saying how old it is — is about
+   * the number rather than about the binder.
+   *
+   * **Required rather than optional**, so a host that has not thought about it cannot silently get
+   * the arm that makes a promise about the reader's collection.
+   */
+  tracksCollection: boolean;
   /**
    * What a drop on the tray writes. `DeckEditor`'s `applyDrop`, which is stable — see it. The
    * tray's own write is always the zero the stepper's last press writes; there is no remove
@@ -173,7 +205,12 @@ export function PriceStrip({
     <div className={cn("relative shrink-0", dragging && "sticky bottom-0")}>
       <p className="text-[0.7rem] text-dim">
         {pricesAsOf(marketplace)}{" "}
-        {variant === "live" && <span>{CUT_CARDS_NOTE}</span>}
+        {/* **Two conditions and neither implies the other.** The Theory list holds no copies, so
+            there is nothing for a cut to give back; a Virtual deck's list holds no copies either,
+            for the entirely different reason that the reader never claimed the cardboard. Both
+            make this sentence a promise about a folder nothing will arrive in, and the strip says
+            it once or not at all rather than wording two absences. */}
+        {variant === "live" && tracksCollection && <span>{CUT_CARDS_NOTE}</span>}
       </p>
 
       {dragging && (

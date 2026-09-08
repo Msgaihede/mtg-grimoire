@@ -1,5 +1,9 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
+import { useState } from "react";
 import { expect, fn, userEvent, within } from "storybook/test";
+import { DEFAULT_SECTION_ZOOMS } from "@/lib/cardZoom";
+import { useAppStore } from "@/lib/store";
+import { STACK_CARD_WIDTH, stackCardWidth } from "./CardStack";
 import { DeckTokensPanel, TOKENS_HEADING } from "./DeckTokensPanel";
 
 /**
@@ -65,8 +69,12 @@ const meta = {
   tags: ["autodocs"],
   args: { deckId: 1, variant: "live", open: true, onToggle: fn() },
   // The band sits at the foot of the editor's column, which is the only scroller in it — so it
-  // is given a column's width and nothing else. Wide enough for the wall to draw a row of tiles
-  // without wrapping at the width the docs page renders at.
+  // is given a column's width and nothing else.
+  //
+  // **It wraps here, and that is the honest picture rather than a decorator that needs widening.**
+  // A tile is `stackCardWidth(cardZoom.deck)` since 2026-09-08 — 210px at 100% — so 60rem holds
+  // four of the seven the seed makes, which is roughly what a real desk holds. This comment used
+  // to promise a row that did not wrap, at 150px tiles.
   decorators: [
     (Story) => (
       <div className="w-[60rem] max-w-full p-4">
@@ -79,7 +87,13 @@ const meta = {
     docs: {
       description: {
         component:
-          "Every token and emblem the open deck needs, in a band under the deck stats.\n\n" +
+          "Every token and emblem the open deck needs, in a band between the price strip and " +
+          "the deck stats.\n\n" +
+          "**A tile is a stacked card at the desk’s own zoom** — `cardZoom.deck`, the same " +
+          "number the Stacks and Grid views read — so the tokens a deck makes are drawn the " +
+          "size of the cards that make them, at every stop of the ladder. The art picker behind " +
+          "a tile follows it, because a reader who presses a picture has to meet the same " +
+          "picture at the same size.\n\n" +
           "**The list is derived on every open and never stored.** Each of the deck's distinct " +
           "cards in an *active* category is read for the tokens it makes; what the table holds " +
           "is only what the reader changed — which art, how many, and whether it is on the wall " +
@@ -281,5 +295,59 @@ export const DismissedRevealed: Story = {
 
     // Unmoved, and deliberately: a dismissal is not one of the tokens this deck brings.
     await expect(within(region).getByText("4 to bring")).toBeInTheDocument();
+  },
+};
+
+/**
+ * **The wall at 150% of the desk's zoom, which is the whole of what a tile's size follows.**
+ *
+ * A tile is `stackCardWidth(cardZoom.deck)` — the stacked card's own width, read at the number
+ * the reader set on the deck beside it — so the tokens a deck makes are drawn the size of the
+ * cards that make them. `cardZoom.deck` is one key for **both** deck views for the reason
+ * `cardZoom.ts` gives, and this band is a third thing on the same desk; what it is emphatically
+ * not is `deckSearch`, the docked column, which is why that record holds a number per section.
+ *
+ * **Everything on the tile moves with it**, through `cardScaleVars`: the name, the subtitle, the
+ * `From …` line, the stepper and the two icon buttons. A 315px picture over an 11px caption is
+ * the tile disagreeing with itself, and it is the failure this story is here to make visible —
+ * neither the type sizes nor the picture's width can be asserted from jsdom, so the play below
+ * pins the one number that is an inline style and the picture is the reader's own check.
+ *
+ * The store is set rather than mocked because `useCardZoomPersistence` is `AppShell`'s alone —
+ * nothing in a story writes this row back.
+ */
+function ZoomedBand() {
+  // **During render rather than in an effect, and in a frame of its own** — `DecksPage`'s
+  // `ZoomedWall`, for both of its reasons. An effect runs after the first paint, so the wall
+  // would be shown at 100% for a frame on its way here; and `useAppStore` is a module singleton,
+  // so a write made while the other four stories are rendered inline on the docs page would be
+  // the last writer and would silently resize all of them (`.storybook/CLAUDE.md`).
+  useState(() => {
+    useAppStore.setState({ cardZoom: { ...DEFAULT_SECTION_ZOOMS, deck: 1.5 } });
+  });
+  return <DeckTokensPanel deckId={1} variant="live" open onToggle={fn()} />;
+}
+
+export const Zoomed: Story = {
+  render: () => <ZoomedBand />,
+  parameters: { docs: { story: { inline: false, height: "520px" } } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const region = await canvas.findByRole("region", { name: TOKENS_HEADING });
+    const tile = await within(region).findByRole("button", {
+      name: `Change the art for Treasure, ${SUBTITLE.treasure}`,
+    });
+
+    // The `<li>` carries the width, so the assertion climbs to it rather than reading the button
+    // — which is `w-full` and would answer about its parent anyway, by a route that would go on
+    // agreeing if the width moved to the wrong box.
+    const item = tile.closest("li");
+    await expect(item).not.toBeNull();
+    await expect(item).toHaveStyle({ width: `${stackCardWidth(1.5)}px` });
+
+    // Said as the ladder rather than as a literal, so a change to `STACK_CARD_WIDTH` moves this
+    // story with it instead of failing it. What is pinned is that the wall reads the zoom at
+    // all, which is the property that can regress.
+    await expect(stackCardWidth(1.5)).toBeGreaterThan(STACK_CARD_WIDTH);
   },
 };

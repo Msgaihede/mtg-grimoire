@@ -504,6 +504,30 @@ export interface CardStackProps {
    */
   theoryPlan?: TheoryPlan;
   /**
+   * Whether the deck these cards are in reads the collection at all — `deckKind.ts`'s
+   * `tracksCollection(deck)`, `false` for the third deck kind (issue #401).
+   *
+   * Handed down whole for {@link CardStackProps.theoryPlan}'s reason: it is one fact about the
+   * deck that every card in the pile is drawn against, so reading it per card would be a hundred
+   * answers to one question. It reaches `deckCardShort` and `deckCardName`, which is the whole
+   * of what it decides here — the red `3/4` in a card's chin and the *you own 3 of 4* clause in
+   * its name.
+   *
+   * **Optional here and required on all four views, which is not a drift.** This component is
+   * where a pile of cards is drawn rather than where a deck is, and its whole contract is that
+   * everything but the cards, the label and the currency has a default — `zoom`, `selectedSlot`
+   * and `landed` are three already, and a story mounting a stack to look at a hover is not making
+   * a claim about a deck kind. The default is `decks.virtual_only DEFAULT 0`'s own, which is the
+   * state every deck that predates schema v40 is in.
+   *
+   * **The fence is at both ends of the default rather than absent.** `StackView` — this
+   * component's only caller inside the app — takes the flag as a required prop and forwards it
+   * here, so nothing the reader ever sees is drawn on the default; and `deckCardShort`'s own
+   * second argument is required, because a *predicate* handed no deck has no honest answer to
+   * fall back on.
+   */
+  tracksCollection?: boolean;
+  /**
    * Open this card. The whole row is passed rather than an id, because the pane needs the
    * slot: the same printing sits in two categories often enough that "which one was pressed"
    * is not derivable from the card.
@@ -602,6 +626,7 @@ export function CardStack({
   currency,
   violations,
   theoryPlan,
+  tracksCollection = true,
   onSelect,
   actions,
   zoom = DEFAULT_ZOOM,
@@ -662,6 +687,7 @@ export function CardStack({
           transition={reduced ? STILL : stackCard}
           ruleBreakText={ruleBreak(violations?.get(card.cardId))}
           theoryMark={theoryMatchMark(theoryPlan, card)}
+          tracksCollection={tracksCollection}
           onSelect={onSelect}
           actions={actions}
         />
@@ -715,6 +741,7 @@ function StackedCard({
   transition,
   ruleBreakText,
   theoryMark,
+  tracksCollection,
   onSelect,
   actions,
 }: {
@@ -747,6 +774,12 @@ function StackedCard({
    *  a card the plan does not ask for; otherwise the tier it is in and how far the live list is
    *  from the plan **at that tier's own grain**, where `0` is the card the plan asks for exactly. */
   theoryMark: TheoryMark | null;
+  /** Whether the deck reads the collection at all — {@link CardStackProps.tracksCollection},
+   *  forwarded. **Required here where the stack's own is optional**: this card is module-private
+   *  and its one mount is a dozen lines up, so a required prop costs nothing and a hop that
+   *  forgets to forward the flag is a red build rather than a red `0/4` on every card of a
+   *  virtual deck. */
+  tracksCollection: boolean;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
 }) {
@@ -757,10 +790,11 @@ function StackedCard({
   // make, so one card is not marked two ways on one screen.
   const treatments = finishTreatments(card.promoTypes, finish);
   // {@link deckCardShort}, which is also what `deckCardName` says this card's shortage in words
-  // from — an inactive pile and the theory list each read 0 owned for a reason that is not an
-  // empty shelf. The **switch**, never the kind: a Maybeboard switched *on* is short of copies
-  // like any other pile.
-  const short = deckCardShort(card);
+  // from — an inactive pile, the theory list and a virtual deck each read 0 owned for a reason
+  // that is not an empty shelf. The **switch**, never the kind: a Maybeboard switched *on* is
+  // short of copies like any other pile. The third of those is the deck's and cannot be read off
+  // the row, which is why it arrives as a prop — see `deckCardShort`.
+  const short = deckCardShort(card, tracksCollection);
 
   return (
     // Collapsed, pulled up over its neighbour; open, standing 8px clear of it. The margin is
@@ -859,7 +893,7 @@ function StackedCard({
         type="button"
         // Every mark below is `aria-hidden`, so this string is the whole of what a keyboard
         // reader gets — including the red shortage figure, which nothing else would say.
-        aria-label={deckCardName(card, ruleBreakText, theoryMark)}
+        aria-label={deckCardName(card, ruleBreakText, theoryMark, tracksCollection)}
         // How the card pane hands the caret back after a printing swap replaces this card.
         {...deckCardProps(card)}
         {...deckCardPress(card, onSelect, actions)}

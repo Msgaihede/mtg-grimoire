@@ -435,6 +435,22 @@ function quickAddLine(kind: DeckAuditKind, p: Record<string, unknown>): AuditLin
  * *checked* that it is one. A variant this build has never heard of names no list and falls back
  * to the deck, which stays true of a whole-list clear whichever list it was — where a bare
  * `listName(entry.variant)` would confidently call it the actual list.
+ *
+ * **A virtual deck's row is not passed `{ virtual: true }`, and that is a decision rather than an
+ * omission** (2026-09-08, issue #401). Its rows are `live` rows, so a whole-list clear on one
+ * reads *"Cleared 60 cards from the actual list"* — vocabulary a reader who has only ever had a
+ * virtual deck has never been shown. The fix would be to hand this function the deck's **current**
+ * kind, and that is the reason not to: an audit row is a record of what happened, and a deck that
+ * was Theory + Actual in August and is virtual today really did have an actual list in August.
+ * Wording a past row from a present fact would relabel history every time the reader changed the
+ * deck's kind — the same error, in the opposite direction, as the `built` value two paragraphs
+ * down that this renderer must keep reading precisely because it was once true.
+ *
+ * What would settle it honestly is a **kind on the row**, written at the time like every other
+ * fact in the payload. That is a schema change no reader has asked for, and until one does, the
+ * confirmation the reader actually presses says *the deck* ({@link ClearDeck}) while the line
+ * recording it afterwards says *the actual list*. Known, small, and written down rather than
+ * quietly fixed the wrong way.
  */
 function clearedFrom(entry: DeckAuditEntry, p: Record<string, unknown>): string {
   if (text(p.scope) !== "deck") return text(p.category) ?? "a category";
@@ -610,6 +626,21 @@ function deckLine(p: Record<string, unknown>): AuditLine {
         detail: null,
       };
     }
+    // `decks.virtual_only` (schema v40) — the third deck kind, and the row a reader most needs
+    // worded, because it is the one write in this switch that **moved their cardboard**:
+    // becoming virtual files every copy the deck's group held into `Recently removed`. The
+    // history is where they will come looking for that, so the line says it.
+    //
+    // **Two rows, never one.** Setting either kind column clears the other, so a press on the
+    // settings group writes a `theory` line *and* a `virtualOnly` line and the drawer reads
+    // both. That is right rather than noisy — "Turned the theory list off" and "Made the deck
+    // virtual" are two true facts about one press, and the day's roll-up counts neither as a
+    // card change. Folding them into one line would need a field this schema does not have.
+    case "virtualOnly":
+      return {
+        text: flag(p.to) ? "Made the deck virtual" : "Made the deck track your collection again",
+        detail: flag(p.to) ? "Its copies moved to Recently removed" : null,
+      };
     case "archived":
       // Filed away, never deleted — `DeckPatch.archived`'s own words, which is why neither
       // half of this says "removed".

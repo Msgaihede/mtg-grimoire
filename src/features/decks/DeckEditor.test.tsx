@@ -262,6 +262,7 @@ const DECK: DeckRow = {
   folderId: null,
   notes: null,
   theoryEnabled: false,
+  virtualOnly: false,
   theoryMarkExact: true,
   theoryMarkName: true,
   // The third mark switch (2026-09-08), on as the column's own default is: a live row the plan
@@ -1748,6 +1749,32 @@ describe("DeckEditor", () => {
     // `DOCUMENT_POSITION_FOLLOWING` — the band comes after the as-of line in document order,
     // which in this one flex column is after it on screen.
     expect(asOf.compareDocumentPosition(stats) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  /**
+   * **Tokens & emblems sits between the price strip and the stats band** (2026-09-08), where it
+   * was under both.
+   *
+   * The half that is a *constraint* is the one above: neither band may come between the deck and
+   * the price strip, because the strip is where the remove tray is drawn for the length of a drag
+   * — so both are below it either way and the two are only ever ordered against each other. The
+   * half that is the reader's *choice* is which side of the four charts the token wall takes: it
+   * is a list of cards the deck is about to want, and the cards belong beside the cards, with the
+   * arithmetic — which nothing is dragged into and nothing is pressed on — last.
+   *
+   * Both facts are asserted, and the first one is why: an assertion that only said "tokens before
+   * stats" would stay green if somebody moved the pair above the strip together, which is the one
+   * arrangement that costs a reader something.
+   */
+  it("draws the token wall under the price strip and over the stats band", async () => {
+    await open();
+
+    const asOf = screen.getByText(/prices as of the last/i);
+    const tokens = screen.getByRole("region", { name: "Tokens & emblems" });
+    const stats = screen.getByRole("region", { name: "Deck stats" });
+
+    expect(asOf.compareDocumentPosition(tokens) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(tokens.compareDocumentPosition(stats) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   /**
@@ -4218,23 +4245,27 @@ describe("DeckEditor", () => {
     await screen.findByRole("group", { name: "Deck list" });
     await waitFor(() => expect(tab("Theory")).toHaveAttribute("aria-pressed", "true"));
 
-    // Deck settings is the only place the switch lives, and opening it is what puts the deck's
+    // Deck settings is the only place the kind is set, and opening it is what puts the deck's
     // own list in the cache beside the plan's — the second row the restore can read.
     await userEvent.click(screen.getByRole("button", { name: "Deck settings" }));
-    await screen.findByText("Theory deck");
-    // Named, because a deck **with** a plan draws three switches in this dialog: the plan's own,
-    // and the two theory marks indented under it. A bare `getByRole("switch")` found one for as
-    // long as there was only one to find.
-    const theorySwitch = () =>
-      within(screen.getByRole("dialog")).getByRole("switch", { name: /Theory deck/ });
+    await screen.findByText("Deck kind");
+    // **A three-way button group since issue #401, where this was a `Theory deck` switch.** The
+    // press is the same act — turn the plan off — spelled as picking the kind the deck becomes,
+    // and the write it makes carries **both** columns: `deckKindPatch` names `theoryEnabled` and
+    // `virtualOnly` on every press, so the pair can never end up both set. Scoped to the dialog
+    // because the words are short enough to collide with the editor behind it.
+    const kindButton = (label: string) =>
+      within(screen.getByRole("dialog")).getByRole("button", { name: label });
 
     deckUpdate.mockImplementation(async () => {
       deckRow = OFF;
       return { ...DECK, theoryEnabled: false };
     });
-    await userEvent.click(theorySwitch());
+    await userEvent.click(kindButton("Regular"));
 
-    await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { theoryEnabled: false }));
+    await waitFor(() =>
+      expect(deckUpdate).toHaveBeenCalledWith(4, { theoryEnabled: false, virtualOnly: false }),
+    );
     await waitFor(() => expect(held).toHaveLength(1));
     held[0]?.();
 
@@ -4252,9 +4283,11 @@ describe("DeckEditor", () => {
       deckRow = ON;
       return { ...DECK, theoryEnabled: true };
     });
-    await userEvent.click(theorySwitch());
+    await userEvent.click(kindButton("Theory + Actual"));
 
-    await waitFor(() => expect(deckUpdate).toHaveBeenLastCalledWith(4, { theoryEnabled: true }));
+    await waitFor(() =>
+      expect(deckUpdate).toHaveBeenLastCalledWith(4, { theoryEnabled: true, virtualOnly: false }),
+    );
     await userEvent.click(screen.getByRole("button", { name: "Close deck settings" }));
     await screen.findByRole("group", { name: "Deck list" });
     await userEvent.click(tab("Theory"));
@@ -4311,18 +4344,18 @@ describe("DeckEditor", () => {
     );
 
     await userEvent.click(screen.getByRole("button", { name: "Deck settings" }));
-    await screen.findByText("Theory deck");
+    await screen.findByText("Deck kind");
     deckUpdate.mockImplementation(async () => {
       deckRow = { theoryEnabled: false, lastVariant: "live" };
       return { ...DECK, theoryEnabled: false };
     });
-    // Named for the reason above: the two mark switches are drawn under this one while the deck
-    // keeps a plan, so the role alone no longer picks one control out.
-    await userEvent.click(
-      within(screen.getByRole("dialog")).getByRole("switch", { name: /Theory deck/ }),
-    );
+    // `Regular` rather than a `Theory deck` switch since issue #401 — the plan is one of three
+    // kinds now, and the write names both columns. Scoped to the dialog: these are short words.
+    await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Regular" }));
 
-    await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { theoryEnabled: false }));
+    await waitFor(() =>
+      expect(deckUpdate).toHaveBeenCalledWith(4, { theoryEnabled: false, virtualOnly: false }),
+    );
     await waitFor(() =>
       expect(screen.queryByRole("group", { name: "Deck list" })).not.toBeInTheDocument(),
     );
@@ -6146,6 +6179,168 @@ describe("DeckEditor — the Collection submenu", () => {
     );
     expect(opener).toHaveFocus();
     expect(deckQuickAddToCollection).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * **A Virtual deck — the third kind, and every collection surface this editor draws** (issue
+ * #401, `deckKind.ts`).
+ *
+ * A Virtual deck is one the reader tracks without owning the cardboard: an MTGO or Arena list, a
+ * proxy pile, a deck they are only reading about. It has no `collection_folders` group, so
+ * `owned_by_printing` joins nothing and every owned figure is a `0` with nothing asking why —
+ * which is exactly why the surfaces have to *go* rather than read that zero. `DeckEditor` answers
+ * `tracksCollection(row)` once and hands the same boolean to all of them, so what this block
+ * asserts is one derivation reaching six places.
+ *
+ * **Every case here is paired with its opposite.** An absence passes just as well against a
+ * surface that has been taken away from every deck, so the last case in this block is an ordinary
+ * deck with all of it still there — the regression that matters most, and the one a bare sweep of
+ * `queryBy…().not.toBeInTheDocument()` cannot make.
+ *
+ * **The rows carry `ownedQuantity: 0`**, which is what the backend answers for a deck with no
+ * group — and it is what makes these absences mean something: with a shortfall of four,
+ * `DeckStats` would draw the whole `N of M missing` line and all three of its presses if nothing
+ * had switched them off.
+ */
+describe("DeckEditor — a virtual deck", () => {
+  /** A deck of the third kind, holding a card it is four copies "short" of. */
+  const VIRTUAL = () =>
+    detail({ virtualOnly: true }, [bolt({ quantity: 4, ownedQuantity: 0 })]);
+
+  /** Right-click a deck card and hand back its menu — `a card's menu`'s own helper, local here
+   *  because that one is scoped to its describe. */
+  async function rightClickCard(name: string) {
+    const el = document.querySelector<HTMLElement>(
+      `[${DECK_CARD_ATTR}="${deckCardSlot(MAIN, `c-${name}`, null)}"]`,
+    );
+    expect(el).not.toBeNull();
+    fireEvent.contextMenu(el as HTMLElement);
+    return screen.findByRole("menu");
+  }
+
+  /**
+   * **The stats band's three presses, all gone** — `Pull from collection`, `Add missing to
+   * collection` and `Send missing to wishlist`.
+   *
+   * Two fences answer for these together and the case is written over both: `onPull` and
+   * `onAddMissing` are `null`, and `tracksCollection` takes the whole shortfall block the third
+   * one lives in. Asserting the third beside the two is what tells the two fences apart — a fix
+   * that only nulled the callbacks would leave `Send missing to wishlist` standing on a deck that
+   * owns nothing by construction, which is a shopping list for cardboard the reader never said
+   * they wanted.
+   */
+  it("draws none of the shortfall's three presses", async () => {
+    deckGet.mockResolvedValue(VIRTUAL());
+    await open();
+    await screen.findByRole("button", { name: /^Lightning Bolt/ });
+
+    expect(screen.queryByRole("button", { name: "Pull from collection" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Add missing to collection" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Send missing to wishlist" }),
+    ).not.toBeInTheDocument();
+  });
+
+  /**
+   * **No Collection tab in the docked column, and no strip over it.**
+   *
+   * The panel's own file pins why the strip goes with the tab
+   * (`DeckSearchPanel.test.tsx` — a two-way control with one answer is a control that cannot be
+   * used); what this asserts is the wiring, which is the half that file cannot see: the editor
+   * reads the deck row and hands the answer down.
+   *
+   * The card search is asserted **present** in the same case, because a panel that failed to
+   * mount at all would satisfy every absence here.
+   */
+  it("offers no Collection tab in the docked search panel", async () => {
+    deckGet.mockResolvedValue(VIRTUAL());
+    await open();
+
+    expect(await screen.findByRole("searchbox", { name: "Search cards" })).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Search in" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Collection" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("searchbox", { name: "Search your collection" })).toBeNull();
+  });
+
+  /**
+   * **No `Collection ▸` on a card, and it is gone rather than greyed.**
+   *
+   * `collectionItems` drops the whole submenu when any of `quickAdd` / `quickAddAndUnwish` /
+   * `pullCard` is `undefined` — `cardMenu.tsx`'s `moveItem` rule — so passing all three as
+   * `undefined` is the structural route and the one this takes. The three greyed-with-a-reason
+   * arms are for a deck that *has* a binder and cannot use it on this row; a virtual deck has no
+   * binder to write a reason about.
+   *
+   * The rest of the menu is asserted present, so the absence is this one item rather than a menu
+   * that failed to open. `Collection` is unambiguous at the top level: the other row by that name
+   * is a destination inside `Add to ▸`, which mounts only when that submenu is expanded.
+   */
+  it("offers no Collection submenu on a card", async () => {
+    deckGet.mockResolvedValue(VIRTUAL());
+    await open();
+    await rightClickCard("Lightning Bolt");
+
+    expect(screen.queryByRole("menuitem", { name: "Collection" })).not.toBeInTheDocument();
+    // The menu really did open, and everything that is not about a binder is still on it.
+    expect(screen.getByRole("menuitem", { name: "Copy card name" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /Move to/ })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Remove card" })).toBeInTheDocument();
+  });
+
+  /**
+   * **Neither plan is read**, which is the half that is not about pixels.
+   *
+   * Rust refuses `deck_pull_plan` and `deck_missing_plan` for a virtual deck **by name**
+   * (`deck::VIRTUAL_HOLDS_NOTHING`) rather than answering an empty list, so a query left enabled
+   * would put a real error banner on a screen whose reader pressed nothing.
+   *
+   * **What this case actually fences is the opener, and that is worth stating rather than
+   * implying.** Both queries are `enabled` on their layer being up, and on this deck no press can
+   * raise one — so backing the `tracks` term out of either `enabled` expression leaves this green,
+   * while backing out `onPull` / `onAddMissing` above reddens it. The term in `enabled` is the
+   * second fence, for the deck that changes *under* an open editor (a sync from another device),
+   * and nothing reachable from this suite can drive that.
+   */
+  it("reads neither the pull plan nor the missing plan", async () => {
+    deckGet.mockResolvedValue(VIRTUAL());
+    await open();
+    await screen.findByRole("button", { name: /^Lightning Bolt/ });
+
+    expect(deckPullPlan).not.toHaveBeenCalled();
+    expect(deckMissingPlan).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **The regression that matters most: an ordinary deck is untouched.**
+   *
+   * Every other case in this block is an absence, and an absence is satisfied by a build that has
+   * taken the surface away from every deck. This is the case that would go red for that — the
+   * three presses, the tab strip and the card's `Collection ▸`, all on the fixture the rest of
+   * this file uses.
+   *
+   * Written over all three surfaces in one case rather than three, because what is being asserted
+   * is a single derivation having the other polarity: `tracksCollection(row)` is `true` here, and
+   * the six consumers each read the same boolean.
+   */
+  it("leaves an ordinary deck's collection surfaces exactly where they were", async () => {
+    await open();
+
+    // The stats band.
+    expect(await screen.findByRole("button", { name: "Pull from collection" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add missing to collection" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send missing to wishlist" })).toBeInTheDocument();
+
+    // The docked column's strip, and the tab the panel opens on.
+    const strip = await screen.findByRole("group", { name: "Search in" });
+    expect(within(strip).getByRole("button", { name: "Collection" })).toBeInTheDocument();
+    expect(within(strip).getByRole("button", { name: "All cards" })).toBeInTheDocument();
+
+    // And the card's own submenu.
+    await rightClickCard("Lightning Bolt");
+    expect(await screen.findByRole("menuitem", { name: "Collection" })).toBeInTheDocument();
   });
 });
 

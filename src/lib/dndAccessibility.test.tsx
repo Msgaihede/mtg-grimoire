@@ -9,7 +9,7 @@ import type { FolderNode } from "@/lib/folderTree";
 import { CollectionFolderCard, type CollectionFolderTotals } from "@/features/collection/CollectionFolderCard";
 import { CollectionTable } from "@/features/collection/CollectionTable";
 import { WishFolderCard } from "@/features/wishlist/WishFolderCard";
-import { FolderTree } from "@/features/decks/FolderTree";
+import { DEFAULT_FOLDER_TREE_WIDTH_PX, FolderTree } from "@/features/decks/FolderTree";
 import type { FolderNode as DeckFolderNode } from "@/features/decks/folders";
 import { card } from "@/features/decks/validation/fixtures";
 import { buildGroups } from "@/features/decks/grouping";
@@ -226,6 +226,15 @@ async function renderFolderTree() {
   render(
     <TooltipProvider>
       <FolderTree
+        // The column's own geometry, at its shipped default and with room to spare. It is
+        // incidental to every assertion in this file — what is under test is where a *drag*
+        // source lands — but the tree draws no folder rows at all while it is railed, so the
+        // open state is what keeps that source in the document.
+        width={DEFAULT_FOLDER_TREE_WIDTH_PX}
+        collapsed={false}
+        maxWidth={600}
+        onResize={vi.fn()}
+        onCollapse={vi.fn()}
         nodes={nodes}
         totalDecks={2}
         selectedId={null}
@@ -302,6 +311,10 @@ async function renderDeckView(which: "stack" | "table" | "grid") {
     marketplace: MARKETPLACES.tcgplayer,
     actions: deckActions(),
     onSelect: vi.fn(),
+    // This file is about the drag-and-drop keyboard protocol and not about what a card says it
+    // owns, so it takes the ordinary deck: `true` is the shape every one of these assertions was
+    // written against, and a virtual deck would only draw the same rows with fewer marks on them.
+    tracksCollection: true,
   };
   render(
     <TooltipProvider>

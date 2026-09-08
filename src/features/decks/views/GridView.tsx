@@ -72,6 +72,7 @@ const TILE_GAP = 10;
 export function GridView({
   groups,
   marketplace,
+  tracksCollection,
   violations,
   theoryPlan,
   onSelect,
@@ -84,6 +85,28 @@ export function GridView({
   /** Which marketplace every price in this view is quoted from — the heading's total and each
    *  tile's own unit price. */
   marketplace: Marketplace;
+  /**
+   * Does this deck read the collection at all? `deckKind.ts`'s `tracksCollection(deck)`, `false`
+   * for a **virtual** deck (issue #401) — the kind the reader tracks without owning the
+   * cardboard.
+   *
+   * Handed down whole like `theoryPlan` and `violations` below it, and for their reason: one fact
+   * about the deck that every tile on the wall is drawn against. What it decides here is
+   * `deckCardShort` — the red `3/4` in a tile's chin, which this view has drawn since 2026-09-08,
+   * and the *you own 3 of 4* clause in the tile's accessible name. A virtual deck has no
+   * `collection_folders` group, so `owned_by_printing` joins nothing, every row reads 0 owned and
+   * **every** tile would wear the mark: the theory list's hundred red marks (issue #354) reached
+   * by a different route.
+   *
+   * **`card.variant` cannot answer it**: a virtual deck's rows are ordinary `live` rows on
+   * purpose, because `DeckRow.cardCount` and the gallery's colour bar both count
+   * `variant = 'live'`.
+   *
+   * **Required, like `marketplace` above it and like every other view's.** The four views are one
+   * deck drawn four ways, and a prop required on one and defaulted on the next is how they come
+   * to disagree about a deck one toolbar press apart.
+   */
+  tracksCollection: boolean;
   violations?: Map<string, ValidationIssue[]>;
   /** The deck's plan — `theoryMatch.ts`'s two lookups and the deck's own two mark switches,
    *  handed down whole like `violations` beside it. `undefined` for a deck with no plan, and on
@@ -175,6 +198,7 @@ export function GridView({
           marketplace={marketplace}
           violations={violations}
           theoryPlan={theoryPlan}
+          tracksCollection={tracksCollection}
           onSelect={onSelect}
           actions={actions}
           selectedSlot={selectedSlot}
@@ -193,6 +217,7 @@ function GridGroup({
   marketplace,
   violations,
   theoryPlan,
+  tracksCollection,
   onSelect,
   actions,
   selectedSlot,
@@ -204,6 +229,11 @@ function GridGroup({
   violations?: Map<string, ValidationIssue[]>;
   /** Handed through to the tiles — see {@link GridView}'s own props. */
   theoryPlan?: TheoryPlan;
+  /** Handed through to the tiles — see {@link GridView}'s own props. **Required here where the
+   *  wall's is optional**: this group is module-private with one mount, so a required prop costs
+   *  nothing and a hop that forgets to forward it is a red build rather than a red `0/4` on every
+   *  tile of a virtual deck. */
+  tracksCollection: boolean;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
   /** Handed through to the tiles — see {@link GridView}'s own props. */
@@ -281,6 +311,7 @@ function GridGroup({
               currency={marketplace.currency}
               ruleBreakText={ruleBreak(violations?.get(card.cardId))}
               theoryMark={theoryMatchMark(theoryPlan, card)}
+              tracksCollection={tracksCollection}
               onSelect={onSelect}
               actions={actions}
               selected={deckCardMarked(card, selectedSlot, actions)}
@@ -325,6 +356,7 @@ function GridCard({
   currency,
   ruleBreakText,
   theoryMark,
+  tracksCollection,
   onSelect,
   actions,
   selected,
@@ -340,6 +372,9 @@ function GridCard({
    *  does not ask for; otherwise the tier it is in and how far the live list is from the plan at
    *  that tier's own grain, where `0` is the card the plan asks for exactly. */
   theoryMark: TheoryMark | null;
+  /** Whether the deck reads the collection at all — see {@link GridView}'s own props. Required
+   *  here for {@link GridGroup}'s reason. */
+  tracksCollection: boolean;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
   /** This is the card the pane is open on. */
@@ -355,11 +390,12 @@ function GridCard({
   const tip = useTooltip();
   const dragRef = useDeckCardDrag(card, actions?.drop !== undefined, actions?.groupDrag);
   // {@link deckCardShort}, which is also what `deckCardName` says this card's shortage in words
-  // from — an inactive pile and the theory list each read 0 owned for a reason that is not an
-  // empty shelf. The **switch**, never the kind: a Maybeboard switched *on* is short of copies
-  // like any other pile. It is the stack's figure, and this tile draws it now because the two
-  // views are one card.
-  const short = deckCardShort(card);
+  // from — an inactive pile, the theory list and a virtual deck each read 0 owned for a reason
+  // that is not an empty shelf. The **switch**, never the kind: a Maybeboard switched *on* is
+  // short of copies like any other pile. It is the stack's figure, and this tile draws it now
+  // because the two views are one card. The third guard is the deck's rather than the row's and
+  // cannot be read off `card`, which is why it arrives as a prop.
+  const short = deckCardShort(card, tracksCollection);
 
   return (
     <li
@@ -427,7 +463,7 @@ function GridCard({
     >
       <button
         type="button"
-        aria-label={deckCardName(card, ruleBreakText, theoryMark)}
+        aria-label={deckCardName(card, ruleBreakText, theoryMark, tracksCollection)}
         {...deckCardProps(card)}
         {...deckCardPress(card, onSelect, actions)}
         // Inset, for the stacked card's reason: the button *is* the card face, whose edge sits 1px

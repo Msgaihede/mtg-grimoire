@@ -387,7 +387,6 @@ function CoverPreview({
           // The custom arm needed one — its route named the *deck*, so nothing keyed on the URL
           // could notice a replaced file, and the host passed the deck's `updatedAt` — and that
           // is the second thing the deletion took away.
-          decoding="async"
           onError={image.onError}
           className="size-full object-cover"
         />
@@ -499,7 +498,6 @@ function ChoiceTile({
           alt=""
           src={image.src}
           loading="lazy"
-          decoding="async"
           onError={image.onError}
           className="size-full object-cover"
         />

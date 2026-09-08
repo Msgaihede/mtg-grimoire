@@ -345,6 +345,7 @@ export const COMMAND_ATTR = "data-deck-command";
 export function StackView({
   groups,
   marketplace,
+  tracksCollection,
   violations,
   theoryPlan,
   onSelect,
@@ -357,6 +358,29 @@ export function StackView({
   /** Which marketplace every price in this view is quoted from — the heading's total and each
    *  card's own unit price. One value for the whole view, so the two cannot disagree. */
   marketplace: Marketplace;
+  /**
+   * Does this deck read the collection at all? `deckKind.ts`'s `tracksCollection(deck)`, `false`
+   * for a **virtual** deck (issue #401) — the kind the reader tracks without owning the
+   * cardboard.
+   *
+   * Handed down whole like `theoryPlan` and `violations` below it: one fact about the deck that
+   * every card in every pile is drawn against, so reading it per card would be a hundred answers
+   * to one question. It reaches `deckCardShort` and `deckCardName` at the bottom of the chain,
+   * which is the red `3/4` in a stacked card's chin and the *you own 3 of 4* clause in its name.
+   * A virtual deck has no `collection_folders` group, so `owned_by_printing` joins nothing and
+   * **every** row reads 0 owned — a hundred red marks all saying the same untrue thing, which is
+   * the theory list's own failure (issue #354) reached by a different route.
+   *
+   * **`card.variant` cannot answer it**, which is why this is a prop rather than a fourth clause
+   * in the predicate: a virtual deck's rows are ordinary `live` rows on purpose, because
+   * `DeckRow.cardCount` and the gallery's colour bar both count `variant = 'live'`.
+   *
+   * **Required, like `marketplace` above it and like every other view's**, rather than defaulted
+   * to `true`: the four views are one deck drawn four ways and a prop that is required on one and
+   * optional on the next is how they come to disagree about a deck a toolbar press apart. It is
+   * required on all three of the components below this one too, for `CommandZone`'s reason.
+   */
+  tracksCollection: boolean;
   violations?: Map<string, ValidationIssue[]>;
   /** The deck's plan — `theoryMatch.ts`'s two lookups and the deck's own two mark switches,
    *  handed down whole like `violations` beside it. `undefined` for a deck with no plan. */
@@ -723,6 +747,7 @@ export function StackView({
             marketplace={marketplace}
             violations={violations}
             theoryPlan={theoryPlan}
+            tracksCollection={tracksCollection}
             onSelect={selectCard}
             actions={actions}
             selectedSlot={selectedSlot}
@@ -738,6 +763,7 @@ export function StackView({
             marketplace={marketplace}
             violations={violations}
             theoryPlan={theoryPlan}
+            tracksCollection={tracksCollection}
             onSelect={selectCard}
             actions={actions}
             selectedSlot={selectedSlot}
@@ -802,6 +828,7 @@ export function StackView({
               marketplace={marketplace}
               violations={violations}
               theoryPlan={theoryPlan}
+              tracksCollection={tracksCollection}
               onSelect={selectCard}
               actions={actions}
               selectedSlot={selectedSlot}
@@ -865,6 +892,7 @@ function CommandZone({
   marketplace,
   violations,
   theoryPlan,
+  tracksCollection,
   onSelect,
   actions,
   selectedSlot,
@@ -893,6 +921,16 @@ function CommandZone({
    * this box is a card in the deck like any other.
    */
   theoryPlan?: TheoryPlan;
+  /**
+   * Whether the deck reads the collection at all — see {@link StackView}'s own props.
+   *
+   * **Required, where the view's own is optional, and the paragraph above is why.** Every prop
+   * on this box used to be optional and a plan left out of the call site compiled, rendered, and
+   * drew an unmarked commander; the shortage mark is the same shape of fact and would fail the
+   * same way — silently, and on the one card the deck is built around. A `boolean` with no
+   * default is a red build for the hop that forgets.
+   */
+  tracksCollection: boolean;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
   /** Handed through to the piles — see {@link StackView}'s own props. */
@@ -941,6 +979,7 @@ function CommandZone({
           marketplace={marketplace}
           violations={violations}
           theoryPlan={theoryPlan}
+          tracksCollection={tracksCollection}
           onSelect={onSelect}
           actions={actions}
           selectedSlot={selectedSlot}
@@ -964,6 +1003,7 @@ function StackGroup({
   marketplace,
   violations,
   theoryPlan,
+  tracksCollection,
   onSelect,
   actions,
   selectedSlot,
@@ -978,6 +1018,10 @@ function StackGroup({
   /** The deck's plan — `theoryMatch.ts`'s two lookups and the deck's own two mark switches,
    *  handed down whole like `violations` beside it. `undefined` for a deck with no plan. */
   theoryPlan?: TheoryPlan;
+  /** Whether the deck reads the collection at all — see {@link StackView}'s own props. Required
+   *  here for {@link CommandZone}'s reason: this pile is reached from three different call sites
+   *  in this file, and a `boolean` with no default is what stops one of the three drifting. */
+  tracksCollection: boolean;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
   /** Handed through to the stack — see {@link StackView}'s own props. */
@@ -1166,6 +1210,7 @@ function StackGroup({
             currency={marketplace.currency}
             violations={violations}
             theoryPlan={theoryPlan}
+            tracksCollection={tracksCollection}
             onSelect={onSelect}
             actions={actions}
             selectedSlot={selectedSlot}

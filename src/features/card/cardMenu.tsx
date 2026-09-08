@@ -1770,8 +1770,34 @@ function collectionLevel(
  *
  * **`Actual` is the label; `live` is still the value** — see the editor's switch, where the
  * choice not to rename the stored variant is argued.
+ *
+ * ## A **virtual** deck needs no arm here, and that is checked rather than assumed
+ *
+ * The third deck kind (issue #401) — one the reader tracks without owning the cardboard — is
+ * `theoryEnabled: false, virtualOnly: true` (`deckKind.ts`'s table), so it takes the first branch
+ * and gets the flat row adding to `"live"`. **That is already the right answer**, and it is right
+ * for the branch's own stated reason rather than by luck: a virtual deck keeps exactly one list,
+ * so offering a plan it does not have would be a second press for a choice with one answer. It
+ * keeps that one list in `live` deliberately — `DeckRow.cardCount` and the gallery's colour bar
+ * both count `variant = 'live'`, so rows parked in `theory` would report `0 cards` under an empty
+ * bar on every tile forever — so the `"live"` this row writes is the variant the deck actually
+ * holds, not a default standing in for one.
+ *
+ * **So no branch was added, and adding one would be the mistake.** `rowKind(deck)` is right there
+ * and reads well, and a `switch` over the three kinds here would spell two of them to the same
+ * row — three cases where the question has two answers, and a place for the two to drift.
+ *
+ * **The deck's name carries no mark of its kind, which is the other thing not to add.** A
+ * `Zoo (virtual)` here would be this menu answering a question the reader did not ask: they are
+ * picking a destination, and every deck in this list is a legal one. Nothing about *where the
+ * card lands* changes with the kind — the row writes a `deck_cards` row either way, and what a
+ * virtual deck does differently is refuse the *collection* writes, none of which are on this
+ * menu. The gallery tile is where a deck's kind is said, because that is the surface a reader
+ * goes to to read about their decks rather than to file a card into one.
  */
 function deckItem(deck: DeckRow, choose: (deckId: number, variant: DeckVariant) => void): MenuItem {
+  // A deck with no plan — a regular one **and a virtual one**, which is the branch's whole
+  // treatment of the third kind: see the block above.
   if (!deck.theoryEnabled) {
     return {
       kind: "action",

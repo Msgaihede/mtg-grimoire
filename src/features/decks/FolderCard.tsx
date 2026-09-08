@@ -637,7 +637,6 @@ function MemberArt({
           alt=""
           src={image.src}
           loading="lazy"
-          decoding="async"
           onError={image.onError}
           className="size-full object-cover"
         />

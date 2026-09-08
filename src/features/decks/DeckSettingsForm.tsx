@@ -7,6 +7,17 @@ import { compareLabels } from "@/lib/options";
 import { cn } from "@/lib/utils";
 import { AUTO_CATEGORY, AUTO_CATEGORY_LABEL } from "./autoCategory";
 import { DeckCoverPicker, type DeckCoverPickerProps } from "./DeckCoverPicker";
+// The three kinds, their words and the patch that writes them — `deckKind.ts` is the one
+// place `theoryEnabled` and `virtualOnly` are read or written together, and this form is a
+// consumer of that rule rather than a second copy of it.
+import {
+  DECK_KIND_HINT,
+  DECK_KIND_LABEL,
+  DECK_KINDS,
+  deckKind,
+  deckKindPatch,
+  type DeckKind,
+} from "./deckKind";
 import { CAPTION, FIELD } from "./formFields";
 // The **vocabulary**, not the control. `FormatSelect.tsx`'s `GameSelect` draws these same four
 // rows for the import dialog and is deliberately not reused here, exactly as its `FormatSelect`
@@ -34,7 +45,28 @@ export interface DeckSettingsValue {
   gameKey: DeckGame;
   description: string;
   notes: string;
+  /**
+   * Whether this deck keeps a plan beside the list it has actually sleeved up — and **half
+   * of a pair, never written on its own**.
+   *
+   * It is one of the two columns a {@link DeckKind} is folded out of, and the group that
+   * draws them writes both at once through `deckKindPatch`. *Reading* it alone is still
+   * right and is what the three mark rows below gate on — a mark compares the live list
+   * against a plan, so having a plan is the whole question. *Writing* it alone is what would
+   * produce the `theoryEnabled && virtualOnly` row `deckKind.ts` exists to keep out of the
+   * database.
+   */
   theoryEnabled: boolean;
+  /**
+   * Whether this deck is one the reader tracks **without owning the cardboard** — an MTGO or
+   * Arena list, a proxy pile. The other half of that pair, and the same rule.
+   *
+   * **Required on the value even though nothing else on this panel reads it**, which is
+   * {@link DeckSettingsValue.defaultCategoryId}'s rule one field over: a value shape that
+   * changed with its host would be two shapes. Both hosts hold it, the create draft holds
+   * `false`, and `deckKind(value)` is the only thing that reads the pair.
+   */
+  virtualOnly: boolean;
   /**
    * Whether this deck draws the **green** theory mark — a live row that is the printing the plan
    * named. See `theoryMatch.ts` for what "off" does, which is not "nothing": an exact row on a
@@ -194,7 +226,7 @@ export interface DeckSettingsFormProps {
  * | Control | `onChange` | `onCommit` |
  * | --- | --- | --- |
  * | Name, Description, Notes | every keystroke | on blur — and Enter blurs the name field, unless a host took Enter for {@link DeckSettingsFormProps.onSubmit} |
- * | Game, Format, Theory deck, Folder, the cover | on the one act that settles them | never |
+ * | Game, Format, Deck kind, Folder, the cover | on the one act that settles them | never |
  *
  * A select, a switch and a tile all finish in a single act, so there is nothing for a second
  * callback to add. A text field does not, which is the whole reason the pair exists.
@@ -207,7 +239,7 @@ export interface DeckSettingsFormProps {
  *
  * | Host | Writes on |
  * | --- | --- |
- * | `DeckSettingsDialog` (edit) | `onChange` for game, format, theory, folder and the cover; `onCommit` for the three text fields — which is today's behaviour exactly, one write per control as it settles |
+ * | `DeckSettingsDialog` (edit) | `onChange` for game, format, the deck's kind, folder and the cover; `onCommit` for the three text fields — which is today's behaviour exactly, one write per control as it settles |
  * | `CreateDeckDialog` (create) | nothing. It merges every `onChange` into a draft and **ignores `onCommit` entirely**, then sends one `deck_create` |
  *
  * ## What it deliberately does not render
@@ -256,20 +288,34 @@ export function DeckSettingsForm({
               id={idPrefix}
             />
           )}
-          <TheorySwitch
-            on={value.theoryEnabled}
-            onChange={(theoryEnabled) => onChange({ theoryEnabled })}
+          <DeckKindGroup
+            kind={deckKind(value)}
+            // **Both columns, always.** `deckKindPatch` names `theoryEnabled` *and*
+            // `virtualOnly` on every press, so no press can leave the other one standing —
+            // which is what keeps the impossible `true, true` row out of a draft as well as
+            // out of the database. The patch goes straight into `onChange`, so the edit host's
+            // single `deckUpdate` carries the pair and the create host's draft holds it.
+            onPick={(kind) => onChange(deckKindPatch(kind))}
             id={idPrefix}
           />
           {/* **Two gates, and they are two different questions.** `theoryEnabled` is *is there a
               plan to compare against* — all three marks are drawn by reading the live list
-              against the theory list, so with no plan a switch here would change what is on
+              against the theory list, so with no plan a row here would change what is on
               screen not at all and nothing on screen would say why. The red one is no exception:
               *not in the theory list* is still a statement about a list, and with no plan every
               row would wear it. {@link DeckSettingsFormProps.canSetTheoryMarks} is *can this host
               write the answer down* — `false` at create, where `DeckInput` carries none of the
               three columns. Neither is a greyed set: a control that changes nothing and a control
-              that cannot take effect are both worse than no control. */}
+              that cannot take effect are both worse than no control.
+
+              **The first gate still reads `theoryEnabled` and deliberately not the kind, and it
+              needs no arm for `virtual`.** `deckKindPatch` writes both columns on every press
+              and only `theory` sets this one, so `Regular` and `Virtual` each leave it `false`
+              — checked against that function rather than assumed, and pinned by
+              `DeckSettingsForm.test.tsx`'s *hides the mark rows for both of the other two
+              kinds*. So the rows vanish for both by the one test that was already here, and a
+              `deckKind(value) === "theory"` beside it would be a second spelling of one fact,
+              free to drift from the patch the moment a fourth kind is added. */}
           {value.theoryEnabled && canSetTheoryMarks && (
             <TheoryMarkSwitches
               exact={value.theoryMarkExact}
@@ -540,29 +586,102 @@ function DefaultCategoryRow({
   );
 }
 
-/** The second list, and what turning it off does — which is less than a reader would fear. */
-function TheorySwitch({
-  on,
-  onChange,
+/**
+ * Which of the three kinds this deck is — one control, three exclusive presses.
+ *
+ * It replaced a single `Theory deck` switch on 2026-09-08, when `virtual` became the third
+ * kind ([issue #401](https://github.com/Msgaihede/mtg-grimoire/issues/401)). A switch answers
+ * a yes-or-no question, and this stopped being one: a deck is a *regular* deck, a deck with
+ * a plan, or a deck whose cardboard the reader does not own, and the two booleans behind
+ * that are one choice wearing two columns.
+ *
+ * **`role="group"` with `aria-pressed` per button, never a radiogroup.** That is
+ * `features/scanner/panels/ControlsPanel.tsx`'s grammar and its argument verbatim: these are
+ * toggles that happen to be exclusive, and a radio's roving tab stop would put the reader
+ * inside a three-way keyboard mode to change one word. Its `Segment` is the **precedent and
+ * not the component** — that file is a private dev panel, sized and coloured for a debug
+ * rail, and importing a control out of it would tie this panel to a surface no reader sees.
+ *
+ * **It is drawn as the editor's own `Theory | Actual` switch is** (`DeckEditor.tsx`'s variant
+ * group): the same joined box, the same `bg-accent`/`text-accent-fg` pressed half against
+ * `text-dim hover:text-text`, the same 150ms colour tween with its `motion-reduce` opt-out.
+ * That resemblance is the point rather than a coincidence — this control is what decides
+ * whether that one is drawn at all, so a reader who sets `Theory + Actual` here should meet
+ * the same object in the ribbon rather than two segmented controls that merely rhyme.
+ * **The height is this panel's and not that ribbon's**: `h-8`, {@link SwitchButton}'s, where
+ * the editor's group is `h-9` because that row is sized by a `ToggleChip` standing in it.
+ *
+ * **The caption goes underneath, which is the one place this row departs from the panel's
+ * heading-left / control-right grammar**, and either half of the reason would be enough on
+ * its own. The group is the widest control here — three words against a switch's one and a
+ * dropdown's `w-44` — so a caption beside it would be squeezed into a column narrower than
+ * the sentence it has to draw, at both hosts' widths. And the sentence *is the answer to the
+ * press*: it changes with every one of the three, so it belongs under the buttons it is
+ * about, where a caption in the left column would read as a standing description of the row.
+ *
+ * **It hands back a {@link DeckKind} and never a patch.** The one place `theoryEnabled` and
+ * `virtualOnly` are spelled together stays `deckKindPatch`, so this component cannot be the
+ * thing that writes one of them alone.
+ */
+function DeckKindGroup({
+  kind,
+  onPick,
   id,
 }: {
-  on: boolean;
-  onChange: (on: boolean) => void;
+  kind: DeckKind;
+  onPick: (kind: DeckKind) => void;
   id: string;
 }) {
   return (
-    <div className="flex items-center gap-3">
-      <div className="min-w-0 flex-1">
-        <p id={`${id}-theory`} className="text-sm">
-          Theory deck
-        </p>
-        <p className="mt-0.5 text-[0.6875rem] leading-snug text-dim">
-          A second list you are building towards. Turning it on makes the deck you have the plan
-          and starts the actual list empty; turning it off hides the Theory/Actual switch and the
-          difference list and keeps every row.
-        </p>
+    <div>
+      <p id={`${id}-kind`} className="text-sm">
+        Deck kind
+      </p>
+      <div
+        role="group"
+        // Named by the heading a reader can see rather than by an `aria-label` repeating it
+        // — WCAG 2.5.3, and {@link SwitchButton}'s own rule two components down.
+        aria-labelledby={`${id}-kind`}
+        // The editor's variant group character for character, with one substitution: `w-fit`
+        // where that one carries `shrink-0`. This is a block child of the panel's `space-y`
+        // column rather than an item of a flex row, so `shrink-0` would be an inert class and
+        // the box would stretch the full width of the column without something to size it to
+        // its buttons.
+        className="mt-1.5 flex w-fit overflow-hidden rounded-md border border-border"
+      >
+        {/* {@link DECK_KINDS}' order, which is an argument rather than an alphabet — the
+            kind every deck is born as, then the one that adds a list, then the one that
+            takes the collection away — so it is deliberately not put through
+            `sortOptions`. The words are {@link DECK_KIND_LABEL}'s, spelled nowhere else,
+            because `Theory + Actual` is also the gallery tile's badge and the two must not
+            come to name one deck two ways. */}
+        {DECK_KINDS.map((k) => (
+          <button
+            key={k}
+            type="button"
+            // The pressed one stays pressable and nothing here is disabled — `aria-disabled`
+            // included. A group of three toggles of which exactly one is on is what
+            // `aria-pressed` says; pressing the kind the deck already is calls back with
+            // that kind, and both hosts' writes are a no-op on a patch that changes nothing.
+            aria-pressed={k === kind}
+            onClick={() => onPick(k)}
+            className={cn(
+              "h-8 px-2.5 text-xs",
+              "transition-colors duration-150 motion-reduce:transition-none",
+              k === kind ? "bg-accent font-medium text-accent-fg" : "text-dim hover:text-text",
+              FOCUS,
+            )}
+          >
+            {DECK_KIND_LABEL[k]}
+          </button>
+        ))}
       </div>
-      <SwitchButton on={on} headingId={`${id}-theory`} onChange={onChange} />
+      {/* The **selected** kind's line and only it. Three sentences on screen at once would
+          be a paragraph about a choice rather than the meaning of the one that has been
+          made, and a reader who has pressed a button is asking what they just did.
+          {@link DECK_KIND_HINT} is those words' one home, so no surface can come to
+          describe a kind differently from this one. */}
+      <p className="mt-1 text-[0.6875rem] leading-snug text-dim">{DECK_KIND_HINT[kind]}</p>
     </div>
   );
 }
@@ -570,10 +689,12 @@ function TheorySwitch({
 /**
  * Which of the live list's three theory marks this deck draws.
  *
- * **Drawn only under a switched-on {@link TheorySwitch}**, and indented under it, because these
- * four are one subject: a mark is the live list read *against* the plan, so a deck with no plan
- * has nothing for any of them to compare against. The gate is at the call site rather than here,
- * beside the switch it depends on.
+ * **Drawn only for a deck {@link DeckKindGroup} is showing as `Theory + Actual`**, and indented
+ * under it, because these four are one subject: a mark is the live list read *against* the
+ * plan, so a deck with no plan has nothing for any of them to compare against. The gate is at
+ * the call site rather than here, beside the control it depends on — and it is spelled
+ * `value.theoryEnabled` rather than `deckKind(value) === "theory"`, for the reason written
+ * there.
  *
  * **Three switches and not one picker**, which is `DeckRow.theoryMarkName`'s argument carried up
  * to the control and widened by the red tier (2026-09-08): a single ordered choice cannot spell
@@ -582,7 +703,7 @@ function TheorySwitch({
  * and it is the case that could not be spelled at all: **a reader may want the red alone**, a
  * proxy player who has no interest in which of their cards are the plan and every interest in
  * which are *not* it. All three off is a real answer too, and is not a second spelling of the
- * theory switch above being off.
+ * the kind above not being `Theory + Actual`.
  *
  * **The swatch is the point of the row's first line.** "Green", "blue" and "red" are the words,
  * and the colours are the reader's own — `useMarkColors` writes `--color-theory-exact`,
@@ -688,11 +809,16 @@ function MarkSwitch({
 }
 
 /**
- * The switch this panel draws four times — the theory list, and each of its three marks.
+ * The switch this panel draws three times — one for each of the live list's three theory marks.
  *
- * One definition rather than four copies, because four controls that look alike today are four
- * independent decisions that agree today: the deck editor has already paid for that with two
- * scrim darknesses and three panel heights.
+ * One definition rather than three copies, because three controls that look alike today are
+ * three independent decisions that agree today: the deck editor has already paid for that with
+ * two scrim darknesses and three panel heights.
+ *
+ * **It drew the theory list's own switch as a fourth until 2026-09-08**, when that question
+ * stopped being a yes-or-no one and became {@link DeckKindGroup}. Nothing about this component
+ * moved with it — a mark really is on or off — which is the whole of why the two shapes can sit
+ * in one panel: a group answers *which of three*, a switch answers *whether*.
  *
  * **`aria-labelledby` naming the heading beside it *and* its own state word, in that order.**
  * Never `aria-label`, which would replace the visible "Enabled" with something that does not
