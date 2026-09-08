@@ -47,8 +47,16 @@ type Story = StoryObj<typeof meta>;
  * marks and its cost.
  *
  * The `RULE BREAK` chip has no room on a 22px row, so the mark here is the **stripe** down the
- * left of the name — destructive for a break, gold for a game changer. The sentence is not
- * lost: it is the row's `title` and it is in the control's own name.
+ * left of the name — destructive for a break, gold for a game changer, and destructive wins on a
+ * card that is both. The sentence is not lost: it is bound as the row's hint and it is in the
+ * control's own name.
+ *
+ * **A game changer is a crowned count at the *head* of the line since 2026-09-08**, and the gold
+ * `GC` badge that used to say it at the tail is deleted. A 10px gutter carries the crown and the
+ * quantity beside it is tinted the same gold, so the fact sits in the column a reader is already
+ * running their eye down rather than among the three small marks in the line's tail. The gutter
+ * is reserved on **every** row, crowned or not, which is what keeps those numbers in one column
+ * down a list of eighty — `rowMarkColor`'s own `transparent` reasoning one mark over.
  */
 export const Default: Story = {
   play: async ({ canvasElement }) => {
@@ -246,14 +254,19 @@ export const ByManaValue: Story = { args: { groups: deckGroups("manaValue", "man
 /**
  * The **Live** list of a deck that keeps a plan.
  *
- * A decklist line is a quantity, a name and its marks, so the mark joins the finish glyph and the
- * `GC` badge at the end of the line rather than taking a corner it has not got. Decoration here:
- * the line is a button with an explicit `aria-label`, so the word is `deckCardName`'s — which is
- * why the assertion below reads the button's name rather than looking for text.
+ * A decklist line is a quantity, a name and its marks, so the mark joins the finish glyph at the
+ * end of the line rather than taking a corner it has not got. Decoration here: the line is a
+ * button with an explicit `aria-label`, so the word is `deckCardName`'s — which is why the
+ * assertion below reads the button's name rather than looking for text.
  *
- * **Two of the four planned marks are counts rather than ticks** (issue #212), drawn at the `GC`
- * badge's own 9px rather than the tick's 12: two characters of type beside a card's name is what
- * that badge already is, and a 12px one would out-shout the name it sits next to.
+ * **It is the last mark in that tail since 2026-09-08**, where it used to share it with the gold
+ * `GC` badge: the game changer is a crowned count at the *head* of the line now, so the only
+ * things left after the name are the finish glyph and this.
+ *
+ * **Two of the four planned marks are counts rather than ticks** (issue #212), drawn at 9px
+ * rather than the tick's 12 — the size the `GC` badge used to be set at, kept for its reason
+ * rather than for its neighbour: two characters of type beside a card's name is a mark that must
+ * not out-shout the name it sits next to.
  *
  * **The other six lines wear the red X** (2026-09-08) — the plan does not ask for that card at
  * all — so every line in this list ends in a mark. On a text list that is the version of the

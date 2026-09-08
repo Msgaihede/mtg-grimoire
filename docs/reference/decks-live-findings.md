@@ -94,6 +94,11 @@ are all things no suite could have seen.
   at three depths — 5px and 8px into the overlap answer the tag, and 3px answers the banner,
   which is correct because the tag's `clip-path` has already receded there. **jsdom paints
   nothing and a class assertion cannot see any of this**; the suite was green throughout.
+  **The overlap it was about is gone since 2026-09-08 and the rung is kept anyway.**
+  `GameChangerBanner` is deleted — the crown is printed *inside* `QuantityTag` now — so no sibling
+  in the marks strip tucks under that slanted tail and `LAYER.overlappingMark` covers nothing.
+  It stays because the finding is general and cost a live pass to get: a mark laid over that tail
+  needs a rung rather than a `relative`, and this is the lowest one on the scale.
 - **Driven 2026-08-13 after the `CardStack.dc.html` redesign, on a 10-row Commander deck**
   seeded through `import_resolve`/`deck_import_commit` over `window.__TAURI_INTERNALS__`:
   the quantity tag, the Game Changer banner, `RULE BREAK`, the data line and the stepper column
@@ -1098,6 +1103,12 @@ row measured 38px. The whole line read
 `Format Commander · Cards 100+3 · Lands 32 · Avg. mana 2.58 · Price $948.94 · Owned 0 / 103
 missing` with `1 issue · 6 game changers · Bracket ~4` in the right-hand group at **297px**.
 
+**That 297 was read with `6 game changers` as a `<span>`, and it became a `<button>` on
+2026-09-08** — the game-changer spotlight. The words are unchanged and so is the height, but a
+**latched** chip draws a 12px crown plus a `gap-1` inside its own box, so the right-hand group is
+~16px wider in that one state and this figure describes the off state only. Nothing about the
+spotlight has been driven in the shipped window.
+
 ### The toolbar's split, read off the y coordinates
 
 At 761 the toolbar is two lines and they are the right two. Read off `getBoundingClientRect`:
@@ -1717,10 +1728,22 @@ say the same thing: tag at `x=1` w28, ribbon at `x=18` w130, tick at `x=147` w28
 draws the tile at a story's own width with a fixture that has to carry a game changer *and* a
 theory match on one card to produce it at all. It is the class of thing this file exists for.
 
-The fix is `DeckCardFace`'s `gameChanger` prop — the ribbon on the stack, the crown alone on the
-tile, in the same place in the same strip. Re-measured immediately after, same session, same
-deck: tag at `x=1` w28, crown at `x=29` w13, tick at `x=136` w28, **overflow 0**, and the stack
-still drew the ribbon (`Game Changer` present, no bare crown) on the same four cards.
+The **first** fix was `DeckCardFace`'s required `gameChanger: "banner" | "crown"` prop — the
+ribbon on the stack, the crown alone on the tile, in the same place in the same strip. Re-measured
+immediately after, same session, same deck: tag at `x=1` w28, crown at `x=29` w13, tick at `x=136`
+w28, **overflow 0**, and the stack still drew the ribbon (`Game Changer` present, no bare crown)
+on the same four cards.
+
+**That prop lived for part of one afternoon and the figures above are its whole record.** It put
+one fact on two arms for two drawings of one deck, which is what the deck's own marks rules
+refuse, so the shipped answer folds the crown **into the quantity tag** instead — 11px of crown
+and a 3px gap inside a mark both card-face views were already drawing, in the tag's own foreground
+rather than in gold. `GameChangerBanner` and `GameChangerBadge` are deleted with it, and the two
+row views draw a gold crown in their quantity column. The crowned tag is 28 + 11 + 3 ≈ **42px** by
+arithmetic, narrower than either arm of the fork; **it has not been read off the window**, so
+there is no live figure for the shipped drawing on this page and the ~42 is derived rather than
+measured. Nothing about the defect above changes: the overflow was real, the clip was at every
+stop, and neither suite could see any of it.
 
 ### Two traps worth keeping
 

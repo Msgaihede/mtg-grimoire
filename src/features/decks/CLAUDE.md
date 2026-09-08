@@ -1394,6 +1394,85 @@ price | type`). An **inactive category stays its own group in all three grouping
     scope. Read-only — changing it is a Deck settings trip — and it is the first thing to go at
     `TIGHT_HEADER_PX`, where the check button's own name still carries it. With no spec in hand it
     falls back to the deck row's `formatName`.
+- **The game-changer count on that line is a readout that is also a press — the _spotlight_**
+  (2026-09-08). The chip says how many; the deck laid out under it says nothing about **where**,
+  and on a hundred-card desk that is a hunt through four views' worth of crowns. Hovering the chip,
+  or the caret landing on it, fades every card in the deck that is **not** a game changer to
+  **25 %**; a click latches the same state so the reader can take their hand off the mouse and go
+  and look. It is the odd control on that line — the check and the bracket are slotted in whole
+  because each opens a layer `DeckLedger` owns nothing about, and this one opens nothing at all, so
+  it is drawn there. Everything below is a decision:
+  - **Two facts and a derivation, never a third `useState`.** `DeckEditor` holds `gcLatched` (the
+    press) and `gcHovered` (the pointer or the caret), and `gcSpotlight` is
+    `(gcLatched || gcHovered) && gameChangers > 0`, computed at render. A synced third state is the
+    derived-state pattern this repo's lint refuses — and refuses only at `npm run verify` — and it
+    would also make hover-while-latched a write that could release the latch when the pointer left.
+  - **`aria-pressed` carries the _latch_ and never the composite.** A latch is a toggle, which is
+    what that attribute describes and what a second press releases; a pointer resting on a control
+    is not a state the control is in, so the chip draws that for itself with a `hover:` /
+    `focus-visible:` variant. Three appearances and only one of them is a state: **off** is
+    `border-border text-dim`, **touched** paints the words gold and leaves the edge alone,
+    **latched** takes the edge too and adds a crown — the same mark the cards it lights up wear. So
+    hovering while latched changes nothing on screen, exactly as it changes nothing in the editor.
+  - **The reveal is on focus as well as hover, and that is not a courtesy** — `onFocus`/`onBlur`
+    are the same callback as `onMouseEnter`/`onMouseLeave`, because an affordance only a pointer
+    can arm is one a keyboard reader never gets. **Two named callbacks rather than one
+    `onSpotlight({ latched?, hovered? })`**: the object shape can spell `{}` and
+    `{ latched: true, hovered: false }`, neither of which is a gesture anybody made.
+  - **The accessible name carries the action, because a readout is not an affordance.**
+    `spotlightName` is `<count> — press to spotlight them in the deck` (and `… to stop …` when
+    latched), with the count first so the visible words stay a prefix of the name (WCAG 2.5.3) at
+    both widths — `tight` deletes the word from the *drawing* and never from the name. Same string
+    as the tooltip, `describes: false`, so the two readers cannot be told different things.
+  - **The fade is one CSS rule and never a re-render of the deck.** `src/index.css` carries
+    `[data-gc-spotlight] .deck-gc-dimmed:not([data-dnd-dragging]) { opacity: 0.25 }` plus a 150ms
+    `ease` transition on the class, with a `prefers-reduced-motion` arm setting `transition: none`
+    — reduced, the cards still dim, they simply arrive there. That arm is not optional: opacity is
+    a **non-positional** property, and `motion`'s `reducedMotion` only reduces positional keys.
+    **0.25 is a fade and never a hide** — the dimmed cards keep their layout, their legibility and
+    every hit target they had, because the question is *which of these* and the reader is still
+    building a deck out of the rest of them.
+  - **The card wears a class and the container wears an attribute, and both spellings are
+    deliberate.** `cardControl.tsx`'s `deckCardDimmed(gameChanger)` answers `GC_DIMMED`
+    (`deck-gc-dimmed`) for anything but `true` — **`null` dims**, as an orphan is not a game
+    changer — and `undefined` for a game changer, so a lit card's class list is byte-for-byte what
+    it was. It is a **class** rather than a `SELECTED_ATTR`-style attribute because every other
+    mark here is an attribute so that something can *find* a card after the fact (a test, a CDP
+    probe, the caret hand-back) and nothing ever asks this one; what settles it in practice is
+    `TableView`, which does not own its row element and reaches this through `VirtualTable`'s
+    existing `rowClassName` hook rather than making that shared primitive grow a prop for one
+    caller. And it marks the **dimmed** state rather than the lit one so the selector stays one
+    flat descendant compound: the inverse is `[data-gc-spotlight] *:not(.deck-gc-lit)`, a `:not()`
+    over a broad subject, which this repo has measured taking one jsdom play from 3.5 s to 15 s.
+  - **A card in the air is exempt, and it is the one collision worth guarding.** The drag rule
+    above it in `index.css` puts a dragged card at 0.75 so the reader can see what they are aiming
+    at, and dnd-kit stamps `data-dnd-dragging` on the source element **in place** — it becomes a
+    popover, and the top layer is a painting order rather than a change of ancestry — so a dimmed
+    card dragged under a latched spotlight still matches, and at (0,2,0) against the drag rule's
+    (0,1,0) it would win. `:not([data-dnd-dragging])` hands the card back for the length of the
+    gesture, and costs nothing because it qualifies a class rather than the broad subject above.
+  - **`deckSpotlightProps` goes on the box holding the four views and on nothing wider.** That box
+    is the `min-w-0 flex-1` + `DECK_HEIGHT_FLOOR` child; the docked search column is its **sibling**
+    in the desk row, so the tiles a reader is shopping through — most of which are game changers of
+    nothing — are outside the attribute by construction. The desk row would have been the wrong
+    ancestor for exactly that reason and the editor's root worse again. The attribute is absent
+    entirely when the spotlight is off, so a deck nobody is spotlighting grows nothing.
+  - **The `gameChangers > 0` gate is a fence against a latch outliving its own control.** The chip
+    is drawn only for a deck that has one, so it cannot be *pressed* on a deck with none — but the
+    latch is the editor's state and the count is a `useMemo` over the rows, so an edit that removes
+    the last game changer would take the chip away and leave a whole deck at a quarter with nothing
+    on screen to press. Gating the **derivation** rather than clearing the flag keeps that a read:
+    a reader who steps a card to zero and undoes it finds the spotlight where they left it.
+  - **The chip counts copies over the piles that count and the fade asks only about the card, so
+    the two can disagree by a switched-off pile.** `gameChangers` sums `quantity` where
+    `gameChanger === true && categoryActive` — the same "counts toward nothing" rule the rest of
+    this file keeps — while `deckCardDimmed` reads `card.gameChanger` alone, so a game changer
+    parked in a switched-off Maybeboard stays **lit** without being in the number above it. That is
+    the honest pair rather than a gap to close: the count is a claim about the deck the format will
+    judge, and the fade answers *is the card in front of me one of the powerful ones*, which is
+    true of a parked one — the same split `validateDeck` and `validateForMarks` already make. It
+    only ever shows up as a lit card the chip did not count; a deck whose game changers are **all**
+    parked reads `0`, draws no chip, and has no spotlight to be inconsistent with.
 - **What is left in the band is what needs the room**: the pips, the shortfall and the press that
   acts on it, and the four charts. **The deck stats are a band at the foot of the editor, and there
   is no control that hides them** (changed 2026-08-14). They were a 280px aside on the desk row with a `Stats` toggle in
@@ -1918,11 +1997,12 @@ price | type`). An **inactive category stays its own group in all three grouping
   pre-warm has one constant to agree with instead of two call sites.
 - **`Grid`'s tile is `DeckCardFace` — the _stack's_ own card — and only the box around it is this
   view's** (changed 2026-09-08). One component draws the card: the printed frame under the picture,
-  the `CardImage`, `FoilOverlay … mark={false}`, the marks strip (`QuantityTag`, the game changer,
-  `TheoryMatchMark`) and the bottom-left `RULE BREAK`, plus `CARD_ASPECT` and
-  `cardFaceHeight(width)`. **The game changer is the one mark of the three the two views draw
-  differently**, and `DeckCardFace`'s required `gameChanger: "banner" | "crown"` is the whole of
-  that difference — the sub-bullet below has the measurement. `CardStack`'s `stackImageHeight(zoom)` is
+  the `CardImage`, `FoilOverlay … mark={false}`, the marks strip (`QuantityTag` — **crowned** where
+  the card is a game changer — and `TheoryMatchMark`) and the bottom-left `RULE BREAK`, plus
+  `CARD_ASPECT` and `cardFaceHeight(width)`. **The two views draw every one of those marks the same
+  way**, which they did not for the few hours `DeckCardFace` carried a required
+  `gameChanger: "banner" | "crown"`; the sub-bullet below has the measurement that put that prop
+  there and the fold that took it away. `CardStack`'s `stackImageHeight(zoom)` is
   `cardFaceHeight(stackCardWidth(zoom))` by construction, so the two views cannot draw two shapes
   of one card. What the tile keeps for itself is the **box** the face goes in — the `rounded-lg
   border` wrapper and the stack's resting shadow, `CardChin` under it with this view's `seam` and
@@ -1952,36 +2032,49 @@ price | type`). An **inactive category stays its own group in all three grouping
     finish is said in words in the chin instead. **The theory tick's `1.5rem × --mark-scale`
     offset went with the chip**: that offset existed to stack the tick under a chip the tile no
     longer draws, so the tick sits at the right end of the same strip with no offsets of its own.
-  - **The game changer is the crown — in the marks strip, in exactly the place the stack's ribbon
-    stands — and this bullet said "the ribbon" for the length of one afternoon.** What it claimed
-    was that with `mark={false}` there is no chip to put a crown in and the marks strip has the
-    room to spell the words out, so the tile draws `GameChangerBanner` exactly as the stack does.
-    The first half is true and is why the 2026-08-16 answer (the crown in `CardArt`'s chip, in the
-    corner the docked search column draws it in) expired with the frame it was about. **The second
-    half was the reasonable inference and it was wrong, and nothing in the source or in either
-    suite could have said so**: the design decision was that the tile adopts the stack's marks,
-    the ribbon is one of them, and the strip's width is not a fact any file states. All three
-    marks in that strip — `QuantityTag`, the game changer and `TheoryMatchMark` — are sized off
-    `--mark-scale`, so they do **not** get narrower when the card does. Driven in the shipped
-    window 2026-09-08 (`npm run tauri dev`, a **debug** build, 1920×1080, against the real corpus,
-    on a 101-card Commander deck at `cardZoom` 1.1): a card that is both a game changer and an
-    exact plan match put a **28px** tag, a **130px** ribbon and a **28px** tick into a **163px**
-    strip on a **165px** tile — **11px of overflow**, into a face that is `overflow-hidden`, so
-    the plan's tick was clipped by nearly half. Every term scales with the zoom, so the ratio is
-    constant and it was clipped at *every* stop of the ladder; photographed at 2× to confirm.
-    Re-measured after the fix in the same session: tag at x=1 (28 wide), crown at x=29 (13 wide),
-    tick at x=136 (28 wide), **overflow 0**, with the stack still drawing the ribbon.
-    So `DeckCardFace` takes a **required** `gameChanger: "banner" | "crown"`; `CardStack` passes
-    `"banner"` (a 210px card has the room, and the ribbon was drawn for it) and `GridView` passes
-    `"crown"` (`components/GameChangerMark`, the 12px gold crown at `--mark-scale`). **It is not a
-    return to the chip**: `FoilOverlay` is still `mark={false}` on both card-face views, top-right
-    is the plan's tick on both, and this view still draws no `CardArt` at all. `GC` is still the
-    table's and the text columns', where there is no art to lay a glyph on. The count of drawings
-    is unchanged — this is `GameChangerMark`'s own rule, *one fact, three drawings, "a difference
-    of room, never of meaning"* — with the **two card-face views on different arms of it for the
-    first time, because they are two widths**. jsdom lays nothing out, so the overflow itself is a
-    live claim; `views.test.tsx` pins the pair (the tile draws no `Game Changer` words and does
-    draw the crown, the stack draws the words) because either half alone is satisfied by the bug.
+  - **The game changer is a crown printed _on the quantity tag_, and both views draw it
+    identically — which took two reversals in one day.** With `mark={false}` there is no chip for
+    a crown to sit in, so the 2026-08-16 answer (`GameChangerMark` in `CardArt`'s corner chip, the
+    way the docked search column still draws it) expired with the frame it was about. **The first
+    replacement was `GameChangerBanner` on both views, and this bullet asserted it for the length
+    of one afternoon**: the design decision was that the tile adopts the stack's marks, the ribbon
+    is one of them, and the strip's width is not a fact any file states. It was a reasonable
+    inference and it was wrong, and nothing in the source or in either suite could have said so.
+    All three marks in that strip — `QuantityTag`, the game changer and `TheoryMatchMark` — are
+    sized off `--mark-scale`, so they do **not** get narrower when the card does. Driven in the
+    shipped window 2026-09-08 (`npm run tauri dev`, a **debug** build, 1920×1080, against the real
+    corpus, on a 101-card Commander deck at `cardZoom` 1.1): a card that is both a game changer
+    and an exact plan match put a **28px** tag, a **130px** ribbon and a **28px** tick into a
+    **163px** strip on a **165px** tile — **11px of overflow**, into a face that is
+    `overflow-hidden`, so the plan's tick was clipped by nearly half. Every term scales with the
+    zoom, so the ratio is constant and it was clipped at *every* stop of the ladder; photographed
+    at 2× to confirm.
+    **The second reversal is what shipped, and it removed the fork rather than picking a side.**
+    The first fix was a required `gameChanger: "banner" | "crown"` on `DeckCardFace` — `"banner"`
+    from `CardStack`, whose 210px card has the room, `"crown"` from here — measured clean in the
+    same session (tag at x=1 w28, a bare crown at x=29 w13, tick at x=136 w28, **overflow 0**).
+    That is one fact drawn two ways on two drawings of one deck, which is what this whole bullet
+    exists to refuse, so the crown folded into `QuantityTag` instead: **11px of crown and a 3px
+    gap**, both scaled, printed before the number inside a mark both views were already drawing.
+    The tag was 28px, so the crowned one is about **42px** — narrower than either arm of the fork
+    — and the strip is two marks again, the crowned tag at the left end and the plan's tick pushed
+    to the right by an `ml-auto` that no longer has a third sibling to space around. So the prop is
+    gone, **`GameChangerBanner` and `GameChangerBadge` are both deleted**, and the deck draws one
+    glyph on all four of its views: the crown on the tag here and on the stack, a gold crown in the
+    quantity column on the table and the text list. **It is not a return to the chip** —
+    `FoilOverlay` is still `mark={false}` on both card-face views, top-right is the plan's tick on
+    both, and this view still draws no `CardArt` at all.
+    **The crown takes the tag's own foreground and is never gold here**, which is the half most
+    likely to be "corrected" back. `components/GameChangerMark`'s gold is for a crown drawn *bare*
+    over somebody's artwork, where nothing else says which fact it is; a filled tag already carries
+    a colour that means the card's **label**, so gold on a Gold-labelled tag is a glyph nobody can
+    see and gold on an azure one is the only mark in the strip ignoring what it stands on.
+    `components/CountTag`'s `crowned` prop carries the arithmetic, including why 14px more content
+    moves no padding.
+    **jsdom lays nothing out, so the overflow was a live claim and so is its absence** — Storybook
+    could not see it either, drawing the tile at a story's own width against a fixture that has to
+    carry a game changer *and* an exact plan match on one card. What a suite can see is that the
+    crown is in the DOM and that neither card face draws the words `Game Changer` any more.
   - **A rule break is `border-destructive` on the tile's wrapper, not a `ring-2 ring-destructive`
     on the face.** The ring was the right answer while the face had an edge of its own (`CardArt`'s
     neutral `border border-border`, from 2026-08-26) and the wrapper had none — a border on the
@@ -2024,7 +2117,10 @@ price | type`). An **inactive category stays its own group in all three grouping
     shipped window" and it was true for a few hours**: the pass that found the ribbon overflowing
     (the game-changer bullet above, 2026-09-08) is the one live reading this tile has, and it is
     the marks strip alone — 165px of tile, a 163px strip, the three marks' widths and their `x`
-    before and after. Everything else about it — the wrapper's border and shadow, the chin's seam,
+    before and after. **Its "after" figures are the _fork's_**, taken with a bare crown on the tile
+    and the ribbon still on the stack, so they measure an arrangement that lasted hours; the
+    crowned tag that replaced it is 28 + 11 + 3 by arithmetic and has not been read off the window.
+    Everything else about the tile — the wrapper's border and shadow, the chin's seam,
     the controls column at each end of the zoom ladder — is still owed, and no figure for any of
     it belongs on this page until it is taken.
 - **The editor is no longer a scroller at all — `AppShell`'s `main` is the one that scrolls**
@@ -2796,12 +2892,14 @@ price | type`). An **inactive category stays its own group in all three grouping
   because a lazy-loaded category is a wall of `<img>`s and the card is known before its bytes are.
   The frame is the same thing that says "No image", "Retrying…" or "No card".
 - **The marks go left, and they used to go right** (changed 2026-08-13). Over the art go facts
-  about the _deck_ — the quantity tag, the game changer (the `Game Changer` banner on the stacked
-  card, `GameChangerMark`'s crown in the same place on a Grid tile, which is a difference of width
-  and nothing else — see the Grid bullet above), `RULE BREAK`. Under it goes the
+  about the _deck_ — the quantity tag and `RULE BREAK`. Under it goes the
   data line with facts about the _printing_. `QuantityTag` merges the label and the copy count
   into one mark: the count printed on the label's own colour, grey when there is no label, so gold
-  stays something a label says. **`LabelDot` is what the other views draw, and since 2026-09-08
+  stays something a label says. **The game changer is a third fact on that same mark since
+  2026-09-08** rather than an object beside it: a crown drawn before the number, in the tag's own
+  foreground, replacing the `Game Changer` banner the stacked card stamped and the bare crown the
+  Grid tile drew for a few hours after it. The Grid bullet above has the measurement that forced
+  it and `components/CountTag`'s `crowned` prop the arithmetic. **`LabelDot` is what the other views draw, and since 2026-09-08
   that is two of them rather than three**: the Grid tile drew a dot beside a `bg-accent` count chip
   until the two card-face views became one `DeckCardFace`, and it folds both into `QuantityTag`
   now exactly as the stack does. `TableView`'s Labels column and `TextView`'s line are the call
@@ -2828,11 +2926,17 @@ price | type`). An **inactive category stays its own group in all three grouping
   its square ones.
 - **Every mark carries a `title`, and that is a second contract from the accessible name.**
   `deckCardName` is the whole of what a screen reader gets; a pointer user sees a 6px gem, a
-  slanted tag in a label's colour and a crown, none of which is a word. Six sentences, pinned by
-  `CardStack.test.tsx`: the label (`"Fast mana · 2 in this pile"` — the label and the count are
-  one mark, so one title says both), `"Game changer"`, the rule break's own finding, the rarity
-  (`RarityGem` grew a `title` for this; the stack draws no rarity text), the shortage, and the
-  finish through `FinishMark`'s SVG `<title>`. **The seventh is missing on purpose**: the canvas
+  slanted tag in a label's colour and a crown printed on it, none of which is a word. Read the
+  marks the card draws rather than a count written here — this bullet said "six sentences" and
+  was already one short of the plan's tick before 2026-09-08 moved another. The ones with a
+  sentence of their own are the quantity tag, the rule break's own finding, the rarity
+  (`RarityGem` grew a `title` for this; the stack draws no rarity text), the shortage, the plan's
+  tick and the finish through `FinishMark`'s SVG `<title>`. **The game changer's sentence is a
+  clause rather than a mark of its own since 2026-09-08**: the crown is drawn inside
+  `QuantityTag`, so one title says all three facts —
+  `"Fast mana · 2 in this pile · Game changer"`, appended so that an uncrowned tag's string is
+  exactly what it always was. `CardStack.test.tsx` is where these are pinned. **The one that is
+  missing is missing on purpose**: the canvas
   wants the set _name_ behind the printing code, and `DeckCard` carries only `setCode` —
   `cards.set_name` exists but `deck_card_select` does not select it.
 - **The shortage is a mark of the _live_ list only, and `deckCardShort` is the whole of the rule**
@@ -2874,6 +2978,12 @@ price | type`). An **inactive category stays its own group in all three grouping
   `VirtualTable`'s own quiet row colour, which all three of the app's tables share; what all four
   agree on is the **attribute**, `SELECTED_ATTR`/`LANDED_ATTR`, which is what `views.test.tsx`
   sweeps and what a CDP probe can ask. A class is a recipe and would go red for a change of taste.
+  **A third joined them on 2026-09-08 and is deliberately the exception to that last sentence** —
+  the game-changer spotlight's `GC_DIMMED`, spread by all four views out of the same module. It is
+  a **class** rather than an attribute because nothing ever asks the DOM which cards are dimmed:
+  the only reader is one rule in `src/index.css`, and `TableView` reaches it through
+  `VirtualTable`'s `rowClassName` rather than making a shared primitive grow a prop. The full rule,
+  the drag exemption and where the container is armed are in the ledger's spotlight bullet above.
 - **Picked is keyed by the _slot_, and that reversed the rule this file used to state**
   (2026-08-17). It was `cardId` alone, argued as "a pane is open on a _printing_, so a card filed
   in two piles is marked in both — which is the honest answer to which card the pane is about".

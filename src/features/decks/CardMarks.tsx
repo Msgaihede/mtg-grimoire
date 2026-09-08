@@ -7,18 +7,31 @@
  * That is only true if they are drawn the same way everywhere, which is what this file buys.
  *
  * Four things separate them and every surface keeps all four: the words (`RULE BREAK` spelled
- * out against two letters), the colour (destructive against the pie gold), the place (over
- * the card's art against its title bar) and the card's own edge, which only a rule break
- * changes. The place is the caller's, so it rides in `className`; the other three are here.
+ * out against a glyph that spells nothing), the colour (destructive against the count tag's own
+ * foreground, which `labelFgCss` computes for legibility on the label's fill and so is never a
+ * red), the place (over the card's art against its title bar) and the card's own edge, which
+ * only a rule break changes. The place is the caller's, so it rides in `className`; the other
+ * three are here.
+ *
+ * **Two of those clauses read differently until 2026-09-08, and both moved rather than
+ * weakened**, when the game changer stopped being a mark of its own and became the crown on
+ * {@link QuantityTag}: the words were *two letters* (`GC`) and the colour was *the pie gold*.
+ * One gold for one fact was that mark's rule and is `components/GameChangerMark`'s still,
+ * wherever the crown is a mark in its own right on somebody else's artwork. What a crown printed
+ * *on* a fill the reader picked cannot be is a fixed colour — so here the separation is carried
+ * by the fill being a label's, which is a thing no rule break ever wears.
  *
  * **That "the place is the caller's" used to be justified by the two card-face views putting the
  * marks in different corners, and since 2026-09-08 they do not.** The stacked card and the Grid
  * tile draw one `DeckCardFace`, so every mark on both is in the same corner of the same strip and
  * `className` is carrying nothing about *place* on either of them. It stays a caller's argument
  * because the surfaces that are **not** a card face still decide it — a table cell and a 22px text
- * line have no corners at all — and because the one thing those two views do still differ about is
- * which *drawing* of the game changer they have room for, which is `GameChangerMark`'s own rule
- * and not a corner.
+ * line have no corners at all. **What the two card faces no longer differ about is the game
+ * changer**, which was the one thing left: the stack had the room to stamp a ribbon and the
+ * 165px tile did not, so one fact took two drawings and `DeckCardFace` a prop to pick between
+ * them. Folded into {@link QuantityTag} the same day, it costs 14px of a mark both views already
+ * draw — so the two are the same marks in the same places, and no width argument is left in this
+ * file.
  *
  * **{@link TheoryMatchMark} joined them on 2026-08-20 and made that rule load-bearing rather
  * than merely observed**, because it is a *tick* — the one glyph a reader could take for "this
@@ -53,9 +66,10 @@
  *
  * Adding a mark here means asking which of those two says it in words.
  */
-import { Check, Crown, X } from "lucide-react";
+import { Check, X } from "lucide-react";
 import { COUNT_TAG_BOX_MIRRORED, COUNT_TAG_SLANT_MIRRORED, CountTag } from "@/components/CountTag";
 import { FinishMark } from "@/components/FinishMark";
+import { GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { playedFinish } from "@/lib/finish";
 import { finishTreatments } from "@/lib/treatment";
@@ -112,10 +126,11 @@ export function LabelDot({
 }
 
 /**
- * The copy count as a **filled tag in the card's own label colour** — the deck stack's mark, and
- * the one place the label and the quantity are drawn as a single object.
+ * The copy count as a **filled tag in the card's own label colour**, crowned where the card is one
+ * the format calls a game changer — the deck's card-face mark, and the one place three facts about
+ * a card are drawn as a single object.
  *
- * ## Why the two were merged
+ * ## Why the label and the count were merged
  *
  * The stack draws whole card faces, and the only part of a collapsed one the reader sees is a
  * 34px strip. Two separate marks in it — an 8px dot and a grey count chip — spend that strip
@@ -123,16 +138,36 @@ export function LabelDot({
  * So the count is *printed on* the tag: one object, one glance, and the strip keeps room for
  * the printed name underneath it.
  *
+ * ## Why the game changer joined them (2026-09-08)
+ *
+ * The same argument made a second time, against a third mark and a strip that had run out of room.
+ * The fact was a *second object* in that strip — a stamped gold ribbon on the stacked card,
+ * `components/GameChangerMark`'s crown on the Grid tile, which is why one fact needed two drawings
+ * and a `gameChanger` prop to pick between them. All three marks are sized off `--mark-scale`, so
+ * none of them narrows when the card does: the ribbon overflowed a 165px tile by 11px into an
+ * `overflow-hidden` face and clipped the plan's tick at every stop of the zoom ladder, which is
+ * the measurement in `GameChangerMark`'s header. Folded in, the fact costs **14px of this tag** —
+ * an 11px crown and a 3px gap — instead of an object of its own, and the two card-face views are
+ * back on one drawing.
+ *
+ * {@link CountTag.crowned} carries the rest, including what survives of *one fact, three drawings,
+ * a difference of room and never of meaning*: the fact and the meaning survive, the room argument
+ * is spent, and a deck draws one glyph on all four of its views.
+ *
  * **An unlabelled card is grey** — {@link CountTag}'s own `NEUTRAL_COUNT_PAINT`, never the gold a
  * missing token falls to. A filled mark has to be some colour, and if the unlabelled one were
  * gold then gold would stop being something a label says. This is the one caller that draws the
- * distinction, which is why it passes `paint` for a label and nothing at all without one.
+ * distinction, which is why it passes `paint` for a label and nothing at all without one. **The
+ * crown is drawn in whatever that decides** and never in gold, which is the same sentence read
+ * from the other end: gold on a Gold-labelled tag would be a glyph nobody can see, and gold on an
+ * azure one would be the only mark in the strip ignoring the label it stands on.
  *
  * **The box is {@link CountTag}'s and no longer this file's** — the slant, the height, the mono
- * face, the `aria-hidden` and the number-with-no-`×`. The search wall makes the same statement
- * about a different quantity (how many printings a collapsed tile stands for) and the two have to
- * be one object. What stays here is what makes this one a *label*: the colour it is filled with,
- * the sentence naming both facts, and the z-index below.
+ * face, the crown, the `aria-hidden` and the number-with-no-`×`. It sits on the `components/`
+ * shelf because that geometry is a primitive rather than this feature's shape, which is that
+ * component's own argument and outlived the second caller it was first moved for. What stays here
+ * is what makes this one a *label*: the colour it is filled with, the sentence naming all three
+ * facts, and the z-index below.
  *
  * {@link LabelDot} is untouched and is still what the table, the text columns and the categories
  * panel draw — a row has a column for the count and does not need the two folded together.
@@ -141,6 +176,7 @@ export function QuantityTag({
   quantity,
   name,
   color,
+  gameChanger,
   className,
 }: {
   quantity: number;
@@ -150,27 +186,47 @@ export function QuantityTag({
   name: string | null;
   /** The stored palette token, never a CSS colour — see `labelColors.ts`. */
   color: string | null;
+  /**
+   * Whether this card is one the format calls a game changer — the crown on the tag, and the
+   * clause on the sentence.
+   *
+   * **Required, and deliberately not defaulted**, which is {@link TheoryMatchMark.tier}'s argument
+   * one component down: a mark is a thing a reader believes at a glance, so a caller that has not
+   * thought about the fact must not be able to draw a tag quietly saying the card is ordinary.
+   * `false` is a claim; an omission is not one, and this is the only mark on a deck's card face
+   * that says the fact at all now.
+   */
+  gameChanger: boolean;
   className?: string;
 }) {
+  // All three facts, because each of them makes a riddle of the others alone: the count without
+  // the name makes the colour one, the name without the count makes the number one, and the crown
+  // says nothing in words at all — this tag is `aria-hidden`, so `title` is the whole of what a
+  // pointer gets and `deckCardName` the whole of what a keyboard reader gets.
+  //
+  // Appended rather than folded in, so the two arms this had before are the same two strings for a
+  // card that is not a game changer. `GAME_CHANGER_LABEL` rather than the words, because it is one
+  // fact and this file no longer owns any of its spellings.
+  const said = name === null ? `${quantity} in this pile` : `${name} · ${quantity} in this pile`;
   return (
     <CountTag
       count={quantity}
-      // Both facts, because the count alone would make the colour a riddle and the name alone
-      // would make the number one. The words themselves are in `deckCardName`, which is the
-      // only text inside a labelled button anyone hears.
-      //
       // Still a `title` **prop** — `CountTag` (`components/CountTag.tsx`) owns turning it into
-      // a `useTooltip()` binding internally, since that component's file is outside this
-      // sweep's list. The prop's name and shape are unchanged, so this call site needed no edit.
-      title={name === null ? `${quantity} in this pile` : `${name} · ${quantity} in this pile`}
+      // a `useTooltip()` binding internally.
+      title={gameChanger ? `${said} · ${GAME_CHANGER_LABEL}` : said}
       // Nothing for an unlabelled card, which is how it lands on the neutral grey — see above.
       paint={name === null ? undefined : { css: labelColorCss(color), fg: labelFgCss(color) }}
+      crowned={gameChanger}
       className={cn(
-        // **The z-index is load-bearing and `relative` alone was not enough.** This tag has to
-        // cover the Game Changer banner tucked 10px under its slanted tail, and the obvious
-        // trick — leave the banner static and make this positioned — does not work on flex
-        // items: they paint in order-modified document order, so the later sibling won. The
-        // lowest rung on the scale, and `layers.ts` has the measurement.
+        // **The rung is kept and covers nothing since 2026-09-08.** It was here to paint over the
+        // Game Changer ribbon tucked 10px under this tag's slanted tail; the crown is drawn inside
+        // the tag now, so no sibling in the marks strip overlaps this one. What is worth keeping
+        // with it is the finding, which is general and took a live pass to get: the obvious
+        // trick — leave the other mark static and make this one positioned — does **not** work
+        // on flex items, because they paint in order-modified document order and the later sibling
+        // wins whatever `position` the earlier one has. So a mark laid over this tail needs a
+        // rung rather than a `relative`, and this is the lowest one on the scale. `layers.ts` has
+        // the measurement.
         "relative",
         LAYER.overlappingMark,
         className,
@@ -286,8 +342,11 @@ export function theoryDeltaText(delta: number): string {
  * The same problem `STACK_OPEN_ATTR` and `LANDED_ATTR` solve one file over: the mark used to be
  * addressable by its `title`, and the tooltip sweep moved that text off the DOM attribute a
  * `getByTitle` could read. It is `aria-hidden` and carries no visible text of its own (unlike
- * `RuleBreakMark`'s `RULE BREAK` or `GameChangerBanner`'s spelled-out words), so a test or a
- * live probe needs its own handle rather than `getByText`. On both {@link TheoryMatchMark} and
+ * {@link RuleBreakMark}'s `RULE BREAK`, which is the only mark on a card face still spelling
+ * anything out), so a test or a live probe needs its own handle rather than `getByText`. That
+ * shrank rather than moved on 2026-09-08, when the game changer's ribbon and its two gold letters
+ * folded into a crown: a glyph is exactly the kind of mark this attribute exists for, so the
+ * question is now asked of nearly every mark in the strip. On both {@link TheoryMatchMark} and
  * {@link TheoryMatchBadge} — one fact, two drawings, one attribute.
  *
  * **The value is the `TheoryTier`** — `"exact"`, `"name"` or, since 2026-09-08, `"unplanned"` —
@@ -362,10 +421,16 @@ const THEORY_PAINT: Readonly<Record<TheoryTier, { fill: string; fg: string }>> =
  *
  * **This is still one fact drawn twice app-wide, and the other drawing is
  * {@link TheoryMatchBadge}** — the table's and the text columns', which have no art to lay a
- * filled mark on. That is the same argument {@link GameChangerBadge} and
- * {@link GameChangerBanner} settle the same way, that one fact may be drawn twice where the two
- * surfaces have genuinely different room. What ended here is a second drawing for two surfaces
- * that turned out to have the *same* room.
+ * filled mark on. What ended here is a second drawing for two surfaces that turned out to have the
+ * *same* room.
+ *
+ * **The game changer used to be the other instance of that argument and is no longer an instance
+ * of anything** (2026-09-08): its ribbon and its two gold letters folded into one crown —
+ * {@link QuantityTag}'s, through {@link CountTag.crowned} on the card faces and the row views' own
+ * quantity column — so a deck draws that fact with one glyph everywhere and *room* has stopped
+ * deciding anything about it. This pair is the one place in the deck where a fact is still
+ * genuinely drawn twice, and the reason is the one above rather than a width: a row of type has no
+ * art to lay a filled mark on.
  *
  * **The measurement that bought the chip is still true and no longer decides anything.** The
  * banner is 22px on a 210px stacked card and the same 22px on a 150px tile — 7.5 % of the card
@@ -440,9 +505,12 @@ const THEORY_PAINT: Readonly<Record<TheoryTier, { fill: string; fg: string }>> =
  * beside the gold banner (`docs/reference/frontend-design.md` has the pass). Two of the three
  * refusals stand unchanged. **Gold** — the obvious first choice, since `bg-accent` is what a chip
  * on a card usually is — put two gold marks in one 27px strip meaning two unrelated things, and
- * read as an extension of {@link GameChangerBanner}. **The neutral count paint** was invisible as
- * a distinction: a grey chip at one end of the strip and a grey chip at the other read as two of
- * the same thing.
+ * read as an extension of the gold Game Changer ribbon that stood in that strip on the day. **That
+ * ribbon is gone and the refusal is not**: the crown that replaced it takes {@link QuantityTag}'s
+ * own foreground, so the second gold in the strip is now a **Gold label's** tag rather than the
+ * game changer's — the same two marks meaning two unrelated things, reached by a different route.
+ * **The neutral count paint** was invisible as a distinction: a grey chip at one end of the strip
+ * and a grey chip at the other read as two of the same thing.
  *
  * **The third is reversed.** That pass ruled `--color-ok` out in these words: *it is this app's
  * "nothing is wrong here" colour, which is the one reading a tick must not have.* That was a
@@ -619,13 +687,18 @@ export function TheoryMatchMark({
  * against it; this draws the glyph in the colour itself, on the view's own background, so there
  * is nothing printed on anything.
  *
- * ## It is deliberately **not** {@link GameChangerBadge}'s outlined box, and that is a finding
+ * ## It is deliberately **not** an outlined box, and that is a finding
  *
- * The first draft was, on the obvious reasoning that the marks inline beside a card's name should
- * be one family. Drawn, it was a **checkbox**: a hairline box with a tick inside it is the one
+ * The first draft was one, on the obvious reasoning that the marks inline beside a card's name
+ * should be one family — the family at the time being the game changer's `GC`, two gold letters in
+ * a hairline box. Drawn, it was a **checkbox**: a hairline box with a tick inside it is the one
  * control every reader already knows, and a row of them down a decklist reads as something to
- * click. `GC` gets away with the box because it contains *letters*. So the box goes and the tick
- * stands on its own, which is what {@link DeckFinishMark} beside it already does.
+ * click. `GC` got away with the box because it contained *letters*, which is why the finding was
+ * about this glyph rather than about that one. So the box goes and the tick stands on its own,
+ * which is what {@link DeckFinishMark} beside it already does. **That badge is gone since
+ * 2026-09-08** — these two views draw the game changer as a crown in their own quantity column —
+ * so nothing inline beside a card's name wears a box at all now, and the finding is what keeps it
+ * that way rather than a thing one mark opted out of.
  *
  * No `--mark-scale` anywhere in it: neither surface is a card face, so neither zooms.
  *
@@ -696,148 +769,6 @@ export function TheoryMatchBadge({
       ) : (
         theoryDeltaText(delta)
       )}
-    </span>
-  );
-}
-
-/**
- * A game changer, as two gold letters.
- *
- * Gold and abbreviated on purpose: it is a fact about the card, not a problem with the deck,
- * and a deck may hold a dozen of them legally. `bracket.ts` counts them into an advisory;
- * nothing about one is a finding.
- *
- * **The deck's table and its text columns, and no card face.** A row of type has no art to lay a
- * glyph on; a card face has, and takes one of the other two arms of `GameChangerMark`'s
- * one-fact-three-drawings rule — {@link GameChangerBanner} where the card is 210px wide,
- * `components/GameChangerMark`'s bare crown where it is 150. This is the arm a width argument
- * never reaches, which is why nothing here has ever had to be measured.
- */
-export function GameChangerBadge({ className }: { className?: string }) {
-  const tip = useTooltip();
-  return (
-    <span
-      aria-hidden="true"
-      // Redundant with `deckCardName`'s own "game changer" clause — the words are already the
-      // whole of what a keyboard reader gets from the button this sits inside.
-      {...tip("Game changer", { describes: false })}
-      className={cn(
-        "shrink-0 rounded-[2px] border border-pie-gold px-0.5 font-mono text-[0.5625rem]",
-        "leading-3 text-pie-gold",
-        className,
-      )}
-    >
-      GC
-    </span>
-  );
-}
-
-/**
- * The same fact as a **stamped gold banner**, for the one surface with room to spell it out —
- * the deck's **stacked card**, and since 2026-09-08 that is a statement about a width rather
- * than about a view.
- *
- * A table row and a text column can afford `GC`; a 210px card face in the stack can carry the
- * words, and it should — two letters are a code the reader has to have learnt, and this is the
- * surface a new reader meets the concept on. The four separations {@link RuleBreakMark} must
- * keep are all still kept, which is the only thing that made spelling it out safe: the **words**
- * differ (`Game Changer` against `RULE BREAK`), the **colour** differs (the gold stamp against
- * destructive), the **place** differs (tucked into the title strip at the top against the card's
- * bottom-left corner — that mark held the stack's top-right until 2026-08-20, when
- * {@link TheoryMatchMark} took the corner, and the separation survived the move intact), and
- * only a rule break changes the card's own **edge**.
- *
- * ## It is one of two arms of the card-face question, not the deck's answer to it
- *
- * The deck's Grid tile draws the same `DeckCardFace` as the stack, with the same 27px marks
- * strip, and it takes `components/GameChangerMark`'s **crown** in the place this ribbon occupies
- * — so `DeckCardFace` requires a `gameChanger: "banner" | "crown"` and the two callers answer it
- * differently. This is `GameChangerMark`'s own rule reaching the two card-face views for the
- * first time: one fact, three drawings, *a difference of room and never of meaning*.
- *
- * **The opening sentence of this block said `GC` was "what a 150px grid tile and a table row can
- * afford", which was two claims and both have moved.** The tile has never drawn `GC` — it wore
- * the crown in `FoilOverlay`'s corner chip while it was a `CardArt` frame — and for a few hours
- * after it became this card it drew *this* mark, because the design decision was that the tile
- * adopts the stack's marks and that was the reasonable reading of it. What no source and no
- * suite could see is that the strip's three marks are each sized off `--mark-scale` and so do
- * not narrow when the card does: driven in the shipped window 2026-09-08 (debug build,
- * 1920×1080, a real Commander deck at `cardZoom` 1.1), a 28px tag, a **130px** ribbon and a 28px
- * tick came to a 163px strip on a **165px** tile — 11px past an `overflow-hidden` face, clipping
- * the plan's tick by nearly half, at every stop of the zoom ladder. `GameChangerMark`'s header
- * carries the whole reading and the figures after the fix.
- *
- * ## The two details that are not decoration
- *
- * **It is deliberately not positioned, and that is no longer what decides the paint order.**
- * It sits 10px under {@link QuantityTag}'s slanted tail, and the tag has to be the one on top.
- * The first attempt did it by leaving this static and marking the tag `relative`, on the rule
- * that a positioned element paints above a static sibling — **which is false for flex items**,
- * as the shipped window then demonstrated. `LAYER.overlappingMark` on the tag is the answer;
- * this staying static is now only tidiness.
- *
- * What it still buys is the fold — the dark seam that makes the ribbon read as folded rather
- * than printed. It is a **background layer** rather than an absolutely positioned child, which
- * costs nothing and means this element never has to be a containing block for anything.
- *
- * The lettering is `font-heading` at 8px, which is the one place Cinzel goes under the 18px its
- * brief sets. A seal is the exception the brief is about the absence of: two fixed words, never
- * body text, never a string that can grow — and the serif is what makes it read as *stamped
- * into* the metal rather than typed on it.
- *
- * ## Every number in it is a number at 100% zoom
- *
- * This is stamped across a card face in the deck's stack view, which the reader zooms from 0.5× to
- * 2× — so the height, the paddings, the tuck, the crown, the lettering **and the tail's own
- * geometry** are all multiplied by that card's `--mark-scale` (`lib/cardZoom.ts`). The tail is the
- * part that could not be left out: the notch, the fold's 5px band and the 9px it is offset by are
- * one drawing, and holding any of the three still turns the ribbon into a rectangle with a dent at
- * one end of the range and a chevron at the other. `tracking` is already `em`-relative, so it
- * follows the lettering without being named here; the drop shadow does not scale, because a shadow
- * that doubles reads as the banner lifting off the card.
- */
-export function GameChangerBanner({ className }: { className?: string }) {
-  const tip = useTooltip();
-  return (
-    <span
-      aria-hidden="true"
-      // Redundant twice over: the words are `deckCardName`'s "game changer" clause **and**
-      // already spelled out on the ribbon itself ("Game Changer", below) — a hint repeating
-      // visible text is the other half of the `describes: false` rule.
-      {...tip("Game changer", { describes: false })}
-      style={{
-        // The ribbon's forked tail. The notch is cut into the *right* edge, so the banner
-        // points away from the tag it emerges from rather than back into it.
-        clipPath:
-          "polygon(0 0, 100% 0, calc(100% - 10px*var(--mark-scale,1)) 50%, 100% 100%, 0 100%)",
-        backgroundImage: "linear-gradient(90deg, rgba(0,0,0,0.30), rgba(0,0,0,0.05))",
-        backgroundSize: "calc(5px*var(--mark-scale,1)) 100%",
-        backgroundPosition: "right calc(9px*var(--mark-scale,1)) top",
-        backgroundRepeat: "no-repeat",
-      }}
-      className={cn(
-        "-ml-[calc(0.625rem*var(--mark-scale,1))] mt-[calc(0.25rem*var(--mark-scale,1))] flex",
-        "h-[calc(0.75rem*var(--mark-scale,1))] flex-none items-center",
-        "gap-[calc(0.25rem*var(--mark-scale,1))] bg-pie-gold-deep",
-        "pl-[calc(0.875rem*var(--mark-scale,1))] pr-[calc(21px*var(--mark-scale,1))]",
-        "text-accent-fg shadow-[0_1px_5px_rgba(0,0,0,0.45)]",
-        className,
-      )}
-    >
-      <Crown
-        className="block size-[calc(9px*var(--mark-scale,1))] shrink-0"
-        strokeWidth={2.5}
-        aria-hidden="true"
-      />
-      <span
-        className={cn(
-          "font-heading text-[calc(0.5rem*var(--mark-scale,1))] leading-none font-semibold",
-          "tracking-[0.06em] whitespace-nowrap",
-          "[text-shadow:0_1px_0_rgba(255,255,255,0.25)]",
-        )}
-      >
-        Game Changer
-      </span>
     </span>
   );
 }

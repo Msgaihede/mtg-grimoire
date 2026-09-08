@@ -20,6 +20,7 @@ import { useCardZoomGesture } from "@/lib/useCardZoomGesture";
 import { cn } from "@/lib/utils";
 import {
   deckCardBodyProps,
+  deckCardDimmed,
   deckCardName,
   deckCardMenuProps,
   deckCardMarked,
@@ -417,6 +418,11 @@ function GridCard({
         // painted beyond the border box, so a picked card that also breaks a rule wears a gold
         // ring around a red card rather than one edge arguing with itself. See `SELECTED_CARD`.
         selected && SELECTED_CARD,
+        // What the game-changer spotlight fades. It marks the cards that are *not* game changers
+        // and is inert until the toolbar's count puts the attribute on an ancestor — see
+        // `deckCardDimmed` and the rule in `index.css`. It goes on this element because the tile
+        // is the card's whole body: face, chin, controls and all fade together.
+        deckCardDimmed(card.gameChanger),
       )}
     >
       <button
@@ -432,20 +438,14 @@ function GridCard({
         {/* The card, which is one component with the stacked card's — see `DeckCardFace`. The
             width is the tile's own and the face's height falls out of it, so the picture, the
             printed frame under it, the marks strip and the rule break are one drawing on both
-            views.
+            views — the game changer included, since the crown folded into the quantity tag and
+            left this component with nothing to decide between two widths.
 
             No zoom goes with it: everything drawn on the card reads `--mark-scale`, which the
             `<li>` above publishes. */}
         <DeckCardFace
           card={card}
           width={scaled(TILE_WIDTH, zoom)}
-          // **The crown, where the stack spells the words out** — the one mark this tile does not
-          // take from the stack, and the reason is arithmetic rather than taste. Measured in the
-          // shipped window 2026-09-08: the ribbon is 130px at `cardZoom` 1.1, which with the
-          // quantity tag and the plan's tick either side of it overflowed a 165px tile's strip by
-          // 11px and clipped the tick. Every term scales with the zoom, so the overflow is
-          // proportional and was there at every stop. See the prop.
-          gameChanger="crown"
           ruleBreakText={ruleBreakText}
           theoryMark={theoryMark}
           landedKey={landedKey}
@@ -538,8 +538,8 @@ function GridCard({
           which is where a 150px tile could fit a stepper and the `Move…` select beside it; that
           select was removed on 2026-08-14 and the bar has been one control on one line ever since.
           The column is the stack's answer to the same question and needs no computed offset at
-          all: `top-9` clears the 27px title bar the quantity tag and the ribbon are in, and the
-          controls run down the card's right margin from there.
+          all: `top-9` clears the 27px title bar the quantity tag and the plan's tick are in, and
+          the controls run down the card's right margin from there.
 
           **Revealed on hover, not by an open state**, which is the one place this tile is not the
           stack: `revealedWhenOpen` asks which card the pile has fanned out, and a wall has no such

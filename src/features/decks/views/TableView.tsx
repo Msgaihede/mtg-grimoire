@@ -25,6 +25,7 @@
  * table over 100k rows and pass nothing.
  */
 import { useCallback, useMemo } from "react";
+import { Crown } from "lucide-react";
 import { OwnedBadge } from "@/components/OwnedBadge";
 import { ManaText } from "@/components/ManaText";
 import { RarityGem } from "@/components/RarityGem";
@@ -41,13 +42,13 @@ import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { cn } from "@/lib/utils";
 import {
   DeckFinishMark,
-  GameChangerBadge,
   LabelDot,
   rowMarkColor,
   theoryMatchLabel,
   TheoryMatchBadge,
 } from "../CardMarks";
 import {
+  deckCardDimmed,
   deckCardMarked,
   deckCardProps,
   deckCardSelectedProps,
@@ -207,6 +208,19 @@ export function TableView({
         // clipped by 18px, 10rem left 6px over and 10.5rem left 2. Keeping 11rem would have
         // left **72px of empty gutter on every row of every deck** — the exact thing the
         // read-only arm exists to avoid.
+        //
+        // **The game changer's crown moved into this column on 2026-09-08 and neither arm had
+        // to grow for it**, which is worth the arithmetic because the paragraph above is what
+        // any widening here has to answer to. A `6.5rem` track is **104px** and the crown costs
+        // an 11px gutter plus this cell's own `gap-1`: 11 + 4 + 80 = **95px**, so the editable
+        // arm keeps **9px** in hand. The pair is centred in the track the way the bare stepper
+        // was, which moves the stepper itself 7.5px right (12px of slack a side became 4.5) —
+        // the alternative is a left-aligned group with all 9px on one edge, and a stepper the
+        // reader aims at all day is better centred than a gutter that is usually empty.
+        // The read-only arm is a `3rem` (48px) track holding 11 + 4 + one `ch` of
+        // the mono face (~7px at `text-xs`) = **~22px**, so it has more than half the column
+        // spare. Neither number was invented for the crown — the 80 and the 104 are the
+        // measurements above, unchanged.
         width: editable ? "6.5rem" : "3rem",
         header: "Qty",
         // `interactive` is the whole of what keeps a press on `−` from also opening the card
@@ -214,12 +228,55 @@ export function TableView({
         // `data-no-drag` and swallows the click and the two activation keys.
         interactive: editable,
         cellClassName: editable ? undefined : "font-mono text-xs tabular-nums text-dim",
-        cell: (row) =>
-          row.kind !== "card" ? null : editable ? (
-            <DeckCardControls card={row.card} actions={actions} className="flex-nowrap" />
-          ) : (
-            row.card.quantity
-          ),
+        // **The crown is drawn on both arms and the `sr-only` twin with it.** The mark says the
+        // same thing whether or not the reader can edit the list, and this is the one view in
+        // the app where a cell's text is really read — a row here is not an `aria-label`-ed
+        // button — so this cell is where the words *Game changer* live now that the `GC` badge
+        // in the name column has gone. Dropping them along with the badge would have been a
+        // real regression on the only view that can say them.
+        //
+        // The gutter is reserved on every row, game changer or not: 11px, `shrink-0`, empty in
+        // the ordinary case. A conditional element would make every row a different width and
+        // the quantities would step in and out down a column of eighty — `rowMarkColor`'s own
+        // reasoning, which returns `transparent` rather than nothing for exactly that reason.
+        //
+        // The crown carries the gold itself (`text-pie-gold`) rather than taking a colour from
+        // something it is printed on: there is no filled chip in a table row, so the mark *is*
+        // the colour — the same gold the name's stripe is drawn in. Nothing in this view zooms,
+        // so every size here is a plain fixed number and no `--mark-scale` reaches it.
+        cell: (row) => {
+          if (row.kind !== "card") return null;
+          const gameChanger = row.card.gameChanger === true;
+          return (
+            <span
+              className={cn(
+                "flex items-center gap-1",
+                // The editable arm only: the 95px pair takes the centring the bare 80px
+                // stepper had, which is the arithmetic in the width note above. The read-only
+                // arm reads left to right off the column's edge, as the design draws it.
+                editable && "justify-center",
+                // The read-only arm inherits `text-dim` from `cellClassName` above; this is
+                // what overrides it, and it tints the crown and the digits as one mark.
+                gameChanger && "text-pie-gold",
+              )}
+            >
+              <span aria-hidden="true" className="flex w-[11px] shrink-0">
+                {gameChanger && (
+                  <Crown className="block size-[11px]" strokeWidth={2.75} aria-hidden="true" />
+                )}
+              </span>
+              {editable ? (
+                <DeckCardControls card={row.card} actions={actions} className="flex-nowrap" />
+              ) : (
+                // One `ch` of the mono face is a single digit, so the numbers line up down the
+                // column; a two-digit count simply takes its own min-content and stays right
+                // aligned against the same edge.
+                <span className="w-[1ch] text-right">{row.card.quantity}</span>
+              )}
+              {gameChanger && <span className="sr-only">Game changer</span>}
+            </span>
+          );
+        },
       },
       {
         key: "name",
@@ -245,6 +302,12 @@ export function TableView({
             <span
               // The stripe the text view uses, for the same reason and in the same two
               // colours: down a column of eighty rows it is what says where to stop.
+              //
+              // **It is the whole of what this column says about a game changer since
+              // 2026-09-08.** The gold `GC` badge stood beside the name until then; the mark is
+              // a gold crown in the quantity column now, with the count tinted to match, so
+              // the fact is drawn once here instead of twice. The stripe itself is unchanged
+              // and `rowMarkColor` still gives a rule break precedence over gold.
               style={{ borderColor: rowMarkColor(row.ruleBreakText, row.card.gameChanger) }}
               className="flex min-w-0 items-center gap-1.5 border-l-2 pl-2"
               // `describes: false` — the sr-only span below already puts "Rule break: …" in the
@@ -254,21 +317,13 @@ export function TableView({
             >
               <span className="min-w-0 truncate">{row.card.name}</span>
               {/* Which object this row plays, where there is no art to hang a chip on. Unlike
-                  the two below it needs no `sr-only` twin — see {@link DeckFinishMark}. */}
+                  the tick below it needs no `sr-only` twin — see {@link DeckFinishMark}. */}
               <DeckFinishMark card={row.card} />
-              {/* The badge and the stripe are both `aria-hidden` decoration; this is where
-                  the table says the two facts in words. It works here and not on the other
-                  three views because a row is not an `aria-label`-ed button — a cell's text
-                  is really read. */}
-              {row.card.gameChanger === true && (
-                <>
-                  <GameChangerBadge />
-                  <span className="sr-only">Game changer</span>
-                </>
-              )}
               {/* The plan's tick, and the `sr-only` twin the other three views cannot have:
                   a cell's text is really read, so this is the surface where the badge's word is
-                  said rather than folded into `deckCardName`. */}
+                  said rather than folded into `deckCardName`. The game changer's words are said
+                  the same way and in the same view — they are in the quantity cell now, beside
+                  the crown that replaced the badge that used to stand here. */}
               {row.theoryMark !== null && (
                 <>
                   <TheoryMatchBadge tier={row.theoryMark.tier} delta={row.theoryMark.delta} />
@@ -456,6 +511,18 @@ export function TableView({
             : undefined
         }
         isSelected={(row) => row.kind === "card" && deckCardMarked(row.card, selectedSlot, actions)}
+        // The game-changer spotlight's mark. This view does not own its row element —
+        // `VirtualTable` does — so it goes through the hook that already exists for exactly
+        // this, beside `isSelected`. **Not a new prop on `VirtualTable`**: that is a shared
+        // primitive drawn over 100k rows by three other surfaces, and this file's own notes
+        // record the decision not to push a handler into it for one caller.
+        //
+        // The `kind === "card"` guard is the whole of what keeps a band out of it: a group's
+        // heading is not a card, so it is neither lit nor faded — a run of dimmed bands would
+        // say the piles themselves were the thing being passed over.
+        rowClassName={(row) =>
+          row.kind === "card" ? deckCardDimmed(row.card.gameChanger) : undefined
+        }
         renderRow={renderRow}
       />
     </div>

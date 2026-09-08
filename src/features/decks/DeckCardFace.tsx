@@ -43,14 +43,13 @@
  */
 import { FoilOverlay } from "@/components/CardArt";
 import { CardImage } from "@/components/CardImage";
-import { GameChangerMark } from "@/components/GameChangerMark";
 import { ManaText } from "@/components/ManaText";
 import { playedFinish } from "@/lib/finish";
 import { cardArtSrc, cardImageUrl } from "@/lib/images";
 import type { DeckCard } from "@/lib/ipc";
 import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
-import { GameChangerBanner, QuantityTag, RuleBreakMark, TheoryMatchMark } from "./CardMarks";
+import { QuantityTag, RuleBreakMark, TheoryMatchMark } from "./CardMarks";
 import { DECK_CARD_VARIANT, LandedMark } from "./cardControl";
 import type { TheoryMark } from "./theoryMatch";
 
@@ -160,21 +159,6 @@ export interface DeckCardFaceProps {
    * root publishes.
    */
   width: number;
-  /**
-   * Which of the game changer's two gold drawings this face has room for — the stack's spelled-out
-   * ribbon, or the crown alone.
-   *
-   * **Required, and deliberately not defaulted, because the wrong answer is silent.** A default
-   * would be the wider mark on a narrower card, and what that costs is a *clipped* mark rather
-   * than an ugly one: the three marks in the strip are sized off `--mark-scale`, the face is
-   * `overflow-hidden`, and the measurement is at the call in the strip below. jsdom lays nothing
-   * out, so nothing in the suite can see the overflow itself — only which drawing was asked for.
-   *
-   * It is a question about the width and not about the view, which is why it is a prop rather
-   * than a threshold read off {@link width}: a threshold is a number somebody has to keep in step
-   * with a mark's own type, and each caller already knows how wide its card is.
-   */
-  gameChanger: "banner" | "crown";
   /** The sentence the `RULE BREAK` mark carries, or `null` when there is nothing wrong. */
   ruleBreakText: string | null;
   /** What the deck's plan says about this row — `theoryMatch.ts`'s `theoryMatchMark`, resolved by
@@ -198,7 +182,6 @@ export interface DeckCardFaceProps {
 export function DeckCardFace({
   card,
   width,
-  gameChanger,
   ruleBreakText,
   theoryMark,
   landedKey,
@@ -335,38 +318,50 @@ export function DeckCardFace({
 
       {/* The sheen without the chip — the finish is said in words on the chin below, where there
           is room for the word and no corner to compete for. `mark={false}` takes the crown with
-          it, which is what leaves the strip below free to draw the ribbon instead. */}
+          it, and that is still exactly why this card's top-right corner belongs to
+          {@link TheoryMatchMark} on both views rather than to a foil chip. The crown itself is not
+          lost with the chip: it is printed on the quantity tag at the other end of the strip. */}
       <FoilOverlay finish={finish} mark={false} />
 
       {/* The reveal strip: what the app knows that the printed card cannot. Over the card's own
           title bar and **left-aligned**, which is a reversal — {@link CARD_MARKS_STRIP} has the
           whole of why. The scrim is what keeps a mark legible over art of any brightness. */}
       <span className={cn(CARD_MARKS_STRIP, "bg-gradient-to-b from-bg/70 to-transparent")}>
-        {/* **One mark for the label and the count**, which is what the Grid tile gave up a
-            `LabelDot` and a `bg-accent` chip for: the count is printed on the label's own colour,
-            grey where there is no label, so gold stays a thing a label means. */}
-        <QuantityTag quantity={card.quantity} name={card.labelName} color={card.labelColor} />
-        {/* Gold, in the card's own strip. The `RULE BREAK` mark is red, boxed and in the card's
-            opposite corner — see `CardMarks.tsx` for why the pair is drawn once and what keeps the
-            two from being confusable.
+        {/* **One mark for the label, the count and the game changer**, which is what the Grid tile
+            gave up a `LabelDot` and a `bg-accent` chip for and what took the strip's second gold
+            object out of it: the count is printed on the label's own colour, grey where there is
+            no label, so gold stays a thing a label means — and a game changer wears a crown in
+            front of the number, in whatever foreground that colour is legible in.
 
-            **Which of the two gold drawings this is depends on the width, and it is measured
-            rather than judged.** `GameChangerMark`'s own doc has the rule this obeys: one fact,
-            three drawings, *"a difference of room, never of meaning"*. The three marks in this
-            strip are all sized off `--mark-scale`, so their widths do not shrink with the card —
-            and driven in the shipped window 2026-09-08 (debug build, 1920×1080, a real Commander
-            deck at `cardZoom` 1.1) the strip on a **165px** tile came to a 28px tag, a **130px**
-            ribbon and a 28px tick in a 163px box: **11px of overflow**, and the face is
-            `overflow-hidden`, so the plan's tick was clipped by nearly half. Every term scales
-            with the zoom, so the ratio is constant and the clip was at *every* stop of the
-            ladder — photographed at 2× to be sure.
+            **Folding the crown into the tag is what let both views draw one mark again, and the
+            measurement is why it had to be folded.** The marks in this strip are each sized off
+            `--mark-scale`, so their widths do not shrink when the card does: driven in the shipped
+            window 2026-09-08 (debug build, 1920×1080, a real Commander deck at `cardZoom` 1.1), a
+            **165px** Grid tile carried a 28px tag, a **130px** `Game Changer` ribbon and a 28px
+            tick in a 163px box — **11px of overflow** past an `overflow-hidden` face, clipping the
+            plan's tick by nearly half. Every term scales with the zoom, so the ratio is constant
+            and the clip was at *every* stop of the ladder; photographed at 2× to be sure. That
+            bought a `"banner" | "crown"` fork on this component for one morning — the spelled-out
+            ribbon for a 210px stacked card, the bare crown for the tile — which is one fact drawn
+            two ways on two drawings of one deck.
 
-            So the ribbon is the stack's, where a 210px card carries it with room to spare, and the
-            crown alone is the Grid tile's — the same fact in the same corner of the same strip, in
-            the drawing that fits. It is not the chip: `FoilOverlay` is `mark={false}` on both
-            views, so top-right is the plan's tick here and this stays where the ribbon was. */}
-        {card.gameChanger === true &&
-          (gameChanger === "banner" ? <GameChangerBanner /> : <GameChangerMark />)}
+            The crowned tag is roughly **42px** at its widest, narrower than either arm of that
+            fork, so the strip's widest term is the tag itself and there is nothing left for a fork
+            to decide: the stack and the tile draw the same mark, in the same corner, at both ends
+            of the ladder. The fact is printed *on* the mark a reader is already reading rather
+            than beside it, which is {@link QuantityTag}'s own merge argument reaching one fact
+            further. `RuleBreakMark` is still red, boxed and in the card's opposite corner — see
+            `CardMarks.tsx` for why that pair is drawn once and what keeps the two from being
+            confusable. */}
+        <QuantityTag
+          quantity={card.quantity}
+          name={card.labelName}
+          color={card.labelColor}
+          // `DeckCard.gameChanger` is `boolean | null` — an orphan whose printing has left the
+          // corpus says nothing either way — so the coercion is what keeps a `null` off a prop
+          // whose two states are *crowned* and *not*.
+          gameChanger={card.gameChanger === true}
+        />
         {/* The plan's tick, at the far end of the same strip the quantity tag opens.
             **In the strip rather than absolutely positioned beside it**, which is what makes it
             free: this band is already a scrim over the card's printed title bar, already 27px tall
@@ -374,10 +369,13 @@ export function DeckCardFace({
             needs no offsets of its own and is legible over art of any brightness for the reason
             the tag beside it is.
 
-            `ml-auto` and not `justify-between`: the banner between them is a variable-width
-            optional sibling, and a `justify-between` strip holding two marks would centre nothing
-            and holding three would space them evenly — the tag has to stay flush left whatever
-            else is in the row.
+            `ml-auto` and not `justify-between`, which is the plainer thing it always should have
+            been. The argument for it used to be a third mark: the game changer's ribbon stood
+            between these two as a variable-width optional sibling, and a `justify-between` strip
+            holding three would have spaced them evenly rather than pushing this one to the end.
+            The crown is on the tag now, so the strip is two marks and both rules would agree —
+            and a margin is still the honest way to say it, because what is wanted is *this mark at
+            the far end* rather than *the row's free space shared out*.
 
             Top-right is `FoilOverlay`'s chip on every other card face in this app, and this is the
             one surface where that is not a collision: it draws the overlay with `mark={false}` and

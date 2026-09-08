@@ -22,6 +22,7 @@ import { cn } from "@/lib/utils";
 import { cardFaceHeight, DeckCardFace } from "./DeckCardFace";
 import {
   deckCardBodyProps,
+  deckCardDimmed,
   deckCardName,
   deckCardMenuProps,
   deckCardMarked,
@@ -792,7 +793,7 @@ function StackedCard({
       {...deckCardBodyProps()}
       {...deckCardSelectedProps(selected)}
       // Everything drawn on this card sizes itself against these two rather than taking a prop:
-      // the quantity tag, the game-changer banner, the rule break, the printed frame under the
+      // the quantity tag and the crown printed on it, the rule break, the printed frame under the
       // art, the gem and finish glyph in the foot, and the stepper column in the margin. Most of
       // them are components the table and text views draw as well, where nothing zooms — so the
       // question is answered here, once, and the `, 1` fallback answers it everywhere else. See
@@ -847,6 +848,11 @@ function StackedCard({
         // is painted beyond the border box, so a picked card that also breaks a rule wears a
         // gold ring around a red card rather than one edge arguing with itself.
         selected && SELECTED_CARD,
+        // What the game-changer spotlight fades. It marks the cards that are *not* game changers
+        // and is inert until the toolbar's count puts the attribute on an ancestor — see
+        // `deckCardDimmed` and the rule in `index.css`. It goes on this element because this is
+        // the card's whole body: face, chin, stepper and all fade together.
+        deckCardDimmed(card.gameChanger),
       )}
     >
       <button
@@ -871,10 +877,6 @@ function StackedCard({
         <DeckCardFace
           card={card}
           width={stackCardWidth(zoom)}
-          // A 210px card has the room to spell it out, and this is the surface the ribbon was
-          // drawn for. The Grid tile passes `"crown"`; see the prop for the measurement that
-          // separates them.
-          gameChanger="banner"
           ruleBreakText={ruleBreakText}
           theoryMark={theoryMark}
           landedKey={landedKey}
@@ -963,8 +965,8 @@ function StackedCard({
           by care.
 
           In the right margin, below the marks strip, standing on the art: `top-9` clears the
-          27px title bar the tag and the banner are in, and the column runs down from there
-          rather than across the foot, where it would cover the data line it now sits beside.
+          27px title bar the quantity tag and the plan's tick are in, and the column runs down from
+          there rather than across the foot, where it would cover the data line it now sits beside.
 
           **The offset is the same 36px it has always been; the column under it is a quarter
           shorter as of 2026-08-20** — three 36px boxes and two 4px gaps at 100% zoom, 116px,

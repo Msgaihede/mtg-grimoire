@@ -5,6 +5,7 @@ import { AllPrintingsDialog } from "@/features/card/AllPrintingsDialog";
 import { CardDetailModal } from "@/features/card/CardDetailModal";
 import { ipc } from "@/lib/ipc";
 import { openDropdown, pickOption } from "@/test-dropdown";
+import { GC_DIMMED, GC_SPOTLIGHT_ATTR } from "./cardControl";
 import { DeckEditor } from "./DeckEditor";
 
 /**
@@ -1279,5 +1280,62 @@ export const SwapFolds: Story = {
       },
       { timeout: 4000 },
     );
+  },
+};
+
+/**
+ * **The game-changer spotlight, composed** — the one thing about that chip no story of
+ * `DeckLedger` can show, because the chip reports two gestures and the deck it lights up is drawn
+ * out here.
+ *
+ * `DeckEditor` holds `gcLatched` and `gcHovered`, derives
+ * `(gcLatched || gcHovered) && gameChangers > 0`, and spreads `deckSpotlightProps` onto the box
+ * that holds the four views — onto nothing wider, because the docked search column is that box's
+ * **sibling** and its tiles are cards the reader is shopping for rather than cards in the deck.
+ * Hover the chip, or Tab onto it, and every card that is not a game changer fades to a quarter; a
+ * click latches the same state so the reader can take their hand off the mouse and go and look.
+ * Deck 2's one game changer is Ancient Tomb, which is the fixture's own argument for the mark
+ * existing at all — a land, with no mana cost to read it off.
+ *
+ * **The play asserts the attribute and the class and never the opacity**, because
+ * `src/stories.test.tsx` runs it under jsdom, which applies no stylesheet. The fade itself is the
+ * live pass's; what is checkable here is that the right box is armed and that the cards under it
+ * carry the mark the one rule in `src/index.css` looks for.
+ */
+export const GameChangerSpotlight: Story = {
+  args: { deckId: 2 },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await canvas.findByRole("region", { name: "Main deck" });
+
+    // Matched on the **action** half of the name: a card that is a game changer says so in its
+    // own accessible name, so `/game changer/` alone finds two buttons on this deck.
+    const chip = await canvas.findByRole("button", {
+      name: /press to (stop spotlighting|spotlight) them in the deck$/,
+    });
+    const armed = () => canvasElement.querySelector(`[${GC_SPOTLIGHT_ATTR}]`);
+
+    await expect(armed()).toBeNull();
+
+    await userEvent.hover(chip);
+    const box = armed();
+    await expect(box).not.toBeNull();
+    // The other half of the pair: the container is armed *and* the cards that are not game
+    // changers carry the class the rule reads. Ancient Tomb is the one card here that does not,
+    // so a wall of marked cards with one unmarked is the whole picture.
+    await expect((box as HTMLElement).querySelectorAll(`.${GC_DIMMED}`).length).toBeGreaterThan(0);
+    // Touched is not pressed — the chip paints the hover for itself with a `hover:` variant.
+    await expect(chip).toHaveAttribute("aria-pressed", "false");
+
+    await userEvent.click(chip);
+    await expect(chip).toHaveAttribute("aria-pressed", "true");
+    await userEvent.unhover(chip);
+    // The latch outliving the pointer is the whole reason the press exists.
+    await expect(armed()).not.toBeNull();
+
+    await userEvent.click(chip);
+    await expect(chip).toHaveAttribute("aria-pressed", "false");
+    await userEvent.unhover(chip);
+    await expect(armed()).toBeNull();
   },
 };

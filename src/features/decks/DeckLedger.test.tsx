@@ -1,6 +1,11 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
-import { TOOLTIP_OPEN_MS, TooltipProvider } from "@/components/tooltip/TooltipProvider";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
+import {
+  TOOLTIP_OPEN_MS,
+  TOOLTIP_PANEL_ID,
+  TooltipProvider,
+} from "@/components/tooltip/TooltipProvider";
 import type { DeckCard } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
@@ -31,6 +36,14 @@ describe("DeckLedger", () => {
           marketplace={MARKETPLACES.tcgplayer}
           formatName="Commander"
           gameChangers={0}
+          // **The spotlight's three props default to off and to nothing**, so every case above
+          // that is about a *figure* says nothing about the chip. `spotlight` is the latch alone
+          // — never the editor's `latched || hovered` — and the two callbacks are no-ops rather
+          // than spies here: a test that asserts on a gesture passes its own `vi.fn()` through
+          // `props`, which is what keeps the assertion beside the press that earns it.
+          spotlight={false}
+          onSpotlightToggle={() => {}}
+          onSpotlightHover={() => {}}
           tight={false}
           check={null}
           bracket={null}
@@ -206,6 +219,238 @@ describe("DeckLedger", () => {
 
     expect(screen.getByText("6 GC")).toHaveAttribute("aria-hidden", "true");
     expect(screen.getByText("6 game changers")).toHaveClass("sr-only");
+  });
+
+  /**
+   * ## The game-changer spotlight (2026-09-08)
+   *
+   * The count became a **press**: hovering it, or the caret landing on it, fades every card in
+   * the deck that is not a game changer to a quarter, and a click latches that so the reader can
+   * take their hand off the mouse. The chip decides none of it — it reports two gestures and is
+   * handed one boolean back — so everything below is about the *reporting* and about what the
+   * boolean is allowed to mean.
+   *
+   * **None of these tests can see the fade, and none of them pretends to.** jsdom applies no
+   * stylesheet, so `opacity: 0.25` is unreachable from here in principle rather than for want of
+   * a query: the rule lives in `src/index.css`, keyed on an attribute the *editor* stamps
+   * (`DeckEditor.test.tsx` covers that half) and a class the four views stamp
+   * (`views/views.test.tsx` covers that one). What is checkable here is the control: its role,
+   * its name, its pressed state, which gesture reaches which callback, and that its two
+   * appearances are drawn differently at all. The pixels are the live pass's.
+   */
+
+  /**
+   * It is a `button` with `aria-pressed`, which is the whole of how a toggle says what it is —
+   * and the name carries the **action**, because the visible text is a readout: a chip reading
+   * `6 game changers` and nothing else is a control nobody can tell is a control.
+   *
+   * The name opens with the drawn words so they stay a prefix of it (WCAG 2.5.3), and what
+   * follows names the state a press would move *to* rather than the one the chip is in —
+   * `aria-pressed` is already saying where it stands, and a toggle's label is a verb.
+   */
+  it("draws the game-changer count as a toggle that says it can be pressed", () => {
+    ledger([card({ name: "Bolt" })], { gameChangers: 6 });
+
+    expect(
+      screen.getByRole("button", { name: "6 game changers — press to spotlight them in the deck" }),
+    ).toHaveAttribute("aria-pressed", "false");
+  });
+
+  /** …and the other way once it is latched, so the name is never a description of the state the
+   *  reader is already in. */
+  it("names the press by the state it would move to, once it is latched", () => {
+    ledger([card({ name: "Bolt" })], { gameChangers: 6, spotlight: true });
+
+    expect(
+      screen.getByRole("button", {
+        name: "6 game changers — press to stop spotlighting them in the deck",
+      }),
+    ).toHaveAttribute("aria-pressed", "true");
+  });
+
+  /**
+   * **`aria-pressed` is the latch and never the hover**, which is the reason the editor hands
+   * this chip `gcLatched` rather than the `gcLatched || gcHovered` the deck is drawn under.
+   *
+   * A pointer resting on a control is not a state the control is *in* — the chip paints that for
+   * itself with a `hover:` variant — so a chip that said `aria-pressed="true"` because a mouse
+   * had wandered over it would tell a screen reader a press had happened that had not.
+   */
+  it("leaves aria-pressed alone while the pointer is merely resting on the chip", async () => {
+    const onSpotlightHover = vi.fn();
+    ledger([card({ name: "Bolt" })], { gameChangers: 6, onSpotlightHover });
+    const chip = screen.getByRole("button", { name: /game changers/ });
+
+    await userEvent.hover(chip);
+
+    expect(onSpotlightHover).toHaveBeenCalledWith(true);
+    expect(chip).toHaveAttribute("aria-pressed", "false");
+    expect(chip.getAttribute("aria-label")).toContain("press to spotlight");
+  });
+
+  /** The press is reported and nothing is decided: the chip is controlled, so its own state does
+   *  not move until the editor hands a new `spotlight` back down. */
+  it("reports a press without latching anything itself", async () => {
+    const onSpotlightToggle = vi.fn();
+    ledger([card({ name: "Bolt" })], { gameChangers: 6, onSpotlightToggle });
+    const chip = screen.getByRole("button", { name: /game changers/ });
+
+    await userEvent.click(chip);
+
+    expect(onSpotlightToggle).toHaveBeenCalledTimes(1);
+    expect(chip).toHaveAttribute("aria-pressed", "false");
+  });
+
+  /** The pointer arriving and the pointer leaving, in that order and with the right boolean —
+   *  one callback, so the editor never has to work out which of two verbs it was handed. */
+  it("reports the pointer arriving on the chip and leaving it", async () => {
+    const onSpotlightHover = vi.fn();
+    ledger([card({ name: "Bolt" })], { gameChangers: 6, onSpotlightHover });
+
+    const chip = screen.getByRole("button", { name: /game changers/ });
+    await userEvent.hover(chip);
+    await userEvent.unhover(chip);
+
+    expect(onSpotlightHover.mock.calls).toEqual([[true], [false]]);
+  });
+
+  /**
+   * **The caret arms it exactly as the pointer does, and that is not a courtesy** — a reveal only
+   * a mouse could reach would put the whole affordance out of a keyboard reader's hands.
+   *
+   * Driven with `Tab` rather than `chip.focus()`: a programmatic focus is a caret nobody has, and
+   * it would pass over a chip that had been given `tabIndex={-1}` or drawn as a `div`. The second
+   * Tab is what proves the *blur* half — it lands on the bracket control slotted in beside the
+   * chip, which is where a real reader's next press would go.
+   */
+  it("arms and disarms on the caret, reached the way a keyboard reader reaches it", async () => {
+    const user = userEvent.setup();
+    const onSpotlightHover = vi.fn();
+    ledger([card({ name: "Bolt" })], {
+      gameChangers: 6,
+      onSpotlightHover,
+      bracket: <button type="button">Bracket ~4</button>,
+    });
+
+    await user.tab();
+    expect(screen.getByRole("button", { name: /game changers/ })).toHaveFocus();
+    expect(onSpotlightHover.mock.calls).toEqual([[true]]);
+
+    await user.tab();
+    expect(screen.getByRole("button", { name: "Bracket ~4" })).toHaveFocus();
+    expect(onSpotlightHover.mock.calls).toEqual([[true], [false]]);
+  });
+
+  /**
+   * **One Tab has to do two things, and this chip is the one control on the row where they
+   * collide.** The caret landing on it arms the spotlight *and* opens the hint; the caret leaving
+   * puts both away.
+   *
+   * That is a regression test rather than a completeness one. `useTooltip`'s binding is four
+   * handlers and two of them are `onFocus`/`onBlur`, so a `{...tip(…)}` spread followed by the
+   * chip's own `onFocus` does not merge them — the later prop **replaces** the earlier one,
+   * silently, and what goes is the half of the tooltip only a keyboard reader ever sees. It
+   * shipped that way: the spotlight armed, the panel never opened, nothing went red, and the
+   * pointer path stayed correct throughout because `onPointerEnter` and `onMouseEnter` are two
+   * different props. The chip chains the two now, and this is what fails if a later edit spreads
+   * over one of them again.
+   *
+   * **Driven with `Tab` for the reason the test above it is**, and here it is load-bearing twice:
+   * `TooltipProvider.focus` refuses an anchor that does not match `:focus-visible`, and jsdom
+   * implements a real modality — a pointer event anywhere in the window turns it off until a
+   * keypress restores it — so a programmatic `focus()` after any of the hover cases above would
+   * prove nothing about the path a reader takes.
+   *
+   * `document.getElementById` rather than `getByRole("tooltip")`: the binding is
+   * `describes: false`, so the panel carries no role at all — the accessible name already says
+   * this sentence, and a wired `aria-describedby` would have a screen reader announce it twice.
+   */
+  it("opens the chip's own hint on the caret, and puts it away again", async () => {
+    const user = userEvent.setup();
+    ledger([card({ name: "Bolt" })], {
+      gameChangers: 6,
+      bracket: <button type="button">Bracket ~4</button>,
+    });
+
+    await user.tab();
+    const chip = screen.getByRole("button", { name: /game changers/ });
+    expect(chip).toHaveFocus();
+    expect(document.getElementById(TOOLTIP_PANEL_ID)).toHaveTextContent(
+      "6 game changers — press to spotlight them in the deck",
+    );
+    // The panel is drawn for the eye alone: the name above already carries the sentence.
+    expect(chip).not.toHaveAttribute("aria-describedby");
+
+    await user.tab();
+
+    // `waitFor` rather than a bare read: the panel leaves through `AnimatePresence`, so its
+    // removal is a commit or two after the blur even with the suite's animations skipped.
+    await waitFor(() => expect(document.getElementById(TOOLTIP_PANEL_ID)).toBeNull());
+  });
+
+  /**
+   * The two states are drawn differently, which is the most this suite can say about the look:
+   * the crown appears — the same mark the cards it is lighting up wear — and the edge takes the
+   * gold, which is the signal that outlives the pointer.
+   *
+   * **Not a claim about colour or opacity.** jsdom applies no stylesheet, so `text-pie-gold` is
+   * a class here and nothing more; whether the chip is actually gold and whether the deck
+   * actually fades are the live pass's to see. `classList.contains` rather than `toHaveClass`
+   * for the off arm, because that arm carries `hover:text-pie-gold` and the question being asked
+   * is about tokens rather than about the string.
+   */
+  it("takes the crown and the gold edge only while it is latched", () => {
+    const off = ledger([card({ name: "Bolt" })], { gameChangers: 6 }).container.querySelector(
+      "button",
+    )!;
+    const latched = ledger([card({ name: "Bolt" })], {
+      gameChangers: 6,
+      spotlight: true,
+    }).container.querySelector("button")!;
+
+    expect(off.querySelector("svg")).toBeNull();
+    expect(latched.querySelector("svg")).not.toBeNull();
+    expect(off.classList.contains("border-pie-gold")).toBe(false);
+    expect(latched.classList.contains("border-pie-gold")).toBe(true);
+  });
+
+  /**
+   * **A latch on a deck with nothing to spotlight still draws no chip**, which is the fence on
+   * the state outliving its own control.
+   *
+   * The editor gates the *derivation* rather than clearing the latch, so `spotlight` can arrive
+   * here `true` for a deck whose last game changer has just been stepped to zero. What must
+   * never happen is a chip reading `0 game changers` — a control that says there is something to
+   * look at and does nothing when pressed.
+   */
+  it("draws nothing at all for a deck with no game changers, latched or not", () => {
+    ledger([card({ name: "Bolt" })], { gameChangers: 0, spotlight: true });
+
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.queryByText(/game changer/)).not.toBeInTheDocument();
+  });
+
+  /**
+   * The narrow arm deletes the word from the **drawing** and never from the name: an `aria-label`
+   * replaces an element's contents for naming, so the `sr-only` twin beside `6 GC` is announced
+   * to nobody and the whole sentence — count and action — has to be in the label at both widths.
+   *
+   * The press is driven here too, because `tight` is a second render path through the same
+   * button and a control that stopped reporting at 761px would be a control the narrow window
+   * simply does not have.
+   */
+  it("keeps the whole name and the press at the tight width", async () => {
+    const onSpotlightToggle = vi.fn();
+    ledger([card({ name: "Bolt" })], { gameChangers: 6, tight: true, onSpotlightToggle });
+
+    const chip = screen.getByRole("button", {
+      name: "6 game changers — press to spotlight them in the deck",
+    });
+    expect(screen.getByText("6 GC")).toHaveAttribute("aria-hidden", "true");
+
+    await userEvent.click(chip);
+
+    expect(onSpotlightToggle).toHaveBeenCalledTimes(1);
   });
 
   /**

@@ -5,6 +5,7 @@
  * this deck" rather than "what does this card do". No art at all — a line is a quantity, a
  * name, its marks and its cost, which is exactly what a player reads off a printed list.
  */
+import { Crown } from "lucide-react";
 import { ManaText } from "@/components/ManaText";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { DROP_MARK_ROOM, DROP_OVER, DROP_RING } from "@/lib/dropMarks";
@@ -12,15 +13,10 @@ import { FOCUS } from "@/lib/focus";
 import type { DeckCard } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
 import { cn } from "@/lib/utils";
-import {
-  DeckFinishMark,
-  GameChangerBadge,
-  LabelDot,
-  rowMarkColor,
-  TheoryMatchBadge,
-} from "../CardMarks";
+import { DeckFinishMark, LabelDot, rowMarkColor, TheoryMatchBadge } from "../CardMarks";
 import {
   deckCardBodyProps,
+  deckCardDimmed,
   deckCardName,
   deckCardMenuProps,
   deckCardMarked,
@@ -367,6 +363,29 @@ function TextGroup({
  * tooltip and it is read aloud in the button's name (`describes: false`, since the two would
  * otherwise say it twice), which is what makes the colour a shortcut rather than the only way
  * to know.
+ *
+ * ## A game changer is a **crowned count**, and the gold `GC` badge that used to say it is gone
+ *
+ * The row opens with a 10px gutter carrying a gold crown, and the quantity beside it is tinted
+ * the same gold. It replaces `GameChangerBadge`, which sat at the far end of the line among the
+ * finish glyph and the plan's tick — three small marks in the tail of a 22px row, where the one
+ * that says *this card is one of the powerful ones* was the least findable of them. The crown
+ * is at the **head** of the line instead, on the number, which is the column a reader is already
+ * running their eye down.
+ *
+ * **The gutter is reserved on every row, game changer or not** — 10px, `shrink-0`, and empty
+ * where there is no crown. That is what keeps the quantity numbers in one column down a list of
+ * eighty; a conditional element would make every row a different width and the digits would
+ * step in and out. It is {@link rowMarkColor}'s own reasoning one mark over, which returns
+ * `transparent` rather than nothing so that every row keeps the same 2px of indent.
+ *
+ * **The crown carries the gold itself**, `text-pie-gold`, where the card-face views take the
+ * colour from the filled chip or banner the crown is printed on. There is no fill here to print
+ * on, so the mark is the colour — the same gold the stripe beside it is already drawn in, and
+ * the same gold the badge was. One colour for one fact.
+ *
+ * **Nothing here zooms.** This view draws no card, so no `--mark-scale` reaches it and every
+ * size in the row is a plain fixed number, as the rest of this file already is.
  */
 function TextRow({
   card,
@@ -417,7 +436,12 @@ function TextRow({
       {...deckCardBodyProps()}
       {...deckCardMenuProps(card, actions)}
       {...deckCardSelectedProps(selected)}
-      className={cn("group relative rounded", FOCUS)}
+      // The game-changer spotlight's mark, on the whole card rather than on the button inside
+      // it — this element is documented above as the card, controls and all, which is the right
+      // scope for a fade that means *this is not one of the ones you are looking at*. The class
+      // is inert until an ancestor carries the spotlight attribute; `cardControl`'s
+      // `deckCardDimmed` and `index.css` carry the pair.
+      className={cn("group relative rounded", FOCUS, deckCardDimmed(card.gameChanger))}
     >
       <button
         type="button"
@@ -440,7 +464,27 @@ function TextRow({
           selected && SELECTED_ROW,
         )}
       >
-        <span className="w-4 shrink-0 text-right font-mono text-[0.6875rem] tabular-nums text-dim">
+        {/* The crown's gutter, reserved on every row — see this component's own note. Empty
+            here is the ordinary case and is what holds the numbers beside it in one column.
+            `aria-hidden` over the whole gutter rather than over the glyph: the row is a button
+            with an explicit `aria-label`, which *replaces* its contents for naming, so
+            everything inside it is decoration by construction and the words are
+            `deckCardName`'s — which already says "game changer". An `sr-only` twin here would
+            be announced to nobody, which is worse than none because it looks accessible. */}
+        <span aria-hidden="true" className="flex w-2.5 shrink-0 text-pie-gold">
+          {card.gameChanger === true && (
+            <Crown className="block size-2.5" strokeWidth={2.75} aria-hidden="true" />
+          )}
+        </span>
+        <span
+          className={cn(
+            "w-4 shrink-0 text-right font-mono text-[0.6875rem] tabular-nums",
+            // The count wears the fact rather than merely standing next to it: gold digits
+            // under a gold crown are one mark two elements wide, which is what makes the pair
+            // findable at the head of an eighty-line list.
+            card.gameChanger === true ? "text-pie-gold" : "text-dim",
+          )}
+        >
           {card.quantity}
         </span>
         <span
@@ -449,13 +493,12 @@ function TextRow({
         >
           {card.name}
         </span>
-        {/* Decoration here, like the badge beside it: this row is a button with an explicit
-            `aria-label`, so the words are `deckCardName`'s. */}
+        {/* Decoration, like the crown at the head of the line: this row is a button with an
+            explicit `aria-label`, so the words are `deckCardName`'s. */}
         <DeckFinishMark card={card} />
-        {card.gameChanger === true && <GameChangerBadge />}
-        {/* Decoration, like the two beside it — this line is a button with an explicit
-            `aria-label`, so the word is `deckCardName`'s. `TableView` is the one view that says
-            it in text, because a cell is not swallowed by a label. */}
+        {/* Decoration, like the two marks either side of it — this line is a button with an
+            explicit `aria-label`, so the word is `deckCardName`'s. `TableView` is the one view
+            that says it in text, because a cell is not swallowed by a label. */}
         {theoryMark !== null && (
           <TheoryMatchBadge tier={theoryMark.tier} delta={theoryMark.delta} />
         )}
