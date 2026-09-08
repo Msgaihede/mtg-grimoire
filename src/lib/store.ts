@@ -14,8 +14,15 @@ import type { TransferFieldId, TransferSurface } from "@/features/transfer/field
 import type { ExportFormat } from "@/features/transfer/formats";
 import type { DeckFinish, DeckVariant } from "./ipc";
 
-/** The six top-level destinations in the sidebar. */
-export type ViewId = "search" | "tags" | "collection" | "wishlist" | "decks" | "settings";
+/** The seven top-level destinations in the sidebar. */
+export type ViewId =
+  | "search"
+  | "tags"
+  | "collection"
+  | "wishlist"
+  | "decks"
+  | "scanner"
+  | "settings";
 
 /**
  * A set of picked cards **and the surface it belongs to** — `lib/multiSelect.ts`'s

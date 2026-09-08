@@ -7,7 +7,7 @@ import { shortcut } from "@/lib/shortcuts";
 describe("the navigation census", () => {
   it("names every view exactly once", () => {
     const ids = NAV.map((e) => e.id);
-    expect(ids).toEqual(["search", "tags", "decks", "collection", "wishlist", "settings"]);
+    expect(ids).toEqual(["search", "tags", "decks", "collection", "wishlist", "scanner", "settings"]);
     expect(new Set(ids).size).toBe(ids.length);
   });
 

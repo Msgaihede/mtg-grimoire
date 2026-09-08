@@ -103,14 +103,14 @@ describe("KeyMap", () => {
 
   /**
    * `switchView` **declares** itself a range, so the ends are drawn and the word between them is
-   * `to`. The count is the assertion that matters: `Ctrl 1 or Ctrl 2 or …` down to `Ctrl 6` is
-   * eleven caps of arithmetic in the widest row of a 384px panel.
+   * `to`. The count is the assertion that matters: `Ctrl 1 or Ctrl 2 or …` down to `Ctrl 7` is
+   * thirteen caps of arithmetic in the widest row of a 384px panel.
    */
   it("draws a shortcut that declares itself a range as its two ends, joined by to", () => {
     useAppStore.setState({ activeView: "search", openDeckId: null, keyMapOpen: true });
     render(<Harness />);
 
-    expect(capsFor("Jump to a section")).toEqual(["Ctrl", "1", "Ctrl", "6"]);
+    expect(capsFor("Jump to a section")).toEqual(["Ctrl", "1", "Ctrl", "7"]);
     expect(screen.getByText("Jump to a section").nextElementSibling?.textContent).toContain("to");
   });
 
@@ -157,7 +157,7 @@ describe("KeyMap", () => {
 
   /**
    * **The caps are separated by text, not by the `gap` between them**, and a gap is read out as
-   * nothing at all: without a text node the range row flattens to `Ctrl1toCtrl6`. This repo has
+   * nothing at all: without a text node the range row flattens to `Ctrl1toCtrl7`. This repo has
    * paid for that once already — a label and its count in two spans computed to `Missing2` — and
    * a stylesheet cannot fix it, since the separation has to exist in the markup an assistive
    * technology reads. Every shape is pinned, because each puts a different thing between two
@@ -168,7 +168,7 @@ describe("KeyMap", () => {
     useAppStore.setState({ activeView: "decks", openDeckId: 7, keyMapOpen: true });
     render(<Harness />);
 
-    expect(readingOf("Jump to a section")).toBe("Ctrl 1 to Ctrl 6");
+    expect(readingOf("Jump to a section")).toBe("Ctrl 1 to Ctrl 7");
     expect(readingOf("Redo the change you undid")).toBe("Ctrl Y or Ctrl Shift Z");
     expect(readingOf("Undo the last change")).toBe("Ctrl Z");
   });

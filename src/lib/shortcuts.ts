@@ -70,7 +70,7 @@ export type ShortcutScope = "global" | ViewId | "deckEditor";
 /**
  * The catalogue.
  *
- * **A `Record` over every scope rather than a partial map**, so the six views are each present
+ * **A `Record` over every scope rather than a partial map**, so the seven views are each present
  * with an empty array. That is not a placeholder waiting to be filled: it is the honest state of
  * those pages, and an empty scope draws nothing at all in the panel — no heading. Making the
  * emptiness explicit is what stops a scope being forgotten when a view starts binding something.
@@ -84,15 +84,15 @@ export const SHORTCUTS: Record<ShortcutScope, readonly Shortcut[]> = {
       id: "switchView",
       label: "Jump to a section",
       /**
-       * A run rather than six alternatives: the digits are consecutive and a reader shown the
+       * A run rather than seven alternatives: the digits are consecutive and a reader shown the
        * ends knows every chord between them, which is what buys the panel one row instead of
-       * eleven caps of arithmetic.
+       * thirteen caps of arithmetic.
        */
       range: true,
       /**
-       * Six chords in `NAV` order, and the *index* is the binding: `AppShell` walks these and
+       * Seven chords in `NAV` order, and the *index* is the binding: `AppShell` walks these and
        * activates `NAV[i]`, so the rail's own order stays the single list rather than being
-       * restated as a sixth-and-seventh copy here.
+       * restated as a seventh copy here.
        */
       chords: [
         { key: "1", ctrl: true },
@@ -101,6 +101,7 @@ export const SHORTCUTS: Record<ShortcutScope, readonly Shortcut[]> = {
         { key: "4", ctrl: true },
         { key: "5", ctrl: true },
         { key: "6", ctrl: true },
+        { key: "7", ctrl: true },
       ],
     },
     { id: "keyMap", label: "Show this list", chords: [{ key: "F1" }] },
@@ -138,6 +139,7 @@ export const SHORTCUTS: Record<ShortcutScope, readonly Shortcut[]> = {
   decks: [],
   collection: [],
   wishlist: [],
+  scanner: [],
   settings: [],
   deckEditor: [
     { id: "undo", label: "Undo the last change", chords: [{ key: "z", ctrl: true }] },

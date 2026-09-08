@@ -324,11 +324,11 @@ it("renders nav and refresh button", async () => {
   // word the nav item uses, so a bare `getByText("Search")` is ambiguous.
   //
   // **In DOM order, because the order is a decision rather than the array's history** — the two
-  // ways into the database, then the three lists the reader owns, then Settings. Six separate
-  // `getByRole` calls stayed green through any shuffle of the column, which is the one thing
-  // about this list a reader would notice from across the room. `within` the rail keeps the
-  // ribbon's own title out of the answer, and the toggle at the rail's foot is the seventh
-  // button inside it.
+  // ways into the database, then the three lists the reader owns, then Scanner, then Settings.
+  // Seven separate `getByRole` calls stayed green through any shuffle of the column, which is
+  // the one thing about this list a reader would notice from across the room. `within` the rail
+  // keeps the ribbon's own title out of the answer, and the toggle at the rail's foot is the
+  // eighth button inside it.
   const nav = screen.getByRole("navigation", { name: "Views" });
   expect(within(nav).getAllByRole("button").map((b) => b.textContent)).toEqual([
     "Search",
@@ -336,6 +336,7 @@ it("renders nav and refresh button", async () => {
     "Decks",
     "Collection",
     "Wishlist",
+    "Scanner",
     "Settings",
     "Collapse",
   ]);
@@ -842,7 +843,7 @@ describe("collapsing the sidebar", () => {
   /**
    * A read that fails is the one state where the shell has to *decide* rather than obey, and
    * "expanded" is the decision: a database that cannot say must open the way this app has always
-   * opened — six named destinations — rather than putting them behind an icon the reader has to
+   * opened — seven named destinations — rather than putting them behind an icon the reader has to
    * guess their way out of. It is also not news, so nothing says it: the sidebar has no sentence
    * to spend on a preference.
    */
@@ -864,12 +865,20 @@ describe("collapsing the sidebar", () => {
    * An `aria-label` would be a second place each word is written, and the first of the two to
    * change would be the one nothing tested.
    */
-  it("keeps the six destinations named, and pressable, while they are drawn as icons", async () => {
+  it("keeps the seven destinations named, and pressable, while they are drawn as icons", async () => {
     navCollapsed.mockResolvedValue(true);
     render(<AppShell update={noUpdate}>{null}</AppShell>);
     await screen.findByRole("button", { name: "Expand sidebar" });
 
-    for (const label of ["Search", "Tagger", "Decks", "Collection", "Wishlist", "Settings"]) {
+    for (const label of [
+      "Search",
+      "Tagger",
+      "Decks",
+      "Collection",
+      "Wishlist",
+      "Scanner",
+      "Settings",
+    ]) {
       expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
     }
 
@@ -1539,7 +1548,7 @@ describe("the card menu's deck write", () => {
 });
 
 /**
- * The one viewport branch in this app: below the phone width the six destinations are a bar
+ * The one viewport branch in this app: below the phone width the seven destinations are a bar
  * across the foot of the window, and there is no rail at all. The argument for asking the
  * *window* here rather than a container — the shell is the only component drawn in exactly one
  * box, and that box is the viewport — is in `useNarrowWindow`'s own doc comment.
@@ -1577,13 +1586,14 @@ describe("the shell's choice of navigation", () => {
       "Decks",
       "Collection",
       "Wishlist",
+      "Scanner",
       "Settings",
     ]);
 
     // **Absent rather than hidden**, which is the half a class assertion could not tell: a rail
-    // pushed off-screen would still answer this query, and would still be six tab stops and six
-    // drop targets for a reader who cannot see it. The collapse toggle is the thing only the
-    // rail draws.
+    // pushed off-screen would still answer this query, and would still be seven tab stops and
+    // seven drop targets for a reader who cannot see it. The collapse toggle is the thing only
+    // the rail draws.
     expect(screen.queryByRole("button", { name: /collapse/i })).toBeNull();
 
     // The ribbon is told the same width and sheds with it — the title stops being painted so the
@@ -1617,14 +1627,15 @@ describe("the shell's choice of navigation", () => {
     const rail = screen.getByRole("navigation", { name: "Views" });
     expect(rail).toHaveAttribute("id", "app-nav");
     expect(rail).not.toHaveStyle({ paddingBottom: "var(--safe-b)" });
-    // The seventh button is the collapse toggle, and its presence is the whole assertion that
-    // this is the rail: the six words above are the same six either way.
+    // The eighth button is the collapse toggle, and its presence is the whole assertion that
+    // this is the rail: the seven words above are the same seven either way.
     expect(within(rail).getAllByRole("button").map((b) => b.textContent)).toEqual([
       "Search",
       "Tagger",
       "Decks",
       "Collection",
       "Wishlist",
+      "Scanner",
       "Settings",
       "Collapse",
     ]);
@@ -1642,7 +1653,7 @@ describe("the shell's choice of navigation", () => {
  * whatever is on screen.
  *
  * Both are asserted through the **store** rather than only through what is drawn, and that is
- * deliberate on either side: `activeView` is what the six destinations, the ribbon's title and
+ * deliberate on either side: `activeView` is what the seven destinations, the ribbon's title and
  * `App`'s view swap all read, so it is the fact the binding is actually for; and `keyMapOpen`'s
  * panel is drawn by `TitleBar`, whose own file tests it — a shell test that went looking for the
  * panel would be asserting somebody else's component through this one. The first case checks the
