@@ -118,17 +118,34 @@ condition at all, unless the snapshot says which question it answered.
 inside folders — makes the common viewer operation (filter across the whole binder) a tree walk,
 and makes a card that moves folders a structural diff rather than a field change.
 
-### 3.1 Size, which is estimated and must be measured before v1 locks the format
+### 3.1 Size, measured
 
-**No measured payload size for a collection read exists anywhere in this repo.** The reference
-database is 275 entries (`collection-folders.md`), the owner's own live collection measured 0
-rows on 2026-08-20 (`import-export.md`), and the closest thing to a budget is the export sweep's
-`SWEEP_PAGE = 500` with its worked "3,000-row collection → six round trips".
+**Measured 2026-09-08, debug build, Windows**, by `share::tests::a_thousand_card_snapshot_is_measured`,
+which prints rather than asserts so that it reports rather than rots:
 
-Arithmetic, so that the plan has something to falsify: ~150 B/card before compression, so 3,000
-cards ≈ 450 KB ≈ ~100 KB gzipped, and a 50,000-card whole-collection share ≈ 7.5 MB ≈ ~1.5 MB
-gzipped. **Plan step 1 is to measure a real one**, and the caps in §5.3 are provisional until it
-has.
+| | |
+| --- | --- |
+| 1 000 cards, raw JSON | **273 117 B** (273 B/card) |
+| the same, gzipped | **41 331 B** (**41.3 B/card**) |
+| ratio | 6.6× |
+
+Extrapolated linearly: **3 000 cards ≈ 819 KB raw / 124 KB gzipped**; **50 000 cards ≈ 13.7 MB raw
+/ 2.07 MB gzipped**. The 8 MB cap in §5.3 is therefore roughly 190 000 cards — far above any real
+collection, which is the right side to be wrong on.
+
+**Treat 41.3 B/card as a floor.** Name and price entropy in the fixture are still optimistic.
+
+⚠️ **The first fixture written for this measurement made it a fiction, and the way it did is worth
+remembering.** It filed every printing at `tsp 157` with a two-byte card id — DEFLATE erases
+repetition of exactly that shape, so the compressed figure would have been meaningless. The
+fixture that produced the numbers above uses uuid-shaped ids, Scryfall-shaped image URLs, distinct
+names, climbing collector numbers, and a rotation through four sets, three finishes and five
+grades. **A compression measurement is a measurement of its fixture's entropy first and the
+format's second.**
+
+This section previously carried arithmetic — ~150 B/card raw, ~100 KB gzipped at 3 000 — offered
+so the plan had something to falsify. It was low by 1.8× on the raw figure and close on the
+compressed one.
 
 ---
 
