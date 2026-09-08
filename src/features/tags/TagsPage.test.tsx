@@ -103,6 +103,19 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     onCollectionReconciled: vi.fn().mockReturnValue(() => {}),
     onMarketplaceProgress: vi.fn().mockReturnValue(() => {}),
     onOracleTagProgress: vi.fn().mockReturnValue(() => {}),
+    // The combo feed's pair, for the reason spelled out below: `AppShell` mounts
+    // `useComboProgress` beside the tag one, so both a listener and a status read are bare calls
+    // in a mount effect. The row is a database that has never fetched Spellbook's list — two
+    // zeros, three nulls, `stale: true` — and it puts nothing in the ribbon on its own.
+    onCombosProgress: vi.fn().mockReturnValue(() => {}),
+    combosStatus: vi.fn().mockResolvedValue({
+      combos: 0,
+      cards: 0,
+      stamp: null,
+      fetchedAt: null,
+      checkedAt: null,
+      stale: true,
+    }),
     // Task 10's and Task 11's four — `AppShell` mounts `useDeviceSyncInvalidation` and
     // `useDeviceSyncLive` beside the listeners above, and its Android foreground effect calls
     // `syncLiveForeground`. Same reason as every entry in this block: a bare call inside a

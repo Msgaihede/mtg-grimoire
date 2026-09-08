@@ -2,7 +2,6 @@ import { useQuery } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import { BackupPanel } from "@/features/settings/BackupPanel";
 import { CachePanel } from "@/features/settings/CachePanel";
-import { CombosPanel } from "@/features/settings/CombosPanel";
 import { DangerZonePanel } from "@/features/settings/DangerZonePanel";
 import { ErrorLogPanel } from "@/features/settings/ErrorLogPanel";
 import { HiddenTagsPanel } from "@/features/settings/HiddenTagsPanel";
@@ -98,11 +97,16 @@ export function imageFailureLine(failures: number | undefined): string {
  * a second channel to the backend. There is nothing to race, and threading it down from
  * `App.tsx` would buy nothing but a prop.
  *
- * `BackupPanel` and `CombosPanel` take no props at all and reach the backend themselves, which
- * is the same argument from one step further along: the mirror has no second reader in the
- * window, and the combo status has one — the deck editor's bracket advisory — that is reading
- * the very same cache entry. Either way `SettingsPage` would be holding a hook only to hand its
- * answer straight back down.
+ * `BackupPanel` takes no props at all and reaches the backend itself, which is the same argument
+ * from one step further along: the mirror has no second reader in the window, so `SettingsPage`
+ * would be holding a hook only to hand its answer straight back down.
+ *
+ * **`CombosPanel` stood in that sentence beside it until the combo feed stopped needing a reader
+ * at all.** Commander Spellbook's list is fetched at launch on the tagger datasets' weekly
+ * schedule now and narrates itself on the ribbon's activity line, so the panel that existed to
+ * make somebody press Refresh had nothing left to ask for. What survives of it in Settings is a
+ * clear in `CachePanel`, which is a debugging affordance rather than a feed a reader tends — and
+ * `nav.ts` carries why `Card data` keeps its entry over the one panel that is left.
  */
 export function SettingsPage({ update }: { update: Update }) {
   /**
@@ -250,18 +254,13 @@ export function SettingsPage({ update }: { update: Update }) {
             button that reaches one. */}
         {shown("updates") && <UpdatePanel update={update} history={history} />}
 
+        {/* **The only panel under `Card data`, and it was the first of two.** `CombosPanel` sat
+            directly under this one on the argument that it was the same kind of thing — both
+            optional bulk feeds from a third party that the app works entirely without — and that
+            argument is what put the two of them under one rail entry. The combo feed downloads by
+            itself now and has no panel; the entry stays, because it names the question rather than
+            the panel that happens to answer it. `nav.ts` has the whole of that reasoning. */}
         {shown("prices") && <MarketplacePanel marketplace={marketplace} />}
-
-        {/* **Directly under Prices, because it is the same kind of thing** — and that argument is
-            now what puts the two of them under one rail entry rather than what puts one below the
-            other on a scroll. Both are optional bulk feeds from a third party that the app works
-            entirely without: a marketplace with no feed quotes em dashes, and a database with no
-            combos estimates a bracket from three signals instead of four. `Card data` is the
-            question they both answer, which is why `nav.ts` gives them one entry between them.
-            Nothing here throws anything away either, so it stays second within that group. It
-            reaches the backend itself — see `CombosPanel`, and `BackupPanel` for the rule it
-            follows. */}
-        {shown("combos") && <CombosPanel />}
 
         {/* **First in `Sync`, and still in the group that throws nothing away.** Removing a device
             is the sharpest press on this panel and it is not a clear: the copies, the decks and

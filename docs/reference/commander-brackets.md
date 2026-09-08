@@ -165,8 +165,9 @@ disagreeing with something written down.
 
 ## What the app can see, and how well
 
-Four signals. Three come from data the app always has; the fourth is a feed that may never have
-been fetched.
+Four signals. Three come from data the app always has; the fourth is a bulk feed a launch goes
+and gets on its own. It can still be absent — a first run that has not finished it yet, or one
+that failed — so each reader of it below says what the estimate does then.
 
 ### Game Changers — a column
 
@@ -237,6 +238,14 @@ argument defaults to `[]`, and a database that has never fetched the file gets a
 reads three signals instead of four. Only the *caller* knows which of the two an empty list is —
 `combosStatus()` reports whether anything was ever ingested — which is why the advisory panel
 carries four states (`never` · `reading` · `failed` · `read`) rather than a count of zero.
+
+**`never` kept its arm when the download became automatic, and only its sentence changed.** It no
+longer tells the reader where to press — the list arrives on its own — but it is not reliably
+transient either: the launch refresh is silent and best-effort, so an install with no network, or
+one whose download was refused, sits in `never` for the whole session with nothing on its way.
+Folding it into `reading` would promise an arrival the panel cannot see coming, and folding it
+into `read` is the one sentence this panel may never write — *no combos matched* is a claim about
+a list that was consulted, and a database that has never fetched has consulted nothing.
 
 **The combos handed to `estimateBracket` are not re-checked there.** They were matched by oracle
 id against a set of card ids the caller chose, so the ids passed to `combosForCards` must come
@@ -375,7 +384,7 @@ Results are ordered `template_count, popularity DESC, id`: fully checkable combo
 most-played, then the id so two runs over one deck cannot answer in two different orders. SQLite
 sorts NULLs first, so `popularity DESC` puts an unranked combo last.
 
-### Weekly, against a file that rotates continuously
+### Weekly and uninvited, against a file that rotates continuously
 
 `combos::REFRESH_INTERVAL_SECS` is **7 × 86 400**, and the file's own `timestamp` was twenty
 minutes old when it was fetched — Spellbook rebuilds through the day. **The two must not be
@@ -389,12 +398,73 @@ asking again tomorrow because they were *built* a week ago would spend a request
 learn nothing. The ETag makes a check that finds nothing cost zero bytes, and `combos_refresh`'s
 `force` skips the weekly throttle but **not** the ETag check.
 
-**Nothing downloads until a reader asks.** `refresh_if_due` returns immediately on a database
-whose `fetched_at` is NULL — the difference between it and `tags::refresh_if_due`, and the
-deliberate one: the tag files are what a deck add is filed by, so a first run fetches them
-uninvited, while combos are the fourth signal and a database without them simply reads three.
-Once a reader has pressed Refresh in Settings, launches keep it current. That is also what lets
-the Settings panel say "never fetched" and mean it.
+**A launch goes and gets it uninvited, and that is a reversal (2026-09-08).** `refresh_if_due`
+used to return immediately on a database whose `fetched_at` was NULL — the deliberate difference
+between it and `tags::refresh_if_due`, on the grounds that the tag files are what a deck add is
+filed by while combos are only the *fourth* bracket signal and a database without them simply
+reads three. That
+argument does not survive contact with the reader. A readout drawn from three signals looks
+exactly like one drawn from four: no error, no empty state, just a number a little too low, for
+as long as it takes somebody to find a Refresh button they have no reason to go looking for. An
+answer that is wrong in a way nobody can see the cause of is the worse failure — worse than
+27.5 MB spent on a schedule this app already spends ~18 MB on for the two tagger files. So combos
+join `tags::{oracle,art}::refresh_if_due` rather than
+`marketplace_feed::refresh_selected_if_due`, where a marketplace nobody picked is still never
+downloaded because nobody has asked to be shown its prices.
+
+`due_at_startup` is now **staleness and nothing else**, asked of `checked_at`. `is_stale` already
+reads a missing `checked_at` as stale, so a database that has never asked is due by definition
+and the never-ingested case needs no arm of its own — it had two, one for no `combo_meta` row and
+one for a row with no `fetched_at`, both answering `false`, and together they meant a database
+that had never fetched the file never would. The function survives the collapse to a single
+expression because the rule is worth asserting on its own, with no network and no database.
+
+**`REFRESH_INTERVAL_SECS` is untouched by any of that.** The week is a statement about how often
+to *ask*, and the paragraph above it is the whole of its reasoning; it reads the same whether the
+first ask was a launch's or a press's.
+
+**The launch task is its own, and that is the argument the two tag refreshes already make against
+each other, now covering three files rather than two.** They are the same shape of job, which is
+exactly why they must not share one: whichever went first would be the reason the others were
+late — 27.5 MB gzipped here against the art file's 12.5 MB and the oracle file's 5.85 MB — and
+*late* is a deck add still filing by card type, or a bracket still reading three signals, minutes
+after launch. They contend for the write connection a batch at a time, which is the engine's job
+and not the launch's. `desktop.rs` spawns it at setup, after the two tagger refreshes and chained
+onto neither, silent and best-effort like every sibling.
+
+**The ribbon says it is happening, and takes the quietest rung to say it.** `comboActivity` takes
+`RANK.combos`, which sits *below* the Oracle-tag refresh at the bottom of a ladder whose top is
+the sync. Two readings agree on that. What a combo failure costs is the fourth signal of
+one advisory on Commander decks alone, where a taxonomy failure changes where every card a reader
+adds to any deck is filed. And this is the longest job in the app, so a rank above the tags would
+have one job hold the row for the whole of a launch and the two short refreshes running beside it
+would never get a sentence at all. `useComboProgress` is the single subscription, mounted once in
+`AppShell`; the `downloading` phase reports real bytes and gets a bar, and `ingesting` is emitted
+**exactly once** over the 639 MB parse, so that phase gets a sentence and an indeterminate bar
+rather than a number parked for minutes — a bar that does not move reads as a job that has
+stalled, where the honest one reads as a job that is running.
+
+**A run this window never heard start is a missing sentence rather than a wrong one.** The flag is
+derived from the last `combos:progress` phase, because `ComboStatus` carries no `refreshing` field
+at all — `combos::is_refreshing` is `#[cfg(test)]`. Since `refresh_if_due` is spawned before there
+is a window, a launch's run can begin before the listener exists, and attaching mid-`ingesting`
+catches nothing until `done`. Guessing from the status instead was rejected and would be worse:
+`stale` says a refresh is *due*, not that one is running, and a failed fetch never moves
+`checked_at` — so a machine that cannot reach Spellbook would carry that line in the ribbon for
+ever. Both edges coming off one channel is also why nothing here polls, which is the one line
+where it parts company with `useOracleTagProgress`.
+
+**A finished download invalidates two roots, because two surfaces answer this question through
+two reads.** The editor's advisory comes off `["combos", …]`; the gallery's tiles come off
+`["decks", "brackets", …]`, where the combos arrive on `deck_bracket_reads` alongside the cards
+they are estimated against. The two share no prefix, so `invalidateQueries` on the combo root
+reaches no tile — and a download landing while the wall is on screen would refill whichever deck
+the reader had open and leave every caption estimating from three signals until some unrelated
+deck write fired `["decks"]`. That is the failure the automatic download exists to remove,
+reproduced one surface over: correct data in the database, an old answer on the screen, nothing
+visible to explain the difference. `useComboProgress` fires both on the same terminal phase, and
+its test builds the gallery key with `deckBracketsKey` itself rather than typing it out, so a
+renamed segment turns the prefix match off and turns the test red.
 
 ### What a failure does
 
@@ -417,9 +487,55 @@ its own would need a CHECK rebuild on `error_log`, a new variant, and an arm in 
 total `SOURCE_LABEL` map. The `operation` carries `combos` instead, that field being free text
 precisely so a new call site can report a failure without a migration first.
 
-**Nothing here may break a launch.** A database that has never fetched the file answers all three
+**Nothing here may break a launch.** A database that has never fetched the file answers all four
 commands, and `combos_status` is safe before the first refresh has ever run: two zeros, three
-nulls and `stale: true` rather than a rejection, so no caller needs a guard.
+nulls and `stale: true` rather than a rejection, so no caller needs a guard. That guarantee is
+**more** load-bearing since the launch fetches on its own, not less: the refresh task is spawned
+before there is a window, so the first thing a reader opens is asking a table that is mid-ingest,
+never-ingested, or both in the same second.
+
+**A first fetch that fails is retried at the next launch rather than throttled out for a week.**
+`mark_checked` deliberately writes nothing when there is no `combo_meta` row — a watermark with no
+rows behind it is what would make the next run 304 past an empty database — so a launch that could
+not reach Spellbook leaves the database exactly as due as it was.
+
+### Throwing the whole thing away
+
+`combos_clear` empties `combo_cards`, `combos` and `combo_meta`, and it is a **debugging
+affordance** — the answer to a combo table that looks wrong, and the only thing in the app that
+can be done about one. It lives with the other local caches rather than with the deck — a second
+button in **Local cache**, under Storage and data, beside the one that empties the image cache —
+because that panel's subject is exactly what these tables are: bytes on disk this app can fetch
+again.
+
+**The `combo_meta` row is deleted rather than blanked.** No row is the never-ingested state the
+whole module is already written against, and it is the state every reader of that table already
+handles: `read_status` answers it with two zeros, three nulls and `stale: true`, `due_at_startup`
+reads it as due, and `mark_checked` deliberately writes nothing over it. A row with its columns
+nulled would be a **fourth** state, indistinguishable at a glance from the three and handled by
+none of them.
+
+**`combo_cards` is emptied by its own statement even though `combo_id` CASCADEs**, and the child
+goes first. `PRAGMA foreign_keys` is per-connection, and nothing about `clear_combos`' signature
+says who set it on the connection handed in — so leaning on the cascade would be a clear that
+works or leaves a table of orphans depending on a setting made somewhere else entirely. One
+transaction, for the reason the swap is one: a clear that emptied `combos` and then failed would
+leave a watermark describing rows that are gone.
+
+**What makes the clear honest is `conditional_etag`, not the delete.** The stored ETag goes with
+the row — but even if it did not, that helper asks whether there are *rows* behind an ETag before
+replaying one, so a cleared database really re-downloads instead of being told 304 into staying
+empty. That is the same guard the empty-file refusal above depends on, read from the other end.
+
+**The press is two calls in one mutation, and that is the whole design.** `combos_clear`
+downloads nothing, so a press that stopped there would leave a reader who came here *because* the
+data looked wrong with no data at all, on a weekly schedule they cannot see. `useLocalCache`
+awaits the clear and then a forced refresh inside one `mutationFn`: one `isPending` across both,
+one refusal reaching the banner whichever of the two produced it, and no window in which the
+button is idle over an empty table. The invalidation is `onSettled` rather than `onSuccess`,
+because the clear lands **first** — a refresh that then fails has still emptied the tables, and
+invalidating only on success would leave an open deck's advisory quoting a combo list that no
+longer exists for `lib/query.ts`'s 30 s, which is exactly long enough to look deliberate.
 
 ## The manual override
 
@@ -557,16 +673,21 @@ reversed — `deckSort.ts` carries that rule and why it differs from `sorting.ts
 
 | File | Holds |
 | --- | --- |
-| `src-tauri/src/combos.rs` | The feed: client, streaming parse, staged write, the match query, three commands, `combos:progress` |
+| `src-tauri/src/combos.rs` | The feed: client, streaming parse, staged write, the match query, `due_at_startup`, `clear_combos`, four commands, `combos:progress` |
 | `src-tauri/src/schema.rs` | The v26 rung — `decks.bracket`, `combos`, `combo_cards`, `combo_meta`, the two indexes, and the staging twins |
 | `src-tauri/src/deck.rs` | `AUTO_BRACKET`, `valid_bracket`, `BAD_BRACKET`, the column on `DeckRow`/`DeckPatch`/`DeckBefore` and the audit line — **and `deck_bracket_reads`**, with `BRACKET_CARDS_SQL` and `BRACKET_IDS_SQL` behind it |
 | `src/lib/ipc.ts` | `AUTO_BRACKET`, `ComboBracketTag`, `DeckCombo`, `ComboStatus`, `ComboProgress`, and the three calls — plus `BracketCardRow`/`DeckBracketRead` and `deckBracketReads` |
-| `src/lib/query.ts` | `COMBOS_KEY`, `COMBOS_STATUS_KEY`, `combosForCardsKey` — one root, so a refresh in Settings refills an open deck's advisory |
+| `src/lib/query.ts` | `COMBOS_KEY`, `COMBOS_STATUS_KEY`, `combosForCardsKey` — one root, so an ingest landing under an open deck refills its advisory |
 | `src/features/decks/validation/types.ts` | `BracketCardFacts` — the five fields, and why the narrowing lives there and not on `CardFacts` |
 | `src/features/decks/validation/bracket.ts` | The floor, the two greps, `COMBO_FLOOR`, `describeReason`, `bracketWarning` |
 | `src/features/decks/DeckBracket.tsx` | The readout, the picker, the combo list, and the four states of the combo read |
 | `src/features/decks/useDeckBrackets.ts` | The gallery's read, `deckBracketsKey`, `bracketLabel` and `effectiveBracket` — the wall's whole share of this document |
-| `src/features/settings/CombosPanel.tsx` | What is ingested, how old, the Refresh and its progress line |
+| `src-tauri/src/desktop.rs` | The launch task — its own, spawned after the two tagger refreshes and chained onto neither |
+| `src/lib/useComboProgress.ts` | `COMBO_PHASE_LABEL`, the one `combos:progress` subscription, and the two roots a terminal phase invalidates — why the flag is derived from the event here and polled for the tags |
+| `src/lib/activity.ts` | `comboActivity` and `RANK.combos` — the ribbon's sentence, and why the longest job takes the quietest rung |
+| `src/features/settings/CachePanel.tsx` | The `Clear combos` button and its confirm — the only combo surface left in Settings |
+| `src/features/settings/useDataReset.ts` | `useLocalCache` — the clear and the forced refresh as one mutation |
+| `src/features/settings/clearOutcome.ts` | `combosOutcome` — what the press reports, counted off the *refilled* table |
 
 ## Sources
 

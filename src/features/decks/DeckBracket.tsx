@@ -62,6 +62,13 @@ import { bracketWarning, estimateBracket } from "./validation/bracket";
  * them and their `bracketTag`, and it is a fourth optional feed like the price lists and the two
  * tagger datasets: a database that has never fetched it reads three signals instead of four, and
  * {@link Advisory} says so in words rather than letting silence imply the deck has none.
+ *
+ * **"Optional" is a claim about what a failure costs and no longer a claim about who starts the
+ * download.** The file is fetched at launch on the same weekly schedule as the two tagger
+ * datasets, so a database that has never seen it is a database that has not been running long
+ * enough — or one whose network has not answered — rather than one whose reader never found a
+ * button. What did not change is the floor: nothing about this feed may fail a deck, and a
+ * reading made from three signals is low rather than wrong.
  */
 export function DeckBracket({
   cards,
@@ -129,10 +136,11 @@ export function DeckBracket({
    * Whether the combo list has ever been downloaded — **not** gated on the panel being open.
    *
    * One local read per Commander deck opened, shared by key with every other mount of this
-   * control and with the Settings panel that refreshes the feed. `enabled: open` would save that
-   * read and cost the one thing this panel may not do: on the first press the answer would still
-   * be in flight, and a panel that draws no combos and says nothing about why is a panel
-   * implying the deck has none when the truth is that nothing has been looked at.
+   * control and with Settings' *Clear combos*, which is the only press left that can move
+   * it — the launch refresh moves the same rows without anyone pressing anything. `enabled: open`
+   * would save that read and cost the one thing this panel may not do: on the first press the
+   * answer would still be in flight, and a panel that draws no combos and says nothing about why
+   * is a panel implying the deck has none when the truth is that nothing has been looked at.
    */
   const status = useQuery({ queryKey: COMBOS_STATUS_KEY, queryFn: () => ipc.combosStatus() });
 
@@ -487,14 +495,27 @@ function Advisory({
           on screen and mean opposite things.** "No combos matched" is a claim about a list that
           was consulted; a database that has never fetched the feed has consulted nothing, and
           writing the first sentence in the second state is the one thing this panel may never
-          do. So the never-ingested case is checked first and says where to go, the in-flight and
-          failed cases say so rather than falling through to a count of zero, and only a read
-          that actually answered may say the deck has none. */}
+          do. So the never-ingested case is checked first and says which of the two it is, the
+          in-flight and failed cases say so rather than falling through to a count of zero, and
+          only a read that actually answered may say the deck has none.
+
+          **The never-ingested arm stopped asking the reader for anything, and it did not stop
+          being an arm.** The feed is fetched at launch now, so what used to be a state a database
+          could sit in for ever is one a launch ordinarily walks out of in a minute or two — which
+          changes the *sentence* and not the census. Three reasons it keeps its own arm. It is not
+          reliably transient: the launch refresh is silent and best-effort, so an install with no
+          network, or one whose download was refused, sits here for the whole session with nothing
+          on its way. Folding it into `reading` would promise an arrival this panel cannot see
+          coming, and folding it into the read arm is the forbidden sentence above. And the two
+          questions are different even while both are waiting — `never` is *has this database got
+          the file at all*, `reading` is *is this deck's own read in flight* — so the reader is
+          told which of the two they are in whichever way it ends. What the transience buys is the
+          last clause: nothing to press, so nothing to go and find. */}
       {comboState === "never" ? (
         <p className="mt-2 leading-snug text-dim">
-          No combo list has been downloaded, so nothing here has been checked for two-card combos
-          at all — this reading is three signals rather than four. Fetch it from Settings, under
-          Combos.
+          No combo list has been downloaded yet, so nothing here has been checked for two-card
+          combos at all — this reading is three signals rather than four. The list downloads on
+          its own shortly after launch, and the fourth signal appears here when it lands.
         </p>
       ) : comboState === "reading" ? (
         <p className="mt-2 text-dim">Reading combos…</p>

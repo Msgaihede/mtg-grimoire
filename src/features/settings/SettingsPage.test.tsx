@@ -22,7 +22,6 @@ function stub(name: string) {
 }
 vi.mock("@/features/settings/BackupPanel", () => ({ BackupPanel: stub("panel:backup") }));
 vi.mock("@/features/settings/CachePanel", () => ({ CachePanel: stub("panel:cache") }));
-vi.mock("@/features/settings/CombosPanel", () => ({ CombosPanel: stub("panel:combos") }));
 vi.mock("@/features/settings/DangerZonePanel", () => ({
   DangerZonePanel: stub("panel:danger"),
 }));
@@ -37,7 +36,7 @@ vi.mock("@/features/settings/UpdatePanel", () => ({ UpdatePanel: stub("panel:upd
 // `isWebTarget` reads `__CORE__`, a build-time constant vitest fixes at "tauri" — so the web
 // answer is only reachable by mocking the module, which its own doc says.
 vi.mock("@/pwa/target", () => ({ isWebTarget: vi.fn(() => false) }));
-// **Stubbed for the same reason the other eight are, and it had never needed to be**: it is
+// **Stubbed for the same reason the other seven are, and it had never needed to be**: it is
 // the one panel `SettingsPage` draws *only* when `isWebTarget()` is true, so before this file
 // could say that, it never rendered here. Unstubbed it reaches `caches.open` on mount, which
 // jsdom has no Cache Storage for — a failure about the environment rather than about the gate.
@@ -401,13 +400,23 @@ describe("the rail decides what the pane draws", () => {
     expect(screen.queryByText("panel:danger")).not.toBeInTheDocument();
   });
 
+  /**
+   * **`Storage and data` rather than `Card data`, and the swap is what deleting `Combos` cost.**
+   * The plural in this test's name is the claim being made — a group draws *all* of its panels,
+   * not the first one — and `Card data` held two until the combo feed became an automatic
+   * download and stopped having a panel. A group of one cannot make that claim at all, so the
+   * press moved to the group with the most stubs behind it. `Card data` is still driven by
+   * `clears the query when a group is picked` below, so the entry that lost a panel is not left
+   * untouched by this file.
+   */
   it("draws a group's panels, and only that group's, once its entry is pressed", async () => {
     render(wrap(<SettingsPage update={NO_UPDATE} />));
 
-    await pickGroup("Card data");
+    await pickGroup("Storage and data");
 
-    expect(screen.getByText("panel:prices")).toBeInTheDocument();
-    expect(screen.getByText("panel:combos")).toBeInTheDocument();
+    expect(screen.getByText("panel:backup")).toBeInTheDocument();
+    expect(screen.getByText("panel:cache")).toBeInTheDocument();
+    expect(screen.getByText("panel:danger")).toBeInTheDocument();
     // The group it came from is gone, which is the half a `shown()` stuck at `true` would fail.
     expect(screen.queryByText("panel:update")).not.toBeInTheDocument();
   });
