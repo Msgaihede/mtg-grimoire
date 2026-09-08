@@ -144,6 +144,11 @@ pub mod reset;
 pub mod schema;
 pub mod search;
 pub mod searchopen;
+/// **Ungated, and only the upload is not.** Rendering a collection folder as a share snapshot
+/// is SQLite in and JSON out — the shape [`search`] has always had — so it builds wherever the
+/// collection does; the publish that puts the bytes on the relay carries its own gate at its
+/// own site.
+pub mod share;
 pub mod slug;
 pub mod sorting;
 /// **Compiles for wasm and can never succeed there**, which is cheaper than gating it and is
