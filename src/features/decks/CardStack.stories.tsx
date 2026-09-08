@@ -153,13 +153,20 @@ export const FixedHeightFromTheCardCount: Story = {
  * requires the two never be confusable, and the only honest way to check that is to draw them
  * together.
  *
- * `RULE BREAK` is red, boxed, in the card's top-right corner, and it is the one mark that
- * changes the card's own edge. `Game Changer` is a gold banner stamped into the title strip on
- * the left, tucked under the quantity tag, and says nothing is wrong.
+ * `RULE BREAK` is red, boxed, in the card's **bottom-left** corner (it moved out of the top-right
+ * on 2026-08-20, to keep it from ever sitting beside the plan's tick), and it is the one mark
+ * that changes the card's own edge. The game changer is a **crown printed on the quantity tag**
+ * at the left of the title strip — no words, no box, and no colour of its own: it is stroked in
+ * `currentColor`, so it is whatever is legible on the fill the card's label chose.
  *
- * **Both are spelled out here**, which is what the 210px face buys over the 150px grid tile's
- * `GC` — so the other three separations carry the whole load, and drawing them together is the
- * only honest way to check that they do.
+ * **Only one of the two spells anything out, and that is the point of drawing them together.**
+ * This story used to show a stamped gold `Game Changer` ribbon here, on the argument that a 210px
+ * face has the room where the 150px Grid tile only had space for `GC` — one fact, three drawings,
+ * a difference of room. The ribbon and the letters both went on 2026-09-08 (the ribbon was
+ * measured overflowing that tile by 11px and clipping the plan's tick), so the deck draws this
+ * fact with one glyph on all four of its views and the *words* separation is now a mark with
+ * words against a mark with none. The other three — the colour, the place and the card's own
+ * edge — are unchanged, and this is where all four are looked at at once.
  */
 export const RuleBreakAndGameChanger: Story = {
   args: {
@@ -184,9 +191,43 @@ export const RuleBreakAndGameChanger: Story = {
   },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
+    // The words: one mark has them and the other has none anywhere on the card. `queryByText`
+    // reads text content, which is the assertion that says the ribbon is gone rather than merely
+    // moved — the fact is in each card's `aria-label` instead, which no text query can reach.
     expect(canvas.getByText("RULE BREAK")).toBeInTheDocument();
-    expect(canvas.getAllByText("Game Changer")).toHaveLength(2);
-    // Only the card that breaks a rule carries the destructive edge.
+    expect(canvas.queryByText(/game changer/i)).toBeNull();
+
+    // Two crowns, one per game changer, and each inside its card's quantity tag rather than
+    // beside it. lucide's own class is the handle: the glyph is `aria-hidden` inside an
+    // `aria-hidden` tag, so it has no role, no name and no text to be found by.
+    const crowns = canvasElement.querySelectorAll(".lucide-crown");
+    expect(crowns).toHaveLength(2);
+    for (const crown of crowns) {
+      // The tag around it is the count's — a crown drawn as a mark of its own would have some
+      // other parent, and would be the second object in the strip this fold exists to remove.
+      const tag = crown.parentElement as HTMLElement;
+      expect(tag).toHaveAttribute("aria-hidden", "true");
+      expect(tag.textContent).toBe("1");
+      // Before the number, and `firstChild` rather than `firstElementChild`: the count is a bare
+      // text node, so the element-only walk answers "the crown" whichever side of it the crown is.
+      expect(tag.firstChild).toBe(crown);
+      // No colour of its own — it is `currentColor` on the tag's foreground, never the gold a
+      // crown floating on artwork wears and never the destructive red beside it.
+      expect(crown.getAttribute("stroke")).toBe("currentColor");
+      expect(crown.getAttribute("class")).not.toContain("text-");
+    }
+
+    // The place: the rule break is laid on the art, absolutely positioned in the card's
+    // bottom-left corner; the crown is positioned by nothing at all, being a flex item of the
+    // tag in the title strip. Two marks that cannot arrive in one corner.
+    const mark = canvas.getByText("RULE BREAK");
+    expect(mark.className).toContain("absolute");
+    expect(mark.className).toContain("text-destructive");
+    expect(mark.className).toContain("left-[calc(5px*var(--mark-scale,1))]");
+    expect(mark.className).not.toContain("right-");
+    expect(crowns[0].getAttribute("class")).not.toContain("absolute");
+
+    // The edge: only the card that breaks a rule carries the destructive one.
     const items = canvas.getAllByRole("listitem");
     expect(items[0].className).toContain("border-destructive");
     expect(items[1].className).not.toContain("border-destructive");

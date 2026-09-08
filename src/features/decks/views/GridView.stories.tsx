@@ -62,18 +62,35 @@ export const Default: Story = {
     expect(canvas.getByText("INACTIVE")).toBeInTheDocument();
     // The two marks, in the two corners they never share.
     expect(canvas.getByText("RULE BREAK")).toBeInTheDocument();
-    // **The crown alone, in the marks strip — not `CardArt`'s corner chip and not the stack's
-    // spelled-out ribbon.** This wall drew the chip from 2026-08-16 until the two card-face views
-    // became one card; the strip is where the mark lives on both of them now, and the corner the
-    // chip owned is the plan's tick. Which of the two gold drawings the strip gets is a question
-    // about **width**: the ribbon is ~130px whatever the card is, and on a 150px tile it pushed the
-    // tick off the end of the strip and the face's `overflow-hidden` clipped it (measured in the
-    // shipped window 2026-09-08). So the stack spells it out and the tile wears the crown — one
-    // fact, two drawings, differing by the room each has, which is `GameChangerMark`'s own rule.
-    // `GameChangerBadge`'s two letters are still the table's and the text columns'.
+    // **The game changer is a crown printed on the copy count, and it is the same mark the
+    // stacked card draws.** Three arrangements are retired rather than one: `CardArt`'s corner
+    // chip, which this wall drew from 2026-08-16 until the two card-face views became one card;
+    // the stack's spelled-out `Game Changer` ribbon; and the fork between them that stood for one
+    // morning. The fork was measured — the ribbon is ~130px whatever the card is, so on a 165px
+    // tile a 28px tag, that ribbon and a 28px tick came to 163px of marks and the face's
+    // `overflow-hidden` clipped the plan's tick (shipped window, 2026-09-08) — and folding the
+    // crown into the tag costs 14px instead, which is what took the width argument away entirely.
+    // So the strip is two marks on both views: the crowned tag at one end, the tick at the other.
+    //
+    // The crown is `aria-hidden` inside an `aria-hidden` tag and binds its sentence through
+    // `useTooltip()` rather than a `title`, so neither `getByRole` nor `getByTitle` reaches it —
+    // the glyph's own class is the handle, exactly as in `GameChangerMark.test.tsx`.
     const crowned = canvas.getByRole("button", { name: /^Lightning Bolt/ });
+    const crowns = crowned.querySelectorAll(".lucide-crown");
+    expect(crowns).toHaveLength(1);
+    // Printed *on* the count rather than beside it: the crown's parent is the tag, and the tag's
+    // own text is the number. A crown that had drifted back out into the strip as a sibling would
+    // pass a bare "there is a crown" and fail this.
+    const tag = crowns[0].parentElement as HTMLElement;
+    expect(tag).toHaveAttribute("aria-hidden", "true");
+    expect(tag.textContent).toBe("1");
+    // Neither the ribbon nor `components/GameChangerMark`, whose crown names itself as a
+    // `role="img"` — that mark is the search side's, and a self-naming glyph inside a tag the
+    // reader colours would be the one mark in the strip ignoring what it stands on.
     expect(within(crowned).queryByText("Game Changer")).not.toBeInTheDocument();
-    expect(within(crowned).getByRole("img", { name: GAME_CHANGER_LABEL })).toBeInTheDocument();
+    expect(
+      within(crowned).queryByRole("img", { name: GAME_CHANGER_LABEL }),
+    ).not.toBeInTheDocument();
     // The words themselves are the button's, which is what a screen reader gets either way.
     expect(crowned).toHaveAccessibleName(expect.stringContaining("game changer"));
   },

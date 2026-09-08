@@ -146,17 +146,32 @@ Every one of these has its measurement and its story in
   in two pictures. That was issue #353; `docs/reference/frontend-design.md` has the record.
 - **A card's marks share one chip in the art's top-right corner** — `FoilOverlay` draws the
   finish glyph and `GameChangerMark`'s gold crown side by side, because a card fact and a
-  printing fact in two boxes start a row of stickers. The crown is `GameChangerBanner`'s glyph
-  without its ribbon — one fact drawn three ways (the stack's banner, the deck's table and text
-  views' `GC`, this), differing only in the room each has. One gold (`text-pie-gold`) everywhere,
-  never the destructive colour, which belongs to a rule break. `FoilOverlay mark={false}` turns
-  the whole chip off, crown included, for a frame that names these somewhere else.
-  **The crown is no longer only this chip's, and the count of drawings did not change with it**
-  (2026-09-08): the deck's Grid tile draws `GameChangerMark` in `DeckCardFace`'s marks strip, in
-  the place the stack's ribbon stands, because that tile draws no chip at all. So the third
-  drawing has two homes — a corner chip on every wall of `CardArt` tiles, and the deck tile's own
-  strip — and *the difference of room is the rule* rather than which component the mark is nested
-  in. `components/GameChangerMark`'s header carries the measurement that put it there.
+  printing fact in two boxes start a row of stickers. `FoilOverlay mark={false}` turns the whole
+  chip off, crown included, for a frame that names these somewhere else.
+  **`components/GameChangerMark` is the _search side's_ mark since 2026-09-08, and the rule this
+  bullet used to carry is retired.** It read *one fact drawn three ways — the stack's banner, the
+  deck's table and text views' `GC`, this — differing only in the room each has*, and it was true
+  of the arrangement it described. `GameChangerBanner` and `GameChangerBadge` are **deleted**: the
+  deck prints the crown on the **quantity** instead — folded into `CardMarks`' `QuantityTag` on
+  both of its card-face views, and drawn in the quantity column beside the number on its two row
+  views. So there is one glyph everywhere, and what differs is only what it is printed *on*. The
+  two callers left here are this chip — every wall of `CardArt` tiles, which is the search's, the
+  collection's, the wishlist's and the three docked search columns — and `SearchPage`'s printings
+  rows.
+  **Gold survives exactly where the mark is _unfilled_, and that is one rule and not two
+  colours.** A crown floating over somebody's artwork, or standing in a line of type, has nothing
+  but `text-pie-gold` saying which fact it is — never the destructive colour, which belongs to a
+  rule break. A crown printed on a filled `QuantityTag` takes that tag's own foreground, because
+  the tag already carries a colour that means the card's **label**: a fixed gold there would be
+  the one mark in the strip ignoring what it stands on, and invisible on a Gold-labelled card.
+  **What retired the room argument is a measurement rather than a tidy-up.** The ribbon was 130px
+  at `cardZoom` 1.1 and the deck's Grid tile is 165px, so a 28px tag, that ribbon and a 28px tick
+  came to 163px of marks in a 165px `overflow-hidden` strip — **11px of overflow**, clipping the
+  plan's tick by nearly half at every stop of the zoom ladder (shipped window 2026-09-08, debug
+  build, 1920×1080). That bought `DeckCardFace` a required `gameChanger: "banner" | "crown"` prop
+  for one morning. The crowned tag is about 42px, narrower than either arm was, so the prop is
+  gone and the two card-face views draw one card again. `components/GameChangerMark`'s header and
+  `components/CountTag`'s `crowned` prop carry the whole record.
   **Top-right is that chip's**, on every surface that draws a card as a face, and a surface's own
   marks go in the corners it leaves: top-left, bottom-left. The deck's Grid view put its copy count
   there too, in a full-width strip, and the two overlapped on any foil card in a deck — invisible
@@ -186,6 +201,14 @@ Every one of these has its measurement and its story in
   the words belong to whatever names the card. **A count laid _beside_ a card keeps its `×`** —
   `OwnedBadge` in a caption, the search table's `×132 printings` — where the sign is what tells a
   count from a set number.
+  **One glyph shares the box since 2026-09-08 and the `×` is still refused**, which is the
+  distinction to hold on to: `crowned` draws a game changer's crown **before** the number, in the
+  tag's own foreground, and the `×` is a second reading of the digits where the crown is a second
+  fact about the card the digits are printed on. It costs 14px — an 11px crown and a 3px gap, both
+  scaled by `--mark-scale` like everything else on a card — and moves no padding, because
+  `COUNT_TAG_BOX`'s `pl − pr = 5px` is a derivation the content width cancels out of. A caller
+  passing it **owes the fact in words**, in the `title` and in the accessible name of whatever the
+  tag is drawn inside, since the whole tag is `aria-hidden`.
 - **A bare number is only honest where something beside it says what is being counted, and that
   is why the search wall stopped drawing one** (2026-08-15). `CountTag` had two callers for a
   day: the deck stack's copies in a pile, and the search wall's printings a collapsed tile stands

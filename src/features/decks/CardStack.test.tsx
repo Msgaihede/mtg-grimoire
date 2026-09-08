@@ -37,7 +37,7 @@ import {
   stackImageHeight,
   stackLiftRoom,
 } from "./CardStack";
-import { LANDED_ATTR, SELECTED_ATTR } from "./cardControl";
+import { CARD_BODY_ATTR, GC_DIMMED, LANDED_ATTR, SELECTED_ATTR } from "./cardControl";
 import { deckCardSlot } from "./dnd";
 import type { TheoryPlan } from "./theoryMatch";
 import { card } from "./validation/fixtures";
@@ -425,8 +425,8 @@ describe("CardStack geometry at a zoom", () => {
 
   /**
    * The card publishes the same zoom as two custom properties, which is how everything laid **on**
-   * it is sized: the quantity tag, the game-changer banner, the rule break, the printed frame under
-   * the art, the gem and finish glyph in the foot, and the stepper column in the margin.
+   * it is sized: the quantity tag and the crown printed on it, the rule break, the printed frame
+   * under the art, the gem and finish glyph in the foot, and the stepper column in the margin.
    *
    * A variable rather than a prop because most of those are components the deck's table and text
    * views draw too, where nothing zooms — so the question is answered once, here, and the `, 1`
@@ -720,6 +720,70 @@ describe("CardStack landed mark", () => {
     mountLanded(new Map());
 
     expect(list().querySelectorAll(`[${LANDED_ATTR}]`)).toHaveLength(0);
+  });
+});
+
+describe("CardStack game-changer spotlight", () => {
+  /**
+   * **What the stack owes the spotlight is one class on one element** (2026-09-08), and this is
+   * the stack's half of it.
+   *
+   * The ledger's `N game changers` chip is the control and `DeckEditor` arms the view box; a
+   * sibling's suite owns both. All four of the deck's views have to carry the vocabulary or the
+   * gesture answers about three of them, so what is checked here is that this view does: the
+   * cards that are **not** game changers wear {@link GC_DIMMED} and the one that is does not.
+   *
+   * **The mark is on the card's whole body and that is the load-bearing half**, not a detail of
+   * where a class happened to land. `src/index.css` fades whatever matches, so a class on the
+   * face alone would leave the chin and the stepper column at full opacity beside a quarter-lit
+   * picture — which is why this asserts the element carrying {@link CARD_BODY_ATTR} rather than
+   * merely "some element under the card". Face, foot and controls fade together or the card is
+   * two objects.
+   *
+   * **It is a class rather than an attribute**, alone among this card's marks, and `cardControl`'s
+   * own doc carries why — nothing ever asks the DOM which cards are dimmed, so there is no
+   * question for a query handle to answer. That is also why this asserts `classList.contains`
+   * rather than a substring of `className`: a substring test passes against the class being
+   * absent about as readily as against it being present.
+   *
+   * jsdom applies no stylesheet, so the 0.25 itself is not visible from here and is not claimed.
+   */
+  it("dims every card that is not a game changer, on the card's whole body", () => {
+    render(<CardStack cards={CARDS} label="Ramp" currency="usd" />);
+
+    const bodies = items();
+    expect(bodies).toHaveLength(3);
+    for (const body of bodies) expect(body).toHaveAttribute(CARD_BODY_ATTR);
+
+    // Sol Ring and Arcane Signet are ordinary cards; The Great Henge is the fixture's one game
+    // changer. The lit card's list is asserted from both ends — it does not wear the class, and
+    // the other two do — because "nobody is dimmed" and "everybody is dimmed" would each satisfy
+    // half of this on its own.
+    expect(bodies[0].classList.contains(GC_DIMMED)).toBe(true);
+    expect(bodies[1].classList.contains(GC_DIMMED)).toBe(true);
+    expect(bodies[2].classList.contains(GC_DIMMED)).toBe(false);
+  });
+
+  /**
+   * **An orphan dims**, which is `deckCardDimmed`'s rule rather than this view's: `gameChanger`
+   * is `boolean | null`, `null` is a printing that has left the corpus or one the format has no
+   * opinion about, and anything but `true` is *not a game changer* — the same reading
+   * `deckCardName` and `CardMarks` already take of the same field. The card that would be wrong
+   * to leave lit is exactly the one nothing can say is a game changer.
+   */
+  it("dims a card whose printing cannot answer the question", () => {
+    render(
+      <CardStack
+        cards={[card({ name: "Gone Card", gameChanger: null })]}
+        label="Ramp"
+        currency="usd"
+      />,
+    );
+
+    expect(items()[0].classList.contains(GC_DIMMED)).toBe(true);
+    // And it wears no crown, for the same reading of the same field — one fact, two drawings that
+    // cannot disagree.
+    expect(document.querySelector(".lucide-crown")).toBeNull();
   });
 });
 
@@ -1167,6 +1231,15 @@ describe("CardStack cards", () => {
    * Every mark on a card is decoration and says so, which is `FoilOverlay`'s rule for
    * `FoilOverlay`'s reason: an `aria-label` replaces its element's content, so an `sr-only`
    * span inside one of these buttons is announced to nobody and only looks accessible.
+   *
+   * **The game changer is the case that makes this a rule rather than a habit** (2026-09-08).
+   * It used to be the one mark on a card with words of its own — a stamped `Game Changer`
+   * ribbon — and even then those words were inside an `aria-hidden` element, said to a screen
+   * reader only by `deckCardName`. The ribbon is gone and the fact is a crown printed inside
+   * {@link QuantityTag}, which spells nothing at all: the tag is `aria-hidden`, the crown is
+   * `aria-hidden` inside it, and the accessible name below is now the **only** place in this
+   * card's subtree the fact is stated in words. So the name assertion stopped being a check
+   * that the words are said twice and became a check that they are said at all.
    */
   it("marks every badge as decoration, and says all of it in the name instead", () => {
     render(
@@ -1202,14 +1275,28 @@ describe("CardStack cards", () => {
       />,
     );
 
-    // The banner's own words are inside it, so the element carrying `aria-hidden` is the mark
-    // rather than the text — `closest` asks the question the way the DOM answers it.
-    for (const label of ["Game Changer", "RULE BREAK", "0/2"]) {
+    // The two marks that still spell something out keep their words inside them, so the element
+    // carrying `aria-hidden` is the mark rather than the text — `closest` asks the question the
+    // way the DOM answers it.
+    for (const label of ["RULE BREAK", "0/2"]) {
       expect(screen.getByText(label).closest("[aria-hidden]")).not.toBeNull();
     }
     // Found by its own text — `QuantityTag` forwards to `components/CountTag`, which now binds
     // `useTooltip()` rather than a native `title`.
-    expect(screen.getByText("2")).toHaveAttribute("aria-hidden", "true");
+    const tag = screen.getByText("2");
+    expect(tag).toHaveAttribute("aria-hidden", "true");
+
+    // The crown, hidden twice over: the tag around it is `aria-hidden` and so is the glyph. The
+    // inner one is what a caller lifting this mark out of an `aria-hidden` box would be relying
+    // on, so it is worth pinning at the glyph rather than inferring it from the ancestor.
+    const crown = tag.querySelector(".lucide-crown");
+    expect(crown).not.toBeNull();
+    expect(crown).toHaveAttribute("aria-hidden", "true");
+
+    // And no mark on this card writes the fact down. `queryByText` reads text content, which is
+    // the only thing an `aria-label` cannot reach into — so this is exactly the claim that the
+    // ribbon is gone and nothing put its words back somewhere a name would swallow them.
+    expect(screen.queryByText(/game changer/i)).toBeNull();
 
     expect(
       screen.getByRole("button", {
@@ -1233,6 +1320,15 @@ describe("CardStack tooltips", () => {
    *
    * The rarity gem is the one worth naming: it is drawn here **without** its word, so the colour
    * was the entire message until `RarityGem` grew a `title` of its own.
+   *
+   * **The game changer's sentence moved rather than went** (2026-09-08). It had a mark of its
+   * own — a ribbon, with a tooltip of its own — and the crown that replaced it is drawn *inside*
+   * {@link QuantityTag}, which owns one `title` for the whole tag. So the fact is a **clause on
+   * the count's sentence** now, appended, which is why the assertion below is the tag's string
+   * with ` · Game changer` on the end rather than a hover of its own: a pointer resting anywhere
+   * on that tag — on the crown or on the digits — gets one sentence saying all three facts. The
+   * crown binds nothing itself, and pinning the joined string is what would go red if it did,
+   * since a second binding on a child would be the tag's own hint being replaced by half of it.
    */
   it("gives every mark on a card its own sentence for the pointer", async () => {
     render(
@@ -1289,13 +1385,14 @@ describe("CardStack tooltips", () => {
     // own `aria-label` — so the panel carries no `role="tooltip"` and is found by its one
     // stable id (`TOOLTIP_PANEL_ID`) instead of by role or by name. `QuantityTag` forwards to
     // `components/CountTag` (outside this bucket's files), which now binds the same way.
+    // All three of the tag's facts in one sentence: the label, the count and — since the crown
+    // folded in — the game changer, in that order. The literal is written out rather than joined
+    // from `GAME_CHANGER_LABEL`, because what this pins is the *wording a pointer reads*, and an
+    // assertion built from the constant would agree with the constant being rewritten.
     const tag = screen.getByText("2");
-    expect(await openTooltip(tag)).toHaveTextContent("Fast mana · 2 in this pile");
+    expect(tag.querySelector(".lucide-crown")).not.toBeNull();
+    expect(await openTooltip(tag)).toHaveTextContent("Fast mana · 2 in this pile · Game changer");
     await closeTooltip(tag);
-
-    const gameChanger = screen.getByText("Game Changer").closest("[aria-hidden]") as HTMLElement;
-    expect(await openTooltip(gameChanger)).toHaveTextContent("Game changer");
-    await closeTooltip(gameChanger);
 
     const ruleBreak = screen.getByText("RULE BREAK");
     expect(await openTooltip(ruleBreak)).toHaveTextContent(
@@ -1326,8 +1423,17 @@ describe("CardStack tooltips", () => {
     await closeTooltip(setCode);
   });
 
-  /** An unlabelled card still answers the question the colour raises — the count alone, with no
-   *  label name invented for it. */
+  /**
+   * An unlabelled card still answers the question the colour raises — the count alone, with no
+   * label name invented for it.
+   *
+   * **And no clause invented for it either** (2026-09-08). This card is not a game changer, so
+   * this is the sentence `QuantityTag` has always said, unchanged by the crown landing in the
+   * tag: the clause is appended on `true` rather than folded into the string, which is what
+   * makes an ordinary card's tooltip byte-for-byte what it was. The crown's absence is asserted
+   * beside it because the two are one claim — a tag saying nothing extra while drawing a crown
+   * would be the fact shown to a pointer and withheld from the words.
+   */
   it("says only the count on an unlabelled card", async () => {
     render(
       <TooltipProvider>
@@ -1335,7 +1441,12 @@ describe("CardStack tooltips", () => {
       </TooltipProvider>,
     );
 
-    expect(await openTooltip(screen.getByText("4"))).toHaveTextContent("4 in this pile");
+    const tag = screen.getByText("4");
+    expect(tag.querySelector(".lucide-crown")).toBeNull();
+    // Anchored, unlike every other tooltip assertion in this file: `toHaveTextContent` takes a
+    // substring, and a substring passes just as happily against the crowned string that has a
+    // clause on the end. The claim here is that there is nothing on the end.
+    expect(await openTooltip(tag)).toHaveTextContent(/^4 in this pile$/);
   });
 
   /**
@@ -1437,10 +1548,12 @@ describe("CardStack marks", () => {
 
     // One card of the two, which is the point: a mark every row carries says nothing.
     // **Found by `THEORY_MATCH_ATTR` rather than by `getByTitle`.** The tick carries no visible
-    // text of its own — unlike `RULE BREAK`'s or `Game Changer`'s spelled-out words — so once
-    // its words moved off the one DOM attribute a query could read, it needed an attribute of
-    // its own, the same way `STACK_OPEN_ATTR` and `LANDED_ATTR` exist for marks CSS alone
-    // cannot answer for.
+    // text of its own — `RULE BREAK` is the only mark on this card that spells anything out at
+    // all now, the game changer's ribbon having folded into a crown on 2026-09-08 — so once its
+    // words moved off the one DOM attribute a query could read, it needed an attribute of its
+    // own, the same way `STACK_OPEN_ATTR` and `LANDED_ATTR` exist for marks CSS alone cannot
+    // answer for. (The crown takes lucide's own class instead, which is a handle rather than a
+    // question the DOM is ever asked; `cardControl.tsx`'s `GC_DIMMED` doc draws that line.)
     const ticks = document.querySelectorAll(`[${THEORY_MATCH_ATTR}]`);
     expect(ticks).toHaveLength(1);
 
@@ -1629,41 +1742,82 @@ describe("CardStack marks", () => {
    * because one is a problem and the other is a fact about a powerful card. Four things
    * separate them and this pins all four — the words, the colour, the place, and the card's
    * own edge, which only a rule break changes.
+   *
+   * **Two of those four read differently since 2026-09-08, and both moved rather than
+   * weakened** — `CardMarks.tsx`'s header is where they are stated and this is written against
+   * it. The game changer's drawing on this surface used to be a stamped `Game Changer` ribbon,
+   * so *the words* were two spelled-out words against two other spelled-out words, and *the
+   * colour* was the pie gold against the destructive. Neither is available now: the fact is a
+   * crown folded into {@link QuantityTag}, which spells nothing and carries no colour of its
+   * own at all.
+   *
+   * So the two clauses are:
+   *
+   * - **The words.** `RULE BREAK` is spelled out; the crown is a glyph that spells nothing, on
+   *   either card. That is a *stronger* separation than the ribbon's was — two marks with words
+   *   in them were told apart by which words, and one of these has none.
+   * - **The colour.** The rule break is `text-destructive`. The crown is stroked in
+   *   `currentColor`, so it is whatever the tag it is printed on has for a foreground — which
+   *   `labelFgCss` computes for legibility on the label's fill and which is therefore one of two
+   *   tokens, neither of them a red. It cannot be recoloured into the destructive paint by a
+   *   reader picking a label, which is the property this pins: no colour class on the glyph, and
+   *   the tag's own `color` is the count tag's foreground.
+   *
+   * That the crown *follows the label's fill* rather than holding a fixed gold is
+   * {@link QuantityTag}'s own contract and is pinned in `CardMarks.test.tsx`, where the
+   * component can be rendered labelled and unlabelled side by side. Here the cards are
+   * unlabelled, so the foreground is `CountTag`'s neutral one.
    */
   it("tells a rule break and a game changer apart four ways", () => {
     withIssue();
     const [first, second] = screen.getAllByRole("listitem");
     const mark = screen.getByText("RULE BREAK");
-    // `getAllByTitle("Game changer")` found these once; the hint now rides `useTooltip()`
-    // (`describes: false`, redundant with the button's own name), so the banner is found by
-    // its spelled-out words and `closest` walks up to the `aria-hidden` element the words
-    // decorate — the same climb the mark's own class assertions below need regardless.
-    const banners = screen
-      .getAllByText("Game Changer")
-      .map((el) => el.closest("[aria-hidden]") as HTMLElement);
+    // `getAllByTitle("Game changer")` found the ribbons once and `getAllByText("Game Changer")`
+    // found them after the tooltip sweep; neither can find this mark, because it has no words
+    // and no hint of its own — it is a glyph inside the quantity tag's own `title`. lucide's
+    // own class is the handle, which is how `CardArt.stories.tsx` already addresses the crown
+    // the search wall draws.
+    const crowns = Array.from(document.querySelectorAll<SVGElement>(".lucide-crown"));
+    // Both cards are game changers, so the mark is on both — which is what makes the edge
+    // assertion at the foot of this test a claim about the *rule break* rather than about
+    // whichever card happened to carry two marks.
+    expect(crowns).toHaveLength(2);
+    const tags = crowns.map((crown) => crown.parentElement as HTMLElement);
 
-    // The words, and the whole sentence behind them — in the card's own name for a screen
-    // reader, which is now the *only* place either sentence is written down; the pointer's
-    // copy of it is `CardStack tooltips`' concern, not this test's, which is about the four
-    // separations rather than about the tooltip surface.
+    // The words: one mark spells its fact out, the other spells nothing anywhere on the card.
+    // Both sentences are in the card's own name for a screen reader, which since the ribbon went
+    // is the *only* place either of them is written down; the pointer's copy is
+    // `CardStack tooltips`' concern rather than this test's.
     expect(mark).toBeInTheDocument();
     expect(
       screen.getByRole("button", {
         name: /rule break: Mana Crypt is banned in Commander\./,
       }),
     ).toBeInTheDocument();
-    expect(screen.getAllByText("Game Changer")).toHaveLength(2);
+    expect(screen.getByRole("button", { name: /^Mana Crypt/ })).toHaveAccessibleName(
+      expect.stringContaining("game changer"),
+    );
+    // `queryByText` reads text content, which is the one thing an `aria-label` cannot reach into
+    // — so this is the assertion that says the ribbon is gone rather than merely renamed.
+    expect(screen.queryByText(/game changer/i)).toBeNull();
+    for (const crown of crowns) expect(crown.textContent).toBe("");
 
-    // The colour: destructive for the break, the deep gold stamp for the banner.
+    // The colour: destructive for the break; for the crown, no colour of its own at all. It is
+    // stroked in `currentColor` and inherits the tag's foreground, so a reader recolouring a
+    // label moves the crown and can never move it onto the destructive paint — `labelFgCss`
+    // answers one of two legibility tokens and these unlabelled cards get the neutral one.
     expect(mark.className).toContain("text-destructive");
-    expect(banners[0].className).toContain("bg-pie-gold-deep");
-    expect(banners[0].className).not.toContain("destructive");
+    expect(crowns[0].getAttribute("stroke")).toBe("currentColor");
+    expect(crowns[0].getAttribute("class")).not.toContain("text-");
+    expect(tags[0].style.color).toBe("var(--color-accent-fg)");
+    expect(tags[0].style.color).not.toContain("destructive");
 
-    // The place: the break is the card's **bottom-left** corner, the banner is in the title
-    // strip at the top, tucked under the quantity tag.
+    // The place: the break is the card's **bottom-left** corner, laid on the art; the crown is
+    // in the title strip at the top, and it is not merely *near* the quantity tag — it is inside
+    // it, before the number, which is the whole of what "folded in" means.
     //
-    // **It moved out of the top-right on 2026-08-20 and the move is load-bearing**, which is why
-    // this assertion is spelled out rather than loosened: the top-right corner is
+    // **The break moved out of the top-right on 2026-08-20 and the move is load-bearing**, which
+    // is why this assertion is spelled out rather than loosened: the top-right corner is
     // `TheoryMatchMark`'s now, and that mark is a *tick*. A tick and a red box adjacent in one
     // corner is precisely the confusion these four separations exist to prevent, so "not in that
     // corner" is part of the requirement rather than an implementation detail this test happens
@@ -1678,7 +1832,17 @@ describe("CardStack marks", () => {
     // 4px is `STACK_DATA_RISE`, the distance the foot rides up over the face, and it does not
     // scale — so a wholly scaled offset would put the mark behind the bar at 0.5×.
     expect(mark.className).toContain("bottom-[calc(0.25rem*var(--mark-scale,1)+4px)]");
-    expect(banners[0].className).not.toContain("absolute");
+    // The crown is positioned by nothing — it is a flex item of the tag — and the tag is the
+    // count's, which is what says the two marks can never end up in one corner.
+    expect(crowns[0].getAttribute("class")).not.toContain("absolute");
+    expect(tags[0]).toHaveAttribute("aria-hidden", "true");
+    // `firstChild` and deliberately **not** `firstElementChild`: the count is a bare text node,
+    // so the element-only walk skips it and answers "the crown" whichever side of the number the
+    // crown is drawn on. Driven both ways — the element form passed against a `CountTag` with the
+    // count moved in front of the glyph, which is the assertion proving nothing.
+    expect(tags[0].firstChild).toBe(crowns[0]);
+    expect(tags[0].textContent).toBe("1");
+    expect(tags[0].contains(mark)).toBe(false);
 
     // The edge: only the card that breaks a rule gets one.
     expect(first.className).toContain("border-destructive");

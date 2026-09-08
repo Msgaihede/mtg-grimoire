@@ -38,6 +38,7 @@ import { stackCardWidth, stackLiftRoom } from "../CardStack";
 import {
   CARD_BODY_ATTR,
   DECK_GROUP_ATTR,
+  GC_DIMMED,
   LANDED_ATTR,
   SELECTED_ATTR,
   type DeckCardActions,
@@ -1025,6 +1026,82 @@ describe.each(VIEWS)("$name editing", ({ render: renderView }) => {
     render(renderView({ groups: GROUPS, marketplace: TCG }));
     expect(screen.queryByLabelText(/^Copies of/)).toBeNull();
     expect(screen.queryByLabelText(/^Move /)).toBeNull();
+  });
+});
+
+/**
+ * **The game-changer spotlight's half of the wiring that lives in the views.**
+ *
+ * The ledger's chip arms the state and the editor puts `GC_SPOTLIGHT_ATTR` on the box holding the
+ * four views; what each view owes is the other half — every card that is **not** a game changer
+ * carries {@link GC_DIMMED}, so one flat descendant rule in `src/index.css` can fade it to 25 %
+ * while the attribute is up. That is **four separate call sites which have to agree**, reached by
+ * three different routes: `GridView` and `TextView` spread `deckCardDimmed` where they already
+ * spread `deckCardBodyProps()`, `CardStack` does the same on the stacked card's own body, and
+ * `TableView` — which does not own its row element — goes through `VirtualTable`'s `rowClassName`.
+ * A sweep rather than four cases for the sweeps above's reason: one surface quietly dropping it is
+ * a reader who presses the chip, switches view and finds the deck no longer answering.
+ *
+ * **The class is asserted through `classList.contains` and never through `className.toContain`**,
+ * which is this file's own rule elsewhere and matters more here than usual: `deck-gc-dimmed` is a
+ * substring of nothing today and would be of any longer class somebody added tomorrow.
+ *
+ * **jsdom loads no stylesheet, so nothing here can see the fade itself** — the opacity, the 150ms
+ * transition, the `prefers-reduced-motion` arm and the `:not([data-dnd-dragging])` carve-out are
+ * all a live pass's to answer. What a suite can see is which cards are marked, which is the half
+ * that is four files' worth of agreement rather than one rule's.
+ */
+describe.each(VIEWS)("$name spotlight", ({ render: renderView }) => {
+  /**
+   * The element a view puts the mark on, found the same way in all four.
+   *
+   * Three of them mark the card's whole **body** — face, chin, controls and all — which is what
+   * `CARD_BODY_ATTR` already names; the table marks its `role="row"`, because that element is
+   * `VirtualTable`'s and the class arrives through `rowClassName`. It is the same pair of
+   * selectors the landed-mark sweep above resolves a mark against, for the same reason.
+   */
+  const cardBody = (name: string) =>
+    screen.getByText(name).closest<HTMLElement>(`[${CARD_BODY_ATTR}], [role="row"]`)!;
+
+  /**
+   * **Both halves in one case, because either alone is satisfied by a defect.** "The ordinary card
+   * is marked" passes against a view that marks every card, which would fade the game changers the
+   * reader pressed the chip to *find*; "the game changer is not marked" passes against a view that
+   * marks nothing at all, which is the spotlight doing nothing. `GROUPS` holds exactly one game
+   * changer (Sol Ring) and three cards that are not, spread across the deck's three piles — the
+   * command zone and the switched-off Maybeboard among them — so the discrimination is real in
+   * every view and in every box each of them draws.
+   */
+  it("marks every card but the game changers, so the spotlight has something to fade", () => {
+    render(renderView({ groups: GROUPS, marketplace: TCG }));
+
+    expect(cardBody("Sol Ring").classList.contains(GC_DIMMED)).toBe(false);
+    for (const name of ["Arcane Signet", "Serah Farron", "Avacyn"]) {
+      expect(cardBody(name).classList.contains(GC_DIMMED)).toBe(true);
+    }
+  });
+
+  /**
+   * **An orphan dims**, which is `deckCardDimmed`'s own rule and the one arm a `!card.gameChanger`
+   * written by hand at four call sites would get right by accident and a `=== false` would get
+   * wrong. `DeckCard.gameChanger` is `boolean | null` — `null` is a printing that has left the
+   * corpus, or one the format has no opinion about — and anything but `true` is *not a game
+   * changer*, exactly as `deckCardName` and `CardMarks` already read it.
+   */
+  it("dims a card whose printing says nothing either way", () => {
+    render(
+      renderView({
+        groups: buildGroups(
+          [card({ name: "Sol Ring", gameChanger: null })],
+          [RAMP],
+          "category",
+          "alphabetical",
+        ),
+        marketplace: TCG,
+      }),
+    );
+
+    expect(cardBody("Sol Ring").classList.contains(GC_DIMMED)).toBe(true);
   });
 });
 
@@ -2695,8 +2772,10 @@ describe("GridView tiles", () => {
    * `bottom: chinHeight(zoom)`, and they are the stacked card's column now — `DeckCardControls
    * layout="card-column"` at `absolute top-9 right-1.5`, character for character what `CardStack`
    * passes. **Measured from the card's top, so there is nothing left to keep in step with.**
-   * `top-9` clears the 27px title bar the quantity tag and the game changer's crown stand in, and
-   * the column runs down the card's right margin from there; a fixed utility is the right answer
+   * `top-9` clears the 27px title bar the crowned quantity tag and the plan's tick stand in — two
+   * marks since 2026-09-08, the game changer having folded into the first of them rather than
+   * standing in that strip as a third — and the column runs down the card's right margin from
+   * there; a fixed utility is the right answer
    * for it rather than a drift waiting for a zoom step. So what is asserted is the class and the
    * **absence** of a computed offset, at both ends of the ladder — the computed one going away is
    * the change, and an offset creeping back would be a second answer to a question the shared
@@ -2832,47 +2911,102 @@ describe("GridView tiles", () => {
   });
 
   /**
-   * **The one mark the tile does not take from the stack, and it is arithmetic rather than taste.**
+   * **The two card-face views draw one mark for the game changer, and the fact rides the quantity
+   * tag** — which is the opposite claim to the one this case used to make, and a stronger one.
    *
-   * Everything in the marks strip is sized off `--mark-scale`, so the three marks in it do not get
-   * narrower when the card does: the tag, the game changer and the plan's tick are the same widths
-   * on a 210px stacked card and on a 150px tile. Driven in the shipped window 2026-09-08 (debug
-   * build, 1920×1080, a real Commander deck at `cardZoom` 1.1), a game changer the plan also asks
-   * for put a 28px tag, a **130px** ribbon and a 28px tick into a 163px strip — **11px of
-   * overflow**, and the face is `overflow-hidden`, so the tick was clipped by nearly half. Every
-   * term scales with the zoom, so the ratio is constant and it was clipped at *every* stop of the
-   * ladder; it was photographed at 2× to be sure.
+   * It read *"gives the tile the crown where the stacked card spells it out"* and asserted a
+   * **fork**: `GameChangerMark`'s bare crown on the 150px tile, the stamped `Game Changer` ribbon
+   * on the 210px stacked card, on the rule *"one fact, three drawings, a difference of room and
+   * never of meaning"*. The measurement behind it stands and is worth keeping, because it is what
+   * put the fork there for one morning: every mark in the strip is sized off `--mark-scale`, so
+   * none of them narrows when the card does, and in the shipped window 2026-09-08 (debug build,
+   * 1920×1080, a real Commander deck at `cardZoom` 1.1) a game changer the plan also asks for put
+   * a 28px tag, a **130px** ribbon and a 28px tick into a 163px strip on a 165px tile — **11px of
+   * overflow** past an `overflow-hidden` face, clipping the plan's tick by nearly half at every
+   * stop of the ladder.
    *
-   * So the ribbon stays the stack's and the tile wears the crown — `GameChangerMark`'s own rule,
-   * *"one fact, three drawings, a difference of room and never of meaning"*, applied to the two
-   * card-face views for the first time. It is **not** a return to `CardArt`'s corner chip: the
-   * mark is in the same strip, in the same place in it, on both views.
+   * **What retired the fork is that the crown folded into {@link QuantityTag}**: 11px of crown and
+   * a 3px gap printed *before* the number, inside a mark both views already drew, which comes to
+   * about 42px — narrower than either arm was. So there is no width left for a prop to decide
+   * between, `DeckCardFace`'s required `gameChanger: "banner" | "crown"` is gone with
+   * `GameChangerBanner` and `GameChangerBadge`, and the honest successor to the old case is its
+   * inverse: **the tile and the stacked card draw the same object, byte for byte.**
    *
-   * **Asserted as a pair across the two views**, because either half alone is satisfied by the bug:
-   * "the tile draws no ribbon" passes against a tile that draws nothing at all, and "the stack
-   * draws one" passes against a face that gives every caller the same mark. jsdom lays nothing out,
-   * so the overflow is a live claim and this is the structural half of it.
+   * ## Which query reaches a crown that is `aria-hidden` inside an `aria-hidden` tag
+   *
+   * Neither `getByRole` nor `getByTitle` can: the whole `CountTag` is `aria-hidden` (so its
+   * subtree is out of the accessibility tree), the crown inside it is `aria-hidden` again and has
+   * no `role="img"` of its own, and the tag's sentence is a `useTooltip()` binding rather than a
+   * `title` attribute — the tooltip sweep took that handle off every mark in this strip. What is
+   * left is the glyph's own class, `.lucide-crown`, which is how `GameChangerMark.test.tsx` and
+   * `CardArt.test.tsx` already address a crown, and the **tag** itself, found by the number
+   * printed on it: `getByText` matches an element's own text nodes, so the count tag is the one
+   * element in a card face whose own text is the count.
+   *
+   * ## Four claims, and none of them passes on its own
+   *
+   * The crown is **inside** the tag rather than beside it (a sibling in the strip is the
+   * arrangement that overflowed); it is **before** the number, which takes `firstChild` and not
+   * `firstElementChild` to say, since the count is a text node and an element query steps over
+   * it; there is **one** of them on the card (a second gold object
+   * in the strip is the thing that was removed); and the two views' tags are **identical markup**,
+   * which is the claim a re-introduced fork fails and a bare "both draw a crown" would not. The
+   * words stay `deckCardName`'s on both, because everything in this strip is decoration once the
+   * button is named.
+   *
+   * jsdom lays nothing out, so the 11px is still a live claim; this is the structural half of it.
    */
-  it("gives the tile the crown where the stacked card spells it out", () => {
+  it("draws one crowned count on both card faces, and spells the fact out on neither", () => {
     const groups = buildGroups(
-      [card({ name: "Sol Ring", gameChanger: true })],
+      [card({ name: "Sol Ring", quantity: 3, gameChanger: true })],
       [RAMP],
       "category",
       "alphabetical",
     );
 
-    render(<GridView tracksCollection groups={groups} marketplace={TCG} />);
-    expect(within(tile()).queryByText("Game Changer")).not.toBeInTheDocument();
-    expect(within(tile()).getByRole("img", { name: GAME_CHANGER_LABEL })).toBeInTheDocument();
-    // The words are the button's either way — the drawing changed, the sentence did not.
-    expect(
-      within(tile()).getByRole("button", { name: /game changer/i }),
-    ).toBeInTheDocument();
-    cleanup();
+    const tags: string[] = [];
+    for (const element of [
+      <GridView key="grid" tracksCollection groups={groups} marketplace={TCG} />,
+      <StackView key="stack" tracksCollection groups={groups} marketplace={TCG} />,
+    ]) {
+      render(element);
+      // One card, so one `<li>` in either view — the tile in the grid, the stacked card in the
+      // stack. Both put `DeckCardFace` inside their own button.
+      const face = screen.getByRole("listitem");
 
-    render(<StackView tracksCollection groups={groups} marketplace={TCG} />);
-    const stacked = screen.getAllByRole("listitem")[0];
-    expect(within(stacked).getByText("Game Changer")).toBeInTheDocument();
+      const tag = within(face).getByText("3");
+      // Still `aria-hidden`, crown and all: the tag says three facts to a pointer and none at all
+      // to the accessibility tree, which is why the clause below has to be on the button.
+      expect(tag).toHaveAttribute("aria-hidden", "true");
+      // Inside the tag and **before** the number — and the second line is what makes the second
+      // half of that a claim: `firstElementChild` skips text nodes, so it would be satisfied by a
+      // crown drawn *after* the count. `firstChild` is the number when it is, so asserting the two
+      // are the same node is what pins the order.
+      expect(tag.firstElementChild).toHaveClass("lucide-crown");
+      expect(tag.firstChild).toBe(tag.firstElementChild);
+      // And the only crown on the card — the strip is two marks again, not three.
+      expect(face.querySelectorAll(".lucide-crown")).toHaveLength(1);
+
+      // Neither view stamps the ribbon any more…
+      expect(within(face).queryByText("Game Changer")).not.toBeInTheDocument();
+      // …and neither reaches for `components/GameChangerMark`, whose crown **names itself** as a
+      // `role="img"`. That mark is the search side's now: printed on a tag that already carries a
+      // colour meaning the card's *label*, a second gold glyph naming itself would be the one mark
+      // in the strip ignoring what it stands on.
+      expect(
+        within(face).queryByRole("img", { name: GAME_CHANGER_LABEL }),
+      ).not.toBeInTheDocument();
+      // The words are the button's on both — the drawing changed, the sentence did not.
+      expect(within(face).getByRole("button", { name: /game changer/i })).toBeInTheDocument();
+
+      tags.push(tag.outerHTML);
+      cleanup();
+    }
+
+    // **One component, one mark.** The two card-face views hand `DeckCardFace` nothing that could
+    // make this differ, and that is exactly the property the retired prop broke: a fork reachable
+    // from either caller would show up here as two strings, whatever each of them drew.
+    expect(tags[0]).toBe(tags[1]);
   });
 
   /**
@@ -3152,6 +3286,61 @@ describe("the deck's two views and their one zoom section", () => {
   });
 });
 
+/**
+ * **The fourth drawing of the crowned count, and the only one that has to reserve room for it.**
+ *
+ * The two card-face views print the crown inside `QuantityTag` and the table prints it in a cell;
+ * a 22px decklist line has neither a tag nor a column, so this view opens the row with a 10px
+ * gutter of its own and tints the quantity beside it. Two things follow, and both are what this
+ * case is here for: the gutter is drawn on **every** row rather than on the crowned ones, which
+ * is what holds the numbers in one column down a list of eighty — a conditional element would
+ * step them in and out — and the crown carries the gold *itself* (`text-pie-gold`), because there
+ * is no filled tag here for it to take a foreground from.
+ *
+ * It replaces the gold `GC` badge, which stood in the line's **tail** among the finish glyph and
+ * the plan's tick: three small marks at the end of a row, of which the one saying *this is one of
+ * the powerful cards* was the least findable. The head of the line is the column a reader is
+ * already running their eye down.
+ *
+ * jsdom applies no stylesheet, so what a class assertion pins here is the *intent* — the sizes
+ * and the gold itself are a live pass's. `classList.contains` rather than `className.toContain`,
+ * this file's own rule: `text-dim` is a substring of nothing today and would be of any longer
+ * class added later.
+ */
+describe("TextView lines", () => {
+  /** The line's own button, and the two spans it opens with: the crown's gutter, then the
+   *  quantity. Read by position, because the claim is that the crown comes **first**. */
+  const line = (name: string) => screen.getByRole("button", { name: new RegExp(`^${name}`) });
+
+  it("opens every line with the crown's gutter, and gilds the count on a game changer", () => {
+    render(<TextView tracksCollection groups={GROUPS} marketplace={TCG} violations={VIOLATIONS} />);
+
+    const crowned = line("Sol Ring");
+    const gutter = crowned.firstElementChild as HTMLElement;
+    expect(gutter).toHaveAttribute("aria-hidden", "true");
+    expect(gutter.firstElementChild).toHaveClass("lucide-crown");
+    // The count wears the fact too, so the pair reads as one mark two elements wide.
+    expect((gutter.nextElementSibling as HTMLElement).classList.contains("text-pie-gold")).toBe(
+      true,
+    );
+
+    // An ordinary line: the same gutter, in the same place, holding nothing — and a count in the
+    // dim face rather than in gold.
+    const plain = line("Arcane Signet");
+    const empty = plain.firstElementChild as HTMLElement;
+    expect(empty).toHaveAttribute("aria-hidden", "true");
+    expect(empty.children).toHaveLength(0);
+    const count = empty.nextElementSibling as HTMLElement;
+    expect(count.classList.contains("text-pie-gold")).toBe(false);
+    expect(count.classList.contains("text-dim")).toBe(true);
+
+    // The words are the button's on this view, as they are on the two card faces: a line with an
+    // explicit `aria-label` announces nothing that is inside it.
+    expect(crowned.getAttribute("aria-label")).toContain("game changer");
+    expect(plain.getAttribute("aria-label")).not.toContain("game changer");
+  });
+});
+
 describe("TableView", () => {
   /**
    * **The last view to read the deck in the order the deck is laid out** (2026-09-08).
@@ -3374,9 +3563,12 @@ describe("TableView", () => {
     expect(document.getElementById(TOOLTIP_PANEL_ID)).toHaveTextContent(
       "Sol Ring is banned here.",
     );
-    // `GameChangerBadge` carries no `title` either; it is found by its own visible letters —
-    // the `sr-only` twin beside it says the words, the badge itself is decoration.
-    expect(screen.getByText("GC")).toBeInTheDocument();
+    // **The game changer left this case with the badge it was about** (2026-09-08). A line here
+    // read `expect(screen.getByText("GC")).toBeInTheDocument()`, with a note that
+    // `GameChangerBadge` carried no `title` and so had to be found by its own visible letters.
+    // That badge is deleted: the fact is a crown in the **quantity** cell now, with the `sr-only`
+    // words beside it, and it is pinned there by the case two below rather than restated here —
+    // this one is about which row a press opens and about the rule break's own sentence.
   });
 
   /**
@@ -3398,16 +3590,127 @@ describe("TableView", () => {
     expect(cardRow!.querySelectorAll("[role=cell]")).toHaveLength(9);
   });
 
-  /** A cell announced by two `sr-only` words the marks no longer carry: in a cell they are
-   *  really read, which is why the table states them and the three button views do not. */
+  /**
+   * Two `sr-only` sentences the marks beside them do not carry: in a cell they are really read,
+   * which is why this view states them and the three `aria-label`-ed views do not.
+   *
+   * **The game changer's half moved cells on 2026-09-08 and this case is where that is pinned.**
+   * It used to be the name column's — a gold `GC` badge with the words beside it — and it is the
+   * **quantity** column's now: an 11px crown before the count, with the count tinted gold to
+   * match, and the same two words in the same cell. So the assertion is no longer "the words are
+   * somewhere in the table" but *which cell they are in*, on both sides: the quantity cell says
+   * the fact twice over (once as a glyph, once in words) and the name cell says it not at all.
+   * `getByText` alone could not tell the two arrangements apart, which is the whole reason this
+   * reads the cells by position.
+   *
+   * The **rule break** did not move and is still the name cell's, beside the stripe — asserted
+   * here together with the other so a change that swept both into one cell goes red rather than
+   * half red.
+   *
+   * The crown is found by `.lucide-crown`, for the reason the two card-face views' own case
+   * gives: it is `aria-hidden` and carries no `title`, so its class is the handle the DOM offers.
+   */
   it("says a game changer and a rule break in words a cell really reads", () => {
     setup();
 
-    expect(screen.getByText("Game changer")).toHaveClass("sr-only");
-    expect(screen.getByText("Rule break: Sol Ring is banned here.")).toHaveClass("sr-only");
-    // The badge itself is decoration in every view — found by its own letters now that it
-    // carries no `title`.
-    expect(screen.getByText("GC")).toHaveAttribute("aria-hidden", "true");
+    // Sol Ring is the fixture's one game changer and its one rule break, so both cells of one
+    // row are in question — `cells[0]` is `Qty` and `cells[1]` is `Card name`, which is the
+    // order the column list is written in and the order the nine-cell case above counts.
+    const row = screen.getByText("Sol Ring").closest("[role=row]") as HTMLElement;
+    const cells = row.querySelectorAll("[role=cell]");
+    const quantity = cells[0] as HTMLElement;
+    const name = cells[1] as HTMLElement;
+
+    // The quantity cell: the crown, and the words beside it.
+    expect(quantity.querySelector(".lucide-crown")).not.toBeNull();
+    expect(within(quantity).getByText("Game changer")).toHaveClass("sr-only");
+    // The name cell keeps the rule break's sentence and says nothing about the game changer —
+    // the stripe there is `rowMarkColor`'s and is the one mark that did not move.
+    expect(within(name).getByText("Rule break: Sol Ring is banned here.")).toHaveClass("sr-only");
+    expect(name.querySelector(".lucide-crown")).toBeNull();
+    expect(within(name).queryByText("Game changer")).not.toBeInTheDocument();
+
+    // Said once in the whole table, not once per cell that could have said it.
+    expect(screen.getAllByText("Game changer")).toHaveLength(1);
+  });
+
+  /**
+   * **The crown is on both arms of the quantity cell, and the `sr-only` twin with it.**
+   *
+   * The cell forks on `editable` — a `DeckCardControls` stepper where the host offers
+   * `setQuantity`, a bare `w-[1ch]` count where it does not — and the game changer is a fact
+   * about the *card* rather than about whether the reader may edit the list, so it has to survive
+   * the fork. Two arms is two places to forget it, and the read-only arm is the one a reader is
+   * least likely to be looking at when it goes: `setup()` above draws it, so this case draws the
+   * other and asserts the pair.
+   *
+   * The 11px gutter is reserved on **every** row, crowned or not, so the quantities stay in one
+   * column down a list of eighty — `rowMarkColor`'s own `transparent` reasoning one mark over.
+   * That is asserted as an ordinary row having the gutter's span and no crown in it, rather than
+   * as a width jsdom could not measure anyway.
+   */
+  it("crowns the quantity on the editable arm too, and reserves the gutter on every row", () => {
+    render(
+      <TableView
+        tracksCollection
+        groups={GROUPS}
+        marketplace={TCG}
+        violations={VIOLATIONS}
+        actions={{ setQuantity: vi.fn(), drop: vi.fn() }}
+      />,
+    );
+
+    const quantityCell = (name: string) =>
+      (screen.getByText(name).closest("[role=row]") as HTMLElement).querySelector(
+        "[role=cell]",
+      ) as HTMLElement;
+    /** The reserved gutter: the cell's one wrapper, and that wrapper's first child. Read by
+     *  position rather than by class, because the class is a width jsdom cannot measure and the
+     *  claim is that the crown comes **first** in the cell. */
+    const gutter = (cell: HTMLElement) =>
+      cell.firstElementChild?.firstElementChild as HTMLElement;
+
+    // The editable arm: a stepper *and* a crown, with the words beside them.
+    const crowned = quantityCell("Sol Ring");
+    expect(crowned.querySelector("[data-no-drag]")).not.toBeNull();
+    expect(gutter(crowned).firstElementChild).toHaveClass("lucide-crown");
+    expect(within(crowned).getByText("Game changer")).toHaveClass("sr-only");
+
+    // An ordinary row: the same cell, the same gutter in the same place, and nothing in it.
+    // Reserved rather than conditional, which is what holds the numbers beside it in one column.
+    const plain = quantityCell("Arcane Signet");
+    expect(gutter(plain)).toHaveAttribute("aria-hidden", "true");
+    expect(gutter(plain).children).toHaveLength(0);
+    expect(within(plain).queryByText("Game changer")).not.toBeInTheDocument();
+  });
+
+  /**
+   * **A group band is never dimmed, and the guard that keeps it out is one clause in one
+   * callback.**
+   *
+   * This view marks the spotlight's cards through `VirtualTable`'s `rowClassName`, which is
+   * handed *every* row — bands included — so the `row.kind === "card"` test is the whole of what
+   * stops a run of faded headings saying the piles themselves were the thing being passed over.
+   * It is asserted here rather than in the four-view sweep because a band is the one row shape
+   * only this view has: the other three draw a heading that is not a card at all.
+   *
+   * Both halves in one case, for the sweep's reason — "no band is marked" passes against a view
+   * that marks nothing, so the card rows under the bands are read in the same pass.
+   */
+  it("never dims a group band, whatever the cards under it are", () => {
+    setup();
+
+    const bands = [...document.querySelectorAll("[aria-colspan]")].map(
+      (cell) => cell.closest("[role=row]") as HTMLElement,
+    );
+    expect(bands.length).toBeGreaterThan(1);
+    for (const band of bands) expect(band.classList.contains(GC_DIMMED)).toBe(false);
+
+    // And the rows that *are* cards still answer, so the absence above is a guard rather than a
+    // view that has stopped marking anything.
+    const rowFor = (name: string) => screen.getByText(name).closest("[role=row]") as HTMLElement;
+    expect(rowFor("Sol Ring").classList.contains(GC_DIMMED)).toBe(false);
+    expect(rowFor("Arcane Signet").classList.contains(GC_DIMMED)).toBe(true);
   });
 
   /**

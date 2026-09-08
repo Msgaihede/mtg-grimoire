@@ -47,10 +47,22 @@ const meta = {
           "**The chip holds two facts, and they are different kinds of fact.** A finish " +
           "belongs to the *printing*; a game changer belongs to the *card* — every printing of " +
           "Rhystic Study is one — so a card carries either, both or neither, and both means one " +
-          "chip with two glyphs rather than two boxes over the same corner. The crown is the " +
-          "deck stack's `GameChangerBanner` glyph without its ribbon, and the same fact the " +
-          "other three deck views abbreviate as `GameChangerBadge`'s gold `GC` — one gold, " +
-          "three amounts of room.\n\n" +
+          "chip with two glyphs rather than two boxes over the same corner.\n\n" +
+          "**This crown is the search side's mark, and since 2026-09-08 it is only that.** It " +
+          "used to be one fact in three drawings — this glyph on a wall of tiles, a stamped " +
+          "`Game Changer` ribbon on the deck's stacked card, and two gold letters (`GC`) in the " +
+          "deck's table and text rows — differing, the rule went, only in how much room each " +
+          "surface had. Both of the deck's drawings are deleted: it prints the crown **on the " +
+          "quantity** now, folded into `CardMarks`' `QuantityTag` on a card face and drawn " +
+          "beside the number in the two row views' quantity column. So there is one glyph " +
+          "everywhere and the only difference left is what it is printed *on*.\n\n" +
+          "**Which is also why gold is still right here and would be wrong there.** A crown " +
+          "floating over somebody's artwork has nothing but `text-pie-gold` saying which fact " +
+          "it is. A crown printed on a filled quantity tag is standing on a colour that already " +
+          "means something — the card's own **label** — so it takes that tag's foreground " +
+          "instead, and a fixed gold would be the one mark in the strip ignoring what it stands " +
+          "on, invisible on a Gold-labelled card. One rule, two answers; " +
+          "`components/GameChangerMark` carries it in full.\n\n" +
           "**The frame draws its own edge, and it is the edge `CardChin` continues.** Every " +
           "surface that draws this frame draws a chin under it, and the chin joins whichever " +
           "outline its host has — under the deck's stacks that host is a bordered card, so the " +
