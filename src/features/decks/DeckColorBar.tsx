@@ -106,24 +106,73 @@ const MANA_FILL: Record<ManaKey, string> = {
  * are one statement, and `DeckColorBar.test.tsx` asserts the agreement directly, which is the
  * thing a drifting copy would break first.
  */
-export function hasColorBar(pips: PipCounts | null): boolean {
-  return pips !== null && pipTotal(pips) > 0;
+
+/** One field of the band: which colour, how many pips bought it, and how wide that makes it. */
+interface ColorField {
+  key: ManaKey;
+  count: number;
+  /** The share as a CSS percentage — the band is correct at every tile width without measuring. */
+  width: string;
+}
+
+/**
+ * The fields to draw, which is **empty for both silences** — see {@link DeckColorBar}.
+ *
+ * A function rather than three expressions in the component, and the reason is narrowing: `pips`
+ * is `PipCounts | null`, the arithmetic needs it non-null, and the alternative is a `!` or a
+ * second `pips === null` test beside the one that already decided. Here the guard and the
+ * arithmetic are the same statement, and the component below never touches `pips` at all.
+ *
+ * The zero-total case returns empty rather than dividing by it: a deck of nothing but lands has a
+ * record and no pips, and `0/0` fields would each be `NaN%`.
+ *
+ * **A colour with no pips is dropped rather than drawn zero-width.** The two are the same pixels
+ * and they are not the same DOM: a zero-width `<span>` is an element a test can find, a
+ * `querySelectorAll` counts and a future `:first-child` rule can style, standing for a colour
+ * that is not in the deck. `deckPips`' `pipColors` is what drops them, so the order and the
+ * census are one answer rather than a filter written at every call site. It matters more than it
+ * did: a zero-width field now also holds a symbol, so the failure would be a glyph clipped to
+ * nothing rather than a sliver of colour.
+ */
+function colorFields(pips: PipCounts | null): ColorField[] {
+  if (pips === null) return [];
+  const total = pipTotal(pips);
+  if (total === 0) return [];
+  return pipColors(pips).map((key) => ({
+    key,
+    count: pips[key],
+    width: `${(pips[key] / total) * 100}%`,
+  }));
 }
 
 /**
  * One deck's colours, as a band: the pips it costs, in printed order, each colour's own symbol on
  * its own field, each field as wide as its share of the whole.
  *
- * **A deck with nothing to say draws nothing at all.** `null` is the read still being out and an
- * all-zero record is a pile of lands and colourless artifacts, and both answer the same way here:
- * an empty grey band under a tile is a bar that says "this deck has no colours" in the same
- * vocabulary a full band uses to say what they are, and a reader cannot tell that from a rendering
- * fault or from a bar still loading. Silence is the honest drawing of "no pips", and it costs the
- * wall nothing — the tile simply sits shorter, with the crop keeping all four of its own corners,
- * which is what a tile with no colour bar looked like before this component existed. It is the
- * same argument the theory badge and the caption's `Any` row already make on this tile: a mark
- * that would sit on nearly every deck, or on a deck it says nothing about, is a mark not worth
- * drawing. {@link hasColorBar} is that rule stated once, for here and for the crop's radius.
+ * **A deck with nothing to say draws the band empty, and that reverses what this file argued
+ * until 2026-09-08.** It used to return `null` for both silences — `null` pips is the read still
+ * out, an all-zero record is a pile of lands and colourless artifacts — on the reasoning that an
+ * empty grey strip says "no colours" in the same vocabulary a full band uses to say what they
+ * are, so silence was the honest drawing. That argument was about the *band* and it missed what
+ * the band had become: a structural course in the tile rather than a mark laid on one.
+ *
+ * **The cost was measured on the shipped wall and it is the whole reason this changed.** A
+ * bandless tile is 20px shorter than every tile beside it, so its name and its caption sit 20px
+ * high — and because the wall is a grid of stretched cells, nothing moves *down* to meet them.
+ * The reader does not see a deck with no colours; they see one tile's type out of line with the
+ * row, which reads as a layout fault. One deck with an empty list (the commonest deck there is,
+ * for exactly as long as it takes to fill) was enough to ragged a whole row.
+ *
+ * So the band is now **always drawn** and the empty case is a bare 20px course of the tile's own
+ * `bg-surface` — no fields, no symbols, nothing claiming a colour. That is still the honest
+ * drawing of "no pips": what it says is *nothing*, in the space where colours would be. What it
+ * is not allowed to be is a full-width colourless field, which would say the deck **is**
+ * colourless — false for a deck whose read has not landed, and a claim `pips === null` has no
+ * business making.
+ *
+ * The knock-on is that the crop is now `rounded-t-lg` unconditionally: there is always something
+ * fused under it, so `DeckTile` has no question to ask and the `hasColorBar` predicate this file
+ * exported for it is gone.
  *
  * **A colour with no pips draws no segment either, rather than a zero-width one.** The two are
  * the same pixels and they are not the same DOM: a zero-width `<span>` is an element a test can
@@ -161,24 +210,9 @@ export function hasColorBar(pips: PipCounts | null): boolean {
  * crop full of dark art loses its own top edge, and the seam is what says the two are one object
  * rather than one bleeding into the other.
  */
-export function DeckColorBar({ pips }: { pips: PipCounts | null }): ReactElement | null {
+export function DeckColorBar({ pips }: { pips: PipCounts | null }): ReactElement {
   const tip = useTooltip();
-
-  // Both silences, together and before anything is measured — see the note above. `hasColorBar`
-  // is the single statement of when a bar exists, so this early return and the radius `DeckTile`
-  // draws the crop with cannot come to disagree.
-  //
-  // The `pips === null` clause is unreachable at runtime and is there for the compiler:
-  // `hasColorBar` answers a plain `boolean` rather than a type predicate, so nothing about its
-  // `true` narrows `pips` for the arithmetic below. It is a second *reading* of the rule, never a
-  // second copy of it — the rule is the function, and this line cannot answer differently from it.
-  if (!hasColorBar(pips) || pips === null) return null;
-
-  // `pipTotal` again, and deliberately not threaded out of the predicate: it is six additions over
-  // a record already in hand, and a `hasColorBar` that answered a number instead of a boolean
-  // would be a predicate shaped around this one call site rather than around `DeckTile`'s question.
-  const total = pipTotal(pips);
-  const colors = pipColors(pips);
+  const fields = colorFields(pips);
 
   return (
     <span
@@ -213,7 +247,12 @@ export function DeckColorBar({ pips }: { pips: PipCounts | null }): ReactElement
       // panel for a relationship that does not exist. Note the trap this repo has recorded: a
       // `describes: false` tooltip carries no `role="tooltip"`, so probing for that role finds
       // nothing on a tooltip that is working perfectly.
-      {...tip(colors.map((key) => `${MANA_LABEL[key]} ${pips[key]}`).join(", "), {
+      //
+      // **An empty band binds no tooltip**, because `useTooltip` refuses falsy content and
+      // `[].join(", ")` is `""`. That is the right silence rather than a lucky one: a hint
+      // reading "no colours" over a strip that is already saying so by being empty is the
+      // vocabulary problem this component's head describes, moved into a popup.
+      {...tip(fields.map((field) => `${MANA_LABEL[field.key]} ${field.count}`).join(", "), {
         describes: false,
       })}
       className={cn(
@@ -223,10 +262,13 @@ export function DeckColorBar({ pips }: { pips: PipCounts | null }): ReactElement
         "h-[calc(1.25rem*var(--mark-scale,1))] gap-[calc(2px*var(--mark-scale,1))]",
       )}
     >
-      {colors.map((key) => (
+      {/* Nothing at all when there are no colours to draw, which is the empty band: a bare 20px
+          course of the tile's own surface, holding the row's line where a deck with costs holds
+          its fields. See the head — an empty band is not a colourless one. */}
+      {fields.map((field) => (
         <span
-          key={key}
-          {...{ [DECK_COLOR_SEGMENT_ATTR]: key }}
+          key={field.key}
+          {...{ [DECK_COLOR_SEGMENT_ATTR]: field.key }}
           // The share as a percentage, so the band is correct at every tile width the zoom ladder
           // produces without anything measuring a box, floored at the width a symbol needs to
           // stay legible. `overflow-hidden` on the parent is what makes the band's rounded foot
@@ -252,7 +294,7 @@ export function DeckColorBar({ pips }: { pips: PipCounts | null }): ReactElement
             "grid min-w-[calc(1.625rem*var(--mark-scale,1))] place-items-center",
             "text-[calc(0.75rem*var(--mark-scale,1))] leading-none",
           )}
-          style={{ width: `${(pips[key] / total) * 100}%`, backgroundColor: MANA_FILL[key] }}
+          style={{ width: field.width, backgroundColor: MANA_FILL[field.key] }}
         >
           {/* The printed symbol, in near-black on its own fill — the arrangement `index.css`
               states at the token and `FilterChips`' `ManaChip` already ships. `aria-hidden`
@@ -268,7 +310,7 @@ export function DeckColorBar({ pips }: { pips: PipCounts | null }): ReactElement
               field, its width and its `data-deck-color` are the segment, and the symbol is what
               the band adds on top of them. `mana.test.ts` is what would go red, since it asserts
               every class this app names against the shipped stylesheet. */}
-          <i className={cn(manaSymbolClass(key), "text-black")} aria-hidden="true" />
+          <i className={cn(manaSymbolClass(field.key), "text-black")} aria-hidden="true" />
         </span>
       ))}
     </span>

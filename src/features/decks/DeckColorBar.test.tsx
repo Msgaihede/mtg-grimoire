@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { MANA_KEYS, type ManaKey, type PipCounts } from "@/lib/mana";
-import { DECK_COLOR_SEGMENT_ATTR, DeckColorBar, hasColorBar } from "./DeckColorBar";
+import { DECK_COLOR_SEGMENT_ATTR, DeckColorBar } from "./DeckColorBar";
 
 /** A pip record with the named colours in it and zero everywhere else — which is the shape
  *  `deckPips` answers and the shape the interesting cases here are all missing something from. */
@@ -71,31 +71,46 @@ function bar(container: HTMLElement): HTMLElement {
 
 describe("DeckColorBar", () => {
   /**
-   * The two silences, and they are one rule: a bar is a statement about colour, so a deck with
-   * no colour to state draws nothing rather than an empty band. `null` is the read still out;
-   * an all-zero record is a real answer about a pile of lands and colourless artifacts. A grey
-   * band under either is indistinguishable from a rendering fault.
+   * The two silences, and they are one rule: a deck with no colour to state draws the band
+   * **empty** — the full 20px course, no fields in it — rather than nothing at all. `null` is the
+   * read still out; an all-zero record is a real answer about a pile of lands and colourless
+   * artifacts, and neither has a colour to name.
+   *
+   * **It drew nothing for both until 2026-09-08 and the reversal is about the wall, not the
+   * band.** The old rule read that an empty strip says "no colours" in the vocabulary a full band
+   * uses to say what they are, so silence was the honest drawing — an argument about this
+   * component alone, and true of it. What it missed is that the band had become a *course* of the
+   * tile: a tile without one is 20px shorter than every tile beside it, and the wall is a grid of
+   * stretched cells, so its name and caption sit high and nothing moves down to meet them. One
+   * empty deck raggeds a whole row.
+   *
+   * **What the empty band must not be is a colourless one.** A full-width `--color-mana-c` field
+   * would say the deck *is* colourless — false for a deck whose read has not landed, and a claim
+   * `null` has no business making — so the assertion is that the band is there and holds nothing.
    */
-  it("draws nothing while the read is out, and nothing for a deck with no pips", () => {
-    expect(render(<DeckColorBar pips={null} />).container).toBeEmptyDOMElement();
-    expect(render(<DeckColorBar pips={pips({})} />).container).toBeEmptyDOMElement();
+  it("draws an empty band while the read is out, and one for a deck with no pips", () => {
+    for (const value of [null, pips({})]) {
+      const { container } = render(<DeckColorBar pips={value} />);
+      expect(bar(container).children, JSON.stringify(value)).toHaveLength(0);
+      expect(segments(container), JSON.stringify(value)).toHaveLength(0);
+    }
   });
 
   /**
-   * **`hasColorBar` and the drawing are one statement, asserted as one.**
+   * **The band is the same box whatever the deck says**, which is what the tile's geometry rests
+   * on: `Cover` draws `rounded-t-lg` unconditionally now, on the promise that something is always
+   * fused under it, and a component that went back to returning `null` for a silence would leave
+   * a square-cornered picture sitting on the page.
    *
-   * `DeckTile` calls the predicate to decide whether the cover art keeps all four of its corners
-   * or gives up the bottom two to a band fused under it, and a predicate that drifted from the
-   * component would be a *radius* — invisible to jsdom, which lays nothing out, and invisible to
-   * any test that renders this component on its own. So the two are checked against each other
-   * directly, over every shape the component distinguishes: the read still out, a counted deck
-   * with no pips at all, one colour, and all six.
+   * Asserted over every shape the component distinguishes — the read still out, a counted deck
+   * with no pips, one colour, and all six — because the symptom of a regression is a **radius**
+   * and a missing 20px, neither of which jsdom can see (no layout engine, no stylesheet).
    *
-   * **The single-pip case is the boundary and is there on purpose.** The rule is `> 0`, and the
-   * plausible way to get it wrong is `> 1` — which every other case in this list agrees with, and
-   * which would silently take the band off a deck holding exactly one coloured card.
+   * **The single-pip case is the boundary and is there on purpose.** A floor written `> 1` rather
+   * than `> 0` agrees with every other case in this list and would silently strip the fields off a
+   * deck holding exactly one coloured card.
    */
-  it("agrees with hasColorBar about when there is a bar at all", () => {
+  it("draws the band for every shape of record, and never returns nothing", () => {
     const cases: (PipCounts | null)[] = [
       null,
       pips({}),
@@ -106,8 +121,8 @@ describe("DeckColorBar", () => {
 
     for (const value of cases) {
       const { container } = render(<DeckColorBar pips={value} />);
-      const drew = container.firstElementChild !== null;
-      expect(hasColorBar(value), JSON.stringify(value)).toBe(drew);
+      expect(container.firstElementChild, JSON.stringify(value)).not.toBeNull();
+      expect(bar(container).classList.contains("h-[calc(1.25rem*var(--mark-scale,1))]")).toBe(true);
     }
   });
 
