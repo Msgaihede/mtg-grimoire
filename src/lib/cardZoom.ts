@@ -360,9 +360,11 @@ export function atLeast(base: number, zoom: number): number {
  *
  * An inherited custom property answers it once, in the other direction: a mark reads
  * `var(--mark-scale, 1)`, and the fallback is what every surface that is not a card gets **without
- * knowing this variable exists**. Three elements set it — `CardGrid`'s tile, `GridView`'s tile and
- * `CardStack`'s card — and nothing else in the app has to be touched for a table to keep drawing
- * a 12px gem.
+ * knowing this variable exists**. A handful of elements set it — `grep -n "cardScaleVars(" src/`
+ * is the census, and it is deliberately not a number here: this sentence said "three" through
+ * four additions (the decks gallery's tile, its folder card, the token wall's tile and the token
+ * art picker's), a count is a fact about a *tree*, and a prose-only edit routes to neither CI
+ * job. Nothing else in the app has to be touched for a table to keep drawing a 12px gem.
  *
  * It is also the reason this is not a `transform: scale()` on the overlay layer, which would have
  * been one line per corner: the caption strip under a wall tile is **in flow**, and a transform

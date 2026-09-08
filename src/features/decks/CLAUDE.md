@@ -1404,7 +1404,12 @@ price | type`). An **inactive category stays its own group in all three grouping
   each measured in the shipped window and none of them visible to a test:
   **(1)** the band sits **below the price strip**, because that strip is where the remove tray is
   drawn for the length of a drag (`-top-3` over the gap under the deck) and a band between them
-  would put four charts between a card and the one drop that takes it out;
+  would put four charts between a card and the one drop that takes it out — and since 2026-09-08
+  it is also below the **Tokens & emblems** band, so this is the last band on the page rather than
+  the last thing under the deck. **The figures in (2) and (3) below predate that band entirely**
+  (2026-08-14 against 2026-09-07), so read them as the arithmetic of the deck, the strip and this
+  band alone; nothing has been re-measured with a token wall open above it, and an open one is
+  another `stackCardHeight`-and-change of column;
   **(2)** the editor is an `overflow-y-auto` **page** now — the deck, the strip and the band come
   to **886px** in the **702px** a 1280×800 window leaves (710 when it was measured, less the 8px
   the ribbon gained when the shell was enlarged on 2026-08-14; the same deck read **866** with the
@@ -3455,9 +3460,16 @@ one edit and not four components disagreeing.
   `App.test.tsx`'s pane assertions. **`shrink-0` is mandatory** — the editor's root is the only
   box with a height, and `shrink-0` on the bands below the desk "is the whole of why this editor
   scrolls now", so without it the band is squeezed to nothing on exactly the decks the feature is
-  for. **Below the Deck stats band, never between `PriceStrip` and it** — the strip's drag-remove
-  tray sits at `-top-3`, reaching up into the column's `gap-3`, so splitting that pair would leave
-  a reader dragging a card the height of four charts to reach the drop that removes it.
+  for. **Below `PriceStrip` and never above it** — that strip's drag-remove tray sits at `-top-3`,
+  reaching up into the column's `gap-3`, so splitting the deck from the strip would leave a reader
+  dragging a card the height of four charts to reach the drop that removes it. **And above the
+  Deck stats band since 2026-09-08**, where it was below: the pair that may not be split is the
+  deck and the strip, so both bands are below it either way and the two are only ever ordered
+  against each other. The reader's reason is that a token wall is a *list of cards* the deck is
+  about to want and the charts are read at a glance — cards beside cards, then the arithmetic,
+  which nothing is dragged into and nothing is pressed on. The old ordering was argued only as
+  "the far side of a pair that may not be split", which is true of both positions and therefore
+  never chose between them.
   **Collapsed by default**, driven by `decks.tokens_open`, so a reader who never sleeves tokens
   pays one header row.
 - **The read runs whether or not the wall is drawn**, and that is deliberate. The header has to
@@ -3508,14 +3520,55 @@ one edit and not four components disagreeing.
     later cannot be the one that forgets the subtitle.
   - It returns `null` for an emblem: the type line already names the planeswalker, so a second
     line would repeat what the tile is drawing.
-- **`TOKEN_TILE_WIDTH` is 150 and is a third constant rather than an import, on purpose.**
-  `GridView`'s `TILE_WIDTH` and `DeckSearchPanel`'s `TILE_BASE` are both a *base* that a zoom then
-  multiplies for their own card section; neither the token wall nor the picker is a zoom section,
-  so importing one would be importing a number that means "the size before the reader's zoom" and
-  using it as the size. What the two walls here must agree about is **each other** — a reader who
-  presses a tile has to meet the same picture at the same size, or the swap does not read as a
-  swap — which is why the number is declared once for the pair, in `TokenArtPicker.tsx`, so the
-  import runs the way a panel opening a picker does.
+- **A tile is `stackCardWidth(cardZoom.deck)` — the stacked card's own width at the desk's own
+  zoom** (2026-09-08, the reader's ask), and both walls read it. It was `TOKEN_TILE_WIDTH`, a flat
+  150 declared in `TokenArtPicker.tsx` for the pair, and the constant is deleted. The old argument
+  was that `GridView`'s `TILE_WIDTH` and `DeckSearchPanel`'s `TILE_BASE` are each a *base* a zoom
+  then multiplies for their own card section, so importing one into a wall that is not a zoom
+  section would be importing a number meaning *the size before the reader's zoom* and using it as
+  the size. **Every word of that is still true of the base and the conclusion was wrong**: this
+  band is on the desk, `cardZoom.deck` is the desk's own number, and a reader who sized their
+  piles to fit the window met a row of tokens beside them at a size nobody had asked for. Five
+  things carry it:
+  - **`deck`, the key `StackView` and `GridView` share**, never `deckSearch`. Those two are two
+    drawings of one pile and the tokens are a third thing on the same desk; the docked column
+    beside it is the split `cardZoom` holds a number per section for.
+  - **The wall reads the number and attaches no `useCardZoomGesture`.** That hook registers its
+    element in a per-section map the zoom badge anchors off, one element per section, so a second
+    `deck` registration would take the badge off the deck the reader is actually zooming.
+    Ctrl+wheel over this band therefore steps nothing — which is what it already did over the
+    stats band and the price strip beside it.
+  - **`DeckTokensPanel` reads it once for the whole band and hands it down**, `GridView`'s
+    arrangement: a deck that makes twenty tokens is twenty tiles, and twenty store subscriptions
+    to one number they all share.
+  - **The picker takes it as a prop, and the two walls agreeing is still the rule** — a reader who
+    presses a tile has to meet the same picture at the same size, or the swap does not read as a
+    swap. A constant left in the picker would have been the two agreeing at exactly one stop of a
+    sixteen-stop ladder.
+  - **Everything on a tile scales with it** through `cardScaleVars` — the stepper and the two icon
+    buttons via `--control-scale`, every line of type via `calc(… * var(--mark-scale, 1))` — while
+    the **gutters** take `atLeast`, which is `cardZoom.ts`' one surviving floor: a gutter measures
+    space *between* cards rather than chrome *on* one.
+
+  **Driven in the shipped window 2026-09-08** (`npm run tauri dev`, a **debug** build, 1920×1080,
+  against a copy of the real db, on a 101-card Commander deck). The tile and the stacked card were
+  read off the **same frame**, so "the same size" is a comparison rather than two numbers taken
+  minutes apart: **105/105** at 0.5×, **231/231** at 1.1×, **420/420** at 2×, with the name at
+  6/13.2/24px, the icon button at 34 at 2× (20 × 2 × `CONTROL_SHRINK`) and the gutters holding at
+  10/16 going down and reaching 20/32 going up. **The band is full width of the editor column** —
+  a sibling of the desk row, so the docked panel never narrows it — which leaves the window floor
+  as the only squeeze, and at **1024 × 700 at 2×** nothing overflows: `document.scrollWidth` 1024
+  = `clientWidth`, the band's `scrollWidth` 761 = its `clientWidth`, the tile's right edge at 648.
+  So this wall needs no `overflow-x` of its own, unlike the three deck views.
+  [decks-live-findings.md](../../../docs/reference/decks-live-findings.md) has the rest, including
+  the picker at 1440 × 972 drawing three 420px tiles per row.
+- **The picker is `AllPrintingsDialog`'s size now, and the height is the half that had to move.**
+  `w-[min(100%,max(64rem,75vw))] max-h-[min(100%,90vh)]`, with the wall a `min-h-0 flex-1`
+  scroller instead of a `max-h-[26rem]` box. Both numbers were right for a fixed 150px tile and
+  wrong for one that follows the zoom: 832px of panel less the list's own padding and scrollbar is
+  ~805, and two 420px tiles want 850 — so at 2× the picker was **one printing per row**, against
+  Treasure's 97, inside a box 416px tall that a single 588px-tall tile did not fit. Read that
+  file's own comment for what the three numbers mean; nothing here re-derives them.
 - **The picker passes no `playableOnly`, because `cardPrintings` does not take one.** That flag is
   `searchCards`', which is what `DeckCoverPicker.tsx:148` passes it to; `card_printings`' predicate
   is `oracle_id = ?1 AND is_paper = 1` with no legality term at all. Reading the two as one command

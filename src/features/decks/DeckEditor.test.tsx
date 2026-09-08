@@ -1723,6 +1723,32 @@ describe("DeckEditor", () => {
   });
 
   /**
+   * **Tokens & emblems sits between the price strip and the stats band** (2026-09-08), where it
+   * was under both.
+   *
+   * The half that is a *constraint* is the one above: neither band may come between the deck and
+   * the price strip, because the strip is where the remove tray is drawn for the length of a drag
+   * — so both are below it either way and the two are only ever ordered against each other. The
+   * half that is the reader's *choice* is which side of the four charts the token wall takes: it
+   * is a list of cards the deck is about to want, and the cards belong beside the cards, with the
+   * arithmetic — which nothing is dragged into and nothing is pressed on — last.
+   *
+   * Both facts are asserted, and the first one is why: an assertion that only said "tokens before
+   * stats" would stay green if somebody moved the pair above the strip together, which is the one
+   * arrangement that costs a reader something.
+   */
+  it("draws the token wall under the price strip and over the stats band", async () => {
+    await open();
+
+    const asOf = screen.getByText(/prices as of the last/i);
+    const tokens = screen.getByRole("region", { name: "Tokens & emblems" });
+    const stats = screen.getByRole("region", { name: "Deck stats" });
+
+    expect(asOf.compareDocumentPosition(tokens) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(tokens.compareDocumentPosition(stats) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  /**
    * A card opens in the pane the app already docks — **and it says which slot the card came out
    * of.** The pane offers to swap that slot's printing, which is a write addressed by deck,
    * category, card *and variant*, so a click here is the one place in the app that writes a

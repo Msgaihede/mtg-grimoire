@@ -18,16 +18,53 @@
  *   `shrink-0` on the bands below the desk "is the whole of why this editor scrolls now". Without
  *   it this band is squeezed to nothing on a deck taller than the window, which is every deck the
  *   feature is for.
- * - **Below the Deck stats band**, which is itself below the price strip. The strip's
- *   drag-remove tray sits at `-top-3`, reaching up into the editor column's own `gap-3`, so the
- *   strip and the deck above it may not be separated — and a band inserted between them would
- *   leave a reader dragging a card the height of four charts to reach the drop that removes it.
- *   Under the stats is the far side of that pair and costs nothing.
+ * - **Below the price strip, and since 2026-09-08 _above_ the Deck stats band rather than under
+ *   it.** The constraint that has teeth is the strip's, and it is unmoved: its drag-remove tray
+ *   sits at `-top-3`, reaching up into the editor column's own `gap-3`, so the strip and the deck
+ *   above it may not be separated — a band inserted between them would leave a reader dragging a
+ *   card the height of four charts to reach the drop that removes it. This band is below that
+ *   pair either way. What changed is which side of the charts it takes, and the reader's reason
+ *   is that a token wall is a **list of cards** the deck is about to need, where the stats band
+ *   is four charts read at a glance: the cards belong next to the cards. The old ordering was
+ *   argued only as "under the stats is the far side of that pair and costs nothing", which was
+ *   true and was never a reason to be there.
  * - **The heading is `Tokens & emblems`, never bare `Tokens`.** `autoCategory.ts` already uses
  *   that word for an auto-category of cards that *make* tokens, driven by the
  *   `repeatable-token-generator` oracle tag — the opposite meaning of the same word — and the
  *   auto-category is deliberately not renamed, because renaming it would silently regroup every
  *   existing deck. So the two strings are kept apart instead.
+ *
+ * ## A tile is a stacked card, at the reader's own zoom
+ *
+ * **The wall draws at {@link stackCardWidth}(`cardZoom.deck`) and not at a constant of its own**
+ * (2026-09-08). It was a flat 150px, and the argument for that was that a token wall is not a
+ * zoom section, so importing either card wall's base would be importing a number that means *the
+ * size before the reader's zoom* and using it as the size. Every word of that is still true of
+ * the *base*; what it got wrong is the conclusion. `cardZoom.deck` is the desk's own number and
+ * this band is on the desk — one editor, one deck, one size for the cards in it — so a reader who
+ * sized their piles to fit the window met a row of tokens beside them at a size nobody had asked
+ * for, fixed at every stop of the ladder.
+ *
+ * **`deck`, the same key `StackView` and `GridView` read**, which is the same argument those two
+ * make about each other: Stacks and Grid are two drawings of one pile, and the tokens the pile
+ * makes are a third thing on the same desk. What is emphatically *not* shared is `deckSearch` —
+ * the docked column beside the desk — which is the split `cardZoom` holds a number per section
+ * for at all.
+ *
+ * **It reads the number and does not attach `useCardZoomGesture`.** That hook registers its
+ * element in a per-section map the zoom badge anchors itself off, one element per section, so a
+ * second `deck` registration here would take the badge off the deck the reader is actually
+ * zooming. Ctrl+wheel over this band therefore steps nothing, which is what it already did over
+ * the stats band and the price strip beside it.
+ *
+ * **Everything on a tile scales with it, through `cardScaleVars`** — the app's rule for anything
+ * drawn on a card, and here it reaches the stepper and the two icon buttons through
+ * `--control-scale` with no prop threaded anywhere. The type is `calc(… * var(--mark-scale, 1))`
+ * for the same reason: a 420px picture over an 11px caption at 2×, or a 105px one over the same
+ * caption at 0.5×, is the tile disagreeing with itself. The **gutters** take {@link atLeast}
+ * rather than `scaled`, which is `cardZoom.ts`' one surviving floor: a gutter measures space
+ * *between* cards rather than chrome *on* one, and halving it at 0.5× is precisely the zoom a
+ * reader chose in order to see more of them at once.
  *
  * ## A token's name does not identify it
  *
@@ -55,13 +92,16 @@ import { CardArt } from "@/components/CardArt";
 import { ToggleChip } from "@/components/FilterChips";
 import { QuantityStepper } from "@/components/QuantityStepper";
 import { useTooltip } from "@/components/tooltip/useTooltip";
+import { atLeast, cardScaleVars } from "@/lib/cardZoom";
 import { count, plural } from "@/lib/counts";
 import { FOCUS, FOCUS_INSET } from "@/lib/focus";
 import { ipcError, type DeckVariant } from "@/lib/ipc";
 import { PRESS } from "@/lib/motion";
+import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
+import { stackCardWidth } from "./CardStack";
 import type { DeckTokenView } from "./deckTokens";
-import { TOKEN_TILE_WIDTH, TokenArtPicker } from "./TokenArtPicker";
+import { TokenArtPicker } from "./TokenArtPicker";
 import { useDeckTokens, type DeckTokens } from "./useDeckTokens";
 
 /**
@@ -73,13 +113,41 @@ import { useDeckTokens, type DeckTokens } from "./useDeckTokens";
  */
 export const TOKENS_HEADING = "Tokens & emblems";
 
-/** A tile's two icon buttons — the same 20px box the `xs` stepper beside them draws. */
+/**
+ * A tile's two icon buttons — the same 20px box the `xs` stepper beside them draws, **at the same
+ * zoom**.
+ *
+ * `--control-scale` rather than `--mark-scale`, character for character what `QuantityStepper`'s
+ * `xs` size writes, so the three controls in the row are one height at every stop rather than
+ * three that agree at 100%. The variable is published by the tile's root; everywhere else in the
+ * app the `, 1` fallback leaves this box the 20px it has always been.
+ */
 const TILE_BUTTON = cn(
-  "grid size-5 shrink-0 place-items-center rounded-md border border-border text-dim",
+  "grid shrink-0 place-items-center rounded-md border border-border text-dim",
+  "size-[calc(1.25rem*var(--control-scale,1))]",
   "hover:text-text",
   PRESS,
   FOCUS,
 );
+
+/** The glyph inside {@link TILE_BUTTON} — `size-3.5`, read at the same zoom the box is. */
+const TILE_ICON = "size-[calc(0.875rem*var(--control-scale,1))]";
+
+/**
+ * The wall's gutters at 100% zoom — `gap-x-2.5` and `gap-y-4`, the numbers this band shipped
+ * with.
+ *
+ * They go through {@link atLeast} rather than `scaled`: a gutter is the one measurement on a wall
+ * of cards that is **between** them rather than **on** one, so it grows with the tiles and holds
+ * at its base going down. `cardZoom.ts` carries the whole argument, and `GridView`'s wall is the
+ * other surface that reads it.
+ *
+ * The vertical one is the larger because a tile's foot is four lines of type under the picture,
+ * where its neighbour's picture starts immediately: 10px between two pictures reads as the same
+ * air as 16px between a caption and the next row's art.
+ */
+const TILE_GAP_X = 10;
+const TILE_GAP_Y = 16;
 
 export interface DeckTokensPanelProps {
   deckId: number;
@@ -110,6 +178,17 @@ export function DeckTokensPanel({
 }: DeckTokensPanelProps): JSX.Element {
   const tokens = useDeckTokens(deckId, variant);
   const bodyId = useId();
+
+  /**
+   * How large the reader has asked the desk's cards to be drawn — `cardZoom.deck`, the same
+   * number `StackView` and `GridView` read, and deliberately not the docked search column's.
+   *
+   * **Read once for the whole band and handed down**, which is `GridView`'s own arrangement and
+   * its reason: a deck that makes twenty tokens is twenty tiles, and twenty store subscriptions
+   * to answer one number they all share. It reaches the picker too — see this file's header for
+   * why the two walls have to agree about it.
+   */
+  const zoom = useAppStore((s) => s.cardZoom.deck);
 
   /**
    * Which token's art is being picked, by `oracle_id`.
@@ -228,7 +307,7 @@ export function DeckTokensPanel({
       {/* Always in the tree so `aria-controls` above always names something, and empty while the
           area is shut so a closed band costs no picture, no tile and no state. */}
       <div id={bodyId}>
-        {open && canOpen && <TokenWall tokens={tokens} onPick={setPicking} />}
+        {open && canOpen && <TokenWall tokens={tokens} zoom={zoom} onPick={setPicking} />}
       </div>
 
       {/* **Mounted inline, and the check that makes that legal is written down rather than
@@ -241,6 +320,10 @@ export function DeckTokensPanel({
           rule to keep is that a container query may never be added above this line. */}
       <TokenArtPicker
         token={picked}
+        // The same number the wall behind the scrim is drawing at. See this file's header and
+        // `TokenArtPicker`'s own: a reader who presses a tile has to meet the same picture at the
+        // same size, or the swap does not read as a swap.
+        zoom={zoom}
         onPick={(cardId) => {
           if (picked !== null) tokens.setPrinting(picked.oracleId, cardId);
           setPicking(null);
@@ -255,9 +338,12 @@ export function DeckTokensPanel({
 /** The wall itself, and the one sentence that stands in for it. */
 function TokenWall({
   tokens,
+  zoom,
   onPick,
 }: {
   tokens: DeckTokens;
+  /** `cardZoom.deck`, read once by the band above. See this file's header. */
+  zoom: number;
   onPick: (oracleId: string) => void;
 }) {
   return (
@@ -280,10 +366,21 @@ function TokenWall({
           Every token this deck makes is dismissed. Show them to bring one back.
         </p>
       ) : (
-        <ul className="flex flex-wrap gap-x-2.5 gap-y-4">
+        // The gutters are inline because a scaled number cannot be a class — `GridView`'s wall
+        // says the same thing at its own `<ul>`, and it is the same rule: Tailwind scans source
+        // text for whole class names, so a `gap-x-[${n}px]` emits no rule at all.
+        <ul
+          className="flex flex-wrap"
+          style={{ columnGap: atLeast(TILE_GAP_X, zoom), rowGap: atLeast(TILE_GAP_Y, zoom) }}
+        >
           {tokens.tokens.map((view) => (
-            <li key={view.oracleId} style={{ width: TOKEN_TILE_WIDTH }}>
-              <TokenTile view={view} tokens={tokens} onPick={() => onPick(view.oracleId)} />
+            <li key={view.oracleId} style={{ width: stackCardWidth(zoom) }}>
+              <TokenTile
+                view={view}
+                tokens={tokens}
+                zoom={zoom}
+                onPick={() => onPick(view.oracleId)}
+              />
             </li>
           ))}
         </ul>
@@ -308,10 +405,13 @@ function tileName(verb: string, view: DeckTokenView): string {
 function TokenTile({
   view,
   tokens,
+  zoom,
   onPick,
 }: {
   view: DeckTokenView;
   tokens: DeckTokens;
+  /** `cardZoom.deck`. The tile's root publishes it as the two card variables; see the header. */
+  zoom: number;
   onPick: () => void;
 }) {
   const tip = useTooltip();
@@ -330,7 +430,17 @@ function TokenTile({
       : "Added by hand";
 
   return (
-    <div className={cn("flex flex-col gap-1", hidden && "opacity-60")}>
+    <div
+      // The stepper, the two icon buttons and every line of type below size themselves against
+      // these two rather than taking a prop — `cardZoom.ts`'s rule, and the reason it is a
+      // variable: `QuantityStepper` is drawn in three tables as well as on this tile, and a prop
+      // would have to be threaded to every one of them and defaulted where nothing scales.
+      style={cardScaleVars(zoom)}
+      className={cn(
+        "flex flex-col gap-[calc(0.25rem*var(--mark-scale,1))]",
+        hidden && "opacity-60",
+      )}
+    >
       <button
         type="button"
         onClick={onPick}
@@ -361,7 +471,10 @@ function TokenTile({
           header. The name is clamped to one line and the subtitle to two; both keep their whole
           string in the DOM, because truncating a subtitle is how the two Wurms fold back into
           one. */}
-      <p className="truncate text-xs text-text" {...tip(view.name, { whenClipped: true })}>
+      <p
+        className="truncate text-[calc(0.75rem*var(--mark-scale,1))] text-text"
+        {...tip(view.name, { whenClipped: true })}
+      >
         {view.name}
       </p>
       {/* **No tooltip, and that is a measurement rather than a preference.** `whenClipped` asks
@@ -372,10 +485,12 @@ function TokenTile({
           screen reader hears it, every control on this tile spells it into its own name, and the
           art picker sets it under its heading unclamped. */}
       {view.subtitle !== null && (
-        <p className="line-clamp-2 text-[0.6875rem] leading-tight text-dim">{view.subtitle}</p>
+        <p className="line-clamp-2 text-[calc(0.6875rem*var(--mark-scale,1))] leading-tight text-dim">
+          {view.subtitle}
+        </p>
       )}
 
-      <div className="flex items-center gap-1">
+      <div className="flex items-center gap-[calc(0.25rem*var(--mark-scale,1))]">
         <QuantityStepper
           size="xs"
           value={view.quantity}
@@ -396,9 +511,9 @@ function TokenTile({
           className={TILE_BUTTON}
         >
           {hidden ? (
-            <Eye aria-hidden="true" className="size-3.5" />
+            <Eye aria-hidden="true" className={TILE_ICON} />
           ) : (
-            <EyeOff aria-hidden="true" className="size-3.5" />
+            <EyeOff aria-hidden="true" className={TILE_ICON} />
           )}
         </button>
         {/* Drawn only where there is something to undo, which is what `overridden` answers — and
@@ -412,12 +527,15 @@ function TokenTile({
             {...tip(tileName("Reset", view), { describes: false })}
             className={TILE_BUTTON}
           >
-            <Undo2 aria-hidden="true" className="size-3.5" />
+            <Undo2 aria-hidden="true" className={TILE_ICON} />
           </button>
         )}
       </div>
 
-      <p className="truncate text-[0.6875rem] text-dim" {...tip(why, { whenClipped: true })}>
+      <p
+        className="truncate text-[calc(0.6875rem*var(--mark-scale,1))] text-dim"
+        {...tip(why, { whenClipped: true })}
+      >
         {why}
       </p>
     </div>

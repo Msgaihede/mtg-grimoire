@@ -628,8 +628,14 @@ Every one of these has its measurement and its story in
   does nothing and WebView2 zooms the whole window on top of you); the zoom rescales **geometry**
   and is never a `transform: scale()`; and **everything drawn _on_ a card scales with it, through
   two inherited custom properties** — `--mark-scale` and `--control-scale`, published by
-  `cardScaleVars(zoom)` in `src/lib/cardZoom.ts` and set on exactly three elements (`CardGrid`'s
-  tile, `GridView`'s tile, `CardStack`'s card). **A variable rather than a prop, because the marks
+  `cardScaleVars(zoom)` in `src/lib/cardZoom.ts`. **Name the setters, never count them** — this
+  sentence said "exactly three elements (`CardGrid`'s tile, `GridView`'s tile, `CardStack`'s
+  card)" through four additions, and `grep -n "cardScaleVars(" src/` is the census. Two of those
+  four are worth knowing about because they are not card walls: the decks gallery's tile and
+  folder card scale a whole deck's crop, and the deck editor's **Tokens & emblems** band and its
+  art picker draw the tokens a deck makes at `stackCardWidth(cardZoom.deck)` — the stacked card's
+  own width at the desk's own zoom, so the tokens are the size of the cards that make them.
+  **A variable rather than a prop, because the marks
   are shared**: `RarityGem`, `OwnedBadge`, `FinishMark`, `LabelDot`, `CountTag` and `QuantityStepper`
   are each drawn on a card face _and_ in one of the three tables or the card pane, so a prop would
   be threaded to every one and defaulted at the ones that must hold still — "does this scale?"
