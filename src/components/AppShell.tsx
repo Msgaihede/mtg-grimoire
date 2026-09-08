@@ -84,6 +84,26 @@ const SWITCH_VIEW = shortcut("global", "switchView");
 const KEY_MAP = shortcut("global", "keyMap");
 
 /**
+ * The destinations `Ctrl+1…9` walk — `NAV` minus the one row that is not always drawn.
+ *
+ * **Ten destinations against nine digits, and this is which one goes without.** `Ctrl+0` is not a
+ * tenth step of that run (`lib/shortcuts.ts` says why), so one entry has to have no chord, and
+ * the choice is forced by what a chord is *for*: it does not move. Every other row is on the rail
+ * for every reader; `shared` appears only once a link has been opened, so a digit bound to it
+ * would either shift the digits after it — one press meaning two things to two readers — or
+ * point at a row half the readers do not have.
+ *
+ * It costs that view its keyboard route and nothing else. The route it had was a *fallback*,
+ * written when nothing in the app offered a first share; `features/collection/ShareFolderMenu.tsx`
+ * draws **Open a shared collection** beside the Share control now, which is the signpost the
+ * chord was standing in for. `docs/reference/keyboard-shortcuts.md` carries the record.
+ *
+ * Derived rather than written out, so a destination added to `NAV` joins the run by construction
+ * and only a deliberate second exclusion could ever be a decision again.
+ */
+const CHORD_NAV = NAV.filter((n) => n.id !== "shared");
+
+/**
  * The window: sidebar, ribbon, and whatever view the store points at.
  *
  * Owns the sync status because everything that needs it lives here — the ribbon's summary
@@ -123,7 +143,7 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   const drops = useSidebarDrops();
   /**
    * Whether there is room for a rail beside the content at all — and, below the phone width,
-   * there is not: the rail's destinations move to a bar across the foot of the window instead.
+   * there is not: the destinations move to a bar across the foot of the window instead.
    *
    * **The one viewport branch in this app**, and `src/lib/viewports.ts` demands a reason wherever
    * one appears. The reason is that *the shell is the window*: every other fold here is a
@@ -212,16 +232,16 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   // app, and passed down `isWebTarget()`-gated at the call site below.
   const deviceSync = useDeviceSyncLive();
   /**
-   * The app's two window-wide chords: `Ctrl+1`…`Ctrl+8` to jump between the eight destinations,
-   * and `F1` to open the map that says so.
+   * The app's two window-wide chords: `Ctrl+1`…`Ctrl+9` to jump between the nine destinations
+   * {@link CHORD_NAV} names, and `F1` to open the map that says so.
    *
    * **Both matched against `@/lib/shortcuts` rather than compared by hand**, which is what makes
    * the panel's rows and these bindings one fact instead of two that drift silently past both CI
    * jobs. The `switchView` entry's chords are `NAV`'s own order, and the *index* is the binding —
    * so the rail stays the single list of destinations rather than being restated here as a
-   * ninth copy, exactly as `nav.ts` argues about the label being the ribbon's `<h1>`.
+   * second copy, exactly as `nav.ts` argues about the label being the ribbon's `<h1>`.
    *
-   * **The modal guard is `[aria-modal="true"]`, and it covers `Ctrl+1…8` alone.** `Dialog.tsx`
+   * **The modal guard is `[aria-modal="true"]`, and it covers `Ctrl+1…9` alone.** `Dialog.tsx`
    * is the one modal chrome in this app and always sets the attribute, so asking the document is
    * asking the thing that knows, with nothing to register and nothing to keep in step. A view
    * that switched out from under an open dialog would leave that dialog sitting over a page it
@@ -251,7 +271,7 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
         // meaning depends on the state it changes.** Holding a key fires `keydown` at the OS
         // repeat rate, and a toggle on that is the panel strobing through its own fade for as
         // long as the finger is down — it lands on whichever side the reader let go on.
-        // `Ctrl+1…8` below is left alone deliberately: re-selecting the view you are on is
+        // `Ctrl+1…9` below is left alone deliberately: re-selecting the view you are on is
         // idempotent, so a guard there would be a rule with no failure behind it, and hoisting
         // one to the top of the handler would decide the question for every chord this shell
         // ever grows — including a stepping chord, where repeating *is* the binding.
@@ -262,20 +282,19 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
       const i = SWITCH_VIEW.chords.findIndex((c) => matchesChord(c, e));
       // `-1` is "not one of ours". The second half is not ceremony: the chords and the
       // destinations are two lists that agree by construction rather than by type, and the day
-      // a ninth chord is written without a ninth `NAV` entry, `NAV[i]` is `undefined` and
-      // this handler throws on every press. The reverse — a ninth destination with no chord —
-      // costs nothing and needs no guard.
+      // a tenth chord is written without a tenth `CHORD_NAV` entry, the lookup is `undefined`
+      // and this handler throws on every press. The reverse — a destination with no chord —
+      // costs nothing and needs no guard, which is what `shared` relies on.
       //
-      // **`NAV` and never the filtered `entries` below**, which is the one thing about this line
-      // that is a decision rather than arithmetic. The rail hides the Shared row until a reader
-      // has opened a link; binding against what is *drawn* would move Scanner and Settings
-      // between `Ctrl+6…7` and `Ctrl+7…8` depending on that, so one chord would mean two things
-      // to two readers. Against the whole list the digits are fixed, and `Ctrl+6` is how a reader
-      // reaches the shared view before its row exists — landing on the empty state that is where
-      // the first link gets pasted.
-      if (i === -1 || i >= NAV.length) return;
+      // **`CHORD_NAV` and never the filtered `entries` below**, which is the one thing about
+      // this line that is a decision rather than arithmetic. The rail hides the Shared row until
+      // a reader has opened a link; binding against what is *drawn* would move every digit after
+      // it depending on something the reader did last week, so one chord would mean two things
+      // to two readers. Against a fixed list the digits never move — and the list is fixed
+      // precisely because the conditional row is the one left out of it.
+      if (i === -1 || i >= CHORD_NAV.length) return;
       e.preventDefault();
-      setActiveView(NAV[i].id);
+      setActiveView(CHORD_NAV[i].id);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -387,12 +406,17 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
    * **Shared appears once a link has been opened** (spec decision 6): a reader who never trades
    * pays no rail slot for a view they will never press. It is filtered *here* rather than in
    * `nav.ts` so that module stays a plain list — one `nav.test.ts` can assert literally, and one
-   * `switchView`'s chords can bind against by index.
+   * {@link CHORD_NAV} can be derived from.
    *
    * **`activeView === "shared"` keeps the row while the reader is standing on it**, which is what
    * makes closing the last binder safe: without it the row would vanish from under the reader in
-   * the same frame the view emptied, and the way back would be a chord they have not been told
-   * about. `Ctrl+6` is the way *in* before there is a row at all.
+   * the same frame the view emptied.
+   *
+   * **The way *in* before there is a row at all is the collection's own control** —
+   * `features/collection/ShareFolderMenu.tsx` draws **Open a shared collection** beside the Share
+   * control, and opening one is what puts this row on the rail. It was `Ctrl+6` until 2026-09-08,
+   * when a tenth destination left nine digits to go round; {@link CHORD_NAV} carries that whole
+   * argument, and the entry point is why it costs nothing.
    */
   const entries = useMemo(
     () =>

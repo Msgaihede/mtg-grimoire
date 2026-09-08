@@ -733,17 +733,22 @@ it("opens the wishlist on the wishlist entry", async () => {
 });
 
 /**
- * The eighth view, and the one whose rail row is conditional — so this is the only place the
- * whole wire is checked: `NAV`'s eighth id, `ViewId`'s eighth member, `ActiveView`'s eighth arm
- * and `AppShell`'s filter all agreeing about the word `shared`.
+ * The one view whose rail row is conditional — so this is the only place the whole wire is
+ * checked: `NAV`'s id, `ViewId`'s member, `ActiveView`'s arm and `AppShell`'s filter all agreeing
+ * about the word `shared`.
  *
- * `Ctrl+6` rather than a press on the rail, because that is the state a reader is actually in
- * before their first link: the row is not drawn, and the chord is the way in.
+ * **Driven through the store rather than through a chord, and that is the change of 2026-09-08.**
+ * It used to press `Ctrl+6`, because before the cabinet grew its own control that chord was the
+ * only way in. `NAV` reached ten destinations against nine digits the same day and this is the
+ * entry that went without one (`docs/reference/keyboard-shortcuts.md` has the argument), so a
+ * chord here would now be pressing Scanner and asserting about Shared. The reader's own route is
+ * the collection's **Open a shared collection** button, which `ShareFolderMenu.test.tsx` and
+ * `CollectionPage.test.tsx` each pin; what is left for this file is that the view exists and is
+ * drawn when the store says so.
  */
-it("opens the shared view on Ctrl+6, with no share and no rail row", async () => {
+it("draws the shared view's empty state, with no share and no rail row", async () => {
+  useAppStore.setState({ activeView: "shared", openedShares: [] });
   render(<App />);
-
-  await userEvent.keyboard("{Control>}6{/Control}");
 
   expect(
     await screen.findByRole("heading", { name: "Open a collection somebody shared with you" }),

@@ -69,16 +69,16 @@ function headingFor(scope: ShortcutScope): string {
  * spellings of one intent, so the word between them is `or`: `Ctrl+Y` and `Ctrl+Shift+Z` both
  * redo, and a reader presses whichever their hands know. An entry that declares
  * {@link Shortcut.range} is a contiguous run instead, so only its ends are drawn and the word is
- * `to` — `switchView` carries one chord per `NAV` entry, and drawing every one of them with `or`
- * between would fill the widest row in the panel with an arithmetic sequence.
+ * `to` — `switchView` carries nine, one per `NAV` entry, and drawing all nine with `or` eight
+ * times over would fill the widest row in the panel with an arithmetic sequence.
  *
  * **The flag, never `chords.length`.** Counting was right for exactly as long as `switchView` was
- * the only multi-chord entry with more than two: a count cannot tell the steps of a sequence
+ * the only multi-chord entry with more than two: a count cannot tell nine steps of a sequence
  * from three genuine alternatives, so the first shortcut written with three spellings would have
  * drawn "`A` **to** `C`" — a promise about a chord nothing binds, in the one panel whose whole job
  * is to be true.
  *
- * Both ends are drawn **whole** — `Ctrl` `1` to `Ctrl` `8`, not `Ctrl` `1` to `8` — because
+ * Both ends are drawn **whole** — `Ctrl` `1` to `Ctrl` `9`, not `Ctrl` `1` to `9` — because
  * collapsing the second chord's modifiers assumes the run shares them, which is true of the one
  * range that exists today and is not a fact this component can check.
  *
@@ -88,7 +88,7 @@ function headingFor(scope: ShortcutScope): string {
  * **The whitespace between the caps is text, not the `gap`, and that is what the row is read out
  * with.** Adjacent inline elements with nothing between them concatenate when their text is
  * flattened — this repo has already paid for that once, with a label and its count in two spans
- * computing to `Missing2` — so caps separated only by `gap-1` say `Ctrl1toCtrl8` to a screen
+ * computing to `Missing2` — so caps separated only by `gap-1` say `Ctrl1toCtrl9` to a screen
  * reader while looking correct to everyone else. A text node fixes it at no visual cost: a
  * sequence of child text runs that is *only* white space is not rendered by a flex container and
  * becomes no flex item (CSS Flexbox §4), so the drawn row is unchanged to the pixel. An
@@ -255,7 +255,7 @@ export function KeyMap({ children }: { children: ReactNode }) {
               {activeScopes({ activeView, openDeckId }).map((scope) => {
                 const rows = SHORTCUTS[scope];
                 // **A scope with nothing in it draws nothing — not a heading over a gap.** All
-                // eight views are in that state today — `deckEditor` is a scope of its own and
+                // nine views are in that state today — `deckEditor` is a scope of its own and
                 // *replaces* `decks` rather than filling it — and that is the honest answer
                 // rather than a page whose section is "coming soon": what a reader on the
                 // search page can press is exactly what `Everywhere` lists.

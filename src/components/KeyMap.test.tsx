@@ -43,7 +43,7 @@ function capsFor(label: string): string[] {
  *
  * **{@link capsFor} cannot see this and never could.** It reads each `<kbd>` on its own, so it is
  * green whether or not anything separates them, while what an assistive technology gets is the
- * concatenation — `Ctrl1toCtrl6` for caps held apart by nothing but a flex `gap`.
+ * concatenation — `Ctrl1toCtrl9` for caps held apart by nothing but a flex `gap`.
  */
 function readingOf(label: string): string {
   const row = screen.getByText(label).nextElementSibling;
@@ -72,7 +72,7 @@ describe("KeyMap", () => {
 
   /**
    * **A scope with nothing in it draws nothing at all** — not a heading over a gap, and not a
-   * sentence promising one later. All eight views are in that state today — `deckEditor` is a
+   * sentence promising one later. All nine views are in that state today — `deckEditor` is a
    * scope of its own that *replaces* `decks` rather than filling it — so this is the case a
    * reader is in most of the time rather than an edge one.
    */
@@ -103,15 +103,15 @@ describe("KeyMap", () => {
 
   /**
    * `switchView` **declares** itself a range, so the ends are drawn and the word between them is
-   * `to`. The count is the assertion that matters: `Ctrl 1 or Ctrl 2 or …` down to `Ctrl 8` is
-   * sixteen caps of arithmetic in the widest row of a 384px panel — two per chord, `Ctrl` plus
+   * `to`. The count is the assertion that matters: `Ctrl 1 or Ctrl 2 or …` down to `Ctrl 9` is
+   * eighteen caps of arithmetic in the widest row of a 384px panel — two per chord, `Ctrl` plus
    * the digit.
    */
   it("draws a shortcut that declares itself a range as its two ends, joined by to", () => {
     useAppStore.setState({ activeView: "search", openDeckId: null, keyMapOpen: true });
     render(<Harness />);
 
-    expect(capsFor("Jump to a section")).toEqual(["Ctrl", "1", "Ctrl", "8"]);
+    expect(capsFor("Jump to a section")).toEqual(["Ctrl", "1", "Ctrl", "9"]);
     expect(screen.getByText("Jump to a section").nextElementSibling?.textContent).toContain("to");
   });
 
@@ -158,7 +158,7 @@ describe("KeyMap", () => {
 
   /**
    * **The caps are separated by text, not by the `gap` between them**, and a gap is read out as
-   * nothing at all: without a text node the range row flattens to `Ctrl1toCtrl8`. This repo has
+   * nothing at all: without a text node the range row flattens to `Ctrl1toCtrl9`. This repo has
    * paid for that once already — a label and its count in two spans computed to `Missing2` — and
    * a stylesheet cannot fix it, since the separation has to exist in the markup an assistive
    * technology reads. Every shape is pinned, because each puts a different thing between two
@@ -169,7 +169,7 @@ describe("KeyMap", () => {
     useAppStore.setState({ activeView: "decks", openDeckId: 7, keyMapOpen: true });
     render(<Harness />);
 
-    expect(readingOf("Jump to a section")).toBe("Ctrl 1 to Ctrl 8");
+    expect(readingOf("Jump to a section")).toBe("Ctrl 1 to Ctrl 9");
     expect(readingOf("Redo the change you undid")).toBe("Ctrl Y or Ctrl Shift Z");
     expect(readingOf("Undo the last change")).toBe("Ctrl Z");
   });

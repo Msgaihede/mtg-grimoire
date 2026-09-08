@@ -8,8 +8,8 @@ import type { ViewId } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
 /**
- * Navigation across the foot of a phone window — and, for two of its rows, one place to let a
- * card go.
+ * The nine destinations across the foot of a phone window — and, for two of them, one place to
+ * let a card go.
  *
  * **The second drawing of navigation, and deliberately not the rail with a flag on it.** A rail
  * entry is a full-width button with a left-anchored icon and a tooltip when there is no room for
@@ -17,25 +17,43 @@ import { cn } from "@/lib/utils";
  * `NAV`, which moved out of `AppShell` for exactly this — and the *drop rule*,
  * `useSidebarDropTarget`. Neither of those is written twice, and the row is.
  *
- * **How many tabs there are is the shell's answer and not this file's** (2026-09-08): `entries`
- * defaults to the whole of `NAV`, and the shell passes the filtered list because the Shared row
- * appears only once a reader has opened a link. So this row is drawn at **seven or eight** tabs
- * where every figure below was taken at six.
- *
- * **The arithmetic, measured — and measured at six.** Six tabs across a 390px window is
- * **65 × 52** each and the row is **53** tall — the 52 plus the hairline. 20px of glyph, 4px of
+ * **The arithmetic, re-measured rather than inherited.** Six tabs across a 390px window was
+ * **65 × 52** each with the row **53** tall — the 52 plus the hairline. 20px of glyph, 4px of
  * gap and 12px of label make the 36 that `py-2` puts 16 around. Driven in headless Chromium over
- * the **built** stylesheet with the real Geist face loaded (2026-08-29, `dist` of this branch,
+ * the **built** stylesheet with the real Geist face loaded (2026-08-29, `dist` of that branch,
  * served over http because `dist`'s font URLs are absolute and a `file://` page lays the text out
  * in a fallback face and lies about every width — the check is that the forced-`sans-serif` widths
  * differ, and they did: `Search` 38.67 against 38.03).
  *
- * ⚠️ **The tab width above is stale and the slack it reports is spent.** The row is `flex` with no
- * wrap, so the same 390px window divides by whatever it is given: 55.7px at seven tabs and
- * **48.75px** at eight. `Collection` inks 55.23 at 12px (below), which fitted a 65px tab with
- * ~10px to spare and does **not** fit 48.75 — so the longest word truncates or the row overflows,
- * and which of those it is has not been driven. Nothing here has been re-measured since the eighth
- * destination landed; that is owed, and it is a live pass rather than a suite run.
+ * **Nine tabs is the row at its floor, and the floor is what it hits rather than what it clears**
+ * (2026-09-08, re-measured the same way against this branch's `dist` — the Geist face was loaded,
+ * checked as before: `Search` inks 38.67, the same figure the six-tab pass recorded). Seven tabs
+ * were **55.70** each with nothing truncated and the row ending exactly on 390. Nine divide to
+ * **43.33** per box, which is under `--target-min`, so the floor is what applies: every button is
+ * **44** wide inside a 43.33 wrapper, neighbours overlap by **0.672**, and the row ends at
+ * **390.67** — the 0.67 is clipped by the shell's `overflow-hidden` root rather than becoming a
+ * sideways scroll. The height is unchanged at **52 + 1**: nothing in the vertical stack depends on
+ * how many tabs share the row. **Every one of those figures was then re-read in the shipped
+ * window** at `size 390 900` over CDP (debug build, same day): 44, 0.672, 390.67, 53, and
+ * `documentElement.scrollWidth` **390** — the clip, confirmed rather than argued.
+ *
+ * **What a reader actually sees is the words, and four of the nine now truncate** — `Collection`
+ * (55.23), `Playtesting` (61.97), `Scanner` (45.73) and `Settings` (45.42), against a 44px content
+ * box. `Wishlist` clears it by 0.7. At seven tabs none of them truncated. That is the honest state
+ * of a nine-destination bar at this width and it is **recorded rather than fixed**: the fix is a
+ * decision about what a phone's navigation *is* — a scroller, a `More` tab, a two-row bar, or
+ * fewer destinations down here than up in the rail — and that is a larger question than the two
+ * placeholders that made it visible.
+ *
+ * ⚠️ **Nine is the usual bar and there is a tenth, which is un-measured.** `NAV` holds ten
+ * destinations since the shared view landed, and the shell passes the *filtered* list — the
+ * Shared row appears only once a reader has opened somebody else's binder — so nine is what
+ * almost every reader has and every figure above is that bar. A reader who has opened one gets
+ * **ten**: 39 per box against the same 44 floor, which is more overlap and one more clipped
+ * pixel, and none of it has been driven. It sharpens the paragraph above rather than changing
+ * it — the row was already at its floor at nine, and the question is still what a phone's
+ * navigation *is* rather than how much a tenth costs. Recorded so nobody reads the figures above
+ * as covering the widest case.
  *
  * **jsdom lays nothing out**, so none of that can go red in this component's suite: what the tests
  * pin is markup, and every pixel above came from a browser.
@@ -55,7 +73,7 @@ export function BottomTabBar({
   decks,
   wishlist,
 }: {
-  /** Which destination is open — the one that wears `aria-current`. */
+  /** Which of the nine is open — the one that wears `aria-current`. */
   activeView: ViewId;
   /**
    * Which destinations to draw, defaulting to the whole of `NAV`.
@@ -103,10 +121,10 @@ export function BottomTabBar({
           active={id === activeView}
           onSelect={() => onSelect(id)}
           dragging={dragging}
-          // **Every tab registers a drop target, the ones that refuse included.** `null` is what
+          // **Every tab registers a drop target, the seven that refuse included.** `null` is what
           // a tab that takes nothing passes, and it still registers — see
           // `useSidebarDropTarget`, where the reason lives: a droppable whose `accepts()` is
-          // false costs a registry entry and nothing else, and registering every tab is what keeps
+          // false costs a registry entry and nothing else, and registering all nine is what keeps
           // the target set from changing shape mid-drag.
           drop={id === "decks" ? decks : id === "wishlist" ? wishlist : null}
         />
@@ -116,21 +134,23 @@ export function BottomTabBar({
 }
 
 /**
- * One tab: a glyph, its word under it, and — for two of them — a place to let a card go.
+ * One tab: a glyph, its word under it, and — for two of the nine — a place to let a card go.
  *
- * **65 × 52 clears `--target-min` in both directions**, so the floor below is a fence rather than
- * the thing deciding the size. It is read as the custom property rather than typed as `44` again,
- * for the reason every token in this app is: a number written twice is a number that can drift.
+ * **65 × 52 cleared `--target-min` in both directions while six tabs shared the row**, which made
+ * the floor below a fence rather than the thing deciding the size. At nine it is the thing
+ * deciding the width — 43.33 of room against a 44px floor — and the header above has that
+ * measurement. It is still read as the custom property rather than typed as `44` again, for the
+ * reason every token in this app is: a number written twice is a number that can drift.
  *
  * **The label is `text-xs`, which is the app's smallest interface size and not a new one** — the
  * sidebar's own drop report (`NavNote`) is already 12px, so nothing is invented here. **The rung
- * above it was measured and rejected rather than assumed away.** `Collection` is the longest word
- * in the list: at 12px it inks **55.23** in a 65px tab — nearly 10px of slack at the six-tab width
- * these figures were taken at — and at the chrome ladder's 14px status-line size it inks **64.44**
- * in the same 65, half a pixel of slack, hard against both edges, taking the row from 53px to
- * **55**, which is height spent on the axis this whole layout is short of. Both figures headless
- * over the built stylesheet, 2026-08-29. **The 65 is what an eighth destination spends** — see the
- * component header above, where what that costs is written down and still owes a live pass.
+ * above it was measured and rejected rather than assumed away.** `Collection` was the longest of
+ * the six words: at 12px it inks **55.23**, which fitted a 65px tab with nearly 10px of slack; at
+ * the chrome ladder's 14px status-line size it inks **64.44** in the same 65 — half a pixel of
+ * slack, hard against both edges — and it takes the row from 53px to **55**, which is height spent
+ * on the axis this whole layout is short of. Both figures headless over the built stylesheet,
+ * 2026-08-29. The 12px rung is the one still standing; what changed at nine tabs is that the
+ * *tab* shrank under the word rather than the word growing past the tab.
  *
  * **No `touch-action` here.** `src/index.css:464` already applies it to whatever is mid-drag, and
  * a second registration on one element silently replaces the first.

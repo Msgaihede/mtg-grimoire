@@ -87,15 +87,16 @@ const meta = {
     docs: {
       description: {
         component:
-          "Navigation across the foot of a phone window, in a row 53px tall inside `--safe-b`. " +
-          "**These stories pass no `entries`, so they draw the whole of `NAV`** — eight tabs, " +
-          "where the shell passes seven until a reader has opened a shared collection. The " +
-          "65px-per-tab figure this note used to quote was measured at six tabs on a 390px " +
-          "window (2026-08-29) and is spent: the row is `flex` with no wrap, so the same window " +
-          "divides by whatever it is given — 48.75px at eight — and nothing has been re-measured " +
-          "since. Two tabs take a dropped card and every tab registers a drop target: a " +
-          "droppable that refuses costs a registry entry and nothing else, and registering them " +
-          "all is what keeps the target set from changing shape mid-drag.",
+          "The nine destinations across the foot of a phone window: 44px each at 390 — the " +
+          "`--target-min` floor, which nine tabs reach and no longer clear — in a row 53px " +
+          "tall, inside `--safe-b`. Two of the nine take a dropped card, and all nine " +
+          "register a drop target — a droppable that refuses costs a registry entry and nothing " +
+          "else, and registering them all is what keeps the target set from changing shape " +
+          "mid-drag.\n\n" +
+          "**This is the width worth looking at.** At six tabs each was 65px and no label " +
+          "truncated; at nine the row divides to 43.33 and four of the words do — " +
+          "`Collection`, `Playtesting`, `Scanner`, `Settings`. `BottomTabBar.tsx`'s header " +
+          "carries the measurement and the open question it leaves.",
       },
     },
   },
@@ -105,7 +106,7 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 /**
- * Nothing in the air: a word under each glyph, and gold on the one that is open.
+ * Nothing in the air: nine words under nine glyphs, and gold on the one that is open.
  *
  * **The play presses a tab**, which is the whole of what this component does — and the assertion
  * is `aria-current`, because that is the answer the rail gives to the same question and two
@@ -133,24 +134,9 @@ export const Default: Story = {
 };
 
 /**
- * `Collection` is the longest word in the list, and this is the frame that shows what a tab does
- * to it.
- *
- * The **55.23px** it inks at `text-xs` had ten to spare in the **65px** tab six destinations
- * bought on a 390px window. This story draws all eight, where the same window gives 48.75 — so
- * what it now shows is the word against a tab too narrow for it.
- *
- * **This paragraph said 54.98 until 2026-09-08 and was the one figure in the app that disagreed
- * with `BottomTabBar.tsx`'s own.** Re-measured in the shipped WebView2 at 12px Geist Variable
- * on that date: Search 38.67, Tagger 37.50, Decks 34.27, **Collection 55.23**, Wishlist 43.30,
- * Shared 39.06, Scanner 45.73, Settings 45.42. `Search` reproduces the 2026-08-29 headless
- * figure exactly, which is the cross-check that the face is the right one — so the component's
- * number was correct and this file's was not.
- *
- * **And what happens to it is no longer undriven: it truncates** — every tab draws at exactly
- * 48.75 × 52 in a 390px `nav`, `nav.scrollWidth === clientWidth === 390`, and `Collection` is
- * the *only* label whose span reports `scrollWidth > clientWidth` (55 against 49), drawn as
- * `Collecti…`. See `docs/reference/collection-sharing.md`.
+ * `Collection` was the longest of the six words and is now the third longest of nine, and this is
+ * the frame that shows what happened to it: 55.23px of ink at `text-xs`, which had ten to spare in
+ * a 65px tab and truncates in a 44px one.
  */
 export const CollectionOpen: Story = {
   args: { activeView: "collection" },
@@ -158,12 +144,11 @@ export const CollectionOpen: Story = {
 
 /**
  * A card is in the air and a deck is open: the two entries that would take it wear the shipped
- * `DROP_RING`, on a tab rather than on the rail's 183px row.
+ * `DROP_RING`, on a 44px tab rather than the rail's 183px row.
  *
  * Nothing on this page drags anything, so this is a control rather than a demonstration — the
  * ring is drawn from the `dragging` prop. Whether a ring that narrow reads as an invitation is a
- * question for hardware, and the plan says so — narrower now than when that was written, since
- * the 65px it names was six destinations' share of a 390px window.
+ * question for hardware, and it is a sharper one at nine tabs than it was at six.
  */
 export const CardInTheAir: Story = {
   args: { dragging: true },

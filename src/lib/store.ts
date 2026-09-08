@@ -15,12 +15,13 @@ import type { ExportFormat } from "@/features/transfer/formats";
 import type { DeckFinish, DeckVariant } from "./ipc";
 
 /**
- * The eight top-level destinations in the sidebar.
+ * The ten top-level destinations in the sidebar.
  *
  * **`shared` is the one the rail does not always draw.** It is somebody else's collection, opened
  * from a link, and a reader who never opens one never sees the row — `AppShell` filters `NAV` on
  * {@link AppState.openedShares}, so `nav.ts` stays the whole set and `nav.test.ts` goes on
- * asserting it literally.
+ * asserting it literally. It is also the one destination with no chord, and the two facts are the
+ * same fact: see `lib/shortcuts.ts`'s `switchView`.
  */
 export type ViewId =
   | "search"
@@ -30,6 +31,8 @@ export type ViewId =
   | "decks"
   | "shared"
   | "scanner"
+  | "trade"
+  | "playtesting"
   | "settings";
 
 /**

@@ -19,6 +19,8 @@ describe("the navigation census", () => {
       // assertion be a literal.
       "shared",
       "scanner",
+      "trade",
+      "playtesting",
       "settings",
     ]);
     expect(new Set(ids).size).toBe(ids.length);
@@ -26,13 +28,13 @@ describe("the navigation census", () => {
 
   /**
    * The label is also the ribbon's `<h1>`, so a second list of words is a second thing to keep
-   * in step — which is the whole reason this module exists rather than the bar copying seven
+   * in step — which is the whole reason this module exists rather than the bar copying nine
    * strings out of the rail.
    *
    * **The glyph is checked by drawing it, not by its `typeof`.** Under `lucide-react` 1.x a
    * `LucideIcon` is a `forwardRef` **object** — `$$typeof: Symbol(react.forward_ref)`, keys
    * `["$$typeof", "render"]` — for lucide's own icons and for `icons.ts`'s `createLucideIcon`
-   * copies alike, so `toBeTypeOf("function")` fails on all seven. And the weaker `"object"` that
+   * copies alike, so `toBeTypeOf("function")` fails on all nine. And the weaker `"object"` that
    * would pass is equally true of the `null` this case exists to catch. Rendering one is the
    * only assertion here that tells a glyph from anything else.
    */
@@ -46,36 +48,40 @@ describe("the navigation census", () => {
   });
 
   /**
-   * Every destination is reachable from the keyboard — the one thing about this list that lives
-   * in another module.
+   * Every destination a chord can reach is reachable from the keyboard — the one thing about
+   * this list that lives in another module.
    *
-   * `Ctrl+1…8` is bound **by index**: `AppShell` walks `switchView`'s chords and activates
-   * `NAV[i]`. So the two lists are one binding written down twice, and nothing in the program
-   * holds them together — `shortcuts.ts` deliberately does not import this module, because the
-   * catalogue is pure data over a plain event and a runtime edge from it to a file of React
-   * components is the wrong direction. A *test* importing both is the fence that costs nothing
-   * at runtime.
+   * `Ctrl+1…9` is bound **by index**: `AppShell` walks `switchView`'s chords and activates
+   * `CHORD_NAV[i]`. So the two lists are one binding written down twice, and nothing in the
+   * program holds them together — `shortcuts.ts` deliberately does not import this module,
+   * because the catalogue is pure data over a plain event and a runtime edge from it to a file
+   * of React components is the wrong direction. A *test* importing both is the fence that costs
+   * nothing at runtime.
    *
    * **Growth is the direction that goes silent, which is why the fence is here rather than in
-   * `shortcuts.test.ts`.** A ninth entry added to the array above with no ninth chord is
-   * simply unreachable, while the panel goes on saying "Jump to a section" over a range that no
-   * longer covers the rail — and the catalogue's own tests would all still pass, because they
-   * pin `Ctrl+1` through `Ctrl+8` literally and have never heard of this list. The other two
-   * directions are already answered: a shrink is caught by `AppShell`'s `i >= NAV.length` floor,
-   * and a reorder remapping the digits is the design working as intended.
+   * `shortcuts.test.ts`.** An eleventh entry added to the array above with no chord is simply
+   * unreachable, while the panel goes on saying "Jump to a section" over a range that no longer
+   * covers the rail — and the catalogue's own tests would all still pass, because they pin
+   * `Ctrl+1` through `Ctrl+9` literally and have never heard of this list. The other two
+   * directions are already answered: a shrink is caught by `AppShell`'s `i >= CHORD_NAV.length`
+   * floor, and a reorder remapping the digits is the design working as intended.
    *
-   * **It counts `NAV` and not the rail, and since 2026-09-08 those differ.** The Shared row is
-   * hidden until a reader has opened a link, and `AppShell` binds these chords against the whole
-   * of `NAV` anyway — so what has to hold is that every *destination* has a chord, which is what
-   * this asserts. A count of the drawn rail would go green on eight chords and seven rows and
-   * say nothing about the one that is only reachable by pressing `Ctrl+6`.
+   * ⚠️ **`NAV.length - 1`, and the `- 1` is a decision rather than an off-by-one.** Ten
+   * destinations arrived on 2026-09-08 against nine digits — `Ctrl+0` is not a tenth step of
+   * that run — so exactly one entry has no chord, and it is `shared`, the one row the rail does
+   * not always draw. The subtraction is spelled against the **id** below rather than as a bare
+   * number, so a *second* exclusion cannot arrive by arithmetic: it would have to be written.
    *
-   * A length rather than a literal eight, because the literal is `shortcuts.test.ts`' job and
-   * stating it twice would make a legitimate ninth view two edits away from green instead of
-   * one. The pair is what pins it: that file says the chords are `Ctrl+1…8`, this one says there
-   * are as many of them as there are places to go.
+   * A length rather than a literal, because the literal is `shortcuts.test.ts`' job and stating
+   * it twice would make a legitimate eleventh view two edits away from green instead of one. The
+   * pair is what pins it: that file says the chords are `Ctrl+1…9`, this one says there are as
+   * many of them as there are places a digit can go.
    */
-  it("has a chord for every destination", () => {
-    expect(shortcut("global", "switchView").chords).toHaveLength(NAV.length);
+  it("has a chord for every destination a digit can reach", () => {
+    const chorded = NAV.filter((n) => n.id !== "shared");
+    expect(shortcut("global", "switchView").chords).toHaveLength(chorded.length);
+    // …and the one left out is left out on purpose, which is the half a length cannot say.
+    expect(NAV.map((n) => n.id)).toContain("shared");
+    expect(chorded).toHaveLength(NAV.length - 1);
   });
 });

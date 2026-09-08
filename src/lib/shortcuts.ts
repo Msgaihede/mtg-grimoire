@@ -46,9 +46,9 @@ export interface Shortcut {
    * list of spellings a reader picks one of.
    *
    * **Declared here because nothing downstream can work it out.** The panel draws the two apart
-   * (`Ctrl` `1` *to* `Ctrl` `8` against `Ctrl` `Y` *or* `Ctrl` `Shift` `Z`), and the only thing
-   * it has to go on otherwise is how many chords there are — which cannot tell eight steps of one
-   * sequence from eight alternatives. Under a count rule the first entry ever written with three
+   * (`Ctrl` `1` *to* `Ctrl` `9` against `Ctrl` `Y` *or* `Ctrl` `Shift` `Z`), and the only thing
+   * it has to go on otherwise is how many chords there are — which cannot tell nine steps of one
+   * sequence from nine alternatives. Under a count rule the first entry ever written with three
    * genuine spellings draws "A **to** C", promising a reader a chord nothing binds: a documented
    * chord with no handler behind it, which is precisely the drift this module exists to end.
    * Whether the middle of a run can be inferred is a fact about the run, so it is the entry's to
@@ -60,7 +60,7 @@ export interface Shortcut {
 /**
  * Where a shortcut is live.
  *
- * `ViewId` rather than a list of its own, so an eighth view is a type error here rather than a
+ * `ViewId` rather than a list of its own, so a tenth view is a type error here rather than a
  * section the map silently never draws. `deckEditor` is not a view and never will be — it is the
  * surface `App.tsx` swaps *in place of* `DecksPage`, which is why {@link activeScopes} replaces
  * rather than nests.
@@ -70,7 +70,7 @@ export type ShortcutScope = "global" | ViewId | "deckEditor";
 /**
  * The catalogue.
  *
- * **A `Record` over every scope rather than a partial map**, so the eight views are each present
+ * **A `Record` over every scope rather than a partial map**, so the nine views are each present
  * with an empty array. That is not a placeholder waiting to be filled: it is the honest state of
  * those pages, and an empty scope draws nothing at all in the panel — no heading. Making the
  * emptiness explicit is what stops a scope being forgotten when a view starts binding something.
@@ -84,23 +84,32 @@ export const SHORTCUTS: Record<ShortcutScope, readonly Shortcut[]> = {
       id: "switchView",
       label: "Jump to a section",
       /**
-       * A run rather than eight alternatives: the digits are consecutive and a reader shown the
+       * A run rather than nine alternatives: the digits are consecutive and a reader shown the
        * ends knows every chord between them, which is what buys the panel one row instead of
-       * sixteen caps of arithmetic (`Caps` draws each chord as two `<kbd>`s, `Ctrl` plus the
+       * eighteen caps of arithmetic (`Caps` draws each chord as two `<kbd>`s, `Ctrl` plus the
        * digit).
        */
       range: true,
       /**
-       * Eight chords in `NAV` order, and the *index* is the binding: `AppShell` walks these and
-       * activates `NAV[i]`, so the rail's own order stays the single list rather than being
-       * restated as an eighth copy here.
+       * Nine chords in `NAV` order, and the *index* is the binding: `AppShell` walks
+       * `CHORD_NAV` and activates its `i`th entry, so the rail's own order stays the single list
+       * rather than being restated as a second copy here.
        *
-       * **`Ctrl+6` reaches a destination the rail may not be drawing**, and that is the one thing
-       * about this run that is not obvious. Shared is hidden until the reader has opened a link
-       * (spec decision 6), while these chords bind against the *whole* of `NAV` — so the digits
-       * never shift under a reader, and the press is what puts the row on screen. Binding against
-       * the filtered rail instead would move Scanner and Settings between `Ctrl+6…8` and
-       * `Ctrl+7…8` depending on something the reader did last week.
+       * **Nine is the ceiling this spelling has**, and the tenth destination arrived on
+       * 2026-09-08: `Ctrl+0` is not a tenth step of this run — it reads as zero and sits at the
+       * wrong end of the keyboard — so one entry has to go without.
+       *
+       * **The one that goes without is `shared`, and the reason is that it is the one row the
+       * rail does not always draw.** A chord's whole value is that it does not move; a digit
+       * bound to a row that appears and disappears would mean two things to two readers, which
+       * is the same argument that made these bind against a *list* rather than against what is
+       * on screen. So `CHORD_NAV` is `NAV` minus that entry, and the nine digits are the nine
+       * unconditional destinations — `Ctrl+9` is Settings for every reader, always.
+       *
+       * ⚠️ **This reverses the `Ctrl+6` the shared view shipped with on 2026-09-08**, and the
+       * reversal is what the entry point bought: that chord existed because *nothing else
+       * reached the view*, and `features/collection/ShareFolderMenu.tsx` now draws **Open a
+       * shared collection** beside the Share control. A signpost where there was only a key.
        */
       chords: [
         { key: "1", ctrl: true },
@@ -111,6 +120,7 @@ export const SHORTCUTS: Record<ShortcutScope, readonly Shortcut[]> = {
         { key: "6", ctrl: true },
         { key: "7", ctrl: true },
         { key: "8", ctrl: true },
+        { key: "9", ctrl: true },
       ],
     },
     { id: "keyMap", label: "Show this list", chords: [{ key: "F1" }] },
@@ -150,6 +160,8 @@ export const SHORTCUTS: Record<ShortcutScope, readonly Shortcut[]> = {
   wishlist: [],
   shared: [],
   scanner: [],
+  trade: [],
+  playtesting: [],
   settings: [],
   deckEditor: [
     { id: "undo", label: "Undo the last change", chords: [{ key: "z", ctrl: true }] },

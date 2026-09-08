@@ -334,11 +334,12 @@ it("renders nav and refresh button", async () => {
   // word the nav item uses, so a bare `getByText("Search")` is ambiguous.
   //
   // **In DOM order, because the order is a decision rather than the array's history** — the two
-  // ways into the database, then the three lists the reader owns, then Scanner, then Settings.
-  // Seven separate `getByRole` calls stayed green through any shuffle of the column, which is
+  // ways into the database, then the three lists the reader owns, then Scanner, then the two
+  // placeholders, then Settings.
+  // Nine separate `getByRole` calls stayed green through any shuffle of the column, which is
   // the one thing about this list a reader would notice from across the room. `within` the rail
   // keeps the ribbon's own title out of the answer, and the toggle at the rail's foot is the
-  // eighth button inside it.
+  // tenth button inside it.
   const nav = screen.getByRole("navigation", { name: "Views" });
   expect(within(nav).getAllByRole("button").map((b) => b.textContent)).toEqual([
     "Search",
@@ -347,6 +348,8 @@ it("renders nav and refresh button", async () => {
     "Collection",
     "Wishlist",
     "Scanner",
+    "Trade",
+    "Playtesting",
     "Settings",
     "Collapse",
   ]);
@@ -398,6 +401,8 @@ describe("the Shared row", () => {
       "Wishlist",
       "Shared",
       "Scanner",
+      "Trade",
+      "Playtesting",
       "Settings",
       "Collapse",
     ]);
@@ -919,7 +924,7 @@ describe("collapsing the sidebar", () => {
   /**
    * A read that fails is the one state where the shell has to *decide* rather than obey, and
    * "expanded" is the decision: a database that cannot say must open the way this app has always
-   * opened — seven named destinations — rather than putting them behind an icon the reader has to
+   * opened — nine named destinations — rather than putting them behind an icon the reader has to
    * guess their way out of. It is also not news, so nothing says it: the sidebar has no sentence
    * to spend on a preference.
    */
@@ -941,7 +946,7 @@ describe("collapsing the sidebar", () => {
    * An `aria-label` would be a second place each word is written, and the first of the two to
    * change would be the one nothing tested.
    */
-  it("keeps the seven destinations named, and pressable, while they are drawn as icons", async () => {
+  it("keeps the nine destinations named, and pressable, while they are drawn as icons", async () => {
     navCollapsed.mockResolvedValue(true);
     render(<AppShell update={noUpdate}>{null}</AppShell>);
     await screen.findByRole("button", { name: "Expand sidebar" });
@@ -953,6 +958,8 @@ describe("collapsing the sidebar", () => {
       "Collection",
       "Wishlist",
       "Scanner",
+      "Trade",
+      "Playtesting",
       "Settings",
     ]) {
       expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
@@ -1614,7 +1621,7 @@ describe("the card menu's deck write", () => {
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("That deck is not there any more");
-    // Outside the bar — it is the shell's strip, drawn above it, not a seventh tab.
+    // Outside the bar — it is the shell's strip, drawn above it, not a tenth tab.
     expect(screen.getByRole("navigation", { name: "Views" }).contains(alert)).toBe(false);
   });
 
@@ -1624,7 +1631,7 @@ describe("the card menu's deck write", () => {
 });
 
 /**
- * The one viewport branch in this app: below the phone width the seven destinations are a bar
+ * The one viewport branch in this app: below the phone width the nine destinations are a bar
  * across the foot of the window, and there is no rail at all. The argument for asking the
  * *window* here rather than a container — the shell is the only component drawn in exactly one
  * box, and that box is the viewport — is in `useNarrowWindow`'s own doc comment.
@@ -1663,12 +1670,14 @@ describe("the shell's choice of navigation", () => {
       "Collection",
       "Wishlist",
       "Scanner",
+      "Trade",
+      "Playtesting",
       "Settings",
     ]);
 
     // **Absent rather than hidden**, which is the half a class assertion could not tell: a rail
-    // pushed off-screen would still answer this query, and would still be seven tab stops and
-    // seven drop targets for a reader who cannot see it. The collapse toggle is the thing only
+    // pushed off-screen would still answer this query, and would still be nine tab stops and
+    // nine drop targets for a reader who cannot see it. The collapse toggle is the thing only
     // the rail draws.
     expect(screen.queryByRole("button", { name: /collapse/i })).toBeNull();
 
@@ -1703,8 +1712,8 @@ describe("the shell's choice of navigation", () => {
     const rail = screen.getByRole("navigation", { name: "Views" });
     expect(rail).toHaveAttribute("id", "app-nav");
     expect(rail).not.toHaveStyle({ paddingBottom: "var(--safe-b)" });
-    // The eighth button is the collapse toggle, and its presence is the whole assertion that
-    // this is the rail: the seven words above are the same seven either way.
+    // The tenth button is the collapse toggle, and its presence is the whole assertion that
+    // this is the rail: the nine words above are the same nine either way.
     expect(within(rail).getAllByRole("button").map((b) => b.textContent)).toEqual([
       "Search",
       "Tagger",
@@ -1712,6 +1721,8 @@ describe("the shell's choice of navigation", () => {
       "Collection",
       "Wishlist",
       "Scanner",
+      "Trade",
+      "Playtesting",
       "Settings",
       "Collapse",
     ]);
@@ -1729,7 +1740,7 @@ describe("the shell's choice of navigation", () => {
  * whatever is on screen.
  *
  * Both are asserted through the **store** rather than only through what is drawn, and that is
- * deliberate on either side: `activeView` is what the seven destinations, the ribbon's title and
+ * deliberate on either side: `activeView` is what the nine destinations, the ribbon's title and
  * `App`'s view swap all read, so it is the fact the binding is actually for; and `keyMapOpen`'s
  * panel is drawn by `TitleBar`, whose own file tests it — a shell test that went looking for the
  * panel would be asserting somebody else's component through this one. The first case checks the
@@ -1749,21 +1760,29 @@ describe("the shell's keyboard bindings", () => {
 
     // Decks and not something else, which is the whole of what "by index" buys: the third chord
     // activates the third entry in `NAV`, so the rail's order is the binding rather than a list
-    // of seven ids restated in the handler. Written out as the word a reader would say rather
+    // of nine ids restated in the handler. Written out as the word a reader would say rather
     // than as `NAV[2].id`, per the rule that an assertion must not read its own constant.
     expect(useAppStore.getState().activeView).toBe("decks");
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Decks");
   });
 
   /**
-   * `Ctrl+6` reaches the Shared view even though the rail is not drawing a row for it — and that
-   * is not a curiosity, it is the only way in before a link has ever been pasted.
+   * ⚠️ **The Shared view has no chord, and this case is the fence around that.**
    *
-   * The chords bind against the **whole** of `NAV`, not against the filtered rail, so the digits
-   * never move under a reader: Scanner is `Ctrl+7` and Settings `Ctrl+8` whether or not a share
-   * is open. Bound against what is drawn, one chord would mean two things to two readers.
+   * Ten destinations against nine digits: `Ctrl+0` is not a tenth step of the run, so exactly one
+   * entry goes without, and it is the one row the rail does not always draw. A digit bound to a
+   * row that appears and disappears would either shift every digit after it or point at a row
+   * half the readers do not have — one press meaning two things to two readers, which is the
+   * whole thing these chords binding against a *list* exists to prevent.
+   *
+   * It cost that view its keyboard route and nothing else: the way in is the cabinet's own
+   * **Open a shared collection** button, which is what the chord was standing in for while
+   * nothing else reached the view.
+   *
+   * **`Ctrl+6` is Scanner**, and asserting that rather than merely asserting *not shared* is what
+   * makes this a test of the binding rather than of an absence.
    */
-  it("reaches the Shared view on Ctrl+6 with no share open and no row drawn", async () => {
+  it("gives the Shared view no chord, and Ctrl+6 reaches Scanner instead", async () => {
     const user = userEvent.setup();
     render(
       <AppShell update={noUpdate}>
@@ -1778,14 +1797,17 @@ describe("the shell's keyboard bindings", () => {
 
     await user.keyboard("{Control>}6{/Control}");
 
-    expect(useAppStore.getState().activeView).toBe("shared");
-    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Shared");
-    // And the row is there now, because the reader is standing on it.
-    expect(screen.getByRole("button", { name: "Shared" })).toBeInTheDocument();
+    expect(useAppStore.getState().activeView).toBe("scanner");
+    // …and no digit reaches it: the run is nine long and the tenth destination is not on it.
+    for (const digit of ["1", "2", "3", "4", "5", "6", "7", "8", "9"]) {
+      await user.keyboard(`{Control>}${digit}{/Control}`);
+      expect(useAppStore.getState().activeView).not.toBe("shared");
+    }
   });
 
-  /** The two rows the eighth destination pushed along, so the shift itself is pinned. */
-  it("keeps Scanner on Ctrl+7 and Settings on Ctrl+8", async () => {
+  /** The rows the two placeholders pushed along, so the shift itself is pinned — and Settings on
+   *  the last digit, which is what the shared view going without is what keeps true. */
+  it("keeps Scanner on Ctrl+6 and Settings on Ctrl+9", async () => {
     const user = userEvent.setup();
     render(
       <AppShell update={noUpdate}>
@@ -1793,10 +1815,16 @@ describe("the shell's keyboard bindings", () => {
       </AppShell>,
     );
 
-    await user.keyboard("{Control>}7{/Control}");
+    await user.keyboard("{Control>}6{/Control}");
     expect(useAppStore.getState().activeView).toBe("scanner");
 
+    await user.keyboard("{Control>}7{/Control}");
+    expect(useAppStore.getState().activeView).toBe("trade");
+
     await user.keyboard("{Control>}8{/Control}");
+    expect(useAppStore.getState().activeView).toBe("playtesting");
+
+    await user.keyboard("{Control>}9{/Control}");
     expect(useAppStore.getState().activeView).toBe("settings");
   });
 
