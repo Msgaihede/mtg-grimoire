@@ -74,4 +74,12 @@ describe("the Tauri core", () => {
     await Promise.resolve();
     expect(off).toHaveBeenCalledTimes(1);
   });
+
+  it("forwards a byte payload and its headers to invoke as the third argument", async () => {
+    const bytes = new Uint8Array([1, 2, 3]);
+    await tauriCore.call("scanner_frame", bytes, { headers: { "x-scanner-options": "{}" } });
+    expect(invoke).toHaveBeenCalledWith("scanner_frame", bytes, {
+      headers: { "x-scanner-options": "{}" },
+    });
+  });
 });

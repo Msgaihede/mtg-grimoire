@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createBrowserCore } from "@/lib/core/browser";
+import { createBrowserCore, RAW_CALL_UNAVAILABLE } from "@/lib/core/browser";
 
 /**
  * The one divert that does not reach the Worker. Mocked here rather than driven through a fake
@@ -298,5 +298,13 @@ describe("the browser core", () => {
     worker.reply({ kind: "ok", id: 1, result: [] });
     worker.reply({ kind: "ok", id: 2, result: {} });
     await Promise.all([one, two]);
+  });
+
+  it("rejects a byte payload with the web sentence and never spawns the Worker", async () => {
+    const c = core();
+    await expect(c.call("scanner_frame", new Uint8Array([1]))).rejects.toBe(
+      RAW_CALL_UNAVAILABLE,
+    );
+    expect(spawned).toBe(0);
   });
 });

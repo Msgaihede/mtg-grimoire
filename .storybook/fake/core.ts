@@ -54,7 +54,15 @@ export function commandScope(commands: CommandTable) {
  * inside the story that started it. Nothing restores it afterwards, deliberately — every
  * entry into the fake sets the pointer first, so a stale one is never read.
  */
-export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+export async function invoke<T>(
+  cmd: string,
+  args?: Record<string, unknown> | Uint8Array,
+  // Accepted and ignored: nothing here reads a header, and the parameter exists only so a
+  // caller built against the real `invoke`'s three-argument shape still type-checks against
+  // this one.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _options?: { headers?: Record<string, string> },
+): Promise<T> {
   const scope = activeScope();
   const handler = scope.commands[cmd];
   if (!handler) throw new Error(`No fake handler registered for command "${cmd}"`);
