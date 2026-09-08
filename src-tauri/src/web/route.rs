@@ -119,6 +119,18 @@ pub const COMMANDS: &[&str] = &[
     "collection_import_commit",
     "collection_folder_list",
     "collection_folder_summary",
+    // The share cache, read-only. **The other four `share_*` commands reach the network, which
+    // `web::route` by construction does not** — see this file's head: a routed command calls the
+    // same function the Tauri wrapper calls, and the four that publish, withdraw and open a
+    // share call `share::publish`, which is `reqwest` behind `cfg(not(target_family = "wasm"))`.
+    // A browser-side publisher would be a `web::glue` `#[wasm_bindgen]` export instead, and
+    // **publishing from the browser build is out of scope for v1**.
+    //
+    // ⚠️ So this answers the cache **without reconciling against the relay**, where the desktop
+    // command reconciles first. The badge and the links a browser draws are the ones the desktop
+    // app last heard, which is exactly what a cache is; what it cannot do is learn about a share
+    // published somewhere else.
+    "share_list",
     "collection_folder_create",
     "collection_folder_rename",
     "collection_folder_set_locked",
@@ -1183,6 +1195,12 @@ pub fn call(
                 crate::collection_folders::list_folders(&conn).map_err(RouteError::Failed)?,
             )
         }
+
+        "share_list" => encode(
+            command,
+            crate::share::cache::list(&crate::sync::lock_db_read(state))
+                .map_err(RouteError::Failed)?,
+        ),
 
         "collection_folder_summary" => {
             let marketplace: Option<String> = optional(command, args, "marketplace")?;
@@ -3145,9 +3163,13 @@ mod tests {
         // asked for five times: `awk` the literal and count it, never add 1 and 2 to 144 — the
         // arithmetic agrees this time and would not have if either branch had also *removed* a
         // route. If a later merge turns this red, take the number from `left`.
+        //
+        // **148 since the share branch added `share_list`** — the cache read, and the only one
+        // of the five `share_*` commands that is routable at all, because the other four are
+        // `reqwest`.
         assert_eq!(
             COMMANDS.len(),
-            147,
+            148,
             "update this number when a command is added"
         );
     }

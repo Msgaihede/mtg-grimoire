@@ -6,6 +6,15 @@
 //! named folder is served whole" is the right answer for a reader standing in their own drawer.
 //! Both defaults publish more than the reader asked for. So the read here is its own, and where
 //! `CollectionQuery`'s unasked question keeps every row, this one's keeps none.
+/// The `collection_shares` reads and writes. **Every target**: the browser build routes
+/// `share_list`, which is this and nothing else.
+pub mod cache;
+/// The five `#[tauri::command]`s and [`commands::ShareRow`]. The module is every-target and the
+/// commands inside it are not — see its head.
+pub mod commands;
+/// The upload. **Desktop and Android only**, because it is `reqwest`.
+#[cfg(not(target_family = "wasm"))]
+pub mod publish;
 mod snapshot;
 #[cfg(test)]
 mod tests;

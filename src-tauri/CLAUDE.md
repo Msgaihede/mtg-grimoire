@@ -222,7 +222,13 @@ both plus the frontend.
   rewrapped key set is the roster for group membership: a synced copy would be a second record
   of a fact the relay already holds, and the two would disagree the first time a device was
   offline during a revoke. What the table buys is a *shared* badge on a folder that survives
-  being offline, and nothing more. **Its two partial unique indexes are one lesson, not two.**
+  being offline, and the links to go with it. **`owner_name` and `url` are stored rather than
+  derived, and both were added to the rung after the fact** (2026-09-08, Task 7): the name is
+  what the *next* device in the group publishes under instead of asking the reader to type it
+  again (spec §4.3), and the link is built by the Worker from its own `SHARE_BASE` binding — so
+  rebuilding it here from `share::publish::SHARE_BASE` would be one string built twice, and a
+  placeholder until the day that Worker is deployed. Neither can be answered offline by anything
+  but a column. **Its two partial unique indexes are one lesson, not two.**
   `idx_collection_shares_folder` is `(folder_uid) WHERE folder_uid IS NOT NULL` and says a
   folder may be shared once; a whole-collection share carries a NULL `folder_uid` and so is in
   no index at all, which is why there is a second. The trap is that the obvious second index —

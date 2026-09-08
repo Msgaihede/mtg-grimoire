@@ -3859,6 +3859,17 @@ CREATE TABLE {schema}.collection_shares (
                  -- device that made it and a row id is local.
                  folder_uid TEXT,
                  title TEXT NOT NULL,
+                 -- What the public page prints above the binder, and what the *next* device in
+                 -- the group inherits instead of asking the reader to type it again (spec
+                 -- §4.3). Stored rather than derived because there is nothing local to derive
+                 -- it from: the relay holds it, and a device that has never published has only
+                 -- ever seen it in `GET /g/{group}/shares`.
+                 owner_name TEXT NOT NULL,
+                 -- `{SHARE_BASE}/s/{id}`, as the relay built it. Stored rather than rebuilt
+                 -- from the compiled-in constant so that a link the reader has already handed
+                 -- out is a fact this row remembers rather than one it recomputes — and so
+                 -- that a share list drawn with no network still carries the links it is for.
+                 url TEXT NOT NULL,
                  -- The wire form, verbatim — a JSON array of `condition`/`lang`/`value`.
                  fields TEXT NOT NULL,
                  state TEXT NOT NULL DEFAULT 'live'
@@ -5760,6 +5771,17 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
                  -- device that made it and a row id is local.
                  folder_uid TEXT,
                  title TEXT NOT NULL,
+                 -- What the public page prints above the binder, and what the *next* device in
+                 -- the group inherits instead of asking the reader to type it again (spec
+                 -- §4.3). Stored rather than derived because there is nothing local to derive
+                 -- it from: the relay holds it, and a device that has never published has only
+                 -- ever seen it in `GET /g/{group}/shares`.
+                 owner_name TEXT NOT NULL,
+                 -- `{SHARE_BASE}/s/{id}`, as the relay built it. Stored rather than rebuilt
+                 -- from the compiled-in constant so that a link the reader has already handed
+                 -- out is a fact this row remembers rather than one it recomputes — and so
+                 -- that a share list drawn with no network still carries the links it is for.
+                 url TEXT NOT NULL,
                  -- The wire form, verbatim — a JSON array of `condition`/`lang`/`value`.
                  fields TEXT NOT NULL,
                  state TEXT NOT NULL DEFAULT 'live'
@@ -9988,15 +10010,19 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(v, 41);
         conn.execute(
-            "INSERT INTO collection_shares (id, folder_uid, title, fields, state, updated_at)
-             VALUES ('abc', 'uid-1', 'Binder', '[\"value\"]', 'live', 0)",
+            "INSERT INTO collection_shares
+                 (id, folder_uid, title, owner_name, url, fields, state, updated_at)
+             VALUES ('abc', 'uid-1', 'Binder', 'Giradeli', 'https://s/abc',
+                     '[\"value\"]', 'live', 0)",
             [],
         )
         .unwrap();
         // One share per folder — decision 7, enforced here as well as on the relay.
         let second = conn.execute(
-            "INSERT INTO collection_shares (id, folder_uid, title, fields, state, updated_at)
-             VALUES ('def', 'uid-1', 'Binder again', '[]', 'live', 0)",
+            "INSERT INTO collection_shares
+                 (id, folder_uid, title, owner_name, url, fields, state, updated_at)
+             VALUES ('def', 'uid-1', 'Binder again', 'Giradeli', 'https://s/def',
+                     '[]', 'live', 0)",
             [],
         );
         assert!(second.is_err(), "a folder may be shared once");
@@ -10029,14 +10055,18 @@ pub(crate) mod tests {
         migrate_single_file(&conn).unwrap();
         migrate_user(&conn).unwrap();
         conn.execute(
-            "INSERT INTO collection_shares (id, folder_uid, title, fields, state, updated_at)
-             VALUES ('whole', NULL, 'Everything', '[]', 'live', 0)",
+            "INSERT INTO collection_shares
+                 (id, folder_uid, title, owner_name, url, fields, state, updated_at)
+             VALUES ('whole', NULL, 'Everything', 'Giradeli', 'https://s/whole',
+                     '[]', 'live', 0)",
             [],
         )
         .unwrap();
         let second = conn.execute(
-            "INSERT INTO collection_shares (id, folder_uid, title, fields, state, updated_at)
-             VALUES ('whole-again', NULL, 'Everything again', '[]', 'live', 0)",
+            "INSERT INTO collection_shares
+                 (id, folder_uid, title, owner_name, url, fields, state, updated_at)
+             VALUES ('whole-again', NULL, 'Everything again', 'Giradeli',
+                     'https://s/whole-again', '[]', 'live', 0)",
             [],
         );
         assert!(
@@ -10046,8 +10076,10 @@ pub(crate) mod tests {
         );
         // A folder share alongside it is a different row and must still fit.
         conn.execute(
-            "INSERT INTO collection_shares (id, folder_uid, title, fields, state, updated_at)
-             VALUES ('folder', 'uid-1', 'Binder', '[]', 'live', 0)",
+            "INSERT INTO collection_shares
+                 (id, folder_uid, title, owner_name, url, fields, state, updated_at)
+             VALUES ('folder', 'uid-1', 'Binder', 'Giradeli', 'https://s/folder',
+                     '[]', 'live', 0)",
             [],
         )
         .unwrap();

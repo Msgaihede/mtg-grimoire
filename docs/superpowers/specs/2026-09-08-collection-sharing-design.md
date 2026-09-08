@@ -209,6 +209,8 @@ CREATE TABLE collection_shares (
   id         TEXT PRIMARY KEY,          -- the share id, as minted by the relay
   folder_uid TEXT,                      -- collection_folders.sync_uid; NULL = whole collection
   title      TEXT NOT NULL,
+  owner_name TEXT NOT NULL,             -- §4.3, so the next device inherits it
+  url        TEXT NOT NULL,             -- {SHARE_BASE}/s/{id}, as the relay built it
   fields     TEXT NOT NULL,             -- JSON array, as on the wire
   state      TEXT NOT NULL CHECK (state IN ('live','lapsed','revoked')),
   published  INTEGER,                   -- when this device last uploaded; NULL = never from here
@@ -245,6 +247,14 @@ would disagree the first time a device was offline during a revoke. What this ta
 local. The unique index is decision 7 — one share per folder — enforced where it can actually be
 enforced on the reading side; the relay enforces it too (§5.2), and the relay's is the one that
 counts.
+
+⚠️ **`owner_name` and `url` were added to this block on 2026-09-08, in Task 7 and inside the
+same unshipped v41 rung.** The table as first written could not answer the `ShareRow` the five
+commands are specified to return: §4.3's whole point is that a device inherits the owner's name
+rather than asking again, and a share list with no links is not a share list — both have to
+survive being offline, which is the one thing this cache exists for. `url` is **stored rather than
+rebuilt** from the compiled-in `share::SHARE_BASE`, which is a placeholder until the Worker is
+deployed and would otherwise make every cached link a placeholder too.
 
 **⚠️ v41 is this branch's guess.** `USER_SCHEMA_VERSION` is 40 today and every open branch that
 adds a rung is guessing the same number. Renumber before merging, and read
@@ -519,6 +529,7 @@ Following the cabinet's own rule that refusals are sentences rather than constra
 | Path | Holds |
 | --- | --- |
 | `src-tauri/src/share/mod.rs` | `ShareSnapshot`, `snapshot()`, the field selection |
+| `src-tauri/src/share/cache.rs` | The `collection_shares` reads, writes and the reconcile; every target |
 | `src-tauri/src/share/publish.rs` | The two-step upload; desktop/Android only |
 | `src-tauri/src/share/commands.rs` | `share_list`, `share_create`, `share_refresh`, `share_revoke`, `share_open` |
 | `share/` | The web viewer bundle, `vite.share.config.ts`, `dist-share/` |
@@ -587,7 +598,14 @@ take their number from the message, not from the binding.
    every blob fetch at once. Deferred, not rejected.
 5. **The new Worker's name and URL**, which become a compiled-in constant beside `RELAY_BASE` and
    must match byte for byte on both sides — the trap `wrangler.jsonc` already documents for the
-   OAuth redirect URI.
+   OAuth redirect URI. **Both halves now exist and both hold the same placeholder**:
+   `share::publish::SHARE_BASE` in the Rust and `SHARE_BASE` in `share-worker/wrangler.jsonc`'s
+   `vars`, each spelled `<set on first deploy>` — a string that cannot be mistaken for an address,
+   because a plausible invented URL is what gets copied into documentation and deployed against.
+   `share::publish::tests::the_share_base_matches_the_workers_own_placeholder` reads the Worker's
+   config and asserts they agree, so whoever changes one is asked about the other. Until the
+   deploy, the only way to exercise the publisher at all is the `sync_state` key `share_url`,
+   which overrides the constant exactly as `relay_url` overrides `RELAY_BASE`.
 
 6. **Whether `caches.default` works at all on a `workers.dev` address.** Cloudflare's Cache API
    page grants functional cache operations to *custom domains* and to Pages functions on
