@@ -768,6 +768,7 @@ const deck = (over: Partial<DeckRow> & { id: number; name: string }): DeckRow =>
   folderId: null,
   notes: null,
   theoryEnabled: false,
+  virtualOnly: false,
   theoryMarkExact: true,
   theoryMarkName: true,
   theoryMarkUnplanned: true,
@@ -864,6 +865,53 @@ describe("buildDeckTargetItems", () => {
     expect(labels(row.items)).toEqual(["Theory", "Actual"]);
     (row.items[0] as MenuAction).onSelect();
     expect(choose).toHaveBeenCalledWith(10, "theory");
+  });
+
+  /**
+   * **A virtual deck already gets the right row, and no branch was added for it** (issue #401).
+   *
+   * The third deck kind is `theoryEnabled: false, virtualOnly: true`, so it takes `deckItem`'s
+   * first arm and adds to `"live"` — which is not a fallback: a virtual deck keeps its one list
+   * in `live` deliberately, because `DeckRow.cardCount` and the gallery's colour bar both count
+   * `variant = 'live'` and rows parked in `theory` would report `0 cards` under an empty bar on
+   * every tile forever. So `"live"` is the variant the row actually writes into.
+   *
+   * The assertion is here rather than left implicit because "it happens to be right" and "it is
+   * right" look identical until somebody adds the `switch` over `rowKind` that this menu does not
+   * want — and because a *reversed* flag (a kind read as keeping a plan) would give this deck a
+   * `Theory | Actual` submenu over a list it does not have, which is the failure worth a case.
+   */
+  it("adds a virtual deck's card to its one list, with no plan to choose between", () => {
+    const choose = vi.fn();
+    const items = buildDeckTargetItems(
+      [],
+      [deck({ id: 11, name: "Arena Mono-Red", virtualOnly: true })],
+      choose,
+    );
+    const row = find(items, "Arena Mono-Red") as MenuAction;
+    expect(row.kind).toBe("action");
+    row.onSelect();
+    expect(choose).toHaveBeenCalledWith(11, "live");
+  });
+
+  /**
+   * **And the name carries no mark of the kind.** A `Zoo (virtual)` here would be this menu
+   * answering a question the reader did not ask: they are picking a destination, every deck in
+   * the list is a legal one, and nothing about where the card lands changes with the kind. The
+   * three kinds are said on the gallery tile and in Deck settings, which are the surfaces a
+   * reader goes to to read *about* their decks.
+   */
+  it("names all three kinds of deck by name alone", () => {
+    const items = buildDeckTargetItems(
+      [],
+      [
+        deck({ id: 10, name: "Burn" }),
+        deck({ id: 11, name: "Arena Mono-Red", virtualOnly: true }),
+        deck({ id: 12, name: "Bruna", theoryEnabled: true }),
+      ],
+      vi.fn(),
+    );
+    expect(labels(items)).toEqual(["Arena Mono-Red", "Bruna", "Burn"]);
   });
 });
 

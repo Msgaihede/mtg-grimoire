@@ -40,6 +40,7 @@ const ATRAXA: DeckRow = {
   folderId: null,
   notes: null,
   theoryEnabled: false,
+  virtualOnly: false,
   theoryMarkExact: true,
   theoryMarkName: true,
   theoryMarkUnplanned: true,

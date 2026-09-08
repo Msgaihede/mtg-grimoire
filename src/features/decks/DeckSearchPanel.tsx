@@ -57,12 +57,44 @@ export type DeckSearchTab = "collection" | "all";
  *
  * **Collection first**, for `DeckEditor`'s Theory/Live reason read across: the first tab is the one
  * the panel opens on, and a reader arriving on the second half of a switch has to work out what
- * the first half was.
+ * the first half was. That is one fact rather than two, so {@link DEFAULT_DECK_SEARCH_TAB} is read
+ * off this array rather than spelled again beside it.
  */
 const TABS = [
   { id: "collection", label: "Collection" },
   { id: "all", label: "All cards" },
 ] as const satisfies readonly { id: DeckSearchTab; label: string }[];
+
+/**
+ * One row of {@link TABS} — what {@link tabsFor} answers a list of and what {@link TabStrip}
+ * draws.
+ *
+ * Structural rather than `(typeof TABS)[number]`, because {@link tabsFor} takes a row *out* of
+ * that tuple and a type read off the whole of it would go on carrying `"collection"` into the
+ * list that no longer has one.
+ */
+interface DeckSearchTabDef {
+  id: DeckSearchTab;
+  label: string;
+}
+
+/**
+ * Which of the two searches this deck may show — **`Collection` is dropped whole for a deck that
+ * tracks none**, rather than drawn and refused.
+ *
+ * A Virtual deck (issue #401) has no `collection_folders` group and draws no owned figure
+ * anywhere in this editor, so a Collection tab here would be a search of the reader's binder
+ * offering to file copies into a list that counts none of them. **Dropped rather than greyed**,
+ * which is the editor's standing answer for a control that cannot act — `DeckStats`' two presses
+ * one component over — and it is the stronger case of the two: the Theory tab's refusals are one
+ * press from the tab that *can* act, where this one would refuse for the whole life of the deck.
+ *
+ * Filtered off {@link TABS} rather than written out as a second array, so a third tab is ordered
+ * once and every label is spelled once.
+ */
+function tabsFor(tracksCollection: boolean): readonly DeckSearchTabDef[] {
+  return tracksCollection ? TABS : TABS.filter(({ id }) => id !== "collection");
+}
 
 /**
  * Where the reader's answer about *which* search is kept for the life of the window.
@@ -73,11 +105,26 @@ const TABS = [
  */
 export const DECK_SEARCH_TAB_KEY = ["deckSearchTab"];
 
-/** Whether a value out of the cache is a tab this build draws — `isPrintingGroupBy`'s shape, and
- *  its reason: the entry is untyped at the cache and a story or an older build may have put
- *  anything in it. */
-function isDeckSearchTab(value: unknown): value is DeckSearchTab {
-  return TABS.some(({ id }) => id === value);
+/**
+ * The tab to draw, given whatever is in the cache and whichever tabs *this deck* has — and it
+ * answers two questions that look like one.
+ *
+ * **A value this build does not draw** — `isPrintingGroupBy`'s shape and its reason: the entry is
+ * untyped at the cache, so a story, a stale build or a seeded test may have put anything in it.
+ *
+ * **A tab this deck does not draw**, which is the Virtual case (issue #401): the memory is
+ * app-wide and the reader's last press may well have been `Collection` on some other deck, so a
+ * deck with no such tab has to fall somewhere. `tabs[0].id` is where — the first tab is the one
+ * the panel opens on, which is exactly what {@link DEFAULT_DECK_SEARCH_TAB} says of the full list.
+ *
+ * **It is a *read* and never a repairing write**, which is the half worth stating: nothing here
+ * puts the fallback back into the cache, so a reader who works out of their collection keeps that
+ * answer while they are standing in a deck that cannot honour it, and gets it back on the next
+ * deck that can. `AUTO_CATEGORY`'s rule — an id the deck's `categories` does not carry reads as
+ * Auto, because there is nothing to repair.
+ */
+function drawnTab(stored: unknown, tabs: readonly DeckSearchTabDef[]): DeckSearchTab {
+  return tabs.find(({ id }) => id === stored)?.id ?? tabs[0].id;
 }
 
 /**
@@ -88,8 +135,16 @@ function isDeckSearchTab(value: unknown): value is DeckSearchTab {
  * when your own binder does not answer, so it is the thing one press away rather than the thing in
  * front of you; until now this panel had it the other way round and there was no way to search a
  * collection from a deck at all.
+ *
+ * **Read off {@link TABS} rather than written out**, because that array's order already *is* this
+ * decision — the first tab is the one the panel opens on, which is what its own note says. Two
+ * spellings would be two places a reordering has to reach.
+ *
+ * It stays the whole list's answer even where the panel cannot honour it: a Virtual deck's
+ * fallback is {@link drawnTab}'s, taken off the tabs that deck actually draws, and nothing writes
+ * that fallback back over this.
  */
-export const DEFAULT_DECK_SEARCH_TAB: DeckSearchTab = "collection";
+export const DEFAULT_DECK_SEARCH_TAB: DeckSearchTab = TABS[0].id;
 
 /**
  * Which search the reader last chose — remembered across decks, for the length of the session.
@@ -112,7 +167,10 @@ export const DEFAULT_DECK_SEARCH_TAB: DeckSearchTab = "collection";
  * entry, so there is nothing to go stale against, and without the second the entry is collected
  * once the last editor closes and the next deck opens on the default again.
  */
-function useDeckSearchTab(): { tab: DeckSearchTab; setTab: (tab: DeckSearchTab) => void } {
+function useDeckSearchTab(tabs: readonly DeckSearchTabDef[]): {
+  tab: DeckSearchTab;
+  setTab: (tab: DeckSearchTab) => void;
+} {
   const queryClient = useQueryClient();
   const query = useQuery({
     queryKey: DECK_SEARCH_TAB_KEY,
@@ -130,9 +188,11 @@ function useDeckSearchTab(): { tab: DeckSearchTab; setTab: (tab: DeckSearchTab) 
   );
 
   const stored = query.data;
-  // Narrowed on the way out rather than trusted: `undefined` is the first render, before the
-  // resolved `queryFn` has landed, and a seeded entry is whatever the seeder wrote.
-  return { tab: isDeckSearchTab(stored) ? stored : DEFAULT_DECK_SEARCH_TAB, setTab };
+  // Resolved on the way out rather than trusted, and against the tabs *this deck* draws rather
+  // than against the vocabulary: `undefined` is the first render before the resolved `queryFn`
+  // has landed, a seeded entry is whatever the seeder wrote, and `"collection"` is what a reader
+  // who works out of their binder leaves behind on every other deck. See {@link drawnTab}.
+  return { tab: drawnTab(stored, tabs), setTab };
 }
 
 export interface DeckSearchPanelProps {
@@ -212,6 +272,29 @@ export interface DeckSearchPanelProps {
    * because there is only one place it can be set.
    */
   targetCategoryId: number;
+  /**
+   * Does the deck this column is docked beside read the reader's collection at all?
+   * `deckKind.ts`'s `tracksCollection(deck)`, answered by the host.
+   *
+   * `false` is a **Virtual** deck (issue #401) and takes the whole Collection tab with it — the
+   * search of the reader's binder, its `collection_to_deck` write, and, with one tab left, the
+   * strip that would offer to switch between them. What is left is the card search this panel has
+   * always been. See {@link tabsFor} for why the tab is dropped rather than greyed, and
+   * {@link drawnTab} for what happens to a reader whose last press was `Collection` on some other
+   * deck.
+   *
+   * **The boolean and not the deck, and not the helper either**: this panel is handed facts and
+   * draws them, exactly as it is handed {@link DeckSearchPanelProps.categories} and
+   * {@link DeckSearchPanelProps.defaultFormat} rather than reading the deck row itself. It has the
+   * `deckId` and could fetch one — which is the second observer of `["decks","detail",id]` that
+   * every other prop on this interface exists to avoid.
+   *
+   * **Required rather than optional**, which is `DeckStats`' rule for the same answer one
+   * component over: a host that has not thought about it must not silently get the
+   * collection-reading case, because that is the arm that offers a reader's binder to a deck that
+   * counts none of it.
+   */
+  tracksCollection: boolean;
   /**
    * The format the filter row's Format select **opens** on — the open deck's, handed down
    * rather than read here, for the reason {@link DeckSearchPanelProps.categories} is: the
@@ -349,6 +432,7 @@ export function DeckSearchPanel({
   categories,
   deckId,
   targetCategoryId,
+  tracksCollection,
   defaultFormat,
   open: openProp,
   setOpen: setOpenProp,
@@ -364,7 +448,10 @@ export function DeckSearchPanel({
   const stored = useSearchOpen("deck");
   const open = openProp ?? stored.open;
   const setOpen = setOpenProp ?? stored.setOpen;
-  const { tab, setTab } = useDeckSearchTab();
+  // The tabs *this* deck draws, and the one the reader is on — resolved together, because the
+  // second is only answerable against the first. See {@link tabsFor} and {@link drawnTab}.
+  const tabs = tabsFor(tracksCollection);
+  const { tab, setTab } = useDeckSearchTab(tabs);
 
   return (
     <CardSearchPanel
@@ -386,7 +473,17 @@ export function DeckSearchPanel({
       // it survives the railing that merely *hides* the body below — so a width change cannot take
       // the reader's tab away any more than it takes their query. The shell draws it only while
       // the panel is, which is why this is handed over whole rather than gated here.
-      tabs={<TabStrip tab={tab} onPick={setTab} />}
+      //
+      // **No strip at all where there is one tab left**, which is the Virtual deck (issue #401):
+      // a two-way control drawn with one answer is a control that cannot be used, and a lit rule
+      // under the only word on the row says *you are here* to a reader who could not be anywhere
+      // else. Nothing else lives on that row — `CardSearchPanel` draws this node and nothing
+      // beside it, with the chevron and the heading in the row above and the search box in the
+      // body below — so dropping it drops one strip and no affordance. The panel then reads as
+      // what it is: one search, under its own heading.
+      //
+      // `undefined` rather than `false`, because that is what the shell's prop is typed as absent.
+      tabs={tabs.length > 1 ? <TabStrip tabs={tabs} tab={tab} onPick={setTab} /> : undefined}
     >
       {/* **Two components, never one body with a branch in it**, and that is {@link OpenPanel}'s
           own reason one level in: each tab's data hook is called from a component that mounts
@@ -498,7 +595,23 @@ export function DeckSearchPanel({
  * and a long word would push the pair into an overhang, which in this editor is a horizontal
  * scrollbar across the whole deck builder.
  */
-function TabStrip({ tab, onPick }: { tab: DeckSearchTab; onPick: (tab: DeckSearchTab) => void }) {
+function TabStrip({
+  tabs,
+  tab,
+  onPick,
+}: {
+  /**
+   * The tabs to draw — {@link tabsFor}'s answer for this deck, not {@link TABS}.
+   *
+   * Handed in rather than read here, so that "which tabs does this deck have" is decided once and
+   * the strip cannot come to draw a tab the panel below it will not mount. The call site draws
+   * this at all only when there are two of them, so what arrives is always the pair; taking the
+   * list anyway is what keeps that a fact about the call rather than an assumption in here.
+   */
+  tabs: readonly DeckSearchTabDef[];
+  tab: DeckSearchTab;
+  onPick: (tab: DeckSearchTab) => void;
+}) {
   return (
     // Named for the question rather than for the control: "Search in — Collection" is what the
     // pair says, and `role="group"` is what holds the two buttons together for a reader stepping
@@ -518,7 +631,7 @@ function TabStrip({ tab, onPick }: { tab: DeckSearchTab; onPick: (tab: DeckSearc
       // word (`Collection`, ~68px) fits half of even the 193px floor.
       className="flex shrink-0 border-b border-border"
     >
-      {TABS.map(({ id, label }) => (
+      {tabs.map(({ id, label }) => (
         <button
           key={id}
           type="button"

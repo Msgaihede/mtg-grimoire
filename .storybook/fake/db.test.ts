@@ -162,6 +162,11 @@ function deck(over: Partial<FakeDeck> = {}): FakeDeck {
     folderId: null,
     notes: null,
     theoryEnabled: false,
+    // The kind, and `false/false` is a regular deck — what every test in this file that says
+    // nothing about it is about. A test that wants the third kind passes `virtualOnly: true`,
+    // and {@link groupsOf} then declines to give it a group, which is the store schema v40
+    // produces.
+    virtualOnly: false,
     lastVariant: "live",
     lastGroupBy: "category",
     lastSortBy: "alphabetical",
@@ -203,18 +208,25 @@ function groupId(deckId: number): number {
 const REMOVED_FOLDER = 199;
 
 /** Every deck's group plus the single `Recently removed` folder — what schema v25 built and what
- *  `deck_create` has made for every deck since. */
+ *  `deck_create` has made for every deck since.
+ *
+ *  **Every deck but a virtual one** (schema v40): `deck_create` skips the row for that kind and
+ *  `deck_update` deletes it on the way in, so a fixture that handed one a group would be a
+ *  fixture of a store the app cannot produce — and every "a virtual deck owns nothing" assertion
+ *  written against it would be passing for the wrong reason. */
 function groupsOf(decks: FakeDeck[]): FakeCollectionFolder[] {
   return [
-    ...decks.map((d) => ({
-      id: groupId(d.id),
-      parentId: null,
-      name: d.name,
-      kind: "deck",
-      deckId: d.id,
-      sortOrder: 0,
-      locked: false,
-    })),
+    ...decks
+      .filter((d) => !d.virtualOnly)
+      .map((d) => ({
+        id: groupId(d.id),
+        parentId: null,
+        name: d.name,
+        kind: "deck",
+        deckId: d.id,
+        sortOrder: 0,
+        locked: false,
+      })),
     {
       id: REMOVED_FOLDER,
       parentId: null,
@@ -7655,6 +7667,386 @@ describe("the deck row itself", () => {
     // Anything that is not blank is stored, whether or not this build has a mode by that name.
     w.deck_set_view_state({ deckId: 1, viewState: { groupBy: "byArtist" } });
     expect(db.decks[0].lastGroupBy).toBe("byArtist");
+  });
+});
+
+/**
+ * `decks.virtual_only` (schema v40, issue #401) — the third deck kind, and the one whose whole
+ * behaviour is things that **do not** happen.
+ *
+ * That is why it needs a block of its own rather than an assertion bolted onto the deck-row
+ * tests: every rule here is an absence, and an absence is what a fixture accidentally satisfies.
+ * A deck with no group reads owned 0 — so does a deck whose group is empty. A press that moves
+ * no `deck_cards` row looks exactly like a press that did nothing. A refusal that fires one
+ * statement too late looks exactly like one that fired on time, until the statement in between
+ * is the one that writes. So each test below either contrasts the virtual answer against the
+ * *other* kind's in the same store, or reaches a refusal that a second, differently-worded one
+ * would otherwise have swallowed.
+ */
+describe("the third deck kind", () => {
+  const groupOf = (db: FakeDb, deckId: number) =>
+    db.collectionFolders.find((f) => f.deckId === deckId && f.kind === "deck");
+  const copiesIn = (db: FakeDb, folderId: number | null) =>
+    db.collectionEntries
+      .filter((e) => e.folderId === folderId)
+      .reduce((n, e) => n + e.quantity, 0);
+  const variantsOf = (db: FakeDb, deckId: number) =>
+    db.deckCards.filter((dc) => dc.deckId === deckId).map((dc) => dc.variant);
+  /** `deck::VIRTUAL_HOLDS_NOTHING`'s middle, which no other refusal in this file contains — so a
+   *  test matching it cannot be satisfied by `THEORY_HOLDS_NOTHING`, `NOT_IN_DECK` or
+   *  `NO_DECK_GROUP` firing in its place. */
+  const HOLDS_NOTHING = /keeps no cardboard/;
+
+  it("gives a deck born virtual its piles and no collection group, where a plain one gets both", () => {
+    const db = makeDb();
+    const w = writeHandlers(db);
+    const plain = w.deck_create({ deck: { name: "Paper", formatKey: "modern" } });
+    const virtual = w.deck_create({
+      deck: { name: "Arena", formatKey: "brawl", virtualOnly: true },
+    });
+
+    expect([plain.virtualOnly, virtual.virtualOnly]).toEqual([false, true]);
+    // The contrast is the test: both decks went through the same handler in the same store, so
+    // a `createDeckGroup` that had stopped running at all would fail on the first of these.
+    expect(groupOf(db, plain.id)).toBeDefined();
+    expect(groupOf(db, virtual.id)).toBeUndefined();
+    // What it *is* born with is its four predefined piles, like every other deck: what a virtual
+    // deck is missing is a **collection** folder, not a set of categories.
+    expect(db.deckCategories.filter((c) => c.deckId === virtual.id)).toHaveLength(4);
+  });
+
+  /** A copy of a virtual deck is a virtual deck, so it inherits the absence too — the kind rides
+   *  the spread with `separateXGroup` and the bracket, and the `if` around the group is the whole
+   *  of what it costs `deck_duplicate`. */
+  it("carries the kind onto a duplicate, and gives the copy no group either", () => {
+    const db = makeDeckDb({ decks: [deck({ id: 1, virtualOnly: true })] });
+    const copy = writeHandlers(db).deck_duplicate({ id: 1 });
+    expect(copy.virtualOnly).toBe(true);
+    expect(groupOf(db, copy.id)).toBeUndefined();
+  });
+
+  /**
+   * The pair is one three-way choice, so the write that sets either half writes both. Read back
+   * off the `DeckRow` rather than off the stored row on purpose: `toDeckRow` is the mapper the
+   * whole app reads a deck's kind through, and a column written correctly and mapped nowhere is
+   * a kind nothing can draw.
+   */
+  it("clears theoryEnabled as it sets virtualOnly, and clears virtualOnly as it sets that", () => {
+    const db = makeDeckDb({ decks: [deck({ id: 1, theoryEnabled: true })] });
+    const w = writeHandlers(db);
+
+    expect(w.deck_update({ id: 1, patch: { virtualOnly: true } })).toMatchObject({
+      theoryEnabled: false,
+      virtualOnly: true,
+    });
+    expect(w.deck_update({ id: 1, patch: { theoryEnabled: true } })).toMatchObject({
+      theoryEnabled: true,
+      virtualOnly: false,
+    });
+    // A patch naming neither leaves both alone — absent means "leave it", and only switching a
+    // flag **on** names a kind.
+    expect(w.deck_update({ id: 1, patch: { name: "Renamed" } })).toMatchObject({
+      theoryEnabled: true,
+      virtualOnly: false,
+    });
+    // And a patch that turns one *off* clears nothing: that is not asking for a kind either.
+    expect(w.deck_update({ id: 1, patch: { theoryEnabled: false } })).toMatchObject({
+      theoryEnabled: false,
+      virtualOnly: false,
+    });
+  });
+
+  /** Both `true` is a caller's bug rather than a fourth kind, and it resolves to
+   *  theory-and-actual: becoming virtual is the destructive direction, and an ambiguous press
+   *  must not be the one that empties a drawer. */
+  it("resolves a patch asking for both kinds to the one that moves no cardboard", () => {
+    const db = makeDeckDb({ decks: [deck({ id: 1 })] });
+    const row = writeHandlers(db).deck_update({
+      id: 1,
+      patch: { theoryEnabled: true, virtualOnly: true },
+    });
+    expect(row).toMatchObject({ theoryEnabled: true, virtualOnly: false });
+    // And the group is still there, which is the half of that argument the row cannot show.
+    expect(groupOf(db, 1)).toBeDefined();
+  });
+
+  /**
+   * Two history rows for one press, from the **resolved** kind and not from the patch — the
+   * drawer is read months later, and "turned the plan off" and "made this a virtual deck" are two
+   * things a reader would want to find separately. A handler recording `patch.theoryEnabled`
+   * would write one row here and the clear would be invisible.
+   */
+  it("records the whole kind change, including the half the patch never mentioned", () => {
+    const db = makeDeckDb({ decks: [deck({ id: 1, theoryEnabled: true })] });
+    writeHandlers(db).deck_update({ id: 1, patch: { virtualOnly: true } });
+    expect(db.deckAudit.map((a) => JSON.parse(a.payload))).toEqual([
+      { field: "theory", from: true, to: false },
+      { field: "virtualOnly", from: false, to: true },
+    ]);
+  });
+
+  /**
+   * The destructive direction, and the one the whole feature turns on: the reader still owns the
+   * cardboard, so it goes back on their desk rather than staying filed under a deck that has
+   * stopped counting it.
+   *
+   * **Two rows in the group and only one of them claimed**, because the release is two calls and
+   * each covers a case the other cannot: the sweep for what the group holds over what the live
+   * list names, then the claim itself. A test with only claimed copies would pass with the first
+   * call deleted, and one with only unclaimed copies would pass with the second deleted.
+   */
+  it("files the group's copies into Recently removed and drops the group on the way in", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1, name: "Ladder" })],
+      deckCards: [deckCard({ id: 1, deckId: 1, categoryKind: "main", quantity: 2 })],
+      collectionEntries: [
+        // Claimed: the live list names two of this printing.
+        entry({ id: 1, cardId: BOLT.id, quantity: 2, folderId: groupId(1) }),
+        // Unclaimed: a printing the list has never heard of, sitting in the drawer anyway.
+        entry({ id: 2, cardId: BOLT_2X2.id, quantity: 1, folderId: groupId(1) }),
+      ],
+    });
+    writeHandlers(db).deck_update({ id: 1, patch: { virtualOnly: true } });
+
+    expect(groupOf(db, 1)).toBeUndefined();
+    expect(copiesIn(db, REMOVED_FOLDER)).toBe(3);
+    // Nothing was scattered to the root on the way past, which is what a folder row left behind
+    // would have cost when the group went.
+    expect(copiesIn(db, null)).toBe(0);
+  });
+
+  /**
+   * And the way back, which is a group and **not** the copies: nothing recorded which of them
+   * came from here, so fetching them out of the holding area would be the app guessing at the
+   * reader's filing. This is exactly where `Clear actual list…` leaves them.
+   */
+  it("makes the group again, empty and under the name the deck has after the patch", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1, name: "Ladder" })],
+      collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 2, folderId: groupId(1) })],
+    });
+    const w = writeHandlers(db);
+    w.deck_update({ id: 1, patch: { virtualOnly: true } });
+    // The rename rides the same patch, so a group made from `before.name` would be a drawer
+    // labelled with a name the gallery stopped using in this very write.
+    w.deck_update({ id: 1, patch: { virtualOnly: false, name: "Paper Ladder" } });
+
+    const group = groupOf(db, 1);
+    expect(group).toMatchObject({ name: "Paper Ladder", parentId: null, locked: false });
+    expect(copiesIn(db, group!.id)).toBe(0);
+    expect(copiesIn(db, REMOVED_FOLDER)).toBe(2);
+  });
+
+  /**
+   * **The contrast that gives this rule its meaning.** Two decks, one store, one press each: the
+   * theory switch moves the whole live list into the plan, and the kind switch moves nothing at
+   * all. Without the second deck in the assertion, "no row moved" is a sentence a broken
+   * `moveLiveToTheory` would also satisfy.
+   */
+  it("moves not one deck_cards row either way, where the theory switch moves the whole list", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 }), deck({ id: 2 })],
+      deckCards: [
+        deckCard({ id: 1, deckId: 1, categoryKind: "main" }),
+        deckCard({ id: 2, deckId: 2, categoryKind: "main" }),
+      ],
+    });
+    const w = writeHandlers(db);
+
+    w.deck_update({ id: 1, patch: { virtualOnly: true } });
+    expect(variantsOf(db, 1)).toEqual(["live"]);
+    w.deck_update({ id: 2, patch: { theoryEnabled: true } });
+    expect(variantsOf(db, 2)).toEqual(["theory"]);
+
+    // And back out again, which is the press the rows staying put is *for*.
+    w.deck_update({ id: 1, patch: { virtualOnly: false } });
+    expect(variantsOf(db, 1)).toEqual(["live"]);
+    // The tab the reader is on moves with the theory list and not with the kind, for the same
+    // reason: there is no second list here to be put on.
+    expect([db.decks[0].lastVariant, db.decks[1].lastVariant]).toEqual(["live", "theory"]);
+  });
+
+  /**
+   * The one place a `{ theoryEnabled: false, virtualOnly: true }` patch could have gone wrong
+   * invisibly: the live-list move reads the **resolved** theory half, so a deck on its way in to
+   * the kind cannot have its list poured into a plan it is about to have no cardboard for.
+   */
+  it("does not pour the live list into the plan on the way in to virtual", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1, theoryEnabled: true })],
+      deckCards: [deckCard({ id: 1, deckId: 1, categoryKind: "main" })],
+    });
+    writeHandlers(db).deck_update({
+      id: 1,
+      patch: { theoryEnabled: false, virtualOnly: true },
+    });
+    expect(variantsOf(db, 1)).toEqual(["live"]);
+  });
+
+  /**
+   * The reads that still answer, and answer **0** — which is where the isolation actually comes
+   * from. `ownedByPrinting` looks the group up, finds none and hands back an empty map, so there
+   * is no branch at any reader to get wrong. A group that had merely been emptied would give the
+   * same number here and a different one to every write, which is why the group is deleted.
+   */
+  it("answers every owned figure as 0 without refusing the deck read", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1, virtualOnly: true })],
+      deckCards: [deckCard({ id: 1, deckId: 1, categoryKind: "main", quantity: 4 })],
+      collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 4 })],
+    });
+    const detail = liveDeck(db)!;
+    expect(detail.cards.map((c) => [c.quantity, c.ownedQuantity])).toEqual([[4, 0]]);
+    // And the tile still has a number and a colour bar to draw, because the rows are ordinary
+    // `live` rows — the whole reason they are stored that way.
+    expect(readHandlers(db).deck_list()[0]).toMatchObject({ cardCount: 4, virtualOnly: true });
+    expect(readHandlers(db).deck_pip_costs()).toEqual([
+      { deckId: 1, costs: [{ cost: "{R}", copies: 4 }] },
+    ]);
+  });
+
+  /**
+   * All nine, in one store, against a deck that would otherwise have had something to say to
+   * every one of them: four copies in the binder for the two pulls, a live list for the two
+   * shortfall reads, and a card the deck plays for the quick add.
+   *
+   * The pattern is `VIRTUAL_HOLDS_NOTHING`'s middle rather than the whole sentence — see
+   * {@link HOLDS_NOTHING} — so none of these can be satisfied by a different refusal arriving
+   * first.
+   */
+  it("refuses every collection and wishlist command by name", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1, virtualOnly: true })],
+      deckCards: [deckCard({ id: 1, deckId: 1, categoryKind: "main", quantity: 4 })],
+      collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 4 })],
+    });
+    const r = readHandlers(db);
+    const w = writeHandlers(db);
+
+    expect(() => r.deck_pull_plan({ deckId: 1 })).toThrow(HOLDS_NOTHING);
+    expect(() => r.deck_missing_plan({ deckId: 1 })).toThrow(HOLDS_NOTHING);
+    expect(() =>
+      w.deck_pull_from_collection({ deckId: 1, picks: [{ entryId: 1, quantity: 1 }] }),
+    ).toThrow(HOLDS_NOTHING);
+    expect(() =>
+      w.deck_missing_to_collection({
+        deckId: 1,
+        picks: [{ cardId: BOLT.id, finish: null, quantity: 1 }],
+        clearWishes: false,
+      }),
+    ).toThrow(HOLDS_NOTHING);
+    expect(() => w.deck_missing_to_wishlist({ deckId: 1 })).toThrow(HOLDS_NOTHING);
+    expect(() =>
+      w.deck_quick_add_to_collection({ deckId: 1, cardId: BOLT.id, quantity: 1 }),
+    ).toThrow(HOLDS_NOTHING);
+    expect(() =>
+      w.collection_to_deck({
+        entryId: 1,
+        deckId: 1,
+        categoryId: categoryId(1, "main"),
+        quantity: 1,
+      }),
+    ).toThrow(HOLDS_NOTHING);
+    expect(() => w.deck_to_collection({ deckCardId: 1, quantity: 1 })).toThrow(HOLDS_NOTHING);
+    expect(() => w.deck_theory_missing_to_wishlist({ deckId: 1 })).toThrow(HOLDS_NOTHING);
+
+    // Nine refusals and nothing moved: `deck_to_collection` is the one of them that would have
+    // *succeeded* without its fence — a deck with no group releases no copies, so the press
+    // would have taken the card off the list and put nothing on the reader's desk.
+    expect(db.deckCards).toHaveLength(1);
+    expect(copiesIn(db, null)).toBe(4);
+    expect(db.wishlistEntries).toEqual([]);
+  });
+
+  /**
+   * Where each refusal sits in its handler's sequence, which is not decoration: every one of
+   * these would still throw if the fence were one statement late, and would throw the **wrong
+   * sentence** — a true thing about the wrong subject, which is the failure a reader cannot
+   * diagnose.
+   */
+  it("says its own sentence rather than the one that would otherwise have fired", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1, virtualOnly: true })],
+      deckCards: [
+        deckCard({ id: 1, deckId: 1, categoryKind: "main" }),
+        deckCard({ id: 2, deckId: 1, categoryKind: "main", variant: "theory" }),
+      ],
+      collectionEntries: [entry({ id: 1, cardId: BOLT_2X2.id, quantity: 1 })],
+    });
+    const w = writeHandlers(db);
+
+    // A **theory** row: without the fence ahead of the variant test this is "a plan holds no
+    // cards", which is true of the row and says nothing about the deck.
+    expect(() => w.deck_to_collection({ deckCardId: 2, quantity: 1 })).toThrow(HOLDS_NOTHING);
+    // A card the deck does not play: without the fence ahead of `deckPlays` these are
+    // "not in this deck", which is a fact about the card rather than about the deck's kind.
+    expect(() =>
+      w.deck_quick_add_to_collection({ deckId: 1, cardId: BOLT_2X2.id, quantity: 1 }),
+    ).toThrow(HOLDS_NOTHING);
+    expect(() =>
+      w.collection_to_deck({
+        entryId: 1,
+        deckId: 1,
+        categoryId: categoryId(1, "main"),
+        quantity: 1,
+      }),
+    ).toThrow(HOLDS_NOTHING);
+    // And a deck with no group at all: without the fence ahead of the group lookup these two are
+    // "that deck has no folder to hold its cards", which is the true half of the wrong sentence.
+    expect(() =>
+      w.deck_pull_from_collection({ deckId: 1, picks: [{ entryId: 1, quantity: 1 }] }),
+    ).toThrow(HOLDS_NOTHING);
+    expect(() =>
+      w.deck_missing_to_collection({
+        deckId: 1,
+        picks: [{ cardId: BOLT.id, finish: null, quantity: 1 }],
+        clearWishes: false,
+      }),
+    ).toThrow(HOLDS_NOTHING);
+  });
+
+  /**
+   * `is_virtual`'s contract from the other end: a deck that is not there answers **false**, so a
+   * stale editor's dead id still hears "that deck is gone" from the statement that was already
+   * going to say it. A helper that raised on an absent row would put a sentence about virtual
+   * decks in front of a deck that does not exist.
+   */
+  it("tells a stale deck id it is gone rather than telling it about virtual decks", () => {
+    const db = makeDeckDb({ decks: [deck({ id: 1, virtualOnly: true })] });
+    expect(() => readHandlers(db).deck_pull_plan({ deckId: 99 })).toThrow(/not there any more/);
+    expect(() => readHandlers(db).deck_missing_plan({ deckId: 99 })).toThrow(/not there any more/);
+    expect(() => writeHandlers(db).deck_missing_to_wishlist({ deckId: 99 })).toThrow(
+      /not there any more/,
+    );
+  });
+
+  /**
+   * The seed, checked here rather than in `world.test.ts` because what it is asserting is a rule
+   * of this file's: a virtual deck has no group. A fixture that quietly gained one would make
+   * every story about owned-0 pass for the wrong reason.
+   */
+  it("seeds a virtual deck with a real list, a real colour bar and no group", () => {
+    const db = seed("virtualDeck");
+    const virtual = db.decks.filter((d) => d.virtualOnly);
+    expect(virtual).toHaveLength(1);
+    expect(groupOf(db, virtual[0].id)).toBeUndefined();
+    // Every other deck in the world still has one, which is what makes the absence above a
+    // statement about the kind rather than about the seed.
+    for (const d of db.decks.filter((x) => !x.virtualOnly)) {
+      expect(groupOf(db, d.id)).toBeDefined();
+    }
+    const row = readHandlers(db)
+      .deck_list()
+      .find((d) => d.id === virtual[0].id)!;
+    // A hundred cards — `SPECS.brawl`'s deck size — and the rows are `live`, which is the whole
+    // reason the tile has a number to draw at all.
+    expect(row.cardCount).toBe(100);
+    expect(variantsOf(db, virtual[0].id).every((v) => v === "live")).toBe(true);
+    // And more than one colour in the bar, so the seed is worth opening.
+    const costs = readHandlers(db)
+      .deck_pip_costs()
+      .find((c) => c.deckId === virtual[0].id)!;
+    expect(costs.costs.length).toBeGreaterThan(5);
   });
 });
 

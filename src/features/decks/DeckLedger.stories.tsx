@@ -40,6 +40,10 @@ const meta = {
     formatName: "Modern",
     gameChangers: 0,
     tight: false,
+    // The ordinary deck, and what every story on this page but {@link OnAVirtualDeck} draws.
+    // `false` takes the `Owned` term and the hairline in front of it away; it is written once, in
+    // the story it is about.
+    tracksCollection: true,
     check: null,
     bracket: null,
   },
@@ -239,5 +243,47 @@ export const EmptyDeck: Story = {
     await expect(within(term("Avg. mana")).getByText("—")).toBeInTheDocument();
     await expect(within(term("Price")).getByText("—")).toBeInTheDocument();
     await expect(canvas.queryByText(/missing/)).toBeNull();
+  },
+};
+
+/**
+ * A **Virtual** deck — one the reader tracks without owning the cards (issue #401) — where the
+ * line is five terms rather than six.
+ *
+ * `Owned` is the one figure here that is about a *binder* rather than about the deck, so it is the
+ * one that goes; the hairline in front of it goes with it, because every term on this line is
+ * preceded by its own and a divider with nothing after it is punctuation punctuating nothing.
+ *
+ * **Absent rather than dimmed to an em dash**, which is right here twice over: a dash on this line
+ * already means *no number to give* — see {@link EmptyDeck}'s average — and re-using it for *no
+ * question to ask* would put two meanings on one glyph.
+ *
+ * The rows are {@link Shortfall}'s, so this deck would read `Owned 1 · 3 missing` if the term were
+ * left in. Everything else is a fact about the list and stays, controls included.
+ */
+export const OnAVirtualDeck: Story = {
+  args: {
+    tracksCollection: false,
+    cards: [
+      deckCard(printing("mh2", "138"), { quantity: 4, ownedQuantity: 1 }),
+      deckCard(printing("lea", "288"), { quantity: 56, ownedQuantity: 56 }),
+    ],
+    gameChangers: 2,
+    check,
+    bracket,
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await expect(canvas.queryByText("Owned", { selector: "dt" })).toBeNull();
+    await expect(canvas.queryByText(/missing/)).toBeNull();
+    // Four hairlines rather than five, so the line does not end in a divider. `aria-hidden` is
+    // what tells a rule from a term — both are `div` children of the `<dl>`.
+    await expect(canvasElement.querySelectorAll("dl > div[aria-hidden]")).toHaveLength(4);
+    // …and nothing else moved: the other five terms and all three controls are where they were.
+    for (const label of ["Format", "Cards", "Lands", "Avg. mana", "Price"]) {
+      await expect(canvas.getByText(label, { selector: "dt" })).toBeInTheDocument();
+    }
+    await expect(canvas.getByText("2 game changers")).toBeInTheDocument();
   },
 };

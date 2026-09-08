@@ -271,12 +271,32 @@ Pathway` is one card and there are seven such names in the reference list alone,
   where the copies go is a consequence of the mode being *chosen* rather than a description of the
   option, so it belongs after the choice. It stays inside the `fieldset`, because it is still part
   of what `What this does to <list>` answers.
-- **That note is drawn behind three conditions and none of them can be dropped** — `replace`,
-  `live`, and a list that holds something. A merge removes nothing, so nothing is released; a
-  theory list is a plan and has never held a copy; and an empty list has none to give back, which
-  the radio beside it already says. It is `ClearDeck`'s ternary and its `> 0` fence read together:
-  a sentence naming a folder nothing will ever arrive in is the exact failure both of those exist
-  to avoid, and the reader who goes looking in `Recently removed` finds the app lied to them.
+- **That note is drawn behind four conditions and none of them can be dropped** — `replace`,
+  `live`, **not a virtual deck**, and a list that holds something. A merge removes nothing, so
+  nothing is released; a theory list is a plan and has never held a copy; a **virtual** deck has
+  no collection group at all, so its rows are live rows that have still never held one; and an
+  empty list has none to give back, which the radio beside it already says. It is `ClearDeck`'s
+  ternary and its `> 0` fence read together: a sentence naming a folder nothing will ever arrive
+  in is the exact failure both of those exist to avoid, and the reader who goes looking in
+  `Recently removed` finds the app lied to them.
+  **The virtual condition is the one that could not be spelled as a variant** (2026-09-08, issue
+  #401), and it is why this list grew rather than being tightened: the other three are all
+  answerable from the list in front of the reader, where this one is a fact about the **deck** —
+  and `live` is the same word on a deck that tracks cardboard and a deck that never will.
+- **A virtual deck moves two more of this dialog's sentences and takes one control away**
+  (2026-09-08, issue #401). `DeckImportSubtitle` drops its variant segment — `Into Arena Standard`
+  rather than `Into Arena Standard · Actual`, through `variantSegment(variant, virtual)`, because
+  `Actual` is half of a two-tab switch a virtual deck's reader has never been shown and there is
+  nothing to disambiguate on a deck with one list; and the mode radios say `the deck` in place of
+  that label, lowercase because it lands mid-sentence where `Actual` and `Theory` are proper
+  labels. **The control is `Add cards to collection`, and it is the one that matters**: that box
+  means *I have physically built this deck*, which is the sentence a virtual deck exists to say
+  the opposite of, and ticking it is the only press in this dialog that writes
+  `collection_entries`. It is not drawn — absent rather than greyed — **and the commit fences it
+  anyway** (`alsoOwn && !virtual`), because a deck can turn virtual under an open step through a
+  sync from another device, and a tick nobody can see must never travel. Nothing else about the
+  import changes: `deck_import_commit` grew no refusal and needed none, since its `replace` arm's
+  `release_live_copies` walks an empty set on a deck with no group.
 - **The _native_ file picker's own half is unverified**, for the reason `deck_set_cover_image`'s
   is: `dialog:allow-open` opens a native window CDP cannot reach. Path → text → preview is
   tested; click → path is not. **The browser's is the exception and is driven end to end** —

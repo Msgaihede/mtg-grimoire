@@ -21,6 +21,7 @@ const meta = {
   tags: ["autodocs"],
   args: {
     variant: "live",
+    virtual: false,
     cardCount: 40,
     otherCount: 100,
     pending: false,
@@ -53,11 +54,15 @@ const meta = {
           "category, its name, its order and its switch — and what goes is the cardboard filed " +
           "into it. That is the difference between this and deleting the deck, and it is the " +
           "destructive sentence's second clause rather than a footnote.\n\n" +
-          "**Where the copies go depends on the list, and the two arms are one ternary.** " +
+          "**Where the copies go depends on the deck as well as the list, and the three arms " +
+          "are one ternary.** " +
           "Since schema v25 an Actual row is backed by a collection row in the deck's group, so " +
           "emptying the actual list files every copy the reader owns into `Recently removed`. A " +
           "theory list is a plan and holds no copies, so it promises nothing instead of " +
-          "promising a folder nothing will arrive in.",
+          "promising a folder nothing will arrive in. And a **virtual** deck — one the reader " +
+          "tracks without owning the cardboard — has no collection group at all, so its rows " +
+          "are live rows that have still never held a copy. That third arm is the one the " +
+          "variant could not reach, which is why it is a prop.",
       },
     },
   },
@@ -121,6 +126,36 @@ export const TheoryList: Story = {
     );
     await expect(canvas.queryByText(/Recently removed/)).toBeNull();
     await expect(canvas.getByText("The 40 cards in the other list are untouched.")).toBeVisible();
+  },
+};
+
+/**
+ * A **virtual** deck — one the reader tracks without owning the cardboard (issue #401).
+ *
+ * **This is the frame the `variant` ternary got wrong, and it is worth a story of its own because
+ * the wrong version read perfectly.** A virtual deck's rows are `live` rows, so the old sentence
+ * promised that "any copies you own go back to Recently removed" — a folder this deck has no
+ * group to put anything in, and a place the reader could go and fail to find their cards. The
+ * assertion that matters is therefore the **negative** one: `Recently removed` appears nowhere in
+ * this frame.
+ *
+ * It also draws the one-list vocabulary. `listName(variant, { virtual: true })` is `deck`, so the
+ * question is `Clear the deck?` rather than naming a half of a Theory/Actual pair this reader has
+ * never been shown — and `otherCount` is `0`, because a virtual deck has no other list to be
+ * reassured about.
+ */
+export const VirtualDeck: Story = {
+  args: { variant: "live", virtual: true, cardCount: 60, otherCount: 0 },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await expect(canvas.getByText("Clear the deck?")).toBeVisible();
+    await expect(canvas.getByText(/leave the deck and the piles stay/)).toHaveTextContent(
+      "This deck keeps no copies, so nothing else moves.",
+    );
+    // The whole point of the frame: the promise the old ternary made to a deck with no folder.
+    await expect(canvas.queryByText(/Recently removed/)).toBeNull();
+    await expect(canvas.queryByText(/actual list/)).toBeNull();
   },
 };
 

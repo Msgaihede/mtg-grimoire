@@ -617,6 +617,34 @@ describe("auditSentence", () => {
   });
 
   /**
+   * `decks.virtual_only` (schema v40) — and the **second** multi-word field name the backend
+   * writes, so it carries `separateXGroup`'s whole trap with it. The default arm answers an
+   * unrecognised field with "Changed the deck", which is true of every deck edit and therefore
+   * fails for nothing; a `virtual_only` spelt `virtualOnly` on one side and anything else on
+   * the other would go red **here and nowhere else**.
+   *
+   * The `detail` is asserted on purpose rather than as decoration. Becoming virtual is the one
+   * row in this switch whose write moved the reader's cardboard — the deck's group is emptied
+   * into `Recently removed` — and the history drawer is where they will come looking for it.
+   */
+  it("words the virtual kind, and says where the copies went", () => {
+    const deck = (payload: Record<string, unknown>) =>
+      auditSentence(entry("deck", payload, { cardId: null, cardName: null }));
+
+    expect(deck({ field: "virtualOnly", from: false, to: true })).toEqual({
+      text: "Made the deck virtual",
+      detail: "Its copies moved to Recently removed",
+    });
+    // Coming back the other way moves nothing — the copies are not fetched out of
+    // `Recently removed`, which is the reader's own filing to redo — so there is no detail to
+    // print, and a line claiming one would promise a restore that did not happen.
+    expect(deck({ field: "virtualOnly", from: true, to: false })).toEqual({
+      text: "Made the deck track your collection again",
+      detail: null,
+    });
+  });
+
+  /**
    * `decks.separate_x_group` (schema v13), and **the only multi-word field name the backend
    * writes** — every other arm of the switch is a single lowercase word, so this is the first
    * place `deck.rs`'s spelling could drift from `auditText`'s without anything going red: the

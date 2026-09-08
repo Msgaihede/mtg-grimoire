@@ -404,6 +404,15 @@ fn take_from_deck_list(
 /// table rather than the mistake — and `PRAGMA foreign_keys` is per-connection, so on a
 /// connection that has it off some of them would not surface at all.
 ///
+/// **A virtual deck is refused outright** ([`crate::deck::VIRTUAL_HOLDS_NOTHING`], issue #401).
+/// A virtual deck is one the reader keeps without owning the cardboard — MTGO, Arena, a pile of
+/// proxies — so there is no binder these copies could come out of and no shelf for them to go on
+/// to. That is [`THEORY_HOLDS_NOTHING`]'s argument one level up: that sentence says a *list*
+/// holds no cards, this one says a whole *deck* does, and both refuse in words rather than
+/// reporting a success that moved nothing. **It is asked before anything about the card**,
+/// because a virtual deck has no group, no pile worth resolving and no shortfall — every fence
+/// below it would be answering a question that cannot arise.
+///
 /// **The deck has to play the card already** ([`NOT_IN_DECK`], issue #358). A deck's group is
 /// the physical record of what that deck holds, and this command used to *write the `deck_cards`
 /// row itself* — so filing copies into a deck that had never listed the card made the list say
@@ -487,6 +496,15 @@ pub fn collection_to_deck(
     // Doubles as the deck fence: it answers `deck::GONE` for an id with no row, one statement
     // before there is an orphan to worry about. [`crate::deck::touch_deck`]'s own argument.
     crate::deck::touch_deck(&tx, deck_id)?;
+    // **What kind of deck this is, asked before anything about the card**, and after
+    // `touch_deck` for that call's stated reason: a stale editor's dead deck id hears
+    // [`crate::deck::GONE`] rather than a sentence about virtual decks, because "that deck is
+    // gone" and "that deck holds no cardboard" are different things to be told. A virtual deck
+    // tracks no copies at all, so there is nothing here for the folder rule, the pile or the
+    // quantity check below to be about.
+    if crate::deck::is_virtual(&tx, deck_id)? {
+        return Err(crate::deck::VIRTUAL_HOLDS_NOTHING.to_owned());
+    }
     // **The folder rule, and it is read here rather than four statements down for one reason:
     // the [`Pile::Name`] arm below *writes*.** A pile the app has to invent must not survive a
     // move that is refused after it — `a_refused_filing_by_name_leaves_no_pile_behind`'s rule,
@@ -629,6 +647,14 @@ pub fn collection_to_deck(
 /// nothing in any folder for it to give back — a press that reported success and moved nothing
 /// would read as a card that vanished.
 ///
+/// **A virtual deck is refused ahead of it** ([`crate::deck::VIRTUAL_HOLDS_NOTHING`], issue
+/// #401), and the order is the rule rather than an accident: the deck's own kind is asked before
+/// the row's variant, here and in [`collection_to_deck`], so one press cannot hear "this list is
+/// a plan" about a deck that holds no cardboard whichever list the row is on. A virtual deck
+/// tracks a deck the reader owns no copies of, so a cut has nothing to file into
+/// `Recently removed` — the same argument [`THEORY_HOLDS_NOTHING`] makes about a list, made
+/// about a deck.
+///
 /// **A deck card with no backing copies just goes away**, and that is the whole reason no
 /// per-deck-card provenance flag is needed. A card added from search is an intention to buy;
 /// the reader never owned it, so nothing lands on their desk when it is cut. The group **is**
@@ -738,6 +764,16 @@ pub fn deck_to_collection(
         .optional()
         .map_err(|e| e.to_string())?
         .ok_or_else(|| DECK_CARD_GONE.to_owned())?;
+    // **The deck's kind before the row's variant**, which is the same order [`collection_to_deck`]
+    // asks them in and is the whole reason the two refusals cannot be heard the wrong way round:
+    // a virtual deck keeps one `live` list and holds no cardboard for it, so "a plan holds no
+    // cards" would be a true sentence about the wrong thing. The deck id comes off the row above
+    // rather than from the caller — this command is pointed at a `deck_cards` row — so this is
+    // the first statement at which the question can be asked at all, and [`DECK_CARD_GONE`]
+    // still answers a stale editor first.
+    if crate::deck::is_virtual(&tx, deck_id)? {
+        return Err(crate::deck::VIRTUAL_HOLDS_NOTHING.to_owned());
+    }
     if variant == THEORY {
         return Err(THEORY_HOLDS_NOTHING.to_owned());
     }
@@ -1074,6 +1110,20 @@ mod tests {
         add_variant_card(conn, deck, category, THEORY, card_id, q)
     }
 
+    /// Turn a deck into one the reader tracks without owning — `decks.virtual_only`, schema v40.
+    ///
+    /// An `UPDATE` rather than a flag on [`deck_with_group`], so a case that wants one says so on
+    /// its own line and every other case in this file is untouched. The group stays where it is:
+    /// what the fence refuses is the *press*, and a database that has one is not what makes a
+    /// deck virtual.
+    fn make_virtual(conn: &Connection, deck: i64) {
+        conn.execute(
+            "UPDATE decks SET virtual_only = 1 WHERE id = ?1",
+            params![deck],
+        )
+        .unwrap();
+    }
+
     /// Copies no deck is holding and nothing has removed — what is actually available to be
     /// put in a deck. A fact about **where the rows sit**, which is the whole point.
     fn unallocated_copies(conn: &Connection, card_id: &str) -> i64 {
@@ -1221,6 +1271,50 @@ mod tests {
         let dc = add_theory_card(&conn, deck, cat, "bolt", 1);
         let err = deck_to_collection(&conn, dc, 1).unwrap_err();
         assert_eq!(err, THEORY_HOLDS_NOTHING);
+    }
+
+    #[test]
+    fn a_virtual_deck_never_gives_copies_back() {
+        // A virtual deck keeps no cardboard, so a cut has nothing to file into
+        // `Recently removed` — and the setup is a press that would otherwise **succeed**, which
+        // is what stops this passing for the wrong reason: the group really does hold four
+        // copies, and the refusal is about what the deck is rather than about what it holds.
+        let (conn, deck, _cat, dc) = cut_fixture();
+        assert_eq!(
+            group_copies(&conn, deck, "bolt"),
+            4,
+            "or this proves nothing"
+        );
+        make_virtual(&conn, deck);
+
+        let err = deck_to_collection(&conn, dc, 4).unwrap_err();
+
+        assert_eq!(err, crate::deck::VIRTUAL_HOLDS_NOTHING);
+        assert_eq!(
+            group_copies(&conn, deck, "bolt"),
+            4,
+            "the refusal took the transaction with it"
+        );
+    }
+
+    #[test]
+    fn a_virtual_deck_never_takes_copies_out_of_the_collection() {
+        // The other direction, and the same shape: the deck plays the card, the reader owns two
+        // loose copies, and every other fence this command has would pass. What refuses is the
+        // deck's own kind.
+        let (conn, deck, cat) = fixture();
+        plays(&conn, deck, cat);
+        let entry = seed_entry(&conn, "bolt-m10", 2, None);
+        make_virtual(&conn, deck);
+
+        let err = collection_to_deck(&conn, entry, deck, Pile::Id(cat), 2).unwrap_err();
+
+        assert_eq!(err, crate::deck::VIRTUAL_HOLDS_NOTHING);
+        assert_eq!(
+            unallocated_copies(&conn, "bolt-m10"),
+            2,
+            "the copies never left the reader's own shelf"
+        );
     }
 
     /// One history row, as these tests compare them: kind, the card's name, the payload and the

@@ -21,6 +21,9 @@ const meta = {
     // itself is `Settings/MarketplacePanel`; what a view owes it is one currency for the whole
     // screen, so a heading and the cards under it cannot name two.
     marketplace: MARKETPLACES.tcgplayer,
+    // The ordinary deck — one with a collection behind it — and therefore the nine-column table.
+    // {@link OnAVirtualDeck} is the eight-column one; the prop is written once, there.
+    tracksCollection: true,
     violations: deckViolations(),
     onSelect: fn(),
   },
@@ -87,6 +90,38 @@ export const WithSelectedRow: Story = {
 
 /** Grouped by type: the bands change, the columns do not. */
 export const ByType: Story = { args: { groups: deckGroups("type", "type") } };
+
+/**
+ * A **Virtual** deck — one the reader tracks without owning the cards (issue #401) — and the one
+ * arrangement of this table with eight columns rather than nine.
+ *
+ * **The column is dropped, not left blank**, which is the whole of the decision. `OwnedBadge`
+ * already returns `null` for a row that owns nothing and wishes for nothing, so the do-nothing
+ * implementation leaves a headed `Owned` column that is empty on every row of every virtual deck
+ * — a question the table keeps asking and never answers, and one a reader can only resolve by
+ * knowing a rule that is nowhere on screen. Dropping it also gives the 4rem back to the two
+ * flexible tracks, so the card name — the column this table exists for — is measured against a
+ * smaller fixed budget.
+ *
+ * The cell's *other* absence is a different fact and is untouched: a row in a switched-off pile
+ * draws no badge because the deck reserved nothing for it, which is a statement about one pile of
+ * a deck that does own cards.
+ */
+export const OnAVirtualDeck: Story = {
+  args: { tracksCollection: false },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // The header list in order, because "Owned is gone" and "the other eight are where they were"
+    // are the two halves of dropping a column — and the sequence below is one the nine-column
+    // table cannot produce, in membership or in position.
+    expect(canvas.getAllByRole("columnheader").map((header) => header.textContent?.trim())).toEqual(
+      ["Qty", "Card name", "Mana cost", "Type", "Price", "Labels", "Rarity", "Printing"],
+    );
+    // And no cell either — the badge's own accessible sentence, which the fake's rows carry on a
+    // regular deck.
+    expect(canvas.queryByText(/in your collection/)).toBeNull();
+  },
+};
 
 /**
  * The **Live** list of a deck that keeps a plan — the mark, and the one surface that says it in
