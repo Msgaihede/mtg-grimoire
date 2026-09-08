@@ -1253,6 +1253,49 @@ describe("ipc argument names match the Rust command signatures", () => {
   });
 
   /**
+   * **`combos_for_card` on the same fence, for the same reason one grain over** — added
+   * 2026-09-08 with the search box.
+   *
+   * This is `deck_card_set_label`'s failure in a different family. The command gained a sixth
+   * parameter, `search: Option<String>`, and the two sides spell it independently: Rust in the
+   * signature, `ipc.ts` in the object literal. **Tauri drops a payload field a command does not
+   * name**, so a crate that called it `query`, or `term`, or `name_search` — every one of which
+   * reads perfectly at its own site — hands `card_combos` a `None` and answers the *unsearched*
+   * page. Nothing goes wrong: the dialog gets combos, the pager pages, the counts add up. They
+   * are simply the counts for a question the reader did not ask, and a search box that narrows
+   * nothing is read as a UI bug for as long as it takes somebody to look at the crate.
+   *
+   * The suite cannot otherwise see it. `invoke` is typed on its return and not its payload, the
+   * argument-naming case below sends `search` to a mock that would accept any key at all, and
+   * the Storybook fake takes `CardCombosQuery` — the camelCase side — so it agrees with the
+   * bug. This is the only place the two spellings meet.
+   *
+   * Containment rather than equality, `finishBearing`'s rule: `state` is declared and never
+   * sent. The two length guards are what stop a parser that found nothing from reading as a
+   * pass — a `pub async fn` this parser cannot see is a green test over an empty list.
+   */
+  it("combos_for_card declares every argument ipc.ts sends it, `search` included", () => {
+    const sent = payloadKeys(ipcSource, "combos_for_card").map(snake);
+    const declared = commandParams(combosRs, "combos_for_card");
+
+    expect(sent, "nothing parsed out of ipc.ts for `combos_for_card`").toContain("oracle_id");
+    expect(declared, "nothing parsed out of the crate for `combos_for_card`").toContain(
+      "oracle_id",
+    );
+    // Named rather than left to the loop: the loop is only as strong as what `ipc.ts` happens to
+    // send, so a wrapper that dropped `q.search` on the floor would make it vacuous — green on
+    // both sides while the box narrows nothing.
+    expect(sent, "`ipc.ts` sends `combos_for_card` no search").toContain("search");
+    expect(declared, "the crate's `combos_for_card` declares no `search`").toContain("search");
+
+    for (const key of sent) {
+      expect(declared, `\`combos_for_card\` is sent \`${key}\` and does not declare it`).toContain(
+        key,
+      );
+    }
+  });
+
+  /**
    * The five folder commands — the one family in the deck surface that is about **no deck**.
    *
    * `deck_folder_list` therefore takes nothing, and `create`/`move` both spell their target
@@ -1865,15 +1908,29 @@ describe("ipc argument names match the Rust command signatures", () => {
    * unfiltered read, which is the read the dialog opens on. A test that only ever sent a number
    * would be green the whole time.
    *
+   * **`search: null` is that trap a second time and it is the newer of the two** (2026-09-08).
+   * `Option<String>` this time, and the shape that writes itself is worse than `cardCount`'s
+   * because it *reads* correctly: `...(term && { search: term })` folds the empty box away, which
+   * is exactly the fold the key helper performs one file over — and here it produces an object
+   * Tauri refuses on every unsearched read, i.e. on the read the dialog opens on and returns to
+   * every time the reader clears the box. So the assertion below is on the **key set**, not on
+   * the object: `toHaveBeenCalledWith` compares the way `toEqual` does and cannot tell a key
+   * holding `undefined` from a key that is not there.
+   *
    * `ownedOnly: false` carries the same trap one field over and is `combos_refresh`'s `force`
    * argument again: an absent boolean is a refusal, not a default.
+   *
+   * **A third read sends a real term**, because the two failures are opposite: a wrapper that
+   * hard-coded `search: null` would satisfy every assertion the unsearched case makes, and the
+   * symptom — a search box that narrows nothing while the caption keeps changing — is a bug in
+   * the dialog everywhere except where it is.
    *
    * The answer is read back through a typed local rather than asserted as an opaque blob,
    * because that is the half `tsc` can see: every field named below has to exist on
    * {@link CardCombosPage}, so a mirror spelling `owned_total` or `by_card_count` the column's
    * way fails the build rather than reaching a caption as `undefined`.
    */
-  it("sends `combos_for_card` under its own name, with `cardCount: null` as a key", async () => {
+  it("sends `combos_for_card` with `search` and `cardCount` null as explicit keys", async () => {
     const page = {
       total: 41,
       matching: 12,
@@ -1922,9 +1979,11 @@ describe("ipc argument names match the Rust command signatures", () => {
     };
     invoke.mockResolvedValue(page);
 
-    // The unfiltered read the dialog opens on — a size filter of `null` and the owned box off.
+    // The unfiltered read the dialog opens on — an empty search, a size filter of `null` and the
+    // owned box off.
     const opened: CardCombosPage = await ipc.combosForCard({
       oracleId: "oracle-thassa",
+      search: null,
       cardCount: null,
       ownedOnly: false,
       limit: 20,
@@ -1933,6 +1992,7 @@ describe("ipc argument names match the Rust command signatures", () => {
 
     expect(invoke).toHaveBeenCalledWith("combos_for_card", {
       oracleId: "oracle-thassa",
+      search: null,
       cardCount: null,
       ownedOnly: false,
       limit: 20,
@@ -1940,9 +2000,10 @@ describe("ipc argument names match the Rust command signatures", () => {
     });
     // Said again, and not as ceremony: `toHaveBeenCalledWith` compares the way `toEqual` does,
     // which treats a key holding `undefined` as a key that is not there. A mapper writing
-    // `cardCount: size ?? undefined` would therefore satisfy the assertion above while sending
-    // an object Tauri refuses. These two lines are about the key *existing* and about it holding
-    // `null` rather than `undefined`, which is the distinction the wire actually has.
+    // `cardCount: size ?? undefined` — or `...(term && { search: term })`, which is the shape
+    // that writes itself for a search box — would therefore satisfy the assertion above while
+    // sending an object Tauri refuses. These lines are about the keys *existing* and about them
+    // holding `null` rather than `undefined`, which is the distinction the wire actually has.
     const sent = invoke.mock.calls[0][1] as Record<string, unknown>;
     expect(Object.keys(sent).sort()).toEqual([
       "cardCount",
@@ -1950,8 +2011,10 @@ describe("ipc argument names match the Rust command signatures", () => {
       "offset",
       "oracleId",
       "ownedOnly",
+      "search",
     ]);
     expect(sent.cardCount).toBeNull();
+    expect(sent.search).toBeNull();
 
     // Read back through the typed local: the three totals are three different questions —
     // `total` is the card's whole match set, `matching` is what the pager pages through, and
@@ -1959,9 +2022,11 @@ describe("ipc argument names match the Rust command signatures", () => {
     expect(opened.total).toBe(41);
     expect(opened.matching).toBe(12);
     expect(opened.ownedTotal).toBe(3);
-    // The census is over the unfiltered set, so its buckets sum past `matching` rather than to
-    // it — a bucket list that agreed with the filtered count would be the client-side filter
-    // this key exists to prevent, arriving through the back door.
+    // The census is over the **searched** set — which on this read is the whole set, because
+    // nothing was searched — so its buckets sum past `matching` rather than to it. A bucket list
+    // that agreed with the filtered count would be the client-side filter this key exists to
+    // prevent, arriving through the back door. (Under a term the sum tracks the searched set
+    // instead, and it is the *facets* that follow the subject: see `CardCombosPage` in `ipc.ts`.)
     expect(opened.byCardCount.map((b) => b.cards)).toEqual([2, 3]);
     expect(opened.byCardCount.reduce((n, b) => n + b.combos, 0)).toBe(41);
     // The piece fields nothing else in this file names. `mustBeCommander` is the column the
@@ -1977,10 +2042,14 @@ describe("ipc argument names match the Rust command signatures", () => {
     expect(consultation.name).toBe("Demonic Consultation");
     expect(consultation.imageUris).toBeNull();
 
-    // A narrowed read: the size comes from a bucket and the owned box is on.
+    // A narrowed read: the size comes from a bucket and the owned box is on. Still no term, so
+    // `search` has to travel as `null` here too rather than being dropped once something else is
+    // set — a mapper spreading only the fields that are "on" would pass the first assertion and
+    // fail this one.
     invoke.mockResolvedValue({ ...page, matching: 12, combos: [] });
     await ipc.combosForCard({
       oracleId: "oracle-thassa",
+      search: null,
       cardCount: 2,
       ownedOnly: true,
       limit: 20,
@@ -1988,11 +2057,42 @@ describe("ipc argument names match the Rust command signatures", () => {
     });
     expect(invoke).toHaveBeenLastCalledWith("combos_for_card", {
       oracleId: "oracle-thassa",
+      search: null,
       cardCount: 2,
       ownedOnly: true,
       limit: 20,
       offset: 20,
     });
+
+    // A searched read — the opposite failure to the two above. A wrapper hard-coding
+    // `search: null`, or dropping `q.search` on the floor, satisfies every assertion so far and
+    // ships a search box that narrows nothing; only a call carrying a real term can see it.
+    // The term is a substring and is sent **as typed**: no trimming, no lower-casing, no `%`
+    // wrapping. Case-insensitivity and the substring match are the backend's, and a wrapper that
+    // pre-cooked the string would be doing half of a job the SQL does the whole of.
+    invoke.mockResolvedValue({ ...page, matching: 1, ownedTotal: 1, combos: [] });
+    await ipc.combosForCard({
+      oracleId: "oracle-thassa",
+      search: "Thassa",
+      cardCount: null,
+      ownedOnly: false,
+      limit: 20,
+      offset: 0,
+    });
+    expect(invoke).toHaveBeenLastCalledWith("combos_for_card", {
+      oracleId: "oracle-thassa",
+      search: "Thassa",
+      cardCount: null,
+      ownedOnly: false,
+      limit: 20,
+      offset: 0,
+    });
+    const searched = invoke.mock.calls[2][1] as Record<string, unknown>;
+    expect(searched.search).toBe("Thassa");
+    // And `cardCount` is still an explicit `null` beside it: the two `Option`s are independent,
+    // so a term must not smuggle a size away.
+    expect(Object.keys(searched)).toContain("cardCount");
+    expect(searched.cardCount).toBeNull();
 
     // **The two reads are pinned apart, not just each pinned.** One character between the two
     // command names, and a wrapper sending either under the other's would be answered — the
@@ -2000,6 +2100,7 @@ describe("ipc argument names match the Rust command signatures", () => {
     invoke.mockResolvedValue([]);
     await ipc.combosForCards(["p1"]);
     expect(invoke.mock.calls.map((c) => c[0])).toEqual([
+      "combos_for_card",
       "combos_for_card",
       "combos_for_card",
       "combos_for_cards",

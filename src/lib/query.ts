@@ -99,7 +99,8 @@ export const combosForCardsKey = (sortedCardIds: readonly string[]): QueryKey =>
 ];
 
 /**
- * Every combo that **names** one card, at one pair of filters — `ipc.combosForCard`.
+ * Every combo that **names** one card, at one search and one pair of filters —
+ * `ipc.combosForCard`.
  *
  * The third key under {@link COMBOS_KEY}, beside {@link COMBOS_STATUS_KEY} and
  * {@link combosForCardsKey}, and it is under that root for the root's own reason: a download
@@ -122,24 +123,66 @@ export const combosForCardsKey = (sortedCardIds: readonly string[]): QueryKey =>
  * cache every time a reader stepped between two printings of the card they are already reading
  * about.
  *
- * **Both filters are in the key rather than applied to a cached superset, because neither is a
- * subset operation.** `cardCount` and `ownedOnly` narrow in SQL *before* the page is cut, so a
- * filtered answer is a different question and not a slice of the unfiltered one. Filtering on
- * this side instead would filter page 1 of a match set that can run to thousands of rows — and
- * the answer it produces is confidently wrong rather than merely incomplete: a card whose first
- * page happens to be all four- and five-card combos would read "no two-card combos" to a reader
- * whose card has forty of them, with nothing on screen suggesting there was more to fetch.
+ * **All three narrowings are in the key rather than applied to a cached superset, because none of
+ * them is a subset operation.** `search`, `cardCount` and `ownedOnly` narrow in SQL *before* the
+ * page is cut, so a filtered answer is a different question and not a slice of the unfiltered
+ * one. Filtering on this side instead would filter page 1 of a match set that can run to
+ * thousands of rows — and the answer it produces is confidently wrong rather than merely
+ * incomplete: a card whose first page happens to be all four- and five-card combos would read "no
+ * two-card combos" to a reader whose card has forty of them, with nothing on screen suggesting
+ * there was more to fetch.
+ *
+ * **`search` is the third of those and the one the argument was written for.** Ashnod's Altar is
+ * in **6 044** combos (measured), which is what the box exists to narrow; a client-side filter
+ * over page 1 of those would tell a reader the card has no combo with Thassa in it while forty
+ * sit on page 12. Same sentence as the two above, said once here and pointed at from
+ * `ipc.ts` rather than repeated there.
+ *
+ * **`""` is folded into `null` here, and this helper is the floor rather than one participant in
+ * a shared rule.** A cleared search box produces `""` on every clear — the ✕, a select-all and
+ * delete, the last backspace — while `null` is what nothing-typed means everywhere else. Left
+ * alone the two spellings of one question are two cache entries: a refetch and a fresh loading
+ * state each time a reader empties the box, for an answer already in hand, and one that could
+ * never differ, since `combos_for_card` reads `""` and `None` as the same request.
+ *
+ * It belongs **here** because the cache is the only thing the difference costs. `ipc.combosForCard`
+ * therefore forwards `search` verbatim and adds no rule of its own — that would be the same rule
+ * written twice, which is the drift these comments exist to prevent — and this fold is total, so
+ * no future caller can split the cache by handing over an empty box.
+ *
+ * **A caller may still normalise *further*, and `CombosDialog` does: it trims.** That is a
+ * different statement and not a second copy of this one — a trim changes what is **sent**
+ * (`"bolt "` and `"bolt"` become one request, which is a decision about what the box means), where
+ * this fold changes only what is **filed**. They compose because the dialog trims before both the
+ * key and the wire, so the key never disagrees with the question that was asked. **What must not
+ * move into this helper is the trim itself**: a key that trimmed what a caller sent untrimmed
+ * would file `" thassa"` and `"thassa"` together while the two produced different pages, which is
+ * this rule's own failure arriving from the other direction.
  *
  * **`limit` and `offset` are deliberately absent**, which is a constraint on the caller and not
  * an oversight: pages of one question belong under one key. Page with `useInfiniteQuery`, which
  * carries its own page param — a plain `useQuery` per offset would write every page over the
  * last one here.
+ *
+ * The arguments are in `CardCombosQuery`'s own order, which is `combos_for_card`'s parameter
+ * order: three files describe one call and an order that agrees is the cheapest way to check it.
  */
 export const cardCombosKey = (
   oracleId: string,
+  search: string | null,
   cardCount: number | null,
   ownedOnly: boolean,
-): QueryKey => ["combos", "forCard", oracleId, cardCount, ownedOnly];
+): QueryKey => [
+  "combos",
+  "forCard",
+  oracleId,
+  // The one place `""` becomes `null`, per the paragraph above — deliberately `=== ""` and not
+  // `|| null`, which would swallow `"0"`, and not a `.trim()`, which would file two different
+  // requests under one key.
+  search === "" ? null : search,
+  cardCount,
+  ownedOnly,
+];
 
 /**
  * The relay's own state — `ipc.syncRelayStatus`.

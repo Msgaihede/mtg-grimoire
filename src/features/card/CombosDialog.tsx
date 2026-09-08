@@ -1,10 +1,12 @@
-import { useId, useState, type JSX, type ReactNode } from "react";
+import { useEffect, useId, useState, type JSX, type ReactNode } from "react";
 import { keepPreviousData, skipToken, useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { ChevronRight } from "lucide-react";
 import { CardArt } from "@/components/CardArt";
 import { Dialog } from "@/components/Dialog";
-import { ToggleChip } from "@/components/FilterChips";
+import { FILTER_FIELD, ToggleChip } from "@/components/FilterChips";
 import { ManaText } from "@/components/ManaText";
 import { COMBO_TAG } from "@/features/decks/DeckBracket";
+import { DEBOUNCE_MS } from "@/features/search/useCardSearch";
 import { count, plural } from "@/lib/counts";
 import { openExternal } from "@/lib/externalLinks";
 import { FOCUS } from "@/lib/focus";
@@ -33,9 +35,20 @@ import { cardDetailKey } from "./cardDetailKey";
  * asked for "this card's combos" would therefore be asking for six thousand rows, each with two
  * to five card pictures in it, for the one card a reader is most likely to open it on.
  *
- * 25 rather than the search wall's 60: a combo row is a wall of art plus five prose sections, so
- * a page here is nearer a screen of reading than a screen of tiles, and **Show more** is one
- * press away.
+ * 25 rather than the search wall's 60: a combo row is a wall of art, so a page here is nearer a
+ * screen of reading than a screen of tiles, and **Show more** is one press away.
+ *
+ * **Paging is not a way to *find* anything, which is the other half of that 6 044 and why the box
+ * above the chips exists.** Twenty-five at a time with no search is 242 presses to reach the end of
+ * one card's list, and a reader who wants the combo with Krark-Clan Ironworks in it has no way to
+ * ask for it. The search narrows in SQL, like the chips, for the chips' reason: a term applied to
+ * the page in hand would be searching 0.4 % of the list and calling the answer *no match*.
+ *
+ * **It stays 25 now that the rows collapse**, which is worth saying because the argument above got
+ * smaller and the number did not. A page is a fraction of the height it was — the five prose
+ * sections are behind a press — but the pictures are not, and they are what a page of this list
+ * costs to draw and to scroll. What the accordion bought is a list a reader can *scan*; a bigger
+ * page would spend that on a longer scroll.
  */
 const PAGE_SIZE = 25;
 
@@ -80,6 +93,12 @@ const NO_ORACLE_CARD =
  * database — and the chips are still on screen above it, each carrying the count that says so. It
  * is drawn only where `total > 0`, which is what keeps it from ever standing in for
  * {@link NEVER_FETCHED}: a database with no rows has no chips to have narrowed with.
+ *
+ * **A search that matches nothing is this sentence and not a fifth one.** The box is a filter like
+ * the chips are — it narrows the same list, it is undone the same way, and it sits in the same row
+ * of controls above this line — so a term that leaves nothing has left the reader in exactly the
+ * state a chip does. `total` is over the unfiltered set and the search does not move it, which is
+ * what keeps this branch reachable with a term in the box: the empty answer is `matching`.
  */
 const NO_MATCH = "No combo matches that filter.";
 
@@ -187,10 +206,11 @@ export function CombosDialog(): JSX.Element {
       onDismiss={close}
       onClose={close}
     >
-      {/* Mounted only while it is open — `Dialog`'s own rule, and the whole of why the two filters
-          below are `useState` rather than store fields: closing the dialog unmounts the body, so a
-          reader who narrowed card A's combos to three-card ones opens card B on **All** without a
-          single effect having to reset anything. */}
+      {/* Mounted only while it is open — `Dialog`'s own rule, and the whole of why the search box
+          and the two chips below are `useState` rather than store fields: closing the dialog
+          unmounts the body, so a reader who narrowed card A's combos to three-card ones with
+          "altar" in the box opens card B on **All** with an empty box, without a single effect
+          having to reset anything. */}
       <Body
         open={open}
         card={card.data ?? null}
@@ -202,11 +222,12 @@ export function CombosDialog(): JSX.Element {
 }
 
 /**
- * The panel's contents — the two filters, the page, and the five things that are not a list.
+ * The panel's contents — the search box, the two chips, the page, and the five things that are not
+ * a list.
  *
  * Split out from the shell for `LegalityDialog`'s reason (the states read as one list rather than
  * as conditions threaded through a `Dialog` call) and for one of its own: **the filters live
- * here**, and they are in the query key, so both reads have to be here with them.
+ * here**, and all three are in the query key, so both reads have to be here with them.
  */
 function Body({
   open,
@@ -231,8 +252,41 @@ function Body({
   /** Only combos every piece of which the reader has a copy of. Also the backend's business. */
   const [ownedOnly, setOwnedOnly] = useState(false);
 
+  /**
+   * What is in the box, and what has been asked for — two states rather than one, and the split is
+   * the debounce.
+   *
+   * {@link text} is the controlled value, so a keystroke is on screen in the same frame it was
+   * typed and is never gated on a round trip; {@link asked} follows it {@link DEBOUNCE_MS} later
+   * and is what the query is keyed on, so a five-letter word costs one request rather than five.
+   * `useCardSearch`'s constant rather than a number of this dialog's own: how long a search box in
+   * this app stays quiet is one question, and a box that answered it differently from the three
+   * card searches would be a second answer to a settled one.
+   */
+  const [text, setText] = useState("");
+  const [asked, setAsked] = useState("");
+
+  useEffect(() => {
+    const timer = setTimeout(() => setAsked(text), DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [text]);
+
+  /**
+   * The term, or `null` for no search at all.
+   *
+   * **Trimmed here rather than at the backend**, so `"bolt "` and `"bolt"` are one query key and
+   * one cache entry rather than two spellings of the same question. `""` collapses to `null` for
+   * the same reason: the wire carries one shape for *no search*, and a key holding the empty
+   * string would be a second one that had to answer identically for ever.
+   */
+  const search = asked.trim() === "" ? null : asked.trim();
+
   const combos = useInfiniteQuery({
-    queryKey: cardCombosKey(oracleId ?? "", cardCount, ownedOnly),
+    // **The search is in the key**, with the two filters and for their reason: it narrows in SQL
+    // before the page is cut, so a searched answer is a different question rather than a subset of
+    // the unsearched one — and a key that left it out would hold the old pages, and with them an
+    // offset into a list that no longer exists.
+    queryKey: cardCombosKey(oracleId ?? "", search, cardCount, ownedOnly),
     // **No call at all for a card with no oracle id**, which is the state {@link NO_ORACLE_CARD}
     // draws: the command matches on oracle id, so a null one has nothing to ask about and the
     // answer is known here without a round trip.
@@ -241,6 +295,7 @@ function Body({
         ? ({ pageParam }) =>
             ipc.combosForCard({
               oracleId,
+              search,
               cardCount,
               ownedOnly,
               limit: PAGE_SIZE,
@@ -250,9 +305,14 @@ function Body({
     initialPageParam: 0,
     getNextPageParam: (_last, pages) => nextComboOffset(pages),
     // A narrowed filter keeps the previous page on screen rather than blanking the panel — the
-    // shape every other filtered list in this app uses (`useCollection`, `useCardSearch`). The
-    // chips it is drawn from come off the *census* fields, which do not move with the filter, so
-    // holding the old page cannot make a chip disagree with itself mid-flight.
+    // shape every other filtered list in this app uses (`useCollection`, `useCardSearch`). Without
+    // it the list would blink to *Reading the combos…* once per debounced keystroke, which is the
+    // one thing a search box may not do to the list it is narrowing.
+    //
+    // **What it costs is one frame of a stale census**, and that is new: `byCardCount` and
+    // `ownedTotal` follow the search now, so while a term is in flight the chips are still the
+    // previous term's. The alternative is a chip row that empties and refills per keystroke, which
+    // is worse — and the numbers a *chip press* moves are still none of them.
     placeholderData: keepPreviousData,
   });
 
@@ -266,10 +326,20 @@ function Body({
   /**
    * The census, off the first page.
    *
-   * **`total` and `byCardCount` describe the card; `matching` describes the filter.** That split
-   * is what lets a chip keep its own count while it is the one selected — a `3 cards · 60` chip
+   * **The search changes the *subject*; the chips are facets of it.** So there are three sets in
+   * one page and each of the four numbers names a different one: `total` is every combo naming
+   * this card, filtered by nothing at all; `byCardCount` and `ownedTotal` are over the
+   * **search-filtered** set; `matching` is over that set with the chips applied as well.
+   *
+   * What a reader sees follows from that and is the whole of the row's legibility: **the chip
+   * counts move when they type and do not move when they press a chip.** A `3 cards · 60` chip
    * that read 60 until pressed and then 60-of-60 would be a control that changed its mind about
-   * what it was counting. It is also why the empty branches below test `total` and not `matching`.
+   * what it was counting — but the same chip reading 4 after a search has not changed its mind,
+   * it has been asked about a different list.
+   *
+   * `total` is the one number no control here can move, which is why the empty branches below test
+   * it rather than `matching`: a card with combos has a filter row whatever is typed into it, and
+   * {@link NEVER_FETCHED} can never be reached by narrowing.
    */
   const page = combos.data?.pages[0] ?? null;
   const total = page?.total ?? 0;
@@ -311,6 +381,7 @@ function Body({
       <Note>{(status.data?.fetchedAt ?? null) === null ? NEVER_FETCHED : NO_COMBOS}</Note>
     ) : (
       <>
+        <SearchField value={text} onChange={setText} />
         <Filters
           page={page}
           cardCount={cardCount}
@@ -370,6 +441,54 @@ function Body({
 }
 
 /**
+ * The box that narrows *this* list — a case-insensitive substring against any piece's name, the
+ * asked-about card included.
+ *
+ * **Named for the list rather than for the act.** The card modal is on screen behind this dialog
+ * and the app is full of boxes that say `Search cards`, so a bare `Search` here is the control
+ * lying about which list it narrows — `FilterBar`'s `labels` rule, at a surface that has to obey
+ * it because the *other* box is a different component on a different layer. A `useId` stem rather
+ * than a constant for the second half of the same rule: two mounted boxes sharing one `id` is a
+ * `getByLabelText` that cannot tell them apart, and `Dialog` mounts and unmounts this one.
+ *
+ * **`clearFieldOnEscape` is deliberately absent, and the omission is not a gap.** This box is
+ * inside a dialog, `Dialog` registers its `"inner"` rung in the **capture** phase, and the capture
+ * stack acts before an element's own `keydown` — so the call would be a line that cannot execute.
+ * Escape closes the combos, which is what a reader in a modal means by it. `src/CLAUDE.md` states
+ * the exception at the rule's own site.
+ *
+ * **{@link FILTER_FIELD} and never `FILTER_CONTROL`** — the row's chips dip 3 % under a press and a
+ * box the reader types into must not, or Chromium's own ✕ slides out from under the pointer and
+ * the box bounces without clearing (issue #179; the measurement is on the constant, and
+ * `motion.test.ts` sweeps for the class). It is also where the finger's 44px floor comes from,
+ * with no number spelled a second time here.
+ */
+function SearchField({ value, onChange }: { value: string; onChange: (text: string) => void }) {
+  const id = useId();
+  return (
+    <div>
+      <label htmlFor={id} className="sr-only">
+        Search these combos
+      </label>
+      <input
+        id={id}
+        type="search"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="Search these combos by piece…"
+        className={cn(
+          FILTER_FIELD,
+          FOCUS,
+          // Full width, because this is the panel's own row rather than one control in a wrapping
+          // filter bar — there is nothing beside it to leave room for.
+          "w-full min-w-0 border-border bg-surface px-3 placeholder:text-dim focus:border-accent",
+        )}
+      />
+    </div>
+  );
+}
+
+/**
  * The two filters — a chip per combo size, and a toggle for the ones the reader can build today.
  *
  * **A chip is drawn only for a size the backend has combos for.** `byCardCount` is the census, so
@@ -377,6 +496,14 @@ function Body({
  * chip would send the backend a `cardCount` it reads as an exact size and get an empty list back.
  * A bucket that somehow arrives at zero is dropped for the same reason: a chip that can only ever
  * empty the list is a control that lies.
+ *
+ * **The census these are drawn from is the searched one, and the one exception to the sentence
+ * above is what the search made necessary.** A reader can narrow to `3 cards` and then type a term
+ * no three-card combo matches, at which point the size the query is still carrying has no bucket —
+ * so the chip that is emptying the list would vanish from the row and take the way back with it,
+ * leaving *No combo matches that filter* over a row of controls none of which is on. So a **pressed**
+ * size keeps its chip at `· 0`. That is not the control that lies: it is the one that is doing the
+ * emptying, said out loud, and pressing it again is the way out.
  */
 function Filters({
   page,
@@ -391,9 +518,16 @@ function Filters({
   onCardCount: (cards: number | null) => void;
   onOwnedOnly: (only: boolean) => void;
 }) {
-  const buckets = (page?.byCardCount ?? [])
+  const census = page?.byCardCount ?? [];
+  const buckets = census
     .filter((bucket) => bucket.combos > 0)
-    .slice()
+    // The pressed size, kept even where the search left it no bucket — see the header. Appended
+    // before the sort, so it lands in size order like any other chip.
+    .concat(
+      cardCount !== null && !census.some((bucket) => bucket.cards === cardCount)
+        ? [{ cards: cardCount, combos: 0 }]
+        : [],
+    )
     // Ascending, and sorted here rather than trusted: the display order of a filter row is this
     // file's decision, it costs one pass over at most a handful of buckets, and a row whose chips
     // moved with the backend's `GROUP BY` would reorder under the reader for no reason they could
@@ -404,9 +538,15 @@ function Filters({
     // `flex-wrap`, because the narrowest surface that draws a row of chips decides its height —
     // this panel is `w-[45rem]` above the phone fold and the whole glass below it, and an unwrapped
     // row just hangs out of the panel and turns into a horizontal scrollbar.
-    <div className="flex flex-wrap items-center gap-1.5">
+    <div className="mt-2 flex flex-wrap items-center gap-1.5">
       <ToggleChip
-        label={`All · ${count(page?.total ?? 0)}`}
+        // **Summed from `byCardCount` rather than read off `total`, and that is the whole of what
+        // makes this chip agree with the ones beside it.** `total` is the census *before* the
+        // search, so on a searched list it would read six thousand over a row of chips adding up
+        // to four — the `All` chip claiming to be a wider set than the union of its own parts.
+        // There is no field for this number and there must not be: a figure that has to equal a
+        // sum is a figure with two sources to drift between.
+        label={`All · ${count(census.reduce((n, bucket) => n + bucket.combos, 0))}`}
         pressed={cardCount === null}
         onClick={() => onCardCount(null)}
       />
@@ -425,6 +565,9 @@ function Filters({
         />
       ))}
       <ToggleChip
+        // `ownedTotal` is over the searched set too, so this figure and the sizes beside it are
+        // counts of one list and can be read against each other. It is still answered whether or
+        // not the toggle is on, which is what lets it say what pressing it would leave.
         label={`I own every piece · ${count(page?.ownedTotal ?? 0)}`}
         pressed={ownedOnly}
         onClick={() => onOwnedOnly(!ownedOnly)}
@@ -434,91 +577,178 @@ function Filters({
 }
 
 /**
- * One combo: what it is made of, what its letter means, what it does, and how to get there.
+ * What one row's header is called, built rather than left to fall out of the layout.
  *
- * Everything below the pieces is optional and most of it is usually absent — `produces`,
- * `description`, both prerequisite fields and `manaNeeded` all arrive `""` very often — so every
- * one of them goes through {@link Section}, which draws **nothing** rather than an empty heading.
- * That rule is structural here rather than repeated five times, because five call sites each
- * remembering to check a string is five chances to ship a heading with nothing under it.
+ * **A `gap` is not a word separator to the accessible-name computation.** Left to compute itself
+ * from its children the header would read `Boros ReckonerOwned+Boros CharmNot ownedS · Spicy —
+ * probably 3 or 4…` — every caption, count and ownership mark in the pieces run together, because
+ * the accname spec concatenates text nodes and the *spaces* on this row are flex gaps. This repo
+ * has been bitten by exactly that with a label and its count computing as `Missing2`.
+ *
+ * So the button carries this string as its `aria-label`, which also makes its children
+ * presentational — which is right rather than a side effect: a disclosure's name is the thing it
+ * opens, and the thing it opens is *this combo*, not the four facts printed under each picture.
+ * The pieces and the letter are what the reader sees and what this says, in that order.
+ */
+function comboLabel(combo: CardCombo): string {
+  const tag = COMBO_TAG[combo.bracketTag];
+  const pieces = combo.pieces.map((piece) => piece.name).join(" + ");
+  return `${pieces} — ${combo.bracketTag} ${tag.name}`;
+}
+
+/**
+ * One combo, collapsed: what it is made of and what its letter means, with everything else one
+ * press away.
+ *
+ * **Every row draws its header and nothing else until it is opened, and the reason is what driving
+ * the shipped window found.** Expanded, a row is the pieces, the bracket line, `produces`, both
+ * prerequisite blocks, the numbered steps, the mana, the template caveat and the Spellbook link —
+ * most of a screen — so twenty-five of them read as a wall rather than as a list. What a reader is
+ * doing in this dialog is *scanning*: which cards, and how strong. That is the header, and it is
+ * the whole header.
+ *
+ * **Closed is nothing mounted**, which is `Dialog`'s own rule one surface down rather than a
+ * performance note: the body is `{open && …}` and not a class that hides it, so a page of
+ * twenty-five costs twenty-five headers — and a `Section` that would have drawn nothing anyway
+ * does not have to be reasoned about at all. It also keeps the collapsed row honest for a test and
+ * for a find-in-page: text that is not on screen is not in the document either.
+ *
+ * The disclosure is `DeckBracket`'s *What this read* — a real `<button aria-expanded>` with a
+ * `ChevronRight` that takes `rotate-90`, and **never** `<details>`/`<summary>`, whose open state
+ * the browser owns and whose styling and animation this app would then be arguing with.
+ *
+ * Everything in the body is optional and most of it is usually absent — `produces`, `description`,
+ * both prerequisite fields and `manaNeeded` all arrive `""` very often — so every one of them goes
+ * through {@link Section}, which draws **nothing** rather than an empty heading. That rule is
+ * structural here rather than repeated five times, because five call sites each remembering to
+ * check a string is five chances to ship a heading with nothing under it.
  */
 function ComboRow({ combo }: { combo: CardCombo }) {
   const tag = COMBO_TAG[combo.bracketTag];
+  /**
+   * Open, per row and per mount.
+   *
+   * Local rather than lifted, and that is what makes *collapsed by default, every time the list
+   * changes* free: a row is keyed on the combo id, so a search, a chip or a **Show more** hands
+   * React a different set of children and every row that arrives arrives closed, with no effect
+   * anywhere having to reset anything. It is `Body`'s own argument for `useState` over a store
+   * field, one level further in.
+   */
+  const [open, setOpen] = useState(false);
 
   return (
-    <li className="rounded-lg border border-border p-3">
-      {/* The pieces are the headline: a combo is a *set of cards*, and the shape a reader already
-          knows from every combo list they have read is the names joined by a plus. The art is what
-          makes that shape scannable in a list of twenty-five. */}
-      <ul aria-label="Pieces" className="flex flex-wrap items-start gap-2">
-        {combo.pieces.map((piece, i) => (
-          <li key={`${piece.oracleId}:${i}`} className="flex items-start gap-2">
-            {i > 0 && (
-              // Visible and **not** `aria-hidden`: read straight through, the list says
-              // "Boros Reckoner + Boros Charm", which is the sentence. A separator hidden from the
-              // accessibility tree would leave two names touching.
-              //
-              // The offset puts it against the middle of the art rather than its top: a `w-24`
-              // frame is 5:7, so 96 × 7/5 = 134px tall, and half of that less half a text line is
-              // ~60px. Derived rather than measured — the pieces row has not been driven in the
-              // shipped window, and a live pass is what would settle it.
-              <span className="mt-[3.75rem] text-dim">+</span>
-            )}
-            <Piece piece={piece} />
-          </li>
-        ))}
-      </ul>
-
-      {/* Spellbook's own classification, in Spellbook's own words — `COMBO_TAG` imported from the
-          deck bracket rather than spelled a second time here, because a letter described two ways
-          in one app is a letter the reader cannot trust either drawing of. The **letter** leads
-          because it is what the feed publishes and what Spellbook's own site prints; the sentence
-          after it is what the letter means, and both are one text node so the two cannot be read
-          apart. */}
-      <p className="mt-2 text-xs text-dim">
-        {combo.bracketTag} · {tag.name} — {tag.forces}
-      </p>
-
-      <Section title="Produces" lines={splitLines(combo.produces)} />
-      <Section title="Prerequisites" lines={splitLines(combo.easyPrerequisites)} />
-      <Section title="Notable prerequisites" lines={splitLines(combo.notablePrerequisites)} />
-      {combo.manaNeeded !== "" && (
-        <div className="mt-2">
-          <h4 className="text-[0.6875rem] uppercase tracking-wide text-dim">Mana needed</h4>
-          {/* The symbols, not the braces — the direction doc's rule, and `ManaText` carries the
-              `sr-only` token beside each glyph so `{2}` is still spoken. */}
-          <ManaText source={combo.manaNeeded} className="mt-0.5 text-sm" />
-        </div>
-      )}
-      <Section title="Steps" lines={splitLines(combo.description)} ordered />
-
-      {/* **Their own sentence, and everything about it says *not the whole combo*.** A
-          `requires[]` template — "a creature with flying", "a mana outlet" — is not a card id and
-          can be resolved against no card list at all, so a row that listed its named pieces and
-          stopped would be this app implying a two-card combo where the feed says three things are
-          needed. `DeckBracket`'s "Possible, and not counted" block is the same sentence one
-          surface over. */}
-      {combo.templateCount > 0 && (
-        <p className="mt-2 text-xs leading-snug text-dim">
-          Also needs {plural(combo.templateCount, "piece")} no card list can name — a creature with
-          flying, a way to sacrifice — so the cards above are not the whole combo.
-        </p>
-      )}
-
-      {/* `openExternal` is the app's single call that leaves it, and it is made **on the press**.
-          Never a raw `window.open`, which in a Tauri webview navigates the app's own window — the
-          rule `CardModalRail` states at its own site. */}
+    <li className="rounded-lg border border-border">
+      {/* **The header *is* the toggle** — the whole of what a collapsed row shows is what opens
+          it, so there is no separate affordance to find. Nothing interactive may go inside it: a
+          button inside a button is invalid, and the Spellbook link is in the body for that reason
+          as much as for its own. The pieces are a row of spans rather than the `<ul aria-label>`
+          they used to be, because a list inside a button is neither valid content nor a list any
+          more — a button's descendants are presentational, so the markup would promise a structure
+          the accessibility tree has already flattened. {@link comboLabel} is what says them. */}
       <button
         type="button"
-        onClick={() => void openExternal(spellbookComboUrl(combo.id))}
+        aria-expanded={open}
+        aria-label={comboLabel(combo)}
+        onClick={() => setOpen((v) => !v)}
         className={cn(
-          "mt-2 rounded-md text-xs text-dim",
-          "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
+          "flex w-full items-start gap-2 rounded-lg p-3 text-left",
+          "transition-colors duration-150 hover:bg-surface motion-reduce:transition-none",
           FOCUS,
         )}
       >
-        View on Commander Spellbook
+        <ChevronRight
+          className={cn(
+            "mt-0.5 size-3 shrink-0 text-dim",
+            "transition-transform duration-150 motion-reduce:transition-none",
+            open && "rotate-90",
+          )}
+          aria-hidden="true"
+        />
+        <span className="min-w-0 flex-1">
+          {/* The pieces are the headline: a combo is a *set of cards*, and the shape a reader
+              already knows from every combo list they have read is the names joined by a plus. The
+              art is what makes that shape scannable in a list of twenty-five — and it is why the
+              header keeps the pictures rather than shrinking to a line of names. */}
+          <span className="flex flex-wrap items-start gap-2">
+            {combo.pieces.map((piece, i) => (
+              <span key={`${piece.oracleId}:${i}`} className="flex items-start gap-2">
+                {i > 0 && (
+                  // The offset puts it against the middle of the art rather than its top: a `w-24`
+                  // frame is 5:7, so 96 × 7/5 = 134px tall, and half of that less half a text line
+                  // is ~60px. Derived rather than measured — the pieces row has not been driven in
+                  // the shipped window, and a live pass is what would settle it.
+                  <span className="mt-[3.75rem] text-dim">+</span>
+                )}
+                {/* **Ownership stays in the header**, unlike everything else that was under the
+                    pieces. The whole reason to filter on *I own every piece* is to find the combo
+                    you could assemble tonight, so a reader scanning a collapsed list has to be
+                    able to see which pieces they are missing without opening anything. */}
+                <Piece piece={piece} />
+              </span>
+            ))}
+          </span>
+
+          {/* Spellbook's own classification, in Spellbook's own words — `COMBO_TAG` imported from
+              the deck bracket rather than spelled a second time here, because a letter described
+              two ways in one app is a letter the reader cannot trust either drawing of. The
+              **letter** leads because it is what the feed publishes and what Spellbook's own site
+              prints; the sentence after it is what the letter means, and both are one text node so
+              the two cannot be read apart. It is in the header rather than the body because *how
+              strong is this* is half of what a reader is scanning for. */}
+          <span className="mt-2 block text-xs text-dim">
+            {combo.bracketTag} · {tag.name} — {tag.forces}
+          </span>
+        </span>
       </button>
+
+      {open && (
+        <div className="border-t border-border p-3">
+          <Section title="Produces" lines={splitLines(combo.produces)} />
+          <Section title="Prerequisites" lines={splitLines(combo.easyPrerequisites)} />
+          <Section title="Notable prerequisites" lines={splitLines(combo.notablePrerequisites)} />
+          {combo.manaNeeded !== "" && (
+            <div className="mt-2 first:mt-0">
+              <h4 className="text-[0.6875rem] uppercase tracking-wide text-dim">Mana needed</h4>
+              {/* The symbols, not the braces — the direction doc's rule, and `ManaText` carries the
+                  `sr-only` token beside each glyph so `{2}` is still spoken. */}
+              <ManaText source={combo.manaNeeded} className="mt-0.5 text-sm" />
+            </div>
+          )}
+          <Section title="Steps" lines={splitLines(combo.description)} ordered />
+
+          {/* **Their own sentence, and everything about it says *not the whole combo*.** A
+              `requires[]` template — "a creature with flying", "a mana outlet" — is not a card id
+              and can be resolved against no card list at all, so a row that listed its named pieces
+              and stopped would be this app implying a two-card combo where the feed says three
+              things are needed. `DeckBracket`'s "Possible, and not counted" block is the same
+              sentence one surface over. */}
+          {combo.templateCount > 0 && (
+            <p className="mt-2 text-xs leading-snug text-dim first:mt-0">
+              Also needs {plural(combo.templateCount, "piece")} no card list can name — a creature
+              with flying, a way to sacrifice — so the cards above are not the whole combo.
+            </p>
+          )}
+
+          {/* `openExternal` is the app's single call that leaves it, and it is made **on the
+              press**. Never a raw `window.open`, which in a Tauri webview navigates the app's own
+              window — the rule `CardModalRail` states at its own site.
+
+              In the body rather than the header, which is the accordion's own constraint agreeing
+              with the one this link already had: a link nested inside the disclosure button would
+              be a control inside a control, and a press on it would toggle the row it left. */}
+          <button
+            type="button"
+            onClick={() => void openExternal(spellbookComboUrl(combo.id))}
+            className={cn(
+              "mt-2 rounded-md text-xs text-dim first:mt-0",
+              "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
+              FOCUS,
+            )}
+          >
+            View on Commander Spellbook
+          </button>
+        </div>
+      )}
     </li>
   );
 }
@@ -615,7 +845,10 @@ function Section({
   // props, and the numbering is the whole difference between the two anyway.
   const items = lines.map((line, i) => <li key={i}>{line}</li>);
   return (
-    <div className="mt-2">
+    // `first:mt-0`, because which of these is first is the *feed's* decision: a combo whose only
+    // filled field is `description` opens on its steps, and a body whose first block carried the
+    // gap meant for a block above it would sit 8px low for that row alone.
+    <div className="mt-2 first:mt-0">
       <h4 className="text-[0.6875rem] uppercase tracking-wide text-dim">{title}</h4>
       {ordered ? (
         <ol

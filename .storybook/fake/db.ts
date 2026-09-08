@@ -3624,9 +3624,18 @@ const HAND_WRITTEN_COMBOS: readonly ComboFixture[] = [
  * row is the fence's test, not an argument that the fence is redundant.
  *
  * So Boros Reckoner's `ownedTotal` is **5** — those three fillers, plus `3422-3587` and
- * `3422-3587--5` — against a `total` of 31 and a `matching` of 27 under the three-card chip.
- * Three different numbers on one page is the whole reason the count is a triple, and a fixture
- * where any two of them coincided would let a handler answer either with the other.
+ * `3422-3587--5` — against a `total` of 31 and a `matching` of 27 under the three-card chip, with
+ * no search term in force. Three different numbers on one page is the whole reason the count is a
+ * triple, and a fixture where any two of them coincided would let a handler answer either with
+ * the other.
+ *
+ * **That the 26 partners are 26 *different* cards is what makes a search assertable** (2026-09-08)
+ * and is worth saying out loud now that something depends on it: a generated half that reused one
+ * partner would make every term all-or-nothing against 26 rows, and a `search` test over it could
+ * not tell a handler that narrowed from one that did not. As the list stands, `ar` — Boros
+ * **Char**m, Nightm**ar**es, T**ar**mogoyf, Llanow**ar**, Plowsh**ar**es — leaves **6** of the 31,
+ * across **both** sizes (2 and 4), **3** of them owned. Four figures off one term, none equal to
+ * another, which is what `db.test.ts` pins. Do not collapse the list.
  *
  * **Consecrated Sphinx and Thrasios are deliberately absent**, and not because a filler could not
  * name them: `DeckBracket.stories.tsx` says in prose that "Consecrated Sphinx is in two of the
@@ -4153,19 +4162,39 @@ function comboPieces(
  * so every printing of a card is the same card here and stepping between two of them in the card
  * modal must not change this list.
  *
- * The three counts are three different questions and none of them can be derived from the page:
+ * **`search` is the reader changing the subject, and the three narrowings are not peers.** It is
+ * a case-insensitive substring over **every piece's name** in the combo — the asked-about card's
+ * own included, which is the least surprising rule and the one that needs no explaining in the
+ * UI — and `null`, `""` and a string that trims to empty are all *no search*, trimmed before the
+ * test. **Wildcards are not special**: a `%` or a `_` is searched for as itself, because
+ * `combos::card_combos` matches with an **escaped** `LIKE` pattern rather than handing SQL's
+ * wildcards to a text box. A fake more permissive than the crate would let a story do what the
+ * app cannot, which is the one way a workbench can teach a lie.
  *
- * * **`total`** — combos naming the card, **before either filter**. The heading's number.
- * * **`matching`** — after `cardCount` *and* `ownedOnly`. The one the pager walks.
- * * **`ownedTotal`** — of `total`, the combos every piece of which the reader has ({@link
- *   comboPieces}, where *has* is presence and not quantity). **The `cardCount` filter does not
- *   narrow it**, which is deliberate rather than an oversight: it is what the `I own every piece`
+ * The three counts are three different questions over **three different sets**, and none of them
+ * can be derived from the page:
+ *
+ * * **`total`** — combos naming the card, **with no filter at all, the search included**. The
+ *   heading's number, and the one question a search does not change.
+ * * **`matching`** — after `search` *and* `cardCount` *and* `ownedOnly`. The one the pager walks.
+ * * **`ownedTotal`** — of the **searched** set, the combos every piece of which the reader has
+ *   ({@link comboPieces}, where *has* is presence and not quantity). **The `cardCount` filter
+ *   still does not narrow it**, and that half is unchanged: it is what the `I own every piece`
  *   control says pressing it would leave, and a count that moved with the size chips would tell a
  *   reader who had picked "3 cards" that they own fewer combos than they do.
- * * **`byCardCount`** — a census of the *unfiltered* set, ascending, and **never a bucket of
+ * * **`byCardCount`** — a census of the **searched** set, ascending, and **never a bucket of
  *   zero**: a size nothing matches has no bucket, which is what makes the list drawable exactly
- *   as it stands. Narrowing it under the current filter would empty every chip but the chosen one
- *   and leave a reader no way back.
+ *   as it stands. Narrowing it by `cardCount` or `ownedOnly` as well would empty every chip but
+ *   the chosen one and leave a reader no way back.
+ *
+ * **Why two of those censuses follow the search and the third does not** (2026-09-08, when the
+ * search box landed): a text search is the reader changing *the subject* — *only combos with
+ * Thassa in them* — where the size chips and the owned toggle are **facets of that subject**. A
+ * facet's count has to predict what pressing it yields, so the census is taken over the searched
+ * set; otherwise every chip is a lie the moment somebody types, offering a size the searched list
+ * does not contain and an owned count drawn from combos the search has already excluded. `total`
+ * stays the card's own census because it answers a question the search does not change.
+ * `CardCombosPage` in `lib/ipc.ts` argues it there in the same words, over the same three sets.
  *
  * The page itself is `cardCount ASC, popularity DESC, id ASC` — smallest combos first because a
  * two-card line is the one a reader can actually assemble, then most-played, then the id so two
@@ -4176,11 +4205,16 @@ function comboPieces(
  * page.** Telling those two apart is {@link readHandlers.combos_status}' job — exactly as it is
  * for {@link matchCombos} — because a caller that cannot will draw "this card is in no combos"
  * over a feed that has never been fetched.
+ *
+ * **A search that matches nothing is a third thing and not that page**: `total` still counts the
+ * card's own combos, so the dialog can say *nothing matches that* rather than *this card is in no
+ * combos*. The empty page above is the one where `total` is `0` too.
  */
 function cardCombosPage(
   db: FakeDb,
   args: {
     oracleId: string;
+    search: string | null;
     cardCount: number | null;
     ownedOnly: boolean;
     limit: number;
@@ -4205,9 +4239,10 @@ function cardCombosPage(
   if (named.size === 0) return empty;
 
   const reach = collectionReach(db);
-  // Every naming combo, whole, **before either filter** — the set all three counts and the census
-  // are taken over. Built once because `ownedTotal` and `matching` disagree about which filters
-  // apply and a second walk would be a second chance to apply the wrong pair.
+  // Every naming combo, whole, **before any of the three narrowings** — `total`'s set, and the
+  // one the search is applied to below. Built once because the four answers disagree about which
+  // narrowings apply to them and a second walk would be a second chance to apply the wrong set.
+  // The pieces come with it, which is what lets the search read names rather than a second table.
   const all = db.combos
     .filter((combo) => named.has(combo.id))
     .map((combo) => {
@@ -4231,22 +4266,39 @@ function cardCombosPage(
       };
     });
 
+  // The subject the two facets are censused over. **Trimmed and lower-cased once**, and `??` as
+  // well as `=== ""` because the argument can arrive as `null` from a cleared box, as `""` from
+  // `lib/query.ts`'s key, or absent altogether from a caller written before the box existed —
+  // three spellings of the same request, and folding them here is what keeps them one.
+  //
+  // `String.includes` and not a pattern, which is the whole of the wildcard rule:
+  // `combos::card_combos` escapes `%`, `_` and the escape character itself before it builds its
+  // `LIKE`, so a `%` typed into the box is a `%` looked for. Every name in this corpus is ASCII,
+  // so JS's Unicode `toLowerCase` and SQLite's ASCII-only `LIKE` cannot disagree over one.
+  const term = (args.search ?? "").trim().toLowerCase();
+  const searched =
+    term === ""
+      ? all
+      : all.filter((row) => row.combo.pieces.some((p) => p.name.toLowerCase().includes(term)));
+
   const buckets = new Map<number, number>();
-  for (const row of all) {
+  for (const row of searched) {
     const size = row.combo.cardCount;
     buckets.set(size, (buckets.get(size) ?? 0) + 1);
   }
 
-  const matching = all.filter(
+  const matching = searched.filter(
     (row) =>
       (args.cardCount === null || row.combo.cardCount === args.cardCount) &&
       (!args.ownedOnly || row.owned),
   );
 
   return {
+    // `all` and not `searched` — the card's own census, and the only one of the four the search
+    // leaves alone.
     total: all.length,
     matching: matching.length,
-    ownedTotal: all.filter((row) => row.owned).length,
+    ownedTotal: searched.filter((row) => row.owned).length,
     byCardCount: [...buckets.entries()]
       .map(([cards, combos]): ComboCountBucket => ({ cards, combos }))
       .sort((a, b) => a.cards - b.cards),
@@ -9407,8 +9459,9 @@ export function readHandlers(db: FakeDb) {
      * the same silence a card genuinely in no combos gets, which is why `ipc.ts` says the two
      * must not be swapped.
      *
-     * The arithmetic — three counts, an unfiltered census, and the page's own order — is
-     * {@link cardCombosPage}, which is where every one of those rules is argued.
+     * The arithmetic — three counts over three sets, the size census, and the page's own order —
+     * is {@link cardCombosPage}, which is where every one of those rules is argued, the
+     * 2026-09-08 `search` argument and what it does and does not move included.
      *
      * A read, so it answers through a sync, and **it honours no fault**, `combosFetchError`
      * included: that fault is about a *fetch*, and this is a read of what is stored.
@@ -9422,6 +9475,10 @@ export function readHandlers(db: FakeDb) {
      */
     combos_for_card: (args: {
       oracleId: string;
+      /** The 2026-09-08 argument, in `CardCombosQuery`'s own order — `oracleId`, `search`,
+       *  `cardCount`, `ownedOnly`, `limit`, `offset` — because three files describe this one
+       *  call and an order that agrees is the cheapest way to check they mean the same thing. */
+      search: string | null;
       cardCount: number | null;
       ownedOnly: boolean;
       limit: number;
