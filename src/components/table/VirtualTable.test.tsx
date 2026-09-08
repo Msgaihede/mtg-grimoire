@@ -152,6 +152,12 @@ describe("VirtualTable's rows", () => {
    * popup inside it cannot lift itself over the next row — the row has to come forward. As
    * far as the rows and no further: the header above is a layer up, and a row lifted to its
    * level would scroll over it.
+   *
+   * **The rung is unconditional and the two premises behind it are not** — under `grow` a row is
+   * a bare `relative` with no transform, so it is a stacking context for one of those two reasons
+   * rather than both, and the lift is still what has to happen. Anything reasoning about a row
+   * being transformed (a `fixed` descendant's containing block, a capped nested `z-index`) is
+   * reasoning about the default mode only. See the `grow` block below.
    */
   it("lifts a row holding an open popup, and no higher than the header", () => {
     setup();
@@ -181,5 +187,104 @@ describe("VirtualTable's rows", () => {
     const group = screen.getByRole("rowgroup");
     expect(screen.getAllByTestId("wrapped")).toHaveLength(2);
     for (const child of group.children) expect(child).toHaveAttribute("role", "row");
+  });
+});
+
+/**
+ * **`grow` is the opt-in that stops this being a scroller, and the deck's Table view is its one
+ * caller** (2026-09-08).
+ *
+ * The three walls that draw this table — the search, the collection, the wishlist — are lists of
+ * up to 117k rows and virtualise for their lives; nothing about them may move, which is why the
+ * prop defaults to `false` and every case above drives that default. A *deck* is a few hundred
+ * rows at most, and drawing it in a scrollport put a second scrollbar an inch from the page's own,
+ * with nothing on screen saying which of the two a wheel was about to move. So the deck's table
+ * renders every row in normal flow and lets `AppShell`'s `main` scroll, exactly as the editor's
+ * other three views already did.
+ *
+ * **jsdom lays nothing out**, so none of this can see the scrollbar itself. What it can see is the
+ * three structural facts that produce it — the count of rows in the tree, the absence of a
+ * scrollport on the root, and a row positioned in flow rather than at an offset — and each of
+ * those is the whole of the mechanism.
+ */
+describe("VirtualTable told to grow", () => {
+  /** Long enough that the virtualiser's window is a genuine subset: at the 600px `offsetHeight`
+   *  stubbed above, 44px rows and an overscan of 10, the default mode mounts a couple of dozen. */
+  const MANY: Row[] = Array.from({ length: 100 }, (_, i) => ({
+    id: String(i),
+    name: `Card ${i}`,
+    price: i,
+  }));
+
+  const draw = (grow: boolean) =>
+    render(
+      <VirtualTable
+        rows={MANY}
+        columns={COLUMNS}
+        label="Test rows"
+        total={MANY.length}
+        listKey="k"
+        onNeedNextPage={() => {}}
+        sort={[]}
+        onSort={() => {}}
+        grow={grow}
+      />,
+    );
+
+  /** The header is a `role="row"` too, so a body count is one less than the query's. */
+  const bodyRows = () => screen.getAllByRole("row").length - 1;
+
+  it("mounts every row, where the default mounts a window onto them", () => {
+    const { unmount } = draw(false);
+    const windowed = bodyRows();
+    expect(windowed).toBeGreaterThan(0);
+    expect(windowed).toBeLessThan(MANY.length);
+    unmount();
+
+    draw(true);
+    expect(bodyRows()).toBe(MANY.length);
+  });
+
+  /**
+   * The root stops being a scroll container, and `min-h-0` matters more than the `overflow`: it is
+   * the line that tells the flex column this box may be squeezed below its content, which is what
+   * turns a full-height table back into a letterbox with a scrollbar in it.
+   */
+  it("takes the scrollport off its root and leaves the frame", () => {
+    draw(true);
+    const table = screen.getByRole("table");
+    expect(table.className).not.toContain("overflow");
+    expect(table.className).not.toContain("min-h-0");
+    expect(table.className).not.toContain("flex-1");
+    // The frame is not a scrollport and stays: the table still reads as one object.
+    expect(table.className).toContain("border");
+    // Nothing holds a scrollbar open to a height the rows are not in.
+    expect(screen.getByRole("rowgroup").style.height).toBe("");
+  });
+
+  /**
+   * A row is laid out by the document rather than by the virtualiser — no `transform`, and a
+   * `minHeight` rather than a `height`, so a band that grows past its declared `extraHeight` makes
+   * the row taller instead of being painted over the row below.
+   *
+   * **`relative` is not cosmetic**: `TableView` lays its drop indicator and its landed mark over a
+   * row with `inset-0`, and in the default mode the virtualiser's own `absolute` is what those
+   * overlays resolve against.
+   */
+  it("lays a row out in flow, positioned and floored rather than fixed and offset", () => {
+    draw(true);
+    const row = screen.getAllByRole("row")[1];
+    expect(row.className).toContain("relative");
+    expect(row.className).not.toContain("absolute");
+    expect(row.style.transform).toBe("");
+    expect(row.style.height).toBe("");
+    expect(row.style.minHeight).toBe("44px");
+  });
+
+  /** The count assistive tech is told is the list's, not the DOM's — unchanged by the mode, and
+   *  worth pinning here because `grow` is the one mode where the two happen to agree. */
+  it("still counts the whole list, header included", () => {
+    draw(true);
+    expect(screen.getByRole("table")).toHaveAttribute("aria-rowcount", "101");
   });
 });

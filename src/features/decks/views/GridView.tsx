@@ -5,9 +5,9 @@
  * deck at once — which is what you want the moment before you cut something.
  */
 import { useRef } from "react";
-import { CardArt } from "@/components/CardArt";
 import { CardChin } from "@/components/CardChin";
-import { atLeast, cardScaleVars, chinHeight, scaled } from "@/lib/cardZoom";
+import { useTooltip } from "@/components/tooltip/useTooltip";
+import { atLeast, cardScaleVars, scaled } from "@/lib/cardZoom";
 import { DROP_MARK_ROOM, DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { playedFinish } from "@/lib/finish";
 import { finishTreatments } from "@/lib/treatment";
@@ -18,9 +18,7 @@ import { formatPrice } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
 import { useCardZoomGesture } from "@/lib/useCardZoomGesture";
 import { cn } from "@/lib/utils";
-import { LabelDot, RuleBreakMark, TheoryMatchMark } from "../CardMarks";
 import {
-  DECK_CARD_VARIANT,
   deckCardBodyProps,
   deckCardName,
   deckCardMenuProps,
@@ -28,22 +26,24 @@ import {
   deckCardPress,
   deckCardProps,
   deckCardSelectedProps,
+  deckCardShort,
   DeckCardControls,
   deckGroupMenuProps,
   deckGroupProps,
   deckGroupRename,
-  LandedMark,
   REVEALED_ON_CARD,
   SELECTED_CARD,
   useCategoryDrop,
   useDeckCardDrag,
   type DeckCardActions,
 } from "../cardControl";
+import { DeckCardFace } from "../DeckCardFace";
 import { theoryMatchMark, type TheoryMark, type TheoryPlan } from "../theoryMatch";
 import { DropIndicator } from "../DropIndicator";
 import type { CardGroup } from "../grouping";
 import { ruleBreak } from "../violations";
 import type { ValidationIssue } from "../validation/types";
+import { splitRail } from "./columns";
 import { GroupHeader } from "./GroupHeader";
 
 /**
@@ -122,6 +122,23 @@ export function GridView({
   // this wall never draws.
   useCardZoomGesture(scrollRef, "deck");
 
+  // **The command zone, then the deck, then everything played beside it** — `splitRail`'s three
+  // runs, concatenated back into one list of full-width wrapping groups.
+  //
+  // This view rendered `groups` straight through until now, and on a real Commander deck that read
+  // Commander → Sideboard (3 cards) → Maybeboard (19) → the deck: the two piles the reader has
+  // said are *not* in the deck sat above it, roughly 900px of wall before their own columns
+  // started. `StackView` and `TextView` have both called `splitRail` since it existed, so the
+  // three views disagreed about where a reader's Sideboard is — which is one deck laid out two
+  // ways, one toolbar press apart.
+  //
+  // **Ordering only, and deliberately not a rail.** The other two views draw the rail as a column
+  // pinned to the right of the flow, and that is exactly what a wall must not do: a group here is
+  // as wide as the desk, so a 19-card Maybeboard in a one-tile column is ~4,500px of scroll for a
+  // pile that is read at a glance. Full-width groups throughout, last instead of first.
+  const { command, flow, rail } = splitRail(groups);
+  const ordered = [...command, ...flow, ...rail];
+
   return (
     // Down the page rather than across it: a wall wraps, so the columns the other two views
     // pack into are the window's own width here.
@@ -150,7 +167,7 @@ export function GridView({
         className,
       )}
     >
-      {groups.map((group) => (
+      {ordered.map((group) => (
         <GridGroup
           key={group.key}
           group={group}
@@ -210,7 +227,23 @@ function GridGroup({
       // holding" and "and it is this one" across the four views and the two screens.
       // `FOCUS` because this is where the caret comes back to when the pile's menu closes; the
       // tab index is already here from `deckGroupProps`.
-      className={cn("relative rounded-md", FOCUS, eligible && DROP_RING, over && DROP_OVER)}
+      className={cn(
+        "relative rounded-md",
+        FOCUS,
+        // **A switched-off pile is washed here as it is on the stacks** (2026-09-08), and it is
+        // the ordering change above that made the absence cost something. This view drew the
+        // `INACTIVE` chip and nothing else, which was survivable while a switched-off pile sat
+        // wherever `sortOrder` put it among the deck's own columns; now `splitRail` puts every
+        // one of them **last**, so a nineteen-card Maybeboard is the bottom of the wall — and
+        // undimmed, the deck simply appears to carry on past its own end. `StackView` says it
+        // three ways and this is the first of them; the second is `GroupHeader`'s dimmed name and
+        // chip, which this view has always drawn, and the third is the cards' own `opacity-60`
+        // below. An active pile carries none of the three: being in the deck is the default, and
+        // being switched off is the fact worth spending marks on.
+        !group.isActive && "bg-surface/60",
+        eligible && DROP_RING,
+        over && DROP_OVER,
+      )}
     >
       {over && <DropIndicator />}
       {/* `tight`, because this section is as wide as the window: counts pushed to the far
@@ -233,7 +266,12 @@ function GridGroup({
         <ul
           aria-label={group.name}
           style={{ gap: atLeast(TILE_GAP, zoom) }}
-          className="flex flex-wrap"
+          // The third of the three signals a switched-off pile carries, and the same class
+          // `StackView` puts on its own `<ul>` — the cards themselves go quiet, so a reader
+          // scanning the wall reads the tail of it as *not the deck* before they have read a
+          // heading. `opacity` below 1 makes this a stacking context; unlike the stack's `<ul>`
+          // nothing here takes `LAYER.raised`, so there is no lift for it to trap.
+          className={cn("flex flex-wrap", !group.isActive && "opacity-60")}
         >
           {group.cards.map((card) => (
             <GridCard
@@ -259,25 +297,27 @@ function GridGroup({
  * One card as a 150px tile — 150px at 1×, and {@link TILE_WIDTH} scaled at every other stop:
  * **the whole card**, with the app's marks over it.
  *
- * **The frame is `components/CardArt`, which is the same object the search wall draws** (changed
- * 2026-08-16). It used to be a hand-rolled copy of it — its own `useImageRetry` call, its own
- * `aspect-[488/680]` box, its own no-image fallback, its own `FoilOverlay` — and the copy had
- * drifted in every way a copy does: `rounded-md` against the wall's `rounded-lg`, a second
- * spelling of the aspect ratio (488/680 rather than `CARD_ASPECT`'s `5 / 7`), a fallback at 9.5px
- * against the wall's 12, and no hover lift at all. A reader looking at the docked search column
- * and the deck laid out beside it was looking at two different drawings of one thing, on the same
- * screen. `CardArt`'s own doc has always claimed to be the one definition; this view is the
- * surface that had opted out.
+ * **The face is `DeckCardFace`, which is the object `CardStack` draws** (changed here after
+ * 2026-08-16's move to `components/CardArt`, which was the right fix aimed at the wrong wall).
+ * That change was made because this tile had a hand-rolled copy of the *search wall's* frame and
+ * had drifted from it, and it is true that a deck tile and a search tile should not be two
+ * drawings of one card. But the wall docked beside the desk is not the surface this tile is one
+ * toolbar press from: `Stacks | Grid` are two drawings of *this deck*, and those two had drifted
+ * from each other instead — a printed frame under the picture against a 5:7 box with `CardArt`'s
+ * own smaller fallback, a folded label-and-count tag against a `bg-accent` chip with a separate
+ * `LabelDot` beside it, a `Game Changer` ribbon against the crown in `FoilOverlay`'s chip, and a
+ * rule break drawn as an edge on one and as a ring on the other. One component is what settles it,
+ * and the reader asked for this one.
  *
- * What stays this view's own is what a card *in a deck* says and a card in a wall does not: the
- * copy count, the reader's label, the rule break, the landed flash and the stepper. They are
- * laid in the corners the wall leaves free — see the tile's body.
+ * What the tile keeps for itself is the *box* the face goes in: the wrapper's own edge and resting
+ * shadow, the chin under it (this view's `seam` and the deck's own shortage figure), and the
+ * controls column over it. That is exactly the split `CardStack` makes.
  *
  * **No name line, and that is the app's existing answer rather than a new one.** A 150px card's
- * printed name is a few pixels tall — but `CardGrid`'s search wall already draws whole `grid`
- * cards at 150–170px and a reader identifies them by frame and art, so a caption here would be a
- * second answer to a question this app has already settled. The button's accessible name still
- * carries the whole sentence, and `GroupHeader` still names the pile.
+ * printed name is a few pixels tall — but the frame `DeckCardFace` draws under the picture carries
+ * the name, the cost and the type line in the app's own hand, so a card is legible before its
+ * bytes land and a caption would be a second answer. The button's accessible name still carries
+ * the whole sentence, and `GroupHeader` still names the pile.
  */
 function GridCard({
   card,
@@ -307,13 +347,18 @@ function GridCard({
    *  `key`, so adding the same card twice replays the fade. */
   landedKey: number | undefined;
   /** How large the reader is drawing cards. The tile's width is the only thing it decides
-   *  outright — the picture follows by aspect ratio, and the foot follows by `chinHeight`. */
+   *  outright — the face's height follows from it by `cardFaceHeight`, and the chin follows by
+   *  `chinHeight` inside `CardChin`. */
   zoom: number;
 }) {
+  const tip = useTooltip();
   const dragRef = useDeckCardDrag(card, actions?.drop !== undefined, actions?.groupDrag);
-  // The card's foot, the same object the stacks draw — see `components/CardChin.tsx`. The
-  // controls bar below is positioned off this number, which is why it is still a local.
-  const footHeight = chinHeight(zoom);
+  // {@link deckCardShort}, which is also what `deckCardName` says this card's shortage in words
+  // from — an inactive pile and the theory list each read 0 owned for a reason that is not an
+  // empty shelf. The **switch**, never the kind: a Maybeboard switched *on* is short of copies
+  // like any other pile. It is the stack's figure, and this tile draws it now because the two
+  // views are one card.
+  const short = deckCardShort(card);
 
   return (
     <li
@@ -322,10 +367,10 @@ function GridCard({
       // right-click on the card. The keydown rides here too, so Shift+F10 with the caret on the
       // stepper drawn over the art still asks about this card.
       {...deckCardMenuProps(card, actions)}
-      // The width is the tile's whole geometry — `CardArt` below is `CARD_ASPECT`, so its height
-      // follows without a second number to keep in step. An inline style rather than the fixed
-      // width utility this used to carry: Tailwind scans source text for whole class names, so an
-      // interpolated one emits no rule and the tile collapses to its content.
+      // The width is the tile's whole geometry — `DeckCardFace` derives its height from this same
+      // number, so there is no second measurement to keep in step. An inline style rather than the
+      // fixed width utility this used to carry: Tailwind scans source text for whole class names,
+      // so an interpolated one emits no rule and the tile collapses to its content.
       //
       // The two variables beside it are the other half of that geometry: everything drawn *on* the
       // card — the copy count, the label, the rule break, the gem, the stepper — sizes itself
@@ -338,20 +383,39 @@ function GridCard({
       {...deckCardBodyProps()}
       {...deckCardSelectedProps(selected)}
       className={cn(
-        // **No box of its own** (changed 2026-08-16): this used to be `rounded-md border
-        // bg-surface`, a slab with the card inset in it and the foot painted on the same felt,
-        // against a search tile that is the card and a caption line under it. The two read as
-        // different objects on one screen. What is left is the wall's own wrapper — a positioned
-        // `group`, which is what `CardArt`'s hover lift and the controls' reveal both hang from.
-        "group relative",
+        // **The stacked card's own wrapper, class for class.** This was `group relative` and
+        // nothing else from 2026-08-16 until the two views became one card: a bare positioned box
+        // around a `CardArt` frame that supplied its own edge. A stacked card is `rounded-lg
+        // border` with the face inset at `rounded-[7px]` and the chin riding onto that border, so
+        // the tile has to carry the same edge or the shared face would sit in two different
+        // objects on two drawings of one deck.
+        //
+        // **`group` stays, and it is the one thing here that is not the stack's.** The stack
+        // reveals its controls by which card is *open* — a collapsed card shows 34px of itself, so
+        // `group-hover:` would arm a bar hundreds of pixels below the strip under the pointer.
+        // Nothing overlaps a tile on this wall, so the pointer is the honest question and
+        // `REVEALED_ON_CARD` hangs off this class.
+        "group relative block rounded-lg border",
+        // Deeper than Tailwind's own `shadow-lg`/`shadow-2xl`, whose alphas are 0.1 and 0.25 —
+        // written for a card on white. These sit on the app's felt at 0.16 lightness, where a
+        // 10 % shadow is not a shadow. The stack's *resting* shadow and not its open one: a tile
+        // on this wall is never fanned out of anything, so there is no second state to draw.
+        "shadow-[0_10px_15px_-3px_rgb(0_0_0/0.45),0_4px_6px_-4px_rgb(0_0_0/0.45)]",
         // Where the caret lands when this tile's menu closes — `deckCardMenuProps` is what makes
         // the tile focusable, and a hand-back the reader cannot see is half a hand-back. Outset
         // where the button inside is inset, because the outline is drawn outside this box rather
         // than in the region it clips.
         FOCUS,
-        // The search wall's own recipe, on the outermost element — so a picked tile that also
-        // breaks a rule keeps both marks and neither is drawn over the other. See
-        // `SELECTED_CARD`, which says why this is here rather than on the card's face.
+        // A card that breaks a rule is outlined in the destructive colour, which is the stack's
+        // answer and is now this view's. It used to be a `ring-2 ring-destructive` on the face,
+        // over a neutral `CardArt` edge — the right answer while the face had an edge of its own
+        // and the wrapper had none, and the wrong one now: the wrapper *is* the card's edge here
+        // exactly as it is on a stacked card, and `CardChin`'s `tone` below carries the colour
+        // through the foot so the outline is one colour all the way round.
+        ruleBreakText ? "border-destructive" : "border-border",
+        // Outside all of that, and therefore never confusable with the card's own edge: a ring is
+        // painted beyond the border box, so a picked card that also breaks a rule wears a gold
+        // ring around a red card rather than one edge arguing with itself. See `SELECTED_CARD`.
         selected && SELECTED_CARD,
       )}
     >
@@ -360,149 +424,40 @@ function GridCard({
         aria-label={deckCardName(card, ruleBreakText, theoryMark)}
         {...deckCardProps(card)}
         {...deckCardPress(card, onSelect, actions)}
-        // Inset, for the stacked card's reason: the button holds a face that clips its own
-        // corners, and an outline standing off its edge lands on the tile's own gap.
+        // Inset, for the stacked card's reason: the button *is* the card face, whose edge sits 1px
+        // inside the card's own border with the chin butted against its bottom, so an outline
+        // standing 2px off it is drawn over both and reads as a thicker card rather than as focus.
         className={cn("block w-full cursor-pointer text-left", FOCUS_INSET)}
       >
-        {/* The card's face, and the box the deck's own marks are positioned against — which is
-            why `CardArt` is wrapped rather than given them: it takes no children.
+        {/* The card, which is one component with the stacked card's — see `DeckCardFace`. The
+            width is the tile's own and the face's height falls out of it, so the picture, the
+            printed frame under it, the marks strip and the rule break are one drawing on both
+            views.
 
-            `overflow-hidden rounded-lg` is `CardArt`'s own pair repeated one level out, so a mark
-            laid over the picture is clipped by the same corner the picture is. */}
-        <span
-          className={cn(
-            "relative block overflow-hidden rounded-lg",
-            // **The card's own edge, and only a rule break changes it** — `CardMarks`' fourth
-            // separation between a rule break and a game changer, kept as a ring on the face
-            // now that the tile has no border. A ring rather than a border because a border
-            // would shrink the picture by 2px on exactly the cards that break a rule; and on
-            // the face rather than on the `<li>` so that it can never collide with
-            // `SELECTED_CARD`, which is a ring on the element outside this one.
-            ruleBreakText !== null && "ring-2 ring-destructive",
-          )}
-        >
-          <CardArt
-            // `null` for an orphan — nothing fetches a picture of a card that is not in the
-            // database, and `CardArt` draws "No card" for it rather than "No image".
-            cardId={card.needsReview === null ? card.cardId : null}
-            // The name is the `alt` and what the no-picture fallback prints. It does **not**
-            // reach the button's accessible name: that is the `aria-label` above, which
-            // replaces this element's content outright and already carries the whole sentence.
-            name={card.name}
-            // The whole card, the same `grid` variant the stack draws.
-            variant={DECK_CARD_VARIANT}
-            // The picture a browser can reach, where the row carries one. `DECK_CARD_VARIANT`
-            // and not a size of this view's own: the URL and the protocol URL beside it have to
-            // name one size, and `CardArt` is handed both and picks — see `cardArtSrc`, which
-            // is the one place that platform branch is written.
-            imageUrl={card.imageUris?.[DECK_CARD_VARIANT]}
-            finish={playedFinish(card.finish, card.finishes)}
-            // In the same chip, whose glyph and word it replaces — so a Surge Foil in a deck
-            // says so here exactly as it does on the search wall docked beside this view.
-            treatments={finishTreatments(
-              card.promoTypes,
-              playedFinish(card.finish, card.finishes),
-            )}
-            // The crown, in the same chip as the finish and in the same corner the search wall
-            // puts it — which is why this view no longer draws `GameChangerBadge`'s `GC`. The
-            // two abbreviations of one fact are still right where there is no room for a glyph
-            // over art (the table's rows, the text columns); a wall of card faces has the room,
-            // and the docked search column beside this one has been drawing the crown all along.
-            gameChanger={card.gameChanger === true}
-            hoverZoom
-            // A wall of a hundred tiles is a hundred mounted images — this view is a plain
-            // scroller rather than a virtualised one, so the browser's gate is the only thing
-            // bounding what they ask for. See the prop, which is `"eager"` everywhere else.
-            loading="lazy"
-          />
-
-          {/* What a card *in a deck* says that a card in a wall does not, in the corners the
-              wall leaves free: top-**left**, because top-right is `FoilOverlay`'s chip on every
-              card surface in this app. It used to be a full-width scrim strip along the top with
-              these pushed to the right end — under that chip, which the two have overlapped for
-              as long as both were drawn. */}
-          <span
-            className={cn(
-              "absolute flex items-center",
-              "top-[calc(0.25rem*var(--mark-scale,1))] left-[calc(0.25rem*var(--mark-scale,1))]",
-              "gap-[calc(0.25rem*var(--mark-scale,1))]",
-            )}
-          >
-            {card.labelName !== null && <LabelDot name={card.labelName} color={card.labelColor} />}
-            {/* The copy count, at the size it is on a card at 100% zoom. `LabelDot` beside it reads
-                the same variable from inside its own component; this one is the view's own chip,
-                so it says so here. */}
-            <span
-              className={cn(
-                "shrink-0 rounded-sm bg-accent font-mono tabular-nums text-accent-fg",
-                "px-[calc(0.25rem*var(--mark-scale,1))]",
-                "text-[calc(0.5625rem*var(--mark-scale,1))]",
-              )}
-            >
-              {card.quantity}
-            </span>
-          </span>
-
-          {/* The plan's tick, in the corner this wall does **not** otherwise own.
-              `src/CLAUDE.md`'s standing rule is that top-right belongs to `FoilOverlay`'s chip
-              and a surface's own marks take the corners it leaves — and this is the one mark
-              that cannot honour it, because the same fact is drawn in the same corner on the
-              stack, where the chip is switched off, and a mark that changed corners between two
-              drawings of one deck would be a mark nobody could find twice.
-
-              So the chip keeps the corner and the tick **stacks under it**, on the one card in
-              four that has a chip at all. `1.5rem` is that chip's own box measured rather than
-              guessed: `FinishMark` and `GameChangerMark` are `0.75rem` glyphs in `py-[0.125rem]`
-              — 16px — plus the 4px inset above it and 4px of gap, every term scaled by the same
-              `--mark-scale` the chip is. The condition has to be spelled the way `FoilOverlay`
-              spells it (`finish !== null || gameChanger`), because a chip is drawn for **either**
-              fact and reading only the finish would put the tick under an empty corner on every
-              non-foil game changer. */}
-          {theoryMark !== null && (
-            <span
-              className={cn(
-                "absolute right-[calc(0.25rem*var(--mark-scale,1))]",
-                playedFinish(card.finish, card.finishes) !== null || card.gameChanger === true
-                  ? "top-[calc(1.5rem*var(--mark-scale,1))]"
-                  : "top-[calc(0.25rem*var(--mark-scale,1))]",
-              )}
-            >
-              {/* The tile's own quantity chip, not the stack's banner — see the component. */}
-              <TheoryMatchMark tier={theoryMark.tier} variant="chip" delta={theoryMark.delta} />
-            </span>
-          )}
-
-          {/* Bottom-left, opposite the tick above — `CardMarks.tsx` has why the two must never
-              share a corner. This wall has drawn it here all along; it is the **stack** that
-              moved its copy down to match, on 2026-08-20. */}
-          {ruleBreakText !== null && (
-            <RuleBreakMark
-              text={ruleBreakText}
-              className={cn(
-                "absolute",
-                "bottom-[calc(0.25rem*var(--mark-scale,1))]",
-                "left-[calc(0.25rem*var(--mark-scale,1))]",
-              )}
-            />
-          )}
-
-          {/* Over the picture rather than over the whole tile, so the foot's gem and price stay
-              at full strength while the card itself lights up. Nothing overlaps a tile on this
-              wall, so unlike the stack there is no reveal strip the mark has to survive into —
-              it is the same mark, drawn in the one place the reader is looking.
-
-              The corner is the caller's — `rounded-[inherit]` emits no rule at all — so it is
-              spelled as the radius this face is drawn with. */}
-          {landedKey !== undefined && <LandedMark key={landedKey} className="rounded-lg" />}
-        </span>
+            No zoom goes with it: everything drawn on the card reads `--mark-scale`, which the
+            `<li>` above publishes. */}
+        <DeckCardFace
+          card={card}
+          width={scaled(TILE_WIDTH, zoom)}
+          // **The crown, where the stack spells the words out** — the one mark this tile does not
+          // take from the stack, and the reason is arithmetic rather than taste. Measured in the
+          // shipped window 2026-09-08: the ribbon is 130px at `cardZoom` 1.1, which with the
+          // quantity tag and the plan's tick either side of it overflowed a 165px tile's strip by
+          // 11px and clipped the tick. Every term scales with the zoom, so the overflow is
+          // proportional and was there at every stop. See the prop.
+          gameChanger="crown"
+          ruleBreakText={ruleBreakText}
+          theoryMark={theoryMark}
+          landedKey={landedKey}
+        />
       </button>
 
       {/* **The card's foot, and a sibling of the button rather than a child of it.**
 
           It said a rarity and a price in 9px type on a 20px strip with no felt and no edges, and
-          left out which printing the card *is* — the one fact a reader comparing two copies of
-          one card needs. It is `components/CardChin` now, the same object `CardStack` draws, so a
-          deck read in one view and then the other says the same things in the same order.
+          left out which printing the card *is* — the one fact a reader comparing two copies of one
+          card needs. It is `components/CardChin` now, the same object `CardStack` draws, so a deck
+          read in one view and then the other says the same things in the same order.
 
           **Outside the button for the reason that component states, and this view is why it is
           worth restating**: everything in the chin is a *fact* rather than a mark, and a button's
@@ -519,10 +474,7 @@ function GridCard({
           It is still inside the tile, which is the card's whole body: the `<li>` carries
           `deckCardBodyProps()` and `deckCardMenuProps`, so a press on the gem or the price is
           still a press on *this card* rather than on the desk behind it, and a right-click there
-          still asks about this card. And the controls bar below is positioned against that same
-          `<li>` at `bottom: footHeight`, so it goes on landing on the chin's top edge — the tile's
-          height is the face plus the chin either way, and which element the chin is nested in
-          moves neither box. */}
+          still asks about this card. */}
       <CardChin
         zoom={zoom}
         rarity={card.rarity}
@@ -530,55 +482,77 @@ function GridCard({
         collectorNumber={card.collectorNumber}
         // The code is what fits; the set's name is one hover away, exactly as on the stacked card
         // — `PF26` is not a word anybody knows, and the hint being on one of two drawings of one
-        // deck is the drift this task exists to remove. `null` for an orphan, whose `setName`
+        // deck is the drift this view exists to remove. `null` for an orphan, whose `setName`
         // `cards` no longer has: then the code stands on its own rather than being annotated with
         // a guess.
         printingTitle={card.setName === null ? null : `${card.setName} · #${card.collectorNumber}`}
         finish={playedFinish(card.finish, card.finishes)}
         treatments={finishTreatments(card.promoTypes, playedFinish(card.finish, card.finishes))}
         money={formatPrice(card.unitPrice, currency)}
-        // **`"art"`, not the stack's.** This tile's face is `CardArt`, whose own edge stops where
-        // this bar begins rather than enclosing it — so the chin supplies all three of its own and
-        // the two are one outline. Under the stack's bordered card it must not, or the foot is 2px
-        // and everything else is 1px.
-        seam="art"
-        // **No `tone`, and that is the whole of this tile's rule-break answer being the ring.**
+        // The card's own edge, and the two must move together — see `CardChin`'s `tone`.
         //
-        // `CardChin`'s `tone` exists so the chin's edge can match the *card's* edge, and the stack
-        // is where that is load-bearing: its card really is bordered in destructive, so a chin
-        // left at the neutral edge would put 28px of the wrong colour back through the left and
-        // right edges of that outline — the one thing the outline exists to prevent, stated at the
-        // prop and again at `CardStack`'s foot.
+        // **This prop was deliberately absent while the tile's face was `CardArt`**, and the
+        // argument for the absence expired with the premise rather than being overruled. It ran:
+        // `CardArt` draws a neutral edge of its own, a rule break here is the `ring-2` outside
+        // that edge, so reddening only the chin would run the outline grey down the art and red
+        // across the foot. Every clause of that was about a card whose edge belonged to the
+        // picture. The tile is `rounded-lg border` now, like a stacked card, and its border is the
+        // rule break's — so a neutral chin would put 28px of `border-border` back through the left
+        // and right edges of that outline, which is the one thing the outline exists to prevent.
+        tone={ruleBreakText !== null ? "destructive" : "default"}
+        // **`"card"`, where it was `"art"`.** The face inside the button clips its own corners at
+        // `rounded-[7px]` and this tile carries the border, so the chin draws sides only and rides
+        // onto the card's own border rather than supplying a bottom edge of its own — the stacked
+        // card's arrangement exactly, and now for the same reason. `"art"` is what a bare
+        // `CardArt` frame needs, and there is no longer one here.
+        seam="card"
+        // **The shortage, and it is drawn only where it says something**: a fully covered card
+        // prints nothing at all, because sixty ticks are sixty things to read past on the way to
+        // the three that matter. It is the deck's own fact — the one slot no other surface's chin
+        // fills — and this wall drew it nowhere until the two card-face views became one card.
         //
-        // Here the argument runs the other way. `CardArt` grew an edge of its own on 2026-08-26 so
-        // the picture and this bar would read as one outlined object, and that edge is **neutral**
-        // — a rule break on this surface is the `ring-2 ring-destructive` on the face above, which
-        // is drawn outside the border box and leaves the border alone. Reddening only the chin
-        // therefore ran the card's outline grey down the art and red across its foot, so the card
-        // stopped reading as one object at exactly the join the border was added to close.
-        //
-        // The fix is this absence rather than a red edge on `CardArt`: the ring already says it,
-        // an outline saying it as well is one fact drawn twice, and `CardArt`'s two callers
-        // disagree about how a rule break is marked — so the colour is not that component's
-        // decision to take.
+        // `aria-hidden` even out here, outside the button: the button beside it already says the
+        // shortage in words, and a screen reader should not hear "1 slash 2" as well.
+        extra={
+          short ? (
+            <span
+              aria-hidden="true"
+              // Redundant with `deckCardName`'s own "you own N of M" clause — the button beside
+              // this figure already says the shortage in words.
+              {...tip(`You own ${card.ownedQuantity} of the ${card.quantity} this deck wants`, {
+                describes: false,
+              })}
+              className="shrink-0 tabular-nums text-destructive"
+            >
+              {card.ownedQuantity}/{card.quantity}
+            </span>
+          ) : undefined
+        }
       />
 
-      {/* Over the art, as in the stack. Absolute, so the tile is exactly as wide and as tall as
-          its card whatever it holds — which is what let the `Move…` select be removed on
-          2026-08-14 without a number here changing: 150px was too narrow for a stepper and a
-          select on one line, so the controls' own `flex-wrap` used to put the select on a
-          second, and a bar that takes no height cost the tile nothing either way.
+      {/* **Over the card, never in it** — the stacked card's column, at the stacked card's offset.
+          An absolutely positioned column takes no height, so the tile is exactly as wide and as
+          tall as its card whatever it holds.
 
-          The positioning is a wrapper's rather than the controls' own `className`, and that is
-          the zoom's doing: the bar sits directly on top of the foot, so its offset is the foot's
-          height — a computed number, and `DeckCardControls` takes a class string and no style. An
-          offset utility was that number while the foot was always 20px. */}
-      <span
-        style={{ bottom: footHeight }}
-        className="absolute inset-x-0 px-[calc(0.25rem*var(--mark-scale,1))]"
-      >
-        <DeckCardControls card={card} actions={actions} className={REVEALED_ON_CARD} />
-      </span>
+          It was a full-width bar sitting on the chin's top edge at `bottom: chinHeight(zoom)`,
+          which is where a 150px tile could fit a stepper and the `Move…` select beside it; that
+          select was removed on 2026-08-14 and the bar has been one control on one line ever since.
+          The column is the stack's answer to the same question and needs no computed offset at
+          all: `top-9` clears the 27px title bar the quantity tag and the ribbon are in, and the
+          controls run down the card's right margin from there.
+
+          **Revealed on hover, not by an open state**, which is the one place this tile is not the
+          stack: `revealedWhenOpen` asks which card the pile has fanned out, and a wall has no such
+          card. `REVEALED_ON_CARD` hangs off the `<li>`'s `group`.
+
+          A **sibling** of the button rather than a child, because a button may not contain a
+          button: the whole face is the control that opens the card, and these are more. */}
+      <DeckCardControls
+        card={card}
+        actions={actions}
+        layout="card-column"
+        className={cn("absolute top-9 right-1.5", REVEALED_ON_CARD)}
+      />
     </li>
   );
 }
