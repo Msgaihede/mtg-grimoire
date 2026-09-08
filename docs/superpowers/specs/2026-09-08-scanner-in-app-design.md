@@ -40,7 +40,7 @@ Measured 2026-09-08 on Windows unless stated. *Build named where it matters.*
 | Camera in the app | `src-tauri/src/camera.rs` (on main, 2026-08-31) answers WebView2's `PermissionRequested` with ALLOW for the camera; without it `getUserMedia` fails as `NotSupportedError` |
 | `getUserMedia` in this shell | `src/features/settings/QrScanner.tsx` is the one call site: `facingMode: "environment"`, `<video srcObject muted>`, one stop function, three error sentences keyed on `DOMException.name` |
 | Bytes inward over IPC | No command takes bytes in today. The one that moves bytes out, the backup zip, is base64 in JSON and its own doc calls a megabyte through IPC "two copies for nothing" |
-| Raw bodies | `tauri 2.11.5` has `tauri::ipc::Request` with `InvokeBody::Raw(Vec<u8>)` and `headers()`; `@tauri-apps/api 2.11.1`'s `invoke` takes `Uint8Array` as its args and `headers` in its options |
+| Raw bodies | `tauri 2.11.5` has `tauri::ipc::Request` with `InvokeBody::Raw(Vec<u8>)` and `headers()`; `@tauri-apps/api 2.11.1`'s `invoke` takes `Uint8Array` as its args and `headers` in its options. **Tauri's own doc on `Request`: raw bytes are accepted "on all platforms except Android"**, and Android's WebView hands a scheme handler no POST body either, so on the phone a frame can only travel as text |
 | `mtgimg://` | Reads only the URI; no POST path exists. The CSP string is pinned by a test on purpose |
 | Navigation | One list, `src/components/nav.ts`; routing is a switch on `activeView`; `Ctrl+1…6` bind **by index** into that list; `SHORTCUTS` is a total record over every `ViewId` |
 | Icons | lucide-react; `ScanLine` exists there |
@@ -55,7 +55,7 @@ Measured 2026-09-08 on Windows unless stated. *Build named where it matters.*
 
 | # | Decision | Why |
 | --- | --- | --- |
-| 1 | **A Tauri command with a raw body** carries each frame: `invoke("scanner_frame", bytes, { headers })` | Stays inside `ipc.ts` and its fences, no CSP edit, one path for desktop and Android, and the web build never routes it |
+| 1 | **A Tauri command carries each frame** — a raw body on desktop, `invoke("scanner_frame", bytes, { headers })`, and base64 in a JSON body on Android, where Tauri takes no raw bytes | Stays inside `ipc.ts` and its fences, no CSP edit, one command for desktop and Android, and the web build never routes it |
 | 2 | **Assets live in `data/scanner/`** and the page names exactly what is missing | Matches "no integration yet"; the bundle has no URL to fetch from until it has a release asset |
 | 3 | **All of the debug page becomes the view, developer panels folded** | Everything testable on the debug page is testable in the app, without switching tools |
 | 4 | **The per-frame handler moves into the crate as `session::Session`**, shared by the debug server and the app | One typed verdict, one OCR cadence, one panic guard; the export writer is this repo's record of what a second copy costs |
@@ -170,9 +170,9 @@ with sentences for errors:
 | Command | In | Out |
 | --- | --- | --- |
 | `scanner_status` | — | `ScannerStatus { bundle: Asset, detection_model: Asset, recognition_model: Asset, labels: usize, scans_dir: String }` where `Asset { path: String, present: bool, loaded: bool, error: Option<String> }` |
-| `scanner_frame` | `tauri::ipc::Request` — raw JPEG body, `x-scanner-options` header holding `FrameOptions` as JSON | `Verdict` |
+| `scanner_frame` | `tauri::ipc::Request` — on desktop a raw JPEG body with an `x-scanner-options` header holding `FrameOptions` as JSON; on Android a JSON body `{ "jpeg": "<base64>", "options": FrameOptions }`, because Tauri accepts raw bytes on every platform except Android. The command reads whichever body arrived | `Verdict` |
 | `scanner_reset` | — | `()` |
-| `scanner_capture` | `tauri::ipc::Request` — raw full-resolution JPEG body, `x-scanner-capture` header holding `{ expected, reported, confidence, votes, distance }` | `Captured { saved: String }` |
+| `scanner_capture` | `tauri::ipc::Request` — the same two shapes: a raw full-resolution JPEG body with an `x-scanner-capture` header holding `{ expected, reported, confidence, votes, distance }`, or on Android `{ "jpeg": "<base64>", "sidecar": {…} }` | `Captured { saved: String }` |
 
 - **The path is the message.** `scanner_status` reports the exact path it looked at for each
   asset, so the page can say "put `card-hashes.bin` at `D:\…\data\scanner\`" rather than "no
@@ -245,7 +245,11 @@ options)`, `scannerReset()`, `scannerCapture(bytes, sidecar)`. `ScannerOptions` 
 types keep the Rust field names — snake case — because the header JSON is deserialised straight
 into `FrameOptions` and the verdict is what the debug page already reads. `scannerFrame` is the
 first wrapper to pass a `Uint8Array` and `headers`, and the file header's source index gains the
-crate's `session.rs` as a source file.
+crate's `session.rs` as a source file. **On Android the same wrapper sends
+`{ jpeg: <base64>, options }` as ordinary named arguments**, chosen by `isAndroid()` — the third
+reader of `platform.ts`, and the one the note there asks to justify: the core boundary cannot
+carry this, because a core is a fact about the *build* and both legs are the Tauri build; the
+difference is Tauri's own, per OS, and belongs in the one wrapper that meets it.
 
 **`Core.call` widens.** Today both cores take `(command, args?: Record<string, unknown>)`. It
 becomes `(command, args?: Record<string, unknown> | Uint8Array, options?: { headers })`: the
@@ -286,9 +290,11 @@ reaches the Worker, with the sentence the page shows for the web build. No other
 ## 10. Platforms
 
 - **Desktop.** The whole design.
-- **Android.** The same commands over the same IPC. The manifest already carries `CAMERA`; the
-  permission is a human tap on the phone, and whether wry answers the permission request unaided
-  is verified by driving the page on the phone once, recorded either way.
+- **Android.** The same commands, with the frame as base64 in a JSON body since Tauri's IPC
+  carries no raw bytes there. The manifest already carries `CAMERA`; the permission is a human
+  tap on the phone, and whether wry answers the permission request unaided is verified by driving
+  the page on the phone once, recorded either way — as is what a base64 frame costs per round
+  trip there.
 - **Web.** The four commands are `#[cfg(not(target_family = "wasm"))]` and unrouted;
   `ScannerPage` dispatches above its hooks on `isWebTarget()` to the web sentence, so no camera is
   asked for, no command is called and no `useQuery` is conditional. The browser core's refusal of
