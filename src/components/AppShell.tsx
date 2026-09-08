@@ -41,6 +41,7 @@ import { DURATION, statusLine as statusLineMotion } from "@/lib/motion";
 import { matchesChord, matchesShortcut, shortcut } from "@/lib/shortcuts";
 import { useAppStore } from "@/lib/store";
 import { usePrefetchSearchOpen } from "@/features/search/useSearchOpen";
+import { usePrefetchFolderPane } from "@/features/decks/useFolderPane";
 import { useCardZoomPersistence } from "@/lib/useCardZoomPersistence";
 import { useComboProgress } from "@/lib/useComboProgress";
 import { useListViewPersistence } from "@/lib/useListViewPersistence";
@@ -316,6 +317,14 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   // for all three, because they share one `app_meta` row and one query key. It renders nothing:
   // the answer goes into the query cache, where `useSearchOpen` reads it.
   usePrefetchSearchOpen();
+  // The decks page's folder tree — its width and whether it is railed — for the same measurement
+  // one row over. The flash it prevents is the worse of the two: until the row lands the tree
+  // answers with its shipped 208px and `collapsed: false`, so a reader who works railed watches
+  // it draw open and shut, and a reader who dragged it wide watches it draw narrow and jump —
+  // and the wall beside it re-lays itself out both times. A second prefetch rather than a wider
+  // one because it is a second `app_meta` row with a key of its own; `useFolderPane` reads the
+  // entry this fills.
+  usePrefetchFolderPane();
   // The one `oracle-tags:progress` subscription, for the same reason again. Unlike the two
   // above it hands back what it heard: the taxonomy has no `useMarketplace`-shaped module of
   // its own to read the event out of a cache entry, and the ribbon is its only consumer today.

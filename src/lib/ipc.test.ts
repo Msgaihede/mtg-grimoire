@@ -19,6 +19,7 @@ vi.mock("@/lib/platform", () => ({ isAndroid: vi.fn(() => false) }));
 import collectionRs from "../../src-tauri/src/collection.rs?raw";
 import collectionFoldersRs from "../../src-tauri/src/collection_folders.rs?raw";
 import deckRs from "../../src-tauri/src/deck.rs?raw";
+import deckpaneRs from "../../src-tauri/src/deckpane.rs?raw";
 import decksortRs from "../../src-tauri/src/decksort.rs?raw";
 import deckMetaRs from "../../src-tauri/src/deck_meta.rs?raw";
 import deckMissingRs from "../../src-tauri/src/deck_missing.rs?raw";
@@ -1924,6 +1925,50 @@ describe("ipc argument names match the Rust command signatures", () => {
     expect(invoke).toHaveBeenCalledWith("set_printing_group_by", { mode: "price" });
   });
 
+  /**
+   * The decks page's folder tree — the **first stored preference in this file that carries a
+   * struct**, and the settings write with the most ways to get the wire wrong.
+   *
+   * Three of them, none caught by either compiler. `set_deck_folder_pane(width, collapsed)` takes
+   * **two** arguments where most of this family takes one, so a wrapper that reached for the
+   * neighbour's shape and sent `{ pane: … }` — the shape the *read* answers in, and therefore the
+   * plausible mistake — is a parameter Tauri cannot fill and a runtime rejection. A wrapper that
+   * spelled the second argument as the thing it is about rather than as the thing it is
+   * (`folded`, `open`, `railed`) is the same rejection, silently, on a press whose whole contract
+   * is that a refusal is *not* surfaced — see `useFolderPane`, which swallows it. And
+   * `deck_folder_pane` takes **no arguments at all**, which is `prewarm_collection`'s trap: an
+   * argument object sent to a command that declares only the managed state is a deserialization
+   * error and not a type error.
+   *
+   * The crate is read for both parameter names rather than trusted, and read by *name* rather
+   * than by type: how wide a column is could honestly be stored as any of several numbers, and a
+   * fence that pinned `i64` would go red for a change that broke nothing.
+   */
+  it("reads the folder pane with no arguments and writes both of its fields by name", async () => {
+    // A pass must never be able to mean "the crate was never read".
+    expect(deckpaneRs.length).toBeGreaterThan(1_000);
+
+    const stored = { width: 288, collapsed: true };
+    invoke.mockResolvedValue(stored);
+    const pane = await ipc.deckFolderPane();
+    expect(invoke).toHaveBeenCalledWith("deck_folder_pane");
+    expect(pane).toEqual(stored);
+    expect(deckpaneRs).toContain("fn deck_folder_pane(");
+
+    invoke.mockResolvedValue(undefined);
+    await ipc.setDeckFolderPane(288, true);
+    expect(invoke).toHaveBeenCalledWith("set_deck_folder_pane", { width: 288, collapsed: true });
+    expect(deckpaneRs).toMatch(/fn set_deck_folder_pane\([^)]*\bwidth\s*:/s);
+    expect(deckpaneRs).toMatch(/fn set_deck_folder_pane\([^)]*\bcollapsed\s*:\s*bool/s);
+
+    // **`null` is an answer and not a missing field.** It is what the row says on a database
+    // nobody has dragged, and it has to reach this side as itself — a mirror that typed `width`
+    // as a bare `number` would make `?? DEFAULT_FOLDER_TREE_WIDTH_PX` unreachable code on one
+    // side of the wire and a `null` width on the other.
+    invoke.mockResolvedValue({ width: null, collapsed: false });
+    expect(await ipc.deckFolderPane()).toEqual({ width: null, collapsed: false });
+  });
+
   it("reads the error log with a limit and clears it with nothing", async () => {
     invoke.mockResolvedValue([]);
     await ipc.errorLogList(50);
@@ -3100,6 +3145,20 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     ["DeckPipCosts", deckRs, "DeckPipCosts"],
     ["BracketCardRow", deckRs, "BracketCardRow"],
     ["DeckBracketRead", deckRs, "DeckBracketRead"],
+    // **The first *stored preference* on either table** (2026-09-08), and it is here because it is
+    // the first one with fields at all: the other nine `app_meta` settings answer a bare string, a
+    // bare map or a bare `boolean`, and this fence parses `pub struct`/`export interface` field
+    // lists — so none of them can be on a list here, and this one cannot be left off it for the
+    // same reason.
+    //
+    // Two fields, and what a drift costs is the quiet kind this table exists for. A renamed
+    // `width` reads `undefined`, `?? DEFAULT_FOLDER_TREE_WIDTH_PX` takes the fallback arm, and the
+    // decks page opens at its default width for ever — which is exactly what a reader who has
+    // never dragged the tree sees, so nothing looks wrong. A renamed `collapsed` reads
+    // `undefined`, the `typeof … === "boolean"` narrowing takes the same fallback, and the tree
+    // simply never remembers a fold. Both are a green build, a drawable page and a setting that
+    // silently stopped working.
+    ["DeckFolderPane", deckpaneRs, "DeckFolderPane"],
   ];
 
   it.each(plainMirrors)(

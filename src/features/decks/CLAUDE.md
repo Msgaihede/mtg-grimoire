@@ -2810,6 +2810,29 @@ price | type`). An **inactive category stays its own group in all three grouping
   there and two spend the space on empty box, so no single constant is honest at all three sites —
   which makes reading the three together the rule before any of them moves. All three scale with
   `--mark-scale`; one holding still puts the track out of true at every stop but 100%.
+- **The folder tree is dragged and railed, and `FolderTree` owns both clamps** (2026-09-08). The
+  splitter is `components/ResizeHandle.tsx` with `side="left"` — the same control the docked search
+  columns use, extracted that day so the two cannot drift. Three things are kept apart and folding
+  any two of them is a bug this has already been written around:
+  - **`collapsed` is the reader's press; `roomy` is the row's measurement; `drawnWidth` is what
+    ends up on screen.** `roomy === false` rails the tree and must **never** write back through
+    `onCollapse` — fold those two and the first reader who narrows their window loses the tree
+    permanently, because the measurement records itself as a choice and widening back gives
+    nothing. Same rule, same reason, as `CardSearchPanel`'s `open`/`roomy`.
+  - **The reader's width is held un-clamped and clamped only where it is drawn.** A drag writes
+    clamped (there the bound is the edge they are pushing against); the environment never does, or
+    a momentary squeeze becomes permanent. `useFolderPane` therefore clamps nothing on purpose —
+    it stores an answer, it does not decide a layout.
+  - **The `<nav>` is the positioned, non-scrolling container and the scroller is inside it.** It
+    was `overflow-y-auto` itself, and an absolutely-positioned handle in a scroller scrolls away
+    with the content and clips. The heading and its `+` no longer scroll off as a side effect.
+  **The width and the rail survive a restart** — one `app_meta` row, `deck_folder_pane`
+  (`src-tauri/src/deckpane.rs`), read per-field so a junk width cannot cost the reader their rail.
+  The storage band is **80..=1200** and is deliberately *not* the UI clamp: how narrow the tree may
+  be dragged and how wide the desk can spare are measurements about a window the crate never sees.
+  `usePrefetchFolderPane` runs in `AppShell` for `usePrefetchSearchOpen`'s measured reason — asked
+  at the page, the row lands ~700ms late and the tree draws open then shuts, or draws at 208 then
+  jumps.
 - **The folder tree draws its nesting, in a gutter _beside_ the button and never under it**
   (2026-09-08). A trunk under a hover fill or a focus ring is a trunk the reader cannot see, so a
   row is a flex of a `flex-none` gutter and the button, and the button's own padding is a constant
@@ -3388,7 +3411,7 @@ price | type`). An **inactive category stays its own group in all three grouping
   wishlist each grew a docked card search of their own, so the two thirds of `DeckSearchPanel` that
   were never about a deck were **extracted**: `CardSearchPanel.tsx` is the shell (the three-state
   `<section>` and its rail, the disclosure and its `NO_ROOM` tooltip, the title row and the
-  vertical rail heading, `ResizeHandle`, the width `useState` and the clamp split, the
+  vertical rail heading, the width `useState` and the clamp split, the
   `open`/`shown`/`over`/`overlaid` derivations, the caret hand-back) and `CardSearchBody.tsx` is
   the wall and its furniture. `MIN_PANEL_WIDTH_PX` and `SEARCH_OVER_ATTR` are re-exported from
   `DeckSearchPanel.tsx`, so nothing that imported them from here had to change.
