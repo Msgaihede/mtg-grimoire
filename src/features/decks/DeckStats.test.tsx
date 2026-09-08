@@ -545,15 +545,20 @@ describe("DeckStats", () => {
   /**
    * The strip, rendered.
    *
-   * **`onPull` defaults to `null`**, which is the theory list's answer rather than the ordinary
-   * one — deliberately, because every case below this line is about the wishlist half, and a
-   * live `onPull` would put a second button into each of their queries for nothing. The cases
-   * that are about the pull pass one and say so.
+   * **`onPull` and `onAddMissing` both default to `null`**, which is the theory list's answer
+   * rather than the ordinary one — deliberately, because every case below this line is about the
+   * wishlist half, and either live callback would put another button into each of their queries
+   * for nothing. The cases that are about one of the other two presses pass it and say so.
    */
-  const strip = (cards: DeckCard[], send = sender(), onPull: (() => void) | null = null) =>
+  const strip = (
+    cards: DeckCard[],
+    send = sender(),
+    onPull: (() => void) | null = null,
+    onAddMissing: (() => void) | null = null,
+  ) =>
     render(
       <TooltipProvider>
-        <DeckStats cards={cards} send={send} onPull={onPull} />
+        <DeckStats cards={cards} send={send} onPull={onPull} onAddMissing={onAddMissing} />
       </TooltipProvider>,
     );
 
@@ -567,10 +572,12 @@ describe("DeckStats", () => {
    */
   async function press(cards: DeckCard[], settled: MissingWrite) {
     const view = render(
-      <DeckStats cards={cards} send={sender()} onPull={null} />,
+      <DeckStats cards={cards} send={sender()} onPull={null} onAddMissing={null} />,
     );
     await userEvent.click(screen.getByRole("button", { name: "Send missing to wishlist" }));
-    view.rerender(<DeckStats cards={cards} send={settled} onPull={null} />);
+    view.rerender(
+      <DeckStats cards={cards} send={settled} onPull={null} onAddMissing={null} />,
+    );
     return view;
   }
 
@@ -631,7 +638,13 @@ describe("DeckStats", () => {
     expect(within(curve()).getByText("4 cards at mana value 3")).toBeInTheDocument();
 
     rerender(
-      <DeckStats cards={deck} send={sender()} onPull={null} separateXGroup />,
+      <DeckStats
+        cards={deck}
+        send={sender()}
+        onPull={null}
+        onAddMissing={null}
+        separateXGroup
+      />,
     );
 
     expect(within(curve()).getAllByRole("listitem")).toHaveLength(10);
@@ -809,13 +822,13 @@ describe("DeckStats", () => {
     const settled = sender({ isSuccess: true, data: 1 });
     const view = render(
       <TooltipProvider>
-        <DeckStats cards={short()} send={sender()} onPull={null} />
+        <DeckStats cards={short()} send={sender()} onPull={null} onAddMissing={null} />
       </TooltipProvider>,
     );
     await userEvent.click(screen.getByRole("button", { name: "Send missing to wishlist" }));
     view.rerender(
       <TooltipProvider>
-        <DeckStats cards={short()} send={settled} onPull={null} />
+        <DeckStats cards={short()} send={settled} onPull={null} onAddMissing={null} />
       </TooltipProvider>,
     );
 
@@ -844,6 +857,7 @@ describe("DeckStats", () => {
         cards={[card({ name: "Bolt", quantity: 4, ownedQuantity: 1 }), card({ name: "Bear" })]}
         send={sender({ isSuccess: true, data: 1 })}
         onPull={null}
+        onAddMissing={null}
       />,
     );
 
@@ -873,10 +887,13 @@ describe("DeckStats", () => {
         cards={[card({ name: "Bolt", quantity: 5, ownedQuantity: 1 })]}
         send={settled}
         onPull={null}
+        onAddMissing={null}
       />,
     );
     // …and back to exactly the number that was sent.
-    rerender(<DeckStats cards={deck} send={settled} onPull={null} />);
+    rerender(
+      <DeckStats cards={deck} send={settled} onPull={null} onAddMissing={null} />,
+    );
 
     expect(screen.getByRole("status")).toHaveTextContent("");
     const button = screen.getByRole("button", { name: "Send missing to wishlist" });
@@ -977,7 +994,12 @@ describe("DeckStats", () => {
     // In flight: `send` is really `disabled`, which is the browser's own "no".
     rerender(
       <TooltipProvider>
-        <DeckStats cards={short()} send={sender({ isPending: true })} onPull={onPull} />
+        <DeckStats
+          cards={short()}
+          send={sender({ isPending: true })}
+          onPull={onPull}
+          onAddMissing={null}
+        />
       </TooltipProvider>,
     );
     expect(screen.getByRole("button", { name: "Send missing to wishlist" })).toBeDisabled();
@@ -1007,6 +1029,165 @@ describe("DeckStats", () => {
   });
 
   /**
+   * **The shortfall has three answers and this line offers all three**, in the order they should
+   * be tried: what you already own is the cheapest, what you have just bought is cardboard the
+   * database has never heard of, and the shopping list is what is left over.
+   *
+   * The order is asserted through the DOM rather than trusted, because all three sit in one
+   * wrapping flex row: reordering them changes nothing about any of their queries and everything
+   * about which one a reader reaches for. Moving the add press after the wishlist would offer a
+   * shopping list before "record what you bought", which is two states of one purchase the wrong
+   * way round.
+   */
+  it("offers the add press between the pull and the wishlist", () => {
+    strip(short(), sender(), vi.fn(), vi.fn());
+
+    const pull = screen.getByRole("button", { name: "Pull from collection" });
+    const add = screen.getByRole("button", { name: "Add missing to collection" });
+    const send = screen.getByRole("button", { name: "Send missing to wishlist" });
+    expect(pull.compareDocumentPosition(add) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(add.compareDocumentPosition(send) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  /**
+   * **The three are peers, and the shared class list is the whole of what says so** — copied
+   * character for character rather than trimmed, including the two state variants nothing here
+   * can currently reach, so the row cannot drift into reading as a primary and two secondaries.
+   *
+   * Compared as sorted `classList` tokens and never with `className.includes`: this list carries
+   * `hover:text-text` and `aria-disabled:opacity-50` as *variants*, so a substring check for
+   * either finds the variant and passes before any state has changed.
+   */
+  it("draws the three presses on one class list, character for character", () => {
+    strip(short(), sender(), vi.fn(), vi.fn());
+
+    const tokens = (name: string) => [...screen.getByRole("button", { name }).classList].sort();
+
+    expect(tokens("Add missing to collection")).toEqual(tokens("Pull from collection"));
+    expect(tokens("Add missing to collection")).toEqual(tokens("Send missing to wishlist"));
+  });
+
+  /**
+   * The shortfall gate takes all three together, and both callbacks are live here — so what is
+   * absent below is the `missing > 0` arm rather than a prop. A deck short of nothing has no hole
+   * for any of them to act on, and a control that spends its life offering to do nothing teaches
+   * the reader to stop looking at the line it is in.
+   */
+  it("draws none of the three presses when the deck is fully owned", () => {
+    strip([card({ name: "Bolt", quantity: 4, ownedQuantity: 4 })], sender(), vi.fn(), vi.fn());
+
+    expect(screen.queryByRole("button", { name: "Pull from collection" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Add missing to collection" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Send missing to wishlist" }),
+    ).not.toBeInTheDocument();
+  });
+
+  /**
+   * `null` is the **theory** list, whose rows hold no cards at all — so there is nothing there to
+   * record copies against, and the press is absent rather than greyed exactly as the pull is.
+   *
+   * The other two are asserted *present* in the same breath, which is the half that makes this a
+   * claim about the prop: a strip drawing none of the three would pass a bare absence check while
+   * being broken for all of them.
+   */
+  it("draws no add press where there is nothing to add to, and keeps the other two", () => {
+    strip(short(), sender(), vi.fn(), null);
+
+    expect(
+      screen.queryByRole("button", { name: "Add missing to collection" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Pull from collection" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send missing to wishlist" })).toBeInTheDocument();
+  });
+
+  it("presses the add callback it was handed", async () => {
+    const onAddMissing = vi.fn();
+    strip(short(), sender(), null, onAddMissing);
+
+    await userEvent.click(screen.getByRole("button", { name: "Add missing to collection" }));
+
+    expect(onAddMissing).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * **The first of the two claims that make this press not its right-hand neighbour.**
+   *
+   * `send` spends about half a second genuinely `disabled` while its command is in flight. These
+   * are three independent writes about one number — the wishlist writes a list, this one creates
+   * collection rows — so a control greyed by a sibling's state is a control whose refusal nothing
+   * on screen explains.
+   */
+  it("leaves the add press pressable while the wishlist write is in flight", async () => {
+    const onAddMissing = vi.fn();
+    render(
+      <TooltipProvider>
+        <DeckStats
+          cards={short()}
+          send={sender({ isPending: true })}
+          onPull={null}
+          onAddMissing={onAddMissing}
+        />
+      </TooltipProvider>,
+    );
+
+    // The neighbour really is refusing, so the liveness below is a fact about this control
+    // rather than about a state the strip never entered.
+    expect(screen.getByRole("button", { name: "Send missing to wishlist" })).toBeDisabled();
+    const add = screen.getByRole("button", { name: "Add missing to collection" });
+    expect(add).toBeEnabled();
+    expect(add).not.toHaveAttribute("aria-disabled");
+
+    await userEvent.click(add);
+    expect(onAddMissing).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * **The second claim, and it is the one with a rule behind it: this press has no `spent` state
+   * at all.**
+   *
+   * The wishlist button is spent after a press because `missing_to_wishlist` *folds* quantities
+   * rather than replacing them, so pressing again wishes for the same copies a second time. This
+   * one cannot go wrong that way: it re-plans inside its own transaction against a shortfall the
+   * first press just closed, so a second press finds nothing left to offer. It therefore stays
+   * live beside a spent neighbour — and stays live for a second press, which is the half a
+   * `spent` flag copied across from the wishlist would break.
+   */
+  it("keeps the add press live after the wishlist press is spent", async () => {
+    const deck = short();
+    const onAddMissing = vi.fn();
+    const settled = sender({ isSuccess: true, data: 1 });
+    const view = render(
+      <TooltipProvider>
+        <DeckStats cards={deck} send={sender()} onPull={null} onAddMissing={onAddMissing} />
+      </TooltipProvider>,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Send missing to wishlist" }));
+    view.rerender(
+      <TooltipProvider>
+        <DeckStats cards={deck} send={settled} onPull={null} onAddMissing={onAddMissing} />
+      </TooltipProvider>,
+    );
+
+    // Spent, so the add's own liveness below is measured against a neighbour that really did
+    // enter the state this test is about.
+    expect(screen.getByRole("button", { name: "Send missing to wishlist" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+
+    const add = screen.getByRole("button", { name: "Add missing to collection" });
+    expect(add).toBeEnabled();
+    expect(add).not.toHaveAttribute("aria-disabled");
+
+    await userEvent.click(add);
+    await userEvent.click(add);
+    expect(onAddMissing).toHaveBeenCalledTimes(2);
+  });
+
+  /**
    * The disabled-on-press hazard, in the one shape it takes outside a dismissible layer: the
    * browser blurs a control that disables itself, so the caret lands on `<body>` and the next
    * Tab restarts from the top of the app. The button is still here — and still *focusable*,
@@ -1016,7 +1197,7 @@ describe("DeckStats", () => {
   it("takes the caret back after the write it disabled itself for", async () => {
     const deck = short();
     const { rerender } = render(
-      <DeckStats cards={deck} send={sender()} onPull={null} />,
+      <DeckStats cards={deck} send={sender()} onPull={null} onAddMissing={null} />,
     );
     const button = screen.getByRole("button", { name: "Send missing to wishlist" });
     await userEvent.click(button);
@@ -1033,6 +1214,7 @@ describe("DeckStats", () => {
         cards={deck}
         send={sender({ isPending: true })}
         onPull={null}
+        onAddMissing={null}
       />,
     );
     expect(document.body).toHaveFocus();
@@ -1042,6 +1224,7 @@ describe("DeckStats", () => {
         cards={deck}
         send={sender({ isSuccess: true, data: 3 })}
         onPull={null}
+        onAddMissing={null}
       />,
     );
 

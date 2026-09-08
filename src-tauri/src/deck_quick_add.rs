@@ -222,12 +222,11 @@ pub fn wishes(
 /// 4. **[`crate::deck::deck_group`]**, else [`crate::collection_alloc::NO_DECK_GROUP`]. There is
 ///    one group per deck since schema v25, so `None` is a database somebody has edited by hand —
 ///    and filing at the root instead would record copies no deck claims.
-/// 5. **[`crate::collection::add_entry_filed`] with
-///    [`crate::collection::DECK_WRITE_FOLDERS`]**, `folder_id` the group and every other
-///    [`crate::collection::EntryInput`] field at its empty value. **The grain fold is that
-///    function's**, so a second quick add on the same line raises the row already in the group
-///    rather than making a second one — the folder is `COLLECTION_GRAIN`'s eleventh term, and
-///    the copies of one printing in one group are one row by construction.
+/// 5. **[`record_copies`]**, which is this module's one spelling of the `EntryInput` a
+///    deck-boundary *create* files — shared with [`crate::deck_missing::to_collection`], the
+///    deck-wide form of this press, so a column added to that struct cannot come to mean two
+///    things in two modules. Every claim about what it writes and what it deliberately leaves
+///    unsaid is on that function.
 /// 6. **The wish, re-read inside the transaction.** See [`WISH_GONE`] and [`WISH_WRONG_CARD`].
 ///    `take = min(quantity, wish.quantity)`; taking the lot deletes the row, because
 ///    `wishlist_entries.quantity` is `CHECK (quantity > 0)` and a wish for none of something is
@@ -291,20 +290,7 @@ pub fn quick_add(
     let group = crate::deck::deck_group(&tx, deck_id)?
         .ok_or_else(|| crate::collection_alloc::NO_DECK_GROUP.to_owned())?;
 
-    // Every field but the five this press knows at its empty value: a menu row records *copies*,
-    // and a purchase price, an acquisition source or a note it invented would be provenance
-    // nobody entered. `..Default::default()` rather than twenty explicit `None`s, so a column
-    // added to `EntryInput` later does not need a line here to keep meaning "not said".
-    let input = crate::collection::EntryInput {
-        card_id: card_id.to_owned(),
-        finish: finish.clone(),
-        condition: condition.map(str::to_owned),
-        quantity,
-        folder_id: Some(group),
-        ..Default::default()
-    };
-    let change =
-        crate::collection::add_entry_filed(&tx, &input, crate::collection::DECK_WRITE_FOLDERS)?;
+    let change = record_copies(&tx, group, card_id, &finish, condition, quantity)?;
 
     let wish_copies = match wish_id {
         None => 0,
@@ -329,6 +315,53 @@ pub fn quick_add(
         entry_id: change.id,
         wish_copies,
     })
+}
+
+/// File copies into a deck's group — the one spelling of the [`crate::collection::EntryInput`] a
+/// deck-boundary *create* uses.
+///
+/// Written once because it is written twice: [`quick_add`]'s step 5 and
+/// [`crate::deck_missing::to_collection`]'s step 6 are the same eight lines, and this module owns
+/// the idea because it made the first of them. **It is deliberately this small.** The two presses'
+/// *fences* differ — one asks [`crate::deck::plays_card`], the other re-plans inside its own
+/// transaction, which is strictly stronger — and their wish halves differ, one named and one
+/// chosen; hoisting either would be one rule kept in two places rather than one.
+///
+/// **`..Default::default()` rather than explicit empties**, so a column added to `EntryInput`
+/// later does not need a line here to keep meaning "the reader did not say": a menu press and a
+/// batch record *copies*, and a purchase price or an acquisition source either of them invented
+/// would be provenance nobody entered.
+///
+/// The grain fold is [`crate::collection::add_entry_filed`]'s: the folder is `COLLECTION_GRAIN`'s
+/// eleventh term, so a second press on the same line raises the row already in the group rather
+/// than making a second one, and the copies of one printing in one group are one row by
+/// construction.
+///
+/// The finish arrives already translated into the **collection's** spelling — the caller has run
+/// [`crate::deck::normalise_finish`] and defaulted to [`NONFOIL`] — because both callers need that
+/// word for their wishlist half too and a second translation is a second thing to drift.
+///
+/// `condition` is an [`Option`] and stays one: `collection::valid_condition` already turns an
+/// absent grade into [`crate::collection::DEFAULT_CONDITION`], so a caller that was never told one
+/// passes `None` and spells no constant of its own. A grade named at a call site would be a second
+/// place to keep in step with a default that has moved once already (schema v35).
+pub(crate) fn record_copies(
+    tx: &Connection,
+    group: i64,
+    card_id: &str,
+    finish: &str,
+    condition: Option<&str>,
+    quantity: i64,
+) -> Result<crate::collection::EntryChange, String> {
+    let input = crate::collection::EntryInput {
+        card_id: card_id.to_owned(),
+        finish: finish.to_owned(),
+        condition: condition.map(str::to_owned),
+        quantity,
+        folder_id: Some(group),
+        ..Default::default()
+    };
+    crate::collection::add_entry_filed(tx, &input, crate::collection::DECK_WRITE_FOLDERS)
 }
 
 /// Re-check one wish against the press and take copies off it. Answers what it took.

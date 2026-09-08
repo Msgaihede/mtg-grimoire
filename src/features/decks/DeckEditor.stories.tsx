@@ -213,8 +213,9 @@ const meta = {
           "**A green drag here would prove nothing about the real app**; that is the live CDP " +
           "pass's to prove, and `Chrome/AppShell` already exercises the payload boundary.\n\n" +
           "Driven end to end by `.storybook/fake/`. The seeded decks, measured 2026-08-11 " +
-          'over `readHandlers(seed("starter")).deck_get`: **deck 1 `Modern Goodstuff`** is 18 ' +
-          "rows — 60 main, 15 sideboard, 2 on the Maybeboard — and validates **clean**; " +
+          'over `readHandlers(seed("starter")).deck_get`, the row count re-counted 2026-09-08: ' +
+          "**deck 1 `Modern Goodstuff`** is 20 rows — 60 main, 15 sideboard, 2 on the " +
+          "Maybeboard — and validates **clean**; " +
           "**deck 2 `Kenrith Two-Drops`** is 99 main + 1 commander + 1 companion and produces " +
           "**exactly one** issue; **deck 3 `Old School 93/94`** is 4 rows holding 22 cards. " +
           "Those three came through the v8 migration, so all three carry five *categories* — " +

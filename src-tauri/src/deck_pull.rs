@@ -32,10 +32,12 @@
 //!
 //! # The plan
 //!
-//! [`plan`] reads the **live** list through [`crate::deck::get_deck`], exactly as
-//! [`crate::deck::missing_to_wishlist`] does — the two are one question asked in two directions,
-//! and the shape is deliberately copied rather than re-derived. What you have *not* got goes on a
-//! shopping list; what you *have* got is in a binder and can be moved. Four rules:
+//! [`plan`] reads the **live** list through [`crate::deck::live_shortfall`], which is the one
+//! walk it shares with [`crate::deck::missing_to_wishlist`] and [`crate::deck_missing::plan`] —
+//! one question asked in three directions (own it loose, have just bought it, still have to buy
+//! it), and the shape is shared rather than copied. What you have *not* got goes on a
+//! shopping list; what you *have* got is in a binder and can be moved. Four rules, the first two
+//! of them that shared walk's and argued in full on it:
 //!
 //! * **An inactive category is short of nothing.** A switched-off pile counts toward nothing
 //!   anywhere in the app, and [`crate::deck::attribute_owned`] already hands it no copies, so its
@@ -283,75 +285,38 @@ const CANDIDATE_SQL: &str = "SELECT e.id, e.quantity, e.folder_id, f.name, f.kin
 /// What this deck is short of that the reader already owns.
 ///
 /// The read half, and **the mirror of [`crate::deck::missing_to_wishlist`] one grain narrower** —
-/// that function is the model for this one and was read before it was written. Both open on
-/// `get_deck` for the **live** list only, both skip an inactive pile, both fold the shortfall
-/// across piles. Where they part is what a hole is filled *with*: a wish is filled by whichever
-/// copy turns up, so it folds to the oracle card and names no printing; a pull moves one specific
-/// object, so it folds to `(card_id, finish)` and matches candidates on both.
+/// that function was the model for this one and was read before it was written. What they share
+/// is now [`crate::deck::live_shortfall`], which both of them call: the **live** list only, an
+/// inactive pile skipped, the shortfall folded across piles, the deck's own read order kept, and
+/// the default marketplace because nothing in the answer is priced. Read that function's doc for
+/// every one of those claims; none of them is respelled here.
 ///
-/// **The default marketplace, and it costs nothing to be wrong about**, which is
-/// `missing_to_wishlist`'s own line: this reads names, finishes and quantities and never a price.
-/// Threading the stored setting in would make which copies are offered depend on where the reader
-/// shops.
-///
-/// **The read order is the deck's own** — [`crate::deck::read_deck_cards`]' `ORDER BY`, category
-/// then name then row id — and the folded rows keep it. That matters for the same reason it
-/// matters to [`crate::deck::attribute_owned`]: this list is walked to hand out a scarce thing
-/// (the shortfall a caller may pick against), so the answer must not depend on how a view chose
-/// to sort itself. A caller wanting another order sorts what it is given.
+/// Where the two part is what a hole is filled *with*, and that is the half this function still
+/// owns: a wish is filled by whichever copy turns up, so `missing_to_wishlist` folds on to the
+/// oracle card and names no printing; a pull moves one specific object, so it keeps the walk's
+/// `(card_id, finish)` grain and matches candidates on both.
 ///
 /// **An empty vector is the ordinary answer.** A deck short of nothing and a deck whose whole
 /// shortfall is cards the reader has never owned are both zero rows, and neither is a failure.
 pub fn plan(conn: &Connection, deck_id: i64) -> Result<Vec<PullRow>, String> {
-    let detail =
-        crate::deck::get_deck(conn, deck_id, LIVE, crate::sorting::Marketplace::default())?
-            .ok_or_else(|| crate::deck::GONE.to_owned())?;
-
-    // The fold, in the read's order: `rows` is the answer and `at` only says where a key already
-    // landed. A `BTreeMap` keyed on the pair would have sorted the answer by card id, which is
-    // neither the deck's order nor any order a reader chose.
-    let mut rows: Vec<PullRow> = Vec::new();
-    let mut at: HashMap<(String, Option<String>), usize> = HashMap::new();
-    for card in &detail.cards {
-        // A switched-off pile counts toward nothing anywhere in the app — and
-        // `attribute_owned` has already handed it no copies, so without this every row in it
-        // would report its whole quantity as a shortfall.
-        if !card.category_active {
-            continue;
-        }
-        let short = card.quantity - card.owned_quantity;
-        if short <= 0 {
-            continue;
-        }
-        // `.copied()` so the lookup's borrow of `at` is over before the `None` arm inserts into
-        // it — the shape every "find or make" in this crate takes.
-        let key = (card.card_id.clone(), card.finish.clone());
-        match at.get(&key).copied() {
-            Some(i) => {
-                rows[i].short += short;
-                // Named once each. The same pile cannot appear twice for one printing and
-                // finish — that pair plus the category is `DECK_CARD_GRAIN` — but a `contains`
-                // costs nothing over a handful of piles and says what the field means.
-                if !rows[i].categories.iter().any(|c| c == &card.category_name) {
-                    rows[i].categories.push(card.category_name.clone());
-                }
-            }
-            None => {
-                at.insert(key, rows.len());
-                rows.push(PullRow {
-                    card_id: card.card_id.clone(),
-                    name: card.name.clone(),
-                    set_code: card.set_code.clone(),
-                    collector_number: card.collector_number.clone(),
-                    finish: card.finish.clone(),
-                    short,
-                    categories: vec![card.category_name.clone()],
-                    image_uris: card.image_uris.clone(),
-                    candidates: Vec::new(),
-                });
-            }
-        }
-    }
+    // The shortfall walk is [`crate::deck::live_shortfall`] and is not spelled here — the fold's
+    // grain, the inactive-pile skip, the read order and the "one pile named once" rule are all
+    // written down on it. What is left in this function is the half that is a pull's own: the
+    // candidates, and dropping the rows that have none.
+    let mut rows: Vec<PullRow> = crate::deck::live_shortfall(conn, deck_id)?
+        .into_iter()
+        .map(|s| PullRow {
+            card_id: s.card_id,
+            name: s.name,
+            set_code: s.set_code,
+            collector_number: s.collector_number,
+            finish: s.finish,
+            short: s.short,
+            categories: s.categories,
+            image_uris: s.image_uris,
+            candidates: Vec::new(),
+        })
+        .collect();
 
     // One prepared statement for the whole plan rather than one per row: a 100-card list short
     // of thirty printings is thirty index lookups on `idx_collection_card`, not thirty prepares.
