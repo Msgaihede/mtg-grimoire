@@ -8182,7 +8182,16 @@ describe("the busy fault", () => {
     // is the split every preference before it is on. What is different about it is only what
     // happens to that refusal afterwards: `TheoryMarksPanel` prints it, where the rail and the
     // list layout swallow theirs. Re-counted by running the sweep.
-    expect(names).toHaveLength(96);
+    //
+    // The automatic combo download then added **one**, 96 → 97: `combos_clear` empties `combos`,
+    // `combo_cards` and `combo_meta`, and it is the entry on this list worth reading beside its
+    // own neighbour rather than beside the ten that preceded it. `combos_refresh` is three lines
+    // up in `unlocked`; this is in the loop; and the two are the same feed's two writes. What
+    // separates them is the network half — a refresh opens on the read connection and stands
+    // aside between ingest batches, where a clear is a delete of three tables and has nothing to
+    // wait for — so "it is about the combo feed" is exactly the wrong way to decide which side a
+    // handler goes on. Re-counted by running the sweep.
+    expect(names).toHaveLength(97);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -10841,6 +10850,123 @@ describe("the four clears", () => {
     expect(() => writeHandlers(db).collection_clear()).not.toThrow();
     expect(() => writeHandlers(db).wishlist_clear()).not.toThrow();
     expect(() => writeHandlers(db).decks_clear()).not.toThrow();
+  });
+});
+
+/**
+ * The combo table's own clear — a fifth clear, and deliberately not one of the four above.
+ *
+ * Those four are Settings' wipes of the reader's *own* rows plus the image cache. This one
+ * throws away a **download** and answers the state the download exists to leave: it is the only
+ * command that can put a world back in `combosMissing`, and it is there to be pressed against a
+ * feed that now arrives on its own. What is worth asserting is therefore not that three arrays
+ * are empty — that is one line of implementation — but that the world it leaves is a world this
+ * fake already has a name for, and that the round trip back out of it still works.
+ */
+describe("clearing the combo table", () => {
+  /** Phases, so the assertion that nothing is emitted is made against a real subscription
+   *  rather than against nobody listening. `watchPhases`' shape, one channel over. */
+  async function watchCombos() {
+    const seen: string[] = [];
+    const stop = await listen<{ phase: string }>("combos:progress", (e) =>
+      seen.push(e.payload.phase),
+    );
+    return { seen, stop };
+  }
+
+  /**
+   * **The watermark goes with the rows, and that is the half worth a test of its own.** On the
+   * real backend a `combo_meta` row standing over an empty `combos` is what makes the next check
+   * replay its ETag and be told 304 about a database with nothing in it — `combos::
+   * conditional_etag` is the fence, and it only works because a clear leaves no meta row for it
+   * to filter. A handler that emptied the two tables and kept the watermark would pass every
+   * other assertion in this file and story a clear the app could never come back from.
+   */
+  it("empties all three tables and answers the never-fetched status", () => {
+    const db = seed("starter");
+    expect(db.combos.length).toBeGreaterThan(0);
+    expect(db.comboCards.length).toBeGreaterThan(0);
+    expect(db.comboMeta).not.toBeNull();
+
+    const after = writeHandlers(db).combos_clear();
+
+    expect(db.combos).toEqual([]);
+    expect(db.comboCards).toEqual([]);
+    expect(db.comboMeta).toBeNull();
+    expect(after).toEqual({
+      combos: 0,
+      cards: 0,
+      stamp: null,
+      fetchedAt: null,
+      checkedAt: null,
+      stale: true,
+    });
+  });
+
+  /**
+   * The world it leaves is the `combosMissing` seed's, asserted through the two reads a story
+   * actually makes rather than against the rows — a seed and a press arriving at the same three
+   * empty arrays is not the same claim as the app being unable to tell them apart.
+   */
+  it("leaves exactly the world the combosMissing seed opens in", () => {
+    const cleared = seed("starter");
+    const ids = cleared.cards.map((c) => c.id);
+    expect(readHandlers(cleared).combos_for_cards({ cardIds: ids }).length).toBeGreaterThan(0);
+
+    writeHandlers(cleared).combos_clear();
+
+    const missing = seed("combosMissing");
+    expect(readHandlers(cleared).combos_status()).toEqual(readHandlers(missing).combos_status());
+    expect(readHandlers(cleared).combos_for_cards({ cardIds: ids })).toEqual([]);
+  });
+
+  /**
+   * The round trip, which is the press this command is actually part of: clear, then force a
+   * refresh. It is asserted here because the fake is where a story drives that pair, and because
+   * a clear that could not be undone from inside the workbench would be a one-way door on a
+   * world every other combo story is written against.
+   */
+  it("is undone by a forced refresh", () => {
+    const db = seed("starter");
+    const before = db.combos.length;
+
+    writeHandlers(db).combos_clear();
+    const after = writeHandlers(db).combos_refresh({ force: true });
+
+    expect(db.combos).toHaveLength(before);
+    expect(db.comboMeta).not.toBeNull();
+    expect(after.stale).toBe(false);
+    expect(after.combos).toBe(before);
+  });
+
+  /** **No phases at all**: there is no fetch, so there is nothing for `combos:progress` to
+   *  describe, and a bar drawn over a delete would be a bar about nothing. */
+  it("emits nothing on the progress channel", async () => {
+    const db = seed("starter");
+    const phases = await watchCombos();
+
+    writeHandlers(db).combos_clear();
+
+    phases.stop();
+    expect(phases.seen).toEqual([]);
+  });
+
+  /**
+   * **It refuses under `busy` where `combos_refresh` does not**, which is the pair's whole
+   * asymmetry: a refresh opens on the read connection and only its ingest takes the write one,
+   * so a sync delays it; a clear is a delete of three tables and has nothing to stand aside for.
+   * The busy sweep counts it for this reason, and this is the same claim made where it can be
+   * read — with the rows still standing afterwards, because a refusal that had already deleted
+   * something is the failure the sweep's arity cannot see.
+   */
+  it("refuses under a running write and leaves the combos standing", () => {
+    const db = { ...seed("starter"), fault: "busy" as const };
+    const before = db.combos.length;
+
+    expect(() => writeHandlers(db).combos_clear()).toThrow(/busy/i);
+
+    expect(db.combos).toHaveLength(before);
+    expect(db.comboMeta).not.toBeNull();
   });
 });
 

@@ -1615,6 +1615,42 @@ failure that looked exactly like this branch breaking the search wall — and ev
 dated `2026-08-05`, out of a file left behind by a session a month earlier. Delete the log before
 the run, and read the timestamps before believing the contents.
 
+## The gallery redrawn (design canvas 1d) — 2026-09-08, `npm run tauri dev` (debug), 1920×1080, a copy of the real db
+
+The redesign that fused the colour bar to the crop, moved the bracket onto the art, redrew folder
+cards in the deck tile's format, gave the folder tree drawn nesting, and collapsed three heading
+buttons into one `Folder` menu. **The whole record — every measurement, the fix, and what is still
+owed — is [frontend-design.md](frontend-design.md)'s section of the same date.** What belongs here
+is the finding, because it is one more entry in this file's running argument that a green suite
+and a green Storybook say nothing about the window that ships.
+
+- **One defect, and no fence in this repo could have caught it.** The band's mana symbol was
+  written `text-[calc(0.75rem*var(--mark-scale,1))]` on the `<i>` that draws it, and the rule
+  never applied: `mana-font`'s `.ms` declares `font-size: inherit` from a **class** selector, and
+  `main.tsx` imports `mana.css` after `index.css`, so a specificity tie goes to the font on source
+  order. Measured `fontSize: "16px"` where the source asked for 12. A `classList` assertion passed
+  over it because the class was genuinely present; jsdom loads no stylesheet, so no computed-style
+  assertion was writable; `tailwind-merge` was suspected first and cleared by running it directly.
+  **At 100% zoom it merely looks bold** — the fault only becomes visible at the bottom of the zoom
+  ladder, where the band shrinks to 14px and the symbol stays 16. Fixed by setting the size on the
+  field, whose `font-size: inherit` the font then honours by its own declaration.
+- **The same trap is live in `ManaText` and was left alone.** `.ms-cost` declares
+  `font-size: 0.95em`, so that component's `text-[0.85em]` is inert and every printed cost in the
+  app draws ~12% larger than its source says. It reaches the search table, the card pane and both
+  deck views, so it wants its own pass rather than a ride on a gallery change.
+- **The rest of the redesign measured as designed**, and two claims that had no proof now have
+  one: the marks overlay resolves to exactly the crop's box (`227.3 × 166` against `227.3 × 166`,
+  both deltas `0`) with no ref and no measurement, and the badge and bracket pill still clear each
+  other by **12.1px** at the narrowest tile the zoom ladder produces (146.2px at 0.7×).
+- **The tree's guides were driven against a cabinet built live to hold all four shapes** — last
+  child, non-last child, a row under a non-last parent (which draws an ancestor hairline at
+  `left: 15.5px` full height *and* its own trunk at `31.5px` stopping at the elbow), and a row
+  under the last parent (which draws no ancestor at all). Gutters 26px at depth 1, 42px at depth 2.
+- **Still open, and it is a judgement call rather than a bug**: at depth 2 in the 208px rail a
+  20-character folder name truncates to about eight. The 16px step and the 10px tick gutter spend
+  width the old 14px step did not. It is the design as approved, names have always truncated, and
+  nobody has yet looked at a genuinely deep cabinet in it.
+
 ## The three alternate views brought up to the stacks' style — 2026-09-08, `npm run tauri dev` (debug), 1920×1080, a copy of the real db
 
 Driven on **Azula**, a 101-card Commander deck, at `cardZoom` **1.1** unless a figure says
@@ -1697,3 +1733,4 @@ still drew the ribbon (`Game Changer` present, no bare crown) on the same four c
   zoom hands the next pass a window at 1.1 or 2 and every pixel figure in it is off by that
   factor. Read `--mark-scale` off the tile rather than assuming 1, or set the zoom deliberately
   at the top of the run — this pass did the first and then the second.
+

@@ -211,6 +211,25 @@ describe("the browser core", () => {
     ]);
   });
 
+  /**
+   * **`combos_clear` shares a feed with a divert and is not one**, which is the same prefix
+   * trap the case above is about and the sharper half of it: `combos_refresh` and `combos_clear`
+   * are the same table's two writes, and only the first of them touches the network. A clear
+   * deletes three tables through the connection the Worker already holds, so it is an ordinary
+   * `web::route` arm — and diverting it would send it to a `#[wasm_bindgen]` export that does
+   * not exist, which is a promise that never settles and a page with nothing on it to say why.
+   *
+   * **No `args` key either.** `browser.ts` omits it rather than sending `undefined`, matching
+   * `core/tauri.ts`, because `wire::Request.args` reads an absent key as `{}` — so this pins the
+   * *shape* of the message and not only where it is sent.
+   */
+  it("leaves the combo clear as an ordinary call, args key and all", () => {
+    const c = core();
+    c.call("combos_clear");
+    expect(worker.posted).toEqual([{ kind: "call", id: 1, command: "combos_clear" }]);
+    expect(worker.posted[0]).not.toHaveProperty("args");
+  });
+
   /** A refresh that failed rejects the mutation the panel is already watching. */
   it("rejects a failed refresh on its own id", async () => {
     const c = core();

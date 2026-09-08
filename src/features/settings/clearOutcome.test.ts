@@ -1,13 +1,26 @@
 import { describe, expect, it } from "vitest";
+import type { ComboStatus } from "@/lib/ipc";
 import {
   cacheOutcome,
   collectionOutcome,
+  combosOutcome,
   decksOutcome,
   fileSize,
   wishlistOutcome,
 } from "./clearOutcome";
 
 const GIGABYTE = 1_000_000_000;
+
+/** A settled combo table, with only the two figures the sentence reads spelled per case. */
+const status = (over: Partial<ComboStatus> = {}): ComboStatus => ({
+  combos: 105_478,
+  cards: 7_310,
+  stamp: "2026-08-27T03:12:44Z",
+  fetchedAt: 1_756_000_000,
+  checkedAt: 1_756_000_000,
+  stale: false,
+  ...over,
+});
 
 describe("fileSize", () => {
   /** The unit the cache actually lands in. 329 682 302 B is the measured dev cache. */
@@ -125,6 +138,46 @@ describe("cacheOutcome", () => {
   it("says there was nothing cached rather than freeing 0 bytes", () => {
     expect(cacheOutcome({ files: 0, bytes: 0, rows: 0, failed: 0 })).toBe(
       "There was nothing cached to clear.",
+    );
+  });
+});
+
+describe("combosOutcome", () => {
+  /**
+   * **The figures are the table's after the download, not before it**, which is the one way this
+   * sentence differs from the other four: the press refills what it emptied, and a reader who
+   * cleared because a bracket readout looked wrong has come for the new numbers. Spellbook's
+   * published file is five figures on the first and four on the second, which is why `counted`
+   * reaches for `count` — the separators are half of what is being pinned here.
+   */
+  it("reports the table that came back, with separators on both figures", () => {
+    expect(combosOutcome(status())).toBe(
+      "Cleared and downloaded again: 105,478 combos, naming 7,310 cards between them.",
+    );
+  });
+
+  /** The plural is per number, and both of them can be one. */
+  it("agrees with a count of one on either figure", () => {
+    expect(combosOutcome(status({ combos: 1, cards: 2 }))).toBe(
+      "Cleared and downloaded again: 1 combo, naming 2 cards between them.",
+    );
+    expect(combosOutcome(status({ combos: 3, cards: 1 }))).toBe(
+      "Cleared and downloaded again: 3 combos, naming 1 card between them.",
+    );
+  });
+
+  /**
+   * The arm this function exists for. A refusal never reaches here — it goes through
+   * `writeFailure` and turns the banner red — but a refresh that *resolves* over an empty table
+   * does, and "downloaded again: 0 combos" would report a successful download of nothing.
+   */
+  it("never prints a zero as though it were an answer", () => {
+    const said = combosOutcome(status({ combos: 0, cards: 0, fetchedAt: null, stale: true }));
+
+    expect(said).not.toContain("0 combos");
+    expect(said).toBe(
+      "The combos were cleared and the download brought none back, so the table is empty. " +
+        "Errors, further down this page, has the reason.",
     );
   });
 });

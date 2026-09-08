@@ -310,7 +310,15 @@ export const BelowTheFloor: Story = {
  * `combos_for_cards` answers `[]` here — and `[]` is also what a deck with no combos in it
  * answers, so silence would have the panel implying this deck has none when the truth is that
  * nothing has been looked at. That is the one sentence this panel must never write, so the
- * never-ingested case is checked *first*, says so, and points at Settings.
+ * never-ingested case is checked *first* and says which of the two it is.
+ *
+ * **It is a state to wait out rather than one to act on**, which reverses what this story said
+ * while the feed needed a reader: the file is fetched at launch on the same weekly schedule as
+ * the two tagger datasets, so the arm promises the arrival instead of naming a Settings panel to
+ * go and press. The panel it named does not exist any more. The arm survives that change because
+ * the promise is not a guarantee — a launch whose network never answers sits here for the whole
+ * session — and because *nothing downloaded* and *this deck's read is in flight* stay two
+ * different answers whichever way the wait ends.
  *
  * The estimate behind it is unharmed: the floor still reads the three signals it has, which is
  * what makes the fourth feed optional by construction. This is the same deck as
@@ -327,7 +335,8 @@ export const CombosNeverFetched: Story = {
     await expect(
       await within(panel).findByText(/No combo list has been downloaded/),
     ).toBeInTheDocument();
-    await expect(panel).toHaveTextContent(/Fetch it from Settings, under Combos/);
+    // The arrival, said in words — the half a reader needs now that there is no button.
+    await expect(panel).toHaveTextContent(/downloads on its own shortly after launch/);
     // Never this, on a database that has looked at nothing.
     await expect(
       within(panel).queryByText("No two-card combo in the list matches this deck."),
