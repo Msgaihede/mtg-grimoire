@@ -1371,7 +1371,21 @@ export function WishlistPage() {
   };
 
   return (
-    <section className="flex h-full flex-col gap-4">
+    <section
+      className={cn(
+        "flex flex-col gap-4",
+        // **`h-full` is the table's, not the page's** — `SearchPage`'s branch, one tab over.
+        // `VirtualTable` is `min-h-0 flex-1 overflow-auto`, so it has a height only while every
+        // box above it has one, and this section pinned to `main`'s height is the top of that
+        // chain: without it the table collapses to nothing.
+        //
+        // The wall wants the opposite. Under `WishlistGrid`'s `grow` it is as tall as its rows and
+        // `main` is what scrolls them, and a section clamped to one screen would be a containing
+        // block one screen tall — which is as far as the dock's `sticky top-0` could then travel,
+        // so the search column would unstick and scroll away after the first viewport of wishes.
+        view === "table" && "h-full",
+      )}
+    >
       {/* Not drawn: the ribbon's `h1` already names the view, and a second Cinzel "Wishlist"
           under it would be a subheading repeating its own heading. */}
       <h2 className="sr-only">Wishlist</h2>
@@ -1492,7 +1506,24 @@ export function WishlistPage() {
           min-content, and an overhang inside `AppShell`'s `overflow-auto` `main` becomes a
           horizontal scrollbar across the whole page — the 1024px-floor failure `ManaValueChips`
           already shipped once. */}
-      <div ref={deskRef} className="flex min-h-0 flex-1 gap-4">
+      <div
+        ref={deskRef}
+        className={cn(
+          "flex gap-4",
+          // The section's `h-full` reasoning, one level in: `min-h-0 flex-1` is what hands the
+          // table a definite height to scroll inside, and is exactly what a growing wall must not
+          // be given — a flex item told to fill a bounded column cannot also be as tall as its own
+          // content. Off it, this row is as tall as the wall, the page is as tall as the row, and
+          // `AppShell`'s `main` is the one thing that scrolls.
+          //
+          // **The dock beside it needs nothing for either state**, which is what makes the branch
+          // safe: `useDockHeight` measures the scrollport and subtracts however much of this row is
+          // still below its top, clamped at zero — so a row that has scrolled past the top gives
+          // the panel the full scrollport, and a row at rest gives it the scrollport under the
+          // header. `sticky top-0` does the pinning in both.
+          view === "table" && "min-h-0 flex-1",
+        )}
+      >
         <div className="flex min-w-0 flex-1 flex-col gap-2">
           {/* **The fence is “not among the filters”, and it was never “not on the bar” — which is
               the half of this note that changed when Flatten moved.** `resetAll` leaves both

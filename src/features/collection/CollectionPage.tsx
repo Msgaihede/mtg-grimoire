@@ -2550,7 +2550,21 @@ export function CollectionPage() {
   });
 
   return (
-    <section className="flex h-full flex-col gap-4">
+    <section
+      className={cn(
+        "flex flex-col gap-4",
+        // **`h-full` is the table's, not the page's** — `SearchPage`'s branch, and the wishlist
+        // carries the twin of this comment. `VirtualTable` is `min-h-0 flex-1 overflow-auto`, so it
+        // has a height only while every box above it has one, and this section pinned to `main`'s
+        // height is the top of that chain: without it the table collapses to nothing.
+        //
+        // The wall wants the opposite. Under `CardGrid`'s `grow` it is as tall as its rows and
+        // `main` is what scrolls them, and a section clamped to one screen would be a containing
+        // block one screen tall — which is as far as the dock's `sticky top-0` could then travel,
+        // so the search column would unstick and scroll away after the first viewport of cards.
+        view === "table" && "h-full",
+      )}
+    >
       {/* Not drawn: the ribbon's `h1` already names the view, and a second Cinzel
           "Collection" 18px under it would be a subheading repeating its own heading. The
           header below says what this view is far better than a title would. */}
@@ -2634,8 +2648,26 @@ export function CollectionPage() {
           shortening it.
 
           `min-h-0` so the column inside can be squeezed below its content and take the scroll,
-          which is what it did as this element's own class before the row existed. */}
-      <div ref={deskRef} className="flex min-h-0 flex-1 gap-4">
+          which is what it did as this element's own class before the row existed — **and since
+          2026-09-08 that is the table's arrangement alone**, for the reason on the branch below. */}
+      <div
+        ref={deskRef}
+        className={cn(
+          "flex gap-4",
+          // The section's `h-full` reasoning, one level in: `min-h-0 flex-1` is what hands the
+          // table a definite height to scroll inside, and is exactly what a growing wall must not
+          // be given — a flex item told to fill a bounded column cannot also be as tall as its own
+          // content. Off it, this row is as tall as the wall, the page is as tall as the row, and
+          // `AppShell`'s `main` is the one thing that scrolls.
+          //
+          // **The dock beside it needs nothing for either state**, which is what makes the branch
+          // safe: `useDockHeight` measures the scrollport and subtracts however much of this row is
+          // still below its top, clamped at zero — so a row that has scrolled past the top gives
+          // the panel the full scrollport, and a row at rest gives it the scrollport under the
+          // header. `sticky top-0` does the pinning in both.
+          view === "table" && "min-h-0 flex-1",
+        )}
+      >
         {/* **`min-w-0` is not optional.** A flex item cannot shrink below its own min-content, and
             an overhang inside `AppShell`'s `overflow-auto` `main` becomes a horizontal scrollbar
             across the whole page — the 1024px-floor failure `ManaValueChips` already shipped once.
@@ -3001,6 +3033,19 @@ export function CollectionPage() {
                 rows={tiles}
                 label="Your collection"
                 listKey={collection.queryKeyString}
+                // **This wall grows and `main` scrolls it — the page is one long page.** The search
+                // page said it first (2026-09-03) and the wishlist takes the same change in this
+                // commit: bounded, the wall was whatever height the desk row had left after the
+                // figures band, the filter bar, the breadcrumb, the folder cabinet and the pinned
+                // strip, so a binder was read through a letterbox with a scrollbar of its own an
+                // inch from the page's — and nothing on screen said which one a wheel would turn.
+                //
+                // **The cabinet above it stays bounded and that is not an inconsistency.** A reader
+                // with twenty drawers must not lose the wall of cards to them, which is the
+                // `max-h-44` strip's own argument; what this changes is the list underneath, which
+                // has no reason to be a band. The two surfaces that must keep a scroller of their
+                // own are untouched — see `CardGrid`'s `grow`.
+                grow
                 // **A phone gets a narrower card, so the binder is two columns rather than one.**
                 // The same width the search wall takes and for the same arithmetic: 324px of wall
                 // at 390, where 170 floors to one column. `PHONE_TILE_WIDTH` carries the

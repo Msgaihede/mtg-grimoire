@@ -1353,12 +1353,16 @@ export function FilterBar<SortKey extends string>({
           **Two things about the pin are honestly untested, and both are written here rather than
           left to be discovered.**
 
-          **It does not currently engage.** Every wall this row sits above is its own scroller
-          (`CardGrid`'s `overflow-auto`, the tables' virtualiser) and all five pages are `h-full`
-          flex columns, so `main` does not scroll as the app stands. The classes are not
-          speculative — they are what stops the strip being wrong the moment this bar's own flow
-          content outgrows its section, which is one tall `TagQueryRow` away — but nobody should
-          read a scroll-locked page as evidence that the pin was driven.
+          **It engages on three of the four card pages now, and the paragraph that stood here said
+          it could not.** That was true of the layout it described: every wall this row sat above
+          was its own scroller (`CardGrid`'s `overflow-auto`, the tables' virtualiser) and all five
+          pages were `h-full` flex columns, so `main` never scrolled. `CardGrid` gained `grow` on
+          2026-09-03 and the search page took it; the collection and the wishlist took it on
+          2026-09-08. On those three, **in grid view**, the wall is as tall as its rows and `main`
+          is the scroller — so the pin is live and the classes below are load-bearing rather than
+          speculative. In table view all three are still `h-full` columns over a bounded
+          `VirtualTable`, and the Tags page is still bounded in both, so the pin is inert there;
+          nobody should read a scroll-locked page as evidence either way.
 
           **And `-mt-5` assumes this row is the first thing in `main`, which is true on one page
           of four.** Only the search page puts the bar straight under `main`'s 20px of padding.
@@ -1371,14 +1375,20 @@ export function FilterBar<SortKey extends string>({
           which page it is on, so the choice is the plan's and the number is here to be argued
           with on the device.
 
-          **Argued, and `-mt-5 pt-5` is gone: it can only cost.** The pin cannot engage in this
-          layout — all four pages are `flex h-full flex-col`, so a section exactly fills `main`
-          and `main` never scrolls — which means the vertical bleed has **no** state in which it
-          is the right answer today, and a guaranteed bite out of three pages in the state that
-          actually exists. `-mx-5 px-5` stays because it is the opposite trade: invisible at rest
-          (it paints `bg-bg` over `main`'s own `bg-bg` gutters) and correct the moment anything
-          does scroll under it. **Put `-mt-5 pt-5` back in the same commit as whatever makes
-          `main` scroll**, and not before.
+          **Argued, and `-mt-5 pt-5` is gone: it can only cost.** As first written that read *the
+          pin cannot engage in this layout — all four pages are `flex h-full flex-col`, so a section
+          exactly fills `main` and `main` never scrolls*, and it ended **put `-mt-5 pt-5` back in
+          the same commit as whatever makes `main` scroll**. Three commits have since made `main`
+          scroll (2026-09-03 and 2026-09-08, above) and the class is still not back, because the
+          premise it rested on was only half the argument and the other half did not move: the
+          bleed is right **while pinned** and a bite out of the box above **at rest**, CSS has no
+          `:stuck`, and this component cannot see which page it is on. What changed is that the
+          wrong state is no longer the only state — it is now grid-at-rest and the whole of table
+          view, on the two pages that draw something above this bar. That is still most of the time,
+          so the trade is unchanged and the class stays out; what is gone is the promise that a
+          scrolling `main` would be reason enough to add it. `-mx-5 px-5` stays for the opposite
+          trade: invisible at rest (it paints `bg-bg` over `main`'s own `bg-bg` gutters) and correct
+          the moment anything does scroll under it.
 
           Worth being plain about what this does and does not buy, because the option story's
           name is misleading: **the 337px this task returns to the wall comes from the bar being

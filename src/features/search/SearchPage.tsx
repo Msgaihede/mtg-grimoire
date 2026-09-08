@@ -565,8 +565,11 @@ function Results({ search }: { search: CardSearch }) {
             rows={rows}
             listKey={searchKey}
             // **This wall grows and `main` scrolls it — the page is one long page.** The first of
-            // the four page-width walls to say so; the other three, and the two bounded surfaces
-            // that must keep a scroller of their own, are untouched. See `CardGrid`'s `grow`.
+            // the four page-width walls to say so, on 2026-09-03; the collection's and the
+            // wishlist's followed on 2026-09-08, so the Tags page is the one left. The two bounded
+            // surfaces that must keep a scroller of their own are untouched — see `CardGrid`'s
+            // `grow`, which carries why the deck editor's 206px docked panel and
+            // `AllPrintingsDialog` are not this.
             grow
             // **A phone gets a narrower card, so the wall is two columns rather than one.** At
             // 390px this wall is 324 wide and the standard 170px tile floors to a single column

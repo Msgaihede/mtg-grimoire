@@ -334,6 +334,19 @@ export function WishlistGrid({
       rows={tiles}
       label="Your wishlist"
       listKey={listKey}
+      // **This wall grows and `main` scrolls it — the page is one long page.** The search page said
+      // it first (`SearchPage`, 2026-09-03) and this is the same sentence one tab over: bounded, the
+      // wall was whatever height the desk row had left over, so a wishlist of forty wishes was drawn
+      // in a letterbox with a scrollbar of its own an inch from the page's, and nothing on screen
+      // said which one a wheel was about to turn. The two surfaces that must keep a scroller of
+      // their own are untouched — `CardGrid`'s `grow` carries why the deck editor's 206px docked
+      // panel and `AllPrintingsDialog` are not this.
+      //
+      // **Passed here rather than at the page's call site**, because this component *is* the
+      // wishlist's wall and has exactly one caller: there is no second site for the prop to
+      // disagree with. `CollectionPage` renders `CardGrid` directly and passes it there, which is
+      // the same rule read from the other end.
+      grow
       // **A phone gets a narrower card, so the list is two columns rather than one.** The same
       // width the search and collection walls take and for the same arithmetic: 324px of wall at
       // 390, where 170 floors to one column. `PHONE_TILE_WIDTH` carries the derivation, the 160
