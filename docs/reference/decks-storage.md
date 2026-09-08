@@ -497,12 +497,16 @@ preferred_finish`'s nullability one table over.
   **The run list is not replaced by a shorter run list; it is replaced by nothing.** There is no
   derived table to keep in step, so no write "runs the allocator" and none can forget to. What
   moves a row *across* the deck boundary is the pair in `collection_alloc.rs` —
-  `collection_to_deck` and `deck_to_collection` — **and, since 2026-09-03, two more that are not
+  `collection_to_deck` and `deck_to_collection` — **and, since 2026-09-03, three more that are not
   members of that pair**: `deck_pull.rs`'s `deck_pull_from_collection`, the third (see
-  [the pull](#the-pull-filling-a-hole-the-list-already-has)), and `deck_quick_add.rs`'s
-  `deck_quick_add_to_collection`, the fourth and the only one that puts a row in a group without
-  taking it out of anywhere (see
-  [the quick add](#the-quick-add-recording-cardboard-nobody-had-written-down)) — plus the six bulk presses that empty a group
+  [the pull](#the-pull-filling-a-hole-the-list-already-has)), `deck_quick_add.rs`'s
+  `deck_quick_add_to_collection`, the fourth (see
+  [the quick add](#the-quick-add-recording-cardboard-nobody-had-written-down)), and
+  `deck_missing.rs`'s `deck_missing_to_collection`, the fifth and the deck-wide form of the
+  fourth (2026-09-08; see
+  [adding the missing](#adding-the-missing-the-deck-wide-form-of-the-quick-add)). **The last two
+  are the ones that put a row in a group without taking it out of anywhere** — that used to read
+  "the fourth and the only one", and it stopped being true the day the batch landed — plus the six bulk presses that empty a group
   the reader is throwing away, every one of them into `Recently removed`: `delete_deck`,
   `deck_meta::delete_category`'s cascade arm, `deck::clear_category`, `deck::clear_variant`,
   `import::commit_import`'s `replace` arm, and Settings' `reset::clear_decks`. The five that
@@ -601,12 +605,16 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
   it for two PRs while the list stayed at 25: a sweep that exists to catch "a new deck write
   records nothing" cannot skip the writes that move cards. It fell back to 27 on 2026-08-31, when
   custom deck covers took `deck_set_cover_image`'s case out with them and this sentence was the
-  half of that deletion nobody re-counted. **Four writes that do record history are not in the
-  list** (re-counted 2026-09-03, still 27): `deck_category_clear` never was and `deck_clear` was
-  not added beside it, and neither of the two deck-boundary crossings that landed on 2026-09-03 —
-  `deck_pull_from_collection` and `deck_quick_add_to_collection` — went in either. So the test's
-  name is wider than what it drives, and each of the four pins its history row in a test of its
-  own: the two clears in `deck.rs`, the two crossings in their own modules. "Exactly one" is per _change_, not per call, and
+  half of that deletion nobody re-counted. **Five writes that do record history are not in the
+  list** (re-counted 2026-09-08, still 27): `deck_category_clear` never was and `deck_clear` was
+  not added beside it, and none of the three deck-boundary crossings went in either —
+  `deck_pull_from_collection` and `deck_quick_add_to_collection` on 2026-09-03, and
+  `deck_missing_to_collection` on 2026-09-08, which knew about the omission and matched it rather
+  than fixing it for one command. So the test's name is wider than what it drives, and each of the
+  five pins its history row in a test of its own: the two clears in `deck.rs`, the three crossings
+  in their own modules (the batch's is inside
+  `a_partial_pick_records_what_it_named_and_leaves_the_rest_short`, which asserts one `move` row
+  naming no card at `delta` 0). "Exactly one" is per _change_, not per call, and
   **three** commands make more than one change in a call:
   **`deck_update` records one row per changed field**
   (`record_deck_edit`, pinned by `a_patch_that_changes_two_fields_records_both`), and it
@@ -1933,6 +1941,185 @@ question for a live pass and not for this page.
 **Nothing in this section has been measured in the shipped window.** The pull's own live pass is
 the model for the one this owes: the two-press case above, a wish picker with several folders, and
 what the editor's banner says when the wish read fails.
+
+## Adding the missing: the deck-wide form of the quick add
+
+`deck_missing.rs`, landed 2026-09-08 from a conversation rather than an issue, and the third
+answer the stats band gives to one number. The press reads **`Add missing to collection`** and
+sits between `Pull from collection` and `Send missing to wishlist`, which is the row read as own
+it loose → just bought it → still have to buy it.
+
+**What it is for is the case the other two cannot answer**: the reader has the cardboard in their
+hand. The pull moves copies that are already in the database somewhere; the wishlist writes down
+what to go and buy. This creates rows for copies that exist on the desk and have never been
+recorded, filed straight into the deck that wanted them — which is exactly
+[the quick add](#the-quick-add-recording-cardboard-nobody-had-written-down)'s job, done for the
+whole list at once and with the preview a menu row has no room for.
+
+### One shortfall walk, three callers
+
+`deck::live_shortfall` is the walk `deck_pull::plan` and `deck::missing_to_wishlist` each spelled
+separately until this feature would have spelled it a third time. It reads the **live** list
+through `get_deck`, skips an inactive pile, computes `quantity − owned_quantity` and folds at
+`(card_id, finish)` in the deck's own read order. Each caller folds its own answer on top: the
+pull hangs candidates off the pair, this one hangs wishes off it, and the wishlist folds on again
+to `oracle_id` and drops the rows that have none.
+
+**Folding twice gives the same answer as folding once**, which is what makes the wishlist's second
+fold safe: `oracle_id` is a property of the `cards` row, so every `(card_id, finish)` bucket of one
+printing carries the same one, and summing per pair then per oracle id is the same sum. The
+`BTreeMap` there sorts by key whatever order rows arrive in, so `add_wish` is still called in
+oracle-id order and the count it answers is unchanged. The extraction was required to be
+behaviour-preserving, and both modules' existing tests were the fence.
+
+### The plan drops an orphan, and that is the write's own precondition
+
+`deck_missing::plan` leaves out a printing whose `card_id` has no `cards` row — not as a policy,
+but because `collection::add_entry_filed` reads `set_code`, `collector_number` and `lang` off that
+row through `printing_of` and refuses without it. A row the write must refuse is a row the dialog
+could only draw as an apology, so it never reaches the dialog. That is
+[the pull](#the-pull-filling-a-hole-the-list-already-has)'s rule about an empty candidate list,
+applied to a different reason for the same emptiness.
+
+**It is a narrower test than `missing_to_wishlist`'s, and the two are not each other's typo.** That
+command skips `oracle_id.is_none()`, because a wish needs an oracle id; a `cards` row can exist
+with a NULL `oracle_id`, and a collection entry records it perfectly well.
+`a_printing_with_no_oracle_id_is_kept` is the test that holds the two apart.
+
+### The pick is addressed by `(card_id, finish)`, because the row does not exist yet
+
+That is the structural difference from `deck_pull::Pick`, which names a `collection_entries.id`.
+Everything else about the write is the pull's discipline: it re-plans **inside** the transaction,
+checks every pick against that re-plan before writing anything, and refuses the whole batch on any
+disagreement. Duplicate picks for one key are **summed and then checked**, so two picks of 3
+against a shortfall of 4 are one refusal rather than two accepted writes.
+
+Five sentences, two of them borrowed from `deck_pull` rather than respelled:
+
+| Refusal | When |
+| --- | --- |
+| `NOTHING_PICKED` | an empty batch, refused before the transaction opens |
+| `collection::ZERO_ADD` | a pick of zero or fewer |
+| `deck_pull::NOT_SHORT_OF_THAT` | the card is in `cards`, and the deck is not short of that pair |
+| `deck_pull::MORE_THAN_MISSING` | the picks for one row sum past its shortfall |
+| `LEFT_THE_DATABASE` | the printing left `cards` between the read and the press |
+
+The last two are told apart on purpose: "the deck does not want them" and "the card is gone" are
+different things for a stale dialog to hear, and one sentence covering both tells it nothing it
+can act on.
+
+**All-or-nothing, and no undo step**, for the quick add's reason sharpened: this write changes no
+`deck_cards` row at all, so the only half of it `deck_undo` could express is the half that does not
+exist. The way back is the collection editor — the copies are a row the reader can see, in a folder
+named after the deck.
+
+### The wish half acts only on an unambiguous match
+
+`quick_add` takes one `wish_id` and can therefore be stale about it, which is what `WISH_GONE` and
+`WISH_WRONG_CARD` are for. A batch over thirty rows cannot ask thirty questions, so this one
+**chooses inside the transaction** instead: `take_lone_wish` re-runs `deck_quick_add::wishes` — the
+same predicate the per-card menu offers by, not a second opinion — and acts only when exactly one
+line matches. None, or two or more, is left standing.
+
+Two consequences worth stating:
+
+- **No wish id rides on the wire**, so `MissingPick` carries only a printing, a finish and a count.
+- **There is no stale-wish refusal.** A line that vanished under an open dialog is simply not among
+  the matches, and the press carries on. The reader is told what happened by `wishCopies` in the
+  outcome rather than by an error — and the dialog said beside each row, before the press, which
+  rows would clear a wish and which had two matches and would be left alone.
+
+The reader can switch the whole half off with the footer's `Also take these off my wishlist`, which
+is on by default.
+
+### One history row for the press, and `AUDIT_KINDS` still stays at nine
+
+The fifth reuse of `move` with a payload key nothing else writes:
+`{"quickAdd": {"copies": N, "wishes": M}}`, `card` NULL, `delta` 0 — byte for byte the quick add's
+shape with the batch's totals, so `auditText.ts`'s `quickAddLine` renders it as *"Recorded N copies
+for this deck"* with *"M copies off your wishlist"* under it and **needed no change at all**.
+
+**One row, not one per printing**, because the reader did one thing. `delta` is 0 and honest: the
+*list* gained nothing, since a 4-copy line the reader was 3 short of is still a 4-copy line.
+
+`deck_missing_to_collection` is **not** in `every_deck_write_leaves_exactly_one_audit_row`'s case
+list, which matches the two crossings that landed before it; see the note on that sweep above for
+why that omission is a known one rather than a fresh miss. Its own row is pinned by
+`a_partial_pick_records_what_it_named_and_leaves_the_rest_short`.
+
+### What TypeScript decides
+
+`addMissingPlan.ts` holds the reader's **departures** from a full record and nothing else — rows
+switched off, and counts lowered — which is `pullPlan.ts`'s discipline with one difference worth
+naming: the pull's departure is a *source*, because the copies exist and sit somewhere; this one's
+is a *count*, because they do not exist yet and the reader may have bought two of the four.
+
+**The clamp is the part that earns the file.** A stored count is clamped against the row's current
+`short` on every derivation, so a re-read that lowered a shortfall cannot leave the footer
+previewing a press the backend would refuse with `MORE_THAN_MISSING`.
+
+`AddMissingToCollectionDialog` holds no query and no mutation — rows and a narrowed write arrive as
+props, so every one of its tests mounts it with no provider of any kind. `useDeck`'s mutation fires
+`query.ts`'s `OWNED_WRITE_KEYS` rather than the `["collection"]` root the movers share, for the
+quick add's reason: this write **creates** rows, so `ownedQuantity` moves from 0 to N and a 30 s
+`staleTime` would otherwise keep saying the old number for half a minute. `["wishlist"]` in that
+set is load-bearing here rather than incidental, because the write can delete a wish outright.
+
+### The live pass, 2026-09-08 (debug build, Windows, 1920×1080)
+
+Driven over CDP against a copy of the real database. The scenario was built on an empty scratch
+deck so nothing real was written: **Chimil, the Inner Sun** short 4 with one wish for 2 at the
+root, **Firemane Commando** short 3 with two wishes (root and `Backordered`), **The One Ring**
+foil short 2 with none. The band read `9 of 9 missing`.
+
+**The band.** All three presses on one row at 1920 wide — identical `top`, and their class lists
+byte-identical as a set. At the app's **1024** floor they still fit on one row, rightmost edge at
+**796** of a 1024 client width, and `scrollWidth` never exceeded `clientWidth`. The `flex-wrap` is
+therefore insurance rather than something the third button spends.
+
+**The dialog opened** with every row ticked and steppers at `4 / 3 / 2`, each `min=1` and
+`max=short`. The three wish shapes drew as designed: `Clears 2 copies off a wish in Wishlist` on
+Chimil (the wish holds 2, so `min(4, 2)`), `2 wishlist lines match — left alone` on Firemane, and
+nothing at all on The One Ring.
+
+**The arithmetic tracks the controls.** Footer `9 copies across 3 cards · 2 copies off your
+wishlist`; untick The One Ring → `7 copies across 2 cards` and the press relabels to
+`Add 7 copies to collection`; step Chimil 4 → 1 → `4 copies across 2 cards · 1 copy off your
+wishlist`, and its row line becomes `Clears 1 copy off a wish in Wishlist` — the clamp and the
+singular both, on one gesture.
+
+**The press was deliberately partial** — 1 of Chimil's 4 and all 3 of Firemane's, with The One
+Ring switched off — because that is the shape that can go wrong silently. It answered
+*"Recorded 4 copies of 2 cards into Test Deck. 1 copy off your wishlist."* and the database agreed
+with every clause of it:
+
+| Claim | After |
+| --- | --- |
+| Chimil recorded 1 | `ownedQuantity` 0 → 1, plan `short` 4 → 3 |
+| Firemane recorded 3 | `ownedQuantity` 0 → 3, row gone from the plan |
+| The One Ring untouched | `ownedQuantity` 0, `short` still 2 |
+| the lone wish decremented | Chimil's wish 2 → 1 |
+| **the ambiguous pair left standing** | both Firemane wishes still 1, after a 3-copy press |
+| one history row for the press | `move`, `card` NULL, `{"quickAdd":{"copies":4,"wishes":1}}`, `delta` 0 |
+
+`ownedQuantity` is the proof the copies landed in the deck's **own** group rather than at the
+root, because `owned_by_printing` counts only rows filed there. The band re-read `5 of 9 missing`
+— down by exactly the four recorded — and the drawer worded the row *"Recorded 4 copies for this
+deck / 1 copy off your wishlist"* with **no change to `auditText.ts`**, which is the reuse of
+`move` paying off rather than merely being asserted in a test.
+
+Escape closed the dialog and returned the caret to the button that opened it.
+
+**One behaviour worth writing down because it surprises on first sight and is correct**: a
+successful press leaves the dialog **open**, and it re-plans. The reader's departures survive that
+refetch — a row they had unticked stays unticked, a count they lowered stays lowered — so the
+footer immediately after the press above read `1 copy across 1 card`, which is Chimil's *new*
+shortfall of 3 still carrying the reader's stepper of 1, with The One Ring still switched off.
+That is `MissingChoice` holding only departures working exactly as designed, and it is the pull's
+behaviour too. Nothing about it is a bug; it is only unintuitive if you expect the dialog to reset.
+
+**No defects found.** That is worth stating plainly rather than leaving as silence, because every
+other UI task in this repo's plans found something the suite could not.
 
 ## The gallery's two second reads, and the order it opens in (2026-09-07, issue #387)
 

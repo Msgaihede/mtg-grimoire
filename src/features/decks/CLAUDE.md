@@ -533,11 +533,15 @@ reader to configure the deck they had just made; it now asks all of them.
     `queryClient.fetchQuery` at the press rather than hooks, so a right-click fires nothing — and
     both query-options factories live in `useDeck.ts`, because a second spelling of either key is
     a fetch that never shares the dialog's cache.
-  - **The quick add is this hook's one write that can _create_ a collection row**, so it fires
-    `query.ts`'s `OWNED_WRITE_KEYS` and not the `["collection"]` root the four movers share — that
-    is exactly the case the comment left where the deleted `own` add's invalidation stood said
-    would come back. The set already carries `["wishlist"]`, which this write needs on its own
-    account and not only for owned progress: the second row can delete a wish outright.
+  - **The quick add and `addMissingToCollection` are this hook's two writes that can _create_ a
+    collection row**, so both fire `query.ts`'s `OWNED_WRITE_KEYS` and not the `["collection"]`
+    root the four movers share — that is exactly the case the comment left where the deleted `own`
+    add's invalidation stood said would come back. The set already carries `["wishlist"]`, which
+    both need on their own account and not only for owned progress: each can delete a wish
+    outright. **Neither calls `invalidate()` beside it**, because `["decks"]` is already a member
+    and a second spelling of a root the constant carries is a second thing to keep in step.
+    The batch is the deck-wide form of the per-card press — one dialog, one write, one history
+    row — and its plan lives under `["decks", "missingPlan", deckId]`.
   - **`QuickUnwishDialog`'s Cancel does nothing at all, the add included.** The reader asked for
     both halves and gets neither, which is the only answer a cancel can honestly give — the same
     rule the backend applies when the wish has moved on and rolls the copies back with the

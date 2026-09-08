@@ -4628,6 +4628,134 @@ fn attribute_owned(rows: &mut [DeckCardRow], owned: &HashMap<(String, String), i
     }
 }
 
+/// One printing-and-finish the live list is short of, before anything else is folded onto it.
+///
+/// **Every caller folds its own answer on top of this**, which is why the row carries both
+/// grains' keys at once: [`crate::deck_pull::plan`] hangs candidates off the printing and the
+/// finish, [`crate::deck_missing::plan`] hangs wishes off the same pair, and
+/// [`missing_to_wishlist`] folds on to [`Self::oracle_id`] and drops the rows that have none.
+/// Every field is a fact copied off the deck row and none of them is a conclusion —
+/// [`live_shortfall`] decides nothing a caller could disagree with.
+#[derive(Debug, Clone)]
+pub struct ShortfallRow {
+    /// The printing the deck lists — half of the grain [`live_shortfall`] folds at.
+    pub card_id: String,
+    /// The `cards` row's oracle id, `None` for an orphan. **A property of the printing rather
+    /// than of this bucket**, which is exactly what makes a second fold on to it safe; the
+    /// argument is on [`live_shortfall`].
+    pub oracle_id: Option<String>,
+    /// The **deck row's** stored name, not the `cards` row's: that is the one name an orphan
+    /// still has, and it is the name every list beside these rows is already showing.
+    pub name: String,
+    pub set_code: String,
+    pub collector_number: String,
+    /// The deck row's finish, where `None` is nonfoil — [`normalise_finish`]'s translation
+    /// carried through unchanged, and the other half of the grain. A caller writing to
+    /// `collection_entries` reads [`crate::schema::FINISHES`]`[0]` back out of it.
+    pub finish: Option<String>,
+    /// Copies of this printing and finish the live list still wants, summed over its **active**
+    /// piles — `quantity - owned_quantity`, which is the same subtraction the editor's missing
+    /// badge draws. Always at least 1: a row that is short of nothing is not returned.
+    pub short: i64,
+    /// The piles that are short, in the deck's own read order, each named once. **For the reader
+    /// and never for the arithmetic**: no caller of [`live_shortfall`] writes a `deck_cards` row,
+    /// so there is no pile for anything to land in and nothing here is an argument to anything.
+    pub categories: Vec<String>,
+    /// The printing's picture, front face — **taken off the deck row rather than queried
+    /// again**, so [`crate::image_uri::front_face_map`]'s precedence keeps its one home. One per
+    /// row, because every copy folded into a row is the same printing. `None` for an orphan,
+    /// whose card has left `cards`.
+    pub image_uris: Option<BTreeMap<String, String>>,
+}
+
+/// Everything the **live** list is short of, folded at `(card_id, finish)`, in the deck's order.
+///
+/// Written once because it was written twice, and it has three callers within the week.
+/// [`crate::deck_pull::plan`] and [`missing_to_wishlist`] both opened on `get_deck(…, LIVE, …)`,
+/// both skipped an inactive pile and both computed `quantity - owned_quantity` — one question
+/// asked in two directions, where what differs is only what a hole is filled *with*.
+/// [`crate::deck_missing::plan`] is the third direction and was what made the duplication worth
+/// paying off: **what the reader has just bought**. Each caller folds its own answer on top of
+/// these rows, and the shape is chosen so that a further caller costs its own fold and nothing
+/// else — which the third one duly did.
+///
+/// **The read order is the deck's own** — [`read_deck_cards`]' `ORDER BY`, category then name
+/// then row id — and the folded rows keep it. `rows` is the answer and the index map only says
+/// where a key already landed; a `BTreeMap` keyed on the pair would have sorted the answer by
+/// card id, which is neither the deck's order nor any order a reader chose. It matters for
+/// [`attribute_owned`]'s reason: this list is walked to hand out a scarce thing — the shortfall a
+/// caller may pick against — so the answer must not depend on how a view sorted itself.
+/// **A caller wanting another order sorts what it is given**, and nothing here takes one.
+///
+/// **The grain is `(card_id, finish)`, and an inactive pile is short of nothing.** The same
+/// printing short in two piles is one row for the sum, because what a reader is short of is
+/// cardboard; the piles are named on the row for them to read and are never a term in the
+/// arithmetic. A switched-off pile counts toward nothing anywhere in the app and
+/// [`attribute_owned`] has already handed it no copies, so without that skip every row in it
+/// would report its whole quantity as a shortfall for ever.
+///
+/// **Folding twice gives the same answer as folding once**, and that is what lets
+/// [`missing_to_wishlist`] fold these rows on to [`ShortfallRow::oracle_id`] rather than walk the
+/// deck itself: `oracle_id` is a property of the `cards` row, so every `(card_id, finish)` bucket
+/// of one printing carries the same one, and summing per pair and then per oracle id is the same
+/// sum as summing per oracle id directly. The `BTreeMap` on the other side sorts by key whatever
+/// order rows arrive in, so its wishes are still written in oracle-id order.
+///
+/// **The default marketplace, and it costs nothing to be wrong about**: this reads names,
+/// finishes and quantities and never a price. Threading the stored setting in would make what a
+/// deck is short of depend on where the reader shops.
+///
+/// `&Connection`, so a bare connection and an open transaction both fit — the pull calls it on
+/// the connection it was handed and [`missing_to_wishlist`] on its own `tx`.
+///
+/// **An empty vector is the ordinary answer.** A deck short of nothing is zero rows, and that is
+/// not a failure.
+pub fn live_shortfall(conn: &Connection, deck_id: i64) -> Result<Vec<ShortfallRow>, String> {
+    let detail = get_deck(conn, deck_id, LIVE, crate::sorting::Marketplace::default())?
+        .ok_or_else(|| GONE.to_owned())?;
+
+    let mut rows: Vec<ShortfallRow> = Vec::new();
+    let mut at: HashMap<(String, Option<String>), usize> = HashMap::new();
+    for card in &detail.cards {
+        if !card.category_active {
+            continue;
+        }
+        let short = card.quantity - card.owned_quantity;
+        if short <= 0 {
+            continue;
+        }
+        // `.copied()` so the lookup's borrow of `at` is over before the `None` arm inserts into
+        // it — the shape every "find or make" in this crate takes.
+        let key = (card.card_id.clone(), card.finish.clone());
+        match at.get(&key).copied() {
+            Some(i) => {
+                rows[i].short += short;
+                // Named once each. The same pile cannot appear twice for one printing and
+                // finish — that pair plus the category is `DECK_CARD_GRAIN` — but a `contains`
+                // costs nothing over a handful of piles and says what the field means.
+                if !rows[i].categories.iter().any(|c| c == &card.category_name) {
+                    rows[i].categories.push(card.category_name.clone());
+                }
+            }
+            None => {
+                at.insert(key, rows.len());
+                rows.push(ShortfallRow {
+                    card_id: card.card_id.clone(),
+                    oracle_id: card.oracle_id.clone(),
+                    name: card.name.clone(),
+                    set_code: card.set_code.clone(),
+                    collector_number: card.collector_number.clone(),
+                    finish: card.finish.clone(),
+                    short,
+                    categories: vec![card.category_name.clone()],
+                    image_uris: card.image_uris.clone(),
+                });
+            }
+        }
+    }
+    Ok(rows)
+}
+
 /// One wish per card the deck is still short of. Returns how many wishes were touched.
 ///
 /// **Any printing**, always: a shopping list is not a printing preference, and the copy that
@@ -4649,6 +4777,11 @@ fn attribute_owned(rows: &mut [DeckCardRow], owned: &HashMap<(String, String), i
 /// An orphaned row is skipped: a wish needs an oracle card or a printing that resolves, and
 /// an orphan has neither. It is already carrying a `needs_review` sentence that says so.
 ///
+/// **The walk that finds the holes is [`live_shortfall`] and is not spelled here.** This
+/// function is one of its folds — oracle-grained, dropping what has no oracle id — and that
+/// function's doc is where the inactive pile, the read order and the "folding twice is folding
+/// once" argument live.
+///
 /// **Records no history**, and it is the one card-adjacent command that does not: nothing about
 /// the deck changed. It writes the wishlist and it reads this deck — and neither is a change to
 /// what the deck plays, so the drawer would be reporting a shopping trip as an edit. (This read
@@ -4657,30 +4790,21 @@ fn attribute_owned(rows: &mut [DeckCardRow], owned: &HashMap<(String, String), i
 /// deck table at all.)
 pub fn missing_to_wishlist(conn: &Connection, deck_id: i64) -> Result<usize, String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-    // The default marketplace, and it costs nothing to be wrong about: this reads names,
-    // quantities and claims, and never a price. Threading the setting in would only make a
-    // shopping list depend on where the user shops.
-    let detail = get_deck(&tx, deck_id, LIVE, crate::sorting::Marketplace::default())?
-        .ok_or_else(|| GONE.to_owned())?;
 
-    // Oracle-grained, so the same card short in two categories is one wish for the sum —
-    // which is what "one wish per card still missing" means, and what the reader would count.
+    // Oracle-grained, so the same card short in two categories is one wish for the sum — which
+    // is what "one wish per card still missing" means, and what the reader would count. It is a
+    // *second* fold over [`live_shortfall`]'s `(card_id, finish)` one and gives the same answer
+    // a single walk would: that function's doc carries the argument. The `BTreeMap` sorts by key
+    // whatever order rows arrive in, so `add_wish` below is still called in oracle-id order.
     let mut missing: BTreeMap<String, (String, i64)> = BTreeMap::new();
-    for row in &detail.cards {
-        if !row.category_active {
-            continue;
-        }
-        let Some(oracle_id) = row.oracle_id.as_deref() else {
+    for row in live_shortfall(&tx, deck_id)? {
+        let Some(oracle_id) = row.oracle_id else {
             continue;
         };
-        let short = row.quantity - row.owned_quantity;
-        if short <= 0 {
-            continue;
-        }
         let entry = missing
-            .entry(oracle_id.to_owned())
+            .entry(oracle_id)
             .or_insert_with(|| (row.name.clone(), 0));
-        entry.1 += short;
+        entry.1 += row.short;
     }
 
     let touched = missing.len();
@@ -11561,6 +11685,110 @@ mod tests {
         assert!(
             may_have_a_power_toughness_box(None),
             "unknown is not `no`: an orphan, or a row that arrived without a type line"
+        );
+    }
+
+    /// `live_shortfall`: a switched-off pile is short of nothing, and the same printing in one
+    /// is not a second row either.
+    ///
+    /// The Maybeboard is seeded `is_active = 0`, so the assertion is on the **number** and not
+    /// merely on the row count: putting the same printing in both piles is what makes a lost
+    /// `category_active` skip change the answer rather than quietly add a row nobody reads.
+    #[test]
+    fn live_shortfall_counts_an_inactive_pile_as_short_of_nothing() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "bolt-lea", main, 4);
+        add(
+            &conn,
+            deck.id,
+            "bolt-lea",
+            kind_of(&conn, deck.id, "maybe"),
+            3,
+        );
+
+        let rows = live_shortfall(&conn, deck.id).unwrap();
+
+        assert_eq!(
+            rows.len(),
+            1,
+            "the Maybeboard contributes no row of its own"
+        );
+        assert_eq!(rows[0].card_id, "bolt-lea");
+        assert_eq!(
+            rows[0].short, 4,
+            "4 in the main pile; the inactive 3 are not a shortfall"
+        );
+        assert_eq!(
+            rows[0].categories,
+            vec!["Main deck".to_owned()],
+            "a pile that counts toward nothing is not named as short of anything either"
+        );
+    }
+
+    /// `live_shortfall`: one printing short in two **active** piles is one row for the sum, and
+    /// the row names both piles.
+    ///
+    /// The copy in the deck's own group is what makes this the subtraction rather than the
+    /// quantity — `attribute_owned` hands it to the first row in the read's order, so the two
+    /// piles are short of 1 and 3 and the fold is 4.
+    #[test]
+    fn live_shortfall_folds_one_printing_across_two_active_piles_and_names_both() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        let spells = crate::deck_meta::category_for_name(&conn, deck.id, "Burn spells").unwrap();
+        file_into_group(&conn, deck.id, "bolt-lea", 1);
+        add(&conn, deck.id, "bolt-lea", main, 2);
+        add(&conn, deck.id, "bolt-lea", spells, 3);
+
+        let rows = live_shortfall(&conn, deck.id).unwrap();
+
+        assert_eq!(
+            rows.len(),
+            1,
+            "what a reader is short of is cardboard — the pile is not a term in the grain"
+        );
+        assert_eq!(rows[0].short, 4, "(2 - 1 owned) + 3");
+        assert_eq!(
+            rows[0].categories,
+            vec!["Main deck".to_owned(), "Burn spells".to_owned()],
+            "both piles, each once, in the deck's own order"
+        );
+        assert_eq!(
+            rows[0].oracle_id.as_deref(),
+            Some("o1"),
+            "a property of the `cards` row, which is what lets the wishlist fold on to it"
+        );
+    }
+
+    /// `live_shortfall`: the answer is in the deck's read order — category, then name, then row
+    /// id — and not in card-id order.
+    ///
+    /// `Commander` is seeded at `sort_order` 0 and `Main deck` is made after the four predefined
+    /// piles, so the read's order and the card ids' are exact opposites here. A `BTreeMap` keyed
+    /// on the pair — the shape this fold deliberately does not use — would answer the other one.
+    #[test]
+    fn live_shortfall_answers_in_the_decks_read_order_and_not_by_card_id() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Angels", "modern")).unwrap();
+        add(
+            &conn,
+            deck.id,
+            "serra-lea",
+            kind_of(&conn, deck.id, "commander"),
+            1,
+        );
+        add(&conn, deck.id, "bolt-lea", main_of(&conn, deck.id), 4);
+
+        let rows = live_shortfall(&conn, deck.id).unwrap();
+
+        let order: Vec<&str> = rows.iter().map(|r| r.card_id.as_str()).collect();
+        assert_eq!(
+            order,
+            vec!["serra-lea", "bolt-lea"],
+            "the deck's own order; a caller wanting another one sorts what it is given"
         );
     }
 

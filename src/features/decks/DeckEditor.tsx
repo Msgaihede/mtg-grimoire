@@ -93,6 +93,7 @@ import { NewDeckPreview } from "@/features/transfer/import/destinations/NewDeckP
 import { ImportDialog } from "@/features/transfer/import/ImportDialog";
 import { RenameField } from "./metaRows";
 import { AddLabelDialog } from "./AddLabelDialog";
+import { AddMissingToCollectionDialog } from "./AddMissingToCollectionDialog";
 import { PriceStrip } from "./PriceStrip";
 import { pullKey } from "./pullPlan";
 import { PullFromCollectionDialog } from "./PullFromCollectionDialog";
@@ -109,7 +110,13 @@ import { asSortBy, DEFAULT_SORT_BY, SORT_OPTIONS, type SortBy } from "./sorting"
 import { LabelsDialog } from "./LabelsDialog";
 import { TheoryDiffDialog } from "./TheoryDiffDialog";
 import { theoryMatchPlan } from "./theoryMatch";
-import { pullPlanQuery, quickAddWishesQuery, useDeck, usePullPlan } from "./useDeck";
+import {
+  pullPlanQuery,
+  quickAddWishesQuery,
+  useDeck,
+  useMissingPlan,
+  usePullPlan,
+} from "./useDeck";
 import { useDeckMeta } from "./useDeckMeta";
 import { useFormatSpecs } from "./useFormatSpecs";
 import { useRecentAdds } from "./useRecentAdds";
@@ -688,6 +695,29 @@ type Layer =
    * there is no question to ask there, rather than a question with an empty answer.
    */
   | { kind: "pull"; card?: DeckCard }
+  /**
+   * **Add missing to collection** — the copies the reader has just bought, recorded into this
+   * deck's own group.
+   *
+   * **It carries no payload and can never grow one, which is the whole of what separates it
+   * from `pull` directly above.** That arm grew a `card` on 2026-09-03 because the pull has two
+   * entrances — the stats band's deck-wide press and a deck card's `Collection ▸ Pull …` — so
+   * its *kind* stopped being enough to say which control is open, and {@link layerMatches}
+   * needed a clause to tell them apart. This one has exactly one opener and structurally cannot
+   * acquire a second: the per-card form of this press already exists as `Collection ▸ Quick add
+   * N copies`, a menu row that writes outright with no dialog at all, because one row's
+   * shortfall is a number the menu label already quotes. So `layerMatches` needs no clause for
+   * it, and a future `card` field here would mean the per-card menu had grown a preview — which
+   * is a different feature and would be a different arm.
+   *
+   * **A full-window overlay for the pull's reason**: it is *consulted* — a plan is read, some
+   * counts are set, it is shut — rather than worked out of, and the widest thing this editor
+   * asks about does not get to take width off the desk for the session.
+   *
+   * The band draws its opener only on the live list, and `null` there is absent rather than
+   * greyed: a plan holds no cards, so there is nothing for it to be short of.
+   */
+  | { kind: "addMissing" }
   /**
    * **Which wish these copies come off** — a deck card's `Collection ▸ Quick add N and remove
    * from wishlist`, on the one press where the answer is ambiguous (issue #350).
@@ -2115,6 +2145,41 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     const wanted = pullKey(pulledCard);
     return rows.filter((planRow) => pullKey(planRow) === wanted);
   }, [pullPlan.data, pulledCard]);
+
+  /**
+   * **Add missing to collection** — the second layer opened from the stats band, and the third
+   * answer to the shortfall the two beside it already answer.
+   *
+   * **The hand-back is read off `document.activeElement`**, which is {@link openPull}'s answer
+   * for {@link openPull}'s reason: this button is `DeckStats`' own and hands no ref up, and a
+   * press focuses what it presses, so reading the caret at the press is exact rather than a
+   * guess. `null` if the reader has moved on by then, which is `handBackRef`'s documented floor.
+   *
+   * There is nothing else for this callback to carry — see the `addMissing` arm's own doc for
+   * why the layer has no payload and cannot grow one.
+   */
+  const openAddMissing = useCallback(() => {
+    const opener = document.activeElement;
+    openLayer({ kind: "addMissing" }, () => {
+      if (opener instanceof HTMLElement) opener.focus();
+    });
+  }, [openLayer]);
+
+  /**
+   * The plan behind that layer — **gated on the layer being up**, exactly as {@link pullPlan} is
+   * and for the same reason: `deck_missing_plan` walks every hole in the live list and asks the
+   * wishlist about each one, and nothing on the screen behind the dialog draws a word of it.
+   *
+   * **The kind is the whole gate here, and unlike the pull's line that needs no explaining**:
+   * this arm carries no payload, so there is one shape of it and {@link layerMatches} would be
+   * asking the same question with more words.
+   *
+   * The answer survives the dialog closing — the key is the deck's and TanStack keeps a disabled
+   * query's cache — and anything invalidating `["decks"]` refills it, which crucially includes
+   * this feature's own write: recording the copies closes the very holes this read answers. See
+   * {@link useMissingPlan} for why the key sits under that root.
+   */
+  const missingPlan = useMissingPlan(deckId, layer?.kind === "addMissing");
 
   /** The press {@link QuickUnwishDialog} is asking about — the card, the count and the wishes,
    *  all frozen at the press. See the arm's own doc for why none of the three is looked up. */
@@ -4488,10 +4553,23 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               `deck_missing_to_wishlist` does one command over. Absent rather than greyed, for the
               editor's own rule about a control that cannot act: a button that spends the whole
               Theory tab refusing teaches the reader to stop looking at the line it is in. */}
+          {/* **`onAddMissing` is `null` on the plan for `onPull`'s reason**, which is the list
+              rather than the feature: `deck_missing_plan` takes no variant and walks the live
+              list, because a plan holds no cards and is therefore short of nothing. Absent
+              rather than greyed, like its neighbour.
+
+              **It is not disabled by either sibling write being in flight**, deliberately: the
+              three presses in that row are three independent answers to one number, and a
+              record that had to wait for a wishlist write to land would be a control greyed by
+              something the reader did not press. And it has no `spent` state — the wishlist's
+              exists because pressing twice wishes for the same copies again, where a second
+              press here re-plans against a shortfall the first one closed and finds nothing to
+              offer. */}
           <DeckStats
             cards={deck.cards}
             send={deck.missingToWishlist}
             onPull={variant === "live" ? openPull : null}
+            onAddMissing={variant === "live" ? openAddMissing : null}
             separateXGroup={separateX}
           />
         </section>
@@ -4776,6 +4854,33 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         loading={pullPlan.isLoading}
         readError={pullPlan.isError ? ipcError(pullPlan.error) : null}
         pull={deck.pullFromCollection}
+        onClose={dismiss}
+      />
+
+      {/* **Add missing to collection**, beside the pull because they are two answers to one
+          number and the reader reaches them from two buttons an inch apart. Everything the
+          mount above says applies unchanged: the plan is **fed rather than fetched** (the read
+          is `missingPlan`, gated on this layer, so a closed dialog costs nothing and the
+          question is not about `AnimatePresence`'s teardown), the mutation goes down **whole**
+          and narrowed by the dialog's own `AddMissingWrite` so the write stays `useDeck`'s
+          single definition with its four invalidations, and the dialog owns the sentence it
+          words about the answer.
+
+          **No `cardName`, and that is the one prop the pull has that this cannot.** The pull is
+          reached from a card's right-click as well as from the band; this is not, so there is no
+          one card for a subtitle to name — the arm's own doc says why that is structural rather
+          than a gap.
+
+          **`dismiss` rather than `close`**, the pull's reason exactly: every way out of this
+          dialog is the reader saying "put me back", and the caret's destination is a button in
+          the stats band two screens down the page. */}
+      <AddMissingToCollectionDialog
+        open={layer?.kind === "addMissing"}
+        deckName={row?.name ?? ""}
+        rows={missingPlan.data ?? null}
+        loading={missingPlan.isLoading}
+        readError={missingPlan.isError ? ipcError(missingPlan.error) : null}
+        add={deck.addMissingToCollection}
         onClose={dismiss}
       />
 

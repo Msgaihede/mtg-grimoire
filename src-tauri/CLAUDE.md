@@ -531,18 +531,30 @@ shared_cell` walks both into two databases and compares them column by column.
   `deck_pull.rs`'s `deck_pull_from_collection` ([issue
   #351](https://github.com/Msgaihede/mtg-grimoire/issues/351)) and `deck_quick_add.rs`'s
   `deck_quick_add_to_collection` ([issue
-  #350](https://github.com/Msgaihede/mtg-grimoire/issues/350)). **Four writes reach a deck's group,
-  the crate may not grow a fifth, and every one of them answers for the `deck_cards` row behind the
-  copies**: `collection_to_deck` writes that row, the pull refuses any pick the list is not already
-  short of, and the quick add refuses unless `deck::plays_card` already says yes. Neither of the
-  two new ones writes a `deck_cards` row at all. **The quick add is the only one that _creates_ a
-  `collection_entries` row rather than moving one**, which is why it goes through the private
+  #350](https://github.com/Msgaihede/mtg-grimoire/issues/350)), and a third on 2026-09-08 —
+  `deck_missing.rs`'s `deck_missing_to_collection`, the deck-wide form of the quick add.
+  **Five writes reach a deck's group, and every one of them answers for the `deck_cards` row
+  behind the copies**: `collection_to_deck` writes that row, the pull refuses any pick the list is
+  not already short of, the quick add refuses unless `deck::plays_card` already says yes, and the
+  batch re-plans the shortfall inside its own transaction — which is *stronger* than
+  `plays_card`, because a card the deck does not play has no shortfall row to pick against. None
+  of the three new ones writes a `deck_cards` row at all.
+
+  **This line read "four writes … the crate may not grow a fifth" until 2026-09-08, and the fifth
+  is the reason the clause is gone.** The count was never the rule; the sentence after it is, and
+  a fence written as a number refuses the write that honours the requirement exactly as hard as
+  the one that does not. What must stay true is that **a write reaching a deck's group answers for
+  the `deck_cards` row behind the copies** — read the four ways above as four proofs of one
+  obligation, and a sixth is legitimate on the day it can be added to that list.
+
+  **The quick add and the batch _create_ a `collection_entries` row rather than moving one**
+  (that used to say the quick add alone), which is why they go through the private
   `collection::add_entry_filed` with `collection::DECK_WRITE_FOLDERS` — the public
   `collection::add_entry` refuses a `deck` folder outright and must go on refusing, and that
   constant was `IMPORT_FOLDERS` until this became its second caller. It is also why it takes
-  `collection_source::with_write_owned` and fires TypeScript's `OWNED_WRITE_KEYS` rather than the
+  `collection_source::with_write_owned` and fire TypeScript's `OWNED_WRITE_KEYS` rather than the
   `["collection"]` root the three movers share: the facet index's `owned` dimension counts rows,
-  and this is the one write here that makes one.
+  and these are the two writes here that make them — the batch several in one press.
   `collection_to_deck` takes copies out of a binder or
   **another deck's group** and writes the `deck_cards` row in the same transaction — **naming its
   pile by id or by name and never both** (`collection_alloc::Pile`, with `Pile::from_args` the one
