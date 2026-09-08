@@ -147,6 +147,28 @@ export function SharedPage() {
         />
       ) : (
         <Binder
+          /**
+           * ⚠️ **The key is load-bearing and its absence was a wrong write.**
+           *
+           * Every piece of this component's state is about *one* binder, and the ticks are about
+           * one binder's **positions**: {@link rows} keys a row by its index in the snapshot's own
+           * array, which is the only unique key this document has. Switching binders is a shipped
+           * control — {@link Switcher} draws a tab per open share — and it does not unmount
+           * anything: `Switcher`'s `useQueries` holds an observer on every open link at
+           * `staleTime: Infinity`, so the target snapshot is already warm and `isPending` is false
+           * on the same render.
+           *
+           * Without a key, `picked` therefore survived the switch and `pickedCards` resolved keys
+           * `"0"`, `"1"` against the **new** binder's rows: *Add to wishlist* wrote the first two
+           * cards of a collection the reader had never looked at, with no error and no cue. The
+           * search box, the drawer, the sort and the report carried over too, which is merely
+           * wrong-looking.
+           *
+           * A key rather than an effect that clears the state, because "this is a different
+           * binder" is exactly what a key says and an effect would have to be remembered by
+           * whoever adds the next field.
+           */
+          key={url}
           snapshot={share.data}
           index={cross.index}
           // ⚠️ **`ready` is passed and not merely computed.** Until both sweeps land — up to a

@@ -68,6 +68,7 @@ import type {
 import type { Finish } from "@/lib/finish";
 import { PRINTING_GROUP_BY_OPTIONS } from "@/features/card/printings";
 import type { MarketplaceId } from "@/lib/marketplace";
+import { parseSnapshotValue, SNAPSHOT_VERSION } from "@/lib/shareSnapshot";
 import type { SortSpec } from "@/lib/sort";
 
 const BOLT = CARDS.find((c) => c.name === "Lightning Bolt")!;
@@ -13247,6 +13248,11 @@ describe("sharing a collection", () => {
     });
     const snapshot = writeHandlers(db).share_open({ url: row.url });
 
+    // **Positively first**, because two `not.toContain`s are both satisfied by an empty list and
+    // a builder that published nothing at all would pass them.
+    expect(snapshot.folders.map((f) => f.name)).toContain("Binder");
+    expect(snapshot.folders.map((f) => f.name)).toContain("Trade binder");
+    expect(snapshot.cards.length).toBeGreaterThan(0);
     // `Someday` is set aside, and a drawer set aside is not offered — the same answer the
     // *refusal* above gives when it is named directly, reached from the other end.
     expect(snapshot.folders.map((f) => f.name)).not.toContain("Someday");
@@ -13326,8 +13332,16 @@ describe("sharing a collection", () => {
     const db = shared();
     const before = writeHandlers(db).share_list();
     db.supporter = { refreshSecret: false, status: "dead", since: null, groupBound: false };
-    // A device with no membership makes no request at all — and the list is still the list,
-    // which is the whole point of the table being a cache.
+    // ⚠️ **The relay is moved out from under it, and that is what makes this bite.** Asserting
+    // that two lists match while the relay agrees with the cache passes with the guard removed,
+    // because the reconcile would copy back the values already there. So the far end says
+    // something *different* — and a device with no membership makes no request at all, so the
+    // list is still exactly what it last heard, which is the whole point of the table being a
+    // cache.
+    const held = db.relayShares.find((s) => s.id === before[0].id)!;
+    held.owner = "Somebody Else";
+    held.state = "revoked";
+
     expect(writeHandlers(db).share_list()).toEqual(before);
   });
 
@@ -13342,5 +13356,66 @@ describe("sharing a collection", () => {
     const listed = writeHandlers(db).share_list().find((s) => s.id === row.id)!;
     expect(listed.ownerName).toBe("Ada Lovelace");
     expect(listed.state).toBe("revoked");
+  });
+
+  /**
+   * **A membership that ended darkens the links, and this list is the only press that can say
+   * so.** `lapsed` is the relay's daily pass talking (spec §6) — no command on this device
+   * produces it, and the reader has to be told before their friends tell them.
+   */
+  it("brings a lapsed membership's shares back from the relay", () => {
+    const db = shared();
+    const row = db.shares.find((s) => s.title === "Binder")!;
+    expect(row.state).toBe("live");
+    db.relayShares.find((s) => s.id === row.id)!.state = "lapsed";
+
+    expect(writeHandlers(db).share_list().find((s) => s.id === row.id)!.state).toBe("lapsed");
+  });
+
+  /**
+   * ⚠️ **The one word the reconcile must not copy back.** `pending` is a fact about a *blob* that
+   * never finished uploading — it is what `GET /s/{id}` answers, and it is why
+   * {@link SHARE_NOT_READY} exists — where `collection_shares.state`'s CHECK is
+   * `live`/`lapsed`/`revoked`. A row carrying it would be a value neither this app nor the
+   * crate's schema can read back, invented by a fake that reasoned "the relay is the authority
+   * on state" one step too far.
+   */
+  it("leaves a half-finished publish out of the cache row's state", () => {
+    const db = shared();
+    const row = db.shares.find((s) => s.title === "Binder")!;
+    db.relayShares.find((s) => s.id === row.id)!.state = "pending";
+
+    expect(writeHandlers(db).share_list().find((s) => s.id === row.id)!.state).toBe("live");
+  });
+
+  /**
+   * **The fake's document, through the app's own reader.**
+   *
+   * `share_open` answers `unknown` at the ipc boundary on purpose, and `parseSnapshotValue` is
+   * the one thing entitled to say what a snapshot is — so a fake whose document that function
+   * would *refuse* is a fake every story renders and no app can. Nothing else in this file
+   * invokes it, which made this the cheapest fence there is over the whole derivation.
+   *
+   * It is deliberately **not** a comparison against `share/__golden__/snapshot.json`: that file's
+   * two scryfall ids are in no fixture here, so matching it would mean hand-planting cards with
+   * an exact image query string and matching price rows — a transcription whose only pin is the
+   * transcription. What actually matters, *which keys are omitted*, is pinned independently on
+   * both sides already.
+   */
+  it("answers a document the app's own reader accepts, absences and all", () => {
+    const db = shared();
+    const value: unknown = writeHandlers(db).share_open({ url: FRIEND_SHARE_URL });
+
+    const parsed = parseSnapshotValue(value);
+
+    // The version the reader knows: a fake drifting ahead of it would be refused with
+    // `SNAPSHOT_TOO_NEW` in the app while every story here went on drawing.
+    expect(parsed.v).toBe(SNAPSHOT_VERSION);
+    expect(parsed.owner).toBe("Giradeli");
+    // And the parse fills nothing in — the absences are still absent on the far side of it,
+    // which is the whole of what a viewer built on this module has to survive.
+    const jace = parsed.cards.find((c) => c.n.startsWith("Jace"))!;
+    expect(jace).not.toHaveProperty("c");
+    expect(parsed.cards.find((c) => c.n === "Sol Ring")!).not.toHaveProperty("p");
   });
 });

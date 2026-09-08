@@ -17098,7 +17098,15 @@ export function writeHandlers(db: FakeDb) {
           // it is, because a list that dropped rows on a failed lookup would lose the links the
           // cache exists to keep.
           if (held === undefined) continue;
-          row.state = held.state === "revoked" ? "revoked" : row.state;
+          // **Every word the column can hold, and `lapsed` is the one this matters for**: a
+          // membership that ended is the relay's daily pass talking (spec §6), and this list is
+          // the only press that can ever bring that answer back to a device. `pending` is
+          // deliberately not propagated — it is a fact about a *blob* that never finished
+          // uploading rather than a share's lifecycle, and `collection_shares.state`'s CHECK is
+          // `live`/`lapsed`/`revoked`, so writing it would store a word neither side can read.
+          if (held.state === "live" || held.state === "lapsed" || held.state === "revoked") {
+            row.state = held.state;
+          }
           row.ownerName = held.owner;
         }
       }
@@ -17278,7 +17286,16 @@ const SHARE_FOLDER_NOT_SHAREABLE = "Only your own folders can be shared.";
 const SHARE_FOLDER_IS_LOCKED = "That folder is locked. Unlock it before sharing it.";
 /** `share::snapshot::WHOLE_COLLECTION_TITLE`. */
 const WHOLE_COLLECTION_TITLE = "Collection";
-/** `share::snapshot::SNAPSHOT_VERSION`. */
+/**
+ * `share::snapshot::SNAPSHOT_VERSION`.
+ *
+ * **Its own literal rather than an import of `@/lib/shareSnapshot`'s**, and deliberately: this
+ * fake stands where the *crate* stands, which keeps its own copy of the number, and `db.test.ts`
+ * runs the document it builds through the app's `parseSnapshotValue`. Imported, the fake could
+ * never be too new for its own reader and that assertion would be trivially true — where written
+ * out, a fake that drifted ahead is refused with `SNAPSHOT_TOO_NEW` exactly as the app would
+ * refuse a snapshot from a newer build.
+ */
 const SNAPSHOT_VERSION = 1;
 
 /** The three switches as the dialog sends them — `share::commands::ShareFieldsArg`. */

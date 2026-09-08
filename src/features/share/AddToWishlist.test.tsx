@@ -21,7 +21,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 import type { WishlistFolder } from "@/lib/ipc";
 import type { ShareCard } from "@/lib/shareSnapshot";
 import { AddToWishlist } from "./AddToWishlist";
-import { EMPTY_INDEX, type OwnedIndex } from "./useOwnedIndex";
+import { EMPTY_INDEX, wishGrainKey, type OwnedIndex } from "./useOwnedIndex";
 
 const card = (over: Partial<ShareCard> = {}): ShareCard => ({
   id: "bolt",
@@ -41,11 +41,28 @@ const folder = (id: number, name: string, parentId: number | null = null): Wishl
   sortOrder: id,
 });
 
-/** An index that says the reader already wants `quantity` of `cardId`, and nothing else. */
-const wanting = (cardId: string, quantity: number): OwnedIndex => ({
+/**
+ * An index holding one wish for `cardId`.
+ *
+ * **Two maps, because the dialog asks two different questions of them.** `wanted` is card-level
+ * and answers *do I want this at all* — the figure under the tile. `wishes` is the **row**, keyed
+ * on `wishlist_add`'s real fold grain, and is the only thing that entitles the word *raises*.
+ * `at: null` therefore means "the reader wants this card, but not as a line this press could fold
+ * onto" — a wish in another drawer, or in another finish — which is the ordinary case and the one
+ * a card-level count would get wrong.
+ */
+const wanting = (
+  cardId: string,
+  quantity: number,
+  at: { finish?: string | null; folderId?: number | null } | null = null,
+): OwnedIndex => ({
   owned: new Map(),
   wanted: new Map([[cardId, quantity]]),
   wantedByName: new Map(),
+  wishes:
+    at === null
+      ? new Map()
+      : new Map([[wishGrainKey(cardId, at.finish ?? null, at.folderId ?? null), quantity]]),
 });
 
 function mount(
@@ -120,7 +137,9 @@ describe("adding picked rows from somebody else's binder", () => {
   it("counts what the reader already wants so a second add is not silent", async () => {
     mount({
       cards: [card(), card({ id: "sol", n: "Sol Ring", s: "c21", cn: "263" })],
-      index: wanting("bolt", 2),
+      // Wanted, and wanted **at the root** — which is where this dialog opens, so the press
+      // really does fold onto the line that is already there.
+      index: wanting("bolt", 2, { folderId: null }),
     });
 
     // The card that is already on the list says so on its own row…
@@ -133,10 +152,58 @@ describe("adding picked rows from somebody else's binder", () => {
     expect(
       within(screen.getByRole("listitem", { name: /^Sol Ring/ })).queryByText(/Already wanted/),
     ).toBeNull();
-    // And the dialog says it once out loud, because the press folds onto the existing wish.
+    // And the dialog says out loud what the press will do, naming the destination it will do it
+    // to — the one number in this dialog that is entitled to the word *raises*.
     expect(
-      screen.getByText("1 of these 2 cards is already on your wishlist. Adding raises its count."),
+      screen.getByText(
+        "1 of these already has a line in your wishlist — adding raises it.",
+      ),
     ).toBeInTheDocument();
+  });
+
+  /**
+   * ⚠️ **The sentence is about the *destination*, and it has to move when the destination does.**
+   *
+   * `wishlist_add` folds on four terms and `folder_id` is one of them, so a wish sitting at the
+   * root is a **brand-new line** the moment the reader files this one in `Trade targets`. A
+   * dialog that counted card-level wants would print "adding raises it" over a press that was
+   * about to make a second row — the one number it exists to get right, wrong, and wrong without
+   * moving when the reader changed their mind.
+   */
+  it("stops promising a fold when the reader picks a different folder", async () => {
+    const user = userEvent.setup();
+    mount({ cards: [card()], index: wanting("bolt", 2, { folderId: null }) });
+
+    await screen.findByRole("option", { name: "Trade targets" });
+    expect(screen.getByText(/adding raises it\./)).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText("Add them to"), "1");
+
+    expect(screen.queryByText(/adding raises/)).toBeNull();
+    expect(
+      screen.getByText(
+        "1 is on your wishlist under a different folder or finish, so it gets a line of its own.",
+      ),
+    ).toBeInTheDocument();
+    // The row's own figure does **not** move, and that is the other half of the distinction: it
+    // says what the reader wants, which is true wherever they file this one.
+    expect(
+      within(screen.getByRole("listitem", { name: /^Lightning Bolt/ })).getByText(
+        "Already wanted: 2",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  /** The same divergence on the grain's third term: a wish for the nonfoil is not the wish a
+   *  picked foil copy writes, however loudly the card-level count agrees. */
+  it("does not promise a fold onto a wish in another finish", async () => {
+    mount({
+      cards: [card({ f: "foil" })],
+      index: wanting("bolt", 1, { finish: null, folderId: null }),
+    });
+
+    expect(screen.queryByText(/adding raises/)).toBeNull();
+    expect(screen.getByText(/gets a line of its own/)).toBeInTheDocument();
   });
 
   it("draws no figure at all for a card the reader wants none of", async () => {
@@ -150,7 +217,8 @@ describe("adding picked rows from somebody else's binder", () => {
 
     await screen.findByRole("option", { name: "Trade targets" });
     expect(screen.queryByText(/Already wanted/)).toBeNull();
-    expect(screen.queryByText(/already on your wishlist/)).toBeNull();
+    expect(screen.queryByText(/adding raises/)).toBeNull();
+    expect(screen.queryByText(/on your wishlist under a different folder/)).toBeNull();
   });
 
   it("files at the root when the reader picks no folder", async () => {
@@ -208,6 +276,31 @@ describe("adding picked rows from somebody else's binder", () => {
     // them that is now half added, and closing over it would hide which half.
     expect(onAdded).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  /**
+   * ⚠️ **The other half of the fold key, and the half no other test here reaches.** The tests
+   * above use one printing per finish or two printings at one finish, so a key of `card.id`
+   * alone passes every one of them — and would fold a foil and a nonfoil copy of one printing
+   * into a single wish, which is the wish the reader did not ask for and the one the foil
+   * cannot fill.
+   */
+  it("keeps two finishes of one printing as two wishes", async () => {
+    const user = userEvent.setup();
+    mount({ cards: [card({ f: "nonfoil" }), card({ f: "foil" })] });
+
+    await screen.findByRole("option", { name: "Trade targets" });
+    expect(addButton()).toHaveAccessibleName("Add 2 cards");
+    await user.click(addButton());
+
+    await waitFor(() => expect(wishlistAdd).toHaveBeenCalledTimes(2));
+    expect(wishlistAdd).toHaveBeenCalledWith({ cardId: "bolt", quantity: 1, folderId: null });
+    expect(wishlistAdd).toHaveBeenCalledWith({
+      cardId: "bolt",
+      quantity: 1,
+      folderId: null,
+      preferredFinish: "foil",
+    });
   });
 
   it("folds two picked copies of one printing and finish into a single wish", async () => {

@@ -30,6 +30,20 @@
  *    behaviour and the wrong surprise: this dialog says which of the picked cards are already on
  *    the list, per row and once in a sentence, so a second add is a decision instead of an
  *    accident.
+ *
+ * ## ⚠️ Two different questions about "already", and the sentence answers the harder one
+ *
+ * *Do I want this card* and *will this press raise a line I already have* are **not** the same
+ * question, and a dialog that answered the first while promising the second would be wrong in the
+ * ordinary case. `wishlist_add`'s fold key is four terms — oracle id, printing, preferred finish,
+ * **folder** — so a wish sitting in `Ordered` is a brand-new line when the reader files this one
+ * at the root, a nonfoil wish is a new line beside a picked foil, and a printing-*less* wish (what
+ * most of a wishlist is) can never be folded onto by the pinned wish this dialog writes.
+ *
+ * So the per-row figure is the card-level one — it agrees with the *You want N* under the tile
+ * behind this dialog, which is the number the reader has just been looking at — and the
+ * **sentence is computed on the real grain and recomputed when the destination changes**. That is
+ * `OwnedIndex.wishes`' whole reason for existing.
  */
 import { useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -42,7 +56,7 @@ import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError } from "@/lib/ipc";
 import type { ShareCard } from "@/lib/shareSnapshot";
 import { cn } from "@/lib/utils";
-import { crossReference, type OwnedIndex } from "./useOwnedIndex";
+import { crossReference, wishGrainKey, type OwnedIndex } from "./useOwnedIndex";
 
 /**
  * The depth of a nested folder in the destination list, as characters.
@@ -98,21 +112,36 @@ function cards(n: number): string {
 }
 
 /**
- * The sentence about what is already on the list, or `null` when there is nothing to say.
+ * What the press will do to the reader's list, in at most two short sentences.
  *
- * **`null` when nothing is wanted, which is also what an unfinished sweep looks like.** The
- * index is `EMPTY_INDEX` until both of `useOwnedIndex`'s passes land, and against it every card
- * answers *wanted 0* — so a dialog that drew a figure per row would draw a confident zero for a
- * card the reader owns four of. Saying nothing is the honest answer to both, and the host gates
- * the tick on `figuresReady` besides.
+ * **Both halves are about the destination and both move when it changes**, which is the whole
+ * point: `folds` is how many of the picked cards already have a line at *this* folder, finish and
+ * printing — the four-term grain `wishlist_add` really folds on — and `elsewhere` is the rest of
+ * what the reader wants, which will land as new lines rather than raising anything.
+ *
+ * **Empty when there is nothing true to say, which is also what an unfinished sweep looks like.**
+ * The index is `EMPTY_INDEX` until both of `useOwnedIndex`'s passes land, and against it every
+ * card answers *wanted 0* — so a dialog that drew a figure anyway would draw a confident zero for
+ * a card the reader has four wishes for. Saying nothing is the honest answer to both, and the host
+ * gates the tick on `figuresReady` besides.
  */
-function alreadySentence(already: number, total: number): string | null {
-  if (already === 0) return null;
-  if (total === 1) return "This card is already on your wishlist. Adding raises its count.";
-  return (
-    `${already} of these ${cards(total)} ${already === 1 ? "is" : "are"} already on your ` +
-    `wishlist. Adding raises ${already === 1 ? "its" : "their"} count.`
-  );
+function alreadyLines(folds: number, already: number, destination: string): string[] {
+  const lines: string[] = [];
+  if (folds > 0) {
+    lines.push(
+      `${folds} of these already ${folds === 1 ? "has" : "have"} a line in ${destination} — ` +
+        `adding raises ${folds === 1 ? "it" : "those"}.`,
+    );
+  }
+  const elsewhere = already - folds;
+  if (elsewhere > 0) {
+    lines.push(
+      `${elsewhere} ${elsewhere === 1 ? "is" : "are"} on your wishlist under a different folder ` +
+        `or finish, so ${elsewhere === 1 ? "it gets a line" : "they get lines"} of ` +
+        `${elsewhere === 1 ? "its" : "their"} own.`,
+    );
+  }
+  return lines;
 }
 
 export function AddToWishlist({
@@ -126,8 +155,9 @@ export function AddToWishlist({
   /** Every copy the reader ticked, in the order the wall drew them. Folded here, not by the
    *  host — see {@link fold}. */
   cards: readonly ShareCard[];
-  /** The reader's own two lists, for the already-wanted figures. `EMPTY_INDEX` is a legitimate
-   *  argument and draws no figures at all. */
+  /** The reader's own lists — the card-level counts for each row's figure, and
+   *  {@link OwnedIndex.wishes} for the sentence's fold. `EMPTY_INDEX` is a legitimate argument
+   *  and draws neither. */
   index: OwnedIndex;
   onClose: () => void;
   /** Every card landed. The sentence names the count and the destination; the host draws it and
@@ -141,6 +171,7 @@ export function AddToWishlist({
   const client = useQueryClient();
 
   const wants = useMemo(() => fold(picked, index), [picked, index]);
+  /** Cards the reader wants **somewhere**, which is what each row's own figure says. */
   const already = wants.filter((w) => w.already > 0).length;
 
   /** The cabinet top to bottom, which is the order the tree is drawn in — never the flat rows'
@@ -149,6 +180,20 @@ export function AddToWishlist({
   const tree = useMemo(() => flattenFolders(buildFolderTree(folders, [])), [folders]);
   const folderId = destination === "" ? null : Number(destination);
   const named = tree.find((node) => node.folder.id === folderId)?.folder.name ?? "your wishlist";
+
+  /**
+   * How many of the picked cards already have a line **at the destination on screen** — the real
+   * four-term fold, and the only figure here that entitles the word *raises*.
+   *
+   * Recomputed from `folderId`, so changing the select changes the sentence. That is the visible
+   * half of the distinction this dialog's header sets out: the same two cards can fold in
+   * `Ordered` and make two new lines at the root, and a number that did not move when the reader
+   * changed their mind would be the wrong answer written confidently.
+   */
+  const folds = wants.filter(
+    (w) => (index.wishes.get(wishGrainKey(w.card.id, w.finish, folderId)) ?? 0) > 0,
+  ).length;
+  const lines = alreadyLines(folds, already, named);
 
   const submit = async () => {
     setAdding(true);
@@ -263,8 +308,12 @@ export function AddToWishlist({
           </select>
         </div>
 
-        {alreadySentence(already, wants.length) !== null && (
-          <p className="text-sm text-dim">{alreadySentence(already, wants.length)}</p>
+        {lines.length > 0 && (
+          <p className="text-sm text-dim">
+            {/* Two sentences in one paragraph rather than two blocks: they are one answer to one
+                question, and a second `<p>` under a four-row list would read as a second warning. */}
+            {lines.join(" ")}
+          </p>
         )}
 
         {refusal !== null && (

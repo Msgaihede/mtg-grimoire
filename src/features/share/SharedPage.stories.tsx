@@ -137,13 +137,20 @@ export const WantList: Story = {
     await waitFor(async () => {
       await expect(canvas.getByRole("option", { name: "Ordered" })).toBeInTheDocument();
     });
-    // One of the two is already written down and the other is not, which is exactly what makes
-    // this sentence worth drawing rather than a count of everything picked.
+    // One of the two already has a line here and the other does not, which is what makes this
+    // sentence worth drawing rather than a count of everything picked. It names the destination
+    // because that is what `wishlist_add` folds on — the same two cards fold in one drawer and
+    // make new lines in another.
     await expect(
-      canvas.getByText("1 of these 2 cards is already on your wishlist. Adding raises its count."),
+      canvas.getByText("1 of these already has a line in your wishlist — adding raises it."),
     ).toBeInTheDocument();
 
     await userEvent.selectOptions(canvas.getByLabelText("Add them to"), "1");
+    // …and it moves with the select. `starter` keeps a second Rhystic Study wish in `Ordered`,
+    // so this destination folds too — but the sentence had to be recomputed to say so.
+    await expect(
+      canvas.getByText("1 of these already has a line in Ordered — adding raises it."),
+    ).toBeInTheDocument();
     await userEvent.click(canvas.getByRole("button", { name: "Add 2 cards" }));
 
     // The verb the button used, in the past tense, naming the destination the reader chose —

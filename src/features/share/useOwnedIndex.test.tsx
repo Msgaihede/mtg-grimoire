@@ -21,7 +21,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 
 import type { CollectionRow, WishRow } from "@/lib/ipc";
 import type { ShareCard } from "@/lib/shareSnapshot";
-import { crossReference, INDEX_PAGE, useOwnedIndex } from "./useOwnedIndex";
+import { crossReference, INDEX_PAGE, useOwnedIndex, wishGrainKey } from "./useOwnedIndex";
 
 const owned = (cardId: string, quantity: number): CollectionRow =>
   ({ cardId, quantity }) as unknown as CollectionRow;
@@ -150,5 +150,71 @@ describe("the reader's own copies, indexed", () => {
 
     await waitFor(() => expect(result.current.failed).toBe(true));
     expect(result.current.ready).toBe(false);
+  });
+});
+
+/**
+ * The third map — the one that answers *will another add fold, or make a second line*.
+ *
+ * ⚠️ **`wanted` cannot answer it and neither can `wantedByName`.** `wishlist_add` folds on four
+ * terms (oracle id, printing, preferred finish, folder), and the two maps above deliberately sum
+ * across every folder and every finish because the question a tile asks is *do I want this card*.
+ * A surface that promised "adding raises what you already want" off `wanted` would be wrong in
+ * both directions, and this is the map that lets it be right.
+ */
+describe("the wishlist at its own grain", () => {
+  const line = (
+    over: Partial<Pick<WishRow, "cardId" | "preferredFinish" | "folderId" | "quantity" | "name">>,
+  ): WishRow =>
+    ({
+      cardId: "bolt",
+      name: "Lightning Bolt",
+      preferredFinish: null,
+      folderId: null,
+      quantity: 1,
+      ...over,
+    }) as unknown as WishRow;
+
+  it("keeps two folders and two finishes of one printing apart", async () => {
+    wishlistList.mockResolvedValue(
+      onePage([
+        line({ quantity: 2 }),
+        // The same printing, filed in a folder — a different row, and a card-level count that
+        // said "7 wanted" would be right about the card and wrong about every one of the folds.
+        line({ folderId: 7, quantity: 1 }),
+        // The same printing again, in a finish. A wish for the foil is not filled by the
+        // nonfoil, so this is a third row.
+        line({ preferredFinish: "foil", quantity: 4 }),
+      ]),
+    );
+    const { result } = renderHook(() => useOwnedIndex(true), { wrapper });
+
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    const { wanted, wishes } = result.current.index;
+
+    // The card-level map still sums the lot, which is what a tile draws.
+    expect(wanted.get("bolt")).toBe(7);
+    // …and the grain map keeps the three rows apart, each at its own quantity.
+    expect(wishes.get(wishGrainKey("bolt", null, null))).toBe(2);
+    expect(wishes.get(wishGrainKey("bolt", null, 7))).toBe(1);
+    expect(wishes.get(wishGrainKey("bolt", "foil", null))).toBe(4);
+    // A grain nothing is filed at answers nothing rather than zero, which is what lets a caller
+    // treat *absent* and *none* as one thing.
+    expect(wishes.get(wishGrainKey("bolt", "etched", null))).toBeUndefined();
+  });
+
+  /**
+   * **A printing-less wish is in `wantedByName` and in nothing else**, and that is the third
+   * divergence rather than an omission: its grain's `card_id` term is `''`, so no pinned wish —
+   * which is the only kind this app's want list writes — can ever fold onto it.
+   */
+  it("leaves an any-printing wish out of the grain map entirely", async () => {
+    wishlistList.mockResolvedValue(onePage([line({ cardId: null, quantity: 3 })]));
+    const { result } = renderHook(() => useOwnedIndex(true), { wrapper });
+
+    await waitFor(() => expect(result.current.ready).toBe(true));
+
+    expect(result.current.index.wantedByName.get("lightning bolt")).toBe(3);
+    expect(result.current.index.wishes.size).toBe(0);
   });
 });

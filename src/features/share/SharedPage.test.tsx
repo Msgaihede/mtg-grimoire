@@ -408,6 +408,50 @@ describe("building a want list out of somebody else's binder", () => {
     ).toBeInTheDocument();
   });
 
+  /**
+   * ⚠️ **A pick is about a *position* in one snapshot, so it may not outlive the snapshot.**
+   *
+   * `rows` keys each row by its index in the snapshot's own array — the only unique key this
+   * document has, since two rows of a binder can agree on printing, finish, folder and grade and
+   * still be two rows. Switching binders does not unmount anything: `Switcher` holds an observer
+   * on every open link at `staleTime: Infinity`, so the target is warm and `isPending` is false on
+   * the same render. Without a key on `<Binder>` the ticks survived and resolved against the
+   * *new* binder's rows, and *Add to wishlist* wrote two cards from a collection the reader had
+   * never looked at — no error, no cue, into their own wishlist.
+   */
+  it("drops the picks when the reader switches to another binder", async () => {
+    const user = userEvent.setup();
+    shareOpen.mockImplementation((url: string) =>
+      Promise.resolve(
+        url === LINK
+          ? snapshot({ cards: [card({ id: "bolt", n: "Lightning Bolt" })] })
+          : snapshot({
+              owner: "Ashiok",
+              title: "Spares",
+              id: "second",
+              cards: [card({ id: "tundra", n: "Tundra" })],
+            }),
+      ),
+    );
+    useAppStore.setState({ openedShares: [LINK, OTHER] });
+    mount();
+
+    await waitFor(() => expect(tick("Lightning Bolt")).toBeInTheDocument());
+    await user.click(tick("Lightning Bolt"));
+    expect(screen.getByText("1 picked")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Ashiok’s Spares" }));
+
+    // The other binder draws…
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { level: 2 })).toHaveAccessibleName("Ashiok’s Spares"),
+    );
+    // …with nothing picked, and the row that *is* there is not ticked. A bar reading `1 picked`
+    // here would be one card of somebody else's binder, addressed by position.
+    expect(screen.queryByText(/picked/)).toBeNull();
+    expect(tick("Tundra")).not.toBeChecked();
+  });
+
   it("puts the picks down when the reader clears them", async () => {
     const user = userEvent.setup();
     mount();

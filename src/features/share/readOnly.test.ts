@@ -17,15 +17,22 @@
  * instead of importing `features/transfer/export/scope.ts`'s `sweep`: the ipc name stays inside
  * the swept files, and the fence stays total. Keep it that way.
  *
- * **`AddToWishlist` imports one hook from outside this directory and that is not the same hole.**
- * `useWishlistFolderList` (`features/wishlist/useWishlistFolders.ts`) calls
- * `ipc.wishlistFolderList` in *its* file, where this glob cannot see it. What the paragraph above
- * forbids is a helper this directory can point at an **arbitrary** command — one that takes a
- * callback, or `ipc` itself — because then the name being swept for is chosen here and written
- * elsewhere. That hook names one fixed read and takes no argument at all, so nothing in this
- * directory can steer it, and reaching it is what keeps the app's wishlist folders one query
- * rather than two cache entries that agree today. A second hand-written `useQuery` here would be
- * exactly the drift that hook's own doc comment argues against.
+ * **`AddToWishlist` imports one hook from outside this directory, and that import needs a fence of
+ * its own.** `useWishlistFolderList` (`features/wishlist/useWishlistFolders.ts`) calls
+ * `ipc.wishlistFolderList` in *its* file, where this glob cannot see it. That much is safe on the
+ * paragraph above's own terms — what it forbids is a helper this directory can point at an
+ * **arbitrary** command, and that hook names one fixed read and takes no argument at all, so
+ * nothing here can steer it. Reaching it is also what keeps the app's wishlist folders one query
+ * rather than two cache entries that agree today.
+ *
+ * ⚠️ **But the module it comes from also exports `useWishlistFolders`, which carries
+ * `create`/`rename`/`move`/`reorder`/`remove`.** Changing one identifier on that import line hands
+ * this directory a folder-*creating* write — exactly the control `AddToWishlist`'s own header and
+ * spec §8 say must not exist here — and **every other assertion in this file stays green**, because
+ * {@link BACK_DOORS} is about `ipc` and nothing else constrains what is imported from a sibling
+ * feature. So {@link OUTSIDE_IMPORTS} enumerates the names this directory may take from outside
+ * `features/share/`, in the shape {@link SHARE_WRITES} already uses: a short list, and a diff that
+ * adds to it is a diff a reviewer reads.
  *
  * ## The one write, and why it had to break this test to get in
  *
@@ -114,6 +121,27 @@ const WRITES: readonly string[] = ["wishlistAdd"];
 /** The three commands that change a share. None of them belongs on a viewer. */
 const SHARE_WRITES: readonly string[] = ["shareCreate", "shareRefresh", "shareRevoke"];
 
+/**
+ * Every name this directory may import from a **sibling feature**, and there are two.
+ *
+ * * `BUTTON` — `features/settings/controls`. A class string; it reaches nothing.
+ * * `useWishlistFolderList` — `features/wishlist/useWishlistFolders`. One fixed read
+ *   (`ipc.wishlistFolderList`), no argument, no callback, so nothing here can steer it — and
+ *   using it is what keeps the app's folder list one query instead of two cache entries.
+ *
+ * **The name that must never appear is `useWishlistFolders`**, its neighbour in the same module,
+ * which carries five folder writes. It would give this view a folder-creating control, which spec
+ * §8 defers and this directory's own doc comments forbid, and the `ipc.*` sweep above cannot see
+ * a single call of it.
+ *
+ * `@/lib/*` and `@/components/*` are deliberately outside this list: they are the app's shared
+ * floor rather than another feature's surface, and `ipc.ts` is already fenced by name.
+ */
+const OUTSIDE_IMPORTS: readonly string[] = ["BUTTON", "useWishlistFolderList"];
+
+/** A named-import list taken from another feature — `import { a, b as c } from "@/features/…"`. */
+const CROSS_FEATURE = /import\s+(?:type\s+)?\{([^}]*)\}\s+from\s+"@\/features\/([^"]*)"/g;
+
 describe("the shared view", () => {
   it("sweeps files at all", () => {
     // A glob that matches nothing passes every assertion below without testing anything, which
@@ -147,6 +175,41 @@ describe("the shared view", () => {
    */
   it("keeps the write off the list of reads", () => {
     for (const write of WRITES) expect(READS).not.toContain(write);
+  });
+
+  /**
+   * And the hole the `ipc.*` sweep structurally cannot see: a **hook** imported from another
+   * feature that does the calling somewhere this glob does not reach.
+   *
+   * It is one identifier away from real — `useWishlistFolderList` and `useWishlistFolders` are
+   * neighbours in one module and the second carries five folder writes — and the swap leaves
+   * every other assertion in this file green.
+   */
+  it("imports only the named few it is allowed to, from other features", () => {
+    let seen = 0;
+    for (const [path, source] of SOURCES) {
+      for (const [, names, from] of source.matchAll(CROSS_FEATURE)) {
+        // A file's imports from `features/share/` itself are this directory's own business and
+        // are already covered by the sweep, since they are swept files too.
+        if (from.startsWith("share/")) continue;
+        for (const spec of names.split(",")) {
+          const name = spec.trim().split(/\s+as\s+/)[0].trim();
+          if (name === "") continue;
+          seen += 1;
+          expect(
+            OUTSIDE_IMPORTS,
+            `${path} imports ${name} from @/features/${from}. Everything in ` +
+              "src/features/share/ renders a document somebody else published, and a hook from " +
+              "another feature can reach commands this file's ipc sweep never sees — " +
+              "`useWishlistFolders` next door carries five folder writes. Add the name to " +
+              "OUTSIDE_IMPORTS in readOnly.test.ts in the same commit and say why.",
+          ).toContain(name);
+        }
+      }
+    }
+    // A regex that stopped matching would pass this over an empty set, which is the same
+    // vacuity the glob's own tripwire above exists for.
+    expect(seen).toBeGreaterThan(0);
   });
 
   it("never touches a share itself", () => {

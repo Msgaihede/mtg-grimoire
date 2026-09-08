@@ -58,6 +58,47 @@ export interface OwnedIndex {
    * common — the snapshot carries no oracle id, so there is no stronger key available.
    */
   wantedByName: ReadonlyMap<string, number>;
+  /**
+   * Copies wished for at **one exact wishlist row**, keyed by {@link wishGrainKey}.
+   *
+   * ⚠️ **This is the only map here that answers "will another add fold, or make a second line".**
+   * The two above it answer *do I want this card*, which is the question a tile asks and a
+   * perfectly good one — but `wishlist_add` folds on a four-term grain
+   * (`oracle_id`, `card_id`, `preferred_finish`, `folder_id`), so a wish for the nonfoil, or one
+   * filed in another drawer, is a **new row** rather than a raised count. A surface that promised
+   * "adding raises what you already want" off `wanted` would be wrong in the ordinary case, in
+   * both directions, and would not change its answer when the reader picked a different folder.
+   *
+   * **Only pinned wishes are in it**, which is the third divergence and the quietest: a wish with
+   * no `card_id` is *any printing of this card*, its grain's second term is `''`, and nothing that
+   * writes a pinned wish can ever fold onto it. `wantedByName` counts those and this deliberately
+   * does not.
+   *
+   * It costs one entry per wish where the two maps above cost one per printing — which is nothing
+   * next to the collection sweep beside it: a wishlist is the reader's own hand-kept list, and
+   * the 50 000-card argument this module is written against is about `collection_entries`.
+   */
+  wishes: ReadonlyMap<string, number>;
+}
+
+/**
+ * `wishlist_add`'s fold key, as far as this side can spell it — printing, finish, folder.
+ *
+ * **The grain's first term is deliberately absent and costs nothing here.** `oracle_id` is
+ * resolved *from* the printing by the backend, so two pinned wishes for one `card_id` always
+ * agree about it; and this key is only ever built for pinned wishes, which is what the map it
+ * feeds holds.
+ *
+ * Written once and read from both ends — the sweep that fills the map and the surface that looks
+ * a row up in it — because a key spelled twice is a lookup that misses for a reason nothing can
+ * see. `""` for the root rather than `0`: folder ids are numbers, so the two can never collide.
+ */
+export function wishGrainKey(
+  cardId: string,
+  finish: string | null,
+  folderId: number | null,
+): string {
+  return `${cardId}|${finish ?? ""}|${folderId ?? ""}`;
 }
 
 /** What every card answers before the sweep has finished, and what a refused sweep leaves. */
@@ -65,6 +106,7 @@ export const EMPTY_INDEX: OwnedIndex = {
   owned: new Map(),
   wanted: new Map(),
   wantedByName: new Map(),
+  wishes: new Map(),
 };
 
 /** One row of somebody else's binder, measured against the reader's own two lists. */
@@ -120,24 +162,32 @@ async function readOwned(): Promise<ReadonlyMap<string, number>> {
   return owned;
 }
 
-/** Every wish, split by whether the reader pinned a printing to it. */
-async function readWanted(): Promise<Pick<OwnedIndex, "wanted" | "wantedByName">> {
+/** Every wish, split three ways: by printing, by name, and by the row it actually is. */
+async function readWanted(): Promise<Pick<OwnedIndex, "wanted" | "wantedByName" | "wishes">> {
   const wanted = new Map<string, number>();
   const wantedByName = new Map<string, number>();
+  const wishes = new Map<string, number>();
   // `flatten` because `folderId` absent is the **root** wishlist on this query and not "every
   // folder" — the opposite polarity to the collection's, which `WishlistQuery.flatten` explains.
   // Without it this sweep would silently answer about unfiled wishes alone.
   await fold(
     (limit, offset) => ipc.wishlistList({ limit, offset, flatten: true }),
     (row) => {
-      if (row.cardId !== null) wanted.set(row.cardId, (wanted.get(row.cardId) ?? 0) + row.quantity);
-      else {
+      if (row.cardId !== null) {
+        wanted.set(row.cardId, (wanted.get(row.cardId) ?? 0) + row.quantity);
+        // **The same row again, at its own grain.** The map above answers *do I want this card*
+        // and this one answers *is this exact wishlist line already there* — see
+        // {@link OwnedIndex.wishes}. Both, because the two questions have different right
+        // answers and a surface asking the second off the first is wrong in both directions.
+        const grain = wishGrainKey(row.cardId, row.preferredFinish, row.folderId);
+        wishes.set(grain, (wishes.get(grain) ?? 0) + row.quantity);
+      } else {
         const key = row.name.toLowerCase();
         wantedByName.set(key, (wantedByName.get(key) ?? 0) + row.quantity);
       }
     },
   );
-  return { wanted, wantedByName };
+  return { wanted, wantedByName, wishes };
 }
 
 /**
@@ -189,7 +239,12 @@ export function useOwnedIndex(enabled: boolean): {
     () =>
       owned === undefined || wanted === undefined
         ? EMPTY_INDEX
-        : { owned, wanted: wanted.wanted, wantedByName: wanted.wantedByName },
+        : {
+            owned,
+            wanted: wanted.wanted,
+            wantedByName: wanted.wantedByName,
+            wishes: wanted.wishes,
+          },
     [owned, wanted],
   );
   const ready = owned !== undefined && wanted !== undefined;
