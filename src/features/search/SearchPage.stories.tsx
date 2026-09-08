@@ -509,47 +509,50 @@ export const NarrowedToAnExactCount: Story = {
 };
 
 /**
- * The `owned` filter, and the one thing about it that is easy to get wrong: **it counts entries,
- * not copies.**
+ * The `owned` filter, and the one thing about it that is easy to get wrong: **it counts
+ * printings, and the list beside it counts cards.**
  *
- * `db.ts:1258-1264` mirrors `search.rs` here — the filter asks whether `collection_entries` has a
- * row for the printing, and a row stepped to zero is a row the collection keeps. So Smuggler's
- * Copter passes `owned: true` on the strength of a row holding **no copies at all**
- * (`seeds.ts:254-256`, seeded at quantity 0 with the note that outlived the cards), while
- * `OwnedBadge` draws nothing for it: the badge's own guard is `owned <= 0 && !wishlisted`
- * (`OwnedBadge.tsx:29`).
+ * The filter mirrors `search.rs`: `ownsPrinting` is `collection_source::owns_printing`, an
+ * `EXISTS` over `collection_entries` for that printing — so four copies and one copy are the same
+ * answer, and the chip's own facet is a count of printings. What the list then draws is **cards**,
+ * because the survivors are grouped: eleven owned printings collapse to **eight cards**, and the
+ * whole of that gap is one card — `lea 161`, `2x2 117`, `sld 913` and `sta 105` are four
+ * printings of Lightning Bolt, and every other owned printing is the only one of its card here.
+ * Two numbers off one press, neither of them the twelve rows the collection actually holds.
+ * Measured 2026-09-08.
  *
- * Twelve entries over twelve distinct printings — which the collapsed list shows as **nine
- * cards**, because three of those printings are second copies of a card already in it. The
- * filter narrows printings first and the survivors are grouped, so the count answers "how many
- * cards do I have an entry for", which is the question the chip asks. Measured 2026-08-11.
+ * **This story used to make the opposite point from a fixture the app cannot produce** (issue
+ * #425). `starter` seeded a `collection_entries` row at quantity 0, and the paragraph here said
+ * Smuggler's Copter passes `owned: true` on the strength of a row holding no copies at all — true
+ * of the code and unreachable in the window, because `set_quantity(id, 0)` deletes the row, the
+ * v24 rung deleted every stored zero and `collection_update` has no caller. The `EXISTS` is
+ * *allowed* to be one only because those rows are gone, so a workbench standing in the one state
+ * that makes copies and rows disagree was teaching a reader a rule the app does not have. The row
+ * left the seed and the claim it carried went with it.
  *
- * The table rather than the wall, because at jsdom's stubbed viewport the wall's virtualiser
- * draws only the first few tiles and the row this story is about is the eighth.
+ * The table rather than the wall, because at jsdom's stubbed viewport the wall's virtualiser draws
+ * only the first few tiles and the row this story is about is not among them.
  */
-export const OwnedCountsEntries: Story = {
+export const OwnedCountsPrintings: Story = {
   args: { view: "table" },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await canvas.findByText("37 cards");
 
-    // A prefix, because the chip's accessible name carries its facet count — "Owned — 9
-    // printings" — and the label is what has to come first.
+    // A prefix, because the chip carries its facet count — "Owned — 11 printings" — and the
+    // label is what has to come first.
     await userEvent.click(canvas.getByRole("button", { name: /^Show filters/ }));
     await userEvent.click(canvas.getByRole("button", { name: /^Owned\b/ }));
     await waitFor(async () => {
-      await expect(canvas.getByText("9 cards")).toBeInTheDocument();
+      await expect(canvas.getByText("8 cards")).toBeInTheDocument();
     });
 
-    // Listed, with nothing to say about copies. `queryByText` over the row rather than over the
-    // canvas: every other row in this list has a badge, and the claim is about this one.
-    const zeroRow = canvas.getByText("Smuggler's Copter").closest('[role="row"]');
-    await expect(zeroRow).not.toBeNull();
-    await expect(within(zeroRow as HTMLElement).queryByText(/in your collection/)).toBeNull();
-
-    // The contrast, one row further down: a printing with copies says how many, and says it
-    // where a screen reader can hear it — the visible `×4` is `aria-hidden`.
+    // **The badge counts copies where the filter counted rows**, which is the pair worth seeing
+    // together: this printing is in the list on the strength of *a* row, and the number drawn on
+    // it is the copies that row holds. Said where a screen reader can hear it — the visible `×4`
+    // is `aria-hidden`.
     const heldRow = canvas.getByText("Urza's Saga").closest('[role="row"]');
+    await expect(heldRow).not.toBeNull();
     await expect(
       within(heldRow as HTMLElement).getByText("4 in your collection"),
     ).toBeInTheDocument();

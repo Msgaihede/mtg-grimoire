@@ -12,8 +12,6 @@
 //! - [`crate::collection`]'s `from_sql` — the collection page, its count and its summary read
 //!   the entries as their `FROM`, with the printing LEFT-JOINed on. Not a correlated
 //!   subquery about ownership; the rows themselves.
-//! - [`crate::wishlist`]'s `OWNED_SQL` — how much of a wish is already filled, narrowed by
-//!   **finish**, which none of the fragments here does.
 //! - [`crate::deck_theory`]'s `OWNED_SPARE_SQL` — copies **no deck's group holds**, so it
 //!   narrows by finish *and* by where each row is filed, neither of which any fragment here
 //!   does. (It subtracted a claim ledger until schema v25 dropped one; the question is now a

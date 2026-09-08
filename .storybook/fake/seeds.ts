@@ -381,17 +381,38 @@ function emptySeed(): FakeDb {
 /* ------------------------------------------------------------------ starter ------------ */
 
 /**
- * Thirteen collection rows over twelve printings, spanning all three finishes and all six
+ * Twelve collection rows over eleven printings, spanning all three finishes and all six
  * conditions, and every one of them is here for a branch.
  *
- * Counted: nonfoil 9, foil 2, etched 2; NM 8, LP 1, MP 1, HP 1, DMG 1, NONE 1; **21 copies
- * across 13 entries**, which is why `collection_summary`'s `totalCards` and `entries` disagree
- * in every story built on this seed — as they must, since a row at zero is still a row.
- * `uniqueCards` stays **12**, because the thirteenth row is a second grade of a printing already
- * here rather than a card the reader did not own before.
+ * Counted: nonfoil 8, foil 2, etched 2; NM 7, LP 1, MP 1, HP 1, DMG 1, NONE 1; **21 copies
+ * across 12 entries**, which is why `collection_summary`'s `totalCards` and `entries` disagree
+ * in every story built on this seed — as they must, since a row is a *thing owned* and four of
+ * them hold more than one copy of it. `uniqueCards` is **11**, one short of the row count,
+ * because the last row is a second grade of a printing already here rather than a card the
+ * reader did not own before.
  *
- * **Four of the thirteen sit in binders the reader named, three sit in a deck's group — two in
- * {@link DECK_1_GROUP} and one in {@link DECK_2_GROUP} — and six are at the root.** Filing moves
+ * # Every row holds at least one copy
+ *
+ * **That is a rule and not an accident** (2026-09-08, issue #425). This array carried a
+ * thirteenth row at quantity 0 for months, under a comment saying the row survives the day the
+ * reader owns none of the card and that deleting is `collection_remove` and only ever that.
+ * That was the pre-v24 rule and it was reversed: `set_quantity(id, 0)` deletes the row and
+ * answers `EntryChange { removed: true }`, the user ladder's v24 rung deleted every stored zero,
+ * and the importer's `set` mode does the same
+ * ([collection-folders.md](../../docs/reference/collection-folders.md), *Zero quantity deletes
+ * the row*). The live dev database holds none of them in 276 rows.
+ *
+ * What that row bought was a fake that disagreed with the crate wherever **owned** is asked as an
+ * existence question — `collection_source::owns_printing` is an `EXISTS`, and the search facet's
+ * `owned` dimension is allowed to be one, *because* zero rows are gone. It had already cost one
+ * screen contradicting itself about one card: `ComboPiece.owned` summed quantities while
+ * `I own every piece` tested presence, so a panel drew `Not owned` on a piece line inside a combo
+ * it was simultaneously offering as fully owned. **A test that needs the impossible row builds it
+ * locally** — a shared seed must not be the thing that makes a fence testable, because every
+ * story on the seed then stands in a state the app deletes.
+ *
+ * **Four of the twelve sit in binders the reader named, three sit in a deck's group — two in
+ * {@link DECK_1_GROUP} and one in {@link DECK_2_GROUP} — and five are at the root.** Filing moves
  * no copies and changes no total: `CollectionQuery.folderId` is absent by default and means
  * *every* folder, so every count above is what it always was and every story that says nothing
  * about folders sees the list it always saw.
@@ -474,13 +495,6 @@ function starterEntries(): FakeEntry[] {
       grading: '{"company":"PSA","grade":"9","cert":"88104412"}',
       folderId: 1,
     }),
-    // **Quantity 0, and the row stays.** The condition, the note and the row's place in the
-    // list all survive the day the user owns none of the card; deleting is `collection_remove`
-    // and only ever that. The Commander deck below asks for this printing, which is what makes
-    // the zero visible: it reads `owned 0` against a row that exists.
-    entry(next(), printing("kld", "235"), "nonfoil", "NM", 0, {
-      notes: "Traded away at the last Modern night. Keeping the row for the note.",
-    }),
     // A proxy, and the fixture's second unpriced card (`lea 232` has no `usd` at all — it is
     // priced in euros and in tickets). The archived deck lists a Black Lotus and this is the
     // only copy of one anywhere — filed in `Trade binder`, so that deck reads owned 0 against a
@@ -508,12 +522,12 @@ function starterEntries(): FakeEntry[] {
     //
     // **Last in the array on purpose.** Every id above it is one a story or a test may have
     // written down (`collection_to_deck({ entryId: 5 })`, a drag payload, a `PickCopies` row),
-    // and inserting beside its twin would have shifted nine of them by one — a rename with no
+    // and inserting beside its twin would have shifted eight of them by one — a rename with no
     // compiler behind it. `sta 105` is also the one printing here no deck lists and no wish
     // pins, and this copy is at the root rather than in a group, so no editor badge and no
     // shortage mark moves: a deck's `ownedQuantity` is what its **own group** physically holds.
-    // What does move is `entries` 12 → 13 and `totalCards` 20 → 21, plus this printing's owned
-    // pip 1 → 2 and the Lightning Bolt oracle's `card_holdings.owned`; `uniqueCards` stays 12.
+    // What does move is `entries` 11 → 12 and `totalCards` 20 → 21, plus this printing's owned
+    // pip 1 → 2 and the Lightning Bolt oracle's `card_holdings.owned`; `uniqueCards` stays 11.
     entry(next(), printing("sta", "105"), "etched", "NONE", 1),
   ];
 }

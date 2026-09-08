@@ -555,7 +555,6 @@ goes red if somebody later "tidies" the exclusion into `collection_source`, and
 | --- | --- |
 | `collection_source::owns_printing` / `copies_of_printing` / `copies_of_oracle` | The card search's owned pip and both owned badges. A graded card is a card you own; a search that stopped saying so would be the app lying about cardboard on the reader's shelf. **Unchanged in the fragments themselves** — the exclusion issue #349 added lives in the `Availability` a caller passes, so only a request naming a deck gets it, and `a_locked_folders_copies_are_still_owned` is the assertion that it stayed there. |
 | `index::CardIndex.owned`, through `collection_source::owned_rowids` | The Owned/Missing facet pair. Same reason, and it has to agree with the pip beside it or the greying contradicts the badge. |
-| `wishlist::OWNED_SQL` | How much of a wish is already filled. A locked copy fills a want — the reader has it, and buying a second is the mistake that figure exists to prevent. |
 | `deck::owned_by_printing` | Structurally cannot see one of these folders at all — the paragraph below. |
 | `import::match_columns` / `MATCH_ORDER` | Which printing a pasted line resolves to. Ranking by owned copies is a guess about *which cardboard the reader means*, and a locked copy is still their cardboard. |
 | `collection_folders::folder_summary` | The per-folder tile. A locked folder's own tile must count its own contents, or the badge sits above a lie. |
@@ -1305,6 +1304,23 @@ Two things simplify with it, and both were previously ways for the app to disagr
 `summarise`'s split between `total_cards` (which sums quantity) and `unique_cards`/`entries` (which
 count rows) stops being able to diverge, and the search facet's `owned` dimension — with
 `collection_source::owns_printing`'s `EXISTS` — stops reading a zero row as owned.
+
+**The workbench held a row that contradicted this until 2026-09-08**
+([issue #425](https://github.com/Msgaihede/mtg-grimoire/issues/425)), and it is worth reading as
+what the two simplifications above actually rest on. Neither reader checks the quantity; both are
+licensed by the *absence* of zero rows, maintained by a different module. `.storybook/fake/`'s
+`starter` seed carried one anyway — from before this reversal, under a comment stating the old rule
+verbatim — so the fake and the crate disagreed wherever *owned* was asked as an existence question.
+What that cost was one screen contradicting itself about one card: the combo panel's
+`ComboPiece.owned` sums quantities while its *I own every piece* filter tests presence, both correct
+against a healthy database, and against that fixture the two answered differently — **Not owned** on
+a piece line inside a combo the same screen was offering as fully owned, with nothing erroring. The
+symptom was closed by fencing `combos::OWNED_CTE` with `AND e.quantity > 0`, deliberately redundant
+and documented as such; the fixture followed later. The measurement the rule is checked against is
+the live dev database's **0 zero-quantity rows out of 276**, and the rule the fake now carries is
+that a shared seed states what the app can produce and nothing else — a test that needs the
+impossible row builds it locally. `.storybook/CLAUDE.md` has it, and `world.test.ts` sweeps every
+seed for it.
 
 The wishlist has been the opposite since it shipped, by table CHECK (`quantity > 0`): a wish for
 none of something is not a wish. The two tables now agree, where they used to be a deliberate
@@ -2190,7 +2206,7 @@ build, not a description of this one.
 | `src-tauri/src/collection_folders.rs` | The folder commands, `set_entry_folder` and its two fences, `refile_entry`, `take_copies` (the split), `merge_entry`, `folder_summary`, `set_folder_locked`, `LOCKED_FOLDER_IDS` and `effectively_locked` (the lock's inheritance, spelled once), `FOLDER_NOT_YOURS`, `ENTRY_IN_A_DECK`, `FOLDER_IS_LOCKED` |
 | `src-tauri/src/collection_alloc.rs` | `collection_to_deck` and `deck_to_collection` — the pair that moves a row across the deck boundary and back — `take_from_deck_list`, `MoveOutcome`, the cut's history row and the argument for its missing undo step, and the seven refusal sentences |
 | `src-tauri/src/deck_pull.rs` | The third crossing (2026-09-03, issue #351): `deck_pull_plan` and `deck_pull_from_collection` — filling a hole the list already declares, writing no `deck_cards` row. Candidate eligibility, the pre-pick order, the all-or-nothing batch, and the `move` history row. Recorded in [decks-storage.md](decks-storage.md#the-pull-filling-a-hole-the-list-already-has) |
-| `src-tauri/src/deck_quick_add.rs` | The fourth crossing (2026-09-03, issue #350): `deck_quick_add_wishes` and `deck_quick_add_to_collection` — the only one that *creates* a row rather than moving one. The seven-step order, `WISH_GONE` and `WISH_WRONG_CARD`, the wishlist predicate and why it is `OWNED_SQL`'s first arm, and the fourth `move` history row. Recorded in [decks-storage.md](decks-storage.md#the-quick-add-recording-cardboard-nobody-had-written-down) |
+| `src-tauri/src/deck_quick_add.rs` | The fourth crossing (2026-09-03, issue #350): `deck_quick_add_wishes` and `deck_quick_add_to_collection` — the only one that *creates* a row rather than moving one. The seven-step order, `WISH_GONE` and `WISH_WRONG_CARD`, the wishlist predicate and why it drops the any-printing arm, and the fourth `move` history row. Recorded in [decks-storage.md](decks-storage.md#the-quick-add-recording-cardboard-nobody-had-written-down) |
 | `src-tauri/src/collection.rs` | The grain's other ten terms, `set_quantity`'s zero-delete, `update_entry`'s merge, `fold_entry`, `EntryChange`, `ENTRY_FINISH`, `Allocation`, `CollectionQuery::exclude_locked` with `scope`'s term for it, and `add_entry_filed` with `DECK_WRITE_FOLDERS` — the private door that takes the folder fence as a parameter, and its two callers |
 | `src-tauri/src/deck_theory.rs` | `OWNED_SPARE_SQL` — "what can I build with", and the first ownership-shaped statement the lock changed, unconditionally |
 | `src-tauri/src/collection_source.rs` | The three fragments and `Availability` — the second thing the lock reaches, as a **scope a caller passes** rather than a statement: `ForDeck` is the deck builder's card search alone (issue #349) and drops another deck's group and every locked drawer, keeping the asking deck's own group |

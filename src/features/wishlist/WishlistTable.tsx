@@ -21,7 +21,7 @@ import type { SortSpec } from "@/lib/sort";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { EditWishButton } from "./EditWish";
-import { missingOf, printingOf, wishLabel } from "./wish";
+import { printingOf, wishLabel } from "./wish";
 import { wishDraggable } from "./wishDrag";
 import { ElsewhereMark, WishFolderCaption } from "./wishMarks";
 
@@ -182,19 +182,12 @@ function columnsFor({
         </>
       ),
     },
-    {
-      key: "owned",
-      width: "6.25rem",
-      header: "Owned",
-      sortable: true,
-      firstDir: "desc",
-      // The whole question a wishlist answers, per row. A fraction and not a bar: the
-      // direction's motion and colour budget is spent on the mana line and the card art, and
-      // forty progress bars would out-shout both.
-      cellClassName: "truncate font-mono text-xs tabular-nums text-dim",
-      cell: (row) =>
-        missingOf(row) === 0 ? "Fulfilled" : `${row.ownedQuantity} of ${row.quantity} owned`,
-    },
+    // **There was an `Owned` column here until 2026-09-08**, between the printing and the
+    // wanted count: `2 of 4 owned`, or the word `Fulfilled`. It read the copies the collection
+    // held against each wish and it is gone with every other comparison this list made against
+    // the binder — a wishlist is the reader's own list, kept by hand, and they take a card off it
+    // when they acquire one. The column that used to answer "how far along am I" was answering a
+    // question this list does not ask.
     {
       key: "quantity",
       width: "7rem",
@@ -256,27 +249,27 @@ function columnsFor({
       headerLabel: `Cost. ${asOf}`,
       headerClassName: "text-right",
       cellClassName: "text-right font-mono tabular-nums",
-      // What finishing this wish costs, over the copies still missing — arithmetic over the
-      // number the stepper moves, so the two can never disagree on screen. A wish with no
-      // price for its finish has no cost either: that is a hole in the data, not a zero, and
-      // an etched wish on Cardmarket is exactly that hole (`eur_etched` does not exist), so
-      // it is an em dash rather than another marketplace's rate wearing a euro sign.
+      // What this wish costs — `unit × copies wanted`, arithmetic over the number the stepper
+      // moves, so the two can never disagree on screen. A wish with no price for its finish has
+      // no cost either: that is a hole in the data, not a zero, and an etched wish on Cardmarket
+      // is exactly that hole (`eur_etched` does not exist), so it is an em dash rather than
+      // another marketplace's rate wearing a euro sign.
       //
-      // The header sorts by *this*, at the marketplace the query named — which is why the
-      // query carries one — and why a fulfilled wish sorts to the bottom of a cost order
-      // however dear the card is.
+      // **It was `unit × copies still missing` until 2026-09-08**, which is why a covered wish
+      // used to sort to the bottom of a cost order however dear the card was. Nothing here reads
+      // the collection now, so a cost order is an order by what the list is worth.
+      //
+      // The header sorts by *this*, at the marketplace the query named — which is why the query
+      // carries one.
       cell: (row) => {
-        const missing = missingOf(row);
         const unit = row.unitPrice;
         return (
           <>
-            {formatPrice(unit === null ? null : unit * missing, currency)}
-            {/* What one of them costs, under what all of them cost — and only where the two
-                are different numbers. On the single-copy rows that are most of a wishlist it
-                would be the same price written twice, and on a fulfilled one it was a unit
-                price under a total of nothing: a line quoting $105.18 each beside the word
-                "Fulfilled" reads as a bill for a card already in the binder. Seen live. */}
-            {unit !== null && missing > 1 && (
+            {formatPrice(unit === null ? null : unit * row.quantity, currency)}
+            {/* What one of them costs, under what all of them cost — and only where the two are
+                different numbers. On the single-copy rows that are most of a wishlist it would be
+                the same price written twice. */}
+            {unit !== null && row.quantity > 1 && (
               <span className="block text-[0.7rem] leading-tight text-dim">
                 {formatPrice(unit, currency)} ea
               </span>
@@ -496,9 +489,11 @@ export function WishlistTable({
       // sentence is a band under the row it belongs to.
       extraHeight={(row) => (row.needsReview ? REVIEW_HEIGHT : 0)}
       isSelected={(row) => row.cardId !== null && row.cardId === selectedCardId}
-      // Last, so it wins over the selection colour: a wish the collection already covers is
-      // a record rather than a want, and it says so by receding rather than by disappearing.
-      rowClassName={(row) => (missingOf(row) === 0 ? "text-dim" : undefined)}
+      // **No `rowClassName` here, and the absence is the change rather than an omission.** A wish
+      // the collection already covered used to recede to `text-dim` — a record rather than a
+      // want, saying so without disappearing — and that dimming went on 2026-09-08 with the
+      // figure behind it. There is no such thing as a covered wish now: the reader takes a card
+      // off this list when they acquire one, so every row on it is a row they still want.
       onNeedNextPage={onNeedNextPage}
       // An any-printing wish names no printing, so there is nothing for the pane to open —
       // and a row that looked clickable and did nothing would be worse than one that does

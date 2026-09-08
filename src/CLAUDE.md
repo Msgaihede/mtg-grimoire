@@ -496,8 +496,8 @@ Every one of these has its measurement and its story in
   was one docked panel until 2026-09-07 and is three now, which changes nothing about the rule and
   triples what a control overflowing its floor costs.) Four
   controls never fold away — the search box, the colours, the mana values and the sort — and
-  everything else (set, format, owned, rarity, price, printings, finish, condition, fulfilled,
-  needs review) is behind one `Filters`
+  everything else (set, format, owned, rarity, price, printings, finish, condition, needs
+  review) is behind one `Filters`
   disclosure, with the filters that are **on** stated as 26px chips under a rule. Thresholds are
   640 / 900 / 1500 and each is where a *line's own contents* stop fitting, not a device.
   **The right-hand end of that row's first line belongs to the grid-or-table pair**, on every

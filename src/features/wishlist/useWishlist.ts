@@ -55,7 +55,6 @@ export const WISHLIST_SORTS = [
 /** Which direction one press on each column asks for first. */
 const WISHLIST_FIRST_DIR: Record<WishlistSortKey, SortDir> = {
   name: "asc",
-  owned: "desc",
   quantity: "desc",
   cost: "desc",
   price: "desc",
@@ -71,18 +70,16 @@ export interface WishlistFilterState {
   manaValues: readonly number[];
   manaX: boolean;
   rarities: readonly string[];
-  /** `false` is a filter too — "the wishes nothing covers" — so this is compared against
-   *  `undefined` rather than tested for truthiness. */
-  fulfilled: boolean | undefined;
-  /** `true` is the wishes a sync flagged, `false` everything it did not touch. Three-way for
-   *  the same reason `fulfilled` is: the complement is a real question. */
+  /** `true` is the wishes a sync flagged, `false` everything it did not touch. Three-way
+   *  because the complement is a real question, and compared against `undefined` rather than
+   *  tested for truthiness because `false` is a filter too. */
   needsReview: boolean | undefined;
 }
 
 /**
  * How many *kinds* of filter are on — the number on the Reset all badge.
  *
- * Eight, where it was three until 2026-08-26 and the argument for three was about the *screen*
+ * Seven, where it was three until 2026-08-26 and the argument for three was about the *screen*
  * rather than the plumbing: a shopping list is read by name, so a row of colour chips over forty
  * rows was chrome that would never be pressed. What overturned it is that the chips are no longer
  * a row — the three card views draw one `FilterBar` now, where everything but the box, the
@@ -92,6 +89,10 @@ export interface WishlistFilterState {
  *
  * `WishlistQuery extends CardFilters`, so every one of these was already a field the backend read
  * and this hook simply never sent. Kinds and not values, as both siblings count them.
+ *
+ * **It was eight until 2026-09-08.** `fulfilled` — the wishes the collection already covered —
+ * went with every other comparison this list made against the binder, so there is one fewer kind
+ * to count and one fewer chip in the tray.
  */
 export function activeFilterCount(f: WishlistFilterState): number {
   return [
@@ -103,7 +104,6 @@ export function activeFilterCount(f: WishlistFilterState): number {
     // same group and is OR'd with them, so "3 and X" is one thing to clear.
     f.manaValues.length > 0 || f.manaX,
     f.rarities.length > 0,
-    f.fulfilled !== undefined,
     f.needsReview !== undefined,
   ].filter(Boolean).length;
 }
@@ -133,7 +133,6 @@ export function useWishlist() {
   // a `{X}{B}{B}{B}` on the list answers the `3` chip and this one both.
   const [manaX, setManaX] = useState(false);
   const [rarities, setRarities] = useState<readonly string[]>([]);
-  const [fulfilled, setFulfilled] = useState<boolean | undefined>(undefined);
   const [needsReview, setNeedsReview] = useState<boolean | undefined>(undefined);
   // Empty is name order — the view's own default, which is what a cleared sort falls back
   // to. Not a filter, so `resetAll` leaves it alone.
@@ -193,11 +192,13 @@ export function useWishlist() {
     // the `{X}` rows to whatever the numerals matched.
     manaX: manaX || undefined,
     rarities: raritiesParam,
-    // Sent only when it is set. `false` — "what is still missing" — is the list's usual
-    // question and is meaningful on the wire; `undefined` is not sent at all.
-    fulfilled,
-    // Same rule: `false` — "everything the sync did not touch" — is meaningful on the wire,
-    // and `undefined` is not sent at all.
+    // Sent only when it is set. `false` — "everything the sync did not touch" — is meaningful on
+    // the wire, and `undefined` is not sent at all.
+    //
+    // **A `fulfilled` field stood beside this one until 2026-09-08.** It asked the backend which
+    // wishes the collection already covered, and the backend has stopped counting: the wishlist
+    // compares itself to the collection nowhere, because the reader is the one who decides a wish
+    // is done, by taking the card off the list.
     needsReview,
     // `paperOnly` is deliberately absent: the wishlist forces it off, exactly as the
     // collection does. A paper test over a printing that has left `cards` would throw away
@@ -214,14 +215,17 @@ export function useWishlist() {
     folderId: folderId ?? undefined,
     // Sent only when `true`. The backend's default is `false`, and sending it on every
     // request would make the payload lie about intent — the rule the file already applies to
-    // `text`, `fulfilled` and `needsReview`.
+    // `text` and `needsReview`.
     flatten: flatten || undefined,
   };
 
-  // `["wishlist", …]`, so the one `invalidateQueries({ queryKey: ["wishlist"] })` that every
-  // collection write in the app already fires refreshes this list too — a wish's
-  // `ownedQuantity` is computed from `collection_entries`, so a stepper press two views away
-  // has just changed what this list says.
+  // `["wishlist", …]`, so every write to *this* list refreshes it.
+  //
+  // **A collection write no longer fires it and no longer should.** The root was shared on the
+  // grounds that a wish counted the copies the binder held (`WishRow.ownedQuantity`, computed
+  // from `collection_entries`), so a stepper press two views away changed what this list said.
+  // Nothing on a wish is derived from a collection row now, so `AddToCollection` narrowed its
+  // invalidation to the list it actually wrote to — see the comment at that write.
   const listKey = [
     "wishlist",
     "list",
@@ -237,7 +241,6 @@ export function useWishlist() {
     // from the numerals alone would serve "3, and also X" out of the pages cached for plain "3".
     manaX ? "x" : "",
     raritiesParam?.join(",") ?? "",
-    fulfilled === undefined ? "" : fulfilled ? "fulfilled" : "missing",
     needsReview === undefined ? "" : needsReview ? "review" : "clear",
     sort.map((t) => `${t.key}:${t.dir}`).join(","),
     // On every order, not only a money one: two marketplaces are two answers to the same
@@ -302,18 +305,6 @@ export function useWishlist() {
      */
     facets: undefined,
     /**
-     * `true` shows only the wishes the collection already covers, `false` only those it does
-     * not, `undefined` asks nothing. Counted in **copies** and finish-aware: a foil wish is
-     * not covered by the nonfoil in the binder.
-     */
-    fulfilled,
-    /** Off → still missing → fulfilled → off. A shopping list asks what is left first. */
-    toggleFulfilled: () => setFulfilled((current) => cycleTriState(current, false)),
-    /** The same field, set outright. `FilterBar` walks the cycle itself for the chip in its tray
-     *  and needs this one to *clear* the kind in a single press — `FilterSurface.needsReview`
-     *  carries the argument for both surfaces. */
-    setFulfilled,
-    /**
      * `true` shows only the wishes a Scryfall migration or a vanished printing flagged,
      * `false` only those it did not, `undefined` asks nothing.
      */
@@ -321,7 +312,9 @@ export function useWishlist() {
     /** Off → flagged → not flagged → off. The flagged ones first: that is the only reason
      *  anybody presses this, and the complement is where you go once they are dealt with. */
     toggleNeedsReview: () => setNeedsReview((current) => cycleTriState(current, true)),
-    /** The same field, set outright — see {@link setFulfilled} beside it. */
+    /** The same field, set outright. `FilterBar` walks the cycle itself for the chip in its tray
+     *  and needs this one to *clear* the kind in a single press — `FilterSurface.needsReview`
+     *  carries the argument for both surfaces. */
     setNeedsReview,
     /** The columns this list is ordered by, first one deciding. Empty is name order. */
     sort,
@@ -388,7 +381,6 @@ export function useWishlist() {
       manaValues,
       manaX,
       rarities,
-      fulfilled,
       needsReview,
     }),
     /** Clear every filter at once. The sort is not a filter and stays: it is how the reader
@@ -410,7 +402,6 @@ export function useWishlist() {
       setManaValues([]);
       setManaX(false);
       setRarities([]);
-      setFulfilled(undefined);
       setNeedsReview(undefined);
     },
     /** Which folder the reader is standing in. `null` is the root wishlist — a real

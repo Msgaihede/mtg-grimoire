@@ -350,8 +350,10 @@ export function CardGrid<T extends GridCard>({
   selectedId = null,
   label = "Search results",
   badge,
+  badgeChrome = "chip",
   topLeft,
   topLeftPlacement = "nameplate",
+  bottomRight,
   finish,
   treatment,
   gameChanger,
@@ -425,11 +427,39 @@ export function CardGrid<T extends GridCard>({
    */
   badge?: (card: T) => ReactNode;
   /**
+   * Whether the {@link badge} corner draws the wall's own chip behind the mark, or hands that
+   * job to the mark itself. `"chip"` by default, which is every caller but one.
+   *
+   * **The default is the argued position and not an inherited shape.** A mark on this wall sits
+   * on a *photograph*, so it needs something behind it to be legible at all; deciding what that
+   * something is at the **corner** rather than at the mark is what has kept six walls from
+   * drifting into six shades of backing, and it is the same sentence `topLeft` makes when it
+   * says its exception ended. So the corner supplies `bg-bg/85`, the scaled radius and the
+   * scaled padding, and a caller hands over plain inline content.
+   *
+   * **`"bare"` is the narrow exception for a corner holding *two* marks, each of which needs a
+   * backing of its own** — the wishlist's, which stacks a folder pill over a copies-wanted pill
+   * with a 4px gutter between them. One box around both would have to be as wide as the folder
+   * name (variable) with two glyphs (`×4`) alone on the row beneath it, which is a large empty
+   * rectangle laid over the art rather than a mark. What `"bare"` drops is the backing, the
+   * padding and the radius and **nothing else**: the corner keeps its position, its
+   * `empty:hidden`, its own pointer events and the click that opens the card, so a bare corner
+   * is still the same corner. It is not licence to draw an unbacked mark on art — a caller
+   * passing this owes each of its marks a backing of its own.
+   *
+   * **It governs the `badge` corner alone.** {@link topLeft} and {@link bottomRight} keep the
+   * chip unconditionally, because both of their callers want exactly one box and the wishlist's
+   * bottom-right mark is deliberately a single pill with two lines in it — the case this prop
+   * exists for is two *marks*, not two lines.
+   */
+  badgeChrome?: "chip" | "bare";
+  /**
    * A mark over the art's **top-left** corner — the search's printing count.
    *
    * Its own slot rather than a second `badge`, because each corner of a tile has exactly one
    * owner and drift is what happens when they do not: bottom-left the owned/wishlist badge,
-   * top-right the finish chip and the game-changer crown, top-left this.
+   * top-right the finish chip and the game-changer crown, bottom-right {@link bottomRight},
+   * top-left this.
    *
    * **It is the same box as `badge` now, backing included** (2026-08-15). It carried none for a
    * day, because the mark inside it was `CountTag` — a filled banner with its own paint, which
@@ -468,6 +498,27 @@ export function CardGrid<T extends GridCard>({
    * else drawn on a card: 64px on a doubled card is the same place on a doubled nameplate.
    */
   topLeftPlacement?: "nameplate" | "clear";
+  /**
+   * A mark over the art's **bottom-right** corner — the fourth and last of a tile's corners.
+   *
+   * **The exact mirror of {@link badge}, and built from the same box on purpose.** Each corner of
+   * a tile has exactly one owner — bottom-left `badge`, top-left {@link topLeft}, top-right the
+   * finish chip and the game-changer crown (`CardArt`'s own), bottom-right this — and the whole
+   * reason all four are decided here rather than at the call sites is that four corners written
+   * four times drift into four shades of felt, four insets and four radii. So this corner is the
+   * badge's `bg-bg/85`, the badge's scaled radius and padding, the badge's `empty:hidden` (a mark
+   * that guards itself still hands over a truthy element, so the guard has to be on the backing),
+   * the badge's `pointer-events-auto` and the badge's own click that opens the card.
+   *
+   * **A caller passing both this and {@link action} would have the strip lying over this corner**,
+   * and that is a real constraint rather than a hypothetical: the strip is `inset-x-0 bottom-0
+   * justify-end`, so it spans the tile's full width at the foot of the art and puts its control in
+   * exactly this corner. The one caller adding a `bottomRight` — the wishlist's wall — is dropping
+   * its `action` in the same change, which is what makes the pair legal to leave uncontested here.
+   * A wall that genuinely needs both owes a decision about which of the two the corner belongs to,
+   * not a `z-index`.
+   */
+  bottomRight?: (card: T) => ReactNode;
   /**
    * The finish a tile's card **is** — a holo sheen and a corner chip, drawn by `CardArt`.
    *
@@ -519,6 +570,10 @@ export function CardGrid<T extends GridCard>({
    * is a gem, a printing line, a finish mark and a price at 170px. Over the art it costs the wall
    * no height at all (the strip is absolutely positioned, so `tileHeight` is unchanged by its
    * existence) and it is where the deck editor already puts a card's stepper.
+   *
+   * **It is `inset-x-0 bottom-0 justify-end`, so it lies over the {@link bottomRight} corner** —
+   * the two slots contest one piece of the tile and a wall passing both owes a decision about
+   * which of them owns it. No wall does today; see `bottomRight`.
    */
   action?: (card: T) => ReactNode;
   /**
@@ -526,11 +581,10 @@ export function CardGrid<T extends GridCard>({
    * position for a card's stepper, brought to the walls by issue #348.
    *
    * Its own slot rather than a second thing hung in {@link action}, for the reason every corner
-   * of a tile has exactly one owner: the strip is a *row* at the foot (`justify-end`, and the
-   * wishlist already has a pencil in it), and a column standing up the right-hand side is a
-   * different piece of geometry with a different collision list. Hanging both off one slot would
-   * make the caller responsible for un-picking the strip's own layout, which is how two walls
-   * drift into two arrangements.
+   * of a tile has exactly one owner: the strip is a *row* at the foot (`justify-end`), and a
+   * column standing up the right-hand side is a different piece of geometry with a different
+   * collision list. Hanging both off one slot would make the caller responsible for un-picking the
+   * strip's own layout, which is how two walls drift into two arrangements.
    *
    * The box is `absolute`, so it costs the wall no height and `tileHeight` is unchanged by its
    * existence — the strip's property, for the strip's reason.
@@ -539,6 +593,13 @@ export function CardGrid<T extends GridCard>({
    * chip and the game-changer crown (`CardArt`), so the column begins below them. 24px on
    * `--mark-scale` is that chip's own box — a 4px inset over ~14px of chip — so the two clear
    * each other at every stop of the zoom rather than at 1× only.
+   *
+   * **The box spans the tile and right-aligns its contents**, which is the strip's arrangement
+   * for the strip's reason — a popup in here anchors off the *tile's* left edge rather than off a
+   * 31px box four pixels from its right one. See the wrapper itself for the measurement; what a
+   * caller has to know is that the wide box is `pointer-events-none` and each **child** inherits
+   * that gate until the tile is hovered or holds focus, so a control put here must be a child of
+   * this slot rather than something that positions itself out of it.
    */
   column?: (card: T) => ReactNode;
   /**
@@ -1334,8 +1395,10 @@ export function CardGrid<T extends GridCard>({
                 selected={tileKey(card) === selectedId || picked.selected(tileKey(card))}
                 dragRest={dragRest}
                 badge={badge}
+                badgeChrome={badgeChrome}
                 topLeft={topLeft}
                 topLeftPlacement={topLeftPlacement}
+                bottomRight={bottomRight}
                 finish={finish}
                 treatment={treatment}
                 gameChanger={gameChanger}
@@ -1373,8 +1436,10 @@ function Tile<T extends GridCard>({
   onSelect,
   selected,
   badge,
+  badgeChrome = "chip",
   topLeft,
   topLeftPlacement = "nameplate",
+  bottomRight,
   finish,
   treatment,
   gameChanger,
@@ -1419,8 +1484,10 @@ function Tile<T extends GridCard>({
   onSelect: (card: T, event: ReactMouseEvent) => void;
   selected: boolean;
   badge?: (card: T) => ReactNode;
+  badgeChrome?: "chip" | "bare";
   topLeft?: (card: T) => ReactNode;
   topLeftPlacement?: "nameplate" | "clear";
+  bottomRight?: (card: T) => ReactNode;
   finish?: (card: T) => Finish | null;
   treatment?: (card: T) => readonly Treatment[];
   gameChanger?: (card: T) => boolean;
@@ -1442,6 +1509,7 @@ function Tile<T extends GridCard>({
 }) {
   const mark = badge?.(card);
   const corner = topLeft?.(card);
+  const footMark = bottomRight?.(card);
   const tileFinish = finish?.(card) ?? null;
   const tileTreatments = treatment?.(card) ?? [];
   const crowned = gameChanger?.(card) ?? false;
@@ -1593,11 +1661,40 @@ function Tile<T extends GridCard>({
       // owns this scroller's offset and the tile's final transform lands in the same commit the
       // scroll is computed in, so the correction is a fraction of the ring's room rather than
       // something needing a frame of its own.
+      //
+      // **A second ring paints in that room now and 6px still covers both**, which is worth
+      // saying because the two are not stacked: the selection ring below is `ring-2` on *this*
+      // box — 2px outside the same border box — and `FOCUS`'s indicator is 4px proud of it, so the
+      // furthest either reaches is 4. What changed is only *whose* box the gold is on. Before this
+      // it was `CardArt`'s frame, one level in, where the tile's own padding-free geometry meant
+      // the ring was already inside the scroll margin by construction; on the root it needs the
+      // margin the focus ring already asked for, and asks for no more of it.
       // **No gap between the art and the chin.** The chin is *attached* to the card — it rides
       // `CHIN_RISE` up over the face's clipped corners so the two are one piece of cardboard — and
       // a gap here would separate exactly what that rise exists to fuse. It used to be `gap-1`,
       // budgeted into the row's height as `CAPTION_GAP`; both are gone together.
-      className="group flex shrink-0 scroll-m-1.5 flex-col"
+      //
+      // **And the gold ring goes around the whole of that piece of cardboard, which is why it is
+      // here and not on the art.** It was `CardArt`'s until this change — the frame draws its own
+      // `ring-2 ring-accent` on `selected`, and this tile passed the flag straight through — so
+      // the ring stopped where the picture stopped and the chin hung outside it: an outlined
+      // photograph glued to an unoutlined bar, which contradicts the one thing `CHIN_RISE` exists
+      // to say. The tile is one object, so the outline is one outline. (`CardArt` keeps the prop
+      // and every other caller keeps the behaviour: `AllPrintingsDialog` and the deck views draw
+      // the frame directly, and there the art genuinely *is* the whole object.)
+      //
+      // `rounded-lg` is what the ring traces, and it is measured rather than guessed:
+      // `src/index.css` sets `--radius: 0.625rem` with `--radius-lg: var(--radius)`, so this is
+      // 10px — the same 10px `CardArt`'s frame uses on its top corners and `CardChin`'s
+      // `rounded-b-lg` uses on its bottom ones. One radius, drawn once around both.
+      //
+      // **It costs the wall no layout.** A `ring` is a spread-only outset box shadow painted
+      // *outside* the border box, so the tile's width and `tileHeight` — and with them the row
+      // pitch the virtualiser is measuring — are exactly what they were with no ring at all.
+      className={cn(
+        "group flex shrink-0 scroll-m-1.5 flex-col rounded-lg",
+        selected && "ring-2 ring-accent",
+      )}
       // A Shift-click is a range (issue #214), and Shift in a browser also drags a text selection
       // across everything between the two presses — on a wall of forty tiles, every chin from
       // the anchor to the pointer painted blue for the length of the gesture. On the tile's root
@@ -1639,7 +1736,9 @@ function Tile<T extends GridCard>({
             // — so the protocol URL and this one name one size and the two builds draw the same
             // picture.
             imageUrl={card.imageUris?.[WALL_CARD_VARIANT]}
-            selected={selected}
+            // **No `selected` here, deliberately.** The gold ring is drawn on the tile's root, so
+            // it goes round the art *and* the chin as one object — see the root's `className`.
+            // Passing it here as well would draw a second ring 28px above the first one's foot.
             finish={tileFinish}
             treatments={tileTreatments}
             gameChanger={crowned}
@@ -1683,11 +1782,20 @@ function Tile<T extends GridCard>({
             // The inset, the padding and the corner are all sizes on a card at 100% zoom, and
             // scale with it — the mark inside already does, and a chip whose box held still would
             // either burst at 2× or swim in its own padding at 0.5×.
+            //
+            // **`badgeChrome` moves the backing and nothing else** — see the prop for why the
+            // default is the one it is, and why one caller needs the other arm. Everything above
+            // the branch is the corner: where it sits, that it disappears when it has nothing to
+            // say, that it takes its own pointer events and opens the card. What `"bare"` drops is
+            // the three classes that make a chip, because the marks inside it bring their own.
             className={cn(
-              "pointer-events-auto absolute bg-bg/85 empty:hidden",
+              "pointer-events-auto absolute empty:hidden",
               "bottom-[calc(0.25rem*var(--mark-scale,1))] left-[calc(0.25rem*var(--mark-scale,1))]",
-              "rounded-[calc(0.25rem*var(--mark-scale,1))]",
-              "px-[calc(0.375rem*var(--mark-scale,1))] py-[calc(0.125rem*var(--mark-scale,1))]",
+              badgeChrome === "chip" && [
+                "bg-bg/85",
+                "rounded-[calc(0.25rem*var(--mark-scale,1))]",
+                "px-[calc(0.375rem*var(--mark-scale,1))] py-[calc(0.125rem*var(--mark-scale,1))]",
+              ],
             )}
           >
             {mark}
@@ -1724,6 +1832,32 @@ function Tile<T extends GridCard>({
             )}
           >
             {corner}
+          </span>
+        )}
+        {footMark && (
+          // The fourth corner, and the exact mirror of the badge — same box, same felt, same
+          // scaled radius and padding, same `empty:hidden`, same pointer events and the same
+          // click that opens the card. Built from the badge's classes rather than beside them on
+          // purpose: four corners decided in four places is four insets, four radii and four
+          // shades of backing, which is the drift `topLeft` already stopped once.
+          //
+          // A *sibling* of the art button like the other two, so its words never join the
+          // button's accessible name — see the badge's comment above, which is the whole of the
+          // reasoning for all three.
+          //
+          // **The `action` strip lies over this corner** (`inset-x-0 bottom-0 justify-end`), so a
+          // wall passing both slots is asking two things to own one place. None does: see
+          // {@link CardGrid}'s `bottomRight`.
+          <span
+            onClick={open}
+            className={cn(
+              "pointer-events-auto absolute bg-bg/85 empty:hidden",
+              "bottom-[calc(0.25rem*var(--mark-scale,1))] right-[calc(0.25rem*var(--mark-scale,1))]",
+              "rounded-[calc(0.25rem*var(--mark-scale,1))]",
+              "px-[calc(0.375rem*var(--mark-scale,1))] py-[calc(0.125rem*var(--mark-scale,1))]",
+            )}
+          >
+            {footMark}
           </span>
         )}
         {action && (
@@ -1783,27 +1917,42 @@ function Tile<T extends GridCard>({
           // stepper, and the whole of what issue #348 asked for: one control in one place across
           // the deck editor and the two walls.
           //
-          // The box hugs its content rather than spanning the tile, which is the one thing that
-          // makes it *unlike* the strip above: there is no popup anchored off it, so it needs no
-          // width of its own, and a narrow box is a narrow collision list.
+          // **The box spans the tile and right-aligns its contents**, which is the strip's
+          // arrangement above and is here for exactly the strip's reason. It used to hug its
+          // content — roughly 31px wide, pinned at `right-[4px]` — on the argument that nothing
+          // was anchored off it so it needed no width, and that a narrow box is a narrow collision
+          // list. Both halves of that stopped being true when the wishlist moved its edit pencil
+          // in here: the pencil is an `AnchoredPopup` passed `static` (as every one of these on a
+          // card is, so its own root drops out of the chain), whose `w-72` (288px) `align="start"`
+          // panel is then `absolute left-0` against **this** box. Against a 31px box sitting 4px
+          // from the right edge of a 170px tile, `left-0` is ~135px in and the panel runs ~253px
+          // off the right-hand edge of the scroller, clipped. Against a box that spans the tile,
+          // `left-0` is the tile's own left edge — which is what the `action` strip already does, and
+          // `AnchoredPopup`'s `align="start"` writes down why: a panel opening leftwards off the
+          // first column is clipped by the scroller, and left overflow, unlike right, cannot be
+          // scrolled back into view.
           //
-          // **`pointer-events` follow the reveal, and here that is load-bearing rather than
-          // tidy.** An `opacity-0` element is still a hit target — the strip's comment above says
-          // so and pays for it with `pointer-events-none` plus `auto` on its children, which
-          // leaves the *control* pressable while invisible. That trade is affordable across a
-          // 20px strip and is not across this column: it stands ~99px tall against a 238px face,
-          // so a reader tapping the right-hand third of a card to open it would step the quantity
-          // of a card they cannot see the controls for. Gating the whole box instead costs a
-          // mouse nothing — the pointer that would press it has already revealed it by being on
-          // the tile — and gives a touch screen back the press that opens the card, which is the
-          // only gesture it had here.
+          // **`pointer-events` follow the reveal, and here that is load-bearing rather than tidy —
+          // but the gate is now on the *children*.** An `opacity-0` element is still a hit target;
+          // the strip pays for that with `pointer-events-none` plus `auto` on what it holds, which
+          // leaves the control pressable while invisible. That trade is affordable across a 20px
+          // strip and is not across this column: it stands ~99px tall against a 238px face, so a
+          // reader tapping the right-hand third of a card to open it would step the quantity of a
+          // card they cannot see the controls for. Spanning the tile makes that band the card's
+          // whole width, so the gate matters more rather than less — and it cannot stay on the
+          // wrapper, because a wrapper that takes pointer events at all would swallow the press
+          // that opens the card everywhere the control is not. So: the wrapper is
+          // **always** pointer-transparent, and the child inherits `none` until the tile is
+          // hovered or holds focus. A mouse loses nothing (the pointer that would press the
+          // control has already revealed it by being on the tile), and a touch screen keeps the
+          // only gesture it ever had here.
           //
-          // `pointer-events` is inherited, so gating the wrapper gates the column inside it and
-          // no `[&>*]` arm is needed.
+          // `group-focus-within` is not decoration either: `AnchoredPopup`'s trigger holds focus
+          // while its panel is up, so without it an *open* popup's own contents would go dead the
+          // moment the pointer left the tile.
           <span
             className={cn(
-              "pointer-events-none absolute flex",
-              "group-hover:pointer-events-auto group-focus-within:pointer-events-auto",
+              "pointer-events-none absolute inset-x-0 flex justify-end",
               // The top-right corner is the finish chip and the game-changer crown (`CardArt`),
               // laid out entirely on `--mark-scale` — inset 4px and 16px tall at 1×. 24px on that
               // **same** variable is what clears them at every stop of the ladder rather than at
@@ -1813,9 +1962,12 @@ function Tile<T extends GridCard>({
               // (2026-09-03, `collection-page--stepping-from-the-wall`, a foil tile): the chip is
               // 8/16/32px tall at 0.5×/1×/2× and this box starts at 12/24/48, so the gap is
               // 1/3/7px — narrowest at the bottom of the ladder and, because both boxes are
-              // linear in the same zoom, incapable of inverting. The right inset is the two
-              // corner marks' own 4px, so the column stands in the same gutter they do.
-              "top-[calc(1.5rem*var(--mark-scale,1))] right-[calc(0.25rem*var(--mark-scale,1))]",
+              // linear in the same zoom, incapable of inverting. The right inset is the two corner
+              // marks' own 4px — `pr-` rather than `right-` now that the box spans the tile, so
+              // the column still stands in the same gutter they do.
+              "top-[calc(1.5rem*var(--mark-scale,1))] pr-[calc(0.25rem*var(--mark-scale,1))]",
+              "[&>*]:pointer-events-none",
+              "group-hover:[&>*]:pointer-events-auto group-focus-within:[&>*]:pointer-events-auto",
               REVEAL_ON_HOVER,
             )}
           >

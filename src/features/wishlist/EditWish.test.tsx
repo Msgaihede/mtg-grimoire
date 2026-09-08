@@ -33,7 +33,6 @@ const BOLT: WishRow = {
   quantity: 4,
   preferredFinish: "foil",
   unitPrice: 400.5,
-  ownedQuantity: 1,
   elsewhere: 0,
   notes: null,
   needsReview: null,
