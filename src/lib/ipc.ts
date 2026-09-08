@@ -149,6 +149,30 @@ const invoke = <T,>(command: string, args?: CallArgs, options?: CallOptions): Pr
   core.call<T>(command, args, options);
 
 /**
+ * JSON with every non-ASCII character escaped, for the two scanner headers.
+ *
+ * **A header value is not a string, it is bytes, and three layers disagree about which bytes
+ * are allowed.** `JSON.stringify` leaves non-ASCII characters as themselves; a browser sends
+ * a header value's 0x80–0xFF as Latin-1 and throws a `TypeError` outright above that; and
+ * Rust's `HeaderValue::to_str` refuses anything outside visible ASCII. So `Æther Vial` in a
+ * `x-scanner-capture` either kills the call in the page or arrives as mojibake the far end
+ * rejects — and a scanner refusing exactly the cards whose names are worth reading is the
+ * failure this prevents. `\uXXXX` is the one spelling that survives all three hops, and it is
+ * still the same JSON: `JSON.parse` on the far side yields the original character.
+ *
+ * Used for **both** headers, so the two are symmetric even though only one has ever carried a
+ * card name. The Android leg needs none of this — it sends a JSON *body*, which is UTF-8.
+ *
+ * A surrogate pair escapes to its two code units, which is exactly what JSON asks for.
+ */
+function asciiJson(value: unknown): string {
+  return JSON.stringify(value).replace(
+    /[\u0080-\uffff]/g,
+    (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
+
+/**
  * The search's sortable columns. Mirrors `SEARCH_SORTS` in `src-tauri/src/search.rs`; a key
  * that is not there is dropped at the far end, which is a control that does nothing.
  *
@@ -7702,7 +7726,7 @@ export const ipc = {
     isAndroid()
       ? invoke<ScannerVerdict>("scanner_frame", { jpeg: bytesToBase64(jpeg), options })
       : invoke<ScannerVerdict>("scanner_frame", jpeg, {
-          headers: { "x-scanner-options": JSON.stringify(options) },
+          headers: { "x-scanner-options": asciiJson(options) },
         }),
   /** `scanner::scanner_reset`. The reader pressed reset, or the next card is coming. */
   scannerReset: () => invoke<void>("scanner_reset"),
@@ -7711,7 +7735,7 @@ export const ipc = {
     isAndroid()
       ? invoke<ScannerCaptured>("scanner_capture", { jpeg: bytesToBase64(jpeg), sidecar })
       : invoke<ScannerCaptured>("scanner_capture", jpeg, {
-          headers: { "x-scanner-capture": JSON.stringify(sidecar) },
+          headers: { "x-scanner-capture": asciiJson(sidecar) },
         }),
 };
 

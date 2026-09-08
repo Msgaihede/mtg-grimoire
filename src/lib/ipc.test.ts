@@ -2038,6 +2038,42 @@ describe("ipc argument names match the Rust command signatures", () => {
     expect(invoke).toHaveBeenCalledWith("scanner_capture", { jpeg: "CQ==", sidecar });
   });
 
+  /**
+   * **A non-ASCII card name has to survive the header, and `JSON.stringify` alone does not get
+   * it there.** Three layers disagree about what a header value may contain: `JSON.stringify`
+   * leaves `Æ` as itself, a browser sends 0x80–0xFF as Latin-1 and throws a `TypeError` above
+   * that, and Rust's `HeaderValue::to_str` refuses anything outside visible ASCII. So a capture
+   * of `Æther Vial` either kills the call in the page or arrives unreadable — and the cards this
+   * would refuse are exactly the ones whose names are worth filing correctly.
+   *
+   * Three assertions, and the first is what ties the other two to the wrapper: the exact string
+   * pins what `scannerCapture` produced, so the ASCII sweep and the round-trip are about the
+   * value that actually goes on the wire rather than about a constant this test wrote.
+   */
+  it("escapes a non-ASCII card name into the capture header, losslessly", async () => {
+    const sidecar = {
+      expected: "Æther Vial",
+      reported: "Jötun Grunt",
+      confidence: "0.91",
+      votes: "8.0",
+      distance: "74",
+    };
+    const header =
+      '{"expected":"\\u00c6ther Vial","reported":"J\\u00f6tun Grunt","confidence":"0.91","votes":"8.0","distance":"74"}';
+
+    await ipc.scannerCapture(new Uint8Array([9]), sidecar);
+
+    expect(invoke).toHaveBeenCalledWith("scanner_capture", new Uint8Array([9]), {
+      headers: { "x-scanner-capture": header },
+    });
+    // Visible ASCII only — the range `HeaderValue::to_str` accepts and the one a browser will
+    // put on the wire without reinterpreting a byte.
+    expect(header).toMatch(/^[\x20-\x7e]*$/);
+    // Still the same JSON: escaping is a spelling, not a lossy transport encoding, so the far
+    // end's `serde_json` reads back the characters the reader saw.
+    expect(JSON.parse(header)).toEqual(sidecar);
+  });
+
   it("scanner_status and scanner_reset take nothing", async () => {
     await ipc.scannerStatus();
     expect(invoke).toHaveBeenCalledWith("scanner_status");
