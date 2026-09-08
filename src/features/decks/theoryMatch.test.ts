@@ -132,8 +132,8 @@ describe("the number's grain follows the tier", () => {
    *
    * **Every one of the eight is marked** — the maps are built once and read, never consumed, so
    * this is not "the last Forest wins" — and the numbers differ by tier on purpose: the green
-   * rows report the *printing* they are two of against the eight planned, and the blue rows
-   * report the *card*, which is exactly right at eight against eight.
+   * rows report the *printing* they are two of against the eight planned (six to add, `+6`), and
+   * the blue rows report the *card*, which is exactly right at eight against eight.
    */
   it("marks all eight Forests, green ones by printing and blue ones by card", () => {
     const printings = ["forest-a", "forest-b", "forest-c", "forest-d"];
@@ -144,7 +144,7 @@ describe("the number's grain follows the tier", () => {
     const marks = printings.map((cardId) =>
       theoryMatchMark(plan, card({ cardId, finish: null, name: "Forest" })),
     );
-    expect(marks[0]).toEqual({ tier: "exact", delta: -6 });
+    expect(marks[0]).toEqual({ tier: "exact", delta: 6 });
     expect(marks.slice(1)).toEqual([
       { tier: "name", delta: 0 },
       { tier: "name", delta: 0 },
@@ -162,10 +162,10 @@ describe("the number's grain follows the tier", () => {
       ],
       BOTH,
     );
-    // Two live, four planned, at the card's grain.
+    // Two live, four planned, at the card's grain: two to add.
     expect(
       theoryMatchMark(plan, card({ cardId: "bolt-m10", finish: "foil", name: "Lightning Bolt" })),
-    ).toEqual({ tier: "name", delta: -2 });
+    ).toEqual({ tier: "name", delta: 2 });
   });
 
   /** The plan's own half of the loose sum: two printings of one card in the plan are one order
@@ -179,7 +179,7 @@ describe("the number's grain follows the tier", () => {
 
     expect(theoryMatchMark(plan, card({ cardId: "bolt-2xm", name: "Lightning Bolt" }))).toEqual({
       tier: "name",
-      delta: -3,
+      delta: 3,
     });
   });
 });
@@ -273,8 +273,11 @@ describe("the name key", () => {
 });
 
 /** Issue #212 — the number the mark draws when the two lists disagree about a card they both
- *  hold. Every case here is about `live − planned` at the exact grain, which the second tier
- *  leaves exactly as it was. */
+ *  hold. Every case here is about `planned − live` at the exact grain, which the second tier
+ *  leaves exactly as it was. **The sign is the action** (issue #400, 2026-09-08): positive is
+ *  copies to add, negative is copies to remove — the reverse of the `live − planned` these cases
+ *  asserted until then, so a flipped subtraction fails the two signed cases below rather than
+ *  passing them. */
 describe("the exact tier's arithmetic", () => {
   it("marks a live row the plan asks for", () => {
     const plan = theoryMatchPlan(
@@ -354,7 +357,8 @@ describe("the exact tier's arithmetic", () => {
     });
   });
 
-  it("counts a live list short of the plan as a negative", () => {
+  /** Two sleeved against four planned: the reader has two to **add**, so the number is `+2`. */
+  it("counts a live list short of the plan as a positive — the copies to add", () => {
     const plan = theoryMatchPlan(
       [slot("bolt-lea|", "Lightning Bolt", 4)],
       [card({ cardId: "bolt-lea", name: "Lightning Bolt", quantity: 2 })],
@@ -363,11 +367,13 @@ describe("the exact tier's arithmetic", () => {
 
     expect(theoryMatchMark(plan, card({ cardId: "bolt-lea", name: "Lightning Bolt" }))).toEqual({
       tier: "exact",
-      delta: -2,
+      delta: 2,
     });
   });
 
-  it("counts a live list over the plan as a positive", () => {
+  /** Four sleeved against two planned: two to **remove**, so `-2` — a cut the reader has not
+   *  made yet, and the sign says which way the cut goes. */
+  it("counts a live list over the plan as a negative — the copies to remove", () => {
     const plan = theoryMatchPlan(
       [slot("bolt-lea|", "Lightning Bolt", 2)],
       [card({ cardId: "bolt-lea", name: "Lightning Bolt", quantity: 4 })],
@@ -376,7 +382,7 @@ describe("the exact tier's arithmetic", () => {
 
     expect(theoryMatchMark(plan, card({ cardId: "bolt-lea", name: "Lightning Bolt" }))).toEqual({
       tier: "exact",
-      delta: 2,
+      delta: -2,
     });
   });
 
@@ -412,7 +418,7 @@ describe("the exact tier's arithmetic", () => {
 
     expect(theoryMatchMark(plan, card({ cardId: "ring-c21", name: "Sol Ring" }))).toEqual({
       tier: "exact",
-      delta: -2,
+      delta: 2,
     });
     expect(
       theoryMatchMark(plan, card({ cardId: "ring-c21", name: "Sol Ring", finish: "foil" })),
@@ -435,7 +441,7 @@ describe("an inactive pile counts on neither side of either tier", () => {
 
     expect(theoryMatchMark(plan, card({ cardId: "bolt-lea", name: "Lightning Bolt" }))).toEqual({
       tier: "exact",
-      delta: -3,
+      delta: 3,
     });
   });
 
@@ -451,7 +457,7 @@ describe("an inactive pile counts on neither side of either tier", () => {
 
     expect(theoryMatchMark(plan, card({ cardId: "bolt-m10", name: "Lightning Bolt" }))).toEqual({
       tier: "name",
-      delta: -3,
+      delta: 3,
     });
   });
 });
@@ -501,7 +507,7 @@ describe("the difference floor", () => {
 
     expect(theoryMatchMark(plan, card({ cardId: "sol-c21", name: "Sol Ring" }))).toEqual({
       tier: "exact",
-      delta: -2,
+      delta: 2,
     });
   });
 
@@ -519,10 +525,10 @@ describe("the difference floor", () => {
       tier: "exact",
       delta: 0,
     });
-    // Loose: two planned against one live — above one, so the number.
+    // Loose: two planned against one live — above one, so the number: one to add.
     expect(theoryMatchMark(plan, card({ cardId: "forest-c", name: "Forest" }))).toEqual({
       tier: "name",
-      delta: -1,
+      delta: 1,
     });
   });
 });
