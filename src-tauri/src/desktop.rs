@@ -20,9 +20,8 @@ use crate::{
     deck_meta, deck_missing, deck_pull, deck_quick_add, deck_theory, deck_tokens, deck_undo,
     deckpane, decksort, errors, export, flatten, images, import, index, listview, markcolors,
     marketplace, marketplace_feed, mirror, nav, paths, reset, scanner, schema, scryfall, search,
-    searchopen,
-    sync, sync_engine, sync_pair, tags, update, wishlist, wishlist_folders, wishlist_optimize,
-    zoom,
+    searchopen, sync, sync_engine, sync_pair, tags, update, wishlist, wishlist_folders,
+    wishlist_optimize, zoom,
 };
 // **Not in the list above, because this file compiles for Android too.** Its name says
 // `desktop`, but its gate is `cfg(not(target_family = "wasm"))` — desktop *and* mobile — while
