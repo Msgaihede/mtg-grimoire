@@ -301,6 +301,13 @@ interface Props {
    *  through this panel since 2026-08-23 rather than inferred from `categories[0].deckId`. */
   deckId: number;
   targetCategoryId: number;
+  /**
+   * Does the deck this column is docked beside read the reader's collection at all? `true` for
+   * every case in this file that says nothing about it, which is the deck every fixture here has
+   * always stood for; `false` is a **Virtual** deck (issue #401), and the block at the foot of
+   * this file is what it costs.
+   */
+  tracksCollection: boolean;
   roomy: boolean;
   /** How wide to draw the panel *over* the deck, for a desk too narrow to hold both. Absent is
    *  the docked arrangement, which is what every case in this file that says nothing about
@@ -321,6 +328,9 @@ function panel({
   categories = SEEDED,
   deckId = 4,
   targetCategoryId = MAIN.id,
+  // The kind of deck every other case in this file is about — one with a binder behind it. See
+  // the prop's own note; `false` is the Virtual deck and has a block of its own.
+  tracksCollection = true,
   roomy = true,
   overWidth = undefined as number | undefined,
   // `null` rather than an omission, because `null` is what the editor actually sends for a deck
@@ -358,6 +368,7 @@ function panel({
     categories,
     deckId,
     targetCategoryId,
+    tracksCollection,
     roomy,
     overWidth,
     defaultFormat,
@@ -455,6 +466,15 @@ const PANEL_TOGGLE = /card search$/;
 const ALL_CARDS = "All cards";
 /** Its sibling — the tab the panel opens on. */
 const COLLECTION = "Collection";
+/**
+ * The stored tab's *value*, which is not the button's label.
+ *
+ * `DECK_SEARCH_TAB_KEY` holds a {@link DeckSearchTab} — `"collection"` — where {@link COLLECTION}
+ * is the word printed on the control. Spelled apart because the Virtual cases below seed the one
+ * and query the other, and a fixture that used the label as the value would seed a tab nothing
+ * draws and pass for the wrong reason.
+ */
+const COLLECTION_TAB: DeckSearchTab = "collection";
 
 /** One tab, by its words. Both are plain buttons: the strip is `aria-pressed` over a `.map` and
  *  deliberately not `role="tab"`, which would bring a keyboard contract nothing else here has. */
@@ -1590,6 +1610,91 @@ describe("DeckSearchPanel tabs", () => {
     expect(screen.queryByRole("group", { name: "Adding" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Cards I own" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Cards I need" })).not.toBeInTheDocument();
+  });
+
+  /**
+   * **A deck that tracks no collection has one tab, so it has no strip** (issue #401).
+   *
+   * A Virtual deck is one the reader tracks without owning the cardboard — no
+   * `collection_folders` group, no owned figure anywhere in the editor — so a search of their
+   * binder here would offer to file copies into a list that counts none of them.
+   *
+   * Three claims, and the second and third are the ones a half-fix would pass. The strip is
+   * **not drawn**, rather than drawn with one word in it. The `Collection` press is **not in the
+   * document**, rather than present and refusing. And `collection_list` is **never called**,
+   * which is what says the tab's body was never mounted rather than merely hidden — the
+   * discriminator the tabs' own opening test uses, read the other way round.
+   */
+  it("draws no strip and no collection tab for a deck that tracks no collection", async () => {
+    panel({ tracksCollection: false });
+
+    await screen.findByRole("searchbox", { name: "Search cards" });
+    expect(screen.queryByRole("group", { name: "Search in" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: COLLECTION })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: ALL_CARDS })).not.toBeInTheDocument();
+    expect(screen.queryByRole("searchbox", { name: "Search your collection" })).toBeNull();
+    expect(collectionList).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **The stored tab is a memory of the reader's last press and it is app-wide**, so a deck with
+   * no Collection tab has to fall somewhere — and `All cards` is where, because the first tab a
+   * deck draws is the tab it opens on.
+   *
+   * This is the case that would leave the panel drawing **nothing at all**: the stored answer is
+   * a tab this deck does not have, and a body chosen by `tab === "collection"` with no fallback
+   * mounts a Collection tab whose strip is not there to switch away from it.
+   */
+  it("opens a deck that tracks no collection on the card search, whatever the stored tab says", async () => {
+    panel({ tracksCollection: false, storedTab: COLLECTION_TAB });
+
+    expect(await screen.findByRole("searchbox", { name: "Search cards" })).toBeInTheDocument();
+    expect(screen.queryByRole("searchbox", { name: "Search your collection" })).toBeNull();
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+    expect(collectionList).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **The fallback is a read and never a repairing write** — `AUTO_CATEGORY`'s rule, one control
+   * over: an answer the deck in front of the reader cannot honour is not an answer to correct.
+   *
+   * Driven from the panel rather than from the cache, because what the entry holds is an
+   * implementation detail and what the reader gets is not: switch the same column back to a deck
+   * that *does* track a collection and their own last press is still there. A fallback written
+   * back would have overwritten it with `all` and this would find the card search.
+   */
+  it("leaves the stored collection tab alone, so a tracking deck still opens on it", async () => {
+    const { update } = panel({ tracksCollection: false, storedTab: COLLECTION_TAB });
+    await screen.findByRole("searchbox", { name: "Search cards" });
+
+    update({ tracksCollection: true });
+
+    expect(
+      await screen.findByRole("searchbox", { name: "Search your collection" }),
+    ).toBeInTheDocument();
+    const strip = screen.getByRole("group", { name: "Search in" });
+    expect(within(strip).getByRole("button", { name: COLLECTION })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  /**
+   * The regression that matters most, stated as its own case rather than left to the tests above
+   * to imply: **an ordinary deck is untouched**.
+   *
+   * Everything else in this block is an absence, and an absence passes just as well against a
+   * panel that has stopped drawing the strip for every deck. This is the assertion that would go
+   * red for that — both tabs present, the strip drawn, and the reader's own binder mounted under
+   * it.
+   */
+  it("still draws both tabs for a deck that tracks a collection", async () => {
+    panel();
+
+    const strip = await screen.findByRole("group", { name: "Search in" });
+    expect(within(strip).getByRole("button", { name: COLLECTION })).toBeInTheDocument();
+    expect(within(strip).getByRole("button", { name: ALL_CARDS })).toBeInTheDocument();
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
   });
 });
 

@@ -788,6 +788,19 @@ pub fn copy_from_live(conn: &Connection, deck_id: i64) -> Result<usize, String> 
 /// [`crate::wishlist::add_wish`] **refuses** a `card_id` it cannot find there ("no card with that
 /// id is in the card database"). From inside this transaction that refusal would abort the whole
 /// press rather than skip one line. It is already carrying a `needs_review` sentence.
+///
+/// # A virtual deck is refused, and it is the only entry point in this module that is
+///
+/// [`crate::deck::VIRTUAL_HOLDS_NOTHING`] (issue #401). A virtual deck tracks a deck the reader
+/// owns no cardboard for, so it has no shopping list — the wishlist is a record of cardboard to
+/// go out and buy, and there is none to buy for a deck that is played on a screen or in proxies.
+/// **This is the module's one write that leaves it**, which is what makes it the module's one
+/// refusal: [`theory_slots`] and [`theory_diff`] are the plan-vs-live comparison, a thing a
+/// virtual deck does not have at all (its `theory_enabled` is 0), so they are already unreachable
+/// for one and a fence there would be a rule kept in step for a case that cannot arise. The
+/// fence is on the press that reaches another table, exactly where
+/// [`crate::collection_alloc::THEORY_HOLDS_NOTHING`] sits for the same kind of reason one table
+/// over.
 pub fn missing_to_wishlist(
     conn: &Connection,
     deck_id: i64,
@@ -803,6 +816,13 @@ pub fn missing_to_wishlist(
         .map_err(|e| e.to_string())?;
     if !exists {
         return Err(crate::deck::GONE.to_owned());
+    }
+    // Behind the existence check and ahead of the diff: "that deck is gone" and "that deck keeps
+    // no cardboard" are different things to be told, and a deck the reader owns nothing for has
+    // nothing to put on a shopping list. Nothing below this line writes to `wishlist_entries`
+    // for a deck that answers yes.
+    if crate::deck::is_virtual(&tx, deck_id)? {
+        return Err(crate::deck::VIRTUAL_HOLDS_NOTHING.to_owned());
     }
     let mut touched = 0;
     // The default marketplace, for [`crate::deck::missing_to_wishlist`]'s reason: this reads
@@ -2189,6 +2209,40 @@ mod tests {
             missing_to_wishlist(&conn, 404, None).unwrap_err(),
             crate::deck::GONE
         );
+    }
+
+    /// Turn a deck into one the reader tracks without owning — `decks.virtual_only`, schema v40.
+    ///
+    /// An `UPDATE` rather than a field on [`DeckInput`], so a case that wants one says so on its
+    /// own line and every other case in this file is untouched.
+    fn make_virtual(conn: &Connection, deck_id: i64) {
+        conn.execute(
+            "UPDATE decks SET virtual_only = 1 WHERE id = ?1",
+            params![deck_id],
+        )
+        .unwrap();
+    }
+
+    /// A virtual deck has no shopping list, because it is not made of cardboard.
+    ///
+    /// **The one refusal in this module**, and the fixture is
+    /// `missing_to_wishlist_asks_for_the_difference`'s: a plan asking for three copies the deck
+    /// does not have, which is a wish the press would otherwise write. [`theory_slots`] and
+    /// [`theory_diff`] get no fence of their own and no case here — a virtual deck's
+    /// `theory_enabled` is 0, so there is no plan to compare and they are unreachable for one.
+    #[test]
+    fn a_virtual_deck_sends_nothing_to_the_wishlist() {
+        let conn = seeded();
+        let id = deck(&conn, "Burn");
+        let main = category(&conn, id, "Main deck");
+        add(&conn, id, "bolt-lea", main, THEORY, 3);
+        make_virtual(&conn, id);
+
+        assert_eq!(
+            missing_to_wishlist(&conn, id, None).unwrap_err(),
+            crate::deck::VIRTUAL_HOLDS_NOTHING
+        );
+        assert!(wishes(&conn).is_empty(), "and no wish was written");
     }
 
     /// A shopping list is priced at the marketplace the reader shops at, and at nowhere else —

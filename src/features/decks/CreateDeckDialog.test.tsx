@@ -7,6 +7,8 @@ import type { CardDetail, CardSummary, DeckFolder, DeckRow, FormatSpec } from "@
 import { cardImageUrl } from "@/lib/images";
 import { isWebTarget } from "@/pwa/target";
 import { openDropdown } from "@/test-dropdown";
+// The kind captions' one home, so a test cannot pass against a sentence it invented itself.
+import { DECK_KIND_HINT } from "./deckKind";
 import { spec } from "./validation/fixtures";
 
 /** Which build the cover frame thinks it is in. `isWebTarget()` reads `__CORE__`, a build-time
@@ -67,6 +69,7 @@ const MADE: DeckRow = {
   archived: false,
   folderId: null,
   theoryEnabled: false,
+  virtualOnly: false,
   theoryMarkExact: true,
   theoryMarkName: true,
   theoryMarkUnplanned: true,
@@ -293,7 +296,10 @@ describe("the create deck dialog", () => {
       "Sideboard plan lives in the maybeboard.",
       { delay: null },
     );
-    await userEvent.click(screen.getByRole("switch", { name: /Theory deck/ }));
+    // The kind group, which replaced the `Theory deck` switch when `virtual` became the third
+    // kind. One press, and the payload below carries **both** columns because `deckKindPatch`
+    // does.
+    await userEvent.click(screen.getByRole("button", { name: "Theory + Actual" }));
     await openDropdown(userEvent.setup(), "Folder");
     await userEvent.click(await screen.findByRole("option", { name: "Commander › Legends" }));
 
@@ -319,14 +325,88 @@ describe("the create deck dialog", () => {
         coverCardId: "s-Shivan Dragon",
         folderId: 2,
         theoryEnabled: true,
-        // **An exact object, so every absence below is asserted too** — and the two theory marks
-        // are the absences that matter: the draft holds both `true`, `decks.theory_mark_exact`
-        // and `theory_mark_name` are `NOT NULL DEFAULT 1`, and a create that carried them would
-        // be a second opinion about a default the table already owns.
+        // **The other half of the pair, sent on the same press.** One press of
+        // `Theory + Actual` writes both columns through `deckKindPatch`, so `false` here is an
+        // answer the reader gave rather than a field nobody touched — and a create that sent
+        // `theoryEnabled` alone would be leaning on Rust's own defence instead of agreeing
+        // with it.
+        virtualOnly: false,
+        // **An exact object, so every absence below is asserted too** — and the three theory
+        // marks are the absences that matter: the draft holds all three `true`,
+        // `decks.theory_mark_exact`/`_name`/`_unplanned` are `NOT NULL DEFAULT 1`, and a create
+        // that carried them would be a second opinion about a default the table already owns.
       }),
     );
     expect(deckCreate).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(onCreated).toHaveBeenCalledWith(MADE));
+  });
+
+  /**
+   * **The kind is a question a deck that does not exist can already answer**, which is what makes
+   * the group unconditional where the "Add cards to" row and the three mark switches are not.
+   * Those two ask about piles and columns a `deck_create` has not made yet; this one is two
+   * fields of `DeckInput`, so a reader can make a virtual deck in one write rather than making a
+   * regular one and converting it.
+   *
+   * `Regular` is the pressed row on an untouched draft — both columns `false` — and the caption
+   * under the group is that kind's line. Asserted with no `categories` and no
+   * `canSetTheoryMarks` in play, which is exactly this host: the row above the group and the
+   * rows below it are both absent and the group still reads correctly.
+   */
+  it("draws the kind group on a deck that does not exist yet, opening on Regular", async () => {
+    wrap(<Harness />);
+
+    await panel();
+    expect(screen.getByRole("group", { name: "Deck kind" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Regular" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByText(DECK_KIND_HINT.regular)).toBeInTheDocument();
+    // The two rows this host really does withhold, for their own reason — so the assertion above
+    // is about the group being drawn rather than about the panel being fully populated.
+    expect(screen.queryByRole("button", { name: "Add cards to" })).toBeNull();
+    expect(screen.queryByRole("switch", { name: /matching printing/i })).toBeNull();
+  });
+
+  /**
+   * **A virtual deck is born virtual**, in the one write, and the pair is sent whole.
+   *
+   * `virtualOnly: true` with `theoryEnabled: false` is the third kind's own row, and the second
+   * half is what a patch naming one column would have got wrong: `deckKindPatch` clears
+   * `theoryEnabled` on the same press, so a reader who pressed `Theory + Actual` and then changed
+   * their mind cannot make the `true, true` deck that `deckKind.ts` exists to keep out.
+   *
+   * The press is made **after** `Theory + Actual` for exactly that reason — from an untouched
+   * draft `theoryEnabled` is already `false` and a group that never wrote it would pass.
+   */
+  it("creates a virtual deck with both columns, the plan cleared", async () => {
+    wrap(<Harness />);
+
+    await userEvent.type(await screen.findByLabelText("Name"), "Arena ladder", { delay: null });
+    await userEvent.click(screen.getByRole("button", { name: "Theory + Actual" }));
+    await userEvent.click(screen.getByRole("button", { name: "Virtual" }));
+
+    expect(screen.getByRole("button", { name: "Virtual" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    // The caption follows the press, which is the only thing on this panel that says what the
+    // kind costs — no collection, no wishlist.
+    expect(screen.getByText(DECK_KIND_HINT.virtual)).toBeInTheDocument();
+
+    await userEvent.click(submitButton());
+
+    await waitFor(() =>
+      expect(deckCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "Arena ladder",
+          virtualOnly: true,
+          theoryEnabled: false,
+        }),
+      ),
+    );
+    expect(deckCreate).toHaveBeenCalledTimes(1);
   });
 
   /**
@@ -346,9 +426,14 @@ describe("the create deck dialog", () => {
   it("offers no theory-mark switches, even with the plan switched on", async () => {
     wrap(<Harness />);
 
-    await userEvent.click(await screen.findByRole("switch", { name: /Theory deck/ }));
+    await userEvent.click(await screen.findByRole("button", { name: "Theory + Actual" }));
 
-    expect(screen.getByRole("switch", { name: "Theory deck Enabled" })).toBeInTheDocument();
+    // The kind really did take — the gate this is about is `canSetTheoryMarks` and not the
+    // press, so a group that had ignored the click would pass the three absences below.
+    expect(screen.getByRole("button", { name: "Theory + Actual" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
     expect(screen.queryByRole("switch", { name: /matching printing/i })).toBeNull();
     expect(screen.queryByRole("switch", { name: /different printing/i })).toBeNull();
     expect(screen.queryByRole("switch", { name: /not in the theory list/i })).toBeNull();
@@ -379,14 +464,17 @@ describe("the create deck dialog", () => {
     // The wire, and not just the object: `invoke` serialises with JSON, which drops an
     // `undefined` value — so serde sees an absent field rather than a null one.
     // `gameKey` is in the list because it is **not** one of the fields left empty: `any` is a
-    // real answer the column stores, exactly as `theoryEnabled: false` is, and neither is the
-    // absence this test is about.
+    // real answer the column stores, exactly as `theoryEnabled: false` and `virtualOnly: false`
+    // are, and none of the three is the absence this test is about. The two kind columns are
+    // **both** here on a deck the reader never pressed the group on, which is the pair being
+    // written together rather than one of them being left to a default.
     expect(JSON.stringify(sent)).toBe(
       JSON.stringify({
         name: "Sunday burn",
         formatKey: "casual",
         gameKey: "any",
         theoryEnabled: false,
+        virtualOnly: false,
       }),
     );
   });

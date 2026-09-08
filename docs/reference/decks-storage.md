@@ -66,7 +66,12 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   unrecoverable.** Entries, then folders — the second needed by hand because
   `collection_entries.folder_id` is SET NULL and a wipe that stopped at the entries hands the
   reader an empty filing cabinet to take apart one drawer at a time. **Then `Recently removed` and
-  one group per surviving deck are rebuilt in the same transaction**, archived decks included:
+  one group per surviving deck are rebuilt in the same transaction**, archived decks included and
+  **virtual ones deliberately not** (`WHERE virtual_only = 0`, schema v40): an archived deck is a
+  deck about cardboard the reader has put away, where a virtual one is a deck there is no
+  cardboard for and `deck::create_deck` gives it no group in the first place — this button
+  restores what a deck is *supposed* to have, and handing one to a deck that never had one would
+  be it inventing a drawer nothing may write to. For the rest:
   since v25 those rows are not the reader's filing but *where the app puts cards*, both
   `collection_alloc` writes look their destination up by `deck_id` and by `kind` and refuse in
   words when it is not there — so a database swept bare is one where **no deck can ever hold a
@@ -485,7 +490,10 @@ preferred_finish`'s nullability one table over.
   own oracle-grain fallback rule reused rather than re-spelled. That rule left
   `release_group_copies` the day the exact-grain change made it a bug there (above), so
   PLAYED_KEY is the rule's only home now. **Live only**: a plan holds no cards, so a theory-only
-  listing refuses.
+  listing refuses. **And a *virtual* deck is refused ahead of the card question entirely**
+  (`deck::VIRTUAL_HOLDS_NOTHING`, schema v40) — there is no binder these copies could come out of
+  and no shelf for them to go on to, so every fence below would be answering a question that
+  cannot arise. See [the deck-kind section](#the-third-deck-kind-a-deck-with-no-cardboard-behind-it).
   Two thin reads over the same expression serve the surfaces that say it early —
   **`deck_played_keys(deckId)`**, every key a deck's live list plays, and
   **`deck_ids_playing(keys)`**, every deck that plays *every* key given (`GROUP BY … HAVING
@@ -618,7 +626,14 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
   **three** commands make more than one change in a call:
   **`deck_update` records one row per changed field**
   (`record_deck_edit`, pinned by `a_patch_that_changes_two_fields_records_both`), and it
-  satisfies that test only because every one of its cases changes exactly one field;
+  satisfies that test only because every one of its cases changes exactly one field —
+  **which since schema v40 is a narrower escape than it sounds**, because a patch that moves the
+  deck's *kind* changes two by construction: `deck_kind` writes `virtual_only` and
+  `theory_enabled` as a pair, so a deck going from theory to virtual leaves a `theory` row and a
+  `virtualOnly` row for one press. Two rather than one *"changed the deck's kind"* row, because
+  "turned the plan off" and "made this a virtual deck" are two things a reader would want to find
+  separately months later, and a single row would have to invent a vocabulary for a value that is
+  stored nowhere. The sweep's `deck_update` case is a rename, so it is untouched;
   **`deck_import_commit` in `replace` mode records two** — a `remove` for what it cleared and
   an `add` for what it imported, which one signed `delta` cannot be both of, while its `merge`
   mode records one; and **`collection_to_deck` records two when the copies come out of another
@@ -716,11 +731,12 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
     upgrade, on every existing database, while a fresh worktree (whose steps were all written
     after) stays green.
 - **`deck_create` makes a whole deck in one INSERT, not a name to be configured afterwards**
-  (changed 2026-08-14). `DeckInput` carries `name`, `formatKey`, `description`, `notes`,
-  `coverCardId`, `folderId` and `theoryEnabled`, because the "New deck" dialog now hosts the same
+  (changed 2026-08-14). `DeckInput` carries `name`, `formatKey`, `gameKey`, `description`,
+  `notes`, `coverCardId`, `folderId`, `theoryEnabled` and — since schema v40 — `virtualOnly`,
+  because the "New deck" dialog now hosts the same
   settings form the settings dialog does and would otherwise be create-then-patch-then-setFolder:
   three transactions, and a half-made deck to roll back by hand the way
-  `useImport.importIntoNewDeck` has to. Four things about it that are **not** `deck_update`'s
+  `useImport.importIntoNewDeck` has to. Five things about it that are **not** `deck_update`'s
   rules, each of which a reader who knows the patch will get wrong:
   **(1)** nothing here is written with `coalesce(?n, column)` — this is an INSERT, so an absent
   `folderId` genuinely is the top level and means it, where `DeckPatch.folderId` cannot un-file a
@@ -739,7 +755,17 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
   leaving live empty, and it does so only on the off → on _transition_. So a deck **born** with
   theory on has made that transition at birth, no later patch will ever move anything for it, and
   the reader's route is `deck_theory_copy_from_live`, which is unchanged. The two routes differ in
-  what they _do_ and agree exactly on what a new deck ends up with. **(4)** a deck's birth stays
+  what they _do_ and agree exactly on what a new deck ends up with. **(4)** `virtualOnly` at create
+  is **not cross-checked against `theoryEnabled`**, where the patch route's `deck_kind` clears
+  whichever half a press did not name: there is nothing to clear on a row that does not exist
+  yet, and a create that silently rewrote one of the two fields it was handed would be answering
+  a question the caller did not ask. What it *does* change is the one statement in this function
+  that is not part of the INSERT — **a deck born virtual is given no `collection_folders`
+  group**, `create_deck_group` sitting behind an `if`, because a deck that owns no cardboard has
+  nothing for that row to hold and its *absence* is what makes every owned readout answer 0 with
+  no branch anywhere. The patch route reaches the same place destructively (it empties the group
+  into `Recently removed` and deletes it); a deck being born holds none and is simply never given
+  one. **(5)** a deck's birth stays
   **one** audit row, `{field:"name", from:null, to:name}`, however many fields it was born with:
   `deck_update` records one row per changed field because each of those is an event, and being
   born is one event. `folderId` is fenced by the real foreign key rather than by Rust — which is
@@ -963,6 +989,71 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
   [sync.md](sync.md), which holds the synced-tables list. The `DEFAULT 1` is load-bearing for the
   sync as well as for the no-backfill argument, and [data-and-sync.md](data-and-sync.md) carries
   that half.
+- **`decks.virtual_only` is the third deck kind, and the kind is a _pair_ of booleans rather than
+  a column of its own** (`INTEGER NOT NULL DEFAULT 0`, **schema v40**, 2026-09-08,
+  [issue #401](https://github.com/Msgaihede/mtg-grimoire/issues/401)). What the kind *does* is
+  [the section below](#the-third-deck-kind-a-deck-with-no-cardboard-behind-it); this bullet is
+  the storage of it. `theory_enabled`/`virtual_only` reads `0/0` regular, `1/0` theory-and-actual,
+  `0/1` virtual, and `1/1` names none of the three.
+  **`DEFAULT 0` is v34's choice and not v38's**, which is the same question answered opposite
+  ways one column apart: v38 defaults a *mark* on because the default is what the reader gets,
+  and this defaults off because a kind is what a deck **is**, so the upgrade leaves every
+  existing deck exactly as it was. **The enum was the alternative and it lost on what it would
+  have had to rewrite**: `theory_enabled` is already named by three commands, a sync spec, an
+  undo journal and a history payload, and a rung that rewrote it would have bought a second
+  spelling of a fact all four readers would then have to be taught. The price is two columns that
+  *can* disagree, and `deck::update_deck` is where they are stopped — `deck_kind` resolves a
+  patch's two `Option<bool>`s into the pair the UPDATE binds, so setting either flag clears the
+  other in the values that are bound. **Not a `CHECK`, and this rung could not have carried
+  one**: SQLite's documented `ADD COLUMN` restrictions rule out a table-level constraint and the
+  column-level one that is legal cannot see `theory_enabled`, so the fence would have cost v35's
+  kind of table rebuild for a rule one command holds — `valid_bracket`'s argument, that a command
+  parameter reaches this column and a refusal in Rust can name the mistake.
+  **The positional trap is v39's read one grain sharper, and this is the ninth time the rule has
+  been owed.** The column is **last** in `DECK_SELECT`'s named list, `deck_row` reads it at the
+  last index and `deck::IMAGE_COL` moved 25 → 26 with it — and the column it most reads like a
+  neighbour of is `theory_enabled`, the *other half of the same pair*, so an index that landed
+  there would not merely swap two switches: it would hand a deck's kind to its own opposite, with
+  both fields still holding a `0` or a `1` and all three kinds still looking like answers. **The
+  *move* is named here because it is a fact about the rung; the index is not, because it is a fact
+  about today's column list** — `separate_x_group`'s rule above, which has already been paid once.
+  Read both off `deck_row`.
+  **It rides `DeckInput`, `DeckPatch`, `DeckRow`, `DeckBefore` and `deck_undo::DECK_FIELDS`, and
+  the last of those is beside `theory_enabled` and never without it** — `update_deck` writes both
+  columns whenever either is turned on, so a list carrying one and not the other would let Ctrl+Z
+  put a deck's plan back while leaving it virtual, which is the `1/1` the pair exists to keep
+  out. **What an undo restores is the column and nothing else**, and nothing claims otherwise: a
+  step writes `decks` and `deck_cards` and no third table, so the copies filed into
+  `Recently removed` and the group that was deleted stay where the press put them. That is
+  `collection_alloc`'s two moves' own standing — they record a history row and file no step at
+  all — and it is the honest answer here, because a rebuild would have to decide which copies in
+  a shared holding area had come from this deck, which nothing records. The way back is a second
+  press of the switch, and the cards are waiting in `Recently removed`.
+  **`duplicate_deck` carries it across**, on this list twice over: it is not a way of *reading* a
+  deck but what the deck **is**, and its `DEFAULT 0` runs the failure the opposite way from the
+  theory marks' — a copy that came back an ordinary deck would be *more* connected to the
+  collection than its original, and the app would immediately start offering to buy cards for it.
+  A virtual copy is given no group either, `create_deck`'s `if` reached from the other side, and
+  `virtual_only` comes back out of the INSERT's own `RETURNING` rather than being read twice.
+  **The audit word is `virtualOnly`**, camelCase, the sixth multi-word key `record_deck_edit`
+  writes after `xGroup`, `defaultCategory` and the three theory marks — so the same silent-drift
+  rule applies, and it has an `auditText.ts` arm (*"Made the deck virtual"* / *"Made the deck
+  track your collection again"*) pinned by `auditText.test.ts`. Booleans on both sides and no
+  `detail`, `xGroup`'s shape. The copies the write releases and the group it takes away are
+  deliberately **not** recorded here: those land on the *collection*, and a reader looking for
+  where their cards went finds them in `Recently removed`, which is what that folder is for.
+  **And it is on `capture::TABLES`' `decks` spec, which is the strongest case that hand-written
+  list has ever had.** A deck that is virtual on the machine it was made on and an ordinary deck
+  on every other one would have its collection integration back on those, offering to file, pull
+  and buy cardboard for a list that exists precisely because the reader owns none of it — and
+  there is still **no fence in the other direction**, so the name needed a deliberate edit rather
+  than travelling for free. **Only the flag travels**: the group `update_deck` deletes is a
+  `collection_folders` row and the copies it releases are `collection_entries` rows, both synced
+  tables of their own, so both halves of the transition arrive as ops about *those* tables from
+  the same press and nothing re-derives a side effect from a boolean. `DEFAULT 0` is what makes
+  the old-peer direction safe, `theory_mark_*`'s note verbatim: a deck built from an op a device
+  one rung back sent arrives as an ordinary deck, which is the only thing that device can have
+  meant.
 - **The six single-card commands, and what each takes** (the three bulk ones,
   `deck_import_commit`, `deck_category_clear` and `deck_clear`, have their own bullets below).\
   `deck_get(id, variant)`;
@@ -1120,7 +1211,12 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   the reader can see and copies filed under a deck that has no row for them, which since v25 means
   invisible on the Collection page and unavailable to every other deck. **`theory` releases
   nothing**, because a plan holds no cards; the fence is inside the helper, so the `replace` arm
-  does not ask. An empty item list is refused in words (`NOTHING_TO_IMPORT`), which matters most
+  does not ask. **A _virtual_ deck's `live` list releases nothing either, and that fence is
+  inside the helper too** (schema v40) — one layer further down, in `release_group_copies`, whose
+  first rule is that a deck with no group holds nothing. So an import over a virtual deck's list
+  walks an empty set and needs no arm here; it is the same absence that lets `deck_clear` and
+  `deck_category_clear` work on one unchanged, and the reason `commit_import` grew no
+  `VIRTUAL_HOLDS_NOTHING` of its own. An empty item list is refused in words (`NOTHING_TO_IMPORT`), which matters most
   in `replace`, where doing nothing and clearing the deck to put nothing back are the same call.
 - **`ImportItem.inactive` is the one field this boundary grew for the format work, and it applies
   to a pile the import _creates_ and to nothing else.** Archidekt's `{noDeck}` is that site's word
@@ -1666,6 +1762,206 @@ clientWidth` — so the tenth bar fitted the 250px content box with no overflow,
   left open is _parked_ rather than forgotten since 2026-08-27** (issue #162), and that does
   not soften this: the park is a field of its own and the deck is not handed back until Decks
   is on screen again, so on those three views the entry is inert exactly as it was.
+
+## The third deck kind: a deck with no cardboard behind it
+
+`decks.virtual_only`, user schema **v40**, landed 2026-09-08 for
+[issue #401](https://github.com/Msgaihede/mtg-grimoire/issues/401). A **Virtual** deck is one the
+reader tracks without owning the cards for it — an MTGO or Arena list, a pile of proxies, a deck
+they are reading about and have not bought. It has no integration with the collection or the
+wishlist at all: nothing in it is owned, missing, pullable or shoppable, because there is no
+cardboard for any of those words to be about.
+
+The column itself, the pair it belongs to and everything it rides are in the
+`decks.virtual_only` bullet above; everything here is what the kind *does*.
+
+### It keeps one ordinary `live` list, and two SQL literals are why
+
+This is the decision most worth reading twice, because the wrong answer is the intuitive one. A
+virtual deck reads exactly like *a plan with no actual version*: the reader never meets the word
+`Actual`, there is no variant switch, there is one list. So the tempting shape is to keep its rows
+in `theory` and be done.
+
+**It would report `0 cards` under an empty colour bar on every tile, for ever, with nothing going
+red.** `DECK_SELECT`'s `card_count` subquery spells `dc.variant = 'live'` as a literal, and so
+does `PIP_COSTS_SQL`, the gallery's colour-bar read — two separate statements, each with its own
+test keeping the literal honest
+(`the_gallery_count_reads_only_live_rows_in_active_categories` and
+`the_colour_bar_reads_the_same_pile_the_gallery_count_does`), neither of which would have failed,
+because both would have been correctly counting a list that was empty.
+
+The near side agrees by default rather than by argument: `useDeck`, `useDeckMeta` and
+`useDeckTokens` all default their `variant` parameter to `DEFAULT_VARIANT`, which is `"live"`, and
+`DeckSettingsDialog` mounts `useDeck(deckId)` with no variant at all to count what its
+`Empty a list` section would clear. Every one of those would have been asking the wrong list.
+
+**So the rows stay `live` and only the vocabulary moves**, which is exactly the rule that kept
+`live` as the stored word when the tab was renamed `Actual` in 2026-08-26 and again when issue
+#357 swept the five surfaces still saying it a week later: the label is the reader's and the
+value is the database's, and `listNames.ts`'s `listName` is the join between them. It grew one
+argument for this — `listName("live", { virtual: true })` answers `deck`, not `actual list` —
+and that is the whole of the change on that side.
+
+### The isolation is a missing folder row, never a branch at each reader
+
+A virtual deck has **no `collection_folders` row with `kind = 'deck'`**. `create_deck` skips
+`create_deck_group` for one, `duplicate_deck` skips it for a virtual copy, and
+`reset::clear_collection`'s rebuild skips it too (`WHERE virtual_only = 0`).
+
+That absence is the mechanism. `deck::owned_by_printing` joins `collection_entries` to
+`collection_folders` on `f.deck_id = ?1`, so with no such row the join finds nothing and **every
+owned figure is `0` with no new arm anywhere** — not in `attribute_owned`, not in
+`live_shortfall`, not in any of the four views. The alternative was an empty group nothing may
+write to, and it lost for the reason a sentinel row always loses: it is a thing every future
+reader has to be told is special, where an absence is a thing they cannot use by accident.
+
+**The same absence is what makes the bulk removals work unchanged.**
+`deck::release_group_copies`' first rule is that a deck with no group holds nothing and answers
+`moved: 0` rather than refusing — so `deck_clear`, `deck_category_clear`, the category cascade and
+`import::commit_import`'s `replace` arm all walk an empty set on a virtual deck and clear a list
+that never held a copy. None of them grew a fence, and none needed one.
+
+### The two transitions, and why only one of them touches cardboard
+
+`update_deck` carries them, both inside the patch's own transaction:
+
+- **Becoming virtual releases the deck's copies and drops the group.**
+  `release_unclaimed_copies` first, then `release_live_copies`, and **the order is the rule
+  rather than a preference**: the first releases what the group holds *over* what the live list
+  claims, the second releases the claim itself, and running them the other way round computes the
+  surplus against a group the second call has already emptied — leaving a group holding more
+  copies than its list names, exactly where it was. Between them they are total, which is what
+  the `DELETE FROM collection_folders` below them needs: `collection_entries.folder_id` is
+  `ON DELETE SET NULL`, so a row left behind is scattered to the **root** rather than to
+  `Recently removed` — the wrong destination, a rewrite of `COLLECTION_GRAIN`'s eleventh term,
+  and a `UNIQUE constraint failed` the moment the root already holds that grain. `delete_deck`
+  reaches the same place from the other side and re-files by hand because it is taking a whole
+  sub-tree; a deck's group has no children and this deck is not going anywhere, so the two shared
+  helpers are the whole of it.
+- **Ceasing to be virtual makes the group again, empty — and fetches nothing back.** The copies
+  are in `Recently removed` where the reader can see them, and a re-fetch would have to decide
+  which rows in a shared holding area had come from this deck, which nothing records. The group
+  is named with the name the deck is called *after* this patch, the rename above having already
+  run in the same transaction: a group made with the old name would be a drawer labelled with a
+  name the gallery stopped using one statement earlier.
+
+The two arms are exclusive by construction, and neither can share a press with the theory move
+above them: `deck_kind` forces the resolved theory half to `Some(false)` on the way in to virtual,
+and `before.virtual_only` is true on the way out, so `will_move`'s `!before.theory_enabled` is the
+only other thing that could have been true — and a virtual deck's theory switch is already off.
+
+### Nine refusals, in words rather than in zeroes
+
+Every entry point that touches the collection or the wishlist on a deck's behalf refuses a virtual
+deck by name. One sentence, `deck::VIRTUAL_HOLDS_NOTHING` — *"A virtual deck keeps no cardboard,
+so it has nothing to compare with your collection."* — named on the crate rather than per call
+site, because a sentence spelled six times is a sentence that will be spelled six ways.
+
+| Module | Where |
+| --- | --- |
+| `collection_alloc` | `collection_to_deck`, `deck_to_collection` |
+| `deck_missing` | `plan`, `to_collection` |
+| `deck_pull` | `plan`, `from_collection` |
+| `deck_quick_add` | `quick_add` |
+| `deck_theory` | `missing_to_wishlist` |
+| `deck` | `missing_to_wishlist` |
+
+**In words rather than by answering zero, and that was the tempting one.**
+`owned_by_printing` already answers 0 for a deck with no group, so a *"0 owned, all missing"*
+readout is what a virtual deck would silently produce — and that is precisely the wrong answer,
+because it tells the reader they are short of a hundred cards they never meant to buy. The
+refusal is what turns that into a sentence.
+
+Two of the nine are **reads**, and the argument for refusing there is one step further along.
+`deck_missing::plan` and `deck_pull::plan` both answer an empty vector in the ordinary course —
+a deck short of nothing is zero rows and is not a failure — so a virtual deck could have been
+handed that same emptiness. It is the *dishonest* one here, because those zero rows already
+**mean** something: `deck_missing::plan`'s doc words its dialog's reading of them as a cheerful
+*All owned.*, and `deck_pull::plan`'s as *there is nothing in your collection this deck needs* —
+over a deck that owns nothing by definition, which is a reader being told they have finished
+collecting a deck that was never about collecting. The two reads refuse together or the two
+dialogs disagree about what a deck is.
+
+`deck::missing_to_wishlist` is the press that would otherwise have succeeded *loudly* and wrongly:
+`live_shortfall` reads what the deck plays against what its group holds, a virtual deck has no
+group, so every card comes back missing and one button would put the entire decklist on the
+reader's shopping list.
+
+**One of the nine was reachable from a press the near side had not been taught about, and the
+near side is where it was fixed** (found 2026-09-08 by reading, not by driving; fixed the same
+day). `deck_to_collection` is not only the Collection tab's cut — it is the command
+`useDeck.setQuantity` sends for **any** decrease on a `live` list, which is every removal in the
+editor: the stepper's zero, the card menu's `Remove card` and the remove tray all reach it through
+`DeckEditor`'s one `setQuantityAt`. A virtual deck's rows are `live` rows, so all three of that
+route's conditions held, and the refusal landed where a card should have been removed.
+
+**The fix is a fourth condition on that route and nothing here**, which is the half worth carrying
+back to this side: the absolute write, `deck_set_card_quantity`, is the right command for a deck
+with no group and is already what the same hook falls back to for a theory row, so the refusal
+below stays exactly as strict. What it says about these nine fences is that a refusal is a
+*backstop* rather than a design — a command that can only ever answer in words is one the near
+side should not be calling — and this is the one of the nine whose caller was a write rather than
+a readout, which is why a sweep for owned figures could not have found it. Full note:
+[`src/features/decks/CLAUDE.md`](../../src/features/decks/CLAUDE.md)'s **Known open bugs**, which
+keeps the account rather than the entry.
+
+### Where each fence sits, and why the order is the rule
+
+- **A write puts it behind `touch_deck`.** "That deck is gone" and "that deck holds no cardboard"
+  are different things to be told, and a stale editor's dead deck id must still hear
+  `deck::GONE`. The stamp the fence then lets through rolls back with the transaction, so nothing
+  is paid for it. `collection_to_deck`, `deck_missing::to_collection`, `deck_pull::from_collection`
+  and `deck_quick_add::quick_add` are all this shape, and each of the last three calls the fence a
+  *rider* on the stamp rather than a numbered step of its own: the numbered steps are the press,
+  and this asks whether the press applies to this deck at all.
+- **Ahead of the group, the pile and the re-plan.** In all four the refusal names the *deck*
+  rather than the folder it does not have, and in `deck_quick_add` it is specifically ahead of
+  `plays_card`, which **cannot stand in for it**: a virtual deck's live list plays its cards
+  perfectly well, and what it has none of is copies.
+- **A read puts it first**, ahead of the shortfall walk — and `deck::is_virtual` answering
+  `false` for a deck that is not there is what makes that safe. A dead id falls straight through
+  to `live_shortfall` and hears `GONE` from it, so the two sentences stay distinct with no
+  existence check of the read's own.
+- **`deck_to_collection` asks the deck's kind before the row's variant**, which is the same order
+  `collection_to_deck` asks them in, and it is the whole reason the two refusals cannot be heard
+  the wrong way round. This command is pointed at a `deck_cards` row rather than at a deck, so the
+  deck id comes off the row and this is the first statement at which the question can be asked at
+  all; `DECK_CARD_GONE` still answers a stale editor first.
+- **`deck::missing_to_wishlist` puts it before the transaction opens**, `update_deck`'s rule for
+  its validations: there is nothing to roll back and no reason to have taken a write lock to find
+  out.
+
+**`is_virtual` answers the fact and never the conclusion**, which is this crate's own boundary and
+the reason it is a `bool` rather than a `Result<(), String>` that refuses on the caller's behalf.
+Every one of the nine is a *different* refusal, and a helper that raised could not then be asked
+the question for any other purpose. `deck_group` is the neighbour that makes the same choice for
+the same reason.
+
+### What has no fence, and each absence is argued
+
+- **`deck_quick_add_wishes` takes no deck id at all.** It is a pure read of `wishlist_entries`
+  for a printing and a finish, so a fence would mean inventing a parameter for the sole purpose
+  of refusing on it. What keeps it off a virtual deck is the caller — the menu row leading there
+  is not offered on one — and the write it leads *to* refuses on its own account. The comment
+  where the fence would be is deliberate: this is where a reader looks for the missing one.
+- **`deck_theory::theory_slots` and `theory_diff` get none.** They are the plan-versus-live
+  comparison, and a virtual deck's `theory_enabled` is `0` by construction, so they are already
+  unreachable for one; a fence there would be a rule kept in step for a case that cannot arise.
+  `missing_to_wishlist` is that module's one write that leaves it, which is what makes it that
+  module's one refusal.
+- **`import::commit_import` gets none**, and importing a decklist into a virtual deck is a
+  perfectly good act: it writes `deck_cards` and nothing else. Its `replace` arm's release walks
+  an empty set, as above.
+- **The three bulk clears get none**, for the same reason.
+
+### The near side, in one paragraph
+
+`src/features/decks/deckKind.ts` is the one place the pair is folded into a word — `DeckKind`,
+`deckKind`, `deckKindPatch`, `tracksCollection` — and `src/features/decks/CLAUDE.md` carries the
+rules that bind it, including the trap this whole feature turns on: **`variant === "live"` no
+longer answers whether a deck reads the collection.** Ten or so surfaces used to ask it that way,
+and a virtual deck's rows are `live` rows on purpose, so every one of them needed a second fact
+about the *deck*.
 
 ## The pull: filling a hole the list already has
 

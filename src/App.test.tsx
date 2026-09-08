@@ -264,6 +264,7 @@ const BURN: DeckRow = {
   folderId: null,
   notes: null,
   theoryEnabled: false,
+  virtualOnly: false,
   theoryMarkExact: true,
   theoryMarkName: true,
   theoryMarkUnplanned: true,

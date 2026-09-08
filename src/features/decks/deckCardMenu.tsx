@@ -210,6 +210,28 @@ export interface DeckCardMenuDeps {
    */
   pullCard?: (card: DeckCard) => void;
   /**
+   * Whether this deck reads the collection at all — `deckKind.ts`'s `tracksCollection(deck)`,
+   * `false` for a **virtual** deck (issue #401).
+   *
+   * **The belt to the structural collapse's braces, and the braces are what a reader meets.**
+   * `DeckEditor` passes no `quickAdd`, `quickAddAndUnwish` or `pullCard` for a virtual deck, so
+   * {@link collectionItems}' all-three-or-none guard drops the whole `Collection ▸` item before
+   * this flag is consulted at all — which is the answer that was chosen (see `QUICK_ADD_REASON`'s
+   * `virtual` arm for why a wholly greyed submenu was the other candidate and lost).
+   *
+   * **Optional, therefore, and `true` where it is absent.** A surface that has not answered has
+   * necessarily wired the three writes above — that is what got it past the guard — so `true` is
+   * the reading that is true by construction wherever the line that reads it can run. Requiring
+   * it would make every host declare a deck kind for a submenu the kind cannot reach, in two
+   * files that draw this menu over decks that all track cardboard.
+   *
+   * What it buys is that the fence is *reachable*: a future surface that wires the three writes
+   * on a virtual deck greys the rows with a sentence rather than offering `Quick add 4 copies` on
+   * a row whose owned count can never move — the inactive arm's own measured failure, one deck
+   * kind over.
+   */
+  tracksCollection?: boolean;
+  /**
    * **The whole picked set, when the right-clicked card is in it** — issue #214. Empty, absent, or
    * holding one card, and this menu is about the row that was right-clicked, exactly as it was
    * before multi-select existed.
@@ -414,10 +436,25 @@ function moveItem(card: DeckCard, deps: DeckCardMenuDeps): MenuItem {
  * place the rule is written down.
  *
  * A `Record` keyed by the block rather than a `switch` with a default, so an arm added to
- * `quickAddBlock`'s union is a red build here instead of a row greyed with `undefined`.
+ * `quickAddBlock`'s union is a red build here instead of a row greyed with `undefined`. **That is
+ * exactly what `virtual` was**: the union grew a fourth arm for the third deck kind and this
+ * object would not compile until somebody worded it, which is the whole of what the shape buys.
  */
 const QUICK_ADD_REASON: Record<Exclude<ReturnType<typeof quickAddBlock>, null>, string> = {
   theory: "a plan holds no cards",
+  // **The one arm no reader reaches through this menu**, and it is worded to the same register as
+  // its neighbours anyway. `collectionItems` drops the whole submenu on a virtual deck — the three
+  // writes are not passed, so the structural refusal fires before `quickAddBlock` is ever asked —
+  // and that was chosen over three greyed rows, because *this deck tracks no cardboard* is a fact
+  // about the deck rather than about the row the reader right-clicked and a wholly greyed submenu
+  // is four things to read past on a menu already carrying thirteen rows.
+  //
+  // So this string is **defence in depth**: it is what the reader would be told if the submenu
+  // were ever wired on a virtual deck, in place of a row greyed with `undefined`. Present tense
+  // and about the deck, like `a plan holds no cards` above it; not *you own no cards*, which
+  // would be a claim about the reader's shelves and is exactly the wrong one — they may own every
+  // card in it and be playing the deck on Arena.
+  virtual: "this deck tracks no cardboard",
   // **A phrase about the pile, not about the card**, and it is the third of these sentences for
   // the same reason the first is: nothing on the cardboard says the column it sits in is switched
   // off, and a switched-off pile is handed nothing out of the deck's folder — so the `0` owned a
@@ -471,11 +508,17 @@ function collectionItems(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
   // that cannot file. The three travel together because they are three answers to one question —
   // how do the copies this row is short of get here — so a submenu offering two of them would
   // read as the third being *impossible* rather than merely unwired.
+  //
+  // **This is also how a virtual deck loses the submenu** (issue #401), and it needed no arm of
+  // its own: `DeckEditor` wires none of the three for a deck the reader tracks without owning the
+  // cardboard, so the guard that already existed is the refusal. See
+  // {@link DeckCardMenuDeps.tracksCollection} for why the structural answer was preferred to
+  // three greyed rows, and `QUICK_ADD_REASON`'s `virtual` arm for what is kept behind it.
   if (quickAdd === undefined || quickAddAndUnwish === undefined || pullCard === undefined) {
     return [];
   }
   const copies = quickAddShort(card);
-  const block = quickAddBlock(card);
+  const block = quickAddBlock(card, deps.tracksCollection ?? true);
   const reason = block === null ? undefined : QUICK_ADD_REASON[block];
   /** One row: live, or greyed **with** its reason — never greyed with a live `onSelect` behind
    *  it, which is what `aria-disabled` would leave pressable by a caret. */

@@ -108,9 +108,16 @@ describe("quickAddShort", () => {
 });
 
 describe("quickAddBlock", () => {
+  /**
+   * **A deck that reads the collection**, which every case below but one is about — spelled out
+   * as a named constant rather than repeated as a bare `true`, so the one case that passes
+   * `false` is visibly the case it is about rather than a typo in a column of booleans.
+   */
+  const TRACKS = true;
+
   /** The live case, which is the only one that presses anything. */
   it("blocks nothing on a live row that is short", () => {
-    expect(quickAddBlock(card({ quantity: 4, ownedQuantity: 1 }))).toBeNull();
+    expect(quickAddBlock(card({ quantity: 4, ownedQuantity: 1 }), TRACKS)).toBeNull();
   });
 
   /**
@@ -123,17 +130,46 @@ describe("quickAddBlock", () => {
    * theory row's own numbers can say anything.
    */
   it("blocks a theory row whatever its numbers say", () => {
-    expect(quickAddBlock(card({ variant: "theory", quantity: 4, ownedQuantity: 0 }))).toBe(
+    expect(quickAddBlock(card({ variant: "theory", quantity: 4, ownedQuantity: 0 }), TRACKS)).toBe(
       "theory",
     );
-    expect(quickAddBlock(card({ variant: "theory", quantity: 4, ownedQuantity: 4 }))).toBe(
+    expect(quickAddBlock(card({ variant: "theory", quantity: 4, ownedQuantity: 4 }), TRACKS)).toBe(
       "theory",
     );
   });
 
   it("blocks a row the group already fills", () => {
-    expect(quickAddBlock(card({ quantity: 4, ownedQuantity: 4 }))).toBe("nothing-missing");
-    expect(quickAddBlock(card({ quantity: 2, ownedQuantity: 9 }))).toBe("nothing-missing");
+    expect(quickAddBlock(card({ quantity: 4, ownedQuantity: 4 }), TRACKS)).toBe("nothing-missing");
+    expect(quickAddBlock(card({ quantity: 2, ownedQuantity: 9 }), TRACKS)).toBe("nothing-missing");
+  });
+
+  /**
+   * **The third deck kind** (issue #401), and the arm is asserted on the row that looks most
+   * pressable: an ordinary `live` row of an active pile, short by three, which every other test in
+   * this file would call `null`. Nothing about the *row* says the deck holds no cardboard — a
+   * virtual deck's rows are ordinary `live` rows on purpose, because `DeckRow.cardCount` and the
+   * gallery's colour bar both count `variant = 'live'` — so the flag is the only thing that can
+   * answer, and passing it is what this case is about.
+   *
+   * **A shortfall of 0 is asserted too**, for the theory case's reason: `virtual` has to win over
+   * `nothing-missing` as well as over `null`, or the arm would be reachable only for the rows the
+   * reader could not press anyway.
+   */
+  it("blocks every row of a deck that tracks no cardboard", () => {
+    expect(quickAddBlock(card({ quantity: 4, ownedQuantity: 1 }), false)).toBe("virtual");
+    expect(quickAddBlock(card({ quantity: 4, ownedQuantity: 4 }), false)).toBe("virtual");
+  });
+
+  /**
+   * **The arm is ahead of both tests below it**, which is `inactive`'s own ordering argument one
+   * kind out: a virtual deck has no `collection_folders` group, so `owned_by_printing` joins
+   * nothing and *every* row reads `0` owned — the shortfall is `quantity` for all of them. An arm
+   * placed after `nothing-missing` would still answer `virtual` here (the row is short), so the
+   * case that proves the order is the **switched-off pile**, where `inactive` would otherwise take
+   * the row first and name a pile switch as the cure for a deck that has no binder to fill.
+   */
+  it("says virtual rather than inactive for a switched-off pile of a virtual deck", () => {
+    expect(quickAddBlock(card({ categoryActive: false, quantity: 4 }), false)).toBe("virtual");
   });
 
   /**
@@ -146,9 +182,9 @@ describe("quickAddBlock", () => {
    * put two copies into one folder from two presses on a Maybeboard line.
    */
   it("blocks a row in a switched-off pile, whose owned count can never move", () => {
-    expect(quickAddBlock(card({ categoryActive: false, quantity: 4, ownedQuantity: 0 }))).toBe(
-      "inactive",
-    );
+    expect(
+      quickAddBlock(card({ categoryActive: false, quantity: 4, ownedQuantity: 0 }), TRACKS),
+    ).toBe("inactive");
   });
 
   /**
@@ -159,17 +195,17 @@ describe("quickAddBlock", () => {
    * offers the press on every real Maybeboard line.
    */
   it("says inactive rather than nothing-missing for a switched-off pile the group fills", () => {
-    expect(quickAddBlock(card({ categoryActive: false, quantity: 4, ownedQuantity: 4 }))).toBe(
-      "inactive",
-    );
+    expect(
+      quickAddBlock(card({ categoryActive: false, quantity: 4, ownedQuantity: 4 }), TRACKS),
+    ).toBe("inactive");
   });
 
   /** A theory row in a switched-off pile is still answered as the plan it is: `theory` is the
    *  stronger statement, and the backend refuses it for that reason rather than for this one. */
   it("prefers theory over inactive when a row is both", () => {
-    expect(quickAddBlock(card({ variant: "theory", categoryActive: false, quantity: 4 }))).toBe(
-      "theory",
-    );
+    expect(
+      quickAddBlock(card({ variant: "theory", categoryActive: false, quantity: 4 }), TRACKS),
+    ).toBe("theory");
   });
 });
 

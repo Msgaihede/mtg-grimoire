@@ -33,7 +33,19 @@ const BLANK: DeckSettingsValue = {
   gameKey: ANY_GAME,
   description: "",
   notes: "",
+  // **Both false is `regular`, which is the kind every deck is born as.** The two columns
+  // are one three-way choice — `deckKind` folds them into a word and `deckKindPatch` writes
+  // them together on every press of the form's group — so the pair is written out here
+  // rather than one of them being left to a default: a draft holding only half of the answer
+  // is the shape that produces the `true, true` row `deckKind.ts` exists to keep out.
+  //
+  // **The group is drawn at create with no work of its own**, unlike the "Add cards to" row
+  // and the three mark switches below: those two ask questions a deck that does not exist
+  // cannot answer, and this one is answerable from the first keystroke — `DeckInput` carries
+  // both columns, so a reader can make a virtual deck in one write rather than making a
+  // regular one and converting it.
   theoryEnabled: false,
+  virtualOnly: false,
   // **All three marks on, and the create sends none of them.** `decks.theory_mark_exact`,
   // `theory_mark_name` and `theory_mark_unplanned` (the last since 2026-09-08) are
   // `NOT NULL DEFAULT 1`, so this trio is the schema's own answer written where the draft can
@@ -443,6 +455,17 @@ function CreateDeckBody({
         // `coalesce` trap, which reads a bound NULL as "leave it", does not apply here.
         folderId: value.folderId ?? undefined,
         theoryEnabled: value.theoryEnabled,
+        // **Sent beside it, never instead of it.** The draft holds both because the form's
+        // group writes both, and `deck_create` takes the pair; Rust refuses the fourth
+        // combination by writing the other column itself, so a create that sent one alone
+        // would be *relying* on that defence rather than agreeing with it. Always sent, like
+        // `gameKey` and `theoryEnabled` and unlike the fields left empty below: `false` is a
+        // real answer the column stores rather than an absence.
+        //
+        // **At create it sets the column and releases nothing.** The patch route files the
+        // deck group's copies into `Recently removed` on the way to virtual; a deck being
+        // born holds none and is simply never given a group. See `DeckInput.virtualOnly`.
+        virtualOnly: value.virtualOnly,
         // Typed against the mirror at the one place the object is built: `src/lib/ipc.ts` is
         // hand-written and nothing checks it against the crate, so a field misspelled here
         // would otherwise travel as a silently ignored key.
