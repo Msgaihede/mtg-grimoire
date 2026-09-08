@@ -19,8 +19,9 @@ use crate::{
     camera, card, collection, collection_alloc, collection_folders, combos, db, deck, deck_audit,
     deck_meta, deck_missing, deck_pull, deck_quick_add, deck_theory, deck_tokens, deck_undo,
     decksort, errors, export, flatten, images, import, index, listview, markcolors, marketplace,
-    marketplace_feed, mirror, nav, paths, reset, schema, scryfall, search, searchopen, sync,
-    sync_engine, sync_pair, tags, update, wishlist, wishlist_folders, wishlist_optimize, zoom,
+    marketplace_feed, mirror, nav, paths, reset, scanner, schema, scryfall, search, searchopen,
+    sync, sync_engine, sync_pair, tags, update, wishlist, wishlist_folders, wishlist_optimize,
+    zoom,
 };
 // **Not in the list above, because this file compiles for Android too.** Its name says
 // `desktop`, but its gate is `cfg(not(target_family = "wasm"))` — desktop *and* mobile — while
@@ -566,6 +567,11 @@ pub fn run() {
             sync_pair::pairing::sync_device_rename,
             sync_pair::pairing::sync_device_revoke,
             sync_pair::pairing::sync_group_leave,
+            // The scanner. Its state is managed separately below — see scanner.rs.
+            scanner::scanner_status,
+            scanner::scanner_frame,
+            scanner::scanner_reset,
+            scanner::scanner_capture,
             // The relay, the membership and the review queue (spec §6.1, §7.2–§7.4, §7.7 and
             // §10). The panel's two reads, the Connect press, the claim code the reader pastes
             // back, one round trip now, the rows carrying a sentence, clearing one of them, the
@@ -611,6 +617,10 @@ pub fn run() {
             // both candidate folders into something unreadable.
             let state = Arc::new(init_state(app).inspect_err(|e| eprintln!("{e}"))?);
             app.manage(state.clone());
+
+            // The scanner's own state, beside `AppState` rather than inside it — it loads
+            // lazily on the first status call and shares nothing but the data directory.
+            app.manage(Arc::new(scanner::ScannerState::new(state.data_dir.clone())));
 
             // The write-side half of live sync's wake. One `Arc` for the whole process: the
             // commit hook installed below calls `notify_one` on it, and
