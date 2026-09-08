@@ -987,9 +987,12 @@ says a profile override in a *dependency* is ignored; cargo reads `[profile.*]` 
 root and nowhere else, so the moment `src-tauri` took this crate the crate's own overrides
 stopped applying to it. The measured reason is §7's release/debug table read from the other
 side: rectify 2,022 ms against 48 ms, a 960 px JPEG decode 230 ms against 3–4, so a
-`tauri dev` scanner without them is a slideshow rather than a slow frame. `image` and
-`imageproc` are overridden; whether `rten` needs the same is decided by the live pass and not
-by a guess.
+`tauri dev` scanner without them is a slideshow rather than a slow frame. **Which packages are
+on the list is the manifest's own answer and is not copied here** — `image` and `imageproc` are
+the two the crate always needed, and everything beyond them was put there by the live pass
+rather than by a guess, each with its measurement in the comment above the block. Read
+`src-tauri/Cargo.toml`; a list restated in prose is one that goes stale the next time a profile
+is measured.
 
 **`npm run verify` runs the crate's suite** as a step beside the `src-tauri` one, at
 `--features cli` so the server's own tests are in it. Nothing ran it before.
@@ -1061,8 +1064,8 @@ bundle".
 status query and no `Reload` button, because asking again in the same session cannot report a
 file that has since appeared — the load ran once and the answer is what it loaded. **A bundle
 or a model pair placed after the app started needs an app restart**, and that is the honest
-instruction: a `Reload assets` press would redraw the same three sentences and read as a repair
-that had happened.
+instruction: a `Reload assets` press would redraw the same two sentences — `bundleSentence` and
+`modelsSentence`, the models' pair sharing one — and read as a repair that had happened.
 
 **The label load opens `corpus.db` directly**, `SQLITE_OPEN_READ_ONLY`, for the length of the
 load and dropped after — never `AppState.db_read`, the rule the mirror thread and `Rebuild now`
@@ -1103,18 +1106,36 @@ labelled, which is the one thing the dataset cannot recover from later. An **abs
 header is still `Sidecar::default()`, because capturing without typing a name is a thing a
 reader chooses.
 
-**The page escapes every non-ASCII character in both header JSONs as `\uXXXX`, and nothing in
-either build checks that it does.** `ipc.ts`'s `asciiJson` is where it happens.
-`JSON.stringify` leaves non-ASCII as itself; a browser sends a header value's 0x80–0xFF as
-Latin-1 and throws outright above that; and Rust's `HeaderValue::to_str` refuses any byte
-outside visible ASCII. So `Æther Vial` in an `x-scanner-capture` either kills the call in the
-page or arrives as mojibake the far end rejects — a scanner refusing exactly the cards whose
-names are worth reading. `\uXXXX` is the one spelling that survives all three hops and is still
-the same JSON: `JSON.parse` on the far side yields the original character. **This contract is
-cross-checked by no test and no compiler**, which is why it is written as a rule in
-[`src/CLAUDE.md`](../../src/CLAUDE.md) and in
-[`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) — those two paragraphs are the only fence it
-has. The Android leg needs none of it: a JSON body is UTF-8.
+**The page escapes every non-ASCII character in both header JSONs as `\uXXXX`.** `ipc.ts`'s
+`asciiJson` is where it happens. `JSON.stringify` leaves non-ASCII as itself; a browser sends a
+header value's 0x80–0xFF as Latin-1 and throws outright above that; and Rust's
+`HeaderValue::to_str` refuses any byte outside visible ASCII. So `Æther Vial` in an
+`x-scanner-capture` either kills the call in the page or arrives as mojibake the far end rejects
+— a scanner refusing exactly the cards whose names are worth reading. `\uXXXX` is the one
+spelling that survives all three hops and is still the same JSON: `JSON.parse` on the far side
+yields the original character.
+
+**Both ends are tested and they are tested apart, which is the thing to know before adding a
+third header.** On the page, `ipc.test.ts`'s *"escapes a non-ASCII card name into the capture
+header, losslessly"* pins the exact string `scannerCapture` produced, sweeps it with
+`/^[\x20-\x7e]*$/` — the range `HeaderValue::to_str` accepts — and round-trips it through
+`JSON.parse`. In Rust, `scanner::tests::an_escaped_card_name_comes_back_with_its_accent` asserts
+its input `is_ascii()` and reads `Æther Vial` back out of `capture_payload`, and
+`a_capture_header_that_is_not_visible_ascii_is_a_sentence` proves the refusal on raw bytes.
+
+**What no test does is carry one string across.** Each side writes its own `Æther Vial`
+literal, by hand, in a different file, and nothing compares the two — the ordinary shape of a
+cross-boundary contract in this repo, and the reason `ipc.test.ts` reads `.rs` files as text at
+all. And the *options* header is weaker still: its case compares against plain
+`JSON.stringify(DEFAULT_SCANNER_OPTIONS)`, which is **indistinguishable from `asciiJson` while
+those defaults are all-ASCII** — every value there is a number, a boolean, `"both"` or `"votes"`
+— so `x-scanner-options` is escaped by the same function and pinned by nothing that could tell
+if it stopped being. That is why the rule is written out in
+[`src/CLAUDE.md`](../../src/CLAUDE.md) and
+[`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) as well as here: the tests prove the capture
+header at each end, and the prose is what carries the rule to the next header somebody adds.
+
+The Android leg needs none of it: a JSON body is UTF-8.
 
 `scanner_capture` writes `live-<epoch>.jpg` and its `.json` sidecar into `data/scanner/scans/`,
 the same names and fields the debug server writes into `docs/scanner/scans/`, so a frame
@@ -1162,7 +1183,7 @@ the web target no camera is asked for, no command is called and no `useQuery` is
 | File | Owns |
 | --- | --- |
 | `ScannerPage.tsx` | The view: the web sentence, or the camera and the panel column |
-| `useCamera.ts` | `getUserMedia`, one stop function, the QR scanner's three sentences with "scan a card" for "scan a code" |
+| `useCamera.ts` | The stream: `getUserMedia` with the debug page's constraints, one `stopAll` every exit path goes through, a tolerated `play()` rejection, and the wait for `loadedmetadata` before reporting a size. Its error state is **keyed on `verdictText.ts`'s `cameraSentence`**, which is where the wording lives |
 | `useScanLoop.ts` | The pump: one request in flight, later frames dropped, the rate over twenty round trips, `grab` for the capture |
 | `Overlay.tsx` | The canvas over the video — the smoothed quad, the raw one behind it |
 | `ScannerPanels.tsx` | Pure. The whole column from `{ status, verdict, options, … }` |

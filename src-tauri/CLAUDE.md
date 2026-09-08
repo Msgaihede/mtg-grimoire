@@ -57,13 +57,19 @@ both plus the frontend.
   **An `sqlite_master` read in a test needs the same care** — unqualified it is `main`'s, so a
   guard written before the split silently halves its own scope; `schema::tests::master` and
   `watch::every_table_in_the_schema_has_been_decided_about`'s `UNION ALL` are the two answers.
-- **Six connections, not two.** `AppState.db` writes and `AppState.db_read` is
-  `SQLITE_OPEN_READ_ONLY`; four more are opened outside it — the facet index's two
-  (`index::lifecycle::build_now`, `invalidate_owned`), the mirror thread's and the settings
-  panel's. **Every one reads tables from both files**, so all six go through `db::open_write` /
+- **Seven connections, not two**, re-counted 2026-09-08 (the census below said six and was one
+  short — it had missed the snapshot archive's). `AppState.db` writes
+  (`desktop::init_state`) and `AppState.db_read` is `SQLITE_OPEN_READ_ONLY` (the same
+  function); **five** more are opened outside it — the facet index's two
+  (`index::lifecycle::build_now`, `invalidate_owned`), the mirror thread's
+  (`mirror::watch::watch`), the settings panel's `Rebuild now`
+  (`mirror::settings::rebuild_now`) and the archive's (`mirror::snapshot::build_now`).
+  **Every one reads tables from both files**, so all seven go through `db::open_write` /
   `db::open_read`, which attach the corpus. One that attached only half does not error: it
-  reports an empty collection, or a cold index. **The scanner's label load is the one connection
-  outside that census and the exception is deliberate** — it opens `corpus.db` alone, because
+  reports an empty collection, or a cold index. `grep -rn "db::open_read(\|db::open_write("
+  src-tauri/src/` is the census — every other hit is below a `#[cfg(test)]`.
+  **The scanner's label load stands outside that census and the exception is deliberate** — it
+  opens `corpus.db` alone with `rusqlite::Connection::open_with_flags`, because
   `Reference::load_labels` reads an unqualified `FROM cards` and needs the corpus to be `main`.
   It is the only read here that wants *half*, which is why it is the only one that may not use
   the pair. See "Card scanner" below.
@@ -1845,8 +1851,13 @@ The whole record, including the pipeline the crate implements:
   writes an unlabelled capture the reader believes they labelled.
   **A page putting JSON in either header must escape every non-ASCII character as `\uXXXX`** —
   `HeaderValue::to_str` refuses anything outside visible ASCII and a browser sends 0x80–0xFF as
-  Latin-1 — and **nothing in either build checks that it did**, so `Æther Vial` in a sidecar is
-  a refusal or mojibake. `src/lib/ipc.ts`'s `asciiJson` is the only implementation.
+  Latin-1, so `Æther Vial` in a sidecar is otherwise a refusal or mojibake. `src/lib/ipc.ts`'s
+  `asciiJson` is the only implementation. **Both ends are tested and neither test carries the
+  other's string**: `scanner::tests::an_escaped_card_name_comes_back_with_its_accent` writes its
+  own `Æ` literal here and `ipc.test.ts` writes one there, so the two agree by hand rather
+  than by fence — and the *options* header is pinned against plain `JSON.stringify` of an
+  all-ASCII default, which cannot tell the two functions apart at all. Read a `to_str` failure
+  here as a page that stopped escaping, not as a corrupt request.
 - **The label load is a further connection, and it is dropped as soon as the load returns.**
   Never `AppState.db_read`, the rule the mirror thread and `Rebuild now` already follow: a
   117 k-row read there queues every search behind it. It opens `corpus.db` **directly** rather

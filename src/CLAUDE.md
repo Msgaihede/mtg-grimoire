@@ -959,20 +959,28 @@ Every one of these has its measurement and its story in
   shell's own question. **The hook's doc names its readers rather than counting them**, for the
   reason above, and `grep -n "useNarrowWindow()" src/` is that census too.
 - **`Core.call` takes `(command, args?: CallArgs, options?: CallOptions)`**, where `CallArgs` is
-  `Record<string, unknown> | Uint8Array`. It widened for exactly one caller — `ipc.scannerFrame`
-  and `ipc.scannerCapture`, the only wrappers that pass raw bytes and headers — and **the browser
-  core rejects a `Uint8Array` with `RAW_CALL_UNAVAILABLE` before it reaches the Worker**. That
-  constant is also the sentence the Scanner's web view draws, imported rather than respelled, so
-  a reader who somehow pressed Scan gets the message the page already showed them.
-- **A JSON header value must be written with `asciiJson`, and nothing checks that it was.** A
+  `Record<string, unknown> | Uint8Array`. It widened for one *shape* of call, which two wrappers
+  make — `ipc.scannerFrame` and `ipc.scannerCapture`, the only two that pass raw bytes and
+  headers — and **the browser core rejects a `Uint8Array` with `RAW_CALL_UNAVAILABLE` before it
+  reaches the Worker**. That constant is also the sentence the Scanner's web view draws,
+  imported rather than respelled, so a reader who somehow pressed Scan gets the message the page
+  already showed them.
+- **A JSON header value must be written with `asciiJson`, never with bare `JSON.stringify`.** A
   header value is bytes, and three layers disagree about which bytes are allowed: `JSON.stringify`
   leaves non-ASCII as itself, a browser sends 0x80–0xFF as Latin-1 and throws outright above
   that, and Rust's `HeaderValue::to_str` refuses anything outside visible ASCII. So `Æther Vial`
   in an `x-scanner-capture` either kills the call here or arrives as mojibake the far end
   rejects. `\uXXXX` is the one spelling that survives all three hops and parses back to the same
-  character. **No test and no compiler crosses this boundary** — this paragraph and
-  [card-scanner.md](../docs/reference/card-scanner.md) §9 are the whole fence — so any future
-  header carrying JSON goes through `asciiJson` too.
+  character. **Both ends are tested, apart, and that is what makes this a rule rather than a
+  note.** `ipc.test.ts`'s *"escapes a non-ASCII card name into the capture header, losslessly"*
+  pins the exact escaped string, sweeps it with `/^[\x20-\x7e]*$/` and round-trips it through
+  `JSON.parse`; `scanner::tests::an_escaped_card_name_comes_back_with_its_accent` does the far
+  half in Rust. **Neither carries the other's string** — each writes its own `Æ` literal, so
+  they agree by hand. And the `x-scanner-options` case compares against plain
+  `JSON.stringify(DEFAULT_SCANNER_OPTIONS)`, which is **indistinguishable from `asciiJson` while
+  those defaults are all-ASCII**, so that header quietly dropping the escape fails no test until
+  a card name reaches it. Any new header carrying JSON goes through `asciiJson` and gets its own
+  non-ASCII case; [card-scanner.md](../docs/reference/card-scanner.md) §9 has the whole record.
 - **The Scanner's fold state is in the app store, not in the view.** `scannerFolds` /
   `setScannerFold`, in memory only, for `openDeckId`'s reason: a reader who folded a developer
   panel away and jumped to Settings finds it still folded coming back.
