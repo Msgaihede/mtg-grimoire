@@ -326,12 +326,20 @@ for.
 
 ## 6. The lapse, and why the public read stays one D1 lookup
 
-Decision 5: **a link goes dark at the end of the grace window.** The mechanism is the daily cron
-that already runs `reconcile` in `relay/src/claim.ts`:
+Decision 5: **a link goes dark at the end of the grace window.** The mechanism is a daily cron —
+**the share Worker's own, not the relay's**, because §5.1 keeps the relay's source and deploy
+untouched and a flip written into `relay/src/claim.ts`'s `reconcile` would break exactly that
+claim. The free plan allows five cron triggers per account and the relay uses one. The share
+Worker's pass reads `entitlements` (the same D1) and writes `shares`:
 
-* a subject whose `decide` lands on `dead` → `UPDATE shares SET state = 'lapsed' WHERE group_id = ?`;
-* a subject that returns to `active` → the same statement with `'live'`, `WHERE state = 'lapsed'`
-  so a reader's own `revoked` is never resurrected.
+* a subject whose status is `dead` → `UPDATE shares SET state = 'lapsed' WHERE group_id = ?`;
+* a subject that is `active` or in `grace` → the same statement with `'live'`, `WHERE state =
+  'lapsed'` so a reader's own `revoked` is never resurrected.
+
+**It reads the stored `status`, and does not re-run `decide`.** `reconcile` is what moves a
+subject through `active → grace → dead` against Patreon, and duplicating that judgement in a
+second Worker would give one account two opinions about when a membership ended. This pass reads
+the answer the relay already wrote.
 
 **So `GET /s/{id}` reads one row and branches on `state`, with no join to `entitlements` and no
 second query.** Putting the entitlement check on the read path instead would make every anonymous
@@ -469,7 +477,7 @@ Following the cabinet's own rule that refusals are sentences rather than constra
 | `src-tauri/src/share/publish.rs` | The two-step upload; desktop/Android only |
 | `src-tauri/src/share/commands.rs` | `share_list`, `share_create`, `share_refresh`, `share_revoke`, `share_open` |
 | `share/` | The web viewer bundle, `vite.share.config.ts`, `dist-share/` |
-| `share-worker/` | `wrangler.jsonc`, `src/index.ts`, `src/shares.ts`, `src/blob.ts`, `src/page.ts` |
+| `share-worker/` | `wrangler.jsonc`, `src/index.ts`, `src/shares.ts`, `src/blob.ts`, `src/page.ts`, `src/lapse.ts` |
 | `src/features/share/` | The in-app view, the paste dialog, the want-list picker |
 | `src/lib/ipc.ts` | The five commands and `ShareSnapshot`'s TypeScript mirror |
 | `docs/reference/collection-sharing.md` | The record of what shipped |
