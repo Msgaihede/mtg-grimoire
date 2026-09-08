@@ -1673,7 +1673,7 @@ describe("the shell's keyboard bindings", () => {
 
     // Decks and not something else, which is the whole of what "by index" buys: the third chord
     // activates the third entry in `NAV`, so the rail's order is the binding rather than a list
-    // of six ids restated in the handler. Written out as the word a reader would say rather
+    // of seven ids restated in the handler. Written out as the word a reader would say rather
     // than as `NAV[2].id`, per the rule that an assertion must not read its own constant.
     expect(useAppStore.getState().activeView).toBe("decks");
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Decks");

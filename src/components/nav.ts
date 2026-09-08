@@ -24,8 +24,8 @@ export interface NavEntry {
  * does in a sentence.
  *
  * **This is a module rather than a const inside `AppShell` because the rail is no longer the
- * only thing that draws it.** A bottom tab bar copying six labels out of the rail is exactly the
- * drift the paragraph above forbids. What deliberately did *not* move is the **row**: a rail
+ * only thing that draws it.** A bottom tab bar copying seven labels out of the rail is exactly
+ * the drift the paragraph above forbids. What deliberately did *not* move is the **row**: a rail
  * entry is a full-width button with a left-anchored icon and a tooltip when narrow, and a tab is
  * a square with its word under the glyph — two drawings, not one component with a flag.
  */

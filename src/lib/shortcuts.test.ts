@@ -400,12 +400,13 @@ describe("the catalogue's shape", () => {
     });
   });
 
-  it("has an entry for every scope, and the six views are honestly empty", () => {
+  it("has an entry for every scope, and the seven views are honestly empty", () => {
     expect(SHORTCUTS.search).toEqual([]);
     expect(SHORTCUTS.tags).toEqual([]);
     expect(SHORTCUTS.decks).toEqual([]);
     expect(SHORTCUTS.collection).toEqual([]);
     expect(SHORTCUTS.wishlist).toEqual([]);
+    expect(SHORTCUTS.scanner).toEqual([]);
     expect(SHORTCUTS.settings).toEqual([]);
   });
 

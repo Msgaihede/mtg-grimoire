@@ -72,7 +72,7 @@ describe("KeyMap", () => {
 
   /**
    * **A scope with nothing in it draws nothing at all** — not a heading over a gap, and not a
-   * sentence promising one later. All six views are in that state today — `deckEditor` is a
+   * sentence promising one later. All seven views are in that state today — `deckEditor` is a
    * scope of its own that *replaces* `decks` rather than filling it — so this is the case a
    * reader is in most of the time rather than an edge one.
    */
@@ -104,7 +104,8 @@ describe("KeyMap", () => {
   /**
    * `switchView` **declares** itself a range, so the ends are drawn and the word between them is
    * `to`. The count is the assertion that matters: `Ctrl 1 or Ctrl 2 or …` down to `Ctrl 7` is
-   * thirteen caps of arithmetic in the widest row of a 384px panel.
+   * fourteen caps of arithmetic in the widest row of a 384px panel — two per chord, `Ctrl` plus
+   * the digit.
    */
   it("draws a shortcut that declares itself a range as its two ends, joined by to", () => {
     useAppStore.setState({ activeView: "search", openDeckId: null, keyMapOpen: true });
