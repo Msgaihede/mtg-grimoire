@@ -5426,6 +5426,66 @@ describe("the collection wall's art", () => {
   });
 });
 
+/**
+ * **Which box scrolls the binder** — the page, or a box inside it.
+ *
+ * The wall took `CardGrid`'s `grow` on 2026-09-08, so in grid view it is as tall as its rows and
+ * `AppShell`'s `main` is what scrolls them; the table did not, because `VirtualTable` mounts the
+ * rows in view and holds a spacer open for the rest, and a virtualiser given no height renders
+ * every row of a 100 k-row collection. That split is three classes on three elements, and this
+ * block is what keeps the three agreeing with each other.
+ *
+ * **jsdom has no layout engine, so nothing here can measure a scroll.** What it can see is the
+ * classes, which is exactly where this defect would live: a `min-h-0 flex-1` left on the desk row
+ * caps a growing wall at one screen and clips the rest, and an `h-full` taken off the section
+ * collapses the table to nothing. Both are silent — every existing case in this file passes
+ * either way, because a row still renders in a box of zero height. The shipped window is the only
+ * witness to the behaviour; these are the wiring.
+ *
+ * The two anchors are the list itself under each view — `role="group"` for the wall,
+ * `role="table"` for the table, both named `Your collection` — and the boxes are reached by
+ * `closest` from there rather than by position, so a box inserted between them does not silently
+ * move what is asserted.
+ */
+describe("which box scrolls the binder", () => {
+  /** The desk row: the flex row the list column and the docked search column share. */
+  const deskOf = (list: HTMLElement) => list.closest(".gap-4");
+  /** The page's own root, which is the top of the table's height chain. */
+  const sectionOf = (list: HTMLElement) => list.closest("section");
+
+  it("gives the grid view no scrollport of its own, and no height to be clipped by", async () => {
+    useAppStore.setState({ collectionView: "grid" });
+    wrap(<CollectionPage />);
+
+    const wall = await screen.findByRole("group", { name: "Your collection" });
+    // `grow`'s own half: the wall keeps its padding and drops the scrollport and the frame it
+    // used to draw around one. `classList.contains` rather than a `toHaveClass` on the string,
+    // because these are the classes that must be **absent**.
+    expect(wall.classList.contains("overflow-auto")).toBe(false);
+    expect(wall.classList.contains("border")).toBe(false);
+    expect(wall).toHaveClass("shrink-0");
+
+    // And the two boxes above it: neither may hand the wall a height, or a wall as tall as its
+    // rows is drawn inside one screen and the rest of the binder is unreachable.
+    expect(deskOf(wall)).not.toHaveClass("min-h-0");
+    expect(deskOf(wall)).not.toHaveClass("flex-1");
+    expect(sectionOf(wall)).not.toHaveClass("h-full");
+  });
+
+  it("keeps the table's height chain whole, from the section down to the scrollport", async () => {
+    useAppStore.setState({ collectionView: "table" });
+    wrap(<CollectionPage />);
+
+    const table = await screen.findByRole("table", { name: "Your collection" });
+    // Read bottom-up, because that is the order the chain fails in: the scrollport is the
+    // `VirtualTable`'s, it has a height only while the desk row has one, and the desk row has one
+    // only while the section is pinned to `main`.
+    expect(table).toHaveClass("overflow-auto");
+    expect(deskOf(table)).toHaveClass("min-h-0", "flex-1");
+    expect(sectionOf(table)).toHaveClass("h-full");
+  });
+});
+
 /* -------------------------------------------------------------------------------------------- *
  * The docked card search (design §4, §5, §8)
  * -------------------------------------------------------------------------------------------- */
