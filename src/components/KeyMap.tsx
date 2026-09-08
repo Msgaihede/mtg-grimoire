@@ -255,7 +255,7 @@ export function KeyMap({ children }: { children: ReactNode }) {
               {activeScopes({ activeView, openDeckId }).map((scope) => {
                 const rows = SHORTCUTS[scope];
                 // **A scope with nothing in it draws nothing — not a heading over a gap.** All
-                // seven views are in that state today — `deckEditor` is a scope of its own and
+                // eight views are in that state today — `deckEditor` is a scope of its own and
                 // *replaces* `decks` rather than filling it — and that is the honest answer
                 // rather than a page whose section is "coming soon": what a reader on the
                 // search page can press is exactly what `Everywhere` lists.

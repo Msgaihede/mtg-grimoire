@@ -400,12 +400,20 @@ describe("the catalogue's shape", () => {
     });
   });
 
-  it("has an entry for every scope, and the seven views are honestly empty", () => {
+  /**
+   * **A row per view, and the emptiness stated rather than assumed.** The `Record` type already
+   * fences *presence*, so nothing here can be missing without `tsc` saying so — what this case
+   * is for is the emptiness being **deliberate**: a view that starts binding something changes a
+   * line here, which is what stops a scope being forgotten. So a new view owes a row, and the
+   * eighth (`shared`, 2026-09-08) went a commit without one while this title still said seven.
+   */
+  it("has an entry for every scope, and the eight views are honestly empty", () => {
     expect(SHORTCUTS.search).toEqual([]);
     expect(SHORTCUTS.tags).toEqual([]);
     expect(SHORTCUTS.decks).toEqual([]);
     expect(SHORTCUTS.collection).toEqual([]);
     expect(SHORTCUTS.wishlist).toEqual([]);
+    expect(SHORTCUTS.shared).toEqual([]);
     expect(SHORTCUTS.scanner).toEqual([]);
     expect(SHORTCUTS.settings).toEqual([]);
   });

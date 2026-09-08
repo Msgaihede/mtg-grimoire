@@ -8,8 +8,8 @@ import type { ViewId } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
 /**
- * The six destinations across the foot of a phone window — and, for two of them, one place to
- * let a card go.
+ * Navigation across the foot of a phone window — and, for two of its rows, one place to let a
+ * card go.
  *
  * **The second drawing of navigation, and deliberately not the rail with a flag on it.** A rail
  * entry is a full-width button with a left-anchored icon and a tooltip when there is no room for
@@ -17,13 +17,25 @@ import { cn } from "@/lib/utils";
  * `NAV`, which moved out of `AppShell` for exactly this — and the *drop rule*,
  * `useSidebarDropTarget`. Neither of those is written twice, and the row is.
  *
- * **The arithmetic, re-measured rather than inherited.** Six tabs across a 390px window is
+ * **How many tabs there are is the shell's answer and not this file's** (2026-09-08): `entries`
+ * defaults to the whole of `NAV`, and the shell passes the filtered list because the Shared row
+ * appears only once a reader has opened a link. So this row is drawn at **seven or eight** tabs
+ * where every figure below was taken at six.
+ *
+ * **The arithmetic, measured — and measured at six.** Six tabs across a 390px window is
  * **65 × 52** each and the row is **53** tall — the 52 plus the hairline. 20px of glyph, 4px of
  * gap and 12px of label make the 36 that `py-2` puts 16 around. Driven in headless Chromium over
  * the **built** stylesheet with the real Geist face loaded (2026-08-29, `dist` of this branch,
  * served over http because `dist`'s font URLs are absolute and a `file://` page lays the text out
  * in a fallback face and lies about every width — the check is that the forced-`sans-serif` widths
  * differ, and they did: `Search` 38.67 against 38.03).
+ *
+ * ⚠️ **The tab width above is stale and the slack it reports is spent.** The row is `flex` with no
+ * wrap, so the same 390px window divides by whatever it is given: 55.7px at seven tabs and
+ * **48.75px** at eight. `Collection` inks 55.23 at 12px (below), which fitted a 65px tab with
+ * ~10px to spare and does **not** fit 48.75 — so the longest word truncates or the row overflows,
+ * and which of those it is has not been driven. Nothing here has been re-measured since the eighth
+ * destination landed; that is owed, and it is a live pass rather than a suite run.
  *
  * **jsdom lays nothing out**, so none of that can go red in this component's suite: what the tests
  * pin is markup, and every pixel above came from a browser.
@@ -43,7 +55,7 @@ export function BottomTabBar({
   decks,
   wishlist,
 }: {
-  /** Which of the six is open — the one that wears `aria-current`. */
+  /** Which destination is open — the one that wears `aria-current`. */
   activeView: ViewId;
   /**
    * Which destinations to draw, defaulting to the whole of `NAV`.
@@ -62,7 +74,7 @@ export function BottomTabBar({
   dragging: boolean;
   /** What a drop on Decks would mean, from `useSidebarDrops`. */
   decks: SidebarDrop | null;
-  /** …and on Wishlist. The other four take nothing and say so by passing `null`. */
+  /** …and on Wishlist. Every other destination takes nothing and says so by passing `null`. */
   wishlist: SidebarDrop | null;
 }) {
   return (
@@ -91,10 +103,10 @@ export function BottomTabBar({
           active={id === activeView}
           onSelect={() => onSelect(id)}
           dragging={dragging}
-          // **Every tab registers a drop target, the four that refuse included.** `null` is what
+          // **Every tab registers a drop target, the ones that refuse included.** `null` is what
           // a tab that takes nothing passes, and it still registers — see
           // `useSidebarDropTarget`, where the reason lives: a droppable whose `accepts()` is
-          // false costs a registry entry and nothing else, and registering all six is what keeps
+          // false costs a registry entry and nothing else, and registering every tab is what keeps
           // the target set from changing shape mid-drag.
           drop={id === "decks" ? decks : id === "wishlist" ? wishlist : null}
         />
@@ -104,7 +116,7 @@ export function BottomTabBar({
 }
 
 /**
- * One tab: a glyph, its word under it, and — for two of the six — a place to let a card go.
+ * One tab: a glyph, its word under it, and — for two of them — a place to let a card go.
  *
  * **65 × 52 clears `--target-min` in both directions**, so the floor below is a fence rather than
  * the thing deciding the size. It is read as the custom property rather than typed as `44` again,
@@ -112,11 +124,13 @@ export function BottomTabBar({
  *
  * **The label is `text-xs`, which is the app's smallest interface size and not a new one** — the
  * sidebar's own drop report (`NavNote`) is already 12px, so nothing is invented here. **The rung
- * above it was measured and rejected rather than assumed away.** `Collection` is the longest of
- * the six words: at 12px it inks **55.23** in a 65px tab, nearly 10px of slack; at the chrome
- * ladder's 14px status-line size it inks **64.44** in the same 65 — half a pixel of slack, hard
- * against both edges — and it takes the row from 53px to **55**, which is height spent on the axis
- * this whole layout is short of. Both figures headless over the built stylesheet, 2026-08-29.
+ * above it was measured and rejected rather than assumed away.** `Collection` is the longest word
+ * in the list: at 12px it inks **55.23** in a 65px tab — nearly 10px of slack at the six-tab width
+ * these figures were taken at — and at the chrome ladder's 14px status-line size it inks **64.44**
+ * in the same 65, half a pixel of slack, hard against both edges, taking the row from 53px to
+ * **55**, which is height spent on the axis this whole layout is short of. Both figures headless
+ * over the built stylesheet, 2026-08-29. **The 65 is what an eighth destination spends** — see the
+ * component header above, where what that costs is written down and still owes a live pass.
  *
  * **No `touch-action` here.** `src/index.css:464` already applies it to whatever is mid-drag, and
  * a second registration on one element silently replaces the first.

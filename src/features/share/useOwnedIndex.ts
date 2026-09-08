@@ -28,6 +28,7 @@
  * Nothing in `src/features/share/` may name a mutation — see that file for why the guarantee is
  * structural rather than a flag.
  */
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ipc } from "@/lib/ipc";
 import type { ShareCard } from "@/lib/shareSnapshot";
@@ -170,12 +171,30 @@ export function useOwnedIndex(enabled: boolean): {
     enabled,
   });
 
-  const ready = collection.data !== undefined && wishlist.data !== undefined;
-  return {
-    index: ready
-      ? { owned: collection.data, wanted: wishlist.data.wanted, wantedByName: wishlist.data.wantedByName }
-      : EMPTY_INDEX,
-    ready,
-    failed: collection.isError || wishlist.isError,
-  };
+  const owned = collection.data;
+  const wanted = wishlist.data;
+  const failed = collection.isError || wishlist.isError;
+
+  /**
+   * ⚠️ **Memoised, and it is the consumer's `useMemo` that this is for.**
+   *
+   * `SharedPage`'s `shown` filters and sorts the whole binder and lists `index` in its deps. A
+   * fresh object literal every render makes that dependency change every render, so the memo
+   * never hits and the sort re-runs on every keystroke, every chip and every refetch tick — at
+   * exactly the binder size this feature is for. `EMPTY_INDEX` is a module constant for the same
+   * reason: the loading and failed states have to be one stable identity too, or the memo would
+   * miss for the whole of the window it is meant to cover.
+   */
+  const index = useMemo<OwnedIndex>(
+    () =>
+      owned === undefined || wanted === undefined
+        ? EMPTY_INDEX
+        : { owned, wanted: wanted.wanted, wantedByName: wanted.wantedByName },
+    [owned, wanted],
+  );
+  const ready = owned !== undefined && wanted !== undefined;
+
+  // The whole answer is memoised too, so a caller that spreads it or lists it in deps of its own
+  // gets the same identity between renders that changed nothing.
+  return useMemo(() => ({ index, ready, failed }), [index, ready, failed]);
 }

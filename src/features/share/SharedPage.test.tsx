@@ -91,6 +91,54 @@ describe("a shared collection, opened in the app", () => {
     expect(await screen.findByText(/as of/)).toBeInTheDocument();
   });
 
+  /**
+   * ⚠️ **Asserted _during_ the sweep rather than past it, which is the only way to see it.**
+   *
+   * Every other cross-reference case here `waitFor`s until the figures land, and the window
+   * before that is where the defect lived: `index` is `EMPTY_INDEX` until **both** sweeps
+   * answer — up to a hundred round trips at the 50 000-card size `useOwnedIndex` is written
+   * for — so a wall drawn against it says *You own 0 · You want 0* on every tile and the two
+   * chips answer confidently backwards. `collectionList` is held open by hand to hold the app in
+   * that state; nothing about the window is otherwise reachable from a test.
+   */
+  it("draws no figure, and narrows nothing, while the sweep is still running", async () => {
+    let land!: (page: { items: CollectionRow[]; total: number }) => void;
+    collectionList.mockReturnValue(
+      new Promise<{ items: CollectionRow[]; total: number }>((resolve) => {
+        land = resolve;
+      }),
+    );
+    shareOpen.mockResolvedValue(
+      snapshot({
+        cards: [card({ id: "bolt", n: "Lightning Bolt" }), card({ id: "sol", n: "Sol Ring" })],
+      }),
+    );
+    wishlistList.mockResolvedValue({ items: [wished("sol", "Sol Ring", 1)], total: 1 });
+    mount();
+    await screen.findByRole("listitem", { name: /^Lightning Bolt/ });
+
+    // The binder draws; the reader's own figures do not, in any spelling.
+    expect(screen.queryByText("You own 0")).not.toBeInTheDocument();
+    expect(screen.queryByText(/^You want/)).not.toBeInTheDocument();
+    expect(screen.getByText(/checking your collection and wishlist/i)).toBeInTheDocument();
+    // …and the tile's accessible name does not carry the figures either, which is the half a
+    // `queryByText` sweep would miss.
+    expect(screen.getByRole("listitem", { name: /^Lightning Bolt/ })).toHaveAccessibleName(
+      "Lightning Bolt",
+    );
+
+    // A chip pressed mid-sweep narrows nothing rather than emptying the binder against zeroes.
+    await userEvent.click(screen.getByRole("button", { name: "On your wishlist" }));
+    expect(screen.getAllByRole("listitem")).toHaveLength(2);
+
+    land({ items: [owned("bolt", 2)], total: 1 });
+
+    // And the moment the figures are real, the chip the reader pressed starts meaning something.
+    await waitFor(() => expect(screen.getAllByRole("listitem")).toHaveLength(1));
+    expect(screen.getByRole("listitem", { name: /^Sol Ring/ })).toBeInTheDocument();
+    expect(screen.queryByText(/checking your collection and wishlist/i)).not.toBeInTheDocument();
+  });
+
   it("cross-references every row against what the reader owns and wants", async () => {
     shareOpen.mockResolvedValue(
       snapshot({

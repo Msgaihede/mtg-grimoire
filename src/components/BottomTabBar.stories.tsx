@@ -87,11 +87,15 @@ const meta = {
     docs: {
       description: {
         component:
-          "The six destinations across the foot of a phone window: 65px each at 390, in a row " +
-          "53px tall, inside `--safe-b`. Two of the six take a dropped card, and all six " +
-          "register a drop target — a droppable that refuses costs a registry entry and nothing " +
-          "else, and registering them all is what keeps the target set from changing shape " +
-          "mid-drag.",
+          "Navigation across the foot of a phone window, in a row 53px tall inside `--safe-b`. " +
+          "**These stories pass no `entries`, so they draw the whole of `NAV`** — eight tabs, " +
+          "where the shell passes seven until a reader has opened a shared collection. The " +
+          "65px-per-tab figure this note used to quote was measured at six tabs on a 390px " +
+          "window (2026-08-29) and is spent: the row is `flex` with no wrap, so the same window " +
+          "divides by whatever it is given — 48.75px at eight — and nothing has been re-measured " +
+          "since. Two tabs take a dropped card and every tab registers a drop target: a " +
+          "droppable that refuses costs a registry entry and nothing else, and registering them " +
+          "all is what keeps the target set from changing shape mid-drag.",
       },
     },
   },

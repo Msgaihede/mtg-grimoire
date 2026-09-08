@@ -60,7 +60,7 @@ export interface Shortcut {
 /**
  * Where a shortcut is live.
  *
- * `ViewId` rather than a list of its own, so a seventh view is a type error here rather than a
+ * `ViewId` rather than a list of its own, so an eighth view is a type error here rather than a
  * section the map silently never draws. `deckEditor` is not a view and never will be — it is the
  * surface `App.tsx` swaps *in place of* `DecksPage`, which is why {@link activeScopes} replaces
  * rather than nests.
@@ -70,7 +70,7 @@ export type ShortcutScope = "global" | ViewId | "deckEditor";
 /**
  * The catalogue.
  *
- * **A `Record` over every scope rather than a partial map**, so the seven views are each present
+ * **A `Record` over every scope rather than a partial map**, so the eight views are each present
  * with an empty array. That is not a placeholder waiting to be filled: it is the honest state of
  * those pages, and an empty scope draws nothing at all in the panel — no heading. Making the
  * emptiness explicit is what stops a scope being forgotten when a view starts binding something.

@@ -43,8 +43,31 @@ const SOURCES = Object.entries(
   }),
 ).filter(([path]) => !/\.(test|stories)\.tsx?$/.test(path));
 
-/** `ipc.something` — the one spelling a backend call has in this app. */
+/** `ipc.something` — the spelling every backend call in this app is written in. */
 const IPC_CALL = /\bipc\.([A-Za-z_$][\w$]*)/g;
+
+/**
+ * The three ways to reach a command **without** writing its name after a dot.
+ *
+ * {@link IPC_CALL} above reads one spelling, and a fence that reads one spelling is a fence for
+ * one spelling: `const { shareRevoke } = ipc` and `ipc["shareRevoke"]` both pass it, and so does
+ * handing `ipc` itself to a helper that does the calling elsewhere. None of the three is a
+ * plausible accident, which is exactly why they are refused outright rather than parsed for
+ * names — there is no legitimate use of any of them in this directory, so "absent" is a complete
+ * answer and a simpler one than trying to read what they would have called.
+ *
+ * The `import` line is not caught by any of them: it is `import { ipc } from "@/lib/ipc"`, where
+ * `ipc` is followed by ` }` and preceded by `{ `.
+ */
+const BACK_DOORS: readonly { form: RegExp; what: string }[] = [
+  { form: /\bipc\s*\[/, what: 'ipc["…"] — a command named by a string the sweep cannot read' },
+  { form: /=\s*ipc\b(?!\s*\.)/, what: "a binding taken off ipc — destructured or aliased" },
+  { form: /[(,]\s*ipc\s*[,)]/, what: "ipc passed as an argument, so the call happens elsewhere" },
+  {
+    form: /import\s+\*\s+as\s+\w+\s+from\s+"@\/lib\/ipc"/,
+    what: "a namespace import, which renames the door",
+  },
+];
 
 /**
  * The commands this directory is allowed to name. **Every one of them is a read.**
@@ -100,6 +123,22 @@ describe("the shared view", () => {
       expect(source, `${path} imports the raw call layer`).not.toMatch(
         /from "@\/lib\/(core|invoke)"|from "@tauri-apps\/api\/core"/,
       );
+    }
+  });
+
+  /**
+   * And the other back door, which is the same hole read from inside the wrapper: a command
+   * reached without its name being written after a dot.
+   *
+   * The name sweep above is the guarantee, and it can only see `ipc.<name>`. Every form here
+   * defeats it silently — `const { shareRevoke } = ipc` is a write that the *fence* reports as
+   * a clean file, which is worse than no fence at all.
+   */
+  it("names every command it calls, in the one spelling the sweep can read", () => {
+    for (const [path, source] of SOURCES) {
+      for (const { form, what } of BACK_DOORS) {
+        expect(source, `${path} uses ${what}`).not.toMatch(form);
+      }
     }
   });
 });

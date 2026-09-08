@@ -123,7 +123,7 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   const drops = useSidebarDrops();
   /**
    * Whether there is room for a rail beside the content at all — and, below the phone width,
-   * there is not: the six destinations move to a bar across the foot of the window instead.
+   * there is not: the rail's destinations move to a bar across the foot of the window instead.
    *
    * **The one viewport branch in this app**, and `src/lib/viewports.ts` demands a reason wherever
    * one appears. The reason is that *the shell is the window*: every other fold here is a
@@ -136,8 +136,8 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
    *
    * **It is the rail's presence it decides, not its width.** `collapsed` below is a reader's
    * choice about a rail that exists; this is whether one is drawn. Below the phone width the
-   * `<nav>` is not rendered at all rather than hidden — a rail off-screen is still six tab stops
-   * and six drop targets — and `BottomTabBar` takes its place after `<main>`.
+   * `<nav>` is not rendered at all rather than hidden — a rail off-screen is still a tab stop
+   * and a drop target per destination — and `BottomTabBar` takes its place after `<main>`.
    */
   const narrowWindow = useNarrowWindow();
   /**
@@ -149,7 +149,7 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
    * `app_meta`, so the choice outlives the process.
    *
    * **A read that fails answers `false`.** A database that cannot say must open the way the app
-   * has always opened — six named destinations — rather than hiding them behind a mystery the
+   * has always opened — its destinations named — rather than hiding them behind a mystery the
    * reader then has to guess their way out of.
    */
   const { collapsed, setCollapsed } = useNavCollapsed();
@@ -158,7 +158,7 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
    * and one tween later in the other**, which is the whole of the two bugs reported 2026-08-22.
    *
    * The rail's width is a CSS transition and its labels are a React commit, so a single flag
-   * driving both meant the words arrived 180ms before the room for them: six labels re-entering
+   * driving both meant the words arrived 180ms before the room for them: a column of labels re-entering
    * the flow at full width inside a 68px rail, painted over the view beside it for the length of
    * the tween, because `<nav>` cannot carry an `overflow-hidden` (the collapsed rail's floating
    * notes hang off it at `left-full`). `useNavLabels` holds them back until the rail has arrived
@@ -496,7 +496,7 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
           and one with no positioned ancestor resolves to the *initial* containing block, is laid
           out at its static position and is clipped by nothing — which stretches the **document**
           (`src/CLAUDE.md`; the deck editor's 1704px phantom scrollbar is what that costs). A
-          collapsed rail turns six labels into exactly that shape, so the containing block has to
+          collapsed rail turns every one of its labels into exactly that shape, so the containing block has to
           be here. It is also what the two floating notes below are positioned against, which is
           what keeps their `left-full top-0` free of any offset arithmetic.
 
@@ -517,7 +517,7 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
           `collapsed`: the width belongs to the rail's own state, and every question about
           whether there is room for a word belongs to the other. */}
         {/* **Not drawn at all below the phone width, rather than hidden there.** A rail pushed
-          off-screen is still six tab stops, six drop targets and six accessible names for a
+          off-screen is still a tab stop, a drop target and an accessible name per destination, for a
           reader who cannot see any of them, and `BottomTabBar` after `<main>` is already
           carrying that landmark's `aria-label`. Everything inside — the collapse toggle, the
           refused-add alert, both floating notes — goes with it, which is the point: the width
@@ -703,7 +703,7 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
                 replaced it.**
 
                 Both lived in the `<nav>` above — the drop report under the entry a card landed
-                on, the refused-add alert under all six of them — and below the phone width
+                on, the refused-add alert under all of them — and below the phone width
                 there is no `<nav>` to be a line in. They go *here* rather than up beside the
                 ribbon because they are the **navigation's** sentences: both are about where a
                 card just went, the reader's thumb is already at the foot of the window, and the

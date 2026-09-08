@@ -72,7 +72,7 @@ describe("KeyMap", () => {
 
   /**
    * **A scope with nothing in it draws nothing at all** — not a heading over a gap, and not a
-   * sentence promising one later. All seven views are in that state today — `deckEditor` is a
+   * sentence promising one later. All eight views are in that state today — `deckEditor` is a
    * scope of its own that *replaces* `decks` rather than filling it — so this is the case a
    * reader is in most of the time rather than an edge one.
    */

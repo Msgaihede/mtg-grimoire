@@ -115,6 +115,31 @@ describe("the reader's own copies, indexed", () => {
   });
 
   /**
+   * The index has to keep its identity across renders that changed nothing.
+   *
+   * `SharedPage`'s `shown` filters and sorts the whole binder and lists `index` in its deps, so a
+   * fresh object literal per render makes that memo miss every time — the one thing it exists to
+   * stop, at the one size this feature is written for. Identity is the only observable: a
+   * `toEqual` here would pass over a new object with the same contents, which *is* the defect.
+   */
+  it("keeps one identity for the index across renders that changed nothing", async () => {
+    collectionList.mockResolvedValue(onePage([owned("bolt", 2)]));
+    const { result, rerender } = renderHook(() => useOwnedIndex(true), { wrapper });
+
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    const settled = result.current.index;
+    rerender();
+    expect(result.current.index).toBe(settled);
+
+    // And before the sweep lands, which is the longer half of the window: `EMPTY_INDEX` is a
+    // module constant precisely so the loading state is one identity too.
+    const pending = renderHook(() => useOwnedIndex(false), { wrapper });
+    const empty = pending.result.current.index;
+    pending.rerender();
+    expect(pending.result.current.index).toBe(empty);
+  });
+
+  /**
    * A refused read is not an empty collection, and the difference is a figure the reader would
    * otherwise act on: *you own 0* beside a card they own four of is what sends somebody to a
    * trade with the wrong list.

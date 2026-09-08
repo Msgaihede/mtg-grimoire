@@ -146,6 +146,13 @@ export function SharedPage() {
         <Binder
           snapshot={share.data}
           index={cross.index}
+          // ⚠️ **`ready` is passed and not merely computed.** Until both sweeps land — up to a
+          // hundred round trips at the 50 000-card size `useOwnedIndex` argues from — `index` is
+          // `EMPTY_INDEX`, and a wall drawn against it says *You own 0 · You want 0* on every
+          // tile: the exact figure that module exists to keep off the screen, arriving as an
+          // answer rather than as a wait. `failed` is the same absence for a different reason,
+          // which is why both are here and neither is folded into the other.
+          figuresReady={cross.ready}
           figuresFailed={cross.failed}
           refreshing={share.isFetching}
           onRefresh={() => void share.refetch()}
@@ -306,6 +313,7 @@ function Refused({
 function Binder({
   snapshot,
   index,
+  figuresReady,
   figuresFailed,
   refreshing,
   onRefresh,
@@ -313,6 +321,15 @@ function Binder({
 }: {
   snapshot: ShareSnapshot;
   index: OwnedIndex;
+  /**
+   * Both sweeps have landed and {@link index} is the reader's real answer.
+   *
+   * **Everything that reads a figure is gated on this**, in three places and for one reason: an
+   * unfinished sweep is an *absence*, and drawn as a number it is a confident zero. The tile
+   * draws no figure line at all; the three match chips do not narrow; and the wall says it is
+   * still checking.
+   */
+  figuresReady: boolean;
   figuresFailed: boolean;
   refreshing: boolean;
   onRefresh: () => void;
@@ -359,7 +376,12 @@ function Binder({
     const filtered = rows.filter(({ card }) => {
       if (kept !== null && (card.fo === null || !kept.has(card.fo))) return false;
       if (!matches(card)) return false;
-      if (match === "all") return true;
+      // ⚠️ **`!figuresReady` widens to everything, and it must.** Against `EMPTY_INDEX` every
+      // card answers *own 0, want 0*, so *On your wishlist* would empty the binder and *You do
+      // not own it* would keep all of it — two confident wrong answers, both of which then
+      // rearrange themselves when the sweep lands. A reader's pressed chip is remembered and
+      // starts narrowing the moment there is something true to narrow by.
+      if (match === "all" || !figuresReady) return true;
       const { own, want } = crossReference(card, index);
       return match === "wanted" ? want > 0 : own === 0;
     });
@@ -373,7 +395,7 @@ function Binder({
       price: (a, b) => (b.p ?? -1) - (a.p ?? -1),
     };
     return filtered.sort((a, b) => by[sort](a.card, b.card));
-  }, [rows, tree, drawer, text, match, sort, index]);
+  }, [rows, tree, drawer, text, match, sort, index, figuresReady]);
 
   const shownCopies = useMemo(() => shown.reduce((n, r) => n + r.card.q, 0), [shown]);
 
@@ -507,13 +529,22 @@ function Binder({
         ))}
       </div>
 
-      {figuresFailed && (
+      {figuresFailed ? (
         // Said out loud rather than folded into zeroes: the two are indistinguishable on screen
         // and only one of them is safe to trade on.
         <p role="status" className="pt-3 text-sm text-destructive">
           Your own collection and wishlist could not be read, so the figures below are missing
           rather than zero.
         </p>
+      ) : (
+        !figuresReady && (
+          // The wait, named. Without this the chips look broken — pressed and narrowing nothing —
+          // and the tiles look as though the reader owns none of a binder they may own half of.
+          // It is the same absence the banner above reports, arriving for a better reason.
+          <p role="status" className="pt-3 text-sm text-dim">
+            Checking your collection and wishlist…
+          </p>
+        )
       )}
 
       <p className="pt-4 font-mono text-xs text-dim">
@@ -539,7 +570,10 @@ function Binder({
             <SharedTile
               key={key}
               card={card}
-              cross={figuresFailed ? null : crossReference(card, index)}
+              // `figuresReady` and not just `!figuresFailed`: a sweep that has not finished is
+              // an absence exactly as a refused one is, and `EMPTY_INDEX` answers both with a
+              // zero that reads as a fact.
+              cross={figuresReady ? crossReference(card, index) : null}
               currency={currency}
               showValue={showValue}
               showCondition={showCondition}
