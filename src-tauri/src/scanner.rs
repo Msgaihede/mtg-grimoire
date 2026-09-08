@@ -233,14 +233,29 @@ pub fn frame_payload(
 }
 
 /// The capture and its sidecar, from either body shape.
+///
+/// **A sidecar header that is there and unreadable is a refusal, where an unreadable options
+/// header in [`frame_payload`] is a shrug — and the asymmetry is the point.** A defaulted
+/// slider costs one frame out of thirty and the next one corrects it; a defaulted sidecar
+/// writes a JPEG to disk with five empty fields and reports success, which is an *unlabelled*
+/// capture the reader believes they labelled — the one thing the dataset cannot recover from
+/// later. An **absent** header still means [`Sidecar::default`], because capturing without
+/// typing a name is a thing the reader chooses. `HeaderValue::to_str` is what fails here:
+/// it refuses any byte outside visible ASCII, so the page escapes non-ASCII as `\uXXXX`
+/// before it puts this JSON on the wire.
 fn capture_payload(body: &InvokeBody, headers: &HeaderMap) -> Result<(Vec<u8>, Sidecar), String> {
     match body {
         InvokeBody::Raw(bytes) => {
-            let sidecar = headers
-                .get(CAPTURE_HEADER)
-                .and_then(|v| v.to_str().ok())
-                .and_then(|s| serde_json::from_str(s).ok())
-                .unwrap_or_default();
+            let sidecar = match headers.get(CAPTURE_HEADER) {
+                Some(value) => {
+                    let text = value
+                        .to_str()
+                        .map_err(|e| format!("the capture's sidecar did not parse: {e}"))?;
+                    serde_json::from_str(text)
+                        .map_err(|e| format!("the capture's sidecar did not parse: {e}"))?
+                }
+                None => Sidecar::default(),
+            };
             Ok((bytes.clone(), sidecar))
         }
         InvokeBody::Json(value) => {
@@ -418,6 +433,64 @@ mod tests {
         assert!(err.contains("jpeg"), "{err}");
         let body = InvokeBody::Json(serde_json::json!({ "jpeg": "not base64!" }));
         assert!(frame_payload(&body, &HeaderMap::new()).is_err());
+    }
+
+    #[test]
+    fn a_raw_capture_reads_its_sidecar_from_the_header() {
+        let body = InvokeBody::Raw(vec![7]);
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            CAPTURE_HEADER,
+            r#"{"expected":"Plains","votes":"8.0"}"#.parse().expect("value"),
+        );
+        let (jpeg, sidecar) = capture_payload(&body, &headers).expect("payload");
+        assert_eq!(jpeg, vec![7]);
+        assert_eq!(sidecar.expected, "Plains");
+        assert_eq!(sidecar.votes, "8.0");
+    }
+
+    #[test]
+    fn a_json_capture_carries_the_frame_and_its_sidecar_for_android() {
+        let body = InvokeBody::Json(
+            serde_json::json!({ "jpeg": "AQID", "sidecar": { "expected": "Plains" } }),
+        );
+        let (jpeg, sidecar) = capture_payload(&body, &HeaderMap::new()).expect("payload");
+        assert_eq!(jpeg, vec![1, 2, 3]);
+        assert_eq!(sidecar.expected, "Plains");
+        // Every other field defaults rather than refusing: `Sidecar` is `#[serde(default)]`
+        // and a capture with only a name typed is the common one.
+        assert_eq!(sidecar.votes, "");
+    }
+
+    /// The page escapes non-ASCII as `\uXXXX` before the JSON goes on the wire, so the header
+    /// is visible ASCII and the card's real name survives the round trip.
+    #[test]
+    fn an_escaped_card_name_comes_back_with_its_accent() {
+        let body = InvokeBody::Raw(vec![7]);
+        let mut headers = HeaderMap::new();
+        // A raw string, so these are the six characters `\u00c6` on the wire rather than the
+        // two UTF-8 bytes the letter itself is — which is exactly what the page sends.
+        let escaped = r#"{"expected":"\u00c6ther Vial"}"#;
+        assert!(escaped.is_ascii(), "the page must escape before the header");
+        headers.insert(CAPTURE_HEADER, escaped.parse().expect("value"));
+        let (_, sidecar) = capture_payload(&body, &headers).expect("payload");
+        assert_eq!(sidecar.expected, "Æther Vial");
+    }
+
+    /// The failure that used to file an unlabelled capture as a success: a header the page put
+    /// raw bytes in is refused, rather than falling back to five empty fields and a written JPEG.
+    #[test]
+    fn a_capture_header_that_is_not_visible_ascii_is_a_sentence() {
+        let body = InvokeBody::Raw(vec![7]);
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            CAPTURE_HEADER,
+            tauri::http::HeaderValue::from_bytes(b"{\"expected\":\"\xc6\"}").expect("value"),
+        );
+        let err = capture_payload(&body, &headers).expect_err("unreadable header");
+        assert!(err.contains("sidecar"), "{err}");
+        // And an absent header is still the reader's own choice, not a failure.
+        assert!(capture_payload(&body, &HeaderMap::new()).is_ok());
     }
 
     #[test]
