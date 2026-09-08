@@ -1426,6 +1426,34 @@ export interface FakeDb {
    */
   deckSort: string | null;
   /**
+   * `app_meta.deck_folder_pane` — how wide the decks page's folder tree was left, and whether
+   * the reader railed it down to icons.
+   *
+   * **The first row here whose value is a stored *object* rather than a map**, and that is the
+   * one thing to read before the shape makes sense. Its four object-valued neighbours
+   * ({@link FakeDb.cardZoom}, {@link FakeDb.listView}, {@link FakeDb.flattenState},
+   * {@link FakeDb.searchOpen}) are `Record`s because each holds one answer *per section*, and a
+   * page this build has no column on is a state a story wants. This one holds two halves of a
+   * single answer about a single pane, so the row is a JSON object with two fixed keys and the
+   * field is that object — or `null` for the row never having been written.
+   *
+   * **`null` is the whole of "nothing stored", and the two halves cannot go missing
+   * separately.** A reader who rails the tree without ever having dragged it still writes a
+   * width, because the press sends the width the page is drawing at; so there is no
+   * `{ width: absent, collapsed: true }` for a story to stand in, and a nullable `width` here
+   * would be a third state the backend cannot produce — {@link FakeDb.navCollapsed}'s argument,
+   * two rows over.
+   *
+   * **The junk state that *is* reachable is a width outside the band**, which is why this stores
+   * a bare `number` and not a narrowed one: a row a hand-edit put `4` or `9999` into is a row a
+   * story wants to be able to seed. What it costs the reader is **the width and only the
+   * width** — the two fields are read independently, so a railed tree stays railed through a
+   * number nobody typed. See {@link readHandlers.deck_folder_pane} and
+   * {@link writeHandlers.set_deck_folder_pane}: the read shrugs at it and the write refuses it,
+   * this table's usual split.
+   */
+  deckFolderPane: FakeDeckFolderPane | null;
+  /**
    * `marketplace_prices` — the table that made a third and fourth marketplace possible.
    *
    * Keyed `(marketplace, cardId, finish)` and **not** a column on `cards`, for the schema's own
@@ -1531,6 +1559,26 @@ export interface FakeDb {
    */
   supporter: FakeSupporter;
   fault: Fault | null;
+}
+
+/**
+ * `app_meta.deck_folder_pane`'s stored value — **the row, not the answer read out of it**.
+ *
+ * `{"width": <integer>, "collapsed": <bool>}` on disk, and every build that writes the row
+ * writes both keys. What {@link readHandlers.deck_folder_pane} answers is a *different* shape:
+ * its `width` is nullable, because "no row" and "a row this app cannot use" both have to be
+ * sayable and neither of them is a width. Storing the DTO here would fold that distinction away
+ * and leave a story unable to seed the row a reader actually has — {@link FakeDb.marketplace}'s
+ * rule about a fake that stores what it answers.
+ */
+export interface FakeDeckFolderPane {
+  /** The dragged width in CSS pixels. Outside {@link MIN_FOLDER_PANE_WIDTH} …
+   *  {@link MAX_FOLDER_PANE_WIDTH}, or not whole, it reads as **no width** — and only as that:
+   *  the `collapsed` beside it is answered from the row either way. */
+  width: number;
+  /** Railed down to icons, or open. A `bool`, so no junk state — see
+   *  {@link writeHandlers.set_nav_collapsed} for the argument in full. */
+  collapsed: boolean;
 }
 
 /**
@@ -1888,6 +1936,53 @@ function isStorableHex(color: string): boolean {
 }
 
 /**
+ * `deckfolderpane::MIN_PANE_WIDTH` and `MAX_PANE_WIDTH` — the band the folder tree's **stored**
+ * width is kept inside.
+ *
+ * **A storage bound, and the word is load-bearing rather than decorative.** These are not the
+ * stops the drag handle moves between: the frontend's own clamp is
+ * `MIN_FOLDER_TREE_WIDTH_PX`, it answers a different question — how narrow a tree may be
+ * *dragged* to on the desk in front of you — and it is deliberately narrower at the bottom and
+ * has no fixed top at all, because how wide a tree may get depends on the monitor. The crate
+ * documents this pair as wider than any UI clamp on purpose, and 1200 is what lets a 2560-pixel
+ * desk hand its reader a ~1280-pixel tree without the row that remembers it refusing to.
+ *
+ * **They are still spelled here rather than imported**, which is {@link isStorableHex}'s rule and
+ * the opposite of {@link isStorableZoom}'s. The zoom's ends belong to the *ladder*, a frontend
+ * vocabulary the Rust keeps a copy of, so a third copy in this file would be the one nothing
+ * checks. These two are the **crate's own**: the row is in the reader's database, a width in it
+ * may have been written by any build or by a hand edit, and what a stored width may be is the
+ * only thing about it the backend decides. Importing the handle's clamp instead would have made
+ * the fake agree with the wrong file by construction — which is exactly how this constant was
+ * wrong the first time it was written, at `160`, refusing in Storybook a drag the shipped app
+ * accepts.
+ */
+const MIN_FOLDER_PANE_WIDTH = 80;
+const MAX_FOLDER_PANE_WIDTH = 1200;
+
+/**
+ * `deckfolderpane::is_storable` — whether a width is one this row may hold.
+ *
+ * The band and nothing else, and it is the **read's** predicate first: a stored width outside it
+ * is dropped, which is what {@link readHandlers.deck_folder_pane} answers `null` for. The write
+ * refuses the same thing so that the drop is never silent.
+ *
+ * **`Number.isInteger` is doing a second job here and it is not the band's.** `width` is a `u32`
+ * at the far end, so `208.5` and `-1` are refused by serde before the shipped command's body is
+ * entered at all — `RouteError::Args` rather than `RouteError::Failed`, which is the crate's own
+ * way of saying the two refusals are different events. {@link writeHandlers.set_deck_folder_pane}
+ * keeps them separate for that reason; this predicate folds them because a *read* cannot tell
+ * them apart — a row holding either is a row the width came out of unusable — and
+ * {@link isStorableZoom}'s `Number.isFinite` is the same guard one predicate over, settling `NaN`
+ * and both infinities before they fail every comparison in silence.
+ */
+function isStorablePaneWidth(width: number): boolean {
+  return (
+    Number.isInteger(width) && width >= MIN_FOLDER_PANE_WIDTH && width <= MAX_FOLDER_PANE_WIDTH
+  );
+}
+
+/**
  * What the `errorLog` fault seeds: one of each shape the panel has to draw.
  *
  * A folded repeat (the ×600 an unreachable image host produces — the case the whole grain
@@ -2106,6 +2201,13 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // which is what `deck_list` already sorts by and what the gallery drew before there was a
     // picker at all.
     deckSort: null,
+    // The folder tree's own row, and a `null` for the third time — a reader who has neither
+    // dragged the tree nor railed it. `deck_folder_pane` answers `{ width: null, collapsed:
+    // false }` for that, which is the frontend's cue to draw its own default width rather than a
+    // number this side invented, so every decks story that says nothing about the tree opens at
+    // the width the app ships. A story that wants one railed, or one dragged wide, passes the
+    // whole row — both halves are written together and there is no half of one to seed.
+    deckFolderPane: null,
     // Empty here and filled by a seed, exactly as the card corpus is: a downloaded feed is a
     // table with rows in it, and "no rows" is the honest state of an install that has never
     // chosen Card Kingdom. `starterSeed` fills both from the corpus.
@@ -8154,6 +8256,50 @@ export function readHandlers(db: FakeDb) {
      */
     deck_sort: (): string =>
       db.deckSort !== null && db.deckSort !== "" ? db.deckSort : DEFAULT_DECK_SORT,
+
+    /**
+     * `deckfolderpane::deck_folder_pane` — how wide the decks page's folder tree was left, and
+     * whether it was railed.
+     *
+     * The newest `app_meta` setting, and **the only one that answers two fields out of one
+     * row** — which is what makes its fallback worth reading rather than assuming.
+     *
+     * **The two fields are read independently, and that is the crate's decision written down**
+     * (`a_junk_width_leaves_the_collapse_standing`). A stored width of `9999` costs the reader
+     * their width and *nothing else*: the answer is `{ width: null, collapsed: true }` for a
+     * railed tree, so the rail they actually pressed survives a number they never typed. The
+     * tidier-looking fake is the wrong one here — folding both halves to their defaults reads
+     * as "the row is unreadable, start over", and it is a fake teaching a reader that a
+     * hand-edited width can silently un-rail their tree.
+     *
+     * That puts this read **with** the narrowing reads above rather than against them, which is
+     * the correction this comment carries: it said the opposite for one wave, on the reasoning
+     * that one JSON object parses or does not. `flatten_state` drops the one entry it cannot key
+     * and leaves the page beside it standing; this drops the one *field* it cannot use and
+     * leaves the field beside it standing. Same rule, one grain finer.
+     *
+     * **Infallible like {@link readHandlers.nav_collapsed}**, and for its reason: nothing here
+     * throws, because there is nothing useful a page can do with an error that is not "draw the
+     * defaults". A missing row is `{ width: null, collapsed: false }` — and the `null` is the
+     * frontend's cue to draw its own default width, the same absent-rather-than-defaulted rule
+     * {@link readHandlers.mark_colors} keeps for a colour, said about a scalar. A fake inventing
+     * `208` here would be a second opinion about a width the stylesheet owns, and would make
+     * "never dragged" and "dragged to exactly the default" one state.
+     *
+     * Read at launch and only at launch — the page asks once and then owns the state — so what
+     * this read is *for* is the first frame. A story seeded railed has to open railed rather
+     * than opening wide and snapping shut, which is the flash a fake that always answered the
+     * default would hide, and it is a whole pane's width of the desk re-packing on the way past.
+     *
+     * A read, so it answers through every second of a sync — the write below does not.
+     */
+    deck_folder_pane: (): { width: number | null; collapsed: boolean } => ({
+      width:
+        db.deckFolderPane !== null && isStorablePaneWidth(db.deckFolderPane.width)
+          ? db.deckFolderPane.width
+          : null,
+      collapsed: db.deckFolderPane?.collapsed ?? false,
+    }),
 
     /**
      * `mirror::settings::mirror_status` — everything the Backup panel draws, in one round trip.
@@ -14535,6 +14681,63 @@ export function writeHandlers(db: FakeDb) {
       refuseIfBusy(db);
       if (args.sort === "") throw refuse(NO_DECK_SORT);
       db.deckSort = args.sort;
+    },
+
+    /**
+     * `deckfolderpane::set_deck_folder_pane` — remember the folder tree's width and its rail.
+     *
+     * **One write for two fields, and that is the contract rather than a convenience.** The
+     * reader makes two gestures — a drag and a press — and both land in one `app_meta` row; a
+     * command per field would have to read the other half back before writing, and two of those
+     * racing would lose one. So both arrive together and the row is replaced whole, which is
+     * also why a press that only rails the tree still sends the width the page is drawing at,
+     * and why {@link FakeDb.deckFolderPane} has no half-written state to seed.
+     *
+     * **The width is refused and the collapse is not**, which is
+     * {@link writeHandlers.set_flatten_state}'s split drawn with a number where that one has a
+     * section. The `boolean` has no junk state — Tauri's deserializer refused anything that is
+     * not `true` or `false` before this handler was reached, the argument
+     * {@link writeHandlers.set_nav_collapsed} makes in full. The **number** has one, and
+     * refusing it is the half a fake is easiest to leave out: the read above drops an out-of-band
+     * width *in silence*, so a fake that stored `9999` would let a story drag the tree, save,
+     * read back the default and look like it worked. `set_card_zoom`'s note names that bug and
+     * this is the second number here it applies to.
+     *
+     * **The width is refused in two sentences, not one, and the split is the crate's**: `width`
+     * is a `u32`, so `208.5` and `-1` never reach the shipped command's body at all — the route
+     * answers `RouteError::Args`, a message about the *call*, where an out-of-band `9999` gets
+     * into the body and comes back `RouteError::Failed`, a message about the *value*. A fake has
+     * no deserializer, so the first of those has to be made by hand or a frontend that forgot to
+     * round would pass every story here and fail on the desk. Two sentences rather than one
+     * because a story renders them, and "this is not a number I can be sent" and "this is not a
+     * width I may store" are two different things to have to read. {@link isStorablePaneWidth}
+     * folds them, deliberately, for the reason a *read* has to.
+     *
+     * The band sentence names the storage bound rather than the drag's stops, which is
+     * {@link MIN_FOLDER_PANE_WIDTH}'s whole note: a width this handler accepts and the handle
+     * cannot reach is a hand-edited row, not a bug.
+     *
+     * It honours `busy` like every other ordinary write — `deckfolderpane.rs` takes the write
+     * connection through `sync::with_write`, and the lock comes first: a drag finished while a
+     * sync holds the connection answers BUSY, because nothing has looked at the number yet. The
+     * read beside it takes `db_read` and keeps answering, so the tree a reader was refused stays
+     * drawn in the shape they left it.
+     */
+    set_deck_folder_pane: (args: { width: number; collapsed: boolean }): void => {
+      refuseIfBusy(db);
+      if (!Number.isInteger(args.width) || args.width < 0) {
+        throw refuse(
+          `invalid args \`width\` for command \`set_deck_folder_pane\`: ` +
+            `${args.width} is not a u32.`,
+        );
+      }
+      if (!isStorablePaneWidth(args.width)) {
+        throw refuse(
+          `${args.width} is not a folder pane width this app can store. ` +
+            `Expected a whole number between ${MIN_FOLDER_PANE_WIDTH} and ${MAX_FOLDER_PANE_WIDTH}.`,
+        );
+      }
+      db.deckFolderPane = { width: args.width, collapsed: args.collapsed };
     },
 
     /**
