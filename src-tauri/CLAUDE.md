@@ -527,7 +527,18 @@ shared_cell` walks both into two databases and compares them column by column.
     `collection_source::copies_of_oracle` under `Availability::Everything`, and its
     `OWNED_CTE` carries two fences worth knowing before you touch it: `k.oracle_id IS NOT NULL`,
     without which one NULL makes `min()` report **every** combo as fully owned, and a
-    `CROSS JOIN` that pins the outer loop to the collection and is worth 65 ms. Both, with the
+    `CROSS JOIN` that pins the outer loop to the collection and is worth 65 ms. **Its `search` is
+    `instr(lower(name), lower(?))` and never `LIKE`** — a structural fence rather than a
+    sanitiser, because `LIKE` has three characters to neutralise and getting it wrong is silent,
+    and because the corpus really does hold names carrying `_` (`_____ Goblin`, `Last Voyage of
+    the _____`), so an unescaped pattern answers a card's *whole* list where a literal search
+    answers one row. **The needle is lowered in SQL and not in Rust**, since `str::to_lowercase`
+    is Unicode-aware and SQLite's `lower()` is ASCII-only and the two sides have to fold by the
+    same function. **A search narrows `by_card_count` and `owned_total` and never `total`**: it
+    changes the *subject* where the two chips are facets of it, so a facet's count goes on
+    predicting what pressing it yields — which is also why `total` needs a statement of its own,
+    a search that matches nothing having no rows to sum at exactly the moment the panel most
+    needs to say *6 044 combos, none matching*. Both, with the
     rejected shapes and every timing, in
     [commander-brackets.md](../docs/reference/commander-brackets.md).
   `combo_cards.combo_id` is the **only enforced key in this schema joining two tables that are

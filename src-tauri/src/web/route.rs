@@ -2029,14 +2029,19 @@ pub fn call(
             )
         }
 
-        // **`cardCount` through [`optional`] and the other four through [`field`]**, which is
-        // the wire's own distinction rather than a preference: "every size" is the page not
-        // sending the key at all, and JavaScript posts an absent key rather than a `null` — so
-        // `field::<Option<i64>>` would refuse the ordinary call with "missing `cardCount`".
-        // The paging pair is required, because a page with no bound is a card in a hundred
-        // combos rendering all of them.
+        // **`search` and `cardCount` through [`optional`] and the other four through
+        // [`field`]**, which is the wire's own distinction rather than a preference: "every
+        // size" and "no search" are the page not sending the key at all, and JavaScript posts
+        // an absent key rather than a `null` — so `field::<Option<i64>>` would refuse the
+        // ordinary call with "missing `cardCount`". The paging pair is required, because a page
+        // with no bound is a card in a hundred combos rendering all of them.
+        //
+        // **An empty `search` reaching here is not a bug and needs no arm.** A box the reader
+        // typed into and cleared may well send `""`; `card_combos` trims it and answers exactly
+        // what an absent key answers, so this seam has no third state to hold.
         "combos_for_card" => {
             let oracle_id: String = field(command, args, "oracleId")?;
+            let search: Option<String> = optional(command, args, "search")?;
             let card_count: Option<i64> = optional(command, args, "cardCount")?;
             let owned_only: bool = field(command, args, "ownedOnly")?;
             let limit: i64 = field(command, args, "limit")?;
@@ -2045,7 +2050,13 @@ pub fn call(
             encode(
                 command,
                 crate::combos::card_combos(
-                    &conn, &oracle_id, card_count, owned_only, limit, offset,
+                    &conn,
+                    &oracle_id,
+                    search.as_deref(),
+                    card_count,
+                    owned_only,
+                    limit,
+                    offset,
                 )
                 .map_err(RouteError::Failed)?,
             )
@@ -2447,8 +2458,9 @@ mod tests {
         assert_eq!(out["byCardCount"], json!([]));
         assert_eq!(out["combos"], json!([]));
 
-        // `cardCount` is the one argument the page may omit — absent is every size — so
-        // sending it must reach the same arm rather than a "missing argument".
+        // `cardCount` and `search` are the two arguments the page may omit — absent is every
+        // size and no search — so sending either must reach the same arm rather than a
+        // "missing argument".
         let sized = call(
             &s,
             "combos_for_card",
@@ -2462,6 +2474,42 @@ mod tests {
         )
         .unwrap();
         assert_eq!(sized["total"], json!(0));
+
+        // **`search` through `optional`, and all three spellings of nothing reach the arm.** A
+        // `field::<Option<String>>` here would refuse the first of these — the ordinary call
+        // every surface that has no search box makes — with "missing `search`"; and a box the
+        // reader typed into and then cleared sends the second, which `card_combos` trims into
+        // the same answer rather than into a needle nothing carries.
+        for args in [
+            json!({ "oracleId": "x", "ownedOnly": false, "limit": 20, "offset": 0 }),
+            json!({ "oracleId": "x", "search": "", "ownedOnly": false, "limit": 20, "offset": 0 }),
+            json!({ "oracleId": "x", "search": "  ", "ownedOnly": false, "limit": 20,
+                    "offset": 0 }),
+            json!({ "oracleId": "x", "search": "thassa", "cardCount": 2, "ownedOnly": true,
+                    "limit": 20, "offset": 0 }),
+        ] {
+            let out = call(&s, "combos_for_card", &args).unwrap();
+            assert_eq!(out["total"], json!(0), "for {args}");
+            assert_eq!(out["combos"], json!([]), "for {args}");
+        }
+
+        // **A wildcard-looking needle crosses the seam as a needle.** Nothing here escapes or
+        // rejects one — `combos::SEL_CTE` matches with `instr` and has no pattern language to
+        // be tricked out of — so this arm needs no sanitiser and must not grow one. What the
+        // characters *mean* is pinned in `combos.rs`; this only says they reach it unharmed.
+        let literal = call(
+            &s,
+            "combos_for_card",
+            &json!({
+                "oracleId": "x",
+                "search": "100%_",
+                "ownedOnly": false,
+                "limit": 20,
+                "offset": 0
+            }),
+        )
+        .unwrap();
+        assert_eq!(literal["matching"], json!(0));
 
         // camelCase on the wire, the way `deck_bracket_reads` pins `deckIds`: the Rust
         // parameter is `oracle_id` and nothing may reach this arm spelling it that way.
