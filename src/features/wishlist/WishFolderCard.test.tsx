@@ -159,7 +159,7 @@ function MenuHost() {
     <ul>
       <WishFolderCard
         node={node(EXPENSIVE)}
-        summary={{ wishes: 1, missing: 0, cost: 0, unpriced: 0 }}
+        summary={{ wishes: 1, copies: 0, cost: 0, unpriced: 0 }}
         currency="usd"
         onOpen={onOpen}
         rowMenu={{
@@ -221,7 +221,7 @@ describe("WishFolderCard", () => {
   interface MountOptions {
     /** Which drawer this card draws. Only the payload test below changes it. */
     on?: FolderNode<WishlistFolder>;
-    summary?: { wishes: number; missing: number; cost: number; unpriced: number } | null;
+    summary?: { wishes: number; copies: number; cost: number; unpriced: number } | null;
     currency?: "usd" | "eur";
     /** The page's rename state, laid over {@link RESTING} — so a case that is about the field
      *  says only the part of it that is its own. */
@@ -236,7 +236,7 @@ describe("WishFolderCard", () => {
 
   function tree({
     on = node(EXPENSIVE),
-    summary = { wishes: 6, missing: 6, cost: 312, unpriced: 0 },
+    summary = { wishes: 6, copies: 6, cost: 312, unpriced: 0 },
     currency = "usd",
     rename = {},
     canDrop = () => true,
@@ -358,25 +358,31 @@ describe("WishFolderCard", () => {
   });
 
   it("says `1 wish`, never `1 wishs`", () => {
-    mount({ summary: { wishes: 1, missing: 1, cost: 4, unpriced: 0 } });
+    mount({ summary: { wishes: 1, copies: 1, cost: 4, unpriced: 0 } });
     expect(screen.getByText("1 wish · $4.00")).toBeInTheDocument();
   });
 
-  it("shows the count alone on a folder with nothing left to buy", () => {
-    mount({ summary: { wishes: 6, missing: 0, cost: 0, unpriced: 0 } });
+  /**
+   * The guard fired on a folder the reader had finished buying while `copies` was the copies
+   * still to find. Nothing is ever finished now, so what reaches this arm is an empty drawer —
+   * `wishes: 6` here is the fixture disagreeing with itself on purpose, because the assertion is
+   * about which figure the guard reads and a `wishes: 0` fixture would pass under either.
+   */
+  it("shows the count alone on a folder wanting no copies", () => {
+    mount({ summary: { wishes: 6, copies: 0, cost: 0, unpriced: 0 } });
     expect(screen.getByText("6 wishes")).toBeInTheDocument();
-    // A `$0.00` on a folder the reader has finished buying is noise, and `formatPrice`'s own rule
-    // is that `$0.00` is a price nobody quoted.
+    // A `$0.00` on a drawer with nothing in it is noise, and `formatPrice`'s own rule is that
+    // `$0.00` is a price nobody quoted.
     expect(screen.queryByText(/\$/)).not.toBeInTheDocument();
   });
 
   it("notes the wishes the marketplace could not price, in the page header's own shape", () => {
-    mount({ summary: { wishes: 6, missing: 6, cost: 312, unpriced: 2 } });
+    mount({ summary: { wishes: 6, copies: 6, cost: 312, unpriced: 2 } });
     expect(screen.getByText("6 wishes · $312.00 · 2 unpriced")).toBeInTheDocument();
   });
 
-  it("draws an em dash rather than $0.00 when every missing copy is unpriced", () => {
-    mount({ summary: { wishes: 3, missing: 3, cost: 0, unpriced: 3 } });
+  it("draws an em dash rather than $0.00 when every copy in it is unpriced", () => {
+    mount({ summary: { wishes: 3, copies: 3, cost: 0, unpriced: 3 } });
     expect(screen.getByText("3 wishes · — · 3 unpriced")).toBeInTheDocument();
   });
 

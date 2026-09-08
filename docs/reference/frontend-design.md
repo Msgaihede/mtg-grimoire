@@ -4045,6 +4045,55 @@ three hosts is exactly the half no suite can see, and it is Task 14 of
 [the plan](../superpowers/plans/2026-08-26-card-chin-and-exact-prices.md). The class assertions
 above pin a string rather than a pixel and do not retire it.
 
+## The selection ring goes round the whole card, not round the picture (2026-09-08)
+
+`CardGrid` drew `selected` straight through to `CardArt`, which paints `ring-2 ring-accent` on the
+5:7 frame. So the gold ring stopped where the picture stopped and the chin hung outside it — an
+outlined photograph glued to an unoutlined bar, on a tile whose whole geometry exists to say the
+opposite. `CHIN_RISE` is 4px precisely so the foot rides up over the face's clipped corners and the
+two read as one piece of cardboard; a ring that ended at the seam contradicted the one thing that
+rise is for.
+
+It is on the **tile root** now, and `CardArt` is passed no `selected` from this wall:
+
+```
+"group flex shrink-0 scroll-m-1.5 flex-col rounded-lg", selected && "ring-2 ring-accent"
+```
+
+Three things are worth writing down.
+
+**`rounded-lg` is the right radius and is not a guess.** `src/index.css` sets `--radius: 0.625rem`
+and `--radius-lg: var(--radius)`, so it is **10px** here rather than Tailwind's stock 8 — the same
+utility `CardArt`'s frame already uses on its top corners and `CardChin`'s `rounded-b-lg` uses on
+its bottom ones. The ring therefore traces exactly the outline the two components already draw
+between them, at every zoom, with nothing to keep in step.
+
+**It costs no layout, so nothing the virtualiser measures moved.** A Tailwind `ring` is a
+spread-only outset `box-shadow`, painted outside the border box; the tile's width, its `tileHeight`
+and the row pitch are what they were with no ring at all. `scroll-m-1.5` was already 6px of scroll
+margin sized for `FOCUS`'s 4px-proud outline, which is more than this needs.
+
+**`CardArt` keeps its `selected` prop and must.** The deck's grid and stack views and
+`AllPrintingsDialog`'s tiles draw that component directly, and there the art genuinely *is* the
+whole object — the wall is the one caller for which "the card" is bigger than "the picture".
+
+**What it reaches.** `CardGrid` is one component and seven surfaces draw it, so the ring changed on
+all of them at once: the search wall, the collection, the tags results, the wishlist, and the three
+docked search columns. That is the intended blast radius rather than a side effect — a reader who
+has learnt one of this app's walls has learnt all of them, and a wishlist that ringed differently
+from the collection beside it would be the drift this component exists to prevent.
+
+**Seven tests catch it moving back**, proved by mutation on the day: putting `selected` back on
+`CardArt` and taking the root's class off reddens three in `CardGrid.test.tsx`, three in
+`AllPrintingsDialog.test.tsx` and one in `CollectionSearchTab.test.tsx`. The assertions that used
+to reach for the `<img>`'s parent climb to `[data-grid-index]` instead, and
+`CollectionSearchTab`'s `ringed` helper asserts the class is on the tile **and** on nothing inside
+it — so a ring that crept back onto a descendant is red rather than silently equivalent.
+
+**Not driven in the shipped window as of this writing.** jsdom loads no stylesheet, so everything
+above is a class assertion; how the ring reads against the chin's own border at 0.5× and 2× is a
+live question.
+
 ## Drag and drop: what `@dnd-kit/dom` 0.5.0 actually requires
 
 Measured 2026-08-27 against **0.5.0** (pinned exactly, no caret — it is pre-1.0 and its API can

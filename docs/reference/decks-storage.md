@@ -2115,24 +2115,28 @@ fetch and any observer of it cannot disagree about what they are sharing. **It n
 because a wish does not: which deck the press came from decides where the *copies* are filed and
 says nothing about which shopping lines could be cleared.
 
-### The wishlist predicate is `OWNED_SQL`'s own first arm, with the second dropped
+### The wishlist predicate is a printing-and-finish match, with the any-printing arm dropped
 
 ```sql
 w.card_id = ?1 AND (w.preferred_finish IS NULL OR w.preferred_finish = ?2)
 ```
 
-`wishlist::OWNED_SQL` — the sum that draws a wish's owned progress — is two arms `OR`ed together:
-a printing-exact one, and an any-printing one that matches `w.card_id IS NULL` through
-`cards.oracle_id`. This takes the first and drops the second, rather than forming a second opinion
-about what fills a wish. Two consequences, both decisions taken on 2026-09-03 and neither an
+"Which wishes could these copies take down" has two arms: a printing-exact one, and an
+any-printing one that would match `w.card_id IS NULL` through `cards.oracle_id`. This takes the
+first and drops the second. Two consequences, both decisions taken on 2026-09-03 and neither an
 oversight:
+
+**It was written as `wishlist::OWNED_SQL`'s first arm and that constant is gone** (2026-09-08).
+`OWNED_SQL` summed how much of a wish the collection already held, which is a question the wishlist
+stopped asking when it stopped comparing itself to the collection at all; the predicate below is
+now this module's own and is the only place the shape is written.
 
 - **The narrowing is on the printing, and it is the pull's narrowing exactly.** A wish for *any*
   printing of the card is left standing after a quick add, the same way the pull leaves an Alpha
   Bolt out of an M10 line — and for the same trade: nothing is ever struck off a shopping list
-  that is not the piece of cardboard the reader has just written down. Owned progress on such a
-  wish still moves, because `OWNED_SQL`'s second arm counts the new copies; it is the row's
-  *deletion* that is fenced, never the arithmetic.
+  that is not the piece of cardboard the reader has just written down. Such a wish is simply left
+  on the list for the reader to cross off, which is what a wishlist is since 2026-09-08 — there is
+  no owned-progress figure on it any more for the second arm to have moved.
 - **A NULL `preferred_finish` matches, and excluding it was never available.** The list itself
   says a wish that names no finish takes any of them, and that is the commonest wish there is.
 

@@ -63,7 +63,6 @@ import { OptimizeWishlistDialog } from "./OptimizeWishlistDialog";
 import { useWishlist, type Wishlist } from "./useWishlist";
 import { useWishlistFolders } from "./useWishlistFolders";
 import { useWishlistOptimize } from "./useWishlistOptimize";
-import { missingOf } from "./wish";
 import type { WishDrop } from "./wishDrag";
 
 /**
@@ -109,7 +108,7 @@ const ROOT_TARGET = 0;
  * 192px list it never overflowed its own box. The table does not.
  *
  * **This page's table fails later than the collection's, and the difference is one column.**
- * `WishlistTable` draws Name, Printing · finish, Owned, Wanted, Cost and Actions where
+ * `WishlistTable` draws Name, Printing · finish, Wanted, Cost and Actions where
  * `CollectionTable` draws six of its own including Folder, so the name column here reads 335px at
  * a 936px list, **122 at 616** and 25 at 470 — against the collection's 371 / 51 / gone. 616 is
  * this page's list at the app's own 1280×800 reference window, so the shipped default was
@@ -147,7 +146,7 @@ type Panel =
 /** What a folder card draws — the recursive total, summed by {@link subtotalsOf}. */
 interface FolderTotals {
   wishes: number;
-  missing: number;
+  copies: number;
   cost: number;
   unpriced: number;
 }
@@ -164,7 +163,7 @@ interface FolderTotals {
  * answered yet.** The two are one `Map.get` miss apart and mean opposite things — see the
  * `summaryQuery.isPending` branch at the wall below, which is what keeps them apart.
  */
-const NO_WISHES: FolderTotals = { wishes: 0, missing: 0, cost: 0, unpriced: 0 };
+const NO_WISHES: FolderTotals = { wishes: 0, copies: 0, cost: 0, unpriced: 0 };
 
 /**
  * The printing a right-click on a **pinned** wish is about.
@@ -263,7 +262,7 @@ function subtotalsOf(
     for (const child of node.children) {
       const under = visit(child);
       total.wishes += under.wishes;
-      total.missing += under.missing;
+      total.copies += under.copies;
       total.cost += under.cost;
       total.unpriced += under.unpriced;
     }
@@ -316,7 +315,10 @@ const WISHLIST_LABELS: FilterLabels = { idStem: "wishlist", search: "Search your
  * whole life saying nothing is a control the reader learns to stop reading; in a shut tray it
  * costs nothing, and a cell that came and went would be the one thing in this list that moved.
  */
-const WISHLIST_TRAY: readonly TrayCell[] = ["set", "format", "rarity", "fulfilled", "needsReview"];
+// `fulfilled` sat between `rarity` and `needsReview` until 2026-09-08 — the Fulfilled / Still
+// missing pair, which asked the backend which wishes the collection already covered. It went with
+// every other comparison this list made against the binder.
+const WISHLIST_TRAY: readonly TrayCell[] = ["set", "format", "rarity", "needsReview"];
 
 export function WishlistPage() {
   const wishlist = useWishlist();
@@ -417,8 +419,9 @@ export function WishlistPage() {
    * Rewrite one wish wherever the wishlist is cached.
    *
    * Every cached filter combination, not just the one on screen: the same wish is in the
-   * "everything" list and in the "still missing" list, and a stepper press that fixed one and
-   * left the other would show two different numbers for one card one filter click apart.
+   * "everything" list and in whatever narrowed list the reader came from, and a stepper press
+   * that fixed one and left the other would show two different numbers for one card one filter
+   * click apart.
    */
   const patchWish = useCallback(
     (id: number, next: ((row: WishRow) => WishRow) | null) => {
@@ -738,13 +741,16 @@ export function WishlistPage() {
   }, [query]);
 
   /**
-   * What is left to buy in the selected marketplace's currency, and how many wishes that
-   * figure could not price.
+   * What this list costs in the selected marketplace's currency, and how many wishes that figure
+   * could not price.
    *
-   * Counted over what is *missing* rather than over what is wanted: a total that charged the
-   * reader for cards already in the binder is a number nobody can act on. Computed here
-   * rather than asked of the backend because a wishlist fits in one page — this is arithmetic
-   * over the rows already on screen, not a second round trip.
+   * Counted over what each wish **wants**, which is a reversal: it was summed over what was
+   * *missing* until 2026-09-08, on the argument that a total charging the reader for cards
+   * already in the binder is a number nobody can act on. That argument assumed the list knew
+   * what was in the binder, and it no longer asks — a wishlist is the reader's own, and a card
+   * leaves it when they acquire one, so every row on it is a row they still intend to buy.
+   * Computed here rather than asked of the backend because a wishlist fits in one page — this is
+   * arithmetic over the rows already on screen, not a second round trip.
    *
    * **One figure, not the pair this used to draw.** Two totals over one shopping list was two
    * answers to the question the header exists to answer, and the setting is now the way to
@@ -760,10 +766,8 @@ export function WishlistPage() {
     let total = 0;
     let unpriced = 0;
     for (const row of rows) {
-      const missing = missingOf(row);
-      if (missing === 0) continue;
       if (row.unitPrice === null) unpriced += 1;
-      else total += row.unitPrice * missing;
+      else total += row.unitPrice * row.quantity;
     }
     return { total, unpriced };
   }, [rows]);
@@ -1443,11 +1447,17 @@ export function WishlistPage() {
             says this header mirrors the collection's, and that one now prices in one
             currency too. Spec §5: it says how old the prices are, and whose they are.
 
+            **It read `Still to buy` until 2026-09-08 and was summed over the copies each wish was
+            still short of.** Both went with the owned count: this list compares itself to the
+            collection nowhere, so what it can honestly total is what it *asks for* rather than
+            what is left to get, and a label promising the second over the first arithmetic would
+            be the header lying about its own sum.
+
             Etched printings have no EUR price in Scryfall's data at all — `eur_etched` is
             documented and absent — so on Cardmarket a wish for one is left out of this sum
             and counted in the note rather than quoted at the nonfoil rate. */}
         <Figure
-          label={`Still to buy (${currency.toUpperCase()})`}
+          label={`Total cost (${currency.toUpperCase()})`}
           value={query.isPending || empty ? "—" : formatPrice(cost.total, currency)}
           note={note}
           title={pricesAsOf(marketplace)}
@@ -1780,8 +1790,8 @@ export function WishlistPage() {
               **The rule reaches this wall as of 2026-08-26**, when the tiles' chins started quoting
               what one copy costs. `WishlistGrid` already binds the same sentence as a tooltip on the
               corner mark, and that is **not** this line and does not stand in for it: that one is
-              attached to the cost still to buy — `unit × copies missing` — and is drawn on no wish
-              the reader has finished, while the chin's figure is on every tile.
+              attached to what the whole wish costs — `unit × copies wanted` — where the chin's figure
+              is what *one* copy costs.
 
               **Said once, under the wall, rather than on every tile** — the argument the search
               page, the Tags page, the printings modal and the deck's docked panel all make, and the

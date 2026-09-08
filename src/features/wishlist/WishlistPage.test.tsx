@@ -101,6 +101,7 @@ import { useAppStore } from "@/lib/store";
 /** The one printing `import_resolve` answers with for the import test below —
  *  `CollectionPage.test.tsx`'s own `SOL_RING`, copied rather than shared for its reason. */
 const SOL_RING: ImportMatch = {
+  ownedQuantity: 0,
   cardId: "sol-ring",
   name: "Sol Ring",
   setCode: "ltc",
@@ -122,10 +123,9 @@ const SOL_RING: ImportMatch = {
   gameChanger: false,
   everUncommon: false,
   printingCount: 1,
-  ownedQuantity: 0,
 };
 
-/** A wish pinned to one printing, one copy of four already in the binder. */
+/** A wish pinned to one printing, for four copies. */
 const BOLT: WishRow = {
   legalities: null,
   id: 7,
@@ -146,7 +146,6 @@ const BOLT: WishRow = {
   quantity: 4,
   preferredFinish: "foil",
   unitPrice: 400.5,
-  ownedQuantity: 1,
   notes: null,
   needsReview: null,
   updatedAt: 1_800_000_000,
@@ -171,7 +170,6 @@ const ANY: WishRow = {
   manaCost: "{U}",
   preferredFinish: null,
   quantity: 1,
-  ownedQuantity: 0,
   unitPrice: 12,
 };
 
@@ -194,7 +192,6 @@ const FILED: WishRow = {
   collectorNumber: "45",
   preferredFinish: null,
   quantity: 1,
-  ownedQuantity: 0,
   unitPrice: 30,
 };
 
@@ -208,6 +205,7 @@ const FILED: WishRow = {
  */
 const SEARCH_BOLT: CardSummary = {
   promoTypes: null,
+  ownedQuantity: 0,
   id: "c1",
   name: "Lightning Bolt",
   setCode: "lea",
@@ -220,7 +218,6 @@ const SEARCH_BOLT: CardSummary = {
   layout: "normal",
   oracleId: "o-bolt",
   finishes: `["nonfoil","foil"]`,
-  ownedQuantity: 1,
   wishlisted: true,
   printings: 1,
   priceLow: 400.5,
@@ -245,8 +242,8 @@ const FOLDERS: WishlistFolder[] = [ORDERED, BACKORDERED, SOMEDAY];
 
 /** Direct per folder, and `Someday` is deliberately absent rather than zeroed. */
 const SUMMARY: WishlistFolderSummary[] = [
-  { folderId: 1, wishes: 1, missing: 1, cost: 10, unpriced: 0 },
-  { folderId: 2, wishes: 2, missing: 2, cost: 20, unpriced: 0 },
+  { folderId: 1, wishes: 1, copies: 1, cost: 10, unpriced: 0 },
+  { folderId: 2, wishes: 2, copies: 2, cost: 20, unpriced: 0 },
 ];
 
 const page = (items: WishRow[], total = items.length) => ({ items, total });
@@ -306,7 +303,7 @@ async function openTray(user: {
  * because the figure changes denomination in Settings, so the scoping selector takes it.
  */
 const total = async (currency: "USD" | "EUR" = "USD") =>
-  (await screen.findByText(`Still to buy (${currency})`)).closest("div") as HTMLElement;
+  (await screen.findByText(`Total cost (${currency})`)).closest("div") as HTMLElement;
 
 /**
  * The page, under the two providers `App` mounts above it.
@@ -572,48 +569,29 @@ beforeEach(() => {
 
 describe("WishlistPage", () => {
   /**
-   * The whole question a wishlist answers, per row: how far along am I. A fraction in the
-   * data face and nothing else — no bar, because the direction's motion and colour budget is
-   * spent on the mana line and the card art, and forty progress bars would out-shout both.
+   * **The list says nothing about the collection, anywhere** — the shape of this page since
+   * 2026-09-08, asserted as an absence because that is the only way it can be asserted.
+   *
+   * There was an `Owned` column here reading `1 of 4 owned`, the word `Fulfilled` on a covered
+   * wish, a `text-dim` dimming of that row and a `Fulfilled` / `Still missing` pair in the filter
+   * tray. All four are gone: a wishlist is the reader's own list, kept by hand, and they take a
+   * card off it when they acquire one. The four assertions below are one test rather than four
+   * because they are one decision, and each names the exact string that would come back.
    */
-  it("says what is still needed, in the data face and without a bar", async () => {
-    wrap(<WishlistPage />);
-
-    const readout = await screen.findByText("1 of 4 owned");
-    expect(readout).toHaveClass("font-mono", "tabular-nums");
-    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
-  });
-
-  /**
-   * A wishlist that deletes its own entries loses the record of why they were there — so a
-   * covered wish is marked rather than removed, in the same cell and the same word.
-   */
-  it("marks a fulfilled wish instead of hiding it", async () => {
-    wishlistList.mockResolvedValue(page([{ ...BOLT, ownedQuantity: 4 }]));
-    wrap(<WishlistPage />);
-
-    expect(await screen.findByText("Lightning Bolt")).toBeInTheDocument();
-    expect(screen.getByText("Fulfilled")).toBeInTheDocument();
-    expect(screen.queryByText(/of 4 owned/)).not.toBeInTheDocument();
-  });
-
-  /** "What is still missing" is the list's usual question, so it is one press away. */
-  it("narrows to the wishes the collection has not covered", async () => {
+  it("says nothing about what the collection holds", async () => {
     wrap(<WishlistPage />);
     await screen.findByText("Lightning Bolt");
 
+    expect(screen.queryByText(/owned/i)).not.toBeInTheDocument();
+    expect(screen.queryByText("Fulfilled")).not.toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: /Owned/ })).not.toBeInTheDocument();
+
+    // And the tray offers no way to ask the question either. Opened rather than assumed shut —
+    // every one of those cells lives behind the disclosure, so a query over a closed tray would
+    // pass whether the chip was there or not.
     await openTray(userEvent);
-    await userEvent.click(screen.getByRole("button", { name: "Still missing" }));
-
-    await waitFor(() => expect(lastQuery().fulfilled).toBe(false));
-
-    // And round the other way, because the opposite question — what did I already get? — is
-    // the reason a fulfilled wish is kept in the first place. The tray is still open from the
-    // press above — it is a disclosure the reader opened, not a menu that closes behind them.
-    await userEvent.click(screen.getByRole("button", { name: "Still missing" }));
-
-    expect(await screen.findByRole("button", { name: "Fulfilled" })).toBeInTheDocument();
-    await waitFor(() => expect(lastQuery().fulfilled).toBe(true));
+    expect(screen.queryByRole("button", { name: "Still missing" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Fulfilled" })).not.toBeInTheDocument();
   });
 
   /**
@@ -631,9 +609,8 @@ describe("WishlistPage", () => {
 
   /**
    * A wish *for the foil* is not filled by the nonfoil in the binder — that is why finish is
-   * part of what makes two wishes two wishes, and why `ownedQuantity` on a wish row is
-   * finish-aware where the search's field of the same name is not. A row that did not say so
-   * would show two identical lines for one card.
+   * part of what makes two wishes two wishes. A row that did not say so would show two
+   * identical lines for one card.
    */
   it("says which finish a wish is for", async () => {
     wishlistList.mockResolvedValue(page([BOLT, ANY]));
@@ -861,7 +838,7 @@ describe("WishlistPage", () => {
 
   /**
    * What the list is *for*: the money still to spend. Counted over what is missing rather
-   * than over what is wanted — three of the four Bolts at $400.50, plus the Recall — because
+   * over what is wanted — all four Bolts at $400.50, plus the Recall — because
    * a total that charged the reader for cards already in the binder is a number nobody can
    * act on. Spec §5: it says how old the prices are, and whose.
    */
@@ -869,8 +846,8 @@ describe("WishlistPage", () => {
     wishlistList.mockResolvedValue(page([BOLT, ANY]));
     wrap(<WishlistPage />);
 
-    // Three of the four Bolts at $400.50, plus the Recall.
-    expect(await within(await total()).findByText("$1,213.50")).toBeInTheDocument();
+    // All four Bolts at $400.50, plus the Recall.
+    expect(await within(await total()).findByText("$1,614.00")).toBeInTheDocument();
     // `Figure`'s own `title` prop, bound through `useTooltip()` since the tooltip sweep
     // rather than a native attribute.
     const figure = await total();
@@ -880,15 +857,23 @@ describe("WishlistPage", () => {
     await userEvent.unhover(figure);
     // One figure, not the pair this header drew before the marketplace setting existed: two
     // totals over one shopping list is two answers to the question it is open to ask.
-    expect(screen.queryByText("Still to buy (EUR)")).not.toBeInTheDocument();
+    expect(screen.queryByText("Total cost (EUR)")).not.toBeInTheDocument();
   });
 
-  /** A fulfilled wish costs nothing to finish, so it adds nothing to the total. */
-  it("charges nothing for a wish the collection already covers", async () => {
-    wishlistList.mockResolvedValue(page([{ ...BOLT, ownedQuantity: 4 }, ANY]));
+  /**
+   * **A wish the reader happens to own is charged for like any other**, which reverses what this
+   * test asserted until 2026-09-08 — a covered wish used to cost nothing to finish and added
+   * nothing to the total. The list does not know what is in the binder any more, and the reader
+   * takes a card off it when they acquire one, so every row on it is a row they still mean to
+   * buy.
+   */
+  it("charges for every wish on the list", async () => {
+    wishlistList.mockResolvedValue(page([{ ...BOLT, quantity: 1 }, ANY]));
     wrap(<WishlistPage />);
 
-    expect(await within(await total()).findByText("$12.00")).toBeInTheDocument();
+    // One Bolt at $400.50 and the Recall at $12 — a fixture that would read $12.00 on its own
+    // under the old subtraction, so the assertion can tell the two arithmetics apart.
+    expect(await within(await total()).findByText("$412.50")).toBeInTheDocument();
   });
 
   /** A total that silently omits the cards it has no price for is a number that lies by
@@ -914,7 +899,7 @@ describe("WishlistPage", () => {
    * a row this marketplace does not quote arrives with a `null` unit price, contributes nothing
    * to the sum, and is counted. Nothing is borrowed, because there is nothing to borrow from.
    */
-  it("prices what is still to buy in euros, and counts what it could not price", async () => {
+  it("prices the list in euros, and counts what it could not price", async () => {
     getMarketplace.mockResolvedValue("cardmarket");
     const UNQUOTED: WishRow = {
       ...ANY,
@@ -927,15 +912,15 @@ describe("WishlistPage", () => {
     wishlistList.mockResolvedValue(page([{ ...BOLT, unitPrice: 320 }, UNQUOTED]));
     wrap(<WishlistPage />);
 
-    // Three of the four Bolts at €320, and nothing at all for the etched wish.
+    // All four Bolts at €320, and nothing at all for the etched wish.
     const eur = await total("EUR");
-    expect(await within(eur).findByText("€960.00")).toBeInTheDocument();
+    expect(await within(eur).findByText("€1,280.00")).toBeInTheDocument();
     expect(within(eur).getByText("1 unpriced")).toBeInTheDocument();
     await userEvent.hover(eur);
     const panel = await screen.findByRole("tooltip", undefined, { timeout: TOOLTIP_OPEN_MS + 1000 });
     expect(panel).toHaveTextContent(pricesAsOf(MARKETPLACES.cardmarket));
     await userEvent.unhover(eur);
-    expect(screen.queryByText("Still to buy (USD)")).not.toBeInTheDocument();
+    expect(screen.queryByText("Total cost (USD)")).not.toBeInTheDocument();
   });
 
   /**
@@ -954,10 +939,10 @@ describe("WishlistPage", () => {
     wrap(<WishlistPage />);
 
     const row = (await screen.findByText("Lightning Bolt")).closest('[role="row"]') as HTMLElement;
-    // Three of four still missing, at €320 each. Scoped to the row: with one wish on the list
-    // the header's total is the same number, and an unscoped query cannot tell a sum from a
-    // term — the same reason `total()` above is scoped.
-    await waitFor(() => expect(within(row).getByText("€960.00")).toBeInTheDocument());
+    // Four copies at €320 each. Scoped to the row: with one wish on the list the header's total
+    // is the same number, and an unscoped query cannot tell a sum from a term — the same reason
+    // `total()` above is scoped.
+    await waitFor(() => expect(within(row).getByText("€1,280.00")).toBeInTheDocument());
     expect(within(row).getByText("€320.00 ea")).toBeInTheDocument();
 
     await waitFor(() => expect(lastQuery().marketplace).toBe("cardmarket"));
@@ -1060,8 +1045,10 @@ describe("WishlistPage", () => {
     wrap(<WishlistPage />);
     await screen.findByText(/nothing on your wishlist yet/i);
 
+    // Any filter will do; this used to press `Still missing`, which was the wishlist's own and
+    // went with the rest of its comparisons against the collection.
     await openTray(userEvent);
-    await userEvent.click(screen.getByRole("button", { name: "Still missing" }));
+    await userEvent.click(screen.getByRole("button", { name: "Needs review" }));
 
     expect(await screen.findByText(/no wishes match these filters/i)).toBeVisible();
   });
@@ -1087,9 +1074,12 @@ describe("WishlistPage", () => {
   });
 
   /**
-   * Every list that counts these copies. A wish's `ownedQuantity` is computed from
-   * `collection_entries`, and a search result's `wishlisted`/`ownedQuantity` from both — so a
-   * write here makes cached rows in two other views wrong.
+   * A wishlist write still reaches the **search** results, which carry a `wishlisted` flag per
+   * card — so a wish added or removed here makes cached search rows wrong.
+   *
+   * It used to reach further. A wish's own `ownedQuantity` was computed from `collection_entries`
+   * and a collection write fired this list; both directions went on 2026-09-08 with every other
+   * comparison the wishlist made against the binder.
    */
   it("re-reads the search results after a write, now that they carry the badges", async () => {
     const { client } = wrap(<WishlistPage />);
@@ -1533,15 +1523,17 @@ describe("the wall", () => {
     expect(useAppStore.getInitialState().wishlistView).toBe("grid");
   });
 
-  it("draws one tile per wish, with what is owned of it over the art", async () => {
+  it("draws one tile per wish, with the copies wanted over the art", async () => {
     useAppStore.setState({ wishlistView: "grid" });
     wrap(<WishlistPage />);
 
     expect(await screen.findByAltText("Lightning Bolt")).toBeInTheDocument();
-    // The fraction the table spells out, in the two glyphs a corner mark has room for — and
-    // the sentence beside it, which is what a screen reader and a tooltip get.
-    expect(screen.getByText("1/4")).toBeInTheDocument();
-    expect(screen.getByText("1 of 4 owned")).toBeInTheDocument();
+    // How many copies, in the glyphs a corner mark has room for — and the sentence beside it,
+    // which is what a screen reader and a tooltip get. It drew `1/4` and `1 of 4 owned` until
+    // 2026-09-08; the fraction went with everything else on this page that read the collection.
+    expect(screen.getByText("×4")).toBeInTheDocument();
+    expect(screen.getByText("4 copies wanted")).toBeInTheDocument();
+    expect(screen.queryByText("1/4")).not.toBeInTheDocument();
   });
 
   /**
@@ -1586,44 +1578,50 @@ describe("the wall", () => {
     );
   });
 
-  /** What finishing the wish still costs, in the corner the search spends on its printings
-   *  count — over the copies still *missing*, which is the header's own arithmetic. */
-  it("marks a tile with the cost of the copies still missing", async () => {
+  /** What the whole wish costs, in the tile's bottom-right corner — `unit × copies wanted`,
+   *  which is the header's own arithmetic. */
+  it("marks a tile with what the whole wish costs", async () => {
     useAppStore.setState({ wishlistView: "grid" });
     wrap(<WishlistPage />);
 
-    // Three still to find at $400.50 each, and not the four the wish asks for. Scoped to the
-    // tile: a one-wish list prints the same amount in the header, and an unscoped query cannot
-    // tell the sum from the term it was summed from.
+    // All four at $400.50 each — where this read $1,201.50 until 2026-09-08, three copies at that
+    // price, the fourth being one the binder held. Scoped to the tile: a one-wish list prints the
+    // same amount in the header, and an unscoped query cannot tell the sum from the term it was
+    // summed from.
     const tile = (await screen.findByAltText("Lightning Bolt")).closest(
       "[data-grid-index]",
     ) as HTMLElement;
-    expect(within(tile).getByText("$1,201.50")).toBeInTheDocument();
+    expect(within(tile).getByText("$1,602.00")).toBeInTheDocument();
   });
 
   /**
-   * Nothing left to buy is nothing to say: the **corner** collapses rather than quoting $0.00.
+   * **A tile carries two prices, and they answer different questions** — which is a reversal of
+   * what this test asserted until 2026-09-08.
    *
-   * The claim is about the corner alone, and it stopped being sayable as "no figure anywhere on
-   * the tile" once the chin arrived — the chin quotes what **one copy** of this printing costs,
-   * which is a fact about the cardboard and is true of a wish the reader has already finished.
-   * So the tile carries exactly one price, and it is the chin's.
+   * It used to say that a wish the collection covered drew *one* price, the chin's, because the
+   * corner collapsed rather than quoting $0.00. There is no covered wish now, so the corner is
+   * always drawn: the chin quotes what **one copy** of this printing costs, a fact about the
+   * cardboard, and the corner quotes what the whole wish costs. A single-copy wish is the case
+   * where the two are the same number and the tile prints it twice — the honest reading of two
+   * true statements, and the reason this fixture uses one rather than four.
    */
-  it("draws no cost on a wish the collection already covers", async () => {
+  it("quotes one copy in the chin and the whole wish in the corner", async () => {
     useAppStore.setState({ wishlistView: "grid" });
-    wishlistList.mockResolvedValue(page([{ ...BOLT, ownedQuantity: 4 }]));
+    wishlistList.mockResolvedValue(page([{ ...BOLT, quantity: 2 }]));
     wrap(<WishlistPage />);
 
     const tile = (await screen.findByAltText("Lightning Bolt")).closest(
       "[data-grid-index]",
     ) as HTMLElement;
-    expect(within(tile).getByText("4/4")).toBeInTheDocument();
+    expect(within(tile).getByText("×2")).toBeInTheDocument();
     const prices = within(tile).getAllByText(/^\$/);
-    expect(prices).toHaveLength(1);
-    // `CardChin` is the only element in a tile with a vertical border, which is how the one
-    // surviving figure is placed without counting `parentElement` hops through two components.
-    expect(prices[0].closest("span.border-x")).not.toBeNull();
-    expect(prices[0]).toHaveTextContent("$400.50");
+    expect(prices).toHaveLength(2);
+    // `CardChin` is the only element in a tile with a vertical border, which is how the unit
+    // price is placed without counting `parentElement` hops through two components.
+    const chin = prices.find((p) => p.closest("span.border-x") !== null);
+    const corner = prices.find((p) => p.closest("span.border-x") === null);
+    expect(chin).toHaveTextContent("$400.50");
+    expect(corner).toHaveTextContent("$801.00");
   });
 
   /**
@@ -2804,7 +2802,7 @@ describe("the folders", () => {
     );
     wishlistFolderSummary.mockImplementation(async () =>
       SUMMARY.map((s) =>
-        s.folderId === 1 ? { ...s, missing: quantity, cost: 10 * quantity } : s,
+        s.folderId === 1 ? { ...s, copies: quantity, cost: 10 * quantity } : s,
       ),
     );
     wishlistSetQuantity.mockImplementation(async (id: number, next: number) => {

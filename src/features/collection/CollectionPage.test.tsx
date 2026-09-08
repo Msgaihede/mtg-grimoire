@@ -1709,9 +1709,13 @@ describe("CollectionPage", () => {
     const { container } = wrap(<CollectionPage />);
     await screen.findAllByAltText("Lightning Bolt");
 
+    // The ring is on the tile's **root** since 2026-09-08 — around the art and the chin together
+    // rather than around the picture alone — so these ask the tile itself where they used to
+    // search inside it. The `querySelectorAll` still counts one across the whole page, which is
+    // what catches a ring drawn in both places at once.
     expect(container.querySelectorAll('[class*="ring-accent"]')).toHaveLength(1);
-    expect(tileQuoting("$9.00").querySelector('[class*="ring-accent"]')).not.toBeNull();
-    expect(tileQuoting("$1.00").querySelector('[class*="ring-accent"]')).toBeNull();
+    expect(tileQuoting("$9.00").classList.contains("ring-accent")).toBe(true);
+    expect(tileQuoting("$1.00").classList.contains("ring-accent")).toBe(false);
   });
 
   /**

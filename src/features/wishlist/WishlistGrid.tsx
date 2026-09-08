@@ -1,7 +1,6 @@
 import { useMemo, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { QuantityStepper } from "@/components/QuantityStepper";
 import { useTooltip } from "@/components/tooltip/useTooltip";
-import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { dragData } from "@/features/decks/dnd";
 import { CardGrid, PHONE_TILE_WIDTH, type GridCard } from "@/features/search/CardGrid";
 import { isFinish, type Finish } from "@/lib/finish";
@@ -13,7 +12,7 @@ import { useAppStore } from "@/lib/store";
 import { useNarrowWindow } from "@/lib/useNarrowWindow";
 import { cn } from "@/lib/utils";
 import { EditWishButton } from "./EditWish";
-import { missingOf, printingOf, wishLabel } from "./wish";
+import { printingOf, wishLabel } from "./wish";
 import { wishDragData } from "./wishDrag";
 import { ElsewhereMark, WishFolderCaption } from "./wishMarks";
 
@@ -53,8 +52,8 @@ function toTile(wish: WishRow): WishTile {
 }
 
 /**
- * The caption: which printing the wish is for, in the words its table uses — plus the two marks
- * spec §4 puts beside it.
+ * The caption: which printing the wish is for, in the words its table uses — plus the duplicate
+ * mark spec §4 puts beside it.
  *
  * `printingOf` rather than the wall's own `SET · number`, and that is the reason `CardGrid` has
  * a caption slot at all — an unpinned wish is drawn as a printing it is not for, and a caption
@@ -65,28 +64,30 @@ function toTile(wish: WishRow): WishTile {
  * table's does not.** See that function: the finish is the other half of what makes two wishes for
  * one card two wishes, and it is still said here — by the chin's own mark where there is one.
  *
- * **The two marks share this line rather than taking a corner or a second row**, and both halves
- * of that are forced. Every corner of a tile already has an owner — bottom-left the progress
- * fraction, top-left the review flag and the cost, top-right `FoilOverlay`'s chip — and the strip
- * is a **budget**: `CardGrid` positions its virtual rows from `CAPTION_HEIGHT`, so a second line
- * here is a wall whose rows overlap by the difference. So the printing truncates and the marks
- * are `shrink-0` beside it, which is the honest trade at 170px: a folder the reader named and a
- * duplicate warning are worth more than the last few characters of a set code.
+ * **One mark shares this line now, and the folder caption that used to sit beside it has moved
+ * over the art** (2026-09-08). The paragraph this replaces argued that both marks had to be here
+ * because every corner of a tile already had an owner, and it listed them: bottom-left the
+ * owned/wanted fraction, top-left the review flag and the cost, top-right `FoilOverlay`'s chip.
+ * That inventory is what changed. The fraction is gone with every other comparison this list
+ * made against the collection, the flag and the cost have moved to the tile's bottom-right, and
+ * bottom-left now holds the folder above a plain count of copies wanted — where the folder is a
+ * word the reader chose and reads better on the picture than squeezed between a set code and a
+ * price at 10px.
  *
- * A closure over the page's two answers, so it is not module scope like the drag beside it —
- * which costs nothing, because `caption` is read on **render** rather than registered
- * (see `CardGrid`, where only `dragRecord`/`tileRef` and the three card-fact slots ask to be held
- * still).
+ * What has **not** changed is the budget the old paragraph turned on: `CardGrid` positions its
+ * virtual rows from `CAPTION_HEIGHT`, so a second line here is still a wall whose rows overlap by
+ * the difference. The printing truncates and the duplicate mark stays `shrink-0` beside it.
+ *
+ * A closure over the page's answer, so it is not module scope like the drag beside it — which
+ * costs nothing, because `caption` is read on **render** rather than registered (see `CardGrid`,
+ * where only `dragRecord`/`tileRef` and the three card-fact slots ask to be held still).
  */
-const captionFor =
-  (folderNameOf: (folderId: number | null) => string | null, flattened: boolean) =>
-  (tile: WishTile) => (
-    <span className="flex min-w-0 items-center gap-[calc(0.375rem*var(--mark-scale,1))]">
-      <span className="min-w-0 truncate">{wallPrinting(tile.wish)}</span>
-      <ElsewhereMark count={tile.wish.elsewhere} />
-      {flattened && <WishFolderCaption name={folderNameOf(tile.wish.folderId)} />}
-    </span>
-  );
+const caption = (tile: WishTile) => (
+  <span className="flex min-w-0 items-center gap-[calc(0.375rem*var(--mark-scale,1))]">
+    <span className="min-w-0 truncate">{wallPrinting(tile.wish)}</span>
+    <ElsewhereMark count={tile.wish.elsewhere} />
+  </span>
+);
 
 /**
  * The finish this wish is **for**, where the app has an enum's word for it.
@@ -184,40 +185,55 @@ const tileDrag = (tile: WishTile): Record<string, unknown> => {
 };
 
 /**
- * How much of this wish the collection already covers, over the art.
+ * The pill every mark in the tile's bottom-left corner is drawn in.
  *
- * `2/4` rather than the table's "2 of 4 owned": a corner mark on a 170px card is two glyphs of
- * shorthand, and the sentence is in the accessible name where the table's column header would
- * have been. The mono face and `--mark-scale` are `OwnedBadge`'s, so the two walls' bottom-left
- * corners are the same object at every zoom even though they count different things.
+ * That corner holds **two** marks now — the folder above the copies wanted — so it is the one
+ * corner on any wall in this app where `CardGrid`'s single chip is the wrong shape: sized to
+ * `Commander` it would leave `×4` alone on a row of empty backing half the tile wide. So the wall
+ * passes `badgeChrome="bare"` and each mark brings its own.
  *
- * **A fulfilled wish recedes here**, which is the wall's version of the dimmed row its table
- * draws: nothing is left to buy, so the figure goes quiet and the cost mark opposite it stops
- * being drawn at all. Nothing is hidden — a covered wish is still on the list until the reader
- * crosses it off.
+ * The numbers are `CardGrid`'s corner chip, copied deliberately rather than shared, because what
+ * is being kept identical is what a mark *looks* like on a photograph across six walls: the app's
+ * own table felt at 85%, the quietest thing that can sit on a card without becoming a sticker,
+ * and every size scaled on `--mark-scale` so the chip is the same place on the picture at every
+ * stop of the zoom ladder.
  */
-function WishProgress({ wish }: { wish: WishRow }) {
+const CORNER_PILL = [
+  "rounded-[calc(0.25rem*var(--mark-scale,1))] bg-bg/85",
+  "px-[calc(0.375rem*var(--mark-scale,1))] py-[calc(0.125rem*var(--mark-scale,1))]",
+].join(" ");
+
+/**
+ * How many copies the reader wants — and nothing else, which is the whole of what this mark is.
+ *
+ * **It replaced `WishProgress` on 2026-09-08 and the deletion is the point.** That mark drew
+ * `owned/wanted` and receded to `text-dim` when the collection covered the wish, on the argument
+ * that a fulfilled wish is the wall's version of the dimmed row its table drew. There is no such
+ * thing as a fulfilled wish any more: a wishlist is the reader's own list, kept by hand, and they
+ * take a card off it when they acquire one — so a tile that quietly reported how far along the
+ * binder had got was answering a question this list does not ask. What is left is the number the
+ * stepper in the right margin writes, said once, in the corner the reader already reads it in.
+ *
+ * `OwnedBadge`'s recipe for the parts that still apply: the mono face and `--mark-scale`, so this
+ * corner and the collection wall's are the same object at every zoom even though they count
+ * different things; an `aria-hidden` `×N` beside an `sr-only` sentence, because `×4` is an
+ * abbreviation and a screen reader is owed the words; and `describes: false` on the tooltip, since
+ * that sentence is already in the accessibility tree and a wired `aria-describedby` would have it
+ * read twice.
+ */
+function WishWanted({ wish }: { wish: WishRow }) {
   const tip = useTooltip();
-  const done = missingOf(wish) === 0;
-  const sentence = done
-    ? `Fulfilled, ${wish.ownedQuantity} of ${wish.quantity} owned`
-    : `${wish.ownedQuantity} of ${wish.quantity} owned`;
+  const sentence = `${wish.quantity} ${wish.quantity === 1 ? "copy" : "copies"} wanted`;
   return (
     <span
-      // Redundant, not a description: the `sr-only` span below already carries this sentence
-      // as text in the accessible tree, so a screen reader that reaches this element has it
-      // already — `describes: false` keeps the panel a pointer/sighted-only hint and stops it
-      // wiring `aria-describedby` onto text that would then be read twice.
       {...tip(sentence, { describes: false })}
-      className={[
-        "inline-flex shrink-0 items-center font-mono tabular-nums",
+      className={cn(
+        CORNER_PILL,
+        "inline-flex shrink-0 items-center font-mono tabular-nums text-text",
         "text-[calc(0.75rem*var(--mark-scale,1))] leading-[calc(1rem*var(--mark-scale,1))]",
-        done ? "text-dim" : "text-text",
-      ].join(" ")}
+      )}
     >
-      <span aria-hidden="true">
-        {wish.ownedQuantity}/{wish.quantity}
-      </span>
+      <span aria-hidden="true">×{wish.quantity}</span>
       <span className="sr-only">{sentence}</span>
     </span>
   );
@@ -313,12 +329,6 @@ export function WishlistGrid({
   const tiles = useMemo(() => rows.map(toTile), [rows]);
   const asOf = pricesAsOf(marketplace);
   const currency = marketplace.currency;
-  // Built fresh on every render, deliberately: `caption` is one of the slots `CardGrid` *reads*
-  // rather than registers, so nothing is torn down when its identity changes — and memoising it
-  // against a `folderNameOf` the page will hand over as an inline arrow would promise a stability
-  // that does not exist.
-  const caption = captionFor(folderNameOf, flattened);
-
   return (
     <CardGrid
       rows={tiles}
@@ -370,115 +380,134 @@ export function WishlistGrid({
       // every one of forty tiles. The corner keeps its own, because arithmetic over a wish is not
       // a figure the sentence under the wall is about.
       money={(tile) => formatPrice(tile.wish.unitPrice, currency)}
-      badge={(tile) => <WishProgress wish={tile.wish} />}
-      // **Below the printed title bar, not on it.** The search wall leaves its corner at 4px *on
-      // purpose* — there the mark is a printings count and the nameplate is the quietest place on
-      // the card to put one. Here the mark is a red sentence and a price, and the same 4px lands
-      // on the card's own **name**, which is the one thing a reader identifies a tile by on a wall
-      // of forty. The two walls want two answers and both are right, which is what the prop is
-      // for; `CardGrid` carries the measurement behind the offset.
-      topLeftPlacement="clear"
-      // The top-left corner carries two facts, in one chip because a tile has four corners and
-      // this is the only one free: what the reconciler found, and what the wish still costs.
+      // **Two marks, stacked, each in a pill of its own** — which is why this wall is the one
+      // caller that asks `CardGrid` for a bare corner.
       //
-      // **The flag is here because a wall may not say less than its table.** `needs_review` is a
+      // The folder rides on top and is drawn **only while the list is flattened**. Flatten's whole
+      // promise is "every wish, wherever it is filed", so without it the switch would hand the
+      // reader one undifferentiated list and take the filing away in the act of showing it all;
+      // inside a folder the caption would be the same word under every tile and the breadcrumb
+      // above already says it. It moved here from the chin's caption on 2026-09-08, where it sat
+      // between a truncating set code and a price at 10px — a word the reader chose themselves,
+      // in the smallest and busiest type on the card.
+      //
+      // Under it, how many copies they want. `WishFolderCaption` is `wishMarks`' shared component
+      // and is drawn exactly as the table draws it, backing apart: it answers `null` for a folder
+      // this page cannot name, which is why the pill is guarded here rather than wrapped around
+      // whatever it returns — a bare chip with nothing in it is the one thing this corner cannot
+      // collapse, `badgeChrome="bare"` having handed `empty:hidden` a wrapper that is never empty.
+      //
+      // The width cap is what keeps a long folder name out of the bottom-right corner opposite,
+      // and it scales for the reason every other size on a card does — at 2× the two marks are
+      // twice as wide and so is the gutter they have to leave each other.
+      badgeChrome="bare"
+      badge={(tile) => {
+        const folder = flattened ? folderNameOf(tile.wish.folderId) : null;
+        return (
+          <span
+            className={cn(
+              "flex flex-col items-start gap-[calc(0.25rem*var(--mark-scale,1))]",
+              "max-w-[calc(100%-2.75rem*var(--mark-scale,1))]",
+            )}
+          >
+            {folder !== null && (
+              <span className={cn(CORNER_PILL, "flex min-w-0 max-w-full")}>
+                <WishFolderCaption name={folder} />
+              </span>
+            )}
+            <WishWanted wish={tile.wish} />
+          </span>
+        );
+      }}
+      // The bottom-right corner carries two facts in one chip: what the reconciler found, and
+      // what this wish costs.
+      //
+      // **It was the top-left until 2026-09-08**, below the printed title bar so a red sentence
+      // would not land on the card's own name — the one thing a reader identifies a tile by on a
+      // wall of forty. What moved it is that the corner it now occupies came free: the pencil left
+      // the hover strip for the column up the right-hand edge, and a price reads better opposite
+      // the count it is a multiple of than diagonally across the picture from it.
+      //
+      // **The flag is drawn because a wall may not say less than its table.** `needs_review` is a
       // sentence, and the rule it is written under is "listed, counted, and asking to be looked
       // at" — a layout that drew the wish and dropped the question would be the one place in the
       // app where a flagged row looks fine. The table has a band across the row for it; a 170px
-      // card has this, with the reconciler's whole sentence as the tooltip on the short label
-      // below.
+      // card has this, with the reconciler's whole sentence as the tooltip on the short label.
       //
-      // The *label* below never truncates — "Needs review" is fixed and short — so `whenClipped`
-      // is wrong here: it would never open. But the *sentence* is the same 130–190 characters as
-      // the collection table's band, whose second half is what to do about it ("check the
-      // printing and re-add it… or remove this entry") — so it is `interactive` for the same
-      // reason the band is: the reader has to be able to select and copy the instruction, and
-      // that must not depend on which surface is showing it. `describes` stays at its default
-      // (`true`): unlike `WishProgress` above, nothing else on this tile carries the sentence as
-      // text, so `aria-describedby` is a genuine gain over the old `title` rather than a double-up.
+      // The *label* never truncates — "Needs review" is fixed and short — so `whenClipped` is
+      // wrong here: it would never open. But the *sentence* is the same 130–190 characters as the
+      // collection table's band, whose second half is what to do about it ("check the printing and
+      // re-add it… or remove this entry") — so it is `interactive` for the same reason the band
+      // is: the reader has to be able to select and copy the instruction, and that must not depend
+      // on which surface is showing it. `describes` stays at its default (`true`): nothing else on
+      // this tile carries the sentence as text, so `aria-describedby` is a genuine gain over the
+      // old `title` rather than a double-up.
       //
-      // The cost is over the copies still *missing* — the same arithmetic the header's "Still to
-      // buy" is summed from and the same the table's Cost column shows, so one definition means
-      // a tile and the figure above it cannot disagree on screen. An unpriced wish is an em dash
-      // rather than another marketplace's rate wearing this one's currency sign, and a fulfilled
-      // wish draws no figure at all: there is nothing left to buy. Neither fact draws an empty
-      // chip — `CardGrid` collapses the corner when the mark comes back with nothing in it.
-      topLeft={(tile) => {
-        const missing = missingOf(tile.wish);
+      // **The cost is `unit × copies wanted`, and it is always drawn.** It was `unit × copies
+      // still missing` and was not drawn at all on a wish the collection covered; both halves went
+      // with the owned count. So there is no `null` arm here and `empty:hidden` never fires on
+      // this corner — which is worth saying, because the guard it replaced was load-bearing: a
+      // wrapper with two falsy children is still an element as far as that rule can tell, so the
+      // old code had to return `null` by hand rather than let two conditions collapse it.
+      //
+      // An unpriced wish is an em dash rather than another marketplace's rate wearing this one's
+      // currency sign. Spec §5: a price is never shown without saying how old it is, and a corner
+      // mark has no room for the sentence — so it rides as the tooltip, describing the
+      // already-visible figure.
+      bottomRight={(tile) => {
         const review = tile.wish.needsReview;
-        // `null` rather than an empty box: `CardGrid`'s `empty:hidden` collapses a corner whose
-        // mark rendered *nothing*, and a wrapper with two falsy children is still an element as
-        // far as that rule can tell — so a fulfilled, unflagged wish would wear a bare chip.
-        if (review === null && missing === 0) return null;
         return (
-          <span className="flex flex-col items-start leading-[calc(1rem*var(--mark-scale,1))]">
+          <span className="flex flex-col items-end leading-[calc(1rem*var(--mark-scale,1))]">
             {review && (
               <span
                 {...tip(review, { interactive: true })}
-                className="font-medium text-[calc(0.7rem*var(--mark-scale,1))] text-destructive"
+                className="font-medium text-[calc(0.7rem*var(--mark-scale,1))] whitespace-nowrap text-destructive"
               >
                 Needs review
               </span>
             )}
-            {missing > 0 && (
-              // Spec §5: a price is never shown without saying how old it is, and a corner mark
-              // has no room for the sentence — so it rides as the tooltip, describing the
-              // already-visible figure.
-              <span
-                {...tip(`${wishLabel(tile.wish)} — ${asOf}`)}
-                className="font-mono text-[calc(0.75rem*var(--mark-scale,1))] tabular-nums text-text"
-              >
-                {formatPrice(
-                  tile.wish.unitPrice === null ? null : tile.wish.unitPrice * missing,
-                  currency,
-                )}
-              </span>
-            )}
+            <span
+              {...tip(`${wishLabel(tile.wish)} — ${asOf}`)}
+              className="font-mono text-[calc(0.75rem*var(--mark-scale,1))] tabular-nums text-text"
+            >
+              {formatPrice(
+                tile.wish.unitPrice === null ? null : tile.wish.unitPrice * tile.wish.quantity,
+                currency,
+              )}
+            </span>
           </span>
         );
       }}
-      // **The pencil, alone in the strip again** (issue #348).
+      // **The tile's two controls, in one column up its right-hand edge** — the stepper, and
+      // the pencil under it (issue #284 put the stepper on the tile, issue #348 moved it here,
+      // and the pencil joined it on 2026-09-08).
       //
-      // It shared the strip with the stepper between issue #284 and now, in a wrapper that
-      // existed to give the two a gutter. The stepper has gone to the right margin below, so the
-      // wrapper has gone with it: `CardGrid`'s strip is a `flex justify-end` and one child
-      // needs no box to be aligned by it. Two things the wrapper carried do **not** need a new
-      // home — `AnchoredPopup` marks itself `data-no-drag`, which is `dnd.ts`'s rule read the
-      // other way round (anything that owns its own press says so), and the strip is still the
-      // positioned box the 256px panel hangs off.
-      action={(tile) => (
-        <EditWishButton
-          // Keyed by the wish, because the wall keys its tiles by *slot*: removing a wish
-          // re-binds this slot to the next one, and an open panel carried across that would be
-          // pointed at a card the reader never opened it on.
-          key={tile.wish.id}
-          row={tile.wish}
-          folders={folders}
-          nodes={nodes}
-          onSetQuantity={onSetQuantity}
-          onRemove={onRemove}
-          onSetFolder={onSetFolder}
-          onChangePrinting={onChangePrinting}
-          onAnyPrinting={onAnyPrinting}
-          // The search wall's recipe verbatim: invisible until the tile is hovered or holds
-          // the caret — a wall of art is not a wall of pencils — and always in the tab order,
-          // because "visible on hover" is not a state a keyboard has. **`static` is
-          // load-bearing**: it is what makes the panel hang off `CardGrid`'s strip rather than
-          // off this 20px control, and a panel anchored to a 20px box at the right end of a
-          // 170px tile opens off the left of the scroller — where left overflow, unlike right,
-          // cannot be scrolled back into view.
-          className={cn(REVEAL_ON_HOVER, "static")}
-        />
-      )}
-      // **How many copies, standing in the tile's right margin** (issue #284 put it on the
-      // tile; issue #348 moved it here).
+      // The stepper sat in the strip beside the pencil until issue #348, as a 20px row. The
+      // report was that the wall's control matched neither the *style* nor the *location* of the
+      // deck builder's, and it did not: the deck stack draws a 36px column up the card's
+      // right-hand side and this drew a bar tucked into the bottom corner. It is the same control
+      // on the same kind of object, so it is one recipe — {@link CardGrid}'s `column` slot is the
+      // position and `size="card"` the size, both of them the deck stack's.
       //
-      // It sat in the strip beside the pencil until now, as a 20px row. The report was that
-      // the wall's control matched neither the *style* nor the *location* of the deck builder's,
-      // and it did not: the deck stack draws a 36px column up the card's right-hand side and
-      // this drew a bar tucked into the bottom corner. It is the same control on the same kind
-      // of object, so it is one recipe now — {@link CardGrid}'s `column` slot is the position and
-      // `size="card"` the size, both of them the deck stack's.
+      // **The pencil followed it, and the `action` strip is gone from this wall entirely.** It
+      // stayed behind as a 20.4px `AnchoredPopup` trigger in the bottom-right of the picture,
+      // which left the tile with two controls at two sizes in two places for the same card — and
+      // the corner it was occupying is where the cost belongs, opposite the count it multiplies.
+      // It is drawn at `EditWishButton`'s `size="card"`, which is this stepper's own box, glyph
+      // and over-art tone read off `QuantityStepper` rather than retyped, so the column is three
+      // 36px boxes and a fourth under them at every stop of the zoom ladder. The gutter is the
+      // stepper's own inter-button gutter for the same reason: two controls in one column, one
+      // rhythm.
+      //
+      // **`static` on the pencil is load-bearing and its reason has moved.** It used to be what
+      // made the panel hang off the strip rather than off a 20px button; the strip is gone, so
+      // what it now hangs off is this column's wrapper — which `CardGrid` widened to the tile's
+      // full width for exactly this, because a 288px panel anchored `left-0` to a ~31px box at
+      // `right-4px` opens ~253px off the right edge of the scroller. Nothing in here may set
+      // `position` for the same reason.
+      //
+      // It carries no `REVEAL_ON_HOVER` of its own: the wrapper already reveals the whole column,
+      // and a second opacity animation over the first is two transitions on one box.
       //
       // **It fits, and the arithmetic is exact rather than approximate.** At `size="card"` the
       // column is three 36px boxes and two 4px gutters, 116px at 100% zoom, and everything drawn
@@ -503,7 +532,10 @@ export function WishlistGrid({
         // **Nothing here sets `position`, and nothing here may** — see the pencil above: the
         // strip is what the 256px panel is anchored to, and a positioned box anywhere in that
         // chain becomes the containing block instead.
-        <span data-no-drag="" className="flex">
+        <span
+          data-no-drag=""
+          className="flex flex-col items-center gap-[calc(0.25rem*var(--control-scale,1))]"
+        >
           <QuantityStepper
             // The deck stack's column, verbatim — the 36px box, standing on end, over art.
             // `xs` and `card` are the two sizes drawn on a card face and both follow the
@@ -542,6 +574,22 @@ export function WishlistGrid({
             // the panel's carry, because it names the same wish.
             label={`Copies wanted of ${wishLabel(tile.wish)}`}
             onChange={(next) => onSetQuantity(tile.wish, next)}
+          />
+          <EditWishButton
+            // Keyed by the wish, because the wall keys its tiles by *slot*: removing a wish
+            // re-binds this slot to the next one, and an open panel carried across that would be
+            // pointed at a card the reader never opened it on.
+            key={tile.wish.id}
+            row={tile.wish}
+            folders={folders}
+            nodes={nodes}
+            onSetQuantity={onSetQuantity}
+            onRemove={onRemove}
+            onSetFolder={onSetFolder}
+            onChangePrinting={onChangePrinting}
+            onAnyPrinting={onAnyPrinting}
+            size="card"
+            className="static"
           />
         </span>
       )}

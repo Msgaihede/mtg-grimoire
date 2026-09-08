@@ -15,6 +15,7 @@ import { MARKETPLACES } from "@/lib/marketplace";
 import { useAppStore } from "@/lib/store";
 import { boxed, recordDrags, startPointerDrag } from "@/test-drag";
 import { stubNarrowWindow } from "@/test-viewport";
+import { QUANTITY_STEPPER_CARD_BOX } from "@/components/QuantityStepper";
 import { PHONE_TILE_WIDTH } from "@/features/search/CardGrid";
 import { WishlistGrid } from "./WishlistGrid";
 import { WishlistTable } from "./WishlistTable";
@@ -58,7 +59,6 @@ const BOLT: WishRow = {
   quantity: 4,
   preferredFinish: "foil",
   unitPrice: 400.5,
-  ownedQuantity: 1,
   elsewhere: 0,
   notes: null,
   needsReview: null,
@@ -82,7 +82,6 @@ const ANY: WishRow = {
   manaCost: "{U}",
   preferredFinish: null,
   quantity: 1,
-  ownedQuantity: 0,
   unitPrice: 12,
 };
 
@@ -157,6 +156,16 @@ function list(rows: WishRow[], over: Overrides = {}) {
  */
 const chinOf = (printing: string): HTMLElement =>
   screen.getByText(printing).closest("span.border-x") as HTMLElement;
+
+/**
+ * The tile corner a mark is drawn in, reached from the mark's own text.
+ *
+ * `CardGrid` positions all three corners with an `absolute` and a pair of scaled offsets, so the
+ * nearest `absolute` ancestor is the corner and its class list is where it sits. Read that way
+ * because **jsdom loads no stylesheet and computes no layout** — a rect would be all zeroes.
+ */
+const cornerOf = (text: string): HTMLElement =>
+  screen.getByText(text).closest("span[class*='absolute']") as HTMLElement;
 
 /**
  * The nearest ancestor (or the element itself) that would be an absolutely positioned
@@ -286,6 +295,15 @@ describe("the folder caption", () => {
     const { unmount } = wall(rows, { flattened: true });
     expect(screen.getByText("Expensive")).toBeInTheDocument();
     expect(screen.getByText("Wishlist")).toBeInTheDocument();
+    // **Over the art, not in the chin** — it sat in the chin's caption beside the printing until
+    // 2026-09-08, between a truncating set code and a price at 10px. Anchored to the corner
+    // rather than merely found on the tile: a query that only asked whether the word was
+    // somewhere would have passed before the move and proves nothing about it.
+    expect(chinOf("LEA · 161")).not.toContainElement(screen.getByText("Expensive"));
+    expect(cornerOf("Expensive").classList.contains("bottom-[calc(0.25rem*var(--mark-scale,1))]"))
+      .toBe(true);
+    expect(cornerOf("Expensive").classList.contains("left-[calc(0.25rem*var(--mark-scale,1))]"))
+      .toBe(true);
     unmount();
 
     list(rows, { flattened: true });
@@ -313,6 +331,63 @@ describe("the folder caption", () => {
     wall([{ ...BOLT, folderId: 404 }], { flattened: true });
     expect(screen.queryByText("Filed in")).toBeNull();
     expect(screen.getByAltText("Lightning Bolt")).toBeInTheDocument();
+  });
+});
+
+/**
+ * **The bottom-left corner: how many copies the reader wants, and nothing about the binder.**
+ *
+ * It drew `owned/wanted` and receded to `text-dim` on a covered wish until 2026-09-08. There is
+ * no covered wish now — a wishlist is the reader's own list and a card leaves it when they
+ * acquire one — so what is left is the number the stepper in the right margin writes.
+ */
+describe("the copies-wanted mark", () => {
+  it("says how many copies, in glyphs and in words, and nothing about what is owned", () => {
+    wall([{ ...BOLT, quantity: 4 }]);
+
+    expect(screen.getByText("×4")).toBeInTheDocument();
+    // The abbreviation is `aria-hidden` and the sentence beside it is what a screen reader and
+    // the tooltip get — `OwnedBadge`'s recipe, kept so the two walls' corners are one object.
+    expect(screen.getByText("4 copies wanted")).toBeInTheDocument();
+    // The assertion that would go red if the fraction came back. Both spellings, because the
+    // mark said `1/4` in glyphs and `1 of 4 owned` in words and either alone could survive.
+    expect(screen.queryByText("1/4")).toBeNull();
+    expect(screen.queryByText(/owned/i)).toBeNull();
+  });
+
+  /** `1 copy`, never `1 copys` — the plural the table's own cells already keep. */
+  it("says `1 copy` on a single-copy wish", () => {
+    wall([{ ...BOLT, quantity: 1 }]);
+    expect(screen.getByText("1 copy wanted")).toBeInTheDocument();
+  });
+
+  /**
+   * **Two pills, each with its own backing** — the one corner on any wall in this app that asks
+   * `CardGrid` for `badgeChrome="bare"`.
+   *
+   * Sized to `Commander`, a single chip would leave `×4` alone on a row of empty backing half the
+   * tile wide. The two are asserted to be different elements *and* each to carry the felt, which
+   * is what tells this arrangement from one chip holding two lines.
+   */
+  it("gives the folder and the count a pill each", () => {
+    wall([{ ...BOLT, folderId: EXPENSIVE.id, quantity: 4 }], { flattened: true });
+
+    const folderPill = screen.getByText("Expensive").closest("span.bg-bg\\/85")!;
+    const countPill = screen.getByText("×4").closest("span.bg-bg\\/85")!;
+    expect(folderPill).not.toBeNull();
+    expect(countPill).not.toBeNull();
+    expect(folderPill).not.toBe(countPill);
+    // And the corner itself supplies none, or the two pills would sit on a third.
+    expect(cornerOf("×4").classList.contains("bg-bg/85")).toBe(false);
+  });
+
+  /** A wish at the root while the list is not flattened draws the count alone — one pill, no gap
+   *  above it, and nothing that could be mistaken for an unnamed folder. */
+  it("draws the count alone where there is no folder to name", () => {
+    wall([{ ...BOLT, quantity: 2 }]);
+
+    expect(screen.getByText("×2")).toBeInTheDocument();
+    expect(cornerOf("×2").querySelectorAll("span.bg-bg\\/85")).toHaveLength(1);
   });
 });
 
@@ -564,14 +639,39 @@ describe("the wall's own quantity stepper", () => {
    * One mark for both buttons rather than one each, which is what `closest` buys and what
    * `DeckCardControls` already does around the same control.
    *
-   * **The pencil is guarded separately, and since issue #348 it is guarded somewhere else.** The
-   * stepper stood beside it in `CardGrid`'s bottom strip until then and the two shared one
-   * wrapper; the stepper has gone to the tile's right margin, so the wrapper covers the stepper
-   * alone and the pencil is left holding `AnchoredPopup`'s own mark. Both halves are asserted
-   * here rather than only the stepper's — a pencil that quietly lost its mark is a press on the
-   * panel becoming a drag of the wish, and no other test in this file would notice.
+   * **The pencil is inside that wrapper again, and it is still marked in its own right.** The
+   * two shared one wrapper in `CardGrid`'s bottom strip until issue #348 moved the stepper to the
+   * tile's right margin, and they share one again since 2026-09-08, when the pencil followed it
+   * into that column. Both facts are asserted rather than only the containment — `AnchoredPopup`
+   * marks itself, which is `dnd.ts`'s rule read the other way round (anything that owns its own
+   * press says so), and a pencil relying on a wrapper it happens to sit in today is a press on
+   * the panel becoming a drag of the wish the day it is moved again.
    */
-  it("marks the stepper and the pencil as not a drag, separately", () => {
+  /**
+   * **The pencil is drawn at the stepper's own box**, which is the whole point of the two standing
+   * in one column: a 24px button under a 36px one reads as two controls that happen to be adjacent
+   * rather than as one column of controls.
+   *
+   * Asserted against `QuantityStepper`'s exported recipe *and* against a real `card` stepper
+   * button on the same tile — an assertion that read only its own imported constant would pass
+   * over a pencil sized by a copy of the string that had since drifted.
+   */
+  it("draws the pencil at the stepper's own box, over art", () => {
+    wall([BOLT]);
+
+    const pencil = screen.getByRole("button", { name: /^Edit Lightning Bolt/ });
+    const step = screen.getByRole("button", { name: `Decrease ${LABEL}` });
+
+    expect(pencil.className).toContain(QUANTITY_STEPPER_CARD_BOX);
+    expect(step.className).toContain(QUANTITY_STEPPER_CARD_BOX);
+    // The over-art tone and the inset ring, for the reasons `tone="art"`/`focus="inset"` give at
+    // the stepper's own site: a 1px outline over an illustration disappears at some brightness,
+    // and an outset ring on a frame that clips its own corners loses the half that lands outside.
+    expect(pencil.className).toContain("bg-bg/88");
+    expect(pencil.classList.contains("focus-visible:-outline-offset-2")).toBe(true);
+  });
+
+  it("marks the stepper and the pencil as not a drag, and the pencil twice over", () => {
     wall([BOLT]);
 
     const decrease = screen.getByRole("button", { name: `Decrease ${LABEL}` });
@@ -581,36 +681,45 @@ describe("the wall's own quantity stepper", () => {
     expect(guard).not.toBeNull();
     expect(increase.closest(NOT_A_DRAG)).toBe(guard);
 
-    // The pencil is outside that wrapper now, and carries a mark of its own — `AnchoredPopup`
-    // marks itself, which is `dnd.ts`'s rule read the other way round.
+    // The column's wrapper covers the pencil too, now that the two stand in one column…
     const pencil = screen.getByRole("button", { name: /^Edit Lightning Bolt/ });
-    expect(guard!.contains(pencil)).toBe(false);
-    expect(pencil.closest(NOT_A_DRAG)).not.toBeNull();
+    expect(guard!.contains(pencil)).toBe(true);
+    // …and the pencil's own root carries the mark regardless, which is what would still hold if
+    // it moved out again. `parentElement` is `AnchoredPopup`'s root, the element that marks
+    // itself; asking `closest` from the button would find the wrapper and prove nothing.
+    expect(pencil.parentElement!.matches(NOT_A_DRAG)).toBe(true);
   });
 
   /**
-   * **The pencil is `position: static` — so `CardGrid`'s strip is what the 256px panel hangs
-   * off.**
+   * **The pencil is `position: static` — so `CardGrid`'s column wrapper is what the 288px panel
+   * hangs off.**
    *
    * `AnchoredPopup` is `relative` by default and `WishlistGrid` passes it `static` precisely so
-   * that it is not the containing block: a panel anchored to a 20px control at the right end of
-   * a 170px tile opens off the left of the scroller, and left overflow — unlike right — cannot
-   * be scrolled back into view. Anything positioned put between the two is the silent way to
-   * undo it, because a `relative` box looks like nothing at all in the markup — which is why
+   * that it is not the containing block: a panel anchored to the pencil itself, a ~31px box at
+   * the right end of a 170px tile, runs off the right of the scroller — and against the strip
+   * this used to hang off, a panel that opened leftwards ran off the left, which unlike right
+   * cannot be scrolled back into view. Anything positioned put between the two is the silent way
+   * to undo it, because a `relative` box looks like nothing at all in the markup — which is why
    * this asserts the *identity* of the anchor rather than the pencil's own class.
    *
    * **Read off the class list, since jsdom loads no stylesheet** — see {@link nearestPositioned}.
    */
-  it("leaves the strip as the box the pencil's panel is anchored to", () => {
+  it("leaves the tile-wide column as the box the pencil's panel is anchored to", () => {
     wall([BOLT]);
 
     const popupRoot = screen.getByRole("button", { name: /^Edit Lightning Bolt/ }).parentElement!;
-    // `CardGrid`'s action strip — the only `pointer-events-none` box between a tile's controls
-    // and the tile itself, and the box that comment calls the anchor.
-    const strip = popupRoot.closest(".pointer-events-none");
+    // `CardGrid`'s **column** wrapper since 2026-09-08, where this was the action strip: the
+    // pencil moved out of the strip and under the stepper, and the wrapper it landed in was
+    // widened to `inset-x-0` for exactly this. It is still the only `pointer-events-none` box
+    // between a tile's controls and the tile itself.
+    const anchor = popupRoot.closest(".pointer-events-none");
 
-    expect(strip).not.toBeNull();
-    expect(nearestPositioned(popupRoot)).toBe(strip);
+    expect(anchor).not.toBeNull();
+    expect(nearestPositioned(popupRoot)).toBe(anchor);
+    // The half that makes the assertion above worth making: a 288px panel anchored `left-0` to a
+    // box that hugged the 31px column would open ~253px off the right of the scroller. Read off
+    // the class list, since jsdom loads no stylesheet and can measure nothing.
+    expect(anchor!.classList.contains("inset-x-0")).toBe(true);
   });
 });
 
@@ -619,21 +728,26 @@ describe("the wall's own quantity stepper", () => {
  *
  * The chin quotes **one copy** of the printing and finish this wish is for — the same statement
  * every other wall's chin makes, which is what lets a reader carry one vocabulary between the
- * collection, the decks and this list. "Still to buy" is `unit × copies still missing`: it is what
- * the page header sums and what the table's Cost column shows, so it keeps the corner it already
- * has beside the review flag rather than being folded into the bar.
+ * collection, the decks and this list. The bottom-right corner quotes the **whole wish**,
+ * `unit × copies wanted`: it is what the page header sums and what the table's Cost column shows,
+ * so it keeps a corner of its own beside the review flag rather than being folded into the bar.
+ *
+ * It was `unit × copies still missing` until 2026-09-08 and was not drawn at all on a wish the
+ * collection covered. Both went with the owned count.
  *
  * Spec §5 — a price is never shown without saying how old it is — is answered once above this
  * wall by `pricesAsOf`, which is why the chin's figure is bare rather than forty tooltips.
  */
 describe("what a wish tile says about money", () => {
-  it("quotes one copy in the chin, and what is still to buy in the corner", () => {
-    wall([{ ...BOLT, unitPrice: 12.32, quantity: 4, ownedQuantity: 2 }]);
+  it("quotes one copy in the chin, and the whole wish in the corner", () => {
+    // `quantity: 4` rather than 1, or the corner and the chin are the same number and the
+    // assertion below cannot tell `unit × quantity` from `unit`.
+    wall([{ ...BOLT, unitPrice: 12.32, quantity: 4 }]);
 
     expect(within(chinOf("LEA · 161")).getByText("$12.32")).toBeInTheDocument();
-    // Two copies still to find, at that unit price — the header's own arithmetic, and the one
-    // figure that must not move into the bar.
-    expect(screen.getByText("$24.64")).toBeInTheDocument();
+    // Four copies at that unit price — the header's own arithmetic, and the one figure that must
+    // not move into the bar.
+    expect(screen.getByText("$49.28")).toBeInTheDocument();
   });
 
   /**
@@ -647,19 +761,24 @@ describe("what a wish tile says about money", () => {
   });
 
   /**
-   * The corner sat 4px in, which on the search wall is deliberately the card's printed nameplate
-   * — and on a wishlist tile is the card's own **name**. It drops below the printed title bar.
+   * **The review flag and the cost live in the tile's bottom-right corner**, where they were the
+   * top-left until 2026-09-08 — offset 2rem down so a red sentence cleared the card's own printed
+   * name. The corner they now occupy came free when the pencil left the hover strip.
    *
    * `classList.contains` rather than a substring of `className`, and here that is not a
-   * formality: the offset it must no longer carry is a **prefix** of the one it now does, so
-   * `includes` would pass on a tile that had not moved at all.
+   * formality: `bottom-…` and `right-…` are each a prefix of longer utilities in the same
+   * family, so `includes` would pass on a mark that had not moved at all. Both old offsets are
+   * asserted absent for the same reason — a corner still wearing `top-` is a corner that never
+   * moved, and one wearing `left-` is the badge's, not this.
    */
-  it("keeps the corner clear of the card's printed name", () => {
+  it("draws the review flag and the cost in the bottom-right corner", () => {
     wall([{ ...BOLT, needsReview: "Check the printing." }]);
 
     const corner = screen.getByText("Needs review").closest("span[class*='absolute']")!;
-    expect(corner.classList.contains("top-[calc(0.25rem*var(--mark-scale,1))]")).toBe(false);
-    expect(corner.classList.contains("top-[calc(2rem*var(--mark-scale,1))]")).toBe(true);
+    expect(corner.classList.contains("top-[calc(2rem*var(--mark-scale,1))]")).toBe(false);
+    expect(corner.classList.contains("left-[calc(0.25rem*var(--mark-scale,1))]")).toBe(false);
+    expect(corner.classList.contains("bottom-[calc(0.25rem*var(--mark-scale,1))]")).toBe(true);
+    expect(corner.classList.contains("right-[calc(0.25rem*var(--mark-scale,1))]")).toBe(true);
   });
 });
 

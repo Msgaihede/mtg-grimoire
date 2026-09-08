@@ -87,7 +87,7 @@ Term by term, each one answering "what makes this a *different* wish":
 | --- | --- |
 | `oracle_id` | Which card is wanted. |
 | `card_id` | Which *printing* — a wish for the Alpha Bolt and a wish for any Bolt are two different requests, and only one of them can be filled at the shop next door. |
-| `preferred_finish` | A foil wish is not satisfied by the nonfoil in the binder; `OWNED_SQL` narrows by finish for the same reason. |
+| `preferred_finish` | A foil wish is not satisfied by the nonfoil in the binder; it is the third term of the grain for that reason, and the price a wish is quoted at follows the finish it names. |
 | `folder_id` | **This one is v23's, and it is what makes "Add to" always an add.** |
 
 **Without the fourth term, "Add to → Ordered" would not be an add.** It would land on the row the
@@ -537,7 +537,7 @@ add up to the rows under it, with nothing on screen saying which of the two figu
 
 ## `folder_summary` answers direct counts, and no row at all for an empty folder
 
-`wishlist_folder_summary(marketplace)` returns `{ folderId, wishes, missing, cost, unpriced }` per
+`wishlist_folder_summary(marketplace)` returns `{ folderId, wishes, copies, cost, unpriced }` per
 folder, and two things about its shape are load-bearing.
 
 **The counts are direct — this folder's own wishes, never its sub-folders'.** The tree sums the
@@ -556,22 +556,123 @@ is a lookup layered onto it. A card whose folder has no summary row falls back t
 and draws `0 wishes`, which is correct rather than an error state — an empty drawer is where the
 next wish goes.
 
-Every figure is `wishlist.rs`'s own arithmetic rather than a second spelling of it: `missing` is
-`max(0, quantity - OWNED_SQL)`, the unit price is `sorting::row_price_expr` over
-`WISH_PREFERRED_FINISH`, and the `LEFT JOIN` that picks the printing is `list_wishes`' join
-verbatim in shape — all three exactly what `list_wishes` puts in its own columns, so a folder's
-subtotal and the page header's total are one piece of arithmetic and cannot disagree. Both
-expressions are evaluated once
-per row in an inner `SELECT` and aggregated by name in the outer one, because `OWNED_SQL` is a
-correlated subquery and the price can be another: spelling either three times in the aggregate list
-would run it three times per row for one answer.
+Every figure is `wishlist.rs`'s own arithmetic rather than a second spelling of it: `copies` is
+`sum(quantity)`, the unit price is `sorting::row_price_expr` over `WISH_PREFERRED_FINISH`, and the
+`LEFT JOIN` that picks the printing is `list_wishes`' join verbatim in shape — all three exactly
+what `list_wishes` puts in its own columns, so a folder's subtotal and the page header's total are
+one piece of arithmetic and cannot disagree. The price expression is evaluated once per row in an
+inner `SELECT` and aggregated in the outer one, because it can be a correlated subquery: spelling
+it three times in the aggregate list would run it three times per row for one answer.
 
-**`unpriced` counts a row only when it has copies still to buy *and* no price** —
-`unit_price IS NULL AND missing > 0`. The second half is the non-obvious one: a wish the binder
-already satisfies costs nothing whether the marketplace can quote it or not, and counting it would
-put a "could not price" note on a folder with nothing left to buy. A `null` price is the answer and
-never a reason to reach for another marketplace's, so `cost` and `unpriced` are always the same
-marketplace's and never travel across a switch.
+**It was `missing` — `max(0, quantity - OWNED_SQL)` — until 2026-09-08, and both the name and the
+arithmetic changed together.** The wishlist compares itself to the collection nowhere now, so there
+is no such thing as a copy a wish no longer needs: what a drawer wants is what its wishes say they
+want. `OWNED_SQL` had no reader left after the change and was deleted with it. The rename is
+fenced: `WishlistFolderSummary` joined `ipc.test.ts`'s `plainMirrors` in the same commit, because a
+rename that reached only one side is the quiet kind — every folder card reads `undefined`, `face()`
+takes its "not counted yet" arm, and the whole cabinet draws an em dash over drawers that are full,
+with a green build and a drawable page.
+
+**`unpriced` counts a row when it has no price, and that is the whole rule.** It carried a second
+clause — `AND missing > 0` — so that a folder of wishes the binder had already filled drew no
+"could not price" note about cards the reader owned. No wish can be filled by the binder any more,
+so that clause could only ever be true and it went with the subtraction that gave it something to
+say. A `null` price is the answer and never a reason to reach for another marketplace's, so `cost`
+and `unpriced` are always the same marketplace's and never travel across a switch.
+
+## The wish tile, redesigned — and the list that stopped asking about the binder (2026-09-08)
+
+Two decisions landed together, from a Claude Design file the reader approved and from a sentence
+they wrote answering a question about it: *drop all comparisons to the collection on the wishlist.
+Wishlists are managed solely by the user. They will remove a card from the wishlist when they
+acquire it.*
+
+### What a tile is now
+
+At 100% zoom on a 170px tile, going round it:
+
+| Where | What | Where it was |
+| --- | --- | --- |
+| The whole tile | The gold selection ring, around art **and** chin | On the art frame alone |
+| Bottom-left | The folder pill, over a `×N` pill — copies wanted | `owned/wanted`, one chip; the folder was in the chin's caption |
+| Bottom-right | `Needs review`, over `unit × copies wanted` | Top-left, at `topLeftPlacement="clear"`, over `unit × copies missing` |
+| Right margin | The `QuantityStepper`, with the pencil under it | The stepper alone; the pencil was in the hover strip |
+| Chin | Rarity gem · printing · duplicate mark · finish · unit price | The same, plus the folder caption |
+| The hover strip | Nothing — `action` is not passed | The pencil |
+
+Four of those are `CardGrid`'s and reach every wall it draws; the rest are this wall's own.
+
+### The three `CardGrid` changes, and the one that is not cosmetic
+
+**The ring** is [frontend-design.md](frontend-design.md#the-selection-ring-goes-round-the-whole-card-not-round-the-picture-2026-09-08).
+
+**`bottomRight`** is a fourth corner slot, built from the `badge` corner's own box so the four
+corners of a tile cannot drift into four shades. It lies **under** the `action` strip
+(`inset-x-0 bottom-0 justify-end`), which is a real constraint rather than a hypothetical — and the
+one caller that takes the corner is the one dropping the strip in the same change.
+
+**`badgeChrome: "chip" | "bare"`** exists for one corner on one wall. The wishlist's bottom-left
+holds *two* marks now, and a single chip sized to `Commander` would leave `×4` alone on a row of
+empty backing half the tile wide — so the corner can hand its `bg-bg/85` to marks that each bring
+their own. It governs `badge` alone; `topLeft` and `bottomRight` keep the chip unconditionally,
+because both of their callers want one box.
+
+**The `column` wrapper spans the tile now**, and this is the change that is load-bearing rather
+than visual. It hugged its content at `right-4px` — about 31px wide — and it is the positioned box
+an `AnchoredPopup` passed `static` anchors off. The pencil's panel is `w-72`, 288px, opening
+`left-0`: against the narrow box that is 135px into a 170px tile and **253px off the right edge of
+the scroller**, clipped. Against `inset-x-0 … justify-end` it opens from the tile's own left edge,
+which is where the action strip used to put it.
+
+What must not regress with it is the touch behaviour the narrow box bought. An `opacity-0` element
+is still a hit target, and this column stands ~99px against a 238px face, so an ungated
+`[&>*]:pointer-events-auto` — the strip's arrangement — would put an invisible stepper under the
+right-hand third of every card. So the wrapper is `pointer-events-none` *unconditionally* (a
+tile-wide band that took events on hover would swallow the press that opens the card) and the gate
+moved to the children: `[&>*]:pointer-events-none`, lifted on `group-hover` and
+`group-focus-within`. The focus arm is what keeps an open panel clickable, the trigger holding
+focus while its panel is up.
+
+### The pencil is drawn at the stepper's box
+
+`QuantityStepper`'s `size="card"` is 36px × `--control-scale` — **30.6px** at rest — with
+`rounded-lg`, a 21px glyph at 7/12 of the button (**17.85px**), `bg-bg/88` over art and an inset
+focus ring. `EditWishButton` takes a `size="card"` that is that recipe, read off
+`QUANTITY_STEPPER_CARD_BOX` / `QUANTITY_STEPPER_CARD_ICON` rather than retyped, so the two cannot
+drift at any stop of the zoom ladder. The gutter between them is the stepper's own inter-button
+gutter, `0.25rem × --control-scale` = **3.4px**. `AnchoredPopup` grew a `triggerClassName` for it,
+documented as narrowly as it is used.
+
+### What the collection comparison cost to remove
+
+Front to back, all of it gone: `WishRow.ownedQuantity` and the `owned_quantity` column behind it;
+`WishlistQuery.fulfilled` and the filter it pushed; the `owned` sort key; `missingOf`; the table's
+`Owned` column and the `text-dim` dimming of a covered row; the `Fulfilled` / `Still missing` chip
+in `FilterBar`'s tray; and `wishlist::OWNED_SQL`, which had no reader left.
+
+Every cost is `unit × quantity` now — the tile's corner, the table's Cost cell, the page header and
+the backend's `cost` sort — so nothing on the page can disagree with anything else. The header's
+label moved with the arithmetic, from **Still to buy** to **Total cost**: a label promising the
+first over the second would be the header lying about its own sum.
+
+Two consequences reach outside the wishlist. `wishlist_folder_summary`'s `missing` became
+**`copies`** (`sum(quantity)`), and `WishlistFolderSummary` joined `ipc.test.ts`'s `plainMirrors` in
+the same commit, because a hand rename that reached one side only is the quiet kind — every folder
+card would read `undefined`, take `face()`'s "not counted yet" arm, and draw an em dash over full
+drawers, with a green build throughout. And `AddToCollection` stopped firing `["wishlist"]` on a
+collection add, `useDataReset` stopped listing it among the roots a collection clear invalidates:
+both were there because a wish counted `collection_entries`, and neither has anything to refresh
+now. Both absences are pinned by assertions rather than left to be re-added by the next reader.
+
+**One thing deliberately stayed.** `WishlistSearchPanel` still draws an `OwnedBadge` on its
+*search results* — that is `CardSummary.ownedQuantity`, the same badge the search page, the tag
+results and both deck panels draw, answering "do I already own this card I am about to wish for?"
+at the moment of adding. It is not a statement about a wish, and removing it would have made one
+search wall differ from the other four.
+
+**Nothing here has been driven in the shipped window as of this writing.** jsdom loads no
+stylesheet and computes no layout, so every geometric claim above is a class assertion or
+arithmetic off `QuantityStepper`'s own constants.
 
 ## The copies control, and the floor that stopped being 1
 
@@ -620,10 +721,15 @@ floor of `1` was always a guard drawn on the glass, never on the table.
   its comment is the one that was ported: `CollectionPage`'s `settle()` invalidates
   `["collection","summary"]` and `["collection","folderSummary"]` and pointedly *not* `["collection"]`,
   so its ghost persisted until something else re-read the list. `settleWhole()` invalidates
-  `["wishlist"]` whole, and this list's key is `["wishlist","list", …]` — broad on purpose, so a
-  collection write two views away refreshes an `ownedQuantity` computed from `collection_entries`
-  (`useWishlist.ts:221`). So the wishlist's ghost clears itself. It is a flicker rather than a
-  standing lie, and it is still not what a delete should look like.
+  `["wishlist"]` whole, and this list's key is `["wishlist","list", …]`, so every write to the
+  wishlist clears its own ghost. It is a flicker rather than a standing lie, and it is still not
+  what a delete should look like.
+
+  **The reason that key is broad has changed and the breadth has not.** It was broad so a
+  *collection* write two views away would refresh an `ownedQuantity` computed from
+  `collection_entries`; since 2026-09-08 the wishlist reads no collection figure at all, and
+  `AddToCollection` fires `["collection"]` or `["wishlist"]` but never both. What the breadth buys
+  now is every cached filter combination of this one list moving together.
 
 The collection's half of this — including the fence that keeps a stepper out of a deck's group and
 `Recently removed`, which the wishlist has no equivalent of because none of its folders belong to
@@ -732,9 +838,8 @@ query is in the caller's key, so a switch refetches rather than relabels. A seco
 travelling in the answer is one more thing that can disagree with the hook.
 
 **The moves come back in `list_wishes`' _fallback_ order — `name ASC, id ASC` — and not in the
-reader's chosen sort.** The money sorts order by output aliases (`unit_price`, `owned_quantity`)
-this statement does not select, so honouring `sort` would mean selecting columns a preview has no
-use for. A preview is a list of changes, not a second rendering of the page.
+reader's chosen sort.** The money sorts order by an output alias (`unit_price`) this statement does
+not select, so honouring `sort` would mean selecting a column a preview has no use for. A preview is a list of changes, not a second rendering of the page.
 
 ### Apply: one transaction, and two things that are not failures
 
@@ -840,7 +945,7 @@ dx 0.0 / dy 0.0 from its trigger on keyboard activation, which is what `menuClic
 | --- | --- |
 | `src-tauri/src/schema.rs` | The v23 step, `WISHLIST_GRAIN`, and the whole-schema `ON DELETE` inventory |
 | `src-tauri/src/wishlist_folders.rs` | The five folder commands, `set_wish_folder`, `folder_summary` |
-| `src-tauri/src/wishlist.rs` | `set_wish_printing`, `elsewhere`, `OWNED_SQL`, `WISH_PREFERRED_FINISH`, the cheapest-printing join |
+| `src-tauri/src/wishlist.rs` | `set_wish_printing`, `elsewhere`, `WISH_PREFERRED_FINISH`, the cheapest-printing join |
 | `src-tauri/src/wishlist_optimize.rs` | `plan` and `apply`, the candidate query, and the six DTOs `ipc.test.ts`'s `plainMirrors` pins |
 | `src/features/wishlist/optimizePlan.ts` | The conclusions drawn from those facts — the ticked set, the headline, the outcome reading |
 | `src/features/wishlist/OptimizeWishlistDialog.tsx` | The preview, and the one press that commits it |

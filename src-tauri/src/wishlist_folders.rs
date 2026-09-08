@@ -83,8 +83,12 @@ pub struct WishlistFolderSummary {
     pub folder_id: i64,
     /// Wishes filed **directly** in this folder. The tree sums it; SQL does not.
     pub wishes: i64,
-    /// Copies still to find here — `sum(max(0, quantity - owned))`, the page's `missingOf`.
-    pub missing: i64,
+    /// Copies wanted here — `sum(quantity)` over the wishes filed **directly** in this folder.
+    ///
+    /// It was `sum(max(0, quantity - owned))` until 2026-09-08 and was called `missing`. The
+    /// wishlist compares itself to the collection nowhere now, so there is no such thing as a
+    /// copy a wish no longer needs: what a drawer wants is what its wishes say they want.
+    pub copies: i64,
     /// What those copies cost at the named marketplace. Unpriced rows are left out, never
     /// quoted at another marketplace's rate.
     pub cost: f64,
@@ -562,9 +566,9 @@ fn refile_wish(tx: &Connection, id: i64, folder_id: Option<i64>) -> Result<Entry
 /// The four numbers each folder tile draws, one row per folder that holds at least one wish.
 ///
 /// **Every figure is [`crate::wishlist`]'s own arithmetic rather than a second spelling of it.**
-/// `missing` is `max(0, quantity - owned)` over [`crate::wishlist::OWNED_SQL`] — which is why
-/// that constant is `pub(crate)`, and why the wishlist table is aliased `w` here: the alias is
-/// part of its contract. The unit price is [`crate::sorting::row_price_expr`] over
+/// `copies` is `w.quantity`, and the cost over it is `quantity × unit_price` — the same
+/// multiplication the page header's total and the wall's own corner mark make, so a drawer's
+/// subtotal adds up to the list inside it. The unit price is [`crate::sorting::row_price_expr`] over
 /// [`crate::wishlist::WISH_PREFERRED_FINISH`], the same expression `list_wishes` puts in its
 /// `unit_price` column. A folder's subtotal and the page header's total have to be one piece of
 /// arithmetic; two implementations of one figure disagree the first time either changes.
@@ -589,21 +593,19 @@ pub fn folder_summary(
     marketplace: Marketplace,
 ) -> Result<Vec<WishlistFolderSummary>, String> {
     // Both expressions are evaluated once per row in an inner SELECT and aggregated by name in
-    // the outer one. `OWNED_SQL` is a correlated subquery and the price can be another; spelling
-    // either of them three times in the aggregate list would run it three times per row for one
-    // answer.
+    // the outer one. The price can be a correlated subquery, so spelling it three times in the
+    // aggregate list would run it three times per row for one answer.
     //
     // **Shared with `wishlist::list` rather than respelled here**, because a folder's subtotal and
     // the page header's total have to be the same arithmetic.
-    let owned = crate::wishlist::OWNED_SQL;
     let sql = format!(
         "SELECT folder_id,
                 count(*) AS wishes,
-                sum(missing) AS missing,
-                sum(CASE WHEN unit_price IS NULL THEN 0.0 ELSE missing * unit_price END) AS cost,
-                sum(CASE WHEN unit_price IS NULL AND missing > 0 THEN 1 ELSE 0 END) AS unpriced
+                sum(copies) AS copies,
+                sum(CASE WHEN unit_price IS NULL THEN 0.0 ELSE copies * unit_price END) AS cost,
+                sum(CASE WHEN unit_price IS NULL THEN 1 ELSE 0 END) AS unpriced
            FROM (SELECT w.folder_id AS folder_id,
-                        max(0, w.quantity - {owned}) AS missing,
+                        w.quantity AS copies,
                         {price} AS unit_price
                    FROM wishlist_entries w
                    LEFT JOIN cards c
@@ -623,7 +625,7 @@ pub fn folder_summary(
             Ok(WishlistFolderSummary {
                 folder_id: r.get(0)?,
                 wishes: r.get(1)?,
-                missing: r.get(2)?,
+                copies: r.get(2)?,
                 cost: r.get(3)?,
                 unpriced: r.get(4)?,
             })
@@ -812,8 +814,8 @@ mod tests {
         .unwrap()
     }
 
-    /// One nonfoil NM copy in the binder, so [`folder_summary`]'s `missing` has something to
-    /// subtract.
+    /// One nonfoil NM copy in the binder — a fixture that DISAGREES with what [`folder_summary`]
+    /// answers, so its assertions would pass over a summary that still subtracted the collection.
     fn own(conn: &Connection, card_id: &str, quantity: i64) {
         conn.execute(
             "INSERT INTO collection_entries
@@ -1224,9 +1226,10 @@ mod tests {
         wish(&conn, "o1", 3, Some(ordered.id));
         wish(&conn, "o2", 4, Some(someday.id));
         wish(&conn, "o1", 9, None);
-        // One copy already in the binder, so `missing` is not just the quantity: this is
-        // `wishlist::OWNED_SQL` doing the subtraction, which is the arithmetic the page header
-        // uses too.
+        // A copy of the same card sitting in the binder, which this summary must now **ignore**:
+        // it counted against the wish until 2026-09-08, and a drawer's figures have nothing to do
+        // with the collection any more. Seeded rather than dropped from the fixture on purpose —
+        // without it the assertion below passes whether the subtraction is there or not.
         own(&conn, "bolt-lea", 1);
 
         let rows = folder_summary(&conn, ANY_MARKET).unwrap();
@@ -1235,22 +1238,31 @@ mod tests {
         let (top, inner) = (&rows[0], &rows[1]);
         assert_eq!(top.folder_id, ordered.id);
         assert_eq!(top.wishes, 1, "the sub-folder's wish is the sub-folder's");
-        assert_eq!(top.missing, 2, "3 wanted, 1 owned");
+        assert_eq!(
+            top.copies, 3,
+            "3 wanted, and the copy in the binder is not asked about"
+        );
         assert!(
-            (top.cost - 10.0).abs() < 1e-9,
-            "2 x $5.00, got {}",
+            (top.cost - 15.0).abs() < 1e-9,
+            "3 x $5.00, got {}",
             top.cost
         );
         assert_eq!(top.unpriced, 0);
 
         assert_eq!(inner.folder_id, someday.id);
-        assert_eq!((inner.wishes, inner.missing), (1, 4));
+        assert_eq!((inner.wishes, inner.copies), (1, 4));
         assert!((inner.cost - 1.0).abs() < 1e-9, "4 x $0.25");
     }
 
-    /// Two things, because one fixture answers both: what an unpriced wish does to the cost
-    /// and to the header's note, and — through the fourth wish — that `missing` is clamped
-    /// **per row** rather than after the sum.
+    /// Two things, because one fixture answers both: what an unpriced wish does to the cost and
+    /// to the header's note, and — through the copies seeded into the binder — that **nothing
+    /// here reads the collection**.
+    ///
+    /// The second half is why the `own` calls survive a change that made them irrelevant to the
+    /// arithmetic. They are the fixture that disagrees: two of these four wishes were covered by
+    /// the binder and one of them over-covered, so every figure below would be a different number
+    /// under the subtraction this summary made until 2026-09-08. Delete them and the assertions
+    /// pass whether or not the subtraction is still there.
     #[test]
     fn folder_summary_leaves_an_unpriced_wish_out_of_the_cost_and_counts_it() {
         let conn = conn();
@@ -1266,22 +1278,18 @@ mod tests {
         .unwrap();
         let ordered = create_folder(&conn, None, "Ordered").unwrap();
         wish(&conn, "o1", 2, Some(ordered.id));
-        // A wish for an oracle card no printing answers to — the join finds nothing, so there
-        // is no price and three copies still to buy.
+        // A wish for an oracle card no printing answers to — the join finds nothing, so there is
+        // no price and one copy to buy.
         wish(&conn, "ghost", 3, Some(ordered.id));
-        // Unpriced too, but the binder already satisfies it. Nothing left to buy is not
-        // something the header's "could not price" note is about.
+        // Unpriced too, and **exactly covered** by the binder. It used to drop out of both the
+        // cost and the note for that; now the binder has no say and it is counted like any other
+        // wish the marketplace cannot quote.
         wish(&conn, "o3", 1, Some(ordered.id));
         own(&conn, "plain", 1);
-        // **Over-covered**, and it is the row that tells `sum(max(0, q - owned))` apart from
-        // `max(0, sum(q - owned))`. Every other wish in this suite is either short or exactly
-        // covered, and on those two formulas agree row for row — so without this one the
-        // clamp's *position* is unpinned. Here the reader wants one copy and the binder holds
-        // four. Clamped per row it contributes 0 and the folder still needs 5; summed first,
-        // its -3 pays for three of the Bolts and the tile reads 2 — a folder claiming there is
-        // almost nothing left to buy while three copies are still to find, and a figure that
-        // contradicts the page header, which clamps per row. That divergence is exactly what
-        // the "one piece of arithmetic" rule exists to prevent.
+        // **Over-covered** — one copy wanted against four in the binder. This is the row that
+        // used to pin where the old `max(0, …)` clamp sat, and it is the sharpest test of the
+        // new rule for the same reason: under the subtraction it contributed nothing at all, and
+        // its price contributed nothing to the cost.
         priced_card(&conn, "bear-lea", "o4", "0.25");
         wish(&conn, "o4", 1, Some(ordered.id));
         own(&conn, "bear-lea", 4);
@@ -1292,17 +1300,17 @@ mod tests {
         let row = &rows[0];
         assert_eq!(row.wishes, 4);
         assert_eq!(
-            row.missing, 5,
-            "2 + 3 + 0 + 0 -- clamped per row, never summed first"
+            row.copies, 7,
+            "2 + 3 + 1 + 1 -- every copy wanted, whatever the binder holds"
         );
         assert!(
-            (row.cost - 10.0).abs() < 1e-9,
-            "only the priced wish with copies still to find is in the cost, got {}",
+            (row.cost - 10.25).abs() < 1e-9,
+            "2 x $5.00 plus 1 x $0.25; the two unpriced wishes are left out, got {}",
             row.cost
         );
         assert_eq!(
-            row.unpriced, 1,
-            "the ghost, and neither of the two wishes the binder already covers"
+            row.unpriced, 2,
+            "the ghost and the Forest -- a wish the binder covers is still a wish nobody quoted"
         );
     }
 
@@ -1325,7 +1333,7 @@ mod tests {
         let rows = folder_summary(&conn, ANY_MARKET).unwrap();
 
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].missing, 3);
+        assert_eq!(rows[0].copies, 3);
         assert_eq!(
             rows[0].cost, 6.00,
             "3 × the $2 printing, not 3 × the $40 one the old join reached first"
@@ -1360,10 +1368,10 @@ mod tests {
             let rows = folder_summary(&conn, Marketplace::from_id(id))
                 .unwrap_or_else(|e| panic!("{id} could not be summed: {e}"));
             // Not merely `is_ok`: an empty answer passes that and proves nothing about the SQL
-            // having run over a row. `wishes` and `missing` carry no price, so they are the
+            // having run over a row. `wishes` and `copies` carry no price, so they are the
             // same two figures whichever marketplace was asked.
             assert_eq!(
-                (rows.len(), rows[0].wishes, rows[0].missing),
+                (rows.len(), rows[0].wishes, rows[0].copies),
                 (1, 1, 3),
                 "at {id}"
             );

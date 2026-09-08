@@ -827,6 +827,162 @@ describe("CardGrid", () => {
     expect(corner).toHaveClass("empty:hidden");
   });
 
+  /**
+   * **The fourth corner** — `bottomRight`, added for the wishlist's redesigned tile.
+   *
+   * It is the exact mirror of `badge` and is asserted as one: the same felt, the same scaled
+   * radius and padding, the same `empty:hidden`, the same pointer events. That is the whole point
+   * of the slot existing rather than a caller positioning its own mark — four corners decided in
+   * four places is four insets and four shades, which is the drift `topLeft` already stopped once.
+   *
+   * And it is a **sibling** of the art button, like the other two, so its words never join the
+   * button's accessible name: a wall of forty cards must not be forty buttons called "Lightning
+   * Bolt ×4 wanted".
+   */
+  it("marks a tile's bottom-right corner in the wall's own box", () => {
+    render(
+      <CardGrid
+        rows={[card("aaa", "Lightning Bolt")]}
+        onSelect={vi.fn()}
+        onNeedNextPage={vi.fn()}
+        listKey="k"
+        zoomSection="search"
+        bottomRight={(c) => <span>wanted: {c.name}</span>}
+      />,
+    );
+
+    const art = screen.getByRole("button", { name: "Lightning Bolt" });
+    const mark = screen.getByText(/wanted: Lightning Bolt/);
+    expect(art.contains(mark)).toBe(false);
+    expect(art).toHaveAccessibleName("Lightning Bolt");
+
+    const corner = mark.parentElement!;
+    // Inside the same `relative` box the art button sits in, which is what the corner is
+    // positioned against.
+    expect(corner.parentElement).toBe(art.parentElement);
+    expect(corner).toHaveClass(
+      "pointer-events-auto",
+      "absolute",
+      "empty:hidden",
+      "bottom-[calc(0.25rem*var(--mark-scale,1))]",
+      "right-[calc(0.25rem*var(--mark-scale,1))]",
+      // The badge's chip, verbatim.
+      "bg-bg/85",
+      "rounded-[calc(0.25rem*var(--mark-scale,1))]",
+      "px-[calc(0.375rem*var(--mark-scale,1))]",
+      "py-[calc(0.125rem*var(--mark-scale,1))]",
+    );
+  });
+
+  /**
+   * The badge's own rule, applied to the corner opposite it: a mark with nothing to say takes the
+   * corner with it, backing included.
+   *
+   * **Both shapes of "nothing", because they arrive differently.** A callback returning `null`
+   * never builds an element at all, so the corner is not rendered; a component that guards
+   * *itself* still hands the slot a truthy element — React cannot be asked what an element will
+   * render before it runs — so `empty:hidden` on the backing is what answers the second case, and
+   * a wall of unwanted cards would otherwise be a wall of empty chips.
+   */
+  it("draws no bottom-right corner for a mark with nothing to say", () => {
+    const props = {
+      rows: [card("aaa", "Lightning Bolt")],
+      onSelect: vi.fn(),
+      onNeedNextPage: vi.fn(),
+      listKey: "k",
+      zoomSection: "search" as const,
+    };
+
+    const { container, rerender } = render(<CardGrid {...props} bottomRight={() => null} />);
+    expect(container.querySelector('[class*="bg-bg/85"]')).toBeNull();
+
+    rerender(<CardGrid {...props} bottomRight={() => <OwnedBadge owned={0} />} />);
+    const corner = container.querySelector('[class*="bg-bg/85"]');
+    expect(corner).toBeEmptyDOMElement();
+    expect(corner).toHaveClass("empty:hidden");
+  });
+
+  /**
+   * And it opens the card, like both corners beside it — the corner takes its own pointer events
+   * so the mark inside it can be hovered for its plain words, and pays for that by answering the
+   * press the art underneath would have.
+   */
+  it("opens the card from the bottom-right corner", async () => {
+    const onSelect = vi.fn();
+    render(
+      <CardGrid
+        rows={[card("aaa", "Lightning Bolt")]}
+        onSelect={onSelect}
+        onNeedNextPage={vi.fn()}
+        listKey="k"
+        zoomSection="search"
+        bottomRight={() => <span title="4 wanted">×4</span>}
+      />,
+    );
+
+    await userEvent.click(screen.getByTitle("4 wanted").parentElement!);
+
+    expect(onSelect.mock.calls.map(([id]) => id)).toEqual(["aaa"]);
+  });
+
+  /**
+   * **`badgeChrome`** — the one corner whose backing a caller may take over.
+   *
+   * The default is the argued position: a mark sits on a photograph, so it needs something behind
+   * it to be legible, and deciding what at the corner rather than at the mark is what keeps six
+   * walls from drifting into six shades. `"bare"` exists for a corner holding *two* marks that
+   * each need their own — the wishlist stacks a folder pill over a copies-wanted pill — where one
+   * box sized to a variable-width folder name with `×4` alone underneath is a large empty
+   * rectangle laid over the art.
+   *
+   * **What must not move is everything else about the corner**, which is the half a naive
+   * implementation loses: the position, the `empty:hidden`, the pointer events and the click that
+   * opens the card are the wall's whichever arm is drawn. And it governs the badge **alone** — the
+   * other two corners keep the chip unconditionally, because both of their callers want one box.
+   */
+  it("hands only the badge corner's backing to the mark under badgeChrome=bare", async () => {
+    const onSelect = vi.fn();
+    const props = {
+      rows: [card("aaa", "Lightning Bolt")],
+      onSelect,
+      onNeedNextPage: vi.fn(),
+      listKey: "k",
+      zoomSection: "search" as const,
+      badge: () => <span>owned</span>,
+      topLeft: () => <span>printings</span>,
+      bottomRight: () => <span>wanted</span>,
+    };
+    const cornerOf = (text: string) => screen.getByText(text).parentElement!;
+
+    const { rerender } = render(<CardGrid {...props} />);
+    expect(cornerOf("owned")).toHaveClass("bg-bg/85", "px-[calc(0.375rem*var(--mark-scale,1))]");
+
+    rerender(<CardGrid {...props} badgeChrome="bare" />);
+    const bare = cornerOf("owned");
+    // The backing, its padding and its radius belong to the mark now. `classList.contains` rather
+    // than a `className.includes`, for the reason the `topLeftPlacement` test above gives: a
+    // substring check on an arbitrary-value class is the shape that passes for the wrong reason.
+    expect(bare.classList.contains("bg-bg/85")).toBe(false);
+    expect(bare.classList.contains("rounded-[calc(0.25rem*var(--mark-scale,1))]")).toBe(false);
+    expect(bare.classList.contains("px-[calc(0.375rem*var(--mark-scale,1))]")).toBe(false);
+    expect(bare.classList.contains("py-[calc(0.125rem*var(--mark-scale,1))]")).toBe(false);
+
+    // Everything that makes the corner a corner is still the wall's.
+    expect(bare).toHaveClass(
+      "pointer-events-auto",
+      "absolute",
+      "empty:hidden",
+      "bottom-[calc(0.25rem*var(--mark-scale,1))]",
+      "left-[calc(0.25rem*var(--mark-scale,1))]",
+    );
+    await userEvent.click(bare);
+    expect(onSelect.mock.calls.map(([id]) => id)).toEqual(["aaa"]);
+
+    // The badge alone: the two corners beside it are untouched by the prop.
+    expect(cornerOf("printings")).toHaveClass("bg-bg/85");
+    expect(cornerOf("wanted")).toHaveClass("bg-bg/85");
+  });
+
   /** The wall says what it is a wall of — the search's results, or somebody's collection. */
   it("takes the name of the list it is showing", () => {
     render(
@@ -1791,9 +1947,23 @@ describe("CardGrid multi-select", () => {
     card("ddd", "Brainstorm"),
   ];
 
-  /** Every card whose art is wearing the picked ring — `CardArt`'s `selected` recipe, which is
-   *  the same gold the deck editor draws and the one thing both walls agree on. */
-  const ringed = () => [...document.querySelectorAll(".ring-accent")];
+  /**
+   * Every **tile** wearing the picked ring — the same gold the deck editor draws, and since the
+   * tile redesign it is on the tile's own root rather than on `CardArt`'s frame, so the outline
+   * goes round the art *and* the chin as one piece of cardboard.
+   *
+   * **Two helpers rather than one, and the second is what makes the first mean anything.** A bare
+   * `.ring-accent` sweep matches whichever element happens to wear the class, so it is green with
+   * the ring on the root and equally green with it back on the art — it can only ever count rings,
+   * never place them. So this one is anchored to the tile root and {@link ringedInside} asserts
+   * that nothing *within* a tile wears it. `CardArt` keeps its `selected` prop for the callers
+   * that draw a frame on its own (`AllPrintingsDialog`, the deck views); what changed is that this
+   * wall stopped passing it.
+   */
+  const ringed = () => [...document.querySelectorAll("[data-grid-index].ring-accent")];
+
+  /** Rings drawn *inside* a tile — the art frame's, which this wall must never have. */
+  const ringedInside = () => [...document.querySelectorAll("[data-grid-index] .ring-accent")];
 
   /**
    * A chord press on a tile's art.
@@ -1841,12 +2011,15 @@ describe("CardGrid multi-select", () => {
     expect(useAppStore.getState().cardSelection?.keys).toEqual(["aaa", "ccc"]);
   });
 
-  it("rings every tile in the set", async () => {
+  it("rings every tile in the set, around the whole card and not around the picture", async () => {
     wall();
     await userEvent.click(screen.getByRole("button", { name: "Lightning Bolt" }));
     await pressWith("Ponder", "Control");
 
     expect(ringed()).toHaveLength(2);
+    // The half that would go green either way without it: the ring stops at the art if `CardArt`
+    // is still handed `selected`, and a count of two says nothing about which box wears it.
+    expect(ringedInside()).toHaveLength(0);
   });
 
   /** Shift takes the run between the anchor and the press, in the order the wall draws them. */
@@ -1984,17 +2157,25 @@ describe("the chin and the tile key", () => {
   };
 
   /**
-   * The class the wall's gold ring is drawn with — `CardArt`'s `selected` recipe, which is the
-   * spelling the multi-select block above already asserts against.
+   * The class the wall's gold ring is drawn with — the spelling the multi-select block above also
+   * asserts against.
    *
-   * It is on the **art** and not on the tile's root, so a ringed tile is one whose art carries
-   * it. That is worth stating because the ring's *decision* is now about the tile and the mark it
-   * produces is still on the card inside it.
+   * **It is on the tile's root and not on the art**, which is the whole of the tile redesign's
+   * first change: the ring wraps the picture *and* the chin, so a selected tile reads as one
+   * outlined piece of cardboard rather than an outlined photograph glued to an unoutlined bar. The
+   * decision was always about the tile ({@link tileKey}); now the mark is too.
+   *
+   * {@link ringedInside} is the assertion that makes {@link ringed} say something. Reading only
+   * "some element in this tile has the class" is green whichever box wears it, so it could not
+   * fail for the change it is here to pin.
    */
   const SELECTED_MARKER = "ring-accent";
 
   const tiles = () => [...document.querySelectorAll("[data-grid-index]")];
-  const ringed = (tile: Element) => tile.querySelector(`.${SELECTED_MARKER}`) !== null;
+  const ringed = (tile: Element) => tile.classList.contains(SELECTED_MARKER);
+  /** The art frame's ring, which this wall must never draw — `CardArt` keeps `selected` for the
+   *  surfaces where the frame really is the whole object, and `CardGrid` stopped passing it. */
+  const ringedInside = (tile: Element) => tile.querySelector(`.${SELECTED_MARKER}`) !== null;
 
   /**
    * The chin's money slot, which is what makes "a price on every card where one exists" true on
@@ -2035,6 +2216,9 @@ describe("the chin and the tile key", () => {
     expect(rung).toHaveLength(2);
     expect(ringed(rung[0])).toBe(false);
     expect(ringed(rung[1])).toBe(true);
+    // Around the whole card: nothing inside the ringed tile wears the gold, so the outline is the
+    // root's and the art frame is bare.
+    expect(ringedInside(rung[1])).toBe(false);
   });
 
   /** A wall whose cards carry no `key` is untouched — six of the seven walls pass none. */
@@ -2109,21 +2293,33 @@ describe("the chin and the tile key", () => {
    * **The right-margin column** (issue #348) — the deck stack's position for a card's stepper,
    * and the slot the collection's and the wishlist's walls moved theirs into.
    *
-   * Two things are pinned and the second is the one that would go wrong silently. It is over the
-   * art like the strip, so it costs the wall no height; and **its `pointer-events` follow its
-   * reveal**, which is where it deliberately differs from the strip above. The strip keeps its
-   * control pressable while invisible — affordable across 20px — and this column is ~99px tall
-   * against a 238px face, so the same trade would put an invisible stepper under the right-hand
-   * third of every card. A mouse loses nothing (the pointer that reaches the column has already
-   * revealed it by being on the tile); a touch screen gets back the press that opens the card.
+   * Three things are pinned and the last two are the ones that would go wrong silently.
    *
-   * `pointer-events` is inherited, so gating the box gates what it holds — which is why there is
-   * no `[&>*]` arm here and why its absence is not the strip's rule forgotten.
+   * It is over the art like the strip, so it costs the wall no height. **It spans the tile and
+   * right-aligns**, where it used to hug its content at `right-4px`: it is the positioned box an
+   * `AnchoredPopup` passed `static` anchors off, and against a ~31px box a 288px panel opening
+   * `left-0` runs ~253px off the right of the scroller. The wishlist's pencil is the caller that
+   * needs it, and the collection's stepper is unaffected — `justify-end` puts both in the same
+   * gutter the corner marks stand in.
+   *
+   * And **its `pointer-events` follow its reveal**, which is where it deliberately differs from
+   * the strip above. The strip keeps its control pressable while invisible — affordable across
+   * 20px — and this column is ~99px tall against a 238px face, so the same trade would put an
+   * invisible stepper under the right-hand third of every card. A mouse loses nothing (the
+   * pointer that reaches the column has already revealed it by being on the tile); a touch screen
+   * gets back the press that opens the card.
+   *
+   * **The gate moved from the box to its children when the box was widened, and it is still a
+   * gate** — which is the one thing about this that reads like the strip's rule and is not. The
+   * wrapper is `pointer-events-none` *unconditionally* now, because a tile-wide band that took
+   * events on hover would swallow the press that opens the card; the child inherits `none` until
+   * the tile is hovered or holds focus, which is what keeps the invisible stepper untouchable.
+   * A bare `[&>*]:pointer-events-auto` — the strip's arrangement — would undo exactly that.
    *
    * **jsdom does no hit testing and applies no `:hover`**, so the classes are the whole of what
    * can be checked; the behaviour is a live-window question.
    */
-  it("stands the tile's column in the right margin, and gates it with the reveal", () => {
+  it("stands the tile's column across the tile, right-aligned, and gates it with the reveal", () => {
     render(
       <CardGrid
         rows={[card("aaa", "Lightning Bolt")]}
@@ -2143,11 +2339,19 @@ describe("the chin and the tile key", () => {
     expect(column.parentElement).toBe(art.parentElement);
     expect(column.classList.contains("absolute")).toBe(true);
 
+    // Spans the tile and right-aligns, so a 288px panel anchored `left-0` opens from the tile's
+    // own left edge rather than 135px into it.
+    expect(column.classList.contains("inset-x-0")).toBe(true);
+    expect(column.classList.contains("justify-end")).toBe(true);
+
+    // The wrapper never takes events — a tile-wide band that did would swallow the press that
+    // opens the card.
     expect(column.classList.contains("pointer-events-none")).toBe(true);
-    expect(column.classList.contains("group-hover:pointer-events-auto")).toBe(true);
-    expect(column.classList.contains("group-focus-within:pointer-events-auto")).toBe(true);
-    // The strip's arrangement is the one this must *not* have: an `[&>*]` escape here would put
-    // the invisible stepper back under the pointer.
+    expect(column.classList.contains("[&>*]:pointer-events-none")).toBe(true);
+    expect(column.classList.contains("group-hover:[&>*]:pointer-events-auto")).toBe(true);
+    expect(column.classList.contains("group-focus-within:[&>*]:pointer-events-auto")).toBe(true);
+    // The strip's arrangement is the one this must *not* have: an ungated `[&>*]` escape would
+    // put the invisible stepper back under the pointer on a touch screen.
     expect(column.classList.contains("[&>*]:pointer-events-auto")).toBe(false);
   });
 });
