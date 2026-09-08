@@ -2543,13 +2543,22 @@ price | type`). An **inactive category stays its own group in all three grouping
   fixed floor is six minimums summing against a tile that has shrunk, which is what would push a
   five-colour band past its picture at 0.5×. `overflow-hidden` on the band is the backstop, and a
   clipped last segment is the better failure.
-  **`hasColorBar(pips)` is exported so the crop and the band cannot disagree**, and a copy of the
-  condition in `DeckTile` is what it exists to prevent: `Cover` takes it as `fused` and draws
-  `rounded-t-lg` or `rounded-lg`, so a disagreement's symptom is a **radius** — which jsdom cannot
-  see (no layout engine, no stylesheet) and no test of either component alone can reach. A deck
-  with no band keeps all four of its own corners; squaring them anyway would put two hard corners
-  on the page under an otherwise rounded frame, on precisely the tiles whose missing band the
-  reader cannot see.
+  **The band is drawn on every deck, empty where there is nothing to say** (2026-09-08, the
+  reader's report), which reverses the rule this file carried for one day and takes a
+  `hasColorBar` predicate and `Cover`'s `fused` prop with it — the crop is `rounded-t-lg`
+  unconditionally now, because something is always fused under it. The old rule returned `null`
+  for both silences on the argument that an empty strip says "no colours" in the same vocabulary
+  a full band uses to say what they are: an argument about the *band*, and true of it. **What it
+  missed is the wall.** A bandless tile is 20px shorter than every tile beside it, and the grid
+  stretches its cells, so its name and its caption sit 20px high with nothing moving down to meet
+  them — read as a layout fault rather than as a deck with no colours, and one empty deck (the
+  commonest deck there is, for as long as it takes to fill) raggeds a whole row. Measured in the
+  shipped window: every tile 232px, the 0-card deck included.
+  **The empty band must not become a colourless one.** A full-width `--color-mana-c` field would
+  say the deck *is* colourless — false for a deck whose read has not landed, and a claim `pips ===
+  null` has no business making. It is a bare course of the tile's own `bg-surface`: no fields, no
+  symbols, and no tooltip either, since `useTooltip` refuses falsy content and an empty list joins
+  to `""`.
   **Nothing may reopen the seam between crop and band.** The band carries no top margin, the crop
   no bottom radius, and an element, a margin or a gap introduced between them on the tile's button
   puts a hairline of page inside one object. The `border-t border-bg/60` above the band is the

@@ -27,7 +27,7 @@ import type { PipCounts } from "@/lib/mana";
 import { PRESS } from "@/lib/motion";
 import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
-import { DeckColorBar, hasColorBar } from "./DeckColorBar";
+import { DeckColorBar } from "./DeckColorBar";
 import { buildDeckMenu, type DeckMenuDeps } from "./deckMenu";
 import { deckColorsLabel } from "./deckPips";
 import { deckDraggable, MoveToFolder, type FolderNode } from "./FolderTree";
@@ -403,7 +403,7 @@ export function DeckTile({
         className={cn("block w-full rounded-lg text-left", FOCUS)}
       >
         {/* The crop loses its bottom corners exactly when a band is coming — see {@link Cover}. */}
-        <Cover deck={deck} fused={hasColorBar(pips)} />
+        <Cover deck={deck} />
         {/* What colours the deck is, between the picture and the name — **inside the button**,
             because it is part of the tile's flow rather than a mark laid on the art, and the
             reader who is about to press this tile is reading it in that order: the picture, the
@@ -413,9 +413,11 @@ export function DeckTile({
             as one object. Nothing may be introduced here that reopens that seam — an element, a
             margin or a gap on the button would put a hairline of page between a picture and the
             band it belongs to.
-            Absent on a deck with no pips, and the component argues why: an all-lands pile has
-            nothing to say and an empty band saying so is worse than silence — which is the same
-            fact {@link hasColorBar} answers for the crop's corners one line up.
+            **Drawn on every deck, and empty where there is nothing to say.** An all-lands pile
+            and a read still in flight both get a bare 20px course of the tile's surface rather
+            than no band at all: the band is a course of the tile now, and a tile missing one
+            stands 20px short of the row, which reads as a layout fault rather than as a deck
+            with no colours. The component's head has the measurement.
             **It is `aria-hidden`, and the words are the `sr-only` span under the name.** The
             picture may sit above the name; the *sentence* may not, and that is the badge's rule
             below applied one element up — a tile is named for its deck, and a bar that named
@@ -717,23 +719,18 @@ export function DeckTile({
  *
  * ## The bottom corners, which belong to whatever is under the picture
  *
- * **`fused` is the frame's half of the join with {@link DeckColorBar}.** The colour band is a
- * 20px solid fused to the bottom edge of this crop, so for the two to read as one object the crop
- * must stop rounding the edge they share: `rounded-t-lg` where a band is coming, `rounded-lg`
- * where none is.
+ * **`rounded-t-lg` and never all four**, because {@link DeckColorBar} is always under this crop.
+ * The band is a 20px solid fused to the bottom edge, so for the two to read as one object the
+ * crop stops rounding the edge they share.
  *
- * **The conditional is not a leftover, and a deck with no band is the case it exists for.** A
- * deck with no pips — an all-lands pile, a deck of nothing but generic costs, or a read still in
- * flight — draws no band at all ({@link hasColorBar}), and its picture then has nothing under it
- * to be fused *to*. Squaring its bottom unconditionally would leave two hard corners sitting on
- * the page under a frame that is rounded everywhere else, on the tiles that are hardest to
- * explain: the reader cannot see the missing band, so what they would see is a cover that had
- * gone wrong. So the picture keeps all four of its own corners exactly when it is on its own.
- *
- * **A prop rather than a test made here**, because the fact belongs to the band: whether one
- * renders is `DeckColorBar`'s rule and its two silences, and a copy of that rule in this frame
- * would be a second place to correct it — where the symptom is a *radius*, which jsdom cannot see
- * (no layout engine, no stylesheet) and which no test of this component alone could reach.
+ * **It was conditional for one day and the condition is gone** (2026-09-08). The band used to
+ * draw nothing for a deck with no pips, so this frame took a `fused` prop off `hasColorBar` and
+ * kept all four of its corners when it was on its own — which was right about the *corners* and
+ * wrong about the wall: a bandless tile stood 20px shorter than its neighbours, and in a grid of
+ * stretched cells that put one tile's name and caption out of line with the row. The band now
+ * always draws, empty where there is nothing to say, so there is no case left where this crop has
+ * nothing under it and no question for a call site to answer. `DeckColorBar`'s own head carries
+ * the argument.
  *
  * ## The illustrator's name, which is this frame's since 2026-09-07
  *
@@ -772,7 +769,7 @@ export function DeckTile({
  * decorative, the deck's name is two lines down, and putting the illustrator into the tile's
  * accessible name would announce a painter before the deck on every tile on the wall.
  */
-function Cover({ deck, fused }: { deck: DeckRow; fused: boolean }) {
+function Cover({ deck }: { deck: DeckRow }) {
   const tip = useTooltip();
   const url = coverUrl(deck);
   // Not `url === null`: on web those are two different states — see {@link hasCover}.
@@ -787,11 +784,11 @@ function Cover({ deck, fused }: { deck: DeckRow; fused: boolean }) {
       {...tip(deck.coverArtist && `Art by ${deck.coverArtist}`)}
       className={cn(
         "grid w-full place-items-center overflow-hidden bg-surface",
-        // The whole of {@link fused}, and it is the join rather than a decoration: a rounded
-        // corner over a square band is a picture sitting *on* something, and the two are meant to
-        // be one object. `overflow-hidden` above is what makes it reach the crop as well as the
-        // frame.
-        fused ? "rounded-t-lg" : "rounded-lg",
+        // The join rather than a decoration: a rounded corner over a square band is a picture
+        // sitting *on* something, and the two are meant to be one object. Unconditional, because
+        // the band always draws — see the note above the component. `overflow-hidden` above is
+        // what makes it reach the crop as well as the frame.
+        "rounded-t-lg",
       )}
       style={{ aspectRatio: ART_ASPECT }}
     >
