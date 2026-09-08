@@ -912,6 +912,27 @@ own SQL, median of 15, warm, all statements interleaved in one process), on Ashn
 | 427 of 6 044 | 71.7 ms | −12.4 |
 | all 6 044 (`ashnod`) | 121.9 ms | **+37.8** |
 
+**Driven in the shipped window the same day, against the migrated corpus**, and the cross-check is
+the part worth keeping: the dialog's chips were read off the screen and the identical census was
+taken from SQL, and they agree to the row.
+
+| Needle | On screen | From SQL |
+| --- | --- | --- |
+| none | `All · 6 044` · `2:61` `3:1 999` `4:3 016` `5:968` | 6 044 · 2:61 3:1999 4:3016 5:968 |
+| `mikaeus` | `All · 69` · `2:1` `3:48` `4:11` `5:9` | 69 · 2:1 3:48 4:11 5:9 |
+| `_` | `All · 1` · `4 cards · 1` | 1 · 4:1 |
+
+That third row **is the wildcard fence, proven end to end rather than argued**: typing a single
+underscore answers the one combo naming `_____ Goblin`, where an unescaped `LIKE` would have
+answered all 6 044. The empty size buckets drop out of the chip row with it, so a searched list
+offers only the sizes it actually contains.
+
+The accordion was driven on the same pass: **25 header buttons, 0 expanded**, and no `PRODUCES`,
+`STEPS` or Spellbook link anywhere in the DOM until a header is pressed — the body is unmounted
+rather than hidden, which is what the count is evidence of. The built accessible name came back as
+`Grenzo, Dungeon Warden + Epitaph Golem + _____ Goblin + Ashnod's Altar — E Exhibition`, which is
+the name-computation trap avoided rather than merely commented on.
+
 So a real search is *faster* than no search, and the worst case is a term that narrows nothing.
 **The whole +11.1 ms on the common path is `total_sql`, and it is one card**: for a card at the
 median of the 7 330 it is 0.02 ms. The cause is that `idx_combo_cards_oracle` does not cover
