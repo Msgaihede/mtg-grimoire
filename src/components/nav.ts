@@ -1,4 +1,4 @@
-import { Heart, ScanLine, Search, Settings, Tags, type LucideIcon } from "lucide-react";
+import { Camera, Heart, Search, Settings, Tags, type LucideIcon } from "lucide-react";
 import { CabinetFiling, Cards } from "@/components/icons";
 import type { ViewId } from "@/lib/store";
 
@@ -37,6 +37,6 @@ export const NAV: readonly NavEntry[] = [
   { id: "wishlist", label: "Wishlist", Icon: Heart },
   // Before Settings so Settings stays the last row — the chord that moved is `Ctrl+7`, and
   // `docs/reference/keyboard-shortcuts.md` says so.
-  { id: "scanner", label: "Scanner", Icon: ScanLine },
+  { id: "scanner", label: "Scanner", Icon: Camera },
   { id: "settings", label: "Settings", Icon: Settings },
 ];
