@@ -49,16 +49,15 @@ it says `tags: ["autodocs"]`.
   the copies **in that deck's own group**, oracle-grained (a claim from the allocator until schema
   v25 deleted it). A fake that stored DTOs would make all three agree, and teach a reader a model
   the app does not have.
-- **Seeds and faults are state, not response stubs**: `parameters: { fake: { seed, fault } }`,
-  seeds `empty`/`starter`/`needsReview`/`large`, **eighteen** faults — `busy`/`syncing`/
-  `syncError`/`imageFailures`/`gone`/`indexCold`/`deckMeta`/`updateAvailable`/`updateError`/
-  `errorLog`/`feedFetchError`/`oracleTagsMissing`/`oracleTagsFetchError`/`artTagsMissing`/
-  `artTagsFetchError`/`imageUrisMissing`/
-  `exportWriteError`/`mirrorRootUnwritable`. (Re-counted 2026-08-20: this line said _twelve_ while `imageUrisMissing`
-  and `exportWriteError` had both been in the union for a feature each, which is the third time
-  this number has rotted; the art taxonomy's pair took it to seventeen the same day, and the
-  plain-text mirror's unwritable root to eighteen on 2026-08-25.) Saying
-  nothing gets `starter` with no
+- **Seeds and faults are state, not response stubs**: `parameters: { fake: { seed, fault } }`.
+  **The lists live in [`.storybook/CLAUDE.md`](../../.storybook/CLAUDE.md) and are deliberately not
+  repeated here**, because this line held them twice and rotted **four** times — it said _twelve_
+  faults on 2026-08-20 while two had been in the union for a feature each, the art taxonomy's pair
+  took it to seventeen the same day, the mirror's unwritable root to eighteen on 2026-08-25, and by
+  2026-09-08 it was wrong by five seeds and seven faults while still claiming eighteen. The
+  authority has a fence this page never could: `world.test.ts`'s
+  `satisfies Record<SeedName, true>` fails `tsc` on a seed nobody registered, which is how the
+  sharing seed was caught. Saying nothing gets `starter` with no
   fault. A fault is set on the world, so a story about `BUSY` shows what the _app_ does with a
   refusal rather than what one mocked call returns. **`indexCold` is one of the four that are not
   a failure at all** (`oracleTagsMissing`, `artTagsMissing` and `imageUrisMissing` are the
