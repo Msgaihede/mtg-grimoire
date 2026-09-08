@@ -36,11 +36,16 @@ export function wireFinish(f: string): Finish | null {
  * * **It is not a button.** There is no card to open — the snapshot carries a printing's
  *   identity and its picture and nothing a detail pane could draw — and a button that opened
  *   nothing would be a control the page cannot honour.
- * * **`cardId={null}`, always.** That makes `cardArtSrc` return the supplied URL on every build,
- *   so the frame never asks for the `mtgimg://` protocol the webview registers and a browser
- *   does not have. The picture is `cards.scryfall.io`'s, straight off the wire, and a card the
- *   publisher's corpus had forgotten carries none — which `CardArt` already draws as a named
- *   frame rather than a broken image.
+ * * **`cardId={null}`, always — but that is not what carries the picture.** ⚠️ `cardArtSrc` is
+ *   `isWebTarget() ? (suppliedUrl ?? null) : protocolUrl`, so what makes the frame draw
+ *   `card.img` is **`__CORE__ === "web"`**, which `vite.share.config.ts` defines and this
+ *   bundle's build is the only place it comes from. With `cardId={null}` on a *tauri* build the
+ *   same call returns `null` and no `<img>` is drawn at all — which is why the suite mocks
+ *   `@/pwa/target`, and why a doc saying "the supplied URL on every build" would be wrong.
+ *   The null is kept as defence in depth: it means this bundle can never *ask* for the
+ *   `mtgimg://` protocol a browser has never heard of, even if that define were ever wrong.
+ *   A card the publisher's corpus had forgotten carries no `img` — which `CardArt` draws as a
+ *   named frame rather than a broken image.
  * * **`rarity={null}` on the chin.** Rarity is not on the wire (spec §3's absences), so the gem
  *   says *unknown* rather than being derived from a corpus this page does not have.
  */

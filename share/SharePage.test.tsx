@@ -3,8 +3,11 @@
  *
  * **Nothing here mocks a backend, because there is nothing to mock.** The page takes a parsed
  * `ShareSnapshot` and draws it; every filter, every folder walk and every sort happens over that
- * one object. That is the whole design (spec §7) and it is what the "filters in the browser"
- * case below is really asserting: a `fetch` spy that never fires.
+ * one object.
+ *
+ * The other half of that design — *and no second request* — is asserted in `boot.test.tsx` and
+ * deliberately not here. `fetch` is reached only from `boot`, which this file never imports, so a
+ * spy on it could not fire whatever `SharePage` did.
  */
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -24,7 +27,12 @@ vi.mock("@/pwa/target", () => ({ isWebTarget: () => true }));
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { parseSnapshot, type ShareSnapshot } from "@/lib/shareSnapshot";
 import golden from "../src-tauri/src/share/__golden__/snapshot.json?raw";
-import { SharePage, snapshotHref } from "./SharePage";
+import {
+  ShareBoundary,
+  SharePage,
+  snapshotHref,
+  SNAPSHOT_UNDRAWABLE,
+} from "./SharePage";
 import { NOTHING } from "./ShareTile";
 
 const snapshot = () => parseSnapshot(golden);
@@ -82,16 +90,17 @@ describe("SharePage", () => {
     expect(tiles()).toHaveLength(2);
   });
 
-  it("filters in the browser without refetching", async () => {
-    const fetched = vi.spyOn(globalThis, "fetch");
+  it("narrows the wall from the search box", async () => {
     const user = userEvent.setup();
     mount(snapshot());
 
     await user.type(screen.getByLabelText("Search this collection"), "tundra");
     expect(tiles()).toHaveLength(1);
     expect(within(wall()).getByAltText("Tundra")).toBeInTheDocument();
-    expect(fetched).not.toHaveBeenCalled();
-    fetched.mockRestore();
+    // **The "without refetching" half is asserted in `boot.test.tsx` and deliberately not here.**
+    // `fetch` is only ever called from `boot`, which this file never imports, so a spy on it
+    // could not fire whatever `SharePage` did — an assertion no mutation can redden reads as
+    // coverage and is worse than none.
   });
 
   it("says when a snapshot carries no prices rather than showing zeroes", () => {
@@ -155,6 +164,85 @@ describe("SharePage", () => {
     await user.click(screen.getByRole("button", { name: "Reset all" }));
     expect(tiles()).toHaveLength(2);
   });
+
+  /**
+   * **Nothing about a card identifies it, so nothing built out of a card can be a React key.**
+   *
+   * The golden's two rows differ in every column, so no case above can see this: the first key
+   * this page shipped was `{id}:{finish}:{folder}:{condition}` and it looked unique. Two rows of
+   * one binder can agree on all four and differ in a column this page does not draw.
+   *
+   * ⚠️ **The length assertion below cannot be the pin.** React renders duplicate-keyed siblings
+   * on first mount and only drops one on reconciliation, so a wall of two is what a broken key
+   * draws too. `console.error` is the only witness at mount, which is why the spy is the test and
+   * the count is the sanity check beside it.
+   */
+  it("keys two identical rows apart", () => {
+    const complained = vi.spyOn(console, "error").mockImplementation(() => {});
+    mount(
+      edited((s) => {
+        s.cards = [structuredClone(s.cards[0]), structuredClone(s.cards[0])];
+      }),
+    );
+    const said = complained.mock.calls.map((call) => call.join(" ")).join("\n");
+    complained.mockRestore();
+
+    expect(said).not.toMatch(/same key/i);
+    expect(tiles()).toHaveLength(2);
+  });
+
+  /**
+   * **`parseSnapshot` promises `v`, `folders` and `cards` and nothing else** — its own header
+   * says a per-field validator there would be a fourth implementation of the format. So a body
+   * from a build that spells `currency` differently, or omits it, still has to draw: the throw
+   * this used to produce happened *during render*, where `boot`'s `try` cannot reach it, and a
+   * throw out of `root.render` is a blank page rather than a notice.
+   */
+  it("draws the wall when the optional top-level fields are missing", () => {
+    const bare = parseSnapshot(golden) as unknown as Record<string, unknown>;
+    for (const key of ["currency", "fields", "owner", "title", "updatedAt", "marketplace"])
+      delete bare[key];
+
+    expect(() => mount(bare as unknown as ShareSnapshot)).not.toThrow();
+    expect(tiles()).toHaveLength(2);
+    // The privacy sentence is the one thing that may never fall off the page.
+    expect(screen.getByText(/anyone with this link/i)).toBeInTheDocument();
+    // No money column was asked for, so none is drawn — and no `NaN` figure either.
+    expect(screen.getByText(/prices were not shared/i)).toBeInTheDocument();
+    expect(screen.queryByText(/NaN|Invalid Date|undefined/)).not.toBeInTheDocument();
+  });
+});
+
+describe("ShareBoundary", () => {
+  /** The floor under everything `asText` and its neighbours do not know to guard. */
+  function Explodes(): never {
+    throw new Error("a field this build had never heard of");
+  }
+
+  it("draws a sentence where a render throw would otherwise draw nothing", () => {
+    const complained = vi.spyOn(console, "error").mockImplementation(() => {});
+    render(
+      <TooltipProvider>
+        <ShareBoundary>
+          <Explodes />
+        </ShareBoundary>
+      </TooltipProvider>,
+    );
+    complained.mockRestore();
+    expect(screen.getByText(SNAPSHOT_UNDRAWABLE)).toBeInTheDocument();
+  });
+
+  it("is out of the way when nothing throws", () => {
+    render(
+      <TooltipProvider>
+        <ShareBoundary>
+          <p>the binder</p>
+        </ShareBoundary>
+      </TooltipProvider>,
+    );
+    expect(screen.getByText("the binder")).toBeInTheDocument();
+    expect(screen.queryByText(SNAPSHOT_UNDRAWABLE)).not.toBeInTheDocument();
+  });
 });
 
 describe("snapshotHref", () => {
@@ -189,9 +277,17 @@ describe("snapshotHref", () => {
  * refuses a second tab — so the viewer imports none of it, and an `ipc` import would drag a
  * Tauri boundary into a bundle that has none.
  *
- * A `grep` over `share/*.tsx` would only catch the first hop. This walks the graph: every
- * `@/…` specifier is resolved against the real `src/` tree and followed, so a component that is
- * clean today and grows a store import next month fails **here** rather than in a browser.
+ * A `grep` over `share/*.tsx` would only catch the first hop. This walks the graph, and it has to
+ * walk **all** of it — the fence exists to survive edits nobody has made yet, so the two ways a
+ * walk can be narrow are both closed:
+ *
+ * * **relative specifiers are followed as well as `@/…` ones.** Following only the alias visited
+ *   31 modules where the real graph is 34: `TooltipProvider` reaches `TooltipPanel`,
+ *   `tooltipStore` and `lib/motion` through a plain `./TooltipPanel`, so the three files most
+ *   likely to grow a store import were the three this could not see.
+ * * **a side-effect and a dynamic import count as imports.** `import "@/lib/core";` and
+ *   `await import("@/features/…")` have no `from`, and a matcher that requires one does not
+ *   merely miss them — its lazy `[\s\S]*?` runs past and captures the *next* specifier instead.
  */
 describe("the viewer's import graph", () => {
   const sources = import.meta.glob("../src/**/*.{ts,tsx}", {
@@ -205,39 +301,95 @@ describe("the viewer's import graph", () => {
     eager: true,
   }) as Record<string, string>;
 
-  /** `@/lib/foo` → `../src/lib/foo.ts`, trying the four spellings a bundler would. */
-  function resolve(spec: string): string | null {
-    const stem = `../src/${spec.slice(2)}`;
+  /**
+   * Every specifier a module names — `from "x"`, a bare `import "x"`, and `import("x")`.
+   *
+   * Comments are stripped first, because this file and its neighbours quote module paths in
+   * prose and a doc comment must not be able to fail a build. The `[^:]` guard on the line-comment
+   * arm is what keeps `https://…` out of it.
+   */
+  function specifiersOf(source: string): string[] {
+    const code = source
+      .replace(/\/\*[\s\S]*?\*\//g, " ")
+      .replace(/(^|[^:"'`])\/\/[^\n]*/g, "$1");
+    const pattern = /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+)["']([^"']+)["']/g;
+    return [...code.matchAll(pattern)].map(([, spec]) => spec);
+  }
+
+  /** `a/b/../c` → `a/c`, keeping the leading `..` that reaches out of `share/`. */
+  function normalise(path: string): string {
+    const out: string[] = [];
+    for (const part of path.split("/")) {
+      if (part === "" || part === ".") continue;
+      if (part === ".." && out.length > 0 && out[out.length - 1] !== "..") out.pop();
+      else out.push(part);
+    }
+    return out.join("/");
+  }
+
+  /** Both globs under one canonical spelling, so `./SharePage.tsx` and `../src/…` compare. */
+  const files: Record<string, string> = {};
+  for (const [key, source] of Object.entries({ ...sources, ...own }))
+    if (!key.endsWith(".test.tsx") && !key.endsWith(".stories.tsx")) files[normalise(key)] = source;
+
+  /** A specifier as a key of {@link files}, or `null` for a package this walk does not follow. */
+  function resolve(from: string, spec: string): string | null {
+    let stem: string;
+    if (spec.startsWith("@/")) stem = normalise(`../src/${spec.slice(2)}`);
+    else if (spec.startsWith("."))
+      stem = normalise(`${from.split("/").slice(0, -1).join("/")}/${spec}`);
+    else return null;
     for (const candidate of [`${stem}.ts`, `${stem}.tsx`, `${stem}/index.ts`, `${stem}/index.tsx`])
-      if (candidate in sources) return candidate;
+      if (candidate in files) return candidate;
     return null;
   }
 
-  const IMPORTS = /(?:^|\n)\s*(?:import|export)[\s\S]*?from\s*["']([^"']+)["']/g;
   const FORBIDDEN = ["@/lib/core", "@/lib/ipc", "@/workers", "@/features", "@tauri-apps/"];
+
+  it("finds a side-effect and a dynamic import, not only a `from`", () => {
+    const specs = specifiersOf(`
+      import { a } from "@/lib/a";
+      import "@/lib/side-effect";
+      export * from "./b";
+      const lazy = await import("@/features/late");
+      // a comment naming "@/lib/ipc" must not count
+      /* nor a block one naming "@/workers/x" */
+    `);
+    expect(specs).toEqual(["@/lib/a", "@/lib/side-effect", "./b", "@/features/late"]);
+  });
 
   it("reaches no core, no ipc, no worker and no feature", () => {
     const seen = new Set<string>();
-    const queue = Object.keys(own).filter((k) => !k.endsWith(".test.tsx"));
+    const queue = Object.keys(own)
+      .filter((key) => !key.endsWith(".test.tsx"))
+      .map(normalise);
     const found: string[] = [];
 
     while (queue.length > 0) {
       const file = queue.shift() as string;
       if (seen.has(file)) continue;
       seen.add(file);
-      const text = (own[file] ?? sources[file]) as string | undefined;
-      if (text === undefined) continue;
-      for (const [, spec] of text.matchAll(IMPORTS)) {
+      const source = files[file];
+      if (source === undefined) continue;
+      for (const spec of specifiersOf(source)) {
         if (FORBIDDEN.some((bad) => spec.startsWith(bad))) found.push(`${file} → ${spec}`);
-        if (!spec.startsWith("@/")) continue;
-        const target = resolve(spec);
+        const target = resolve(file, spec);
         if (target !== null) queue.push(target);
       }
     }
 
     expect(found).toEqual([]);
-    // The walk is worthless if it never left `share/` — `CardArt` and `CardChin` are the whole
-    // point of reusing the app's frame, so the graph must be dozens of files deep.
-    expect(seen.size).toBeGreaterThan(10);
+    // The walk is worthless if it never left `share/`, and worth less than it looks if it stops
+    // at the alias. These three are reached **only** through a relative specifier — the hop this
+    // sweep could not see until 2026-09-08 — so they are what proves the fix rather than the
+    // count beside them.
+    expect([...seen]).toEqual(
+      expect.arrayContaining([
+        "../src/components/tooltip/TooltipPanel.tsx",
+        "../src/components/tooltip/tooltipStore.ts",
+        "../src/lib/motion.ts",
+      ]),
+    );
+    expect(seen.size).toBeGreaterThan(25);
   });
 });

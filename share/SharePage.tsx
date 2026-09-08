@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { Component, useMemo, useState, type ErrorInfo, type ReactNode } from "react";
 import { GrimoireMark } from "@/components/GrimoireMark";
 import { ManaLine } from "@/components/ManaLine";
 import { CONDITION_LABEL, CONDITIONS, type Condition } from "@/lib/conditions";
@@ -54,9 +54,23 @@ export function snapshotHref(doc: Document): string | null {
   return href === "" ? null : href;
 }
 
+/**
+ * **`parseSnapshot` guarantees `v`, `folders` and `cards`, and nothing else — by design.**
+ *
+ * Its own header says why: a per-field validator there would be a fourth implementation of the
+ * format, free to disagree with the writer and both readers. So every *other* field this page
+ * reads is checked here, at the one place that reads it, and the answer for a missing one is the
+ * binder minus that column rather than a refusal. A body that parses but omits `currency` used to
+ * throw inside this function **during render**, where `boot`'s `try` cannot reach it — and a
+ * throw out of `root.render` is a blank page, not a notice.
+ */
+function asText(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
 /** Which currency the prices on the wire are in. The snapshot's own answer wins. */
 function shareCurrency(snapshot: ShareSnapshot): Currency {
-  const named = snapshot.currency.toLowerCase();
+  const named = asText(snapshot.currency).toLowerCase();
   if (named === "usd" || named === "eur") return named;
   // A currency this build does not know is a snapshot from a future one; the marketplace it was
   // priced at is the better guess than a hard-coded dollar.
@@ -72,7 +86,8 @@ const COUNT = new Intl.NumberFormat("en-US");
  * The stamp is **seconds** — `updatedAt` is a unix time, like every other timestamp this repo
  * puts on a wire — and reading it as milliseconds dates every share ever published to 1970.
  */
-function asOf(updatedAt: number): string {
+function asOf(updatedAt: number): string | null {
+  if (typeof updatedAt !== "number" || !Number.isFinite(updatedAt)) return null;
   return new Intl.DateTimeFormat(undefined, { dateStyle: "long" }).format(
     new Date(updatedAt * 1000),
   );
@@ -158,9 +173,18 @@ export function SharePage({ snapshot }: { snapshot: ShareSnapshot }) {
 
   const currency = shareCurrency(snapshot);
   const market = resolveMarketplace(snapshot.marketplace);
-  const showValue = snapshot.fields.includes("value");
-  const showCondition = snapshot.fields.includes("condition");
-  const showLang = snapshot.fields.includes("lang");
+  // Guarded for `asText`'s reason: `fields` is not one of the three keys `parseSnapshot`
+  // promises, and an absent one means "the publisher answered no optional question" rather than
+  // a document nobody can open.
+  const fields = Array.isArray(snapshot.fields) ? snapshot.fields : [];
+  const showValue = fields.includes("value");
+  const showCondition = fields.includes("condition");
+  const showLang = fields.includes("lang");
+  const owner = asText(snapshot.owner);
+  // A heading with no text is a heading nothing announces, so the fallback is a name rather than
+  // an empty string. It is what the Worker's own 404 page calls this, one word shorter.
+  const title = asText(snapshot.title) || "Shared collection";
+  const stamp = asOf(snapshot.updatedAt);
 
   const rail = useMemo(() => folderRail(snapshot), [snapshot]);
   const copies = useMemo(() => snapshot.cards.reduce((n, c) => n + c.q, 0), [snapshot]);
@@ -258,15 +282,16 @@ export function SharePage({ snapshot }: { snapshot: ShareSnapshot }) {
           {/* A `ch` cap would be measured in the h1's own inherited size and not in Cinzel's, so
               a two-word title wrapped at 1280 the first time this was drawn in a browser. */}
           <h1 className="max-w-[34rem]">
-            <span className="block text-sm text-dim">{snapshot.owner}’s</span>
+            {owner !== "" && <span className="block text-sm text-dim">{owner}’s</span>}
             <span className="block font-heading text-[1.75rem] leading-tight sm:text-[2.125rem]">
-              {snapshot.title}
+              {title}
             </span>
           </h1>
           <p className="mt-4 font-mono text-[0.8125rem] text-dim">
             {COUNT.format(copies)} {copies === 1 ? "card" : "cards"}
-            {rail.length > 0 && ` in ${COUNT.format(rail.length)} ${rail.length === 1 ? "drawer" : "drawers"}`}
-            {`, as of ${asOf(snapshot.updatedAt)}`}
+            {rail.length > 0 &&
+              ` in ${COUNT.format(rail.length)} ${rail.length === 1 ? "drawer" : "drawers"}`}
+            {stamp !== null && `, as of ${stamp}`}
           </p>
           <p className="mt-1 font-mono text-[0.8125rem] text-dim">
             {showValue
@@ -574,4 +599,44 @@ export function ShareNotice({ sentence, detail }: { sentence: string; detail?: s
       </div>
     </div>
   );
+}
+
+/** What a reader is told when this page threw where nothing could catch it. */
+export const SNAPSHOT_UNDRAWABLE = "This shared collection could not be drawn.";
+
+/**
+ * **The floor under every field this page reads, and the reason it is a boundary rather than more
+ * guards.**
+ *
+ * `parseSnapshot` promises `v`, `folders` and `cards` and deliberately nothing else, so every
+ * other read is a guess about a document written by a build that may be newer than this one. The
+ * named ones are guarded at their own site (`asText`, `asOf`, the `fields` check) and that is the
+ * better answer where it applies — a binder minus one column beats a sentence.
+ *
+ * This catches the rest. A throw during render escapes `boot`'s `try` entirely: `root.render` is
+ * asynchronous in React 19, so the exception surfaces from a commit the `await` chain has already
+ * left. What a stranger got was a **blank page** — no sentence, no chrome, nothing to report. One
+ * class component is the whole of the fix, and it is the only class in this bundle.
+ */
+export class ShareBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    // The only place this is ever recorded — there is no `error_log` on a page with no core.
+    console.error(error, info.componentStack);
+  }
+
+  render() {
+    if (!this.state.failed) return this.props.children;
+    return (
+      <ShareNotice
+        sentence={SNAPSHOT_UNDRAWABLE}
+        detail="The link is good; this page could not read what it points at. Reload, or ask for the link again."
+      />
+    );
+  }
 }
