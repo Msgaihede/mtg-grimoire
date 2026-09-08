@@ -1,19 +1,21 @@
 /**
  * What a clear did, in a sentence.
  *
- * **A module rather than four lines inside the panels, because these are conclusions and Rust
+ * **A module rather than five lines inside the panels, because these are conclusions and Rust
  * only supplies the facts.** `reset.rs` answers counts — entries, folders, files, bytes — and
  * every one of the decisions below is about English rather than about data: whether
  * a second clause is worth printing at all when its number is zero, which unit 329 682 302 bytes
  * belongs in, and what "nothing happened" should say instead of "cleared 0 things". That is the
  * boundary this repo draws, and it is also what makes these testable without a render.
  *
- * The pattern in all four: **a clear that changed nothing says so plainly**, and never reports
+ * The pattern in all five: **a clear that changed nothing says so plainly**, and never reports
  * a row of zeroes. A reader who presses Clear collection on an empty collection has not made a
- * mistake worth a number.
+ * mistake worth a number. {@link combosOutcome} is the one that reaches that rule from the far
+ * side — its press *refills* what it emptied, so its zero is a download that came back with
+ * nothing rather than a table that was already bare — and it obeys the same sentence.
  */
 import { count } from "@/lib/counts";
-import type { CacheCleared, CollectionCleared, DecksCleared } from "@/lib/ipc";
+import type { CacheCleared, CollectionCleared, ComboStatus, DecksCleared } from "@/lib/ipc";
 
 /**
  * A count and the unit it agrees with, with thousands separators.
@@ -109,6 +111,36 @@ export function cacheOutcome(r: CacheCleared): string {
   return r.failed === 0
     ? swept
     : `${swept} ${counted(r.failed, "file")} ${r.failed === 1 ? "was" : "were"} in use and stayed.`;
+}
+
+/**
+ * What throwing the combos away and fetching them again left behind.
+ *
+ * **The only one of these five that reports what *arrived* rather than what went**, because it
+ * is the only press that puts something back: a reader who cleared this because a bracket readout
+ * looked wrong has come for correct data, and "cleared 105,478 combos" would be an answer to a
+ * question nobody asked. So the numbers are the fresh table's, and they are the pair `CombosPanel`
+ * printed before it was deleted — the count, and the distinct cards named between them, which is
+ * what gives the count a sense of scale.
+ *
+ * **Zero is not a number this may print, and that is the whole reason for the first arm.** A
+ * refusal never reaches here — it goes through `writeFailure` and turns the banner red — but a
+ * refresh that *resolves* over an empty table does, and it is a real state: the clear succeeded,
+ * the fetch brought nothing back, and `combos: 0` reported in the sentence's usual shape would
+ * read as a successful download of nothing. The reader is told the table is empty and where the
+ * reason is, which is `comboNote`'s failed arm making the same distinction one panel over.
+ */
+export function combosOutcome(r: ComboStatus): string {
+  if (r.combos === 0) {
+    return (
+      "The combos were cleared and the download brought none back, so the table is empty. " +
+      "Errors, further down this page, has the reason."
+    );
+  }
+  return (
+    `Cleared and downloaded again: ${counted(r.combos, "combo")}, ` +
+    `naming ${counted(r.cards, "card")} between them.`
+  );
 }
 
 /** `a`, `a and b`, `a, b and c`. Serial comma omitted, as the rest of this app's prose does. */

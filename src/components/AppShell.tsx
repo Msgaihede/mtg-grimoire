@@ -29,6 +29,7 @@ import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
 import { useCardToDeckRefusal } from "@/features/card/cardMenu";
 import {
   ACTIVITY_DELAY_MS,
+  comboActivity,
   marketplaceFeedActivity,
   oracleTagActivity,
   syncActivity,
@@ -41,6 +42,7 @@ import { matchesChord, matchesShortcut, shortcut } from "@/lib/shortcuts";
 import { useAppStore } from "@/lib/store";
 import { usePrefetchSearchOpen } from "@/features/search/useSearchOpen";
 import { useCardZoomPersistence } from "@/lib/useCardZoomPersistence";
+import { useComboProgress } from "@/lib/useComboProgress";
 import { useListViewPersistence } from "@/lib/useListViewPersistence";
 import { useFlattenPersistence } from "@/lib/useFlattenPersistence";
 import { useDelayedFlag } from "@/lib/useDelayedFlag";
@@ -318,12 +320,17 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   // above it hands back what it heard: the taxonomy has no `useMarketplace`-shaped module of
   // its own to read the event out of a cache entry, and the ribbon is its only consumer today.
   const oracleTags = useOracleTagProgress();
+  // And the one `combos:progress` subscription, mounted here for the same reason again. It is
+  // the only consumer of that channel anywhere: Settings' combo panel and its progress bar are
+  // gone, so without this the 27.5 MB and the 639 MB parse behind it would run with nothing on
+  // screen saying why the disk and the network are busy.
+  const combos = useComboProgress();
 
   // Either this window started the sync or something else did (the run spawned at
   // startup, most often). A second `sync_run` would only be refused.
   const busy = refreshing || status?.syncing === true;
 
-  // The four long jobs this window can be running. All are registered from here — the sync by
+  // The five long jobs this window can be running. All are registered from here — the sync by
   // this component, the update by `App`, which hands it down — and the registry is what lets
   // the ribbon describe any of them without knowing which.
   //
@@ -336,10 +343,15 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   const refreshingLabel = feeds.find((f) => f.marketplace.id === refreshingFeed)?.marketplace.label;
   useRegisterActivity(syncActivity(progress, busy));
   useRegisterActivity(marketplaceFeedActivity(refreshingLabel ?? null, feedProgress));
-  // **Started somewhere else again, and usually by nobody**: `oracle_tags::refresh_if_due`
-  // runs at launch when the taxonomy is a week old, so the commonest way this line appears is
-  // a job no surface in the window asked for. The status read is what makes that visible.
+  // **Started somewhere else again, and usually by nobody**: `tags::oracle::refresh_if_due`
+  // and `combos::refresh_if_due` both run at launch when their file is a week old, so the
+  // commonest way either of these lines appears is a job no surface in the window asked for.
+  // That argument is what puts them here rather than on a panel — and it is stronger for the
+  // combos, which no longer *have* a panel and are the largest download of the two by four
+  // times over. What makes each visible differs and each hook says so: the taxonomy has a
+  // `refreshing` flag on its status to read, and the combo feed has only its own event.
   useRegisterActivity(oracleTagActivity(oracleTags.refreshing, oracleTags.progress));
+  useRegisterActivity(comboActivity(combos.refreshing, combos.progress));
   useRegisterActivity(updateActivity(update.progress, update.status?.available?.version ?? null));
   const activity = useTopActivity();
   // The line moves the moment a job starts; the sentence waits, so a sub-second `checking`

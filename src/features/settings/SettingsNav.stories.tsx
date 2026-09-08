@@ -48,13 +48,15 @@ const meta = {
     docs: {
       description: {
         component:
-          "The way through Settings: six groups, and a box that searches every panel in all " +
+          "The way through Settings: seven groups, and a box that searches every panel in all " +
           "of them at once.\n\n" +
-          "**Six entries and not twelve.** A rail as long as the page it indexes is a second " +
-          "scroll rather than a way through the first, so panels that answer one question " +
-          "share an entry — `Prices` and `Combos` are both optional bulk feeds of card facts, " +
-          "and `Needs review` is what sync asks of a reader. `nav.ts` carries that grouping " +
-          "and this component decides none of it.\n\n" +
+          "**Fewer entries than there are panels**, deliberately: a rail as long as the page it " +
+          "indexes is a second scroll rather than a way through the first, so panels that " +
+          "answer one question share an entry — `Needs review` is what sync asks of a reader, " +
+          "and `Appearance`'s two are the reader's own marks recoloured. `Card data` is the " +
+          "entry that now holds one, since the combo feed became an automatic download and lost " +
+          "its panel; the entry names the question rather than the panel, so it stayed. " +
+          "`nav.ts` carries all of that grouping and this component decides none of it.\n\n" +
           "**A query outranks the group.** While the box has words in it no entry is marked " +
           "current, because a reader who types `dropbox` while standing on `Updates` is asking " +
           "the page a question rather than asking the `Updates` group one. Picking a group is " +
@@ -112,7 +114,7 @@ export const BesideThePane: Story = {
  * The figure is gold, which is what "the number worth looking at" is spelled in everywhere else
  * in this window, and `tabular-nums` so a count changing under the reader's eye does not shift
  * the entry's width. A group whose count is **zero draws no badge at all** rather than a nought:
- * six entries each carrying one is a page that always looks like it is asking for something.
+ * seven entries each carrying one is a page that always looks like it is asking for something.
  *
  * The figure is `aria-hidden` and the button's name carries its own copy — `Sync (12)`. That is
  * not belt and braces: a label and a number in two sibling elements compute to `Sync12`, because
@@ -131,7 +133,7 @@ export const BadgesLit: Story = {
     const canvas = within(canvasElement);
     await expect(canvas.getByRole("button", { name: "Sync (12)" })).toHaveTextContent("12");
     await expect(canvas.getByRole("button", { name: "Errors (41)" })).toBeInTheDocument();
-    // Nothing is drawn for a count of zero, and four of the six groups have no badge at all.
+    // Nothing is drawn for a count of zero, and five of the seven groups have no badge at all.
     await expect(canvas.queryByText("0")).not.toBeInTheDocument();
   },
 };

@@ -5733,12 +5733,18 @@ position.
   the theory badge and the caption's `Any` row already make about a mark that would sit on nearly
   every deck.
 
-**`role="img"`, and the accessible name is the colours and nothing else** — `White, Green`, in
-printed order, which is how a player says a deck's colours out loud. The arithmetic goes in the
-tooltip (`White 11, Green 8`), one vocabulary at two depths rather than two ways of saying one
-thing. The tooltip is bound `describes: false`, and that is a fact about where the element sits
-rather than a preference: the span is not focusable and lives inside a button whose name is
-computed from its contents, so an `aria-describedby` wired here would be announced to nobody.
+**The bar is `aria-hidden`, and the colours are said in an `sr-only` span after the deck's name**
+— `White, Green`, in printed order, which is how a player says a deck's colours out loud, off
+`deckPips`' `deckColorsLabel`. (**Corrected 2026-09-08.** This paragraph said `role="img"` with an
+`aria-label` of the colours, which is how the bar was written first and is *not* what shipped:
+named here, the span joins the tile button's own accessible name ahead of the deck, so the tile
+came out `"White, Red Zoo …"` and `getByRole("button", { name: /^Zoo/ })` matched nothing. The
+correction is the drawing's, not the words' — the same colours, said one element down.) The
+arithmetic goes in the tooltip (`White 11, Green 8`), one vocabulary at two depths rather than two
+ways of saying one thing. The tooltip is bound `describes: false`, and that is a fact about where
+the element sits rather than a preference: the span is not focusable and lives inside a button
+whose name is computed from its contents, so an `aria-describedby` wired here would be announced
+to nobody.
 (Note the trap this repo has recorded — a `describes: false` tooltip carries no `role="tooltip"`,
 so probing for that role finds nothing on a tooltip that is working.)
 
@@ -5797,8 +5803,13 @@ can end up alone on a line saying nothing.
   format no deck on the wall is in is a control whose only possible outcome is an empty wall; a
   *lone* chip can do exactly two things, leave the wall as it is or empty it, so it is a control
   whose only effect is the bad one. The count rides `title`, which `ToggleChip` makes both the
-  tooltip and the accessible name, so a chip reads *"Modern, 3 decks"* while still beginning with
-  the word printed on it (WCAG 2.5.3) — the search's Owned chip's arrangement.
+  tooltip and the accessible name, so a chip reads *"Modern format, 3 decks"* while still
+  beginning with the word printed on it (WCAG 2.5.3) — the search's Owned chip's arrangement.
+  (**Corrected 2026-09-08**: this line said *"Modern, 3 decks"*, and the word `format` in the name
+  is load-bearing rather than filler. Without it a chip is named `Commander, 1 deck` and so is the
+  tree row for a *folder* somebody called Commander holding one deck — a name a Commander player
+  is very likely to use. A story going red is what found it, and it is the third entry in the
+  naming series the 2026-09-08 section below tabulates.)
 - **The `Archived` chip replaces the disclosure's own button and is still a disclosure.** It
   carries `aria-expanded`, not `aria-pressed`, which is why it is built out of the chip family's
   recipes instead of being a `ToggleChip`: "this filter is on" and "the thing below is open" are
@@ -5832,3 +5843,434 @@ this row that is a product decision rather than a drawing one. An order is how a
 read their gallery and it is visible in the toolbar the moment they open it; a filter is a thing
 they are doing *right now*, and a gallery that opened already narrowed, with no memory of having
 asked for it, is a gallery that looks like it has lost decks.
+
+## The deck gallery redrawn: a fused band, marks on the art, tile-format folders, a drawn tree (2026-09-08)
+
+The wall the section above describes had been on screen for a day. The redesign (commit
+`669de894`, from the approved design canvas, iteration 1d) redraws four of its objects and
+collapses one control: the colour bar becomes the tile's foot, the theory badge and the bracket
+become two marks on the art, a folder card becomes a deck tile's frame, the folder tree draws its
+nesting, and three folder verbs in the heading row become one menu. `DeckColorBar.tsx`,
+`DeckTile.tsx`, `FolderCard.tsx`, `FolderTree.tsx`, `DecksPage.tsx` and `panels.ts` under
+`src/features/decks/`, plus a prose correction in `src/lib/dropMarks.ts`.
+
+**Say the honest half first: everything down to the last subsection is the design _as
+authored_, read off the source** — every size is what the file says rather than what a box
+measured, and the one live figure quoted among them is the previous section's ~548px column,
+measured 2026-09-07 in a debug build at 1024 × 700. **The last subsection is the pixels**, taken
+2026-09-08 over CDP in the shipped `tauri dev` window at 1920 × 1080 against a copy of the real
+database. Read it before trusting a number above it: it found one defect that every suite in this
+repo was structurally blind to, and it is where the measured figures live.
+
+### The bar became the tile's foot: the fills, a printed symbol, and a floor that scales
+
+A 5px pill floating 4px under the crop, filled with the colour-identity deeps, is now a **20px
+band fused to the crop's bottom edge**, filled with the **mana fills** and carrying each colour's
+printed `mana-font` glyph.
+
+- **The switch from `--color-pie-*` to `--color-mana-*` is the change worth carrying away, and the
+  band is what forced it.** `index.css` states both families at the token: the deeps are
+  "saturated enough to carry meaning at 1px", which is exactly the demand a hairline makes, and
+  the fills are "the five colours, as printed symbols are filled … Glyphs sit on these in
+  near-black, exactly like a real symbol". A 20px field with a black symbol printed on it makes
+  the second demand rather than the first — `ms-b` in near-black on `--color-pie-b` (**#3b3a3e**)
+  is a black glyph on a near-black field, invisible, on the one colour a reader is likeliest to be
+  checking for. So the band is not a new arrangement: `FilterChips.tsx`'s `ManaChip` already ships
+  this pair character for character, `text-black` over an inline
+  `backgroundColor: var(--color-mana-…)`, and the band is the app's existing arrangement at a new
+  size.
+- **What the two families no longer share is `DeckStats`' `PIP_COLOR`.** The tile's band and the
+  editor's identity pie now answer with different families, and that is the honest reading rather
+  than drift: a pie slice is a colour with nothing printed on it, a band segment is a field with a
+  symbol on it, and those are two demands the palette has two answers for. The table stays a
+  `Record` with `var(…)` spelled out per key — an interpolated `bg-mana-${key}` emits no rule at
+  all, which is `src/CLAUDE.md`'s standing rule and the same trap the old table was written around.
+- **Four numbers, each answering a different question.** 20px of height at 100%
+  (`calc(1.25rem * var(--mark-scale, 1))`), which is what a 12px glyph needs with air either side
+  — the symbol sets the floor, the band is not a thickness anybody chose. **26px of minimum width
+  per segment**, because a splash colour at 3% of a deck's pips is a segment a glyph cannot be
+  drawn smaller for: there is no smaller version of a printed symbol. **2px between segments, as a
+  `gap` and never a border**, so what shows through is the band's own `bg-surface` rather than a
+  line this component picked a colour for — and a seam is what stops `--color-mana-b` (#cbc2bf)
+  and `--color-mana-c` (#c8c4bf) reading as one field on an Eldrazi deck. **`rounded-b-lg` against
+  the crop's `rounded-t-lg`**, one 0.5rem, and neither radius scales, which is this app's standing
+  rule for a Tailwind corner.
+- **The 26px floor scales with `--mark-scale` rather than being a fixed pixel, and that is what
+  keeps five colours inside a tile at 0.5×.** A fixed floor is six minimums summing against a tile
+  that has shrunk; a scaled one shrinks with the box it is inside. `overflow-hidden` on the band
+  is the backstop for the case where they still do not fit, and clipping the last segment is the
+  better failure than a band wider than the picture above it.
+- **A `border-t` in `bg-bg/60` sits between the crop and the band** — the page colour at 60%, so
+  the band is separated from the picture rather than washed into it. A band flush against a crop
+  full of dark art loses its own top edge; the hairline is what says crop and band are one object
+  rather than one bleeding into the other. There is **no margin at all** above the band, and
+  `DeckTile`'s own comment fences that: an element, a margin or a gap introduced on the button
+  between the two would put a hairline of page between a picture and the band it belongs to.
+
+**`hasColorBar(pips)` is exported so the cover and the band cannot disagree about whether one is
+coming.** It is `true` exactly when `DeckColorBar` renders something, and `Cover` takes it as
+`fused` to draw the crop `rounded-t-lg` or `rounded-lg`. Writing the condition twice would put the
+symptom in a **radius** — which jsdom cannot see at all (no layout engine, no stylesheet) and
+which no test of either component alone could reach. The conditional matters most on the tiles
+that are hardest to explain: a deck with no pips draws no band, so squaring its crop
+unconditionally would leave two hard corners sitting on the page under a frame that is rounded
+everywhere else, and the reader cannot see the missing band — what they would see is a cover that
+had gone wrong.
+
+**The band stays `aria-hidden` and the printed symbols make that more true, not less.** A
+`mana-font` glyph is a `content` on an empty `<i>`'s `::before`: it reaches a screen reader as
+nothing, and under jsdom the element has no text either. A band that dropped `aria-hidden` would
+announce six empty elements and still name no colour. The words stay in the `sr-only` span after
+the deck's name (`deckPips`' `deckColorsLabel`), and the counts stay in the tooltip. That also
+leaves `data-deck-color` the only honest handle on a segment — the classes on the glyph are
+assertable as *source text* and are asserted that way, but which colour a segment is **for** is
+the fact under test.
+
+**A correction to the section above, in passing:** its paragraph beginning "`role="img"`, and the
+accessible name is the colours and nothing else" describes an iteration that did not ship. The bar
+has been `aria-hidden` with an `sr-only` twin since it landed on 2026-09-07 — with `role="img"`
+and an `aria-label` the tile's accessible name came out `"White, Red Zoo …"`, so
+`getByRole("button", { name: /^Zoo/ })` matched nothing and a voice user could not say "click
+Zoo". That paragraph is corrected in place; the rest of it — the tooltip's vocabulary, and
+`describes: false` being a fact about where the element sits — was and is true.
+
+### Two marks on the art, in a box that is the art
+
+The theory badge moves from the crop's top-left to its **bottom-left**, a `BRACKET ~3` pill joins
+it at the **bottom-right**, and the bracket **leaves the caption**, which is back to the three
+terms that describe the *list*: `Commander · Paper · 100 cards`. The caption was the wrong home
+for it — the tile's least important line, truncating from the end, in a column narrow enough that
+a fourth segment is the segment that goes — and a bracket is the one number on the tile a reader
+compares decks by.
+
+**The mechanism is the part to document, because it reconciles two constraints that pull opposite
+ways.**
+
+- The marks must stay **outside** the tile's `<button>`. An accessible name is computed from a
+  button's contents, so a mark inside it is announced *before* the deck, and the tile is named for
+  its deck. That is the badge's own long-standing rule, unchanged; what is new is that there are
+  two of them.
+- But "the art's bottom" is not "the tile's bottom". Under the picture sit the colour band, the
+  name and the caption, so a mark anchored to the `<li>` would land on the caption.
+
+**An aspect-ratio box is what reconciles them.** One `pointer-events-none absolute inset-x-0
+top-0` overlay, a sibling of the button, sized by `style={{ aspectRatio: ART_ASPECT }}` — the same
+`626 / 457` the cover is drawn at. Its height therefore resolves to exactly the cover's height
+with **no ref, no `ResizeObserver` and no frame of disagreement**, at every stop on the zoom
+ladder, because both boxes are driven by the same grid track. A copied pixel height could not be
+exact at every stop the ladder has; a measured one would answer a frame late.
+
+- **The overlay is deliberately _not_ `aria-hidden`, and the design source says otherwise.** On the
+  canvas both marks duplicated caption text, so hiding them was right there. It is wrong here: the
+  caption has *lost* the bracket, so the pill is now the only place the bracket is said at all,
+  and hiding it would take a fact off the wall for a screen reader and leave it on for everybody
+  else.
+- **`TILE_MARK` is one constant because the two are one mark drawn twice** — same edge, same
+  picture, opposite ends — and a padding, face or radius changed on one alone is two vocabularies
+  in one corner. Every size in it scales with `--mark-scale`, the inset included: 6px in from a
+  200px crop is a corner, 6px in from a 400px one is a smudge against the edge. What is *not*
+  shared is the dash: `border-dashed` means provisional, which a theory list is and an estimate is
+  not.
+- **The pill takes no tooltip, and the reason generalises.** `pointer-events` inherits, so a hint
+  bound anywhere inside a `pointer-events-none` wrapper can never open — `src/CLAUDE.md`'s rule.
+  The escape `FoilOverlay` uses, `pointer-events-auto` on the mark itself, works only because that
+  chip is *inside* its button, where the press still opens the card. Here the marks are siblings
+  of the button, so buying the hint back would buy a genuine dead spot in the picture's corner,
+  for words the pill already prints in visible type.
+- The string is the page's. `BRACKET ~3` is `uppercase` over `bracketLabel`'s `Bracket ~3`, never
+  a second string built in the tile: the page owns the words, the tile owns the type. `null` draws
+  nothing — never `Bracket ?`, never a skeleton, never a dash — which is exactly what the caption
+  segment did before it.
+
+### The 20px that three objects now share
+
+The band's height is the number that keeps a grid track level, and it is spent three different
+ways:
+
+| Where | How it is spent | Spelled |
+| --- | --- | --- |
+| `DeckColorBar.tsx` | the band itself, drawn | `h-[calc(1.25rem*var(--mark-scale,1))]` |
+| `FolderCard.tsx` | `BAND_PAD`, padding under the crops | `pb-[calc(1.25rem*var(--mark-scale,1))]` |
+| `DecksPage.tsx` | the empty drawer's `New deck` placeholder | `paddingBottom: "calc(1.25rem * var(--mark-scale, 1))"` |
+
+**Three spellings rather than one import, deliberately** — one object draws a band there and two
+spend the space on empty box, so there is no single constant that would be honest at all three
+sites. What there is instead is this table and `BAND_PAD`'s own doc comment: the three have to be
+read together before any of them moves. All three scale with `--mark-scale` for the same reason;
+one holding still would put the track out of true at every stop but 100%.
+
+### Folder cards in the deck tile's format, and where the dash went
+
+A dashed box holding a 96px strip of up to three crops, then a name with a bare figure beside it,
+then the word `Folder` on a line of its own, is now **one framed box in the deck tile's own
+format**: `overflow-hidden rounded-lg border border-border bg-surface` on the `<button>` itself,
+an `ART_ASPECT` spacer plus `BAND_PAD` for its height, the member crops filling the whole frame
+(`absolute inset-0`, 2px seams) rather than sitting in a fixed strip, and the name with
+`Folder · N decks` on a `bg-bg/72` scrim over the bottom. A wall of folders and decks is one wall
+now rather than two kinds of object in one grid.
+
+- **The frame's edge is on the `<button>` and that is load-bearing rather than tidy.** 2026-09-03
+  moved both drags' marks onto that element — the one that already carries the card's own edge —
+  because a ring around a dashed card was the three-concentric-outlines bug a reader reported.
+  Putting the new frame on a face *inside* the button would have re-made it at exactly the place
+  the app has already been reported for. So the border, the radius, the clip and both drop marks
+  are one element's, and `DROP_EDGE` recolours whatever edge that element owns — which is why a
+  card that turned solid needed no change to the marks and got none.
+- **Dashed became solid, and the dash was prose rather than decoration.** `FolderCard`'s comment
+  used to name it as the screen's one visual rule, *dashed means provisional*; a folder is not
+  provisional beside a deck, it is the same object with decks inside it, which is what drawing the
+  two the same way claims. The vocabulary survives where it still says something:
+  `ParentDeckFolderCard`, the way *out* of a drawer, takes the same silhouette with a dashed
+  `border-accent/55` edge and is the only tile on the wall that is not a place.
+- **The wishlist's and the collection's folder cards keep the dash and are untouched**, and the
+  divergence is honest rather than drift: those walls draw a folder as a 62px line of type among
+  62px lines of type (the 2026-09-03 section above measured them), where an edge is the only thing
+  separating a container from a control. This one draws it as a picture the size of a deck's
+  picture with the word `Folder` in the caption.
+- **`src/lib/dropMarks.ts`' prose was corrected in the same commit** — it described all four folder
+  cards as dashed, and one of them no longer is. Its argument was unaffected; the sentence was one
+  wall behind.
+
+**`ParentDeckFolderCard` gained a `zoom` prop, and the reason is a trap worth generalising.** It
+used to be `components/ParentFolderCard` with two drop targets wrapped around it — words in a
+stretched grid item, where `h-full` was the whole of its geometry and the tile kept pace with its
+neighbours without knowing the zoom existed. Drawn in the new frame it prints a glyph, a
+heading-face label and a caption at `calc(… * var(--mark-scale, 1))` sizes, **and a tile that never
+sets that variable reads the fallback of 1**: at 2× the wall's decks and folders would double
+while the way *out* of the folder stayed at its shipped size, inside a box that had grown around
+it. The prop is what publishes the variable, through `cardScaleVars`, exactly as `FolderCard` and
+`DeckTile` do. The *words* are still shared — `UP_ONE_LEVEL` and `upCardName` are imported rather
+than respelled, so all three walls say one string and the accessible name cannot diverge; what
+could not be shared any longer is the drawing.
+
+### The tree draws its nesting: 16px steps, a gutter beside the button, an elbow at the last child
+
+Rows go from `py-1.5` to `py-2.5` (a 32px row around a 20px line becomes 40px, which is why the
+`New folder in …` control's centring moves from `top-1` to `top-2` — one arithmetic written
+twice), glyphs from `size-3.5` to `size-4`, and the selected row gains a **2px accent rail** down
+its leading edge, `absolute bottom-2 left-0 top-2 w-0.5`, *inside* the button so it sits within the
+fill it belongs to. The fill and `aria-current` already say a row is current and neither is
+findable — a fill of that weight is what a hover paints too — so in a rail of twenty rows the
+reader had to read the names to find where they were.
+
+**The nesting is drawn, and the guides live in a gutter _beside_ the button, never under it.** A
+trunk under a hover fill or a focus ring is a trunk the reader cannot see, so the row is a flex of
+two things: a `flex-none` gutter of absolutely positioned hairlines, then the button, whose own
+padding is a constant 8px with no indent left in it at all.
+
+The arithmetic, with `GUIDE_STEP = 16`, `GUIDE_TICK = 10`, and a 16px glyph at 8px of padding:
+
+| Mark | Geometry |
+| --- | --- |
+| the gutter | width `16·depth + 10` — the last trunk plus the run the tick needs |
+| a trunk at level L | `left: 16·L − 0.5`, which is where a 1px line starts if its middle is to land on `16·L` |
+| an ancestor's trunk | drawn only where that ancestor still has siblings below this row |
+| the tick | `top: 50%`, `left: 16·depth + 0.5`, `right: 0` |
+| a last child's own trunk | `bottom: 50%` — the elbow |
+| every vertical | `top: -2`, `bottom: -2` — the overhangs |
+| the root's trunk | in "All decks"' own `<li>`: `left: 15.5px`, `top: calc(50% + 12px)`, `bottom: -2px` |
+
+- **At L = 1 the trunk lands on the centre of a top-level row's 16px glyph**, which is the line
+  every top-level folder hangs from. That is the whole of why the step is 16.
+- **The 2px overhangs are what make a trunk read as one line.** The list is `gap-0.5`, so
+  consecutive rows stand 2px apart, and a guide drawn to its own row's edges would stop and
+  restart at every row — a dashed line down the tree, which says something the tree does not mean.
+- **The root row draws the trunk its children descend from**, because "All decks" is the top
+  rather than a row of the tree: it has no gutter of its own, so the level-1 trunk has nowhere
+  else to start. It starts at `50% + 12px` — the midline plus half a glyph and 4px of air — so the
+  line begins just under the glyph rather than out of the middle of it, and is drawn only when
+  there is a folder under it.
+- **The gutter went _inside_ the measured drop box, not in front of it.** Both drag registrations
+  still span the whole row and are still the same rectangle: wrapping the pair in a flex box
+  *outside* `folderRef` would have narrowed the folder drag's box to the button, so the row's
+  leading 26–58px would stop being part of what a folder is let go on and picked up by. Nothing
+  about `folderEdge`'s thresholds moves either way — `axis="vertical"` divides the box by
+  **height**, and a gutter of absolutely positioned hairlines adds none.
+
+**`indent()` in `src/lib/folderTree.ts` was deliberately not changed, and the two steps no longer
+agree on purpose.** That function is 14, still exported, and still the wishlist tree's, the
+collection cabinet's and `MoveToFolder`'s — pickers, flat lists of destinations with no guides in
+them, whose step is free to be what reads well. A step that draws hairlines is not free: pulling
+the tree back to 14 would put every trunk half a glyph off the row above it, and pushing the
+pickers out to 16 would move a list that gets nothing for it. The deck tree's own `treeIndent()`
+is module-local and answers only the tree's question — which is where the `New folder in …` field
+stands, so it lines up with the rows around it.
+
+**The row order and the two facts the guides need come from a module-local `drawOrder` walker
+rather than from `flattenFolders`.** Whether a row is the `last` of its siblings, and the ancestor
+`trail` of "does that level still have a branch running past this row", are facts only this
+drawing uses; widening `FolderNode` or the shared flattener for them is a change four surfaces pay
+for and one benefits from. The *order* is not given up — the same depth-first, parents-first walk
+— which is what let the call be replaced rather than joined.
+
+**A new exported `FOLDER_GUIDE_ATTR` (`data-folder-guide`) is the test handle**, and it carries
+which piece it found as its value: six values, five of them the nesting (`gutter`, `ancestor`,
+`trunk`, `tick`, `root`) and `rail` for the selected row's mark, which is the same *kind* of thing
+— an `aria-hidden` mark that is nothing but a position and a colour. The reason is
+`DECK_COLOR_SEGMENT_ATTR`'s, and it applies twice over here: the marks are `aria-hidden` and have
+no role, name or text, their offsets are **inline styles** (computed, and Tailwind emits nothing
+for an interpolated class), and jsdom applies no stylesheet — so a class assertion would be a
+check on source text rather than on the drawing. A handle that could only be *counted* would be
+satisfied by an ancestor's trunk standing where the row's own belongs.
+
+**Still no twisty**, and the guides do not reopen that argument: they are disclosure's picture
+without disclosure's mechanism. Nothing collapses, every folder is still always on screen, and
+there is still no branch a deck can hide in with no number pointing at it.
+
+### `Folder actions`: the fourth ruling in one running series
+
+`Rename folder…`, `Move folder…` and `Delete folder…` — three heading-row buttons and the two
+anchored panels behind them — collapse into one `Folder` control that opens `buildFolderMenu`
+verbatim through `useContextMenu`'s `menuClick` (which anchors at the pointer for a press that had
+one and at the button's bottom-left for one that did not — a button reached by Tab fires a `click`
+carrying no coordinates, and `0, 0` would put the panel in the corner of the window).
+
+Two things make it worth recording.
+
+**First, the row was spending width saying one thing twice.** Six controls stood beside a heading
+and a count — the three verbs, `New folder`, `Import deck`, `New deck` — in a column measured at
+**548px** at the app's 1024px floor (2026-09-07, debug build; the figure is the previous section's
+and was driven). Four do now. And the two spellings did not even agree: the tree's own row menu
+already offered those three writes **plus** `New deck here` and `New subfolder…`, so a folder a
+reader right-clicked could do more than the folder they were standing *in*. The caret glyph
+replaces the ellipsis deliberately — an ellipsis means "this opens something that asks you a
+question", which is true of a rename field and a delete confirmation and false of a menu.
+
+**Second, and this is the one to carry away: the button's accessible name is `Folder actions`, not
+the `Folder` it prints, and the suite is what found that.** `CreateDeckDialog`'s own folder select
+is named exactly `Folder`, and that dialog opens *over* this row — so for as long as it is up, two
+controls on one screen answer to one name, and `getByRole("button", { name: "Folder" })` throws
+"found multiple". It is not a WCAG failure; it is a control that cannot be addressed
+unambiguously, by a screen reader walking the page, by anyone driving the app by voice, or by a
+query. **It is the fourth time this exact collision has been ruled on in this feature**, and each
+was settled the same way — the name says what kind of thing the control is about, and the visible
+word stays the first word of the name (WCAG 2.5.3, so "click Folder" still works):
+
+| The control | Collided with | Named |
+| --- | --- | --- |
+| the gallery's sort picker | the deck editor's `Sort` | `Sort decks` |
+| the gallery's name box | the editor's `Filter this deck` | `Filter decks by name` |
+| a format chip | the tree row for a *folder* of that name (`Commander, 1 deck`) | `Commander format, 1 deck` |
+| the heading row's folder menu | `CreateDeckDialog`'s `Folder` select | `Folder actions` |
+
+**The collision only exists while a dialog is open, which is why reading the row could never have
+shown it.** That is the general lesson rather than a fact about this button: a name collision is a
+property of what is on screen *together*, so the surface to check is every layer that can be up at
+once, and the suite is the only thing that walks them all. The trigger carries
+`aria-haspopup="menu"` and **no `aria-expanded`** — `WishFolderCard`'s ruling, for its reasons: the
+popup *kind* is a fact about this button and is free, the expanded *state* belongs to
+`ContextMenuProvider`, and a static `aria-expanded="false"` is an assertion that is wrong for
+exactly as long as the menu is up.
+
+**`{ kind: "moveFolder" }` left `panels.ts` as dead, and must not come back.** The picker lives in
+the menu's lazy `Move to` submenu now, which the menu panel draws at the app root — so there is no
+layer of this view's own for the arm to be about, and it would be a flag nothing sets and nothing
+reads. *A picker that lives in a menu is not a panel.* The two folder verbs that still raise a
+layer of this view's own are in there: the rename field, which the tree draws in place of a row,
+and the delete question, which the `Folder` button now anchors. Both routes into the delete
+question make the folder in question the open one — `folderMenuDeps.askDelete` does
+`setSelectedFolderId(folder.id)` on the way in — which is what puts the wall the sentence is about
+behind the sentence, and what guarantees there is a button on screen to anchor the panel to.
+(`CollectionPage` and `WishlistPage` each declare a `moveFolder` arm of their own; those are
+different unions about different screens and are not evidence that this one needs it back.)
+
+**An empty folder stops drawing a sentence and draws the wall.** *"Nothing is filed in X yet. Drag
+a deck onto it, or use the Move control on a tile"* described a gesture instead of offering one —
+and it withheld the up-one-level tile from precisely the folder with nothing else on screen to
+press, while naming a control that lives on a *different* wall. So an empty drawer gets two tiles:
+the way out it was already denied, and a dashed `New deck` placeholder standing at a deck tile's
+height (crop box plus the band's 20px), named `New deck in {folder}` rather than `New deck`
+because the heading row's primary control already owns that string. It is not an always-present
+`+ New deck` tile — a wall of forty decks would end in a dashed box nobody was looking for.
+**The root-level sentence stays a sentence** (at the top level the folder cards *are* the wall, and
+there is no level above for a way out to point at), and **the "No decks match this filter" state is
+untouched** — it is gated on `here` rather than on `shown` for the reason its own long argument
+gives: a dashed `New deck` box on a wall the reader has just narrowed says the same wrong thing the
+old sentence would have.
+
+### The live pass, and the bug in it that nothing else could have found (2026-09-08)
+
+Driven over CDP in the shipped `tauri dev` window, debug build, 1920 × 1080, against a copy of
+the main checkout's real database. **It found one defect, and it is the kind this whole practice
+exists for: three green suites, a correct-looking screenshot at 100%, and a rule that was never
+applied.**
+
+#### The symbol was 16px in a band that asked for 12
+
+The glyph is drawn as `<i class="ms ms-u …">`, and the size was written on that element as
+`text-[calc(0.75rem*var(--mark-scale,1))]`. Measured in the window at `--mark-scale: 1`:
+
+| Read | Expected | Actual |
+| --- | --- | --- |
+| `getComputedStyle(i).fontSize` | `12px` | **`16px`** |
+| the same at `--mark-scale: 0.7` | `8.4px` | **`16px`**, in a band 14px tall |
+
+**The cause is source order, not the class.** `mana-font`'s own `.ms` rule declares
+`font: normal normal normal 14px Mana` and then `font-size: inherit` — a **class** selector,
+exactly as specific as a Tailwind utility — and `src/main.tsx` imports `mana-font/css/mana.css`
+after `index.css`. On a specificity tie the later sheet wins, so the utility was in the markup,
+in the stylesheet, and inert; the symbol simply took its parent's 16px.
+
+**Every fence this repo owns was blind to it, and each for a different reason.** `classList`
+assertions passed because the class really was there. jsdom applies no stylesheet, so a
+computed-style assertion could not have been written. `tailwind-merge` was checked and cleared —
+it keeps both classes, which was the hypothesis tried first and refuted by running `twMerge`
+directly. And at 100% zoom a 16px symbol in a 20px band merely reads as a slightly bold band. It
+only becomes a *visible* fault at the bottom of the zoom ladder, where the band shrinks and the
+symbol does not.
+
+**The fix is to set the size on the field rather than on the `<i>`**, which is not a workaround
+but the arrangement the font asks for: `font-size: inherit` is `.ms`'s own declaration, so the
+glyph follows its parent by design, and the parent is the one element that already knows how big
+the band is. Re-measured after the fix, the whole ladder is proportional:
+
+| `--mark-scale` | band | symbol | segment floor | tile |
+| --- | --- | --- | --- | --- |
+| 0.7 | 14px | 8.4px | 18.2px | 146.2px |
+| 1.0 | 20px | 12px | 26px | 227.3px |
+| 1.3 | 26px | 15.6px | 33.8px | 272px |
+
+**`ManaText` has the same defect and it is not fixed here.** `.ms-cost` declares
+`font-size: 0.95em` by the same kind of selector, so that component's `text-[0.85em]` is inert
+too and every printed cost in the app draws ~12% larger than its own source says. It is a
+separate change — that component is on the search table, the card pane, both deck views and their
+stories — and it wants its own pass rather than riding in on a gallery redesign.
+
+#### What else the window settled
+
+- **The band is fused, exactly.** `band.top − art.bottom = 0`. The crop's bottom-left radius is
+  `0px` where a band follows and `10px` where none does (`rounded-lg` is 10px in this app, not
+  Tailwind's stock 8px — so the band's `rounded-b-lg` foot and the crop's `rounded-t-lg` head are
+  one radius). The seam is a real `1px` top border; the 2px gaps are the band's own `bg-surface`
+  showing through, and the three fields on a Grixis deck read `rgb(170, 224, 250)`,
+  `rgb(203, 194, 191)`, `rgb(249, 170, 143)` — `--color-mana-u`, `-b`, `-r` and not a deep among
+  them.
+- **The marks overlay resolves to exactly the cover's box**, which was the claim with no proof:
+  `227.3 × 166` against a crop of `227.3 × 166`, `top` and `bottom` deltas both `0`. No ref, no
+  measurement, one aspect ratio.
+- **The two marks do not collide at the narrowest tile.** At 0.7× the tile is 146.2px and the gap
+  between the badge's right edge and the pill's left is **12.1px**; at 1× it is 37.3px. Both marks
+  scale with the tile, so the clearance is proportional rather than lucky.
+- **The guides draw what the arithmetic promised**, read off a tree built live to have all four
+  shapes in it. A non-last folder's trunk runs `top: -2px → bottom: -2px`; a last one stops at
+  `bottom: 50%`. A row nested under a **non-last** parent draws an `ancestor` hairline at
+  `left: 15.5px` running the full height *and* its own trunk at `31.5px` stopping at the elbow; a
+  row nested under the **last** parent draws no ancestor at all. Gutters measured 26px at depth 1
+  and 42px at depth 2, rows 40px tall with `padding-left: 8px`, and the selected row's rail 2 × 24px.
+- **The empty folder draws the wall**, up-tile and dashed placeholder, both standing at a deck
+  tile's height. Folder cards and deck tiles measured **232px** each in one track.
+- **The `Folder` menu opens on a plain click** and carries `New deck here · New subfolder… ·
+  Rename… · Move to · Delete…` — the tree row's list, not a second one.
+
+#### Still owed
+
+- **`ms-b` and `ms-c` side by side** against real cover art, which is the seam the 2px gap was
+  chosen for. The database driven had no deck with both.
+- **The heading row at the 1024px floor.** The pass ran at 1920 and the collapse's whole argument
+  is about a ~548px column.
+- **Where the caret lands** after each `Folder` menu row that raises a layer, and that `menuClick`
+  anchors a keyboard press at the button rather than at the pointer's last position.
+- **The tree at depth 3+ in a 208px rail.** At depth 2 a 20-character folder name already
+  truncates to about eight (`Nested U…`), which is the 16px step and the 10px tick gutter spending
+  width the 14px step did not. It is the design as approved and names have always truncated, but
+  nobody has yet looked at a genuinely deep cabinet in it.

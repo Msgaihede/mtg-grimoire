@@ -10,9 +10,11 @@ answers costs em dashes rather than a broken app. Card trader is deliberately ab
 needs a per-user JWT and publishes no bulk download.
 
 **Scryfall's two Tagger datasets are further bulk downloads from the same source, and optional
-the same way.** **Oracle Tags** say what a card _does_ (`removal`, `ramp`, `recursion`), which is
-what a deck add is filed by; a database that has never fetched them files by card type instead,
-and that fallback is the floor rather than an error. **Art Tags** say what an illustration
+in a weaker sense than the price feeds are**: a launch fetches them uninvited, and what makes
+them optional is that every reader of them answers without them. **Oracle Tags** say what a card
+_does_ (`removal`, `ramp`, `recursion`), which is what a deck add is filed by; a database that has
+never fetched them files by card type instead, and that fallback is the floor rather than an
+error. **Art Tags** say what an illustration
 _shows_ (`forest`, `dragon`, `dog`), which is what the Tags page browses by; a database that
 has never fetched them has a Tags page that says so and still answers from the oracle side.
 ~5.85 MB and ~12.5 MB — [the oracle research](docs/superpowers/research/2026-08-14-scryfall-oracle-tags.md)
@@ -87,13 +89,16 @@ constant. [sync.md](docs/reference/sync.md) has the whole record.
 **Commander Spellbook's combo database is the third optional feed, and the first that is neither
 Scryfall nor a price list.** `variants.json.gz` is where a Commander deck's bracket estimate gets
 its fourth signal: a two-card infinite combo is a fact about an _interaction_, so no amount of
-reading either card's own text finds one. It is optional the same way the others are — nothing
-downloads until a reader presses Refresh in Settings, a failure keeps the combos already stored,
-and a database that has never fetched it estimates from three signals instead of four, which is a
-supported state rather than an error. 27.5 MB gzipped over 639 MB of JSON, so the ingest streams
-throughout; `combos::REFRESH_INTERVAL_SECS` is **the same week**, against a file Spellbook rebuilds
-through the day, and the reason is the tagger week's: a bracket readout that changed between two
-sessions on one afternoon, for a reason the reader cannot see, is the failure worth avoiding.
+reading either card's own text finds one. **It is optional in the tagger files' sense and not the
+price feeds'**, and it moved across that line: a launch fetches it uninvited now, because a
+bracket readout drawn from three signals looks exactly like one drawn from four — no error, no
+empty state, just a number a little too low — and there was no way for a reader to know a Refresh
+button was what they were missing. What optional still means is that a failure keeps the combos
+already stored, and an estimate with none reads three signals rather than refusing to answer.
+27.5 MB gzipped over 639 MB of JSON, so the ingest streams throughout;
+`combos::REFRESH_INTERVAL_SECS` is **the same week**, against a file Spellbook rebuilds through
+the day, and the reason is the tagger week's: a bracket readout that changed between two sessions
+on one afternoon, for a reason the reader cannot see, is the failure worth avoiding.
 [commander-brackets.md](docs/reference/commander-brackets.md) has every measurement.
 
 ## Commands

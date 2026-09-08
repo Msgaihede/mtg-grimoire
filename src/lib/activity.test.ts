@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   ACTIVITY_DELAY_MS,
   RANK,
+  comboActivity,
   createActivityStore,
   megabytes,
   oracleTagActivity,
@@ -10,7 +11,7 @@ import {
   updateActivity,
   type Activity,
 } from "@/lib/activity";
-import type { OracleTagProgressEvent, SyncProgressEvent } from "@/lib/ipc";
+import type { ComboProgress, OracleTagProgressEvent, SyncProgressEvent } from "@/lib/ipc";
 
 const job = (over: Partial<Activity> = {}): Activity => ({
   key: "sync",
@@ -284,6 +285,107 @@ describe("oracleTagActivity", () => {
     expect(topActivity([oracleTags, sync])).toBe(sync);
     expect(topActivity([oracleTags, update])).toBe(update);
     expect(RANK.oracleTags).toBeGreaterThan(RANK.marketplaceFeed);
+  });
+});
+
+describe("comboActivity", () => {
+  const combos = (over: Partial<ComboProgress> = {}): ComboProgress => ({
+    phase: "downloading",
+    done: 0,
+    total: 0,
+    ...over,
+  });
+
+  /**
+   * `refreshing` decides, not the event — `syncActivity`'s rule, kept in the argument list even
+   * though `useComboProgress` is the one hook that has to derive its flag *from* the event.
+   * `ComboStatus` carries no `refreshing` field to read, so the builder keeping the rule is what
+   * stops a terminal event reaching the ribbon by itself.
+   */
+  it("is null when nothing is running, whatever event is still in hand", () => {
+    expect(comboActivity(false, null)).toBeNull();
+    expect(comboActivity(false, combos({ phase: "ingesting" }))).toBeNull();
+    expect(comboActivity(false, combos({ done: 14_000_000, total: 27_500_000 }))).toBeNull();
+  });
+
+  /** The state a window that heard a run start and nothing since is in — and the state a
+   *  future `ComboStatus.refreshing` would put it in with no event at all. */
+  it("is the generic sentence, indeterminate, before any event arrives", () => {
+    expect(comboActivity(true, null)).toMatchObject({
+      key: "combos",
+      rank: RANK.combos,
+      label: "Updating combos",
+      detail: null,
+      value: null,
+    });
+  });
+
+  it("counts the download in whole megabytes", () => {
+    const activity = comboActivity(true, combos({ done: 14_000_000, total: 27_500_000 }));
+
+    expect(activity?.label).toBe("Downloading combos");
+    expect(activity?.detail).toBe("14 / 28 MB");
+    expect(activity?.value).toBeCloseTo(0.509, 2);
+  });
+
+  /** `download` reads `content_length().unwrap_or(0)`, so a host that declares none leaves the
+   *  phase with a sentence and no denominator rather than an error. */
+  it("has no figure and no bar for a download with no declared length", () => {
+    const activity = comboActivity(true, combos({ done: 14_000_000, total: 0 }));
+
+    expect(activity?.label).toBe("Downloading combos");
+    expect(activity?.detail).toBeNull();
+    expect(activity?.value).toBeNull();
+  });
+
+  /**
+   * **The ingest counts nothing, and that is `combos.rs` rather than a choice here**: `refresh`
+   * hands `ingest_gz` a `&mut |_, _| {}` and emits `("ingesting", 0, 0)` exactly once, over a
+   * 639 MB parse and several hundred thousand row writes. It is the longest phase of the longest
+   * job in the app, so a bar parked at a number for the whole of it would read as a stall —
+   * where an indeterminate one reads as work. Inventing a figure is the thing this asserts
+   * against.
+   */
+  it("names the check and the ingest without a number for either", () => {
+    for (const phase of ["checking", "ingesting"] as const) {
+      // `done`/`total` set to something a fabricated percentage could be built from, so the
+      // assertion is about the refusal rather than about the numbers being absent.
+      const activity = comboActivity(true, combos({ phase, done: 200_000, total: 500_000 }));
+      expect(activity?.label).toBe(
+        phase === "checking" ? "Checking for combo updates" : "Importing combos",
+      );
+      expect(activity?.detail).toBeNull();
+      expect(activity?.value).toBeNull();
+    }
+  });
+
+  /** Their event outlives the run it describes, so neither may read as finished — a full bar
+   *  on a `done` this window is still holding would be a job that never ends. */
+  it("treats a finished or failed refresh as running with nothing to say", () => {
+    for (const phase of ["done", "error"] as const) {
+      const activity = comboActivity(true, combos({ phase, done: 9, total: 9 }));
+      expect(activity?.label).toBe("Updating combos");
+      expect(activity?.detail).toBeNull();
+      expect(activity?.value).toBeNull();
+    }
+  });
+
+  /**
+   * The quietest job of the five, and the longest. What its failure costs is the fourth signal
+   * of one advisory on Commander decks alone, where the tag refresh below it changes where every
+   * card a reader adds is filed — and a rank above the tags would let one 639 MB job hold the
+   * row for a whole launch while the short refreshes beside it never got a sentence.
+   */
+  it("is outranked by every other job, the tag refresh included", () => {
+    const combo = comboActivity(true, null)!;
+    const oracleTags = oracleTagActivity(true, null)!;
+    const sync = syncActivity(null, true)!;
+    const update = updateActivity({ done: 1, total: 2 }, "0.3.0")!;
+
+    expect(topActivity([combo, sync])).toBe(sync);
+    expect(topActivity([combo, update])).toBe(update);
+    expect(topActivity([combo, oracleTags])).toBe(oracleTags);
+    expect(RANK.combos).toBeGreaterThan(RANK.marketplaceFeed);
   });
 });
 

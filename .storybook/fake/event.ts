@@ -11,7 +11,10 @@
  * `marketplace:progress` (`FeedProgressEvent`, subscribed once by `useMarketplaceProgress`),
  * `oracle-tags:progress` (`OracleTagProgressEvent`, subscribed once by `useOracleTagProgress`),
  * `art-tags:progress` (`ArtTagProgressEvent`, subscribed by `TagsPage`),
- * `combos:progress` (`ComboProgress`, subscribed by `CombosPanel`),
+ * `combos:progress` (`ComboProgress`, reached through `ipc.onCombosProgress` — the one entry
+ * here that names its wrapper instead of a component, because the combo feed downloads at
+ * launch since 2026-09-08 and the Settings panel this line used to name is gone with the press
+ * that started it),
  * `sync:applied` (`RelayOutcome`, subscribed by `useDeviceSyncInvalidation`) and
  * `sync:live` (`SyncLiveEvent`, subscribed by `useDeviceSyncLive`). A story drives any of them
  * with `emitFake`.
