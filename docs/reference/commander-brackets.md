@@ -2,18 +2,32 @@
 
 What the bracket readout on a Commander deck's header says, what it is allowed to conclude, and
 where the one signal that is not in a card's own text comes from. **Since 2026-09-07 the same
-answer is drawn on the deck _tile_ as well**, over a read of its own — the last section is what
+answer is drawn on the deck _tile_ as well**, over a read of its own — the tile section is what
 is different about asking a whole gallery at once.
+
+**Since 2026-09-08 the feed has a second reader that is not a deck at all**
+([#359](https://github.com/Msgaihede/mtg-grimoire/issues/359)): a `Combos` row on the card
+modal's rail, asking *which combos name this card* where every other reader here asks *which
+combos does this pile of cards hold*. **The card side has its own section at the end**, and the
+two questions never share a statement, a query key or a sentence.
 
 The rules are the Commander Format Panel's and the combo classifications are Commander
 Spellbook's editors'. Both were verified live on **2026-08-27** and are recorded in
 [the research](../superpowers/research/2026-08-27-commander-brackets-and-combos.md), which is
 the source; this document is the reference the shipped code is held to and does not restate it.
 
-**Every duration below was taken on Windows against a _debug_ build**, by
+**Every duration in the feed sections below was taken on Windows against a _debug_ build**, by
 `combos::tests::live_ingest` — an `#[ignore]`d test in `src-tauri/src/combos.rs` that exists so
 these can be re-taken rather than trusted. A release build can differ by ~8×, which is the root
 `CLAUDE.md`'s standing rule, so no timing here appears without the build it was taken on.
+
+**The card-side timings at the end were taken a different way and are not comparable to those**,
+which is stated at their own table too because a figure that is quoted away from its method is a
+figure that will be compared with the wrong thing: they are **Node 24.16.0's built-in
+`node:sqlite`** driving the statements' own SQL text against the live dev pair opened read-only,
+not rusqlite inside a debug build. What they measure is **the query plan**, and the difference
+between two plans over one corpus; they do not measure the binary, the IPC hop or the
+serialisation, and nothing in them can be added to a figure that does.
 
 ## The table as it stands
 
@@ -176,6 +190,25 @@ that failed — so each reader of it below says what the estimate does then.
 2026 additions arrived without a code change. `gameChanger` is `boolean | null` and a `null` — an
 orphaned row that knows nothing about itself — is counted in **neither** direction.
 
+**It is the one bracket signal a reader can see on a card, and since 2026-09-08 it is one glyph
+everywhere** — a crown. The deck's two card-face views print it inside the quantity tag, the two
+row views draw it in gold in the quantity column, and every wall of card tiles draws it bare and
+gold in `FoilOverlay`'s corner chip; `GameChangerBanner`'s ribbon and `GameChangerBadge`'s gold
+`GC` are deleted. The drawing rules and the measurement that forced the change are in
+[frontend-design.md](frontend-design.md). Two consequences for this document. **The other three
+signals still have no per-card mark and are not owed one** — mass land denial, extra turns and a
+combo are findings about text or about an *interaction*, and the panel's `What this read` is where
+they are named. And **the deck header's `N game changers` chip is a control now**: hovering or
+latching it fades every card that is not a game changer to 25 %, which is the one place this
+column is asked *where* rather than *how many*.
+**It drops a switched-off pile exactly as `estimateBracket` does** (`gameChanger === true &&
+categoryActive`), so the two cannot disagree about which cards are in the conversation — but they
+count different things and are free to print different numbers. The chip sums **copies**; the
+estimate dedupes by **name** (`seen`, so a card filed in two piles is one Game Changer against the
+1–3 / ≥ 4 thresholds, which is what the bracket rules mean). In a singleton Commander deck with no
+card in two piles those are the same number, which is every deck the bracket applies to and most
+of the rest.
+
 ### Mass land denial — an oracle-text grep, read one sentence at a time
 
 `isMassLandDenial` reads every face's text, lowercased, split into rough sentences, and asks for
@@ -274,18 +307,46 @@ filename tried on that host answers 403, so there is exactly one file and no lig
 it to prefer.
 
 **The 23× expansion is almost entirely Scryfall image URLs** — every `uses[].card` carries ten
-`imageUri*` fields plus a type line, and every variant carries a description, notes and prices.
-None of it is wanted, so the ingest is streaming end to end: byte stream → a temp file under
-`tmp/` → `flate2::read::GzDecoder` → `serde_json` with a `DeserializeSeed` over the `variants`
-array, one variant live at a time. `from_str` on 639 MB is not available and neither is
-`serde_json::Value`. `MAX_FEED_BYTES` (128 MiB) is checked against the declared `Content-Length`
-*and* against the running total, because a chunked response declares nothing.
+`imageUri*` fields plus a type line, and every variant carries notes and prices. Most of it is
+unwanted, so the ingest is streaming end to end: byte stream → a temp file under `tmp/` → 64 KB
+chunks → `feed::frame::Decoder`, which sniffs the gzip magic and decompresses →
+`feed::frame::Elements`, which frames one `variants[]` element at a time by brace depth →
+`serde_json::from_slice` on that one element. Exactly one variant is live at a time and every
+image URL is dropped with the raw variant that carried it. `from_str` on 639 MB is not available
+and neither is `serde_json::Value`. `MAX_FEED_BYTES` (128 MiB) is checked against the declared
+`Content-Length` *and* against the running total, because a chunked response declares nothing.
+
+**The framing is push-shaped, and that is a change from what first shipped.** The module drove
+`serde_json::Deserializer::from_reader` with a `DeserializeSeed` over the array, which is a
+*pull* parser: it calls `read()` when it wants more and blocks until it gets it. A browser stream
+is push and async with no thread to block, so the web target could not drive it at all.
+`read_file` and the seed are still there — they are the file-shaped entry point the tests use —
+but `ingest_gz` goes through `read_stream`.
 
 ### What survives the reduction
 
 Per variant: the id, `bracketTag`, colour identity, popularity, how many `requires[]` templates
-it also needs, and its `produces[]` feature names `\n`-joined. Per `uses[]` entry: an oracle id,
-a name, a quantity, and whether the card must be the commander. Everything else is stepped over.
+it also needs, its `produces[]` feature names `\n`-joined, and — **since corpus schema 2** — four
+prose fields: `description`, `easyPrerequisites`, `notablePrerequisites` and `manaNeeded`. Per
+`uses[]` entry: an oracle id, a name, a quantity, and whether the card must be the commander.
+Everything else is stepped over.
+
+**The four prose fields are stored for the card side and for nothing else.** The bracket estimate
+never reads them and `match_combos` does not select them — they are what a reader looking at *one
+card's* combos needs in order to be told how the combo is actually played, and they were parsed
+past for ten days before there was a reader for them. **All four are commonly `""` in the file
+itself** — Spellbook writes an empty string rather than a null — so `""` is a *value* here, never
+a reason to skip a variant, and the columns are `NOT NULL DEFAULT ''` to match the wire rather
+than inventing a third state.
+
+**What is deliberately not stored, though the wire carries it:** `notes` (Spellbook's editorial
+remarks to itself), `manaValueNeeded` (derivable from `manaNeeded` and read by nothing), `of` /
+`includes` / `variantCount` (the feed's own graph of which variants generalise which, which this
+app draws no conclusion from), `spoiler`, `prices` (this app has two price feeds of its own and
+neither is Spellbook's), and the per-`uses` `zoneLocations` and `*CardState` strings — "on the
+battlefield, tapped" is a fact about *playing* the combo that the description already spells out
+in prose. **`requires[]` is still a count and nothing more**: resolving "a creature with flying"
+is not something this app can do, which is the same sentence `template_count` has always carried.
 
 A variant is **kept** only when `status == "OK"` — the rest of that enum (`N` New, `D` Draft,
 `NR` Needs Review, `E` Example, `R` Restore, `NW` Not Working) is Spellbook's editorial pipeline
@@ -302,6 +363,65 @@ Two fields are wider than their names suggest, and both are documented at their 
   card the file named but did not identify is exactly as uncheckable as "a creature with flying".
   Nothing in the file measured so far has one; this is the direction to be wrong in if one
   appears.
+
+### Corpus schema 2 — four columns, and the two traps in landing them
+
+`CORPUS_SCHEMA_VERSION` 1 → **2** (2026-09-08). `combos` grows `mana_needed`,
+`easy_prerequisites`, `notable_prerequisites` and `description`, all `TEXT NOT NULL DEFAULT ''`
+and all in the feed's own spelling. `schema::rebuild_combo_tables` **drops and rebuilds the
+feed's three tables** and touches nothing else — not `cards`, not `cards_fts`, not either tag
+taxonomy, not `image_cache`, not `marketplace_prices`, and `user.db` is never opened. The whole
+cost is one silent background re-download of a 27.5 MB file `refresh_if_due` already fetches
+uninvited at every launch, where a rung that took the corpus with it would have charged the
+better part of a gigabyte of Scryfall resync for four columns on one table. That licence is the
+whole difference between the two ladders: **a corpus rung is allowed to give up and rebuild,
+because what is behind it is a download.** `combo_meta` is deleted rather than emptied, which is
+`clear_combos`' rule for `clear_combos`' reason, and a v1-shaped staging pair an interrupted
+ingest left goes with it.
+
+**Trap one: the rung is gated on the table's SHAPE, not on the version number, and it has to
+be.** `split::finish` stamps whatever `CORPUS_SCHEMA_VERSION` currently is onto the file it
+renames into `corpus.db` — and what is *in* that file is whatever `migrate_single_file`'s frozen
+v26 rung built, which is the shape of version **1**. A fresh install goes through the same
+conversion. So **every converted database and every fresh install reaches `migrate_corpus`
+already wearing head while carrying a v1-shaped `combos`**, and an `if v < CORPUS_SCHEMA_VERSION`
+gate skips exactly the population that needs the rung. Nothing goes red: the symptom lands much
+later, as an ingest raising `table combos has no column named description` on a machine nobody
+can reproduce from a fresh worktree. `migrate_corpus` therefore asks
+`schema::combos_are_at_head`, which reads `PRAGMA {schema}.table_info(combos)` for
+`COMBO_V2_COLUMNS`; the version is still stamped, because it is the record of what the shape is
+and the thing the next rung will want to have moved. **Asking the catalog is right for every
+population at once, where a rung fires once and in one direction** — which is `TAG_INDEXES_SQL`'s
+own argument, one line down in the same function.
+
+*The probe reads column names and deliberately not the stored `CREATE TABLE` text.* After the
+first ingest the live `combos` **is** the table `swap_combo_staging` renamed over it, so
+`sqlite_master` holds `COMBO_STAGING_SQL`'s declaration rather than `COMBO_TABLES_SQL`'s — the
+two agree column for column and differ as strings. A probe on the text would call every database
+that has ever refreshed out of date, drop the reader's combos on every launch and re-download
+27.5 MB each time.
+
+**And a related weakness worth knowing before you trust that suite**: `split.rs`'s own test
+asserts the stamped version against the constant it is stamped *from*, so it is green over
+exactly this mismatch and always will be. What catches the gate is a fixture built at the shape
+below head, in `schema.rs`.
+
+**Trap two: `create_corpus_schema` is bare `CREATE TABLE`, not `IF NOT EXISTS`.** So bumping the
+version and letting the builder run again does not silently no-op — it raises `table cards
+already exists` and **stops the launch**. That is why the combo DDL was split out of
+`CORPUS_SCHEMA_SQL` into `COMBO_TABLES_SQL` and why corpus schema 2 is `rebuild_combo_tables`
+rather than a second call to the builder. `create_combo_tables` is the one literal both paths go
+through, so a corpus that was *built* and a corpus that was *climbed* cannot end up shaped
+differently — and it replays `COMBO_INDEXES_SQL`, because the drop took the indexes with the
+tables and a `combo_cards` that comes back unindexed turns every bracket check into a full scan
+with nothing going red and nothing in the log.
+
+**Pointing a corpus rung at a head constant is legal and would be a bug on the user ladder.**
+There every step spells its DDL out literally (`CARDS_COLUMNS`' rule) because a user rung is
+*history* and a constant that moved under it would rewrite what a fresh install created
+yesterday. A corpus rung is not history. The v26 rung's own copy of this DDL stays frozen at the
+v1 shape for exactly that reason, and corpus schema 2 is what brings the file it built up to
+date.
 
 ### `bracketTag`, and the floor each letter implies
 
@@ -338,6 +458,13 @@ stored — a letter a total map has never heard of reaches the panel as `undefin
 still reads `?? null` on top of that, so a letter that somehow got through raises nothing rather
 than poisoning the `Math.max`.
 
+**The card side draws the same letters and reads no floor at all**, because it is not looking at
+a deck. What it needs is the *name* and Spellbook's own words, which is `COMBO_TAG` — exported
+from `DeckBracket.tsx` since 2026-09-08 rather than copied, for the reason the first paragraph of
+this section gives: the classification is the **feed's**, so there is one right answer to what
+`S` means and it is not per-panel. Two tables spelling seven letters are two things that can come
+to disagree, in two surfaces a reader moves between inside one session.
+
 ### One ingest, measured
 
 All figures 2026-08-27, Windows, **debug** build, by `combos::tests::live_ingest`:
@@ -363,6 +490,11 @@ asserting today's count would go red on a morning when nothing was wrong; what i
 the *shape* survived contact — a real corpus, more than one bracket letter, and both of the kinds
 of combo the estimator sorts on.
 
+**Twelve days later the same table read 107 016 combos over 378 197 `combo_cards` rows** — the
+card side's census, taken a different way and recorded with its method under *The card side*
+below. The two are not a before-and-after of anything and must not be read as a growth rate: they
+are two days of a file Spellbook rebuilds continuously, measured by two tools.
+
 ### The match, and why it starts from the deck
 
 `combos_for_cards` runs on every deck edit, so the number that matters is the 21–38 ms above and
@@ -383,6 +515,10 @@ the cap, because a caller sending one card twice has not asked about two cards.
 Results are ordered `template_count, popularity DESC, id`: fully checkable combos first, then
 most-played, then the id so two runs over one deck cannot answer in two different orders. SQLite
 sorts NULLs first, so `popularity DESC` puts an unranked combo last.
+
+**The card side starts from the same index and for the same reason**, with one oracle id where
+this one has a hundred, and it orders on `card_count` first rather than `template_count` — a
+different question wanting a different first term. *The card side* has the whole of it.
 
 ### Weekly and uninvited, against a file that rotates continuously
 
@@ -487,8 +623,10 @@ its own would need a CHECK rebuild on `error_log`, a new variant, and an arm in 
 total `SOURCE_LABEL` map. The `operation` carries `combos` instead, that field being free text
 precisely so a new call site can report a failure without a migration first.
 
-**Nothing here may break a launch.** A database that has never fetched the file answers all four
-commands, and `combos_status` is safe before the first refresh has ever run: two zeros, three
+**Nothing here may break a launch.** A database that has never fetched the file answers **every**
+command — the card side's included, which answers an empty page for its own reason and is where
+`NEVER_FETCHED` comes from — and `combos_status` is safe before the first refresh has ever run:
+two zeros, three
 nulls and `stale: true` rather than a rejection, so no caller needs a guard. That guarantee is
 **more** load-bearing since the launch fetches on its own, not less: the refresh task is spawned
 before there is a window, so the first thing a reader opens is asking a table that is mid-ingest,
@@ -514,6 +652,12 @@ handles: `read_status` answers it with two zeros, three nulls and `stale: true`,
 reads it as due, and `mark_checked` deliberately writes nothing over it. A row with its columns
 nulled would be a **fourth** state, indistinguishable at a glance from the three and handled by
 none of them.
+
+**Two surfaces go into their never-fetched arm on that press, not one.** The deck advisory's
+`never` and the card dialog's `NEVER_FETCHED` are both derived from `fetchedAt` being null, which
+is why the row has to be *deleted* for either of them to be right — and it is the one place in
+the app where a reader can reach that state on purpose, which is also what makes it storyable.
+`schema::rebuild_combo_tables` deletes it for the same reason, one ladder over.
 
 **`combo_cards` is emptied by its own statement even though `combo_id` CASCADEs**, and the child
 goes first. `PRAGMA foreign_keys` is per-connection, and nothing about `clear_combos`' signature
@@ -669,18 +813,218 @@ about. The `~` in the caption is where that distinction is drawn, and it costs o
 with neither number sorts **last in the key's natural direction** and first when the direction is
 reversed — `deckSort.ts` carries that rule and why it differs from `sorting.ts`' `nullsLast`.
 
+## The card side: every combo that *names* one card (2026-09-08, issue #359)
+
+**The opposite question, and a second statement rather than a parameter on the first.**
+`match_combos` asks *which combos does this deck completely hold* and answers only the ones it
+does. `card_combos` asks *which combos name this card at all*, makes no claim about the other
+pieces, and is the only question a reader looking at a single card can be asking. Folding them
+into one query would mean a `have = card_count` clause that is sometimes applied and sometimes
+not — two queries wearing one name.
+
+A `Combos` row on the card modal's rail opens `CombosDialog`. Each row draws the combo's pieces
+as card art with the reader's own copy count under each, the bracket letter and what it means,
+what the combo produces, both halves of the prerequisites, the numbered steps, the mana it needs
+and a link to Spellbook's own page for the variant. Above them, a chip per combo size and an
+**I own every piece** toggle. Paged 25 at a time behind **Show more**.
+
+**The card is named by `oracle_id` and never by a printing id.** A combo is a fact about a
+*card*, `combo_cards` is keyed on the oracle id, and asking about a printing would mean resolving
+it first only to answer identically for all of them. `cardCombosKey` keys on the same thing, so
+all four Lightning Bolts share one cached answer and stepping between two printings of the card
+you are already reading about is not a refetch. **Both filters are in the key** rather than
+applied to a cached superset, because neither is a subset operation: `cardCount` and `ownedOnly`
+narrow in SQL *before* the page is cut, and filtering on the TypeScript side would filter page 1
+of a match set that can run to thousands — a card with forty two-card combos reading *no two-card
+combos*, confidently and with nothing on screen suggesting there was more to fetch.
+
+### Three statements, in this order
+
+1. **`counts_sql`** — one pass over every combo the card is in, answering three of the page's
+   four numbers at once: `by_card_count` is the rows, `total` their sum, `owned_total` the sum of
+   the third column, and `matching` the same sums over the buckets the filters keep. Four
+   statements would be four scans to answer questions one scan already has in hand and — worse —
+   four chances for the panel's chrome to disagree with itself about a set that has not changed.
+2. **`page_sql`** — the rows, narrowed and ordered and `LIMIT`ed in SQL. `ORDER BY c.card_count,
+   c.popularity DESC, c.id`: **`match_combos`' order with one term changed**, because a deck
+   asking *what have I got* wants the combos it can be sure of (`template_count` first) while a
+   reader asking *what does this card do* wants the two-card combos before the five-card ones.
+3. **`pieces_sql`** — every card of every combo on that page, in **one** statement over the
+   page's ids, folded back per combo **by id**. A statement per combo is 68 µs each; matching
+   back by *position* would quietly mis-file every piece the moment a combo on the page turned
+   out to have no rows at all.
+
+The third is skipped when the page is empty, because `IN ()` is not SQL. The first two run
+unconditionally — an unknown oracle id costs one index probe that finds nothing, and deciding to
+skip the page from a count derived by the statement before it is exactly the shape that hides the
+bug where those two disagree.
+
+`MAX_PAGE` is **100**, and it is a ceiling on one *answer* rather than on the question — `total`
+says how many there really are. It is **clamped and never refused**, unlike `MAX_CARD_IDS`: that
+bound is a fact about a deck the reader assembled, this one is a number the page composed, and a
+refusal a reader cannot act on is worse than a shorter list.
+
+Two reads join the corpus to a piece and neither is spelled twice here. The **default printing**
+is `deck_tokens`' `newest_printing` verbatim (`released_at DESC, set_code ASC, collector_number
+ASC, id ASC`) — verbatim on purpose, because the art in this panel and the art of a token derived
+from the same oracle card must not disagree about which printing *is* that card. The **owned
+count** is `collection_source::copies_of_oracle` under `Availability::Everything` — `Everything`
+and not `ForDeck`, because a locked folder is a drawer the app stops *offering* from and this
+panel is stating a fact about the collection rather than offering to move anything out of it.
+
+### The corpus these run against, measured
+
+**2026-09-08**, against the live dev databases (`user.db` with `corpus.db` `ATTACH`ed,
+read-only), through **Node 24.16.0's `node:sqlite`** driving each statement's own SQL text,
+median of 9 runs. **This is not rusqlite in a debug build**: it measures the query plan, not the
+binary, and none of it is comparable with the ingest figures above or with `combos_for_cards`'
+21–38 ms.
+
+| | |
+| --- | --- |
+| Feed version | 6.3.3, file stamp `2026-09-08T07:09:47Z` |
+| Compressed | 27 785 378 bytes |
+| Stored | **107 016** combos over **378 197** `combo_cards` rows |
+| Distinct oracle ids appearing in a combo | **7 330** |
+| Skipped | 1 519 variants |
+
+**The distribution is the whole reason the dialog pages.** Combos by size, over the whole table:
+
+```
+1 → 7     2 → 5 104   3 → 47 967   4 → 45 670   5 → 8 231
+6 → 25    7 → 6       8 → 1        9 → 4       10 → 1
+```
+
+…and per card it is far less flat than that. **Ashnod's Altar** (oracle
+`4d18bcba-a346-445e-a182-6cc30b7e066d`) is in **6 044** combos — 2 → 61, 3 → 1 999, 4 → 3 016,
+5 → 968 — and only **114** cards are in more than 500. So the one card a reader is most likely to
+open this on is the one that would ask for six thousand rows, each carrying two to five pictures
+and five prose sections. A page of 25 is nearer a screen of reading than the search wall's screen
+of tiles, which is why it is 25 and not 60.
+
+Every timing below is against that worst card unless it says otherwise:
+
+| Query | Median |
+| --- | --- |
+| First page of 25, no filters | **85.9 ms** (min 84.3, max 92.0) |
+| …with `ownedOnly` | 107.2 ms |
+| …with a size filter | 101.7 ms |
+| A page of 100 at offset 6 000 | 138.8 ms |
+| A card at the **median** of the 7 330 | 7.5 ms |
+| A card in no combo at all | 0.2 ms |
+
+**Upper bound once the four prose columns carry data**, measured against a TEMP table with 301
+bytes of prose on **every** row — deliberately an over-estimate, since most rows in the real feed
+carry `""`: **~123 ms** first page, **~185 ms** at offset 6 000.
+
+### `CROSS JOIN` is worth 65 ms, and two other shapes were rejected
+
+All three were measured against the same 6 044 rows on the same day:
+
+- **A correlated `NOT EXISTS` per candidate combo** — 111–207 ms for `owned_total` alone,
+  ~21 000 correlated probes.
+- **`copies_of_oracle` over the hit set's distinct pieces** — 1.3–2.5 s.
+- **The owned-oracle CTE written as a plain `JOIN`** — 72.7 ms. SQLite drove it from `cards`: a
+  117 606-row scan of `idx_cards_collapse`, probing `collection_entries` for each.
+
+**`CROSS JOIN` is SQLite's documented way to pin the outer loop**, and pinning it to the 276-row
+collection takes the same answer to **7.1 ms**. One word, 65 ms.
+
+### Two correctness fences in `OWNED_CTE`
+
+```sql
+owned(oracle_id) AS (
+  SELECT DISTINCT k.oracle_id
+    FROM collection_entries e CROSS JOIN cards k ON k.id = e.card_id
+   WHERE k.oracle_id IS NOT NULL AND e.quantity > 0)
+```
+
+**`k.oracle_id IS NOT NULL` is correctness and not tidiness.** The column is nullable; one NULL
+in this set makes `p.oracle_id IN (SELECT …)` return NULL for every *unowned* piece, and SQLite's
+`min()` **skips NULLs** — so a combo with one owned piece and one unowned would answer
+`all_owned = 1`. Every combo would report as fully owned and **I own every piece** would be a
+silent no-op. It is the empty-set trap this repo has already paid for once, one operator over.
+
+**`e.quantity > 0` is redundant against a healthy database and is here anyway**, which makes it
+the one guard in that statement that is not load-bearing today. A collection row cannot hold zero
+copies: `set_quantity(id, 0)` deletes the row, the user ladder's v24 rung deleted every stored
+zero, and the importer's `set` mode does the same — which is exactly why
+`collection_source::owns_printing` is allowed to be an `EXISTS` at all
+([collection-folders.md](collection-folders.md), *Zero quantity deletes the row*).
+
+It is here because of what the *disagreement* looks like if that invariant is ever broken
+somewhere else. `ComboPiece.owned` sums quantity; `all_owned` tests presence. Without the clause
+those two answer differently for a zero row, and the panel prints **Not owned** on a piece line
+inside a combo it is simultaneously offering under **I own every piece** — one screen
+contradicting itself about one card, with no error anywhere. **The Storybook fake reached that
+state on the first try**, off a seed written before the zero-row rule changed. A guard that costs
+nothing on 276 rows is cheaper than an invariant two modules have to keep agreeing about.
+
+### Ownership is presence, never copies
+
+`all_owned` asks whether the reader owns **any** copies of each card the combo names, and never
+`owned >= quantity`. **A combo needing two Ashnod's Altars is fully owned by a reader holding
+one.** That is `match_combos`' rule read one surface over — it asks whether a deck *lists* each
+named card and never how many copies — and the alternative is a filter that hides an interaction
+from the reader who is one copy away from it. `ComboPiece.owned` carries the count, so the piece
+line can say *1 of 2 owned* and let the reader judge for themselves. The two numbers disagreeing
+on purpose is the point; the two numbers disagreeing by accident is what `e.quantity > 0` above
+is for.
+
+### Four empty states, and the one that may never be collapsed
+
+An empty box would read as *this card is in no combos*, which is a claim the dialog is very often
+not entitled to make. So an empty answer always says **which** empty it is, and there are four:
+
+| State | What it means | When it can be drawn |
+| --- | --- | --- |
+| `NO_ORACLE_CARD` | The printing is not linked to an oracle card | `CardDetail.oracleId` is null — a real state, a handful of rows are — and the one case where nothing is asked at all |
+| `NEVER_FETCHED` | Spellbook's list has not been downloaded | `total === 0` **and** `ComboStatus.fetchedAt` is null |
+| `NO_COMBOS` | Spellbook has none on record naming this card | `total === 0` and the feed *is* here |
+| `NO_MATCH` | The reader's own filter left nothing | `total > 0` and `matching === 0` — so it can never stand in for the row above it, because a database with no rows has no chips to have narrowed with |
+
+**`NEVER_FETCHED` may never be folded into `NO_COMBOS`, and that is the whole reason this dialog
+reads `combos_status` at all.** `combos_for_card` cannot tell a card with no combos from a
+database with no combo table, because both are zero rows — and the two answers are not close: one
+is a fact about the reader's card, the other a fact about the reader's database. This is
+`DeckBracket`'s `never` arm one surface over, and the advisory's argument holds here word for
+word: a never-ingested table is where every install is **before its first launch fetch lands**,
+where a machine that cannot reach Spellbook **stays for the whole session**, and — since
+`combos_clear` — where a reader can deliberately put one back. Telling any of those three readers
+"Commander Spellbook has no combo naming this card" is telling them something false about a list
+that was never consulted.
+
+Its *sentence* differs from the advisory's in one way and for the same reason the advisory's
+changed: the download is automatic and there is no button for it anywhere in the app, so the
+honest instruction is that **nothing here needs a press**.
+
+**An unanswered status reads as never-fetched**, which is the safe way round. `combos_status`
+reads one small table and makes no network call, so that branch is all but unreachable — and of
+the two claims, "the file has not been downloaded" is the one that stays true of a database
+nobody can read the status of. Both reads are awaited before anything is drawn, because the
+sentence an empty answer gets is *decided* by the status row, and drawing early would flash
+whichever of the two the default happened to be.
+
+Three states above and beside those four are not empties at all and are drawn as themselves: the
+card detail still loading, a printing the corpus has since dropped (`card_detail` answers `null`,
+which a collection or deck holding a retired printing reaches honestly), and a failed read, which
+says so and names the error rather than reading as an absence.
+
 ## Where each piece lives
 
 | File | Holds |
 | --- | --- |
-| `src-tauri/src/combos.rs` | The feed: client, streaming parse, staged write, the match query, `due_at_startup`, `clear_combos`, four commands, `combos:progress` |
-| `src-tauri/src/schema.rs` | The v26 rung — `decks.bracket`, `combos`, `combo_cards`, `combo_meta`, the two indexes, and the staging twins |
+| `src-tauri/src/combos.rs` | The feed: client, streaming parse, staged write, `due_at_startup`, `clear_combos`, the commands, `combos:progress` — **and both match queries**: `match_combos`/`combos_for_cards` (*which combos does this pile of printings hold*, the deck advisory's and the gallery's fourth signal) and `card_combos`/`combos_for_card` (*which combos name this one oracle card* — `HIT_CTE`, `OWNED_CTE`, `GRP_CTE`, `counts_sql`, `page_sql`, `pieces_sql`, `MAX_PAGE`) |
+| `src-tauri/src/schema.rs` | The v26 rung — `decks.bracket`, `combos`, `combo_cards`, `combo_meta`, the two indexes, and the staging twins — **and corpus schema 2**: `COMBO_TABLES_SQL`, `create_combo_tables`, `combos_are_at_head`, `COMBO_V2_COLUMNS`, `rebuild_combo_tables` |
 | `src-tauri/src/deck.rs` | `AUTO_BRACKET`, `valid_bracket`, `BAD_BRACKET`, the column on `DeckRow`/`DeckPatch`/`DeckBefore` and the audit line — **and `deck_bracket_reads`**, with `BRACKET_CARDS_SQL` and `BRACKET_IDS_SQL` behind it |
-| `src/lib/ipc.ts` | `AUTO_BRACKET`, `ComboBracketTag`, `DeckCombo`, `ComboStatus`, `ComboProgress`, and the three calls — plus `BracketCardRow`/`DeckBracketRead` and `deckBracketReads` |
-| `src/lib/query.ts` | `COMBOS_KEY`, `COMBOS_STATUS_KEY`, `combosForCardsKey` — one root, so an ingest landing under an open deck refills its advisory |
+| `src/lib/ipc.ts` | `AUTO_BRACKET`, `ComboBracketTag`, `DeckCombo`, `ComboStatus`, `ComboProgress` and the calls — plus `BracketCardRow`/`DeckBracketRead`/`deckBracketReads`, and the card side's `ComboPiece`/`CardCombo`/`ComboCountBucket`/`CardCombosPage`, plus `CardCombosQuery`, which mirrors no Rust struct and exists so the call site and `cardCombosKey` cannot disagree about what was asked |
+| `src/lib/query.ts` | `COMBOS_KEY`, `COMBOS_STATUS_KEY`, `combosForCardsKey`, `cardCombosKey` — one root, so an ingest landing under an open deck or an open card refills it. The last two are **deliberately not both `"forCards"`**: every prefix-scoped TanStack operation matches by prefix, so one spelling would let a targeted invalidation of the cheap read throw away the expensive one |
 | `src/features/decks/validation/types.ts` | `BracketCardFacts` — the five fields, and why the narrowing lives there and not on `CardFacts` |
 | `src/features/decks/validation/bracket.ts` | The floor, the two greps, `COMBO_FLOOR`, `describeReason`, `bracketWarning` |
-| `src/features/decks/DeckBracket.tsx` | The readout, the picker, the combo list, and the four states of the combo read |
+| `src/features/decks/DeckBracket.tsx` | The readout, the picker, the combo list, and the four states of the combo read — **and `COMBO_TAG`**, exported since the card side became its second reader, because two tables spelling Spellbook's seven letters are two things that can come to disagree about what `S` means |
+| `src/features/card/CombosDialog.tsx` | The card side's whole surface: `PAGE_SIZE`, the two filters, the piece art and its owned mark, the four empty sentences, `AS_OF`, and the Spellbook permalink |
+| `src/features/card/CardModalRail.tsx` | The `Combos` row — a noun in the first block, at the end of it, because nothing a reader has learnt the position of moves |
+| `src/features/card/cardDetailKey.ts` | The one `card_detail` key the modal and all four of its overlays share, so opening this dialog is a cache read rather than a round trip |
 | `src/features/decks/useDeckBrackets.ts` | The gallery's read, `deckBracketsKey`, `bracketLabel` and `effectiveBracket` — the wall's whole share of this document |
 | `src-tauri/src/desktop.rs` | The launch task — its own, spawned after the two tagger refreshes and chained onto neither |
 | `src/lib/useComboProgress.ts` | `COMBO_PHASE_LABEL`, the one `combos:progress` subscription, and the two roots a terminal phase invalidates — why the flag is derived from the event here and polled for the tags |

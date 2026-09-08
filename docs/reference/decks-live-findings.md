@@ -94,6 +94,11 @@ are all things no suite could have seen.
   at three depths — 5px and 8px into the overlap answer the tag, and 3px answers the banner,
   which is correct because the tag's `clip-path` has already receded there. **jsdom paints
   nothing and a class assertion cannot see any of this**; the suite was green throughout.
+  **The overlap it was about is gone since 2026-09-08 and the rung is kept anyway.**
+  `GameChangerBanner` is deleted — the crown is printed *inside* `QuantityTag` now — so no sibling
+  in the marks strip tucks under that slanted tail and `LAYER.overlappingMark` covers nothing.
+  It stays because the finding is general and cost a live pass to get: a mark laid over that tail
+  needs a rung rather than a `relative`, and this is the lowest one on the scale.
 - **Driven 2026-08-13 after the `CardStack.dc.html` redesign, on a 10-row Commander deck**
   seeded through `import_resolve`/`deck_import_commit` over `window.__TAURI_INTERNALS__`:
   the quantity tag, the Game Changer banner, `RULE BREAK`, the data line and the stepper column
@@ -1098,6 +1103,12 @@ row measured 38px. The whole line read
 `Format Commander · Cards 100+3 · Lands 32 · Avg. mana 2.58 · Price $948.94 · Owned 0 / 103
 missing` with `1 issue · 6 game changers · Bracket ~4` in the right-hand group at **297px**.
 
+**That 297 was read with `6 game changers` as a `<span>`, and it became a `<button>` on
+2026-09-08** — the game-changer spotlight. The words are unchanged and so is the height, but a
+**latched** chip draws a 12px crown plus a `gap-1` inside its own box, so the right-hand group is
+~16px wider in that one state and this figure describes the off state only. Nothing about the
+spotlight has been driven in the shipped window.
+
 ### The toolbar's split, read off the y coordinates
 
 At 761 the toolbar is two lines and they are the right two. Read off `getBoundingClientRect`:
@@ -1717,10 +1728,22 @@ say the same thing: tag at `x=1` w28, ribbon at `x=18` w130, tick at `x=147` w28
 draws the tile at a story's own width with a fixture that has to carry a game changer *and* a
 theory match on one card to produce it at all. It is the class of thing this file exists for.
 
-The fix is `DeckCardFace`'s `gameChanger` prop — the ribbon on the stack, the crown alone on the
-tile, in the same place in the same strip. Re-measured immediately after, same session, same
-deck: tag at `x=1` w28, crown at `x=29` w13, tick at `x=136` w28, **overflow 0**, and the stack
-still drew the ribbon (`Game Changer` present, no bare crown) on the same four cards.
+The **first** fix was `DeckCardFace`'s required `gameChanger: "banner" | "crown"` prop — the
+ribbon on the stack, the crown alone on the tile, in the same place in the same strip. Re-measured
+immediately after, same session, same deck: tag at `x=1` w28, crown at `x=29` w13, tick at `x=136`
+w28, **overflow 0**, and the stack still drew the ribbon (`Game Changer` present, no bare crown)
+on the same four cards.
+
+**That prop lived for part of one afternoon and the figures above are its whole record.** It put
+one fact on two arms for two drawings of one deck, which is what the deck's own marks rules
+refuse, so the shipped answer folds the crown **into the quantity tag** instead — 11px of crown
+and a 3px gap inside a mark both card-face views were already drawing, in the tag's own foreground
+rather than in gold. `GameChangerBanner` and `GameChangerBadge` are deleted with it, and the two
+row views draw a gold crown in their quantity column. The crowned tag is 28 + 11 + 3 ≈ **42px** by
+arithmetic, narrower than either arm of the fork; **it has not been read off the window**, so
+there is no live figure for the shipped drawing on this page and the ~42 is derived rather than
+measured. Nothing about the defect above changes: the overflow was real, the clip was at every
+stop, and neither suite could see any of it.
 
 ### Two traps worth keeping
 
@@ -1734,3 +1757,64 @@ still drew the ribbon (`Game Changer` present, no bare crown) on the same four c
   factor. Read `--mark-scale` off the tile rather than assuming 1, or set the zoom deliberately
   at the top of the run — this pass did the first and then the second.
 
+
+
+## The token wall at the stacked card's size — 2026-09-08, `npm run tauri dev` (debug), 1920×1080, a copy of the real db
+
+The reader's ask was two things: draw the **Tokens & emblems** tiles at the size of the cards in
+the stacks and follow the deck's zoom, and move the band above the Deck stats. Driven on the
+`Azula` deck — 101 cards, Commander, three tokens (Bird, Fish, Treasure) — which arrived at
+`cardZoom.deck` **1.1**, so the first reading is at 110% rather than at 100% and every figure
+below names its stop.
+
+### The size, at three stops of the ladder
+
+The tile's width and the stacked card's are read in one pass, off the same frame, so "the same
+size" is a comparison rather than two numbers taken minutes apart.
+
+| `cardZoom.deck` | token tile | stack card | `--mark-scale` | tile name | icon button | gutters (x / y) |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0.5 | **105** | **105** | 0.5 | 6px | 9 | 10 / 16 |
+| 1.1 | **231** | **231** | 1.1 | 13.2px | — | — |
+| 2 | **420** | **420** | 2 | 24px | 34 | 20 / 32 |
+
+Every one of those is the arithmetic and not an approximation: 210 × 1.1 = 231, 210 × 2 = 420,
+210 × 0.5 = 105; the name is `0.75rem × --mark-scale` (12 → 13.2 → 24) and the icon button is
+`1.25rem × --control-scale`, which carries `CONTROL_SHRINK` — 20 × 2 × 0.85 = **34**. The stack
+card's own image measured **229** at 1.1 against the tile's 231, which is the card's two
+hairlines and is what `STACK_CARD_BORDER` says it should be.
+
+**The gutters hold at their base going down and grow going up** — 10/16 at 0.5× and 20/32 at 2× —
+which is `atLeast` doing exactly what it is for, and the one measurement here that is deliberately
+not proportional.
+
+### The band's place
+
+`Tokens & emblems` at `top: 2828`, `Deck stats` at `top: 3313`, in that order, under the price
+strip's *"TCGplayer prices as of the last card-data sync"* line. `compareDocumentPosition` agrees
+with the pixels. The pair that may not be split — the deck and the price strip — is untouched;
+both bands are still below it.
+
+### The art picker, which is why the dialog was resized
+
+At 2× the picker's tiles are 420 like the wall's, and the old `w-[52rem]` / `max-h-[26rem]` box
+could not hold them: 832px of panel less the list's padding and scrollbar is ~805, and two 420px
+tiles want 850. On `AllPrintingsDialog`'s size instead, measured with the Bird picker open at 2×
+on 1920×1080: panel **1440 × 972** (75vw, 90vh), seven printings, tiles **420**, **3 per row**,
+and the `<ul>` scrolling inside itself rather than the panel growing. Photographed.
+
+### The one case that could have overflowed, and does not
+
+A 420px tile is wider than some desks, and this band is **full width of the editor column** —
+unlike the deck views, it is a sibling of the desk row, so the docked search panel never narrows
+it. That leaves the window floor as the only squeeze. At **1024 × 700 with the zoom at 2×**:
+`document.scrollWidth` **1024** = `clientWidth`, `main.scrollWidth` **801** = `main.clientWidth`,
+the band's own `scrollWidth` **761** = its `clientWidth`, and the tile's right edge at **648**
+inside it. No horizontal scrollbar anywhere, so the band needs no `overflow-x` of its own.
+
+### What was left alone, and is visible in the photograph
+
+Tiles are not baseline-aligned: Treasure's subtitle wraps to two lines, so its stepper row sits
+~15px below Bird's and Fish's. That is the tile's own `flex-col` and was true at 150px too — it
+is simply easier to see at 231. Not a regression and not part of the ask; noted so the next
+reader does not measure it as one.

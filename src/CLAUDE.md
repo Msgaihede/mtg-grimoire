@@ -79,6 +79,26 @@ Every one of these has its measurement and its story in
   would arm a timer against a picture that can never arrive. Nothing in jsdom can go red for the
   behaviour itself; the deadline is sized from the shipped window and the figures are in
   [image-cache.md](../docs/reference/image-cache.md).
+  **And it decodes `sync`, which is a fourth failure and the opposite of the third** (2026-09-08).
+  The watchdog above asks again when a frame has heard *nothing*, and its first question is
+  `el.complete && el.naturalWidth > 0`. The failure readers kept reporting after it shipped answers
+  that **yes**: the bytes are decoded and in memory and the frame is empty anyway, because
+  `decoding="async"` lets the browser present the frame first and paint the picture when the decode
+  lands — and that second paint is sometimes never made. So one picture that never came and one
+  that came and was not drawn look identical to a reader, and no instrument this repo owns can tell
+  them apart: the DOM says loaded, the console says nothing, `error_log` says nothing, jsdom decodes
+  nothing, and **a CDP screenshot forces a frame** — which is why the 2026-09-01 sweep of ~3 300
+  images found none and concluded the state was unreachable. It is measured by reading the
+  **screen's own framebuffer** (Win32 `CopyFromScreen`) against the DOM: flat tiles at `sd 0`,
+  `mean 24.09`, still flat six seconds later, surviving both a far-away pointer move and a forced
+  compositor frame, and repaired only by hovering the tile itself. They come in contiguous
+  right-hand blocks that break at the same column on consecutive rows — a raster region, not
+  anything the app can see. `"sync"` rather than dropping the attribute: absent, the value is
+  `auto` and the choice is a heuristic free to pick the async path again. It is **not** the trade it
+  sounds like — same gesture, same build, `sync`'s worst long task **79 ms** against `auto`'s
+  **128 ms**. Set in `CardImage` before the spread, like `draggable`; the ten call sites that used
+  to pass `decoding="async"` by hand no longer pass anything. Every figure and both A/Bs:
+  [image-cache.md](../docs/reference/image-cache.md).
 - **A card frame is `components/CardArt`** — the 5:7 box, `CardImage`, `useImageRetry`, the
   no-art fallback and the foil marking, in one place. **Every wall of card faces draws it**: the
   search's, the collection's, the wishlist's and the three docked search columns — all of them
@@ -126,17 +146,32 @@ Every one of these has its measurement and its story in
   in two pictures. That was issue #353; `docs/reference/frontend-design.md` has the record.
 - **A card's marks share one chip in the art's top-right corner** — `FoilOverlay` draws the
   finish glyph and `GameChangerMark`'s gold crown side by side, because a card fact and a
-  printing fact in two boxes start a row of stickers. The crown is `GameChangerBanner`'s glyph
-  without its ribbon — one fact drawn three ways (the stack's banner, the deck's table and text
-  views' `GC`, this), differing only in the room each has. One gold (`text-pie-gold`) everywhere,
-  never the destructive colour, which belongs to a rule break. `FoilOverlay mark={false}` turns
-  the whole chip off, crown included, for a frame that names these somewhere else.
-  **The crown is no longer only this chip's, and the count of drawings did not change with it**
-  (2026-09-08): the deck's Grid tile draws `GameChangerMark` in `DeckCardFace`'s marks strip, in
-  the place the stack's ribbon stands, because that tile draws no chip at all. So the third
-  drawing has two homes — a corner chip on every wall of `CardArt` tiles, and the deck tile's own
-  strip — and *the difference of room is the rule* rather than which component the mark is nested
-  in. `components/GameChangerMark`'s header carries the measurement that put it there.
+  printing fact in two boxes start a row of stickers. `FoilOverlay mark={false}` turns the whole
+  chip off, crown included, for a frame that names these somewhere else.
+  **`components/GameChangerMark` is the _search side's_ mark since 2026-09-08, and the rule this
+  bullet used to carry is retired.** It read *one fact drawn three ways — the stack's banner, the
+  deck's table and text views' `GC`, this — differing only in the room each has*, and it was true
+  of the arrangement it described. `GameChangerBanner` and `GameChangerBadge` are **deleted**: the
+  deck prints the crown on the **quantity** instead — folded into `CardMarks`' `QuantityTag` on
+  both of its card-face views, and drawn in the quantity column beside the number on its two row
+  views. So there is one glyph everywhere, and what differs is only what it is printed *on*. The
+  two callers left here are this chip — every wall of `CardArt` tiles, which is the search's, the
+  collection's, the wishlist's and the three docked search columns — and `SearchPage`'s printings
+  rows.
+  **Gold survives exactly where the mark is _unfilled_, and that is one rule and not two
+  colours.** A crown floating over somebody's artwork, or standing in a line of type, has nothing
+  but `text-pie-gold` saying which fact it is — never the destructive colour, which belongs to a
+  rule break. A crown printed on a filled `QuantityTag` takes that tag's own foreground, because
+  the tag already carries a colour that means the card's **label**: a fixed gold there would be
+  the one mark in the strip ignoring what it stands on, and invisible on a Gold-labelled card.
+  **What retired the room argument is a measurement rather than a tidy-up.** The ribbon was 130px
+  at `cardZoom` 1.1 and the deck's Grid tile is 165px, so a 28px tag, that ribbon and a 28px tick
+  came to 163px of marks in a 165px `overflow-hidden` strip — **11px of overflow**, clipping the
+  plan's tick by nearly half at every stop of the zoom ladder (shipped window 2026-09-08, debug
+  build, 1920×1080). That bought `DeckCardFace` a required `gameChanger: "banner" | "crown"` prop
+  for one morning. The crowned tag is about 42px, narrower than either arm was, so the prop is
+  gone and the two card-face views draw one card again. `components/GameChangerMark`'s header and
+  `components/CountTag`'s `crowned` prop carry the whole record.
   **Top-right is that chip's**, on every surface that draws a card as a face, and a surface's own
   marks go in the corners it leaves: top-left, bottom-left. The deck's Grid view put its copy count
   there too, in a full-width strip, and the two overlapped on any foil card in a deck — invisible
@@ -166,6 +201,14 @@ Every one of these has its measurement and its story in
   the words belong to whatever names the card. **A count laid _beside_ a card keeps its `×`** —
   `OwnedBadge` in a caption, the search table's `×132 printings` — where the sign is what tells a
   count from a set number.
+  **One glyph shares the box since 2026-09-08 and the `×` is still refused**, which is the
+  distinction to hold on to: `crowned` draws a game changer's crown **before** the number, in the
+  tag's own foreground, and the `×` is a second reading of the digits where the crown is a second
+  fact about the card the digits are printed on. It costs 14px — an 11px crown and a 3px gap, both
+  scaled by `--mark-scale` like everything else on a card — and moves no padding, because
+  `COUNT_TAG_BOX`'s `pl − pr = 5px` is a derivation the content width cancels out of. A caller
+  passing it **owes the fact in words**, in the `title` and in the accessible name of whatever the
+  tag is drawn inside, since the whole tag is `aria-hidden`.
 - **A bare number is only honest where something beside it says what is being counted, and that
   is why the search wall stopped drawing one** (2026-08-15). `CountTag` had two callers for a
   day: the deck stack's copies in a pile, and the search wall's printings a collapsed tile stands
@@ -641,8 +684,14 @@ Every one of these has its measurement and its story in
   does nothing and WebView2 zooms the whole window on top of you); the zoom rescales **geometry**
   and is never a `transform: scale()`; and **everything drawn _on_ a card scales with it, through
   two inherited custom properties** — `--mark-scale` and `--control-scale`, published by
-  `cardScaleVars(zoom)` in `src/lib/cardZoom.ts` and set on exactly three elements (`CardGrid`'s
-  tile, `GridView`'s tile, `CardStack`'s card). **A variable rather than a prop, because the marks
+  `cardScaleVars(zoom)` in `src/lib/cardZoom.ts`. **Name the setters, never count them** — this
+  sentence said "exactly three elements (`CardGrid`'s tile, `GridView`'s tile, `CardStack`'s
+  card)" through four additions, and `grep -n "cardScaleVars(" src/` is the census. Two of those
+  four are worth knowing about because they are not card walls: the decks gallery's tile and
+  folder card scale a whole deck's crop, and the deck editor's **Tokens & emblems** band and its
+  art picker draw the tokens a deck makes at `stackCardWidth(cardZoom.deck)` — the stacked card's
+  own width at the desk's own zoom, so the tokens are the size of the cards that make them.
+  **A variable rather than a prop, because the marks
   are shared**: `RarityGem`, `OwnedBadge`, `FinishMark`, `LabelDot`, `CountTag` and `QuantityStepper`
   are each drawn on a card face _and_ in one of the three tables or the card pane, so a prop would
   be threaded to every one and defaulted at the ones that must hold still — "does this scale?"

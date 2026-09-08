@@ -363,57 +363,129 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   are already competing for. What must never happen is _neither_ — a sheen with nothing naming
   it is decoration, which is the whole of why the chip existed. **It governs the crown too**, in
   the sense that turning the chip off takes whatever is in it with it — and the second clause of
-  this sentence, *since the chip is the only thing a crown can be drawn as and this face has its
-  banner instead*, was written on 2026-09-08 and stopped being true the same day. A crown is a
-  glyph and can be drawn anywhere there is room for one: the deck's Grid tile draws it in its marks
-  strip, with no chip anywhere on the tile. What each of the two card-face views puts in that
-  strip is its own answer — the stack's ribbon, the tile's bare crown — and the bullet below is
-  where that is settled and measured.
-- **One game changer, three drawings, and the difference is room rather than meaning.** The deck's
-  **stacked card** stamps `GameChangerBanner` — a gold seal, a 9px crown, `Game Changer` in
-  Cinzel — where a
-  card is 295px tall; the deck's table and text views abbreviate to `GameChangerBadge`'s gold `GC`
-  where a cell has a column; and **every other surface that draws a card as a face** — the search
-  wall's tiles, the collection's, the wishlist's, the three docked search columns and the deck's
-  own **Grid tile** — gets `components/GameChangerMark`, **the banner's crown and nothing else**,
-  because a 150–170px tile is somebody else's artwork and a ribbon across it is a sticker over the
-  picture the reader came to look at.
-  `text-pie-gold` in all three: the spec
-  is explicit that a game changer (a fact about a powerful card) and a rule break (a problem)
-  must never be confusable, and the destructive colour belongs to the second. On the walls it
-  shares the finish chip rather than taking a corner of its own — **a card fact and a printing
-  fact in one box**, since a card can be either, both or neither; on a deck tile there is no chip
-  at all (`FoilOverlay mark={false}`, the bullet above) and the crown stands in the card's own
-  marks strip. Nothing derives it: the backend flattens
-  `cards.game_changer`'s NULL into `false` (the column is nullable; only `card_row.rs`'s parser
-  struct is a `bool`).
-  **This list put the deck's Grid view on the *banner* arm for a few hours on 2026-09-08, and what
-  moved it back is a measurement rather than a second opinion.** The claim was reasonable and is
-  worth reading before the correction: that view had stopped being a `CardArt` tile with a corner
-  chip and had become `features/decks/DeckCardFace` — the stacked card, shared — so it draws the
-  stack's own 27px marks strip; the design decision was that the tile adopts the stack's marks,
-  and the ribbon is one of them. It had held the crown "since 2026-08-16" only because a `CardArt`
-  tile has nowhere else to put one. **What no source and no suite could see is that the strip does
-  not narrow with the card.** All three marks in it — `QuantityTag`, the game changer and
-  `TheoryMatchMark` — are sized off `--mark-scale`, which is the reader's *zoom* and not the
-  tile's width, so a 130px ribbon is 130px on a 210px stacked card and 130px on a 150px tile.
+  this sentence has now been rewritten twice inside one day. It read *since the chip is the only
+  thing a crown can be drawn as and this face has its banner instead*, then *a crown is a glyph and
+  can be drawn anywhere there is room for one — the deck's Grid tile draws it in its marks strip*.
+  Both are spent. **A crown on a deck card is printed on the quantity tag**, through
+  `CardMarks`' `QuantityTag` and `components/CountTag`'s `crowned` prop, so there is no crown of
+  its own in that strip for the chip's absence to be about — and one surviving `mark={false}` here
+  would be the *third* crown on the card, the tag under it already wearing one. The bullet below
+  is where that is settled and measured.
+- **One game changer, one glyph — and what differs is what it is printed _on_** (2026-09-08). It
+  is a crown everywhere. On the deck's **two card-face views** it is printed inside
+  `CardMarks`' `QuantityTag`, before the number, in the tag's own foreground colour. On the deck's
+  **two row views** it is a gold crown in the **quantity column**, with the quantity itself tinted
+  the same gold. On **every wall that draws a card as a face** — the search's tiles, the
+  collection's, the wishlist's, the three docked search columns — and on `SearchPage`'s printings
+  rows, it is `components/GameChangerMark`, the crown standing bare and gold; on the walls it
+  shares `FoilOverlay`'s finish chip rather than taking a corner of its own, **a card fact and a
+  printing fact in one box**, since a card can be either, both or neither. Nothing derives it: the
+  backend flattens `cards.game_changer`'s NULL into `false` (the column is nullable; only
+  `card_row.rs`'s parser struct is a `bool`).
+  **What this replaced was *one fact, three drawings — a difference of room, never of meaning*, and
+  the fact and the meaning are what survive.** The deck's **stacked card** stamped
+  `GameChangerBanner` — a gold seal, a 9px crown, `Game Changer` in Cinzel — where a card is 295px
+  tall; the deck's **table and text** views abbreviated to `GameChangerBadge`'s gold `GC` where a
+  cell has a column; every other surface got the bare crown, because a 150–170px tile is somebody
+  else's artwork and a ribbon across it is a sticker over the picture the reader came to look at.
+  **Both components are deleted.** *Room* is the half that has gone: the deck annotates a mark it
+  was already drawing rather than spending width on a mark of its own, so no surface in the app
+  chooses a drawing by how much space it has.
+  **Gold survives exactly where the mark is unfilled, and that is one rule rather than two
+  colours.** A crown floating over artwork or standing in a line of type has nothing but
+  `text-pie-gold` saying which fact it is — and never the destructive colour, because the spec is
+  explicit that a game changer (a fact about a powerful card) and a rule break (a problem) must
+  never be confusable. A crown printed on a filled `QuantityTag` takes that tag's `fg` instead:
+  white on a blue label, dark on a gold one, `NEUTRAL_COUNT_PAINT`'s foreground unlabelled. The tag
+  already carries a colour that means the card's **label**, so a fixed gold there would be a second
+  colour inside one object — the one mark in the strip ignoring what it stands on, and invisible on
+  a Gold-labelled card.
+  **What retired the room rule is a measurement, and the arrangement it killed lasted a morning.**
+  The deck's Grid tile stopped being a `CardArt` frame with a corner chip on 2026-09-08 and became
+  `features/decks/DeckCardFace` — the stacked card, shared — so it draws the stack's own 27px marks
+  strip; the design decision was that the tile adopts the stack's marks, and the ribbon was one of
+  them. It had held the crown "since 2026-08-16" only because a `CardArt` tile has nowhere else to
+  put one. **What no source and no suite could see is that the strip does not narrow with the
+  card.** All three marks in it — `QuantityTag`, the game changer and `TheoryMatchMark` — are sized
+  off `--mark-scale`, which is the reader's *zoom* and not the tile's width, so a 130px ribbon is
+  130px on a 210px stacked card and 130px on a 150px tile.
   **Driven in the shipped window 2026-09-08** (`npm run tauri dev`, a **debug** build, 1920×1080,
   against the real corpus, on a 101-card Commander deck at `cardZoom` 1.1), on a card that is both
   a game changer and an exact plan match: a **28px** tag, a **130px** ribbon and a **28px** tick
   went into a **163px** strip on a **165px** tile — **11px of overflow**, into a face that is
   `overflow-hidden`, so the plan's tick was clipped by nearly half. Every term scales with the
   zoom, so the ratio is constant and it was clipped at *every* stop of the ladder; photographed at
-  2× to confirm. Re-measured after the fix in the same session: tag at **x=1** (28 wide), crown at
-  **x=29** (13 wide), tick at **x=136** (28 wide), **overflow 0** — and the stack, checked in the
-  same pass, still draws the ribbon.
-  **The count of drawings is unchanged and so is the rule that decides them** — it is *room*, and
-  the room a mark has is a fact about the surface rather than about the component it borrows. What
-  is new is that the **two card-face views sit on different arms of it for the first time**,
-  because they are two widths: `DeckCardFace` takes a required `gameChanger: "banner" | "crown"`,
-  `CardStack` passes the first and `GridView` the second. It is **not** a return to the corner
-  chip — the mark is in the same strip in the same place on both views, `FoilOverlay` is
-  `mark={false}` on both, and top-right is `TheoryMatchMark`'s on both. jsdom lays nothing out, so
-  every figure above is a live claim and the suite can only pin which drawing each view asks for.
+  2× to confirm.
+  **The first fix forked the component and the second removed the fork.** For part of that
+  afternoon `DeckCardFace` took a required `gameChanger: "banner" | "crown"` — `CardStack` passing
+  the first, `GridView` the second — and it measured clean in the same session: tag at **x=1**
+  (28 wide), a bare crown at **x=29** (13 wide), tick at **x=136** (28 wide), **overflow 0**, with
+  the stack still drawing the ribbon. That is one fact drawn two ways on two drawings of one deck,
+  which is exactly what the marks rules exist to refuse, so the crown folded into the tag instead:
+  an **11px** crown and a **3px** gap, both scaled by `--mark-scale`, plus one scaled pixel of `mb`
+  that is optical rather than structural (`items-center` centres the glyph's box, and mono digits
+  sit on a baseline above the middle of theirs). The tag was 28px, so the crowned one is about
+  **42px** by arithmetic — narrower than either arm of the fork — and the prop is gone. It moves no
+  padding and cannot: `COUNT_TAG_BOX`'s `pl − pr = 5px` is a derivation the content width cancels
+  out of. The strip is two marks again, so the tick's `ml-auto` no longer has a third sibling a
+  `justify-between` would have spaced around. **jsdom lays nothing out, so every figure above is a
+  live claim**, and the ~42px has not itself been read off the window.
+- **The two row views reserve the crown's gutter on _every_ row, and that is what keeps the numbers
+  in one column** (2026-09-08). A conditional element makes every row a different width and the
+  digits step in and out down a list of eighty — `rowMarkColor`'s own reasoning one mark over, which
+  returns `transparent` rather than nothing so every row keeps the same 2px of indent. `TextView`
+  reserves **10px** (`w-2.5`, `shrink-0`) at the head of the line and draws a `size-2.5` crown in
+  it; `TableView` reserves **11px** in the Qty cell and draws a `size-[11px]` crown, both at
+  `strokeWidth={2.75}` — an outline glyph at that size needs the weight a filled one gets from its
+  body. Neither view zooms, so no `--mark-scale` reaches either and every size is a plain fixed
+  number.
+  **Neither of the table's two column widths had to grow for it**, which is worth the arithmetic
+  because the Qty column's width is the thing any change there has to answer to. The **editable**
+  arm is a `6.5rem` (104px) track: 11px of gutter plus the cell's own `gap-1` plus the 80px stepper
+  is **95px**, leaving **9px** in hand, and the pair takes the centring the bare stepper had — which
+  moves the stepper itself 7.5px right, 12px of slack a side becoming 4.5. The alternative was a
+  left-aligned group with all 9px on one edge, and a stepper the reader aims at all day is better
+  centred than a gutter that is usually empty. The **read-only** arm is a `3rem` (48px) track
+  holding 11 + 4 + one `ch` of the mono face (~7px at `text-xs`) = **~22px**, so it keeps more than
+  half the column spare and reads left-to-right off the column's edge as the design draws it.
+  **The table is where the words live now.** `GameChangerBadge` stood beside the name with an
+  `sr-only` twin, and that twin moved to the quantity cell with the crown rather than being dropped:
+  a table row is not an `aria-label`-ed button, so this is the one view in the app whose cell text
+  is really read, and losing the words there would have been a real regression. The name column's
+  gold left stripe is unchanged, and `rowMarkColor` still gives a rule break precedence over gold —
+  so the fact is drawn once in that column instead of twice. On `TextView` there is no such twin and
+  there never was: the row **is** a button with an explicit `aria-label`, so the whole gutter is
+  `aria-hidden` and the words are `deckCardName`'s.
+- **The game-changer _spotlight_ is one CSS rule, and every drawing decision in it is about
+  cost or about a collision** (2026-09-08). The ledger's `6 game changers` chip is a toggle:
+  hovering it, focusing it, or clicking it to latch fades every deck card that is not a game
+  changer to **25 %**. The contract — the two states, the derivation, `aria-pressed`, the chip's
+  three appearances, and which box is armed — is in
+  [`src/features/decks/CLAUDE.md`](../../src/features/decks/CLAUDE.md); what belongs here is how
+  it is *drawn*.
+  - **`[data-gc-spotlight] .deck-gc-dimmed:not([data-dnd-dragging]) { opacity: 0.25 }`**, with the
+    transition on the class rather than on the rule so the fade runs in both directions: 150ms
+    `ease`, which is the deck's own short transition and the same `duration-150` the row hover
+    beside it uses. **The `prefers-reduced-motion` arm is not optional**: opacity is a
+    non-positional property and `motion`'s `reducedMotion` only reduces positional keys, so a
+    fade needs its own opt-out. Reduced, the cards still dim; they simply arrive there.
+  - **0.25 is a fade and never a hide.** The dimmed cards keep their layout, their legibility and
+    every hit target they had. The spotlight answers *which of these*, and a reader who could no
+    longer read or press the rest of the deck would have been given a filter nobody asked for.
+  - **The dimmed state is what is marked, and the selector's shape is why.** The inverse spelling
+    is `[data-gc-spotlight] *:not(.deck-gc-lit)` — a `:not()` over a **broad subject**, evaluated
+    against every element under the deck. The measured cost of that shape in this repo is one
+    jsdom play going **3.5 s → 15 s** and a whole run 181 s → 231 s, which is why the majority of
+    the cards carry the class and the selector stays one flat descendant compound.
+  - **`:not([data-dnd-dragging])` is a specificity collision, not a tidy-up.** The drag rule
+    directly above it puts a dragged card at `opacity: 0.75` so the reader can see the pile they
+    are aiming at, and dnd-kit stamps its attribute on the source element **in place** — the card
+    becomes a popover, and the top layer is a painting order rather than a change of ancestry — so
+    a dimmed card dragged under a latched spotlight still matches, at **(0,2,0)** against the drag
+    rule's **(0,1,0)**, and would carry the card through the gesture at a quarter. The guard
+    qualifies a class rather than the broad subject above, so it costs nothing.
+  - **Nothing here has been driven in the shipped window.** jsdom applies no stylesheet, so no
+    suite can see any of it either; the only figures above are the ones written into the rule.
 - **The rule break's edge is the fourth separation, and on the stacked card it is drawn by _two_
   elements** (fixed 2026-08-14). `CardStack`'s data line is a sibling of the face, not a band
   inside it: `-mx-px` puts its own border exactly where the card's is, and being `relative` and
@@ -570,7 +642,10 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
     `CardArt`'s `rounded-lg` and the stack's 7px corner (Tailwind classes that do not scale — which
     is also why `STACK_DATA_RISE` stays 4px, since it hides the seam under that corner), the
     stack's `STACK_LIFTED_MARGIN` (a gap saying "this card is out of the pile", not part of the
-    card), the banner's drop shadow, and the gutters `CardGrid` splits either side of a row.
+    card), and the gutters `CardGrid` splits either side of a row. **A sixth entry read "the
+    banner's drop shadow" and went with the banner on 2026-09-08** — `GameChangerBanner` is
+    deleted, and the crown that replaced it is an 11px glyph inside `QuantityTag` that scales like
+    every other term in that box.
   - **Driven in the shipped window 2026-08-17** (`npm run tauri dev`, a **debug** build at
     1280×800, against a real 116 712-card corpus, ctrl+wheel dispatched synthetically). Search
     wall, 0.5× / 1× / 2×: tile **85 / 170 / 340**, caption type **6 / 12 / 24px**, rarity gem
@@ -583,6 +658,9 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
     the Game Changer banner **117.8×12 / 235.5×24** with a **9 / 18px** crown, the stepper column
     **20.4 / 40.8 / 81.6**. **The tag fits inside the reveal at 0.5× (11 ≤ 17)**, which is the one
     property `stackAdvance`'s floor existed to protect and is now held by the tag scaling instead.
+    (**The banner reading is history**: `GameChangerBanner` was deleted on 2026-09-08 and the crown
+    is 11px inside the quantity tag, which widens that tag's own figures by 14px at 1×. Every other
+    number here is untouched.)
     Deck grid: tile **75 / 300**, copy count **4.5 / 18px**, foot **10 / 40**, stepper **8.5 / 34**.
     **The control case**: with the desk at 2× the deck's _table_ row still read a **6px** gem and a
     **20px** stepper with `--mark-scale` **unset**, and with the search wall at 2× beside an open
@@ -2191,7 +2269,10 @@ figure in it that came from a run of text is exposed and should be re-read befor
   the edge *away* from the corner it is pinned to, which is what makes it read as a banner tucked
   into that corner. Reused unmirrored on the right, the bite lands against the card's own edge and
   leaves a notch. The mirrored pair read as bookends of the marks strip; the unmirrored one read
-  as a mistake. Same idea `GameChangerBanner` already states about its forked tail. **What this
+  as a mistake. Same idea `GameChangerBanner` stated about its own forked tail — **that banner was
+  deleted on 2026-09-08 and this pair is where the rule is drawn now**, which is the general form:
+  a mark's geometry is oriented to the corner it is pinned to, and only the orientation changes.
+  **What this
   pass could not see is that the polygon it settled on was a _rotation_ rather than a reflection**
   — both hide the notch, and only one keeps the taper; issue #182 two sections down.
 - **The Grid tile got a second drawing, not the same one — and that `variant` was deleted on
@@ -2209,10 +2290,13 @@ figure in it that came from a run of text is exposed and should be re-read befor
   whole 27px marks strip with a 22px tag at the other end of it, so the weight the chip refused is
   already accepted on the same card, and refusing it *here* would leave the strip's two bookends
   in different shapes. `CardMarks.tsx` carries the full reading at its own site.
-- **The row views get no box.** `GameChangerBadge`'s outlined box around a **tick** is a
-  **checkbox** — the one control every reader already knows — and a decklist of them reads as
-  something to click. `GC` survives the box because it contains letters. So `TheoryMatchBadge` is
-  the glyph alone, at `DeckFinishMark`'s 12px rather than `GC`'s 9px type.
+- **The row views get no box.** The shape argued against was `GameChangerBadge`'s outlined box put
+  around a **tick**, which is a **checkbox** — the one control every reader already knows — so a
+  decklist of them reads as something to click. `GC` survived the box because it contained letters.
+  So `TheoryMatchBadge` is the glyph alone, at `DeckFinishMark`'s 12px rather than `GC`'s 9px type.
+  **That badge was deleted on 2026-09-08** and the row views' game changer is a bare gold crown in
+  the quantity column — so the two marks in a row are a boxless glyph either end of the line, and
+  the rule survives its own counter-example: nothing in a decklist wears an outlined box now.
 
 **One thing the frame shows and nobody has decided:** at the bottom-left of a stacked card the
 `RULE BREAK` mark lands **over the card's own printed set/collector/artist line**. `GridView` has
@@ -2373,10 +2457,14 @@ The rule, the per-deck switches and the arithmetic are in
 reversed. **It is left standing above rather than deleted**: it was right about what it was
 looking at, and knowing why it stopped applying is the whole of the argument.
 
-**Two of the three refusals stand word for word.** Gold still puts two gold marks in one 27px
-strip meaning two unrelated things, and still reads as an extension of the Game Changer banner.
-The neutral count paint is still no distinction at all — a grey chip at one end of the strip and
-a grey chip at the other.
+**Two of the three refusals stand, and one of them lost its example rather than its argument.**
+Gold still puts two gold marks in one 27px strip meaning two unrelated things — a Gold-labelled
+`QuantityTag` at one end and a gold tick at the other — and gold already means *picked* on every
+wall in this app. What it no longer does is *read as an extension of the Game Changer banner*:
+that banner was deleted on 2026-09-08 and the game changer is a crown drawn **inside** the
+quantity tag, in the tag's own foreground rather than in gold, so the strip's second gold object
+is gone and the refusal now rests on the label and on `SELECTED_CARD`. The neutral count paint is
+still no distinction at all — a grey chip at one end of the strip and a grey chip at the other.
 
 **The third was a finding about a different mark.** `--color-ok` was ruled out in these words:
 *it is this app's "nothing is wrong here" colour, which is the one reading a tick must not have.*
@@ -3834,9 +3922,10 @@ nothing**, being a plain scroller rather than a virtualiser. **The rest of that 
 `footHeight` local that positioned the controls strip on the chin's top edge, and there is no such
 local since 2026-09-08**: the tile draws the stack's controls column instead, `DeckCardControls
 layout="card-column"` at `absolute top-9 right-1.5`, which needs no computed offset at all —
-`top-9` clears the 27px printed title bar the quantity tag and the game changer's crown sit in
-(the crown and not the ribbon on this view — see the game-changer bullet near the top of this
-page for the width that decided it), and the column
+`top-9` clears the 27px printed title bar the quantity tag and the plan's tick sit in (the game
+changer is *inside* that tag since the same day, so the strip is two marks on both card-face views
+— see the game-changer bullet near the top of this page for the width that decided it), and the
+column
 runs down the card's right margin from there. An absolutely positioned column takes no height, so
 the tile is still exactly as tall as its face plus its chin. The stacks did not move at all: 28
 is where the number came from, and `stackCardHeight` has always subtracted the rise.

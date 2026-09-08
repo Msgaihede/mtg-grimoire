@@ -21,30 +21,35 @@ import { useMemo, type JSX } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { CardArt } from "@/components/CardArt";
 import { Dialog } from "@/components/Dialog";
+import { atLeast, cardScaleVars } from "@/lib/cardZoom";
 import { count } from "@/lib/counts";
 import { FOCUS_INSET } from "@/lib/focus";
 import { WALL_CARD_VARIANT } from "@/lib/images";
 import { ipc, ipcError, type Printing } from "@/lib/ipc";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
+import { stackCardWidth } from "./CardStack";
 import type { DeckTokenView } from "./deckTokens";
 
 /**
- * How wide a token is drawn, in this dialog and on the wall behind it.
- *
- * **150, which is `GridView`'s `TILE_WIDTH` and `DeckSearchPanel`'s `TILE_BASE` a third time** —
- * and it is a third constant rather than an import for a reason each of those two also has. Both
- * of theirs are a *base* that `CardGrid` and the deck's Grid view then multiply by the reader's
- * zoom for their own card section; neither the token wall nor this picker is a zoom section, so
- * importing one would be importing a number that means "the size before the reader's zoom" and
- * using it as the size. What the two walls here must agree about is each other, which is why the
- * number is declared once for the pair: a reader who presses a tile has to meet the same picture
- * at the same size, or the swap does not read as a swap.
- *
- * It lives in this file rather than in the panel because the import has to run one way, and a
- * panel that opens a picker is the honest direction for it.
+ * The wall's gutters at 100% zoom — `gap-x-2.5` and `gap-y-3`, the numbers this dialog shipped
+ * with, through {@link atLeast} for `DeckTokensPanel`'s reason: a gutter is space **between**
+ * cards rather than chrome **on** one, so it grows with the tiles and holds at its base going
+ * down.
  */
-export const TOKEN_TILE_WIDTH = 150;
+const TILE_GAP_X = 10;
+const TILE_GAP_Y = 12;
+
+/**
+ * The one line that stands in for the wall — in flight, refused, or nothing to offer.
+ *
+ * **`Dialog` draws no padding around a body and says so**, so each of these was flush against the
+ * panel's own edge. That was merely tight in a `w-[52rem]` panel and reads as unplaced in one
+ * sized off the window, so the three take the header's own `px-5` and the vertical rhythm every
+ * other dialog body in this folder uses. It is a class rather than three spellings because the
+ * three are one sentence in three moods, and a fourth state must not have to rediscover it.
+ */
+const STATE_LINE = "px-5 pb-6 pt-4 text-sm";
 
 export interface TokenArtPickerProps {
   /**
@@ -57,6 +62,21 @@ export interface TokenArtPickerProps {
    * already had answered.
    */
   token: DeckTokenView | null;
+  /**
+   * How wide a token is drawn — `cardZoom.deck`, read once by the panel that opens this and
+   * handed straight through.
+   *
+   * **This wall and the one behind the scrim have to agree, and that is the whole reason the
+   * prop exists.** A reader who presses a tile has to meet the same picture at the same size, or
+   * the swap does not read as a swap. It was a shared 150px constant until 2026-09-08, when the
+   * wall took the stacked card's own width at the desk's zoom; a constant left here would have
+   * been the two walls agreeing at exactly one stop of a sixteen-stop ladder.
+   *
+   * The dialog is `AllPrintingsDialog`'s width for it — 75vw between a 64rem floor and the
+   * window — because a 420px tile in the old `w-[52rem]` panel is one printing per row, and
+   * Treasure answers 97 of them.
+   */
+  zoom: number;
   /** A printing was pressed. The host writes it; this dialog knows nothing about the command. */
   onPick: (cardId: string) => void;
   /** Escape and the ✕: close, and hand the caret back to the tile that opened this. */
@@ -75,6 +95,7 @@ export interface TokenArtPickerProps {
  */
 export function TokenArtPicker({
   token,
+  zoom,
   onPick,
   onDismiss,
   onClose,
@@ -91,11 +112,23 @@ export function TokenArtPicker({
       // reader which of the two they pressed.
       subtitle={token?.subtitle ?? undefined}
       closeLabel="Close the art picker"
-      size="w-[52rem]"
+      // **`AllPrintingsDialog`'s three numbers, verbatim, and the reason is the same one it
+      // gives**: this is a grid to pick out of rather than a form or a list, so its width is a
+      // proportion of the window with a floor and a ceiling either side, and its height is
+      // spelled because the body is a wall rather than a form. Read that file for the whole
+      // argument — 75vw, floored at the app's own 1024px window floor and ceilinged at the
+      // column the shell reserves, then `min(100%, 90vh)` so 5vh of glass either side keeps the
+      // modal floating.
+      //
+      // It was `w-[52rem]` with the wall clamped at `max-h-[26rem]`, which was right for a
+      // fixed 150px tile and is wrong for one that follows the deck's zoom: 832px of panel less
+      // the list's own padding and scrollbar is ~805, and two 420px tiles want 850 — so at 2×
+      // the picker was one printing per row, in a box shorter than a single tile.
+      size="w-[min(100%,max(64rem,75vw))] max-h-[min(100%,90vh)]"
       onDismiss={onDismiss}
       onClose={onClose}
     >
-      {token !== null && <PickerBody token={token} onPick={onPick} />}
+      {token !== null && <PickerBody token={token} zoom={zoom} onPick={onPick} />}
     </Dialog>
   );
 }
@@ -110,9 +143,12 @@ export function TokenArtPicker({
  */
 function PickerBody({
   token,
+  zoom,
   onPick,
 }: {
   token: DeckTokenView;
+  /** `cardZoom.deck` — see {@link TokenArtPickerProps.zoom}. */
+  zoom: number;
   onPick: (cardId: string) => void;
 }) {
   const { marketplace } = useMarketplace();
@@ -142,14 +178,14 @@ function PickerBody({
 
   if (failure !== null) {
     return (
-      <p role="alert" className="text-sm text-destructive">
+      <p role="alert" className={cn(STATE_LINE, "text-destructive")}>
         Could not read this token&rsquo;s printings — {failure}
       </p>
     );
   }
 
   if (query.isPending) {
-    return <p className="text-sm text-dim">Reading the printings…</p>;
+    return <p className={cn(STATE_LINE, "text-dim")}>Reading the printings…</p>;
   }
 
   if (items.length === 0) {
@@ -158,7 +194,7 @@ function PickerBody({
     // It says what is true rather than claiming a failure — the read succeeded and answered
     // nothing.
     return (
-      <p className="text-sm text-dim">
+      <p className={cn(STATE_LINE, "text-dim")}>
         No paper printing of this token is in your card data yet.
       </p>
     );
@@ -169,10 +205,28 @@ function PickerBody({
       {/* A scroller of its own, and the reason is the app's standing one: a modal is clamped to
           the window and scrolls **inside** itself, so a token with 97 printings may not decide
           this panel's height. The tiles wrap, so nothing here can scroll sideways — which is the
-          other half of the rule, and the half a fixed-column grid would have broken. */}
-      <ul className="flex max-h-[26rem] flex-wrap gap-x-2.5 gap-y-3 overflow-y-auto p-1.5">
+          other half of the rule, and the half a fixed-column grid would have broken.
+
+          **`min-h-0 flex-1` rather than a `max-h` in rem**, which is what `Dialog`'s own doc asks
+          a body for and what the panel's `max-h` needs to bind against: a 26rem ceiling is 416px,
+          and one tile at 2× is 420 wide and 588 tall, so the fixed box was shorter than a single
+          row of what it is drawn to hold. Bounded by the panel instead, the wall is as tall as
+          the window allows at every stop of the ladder.
+
+          The gutters are inline because a scaled number cannot be a class — Tailwind scans source
+          text for whole class names, so an interpolated one emits no rule at all. */}
+      <ul
+        className="flex min-h-0 flex-1 flex-wrap content-start overflow-y-auto p-1.5"
+        style={{ columnGap: atLeast(TILE_GAP_X, zoom), rowGap: atLeast(TILE_GAP_Y, zoom) }}
+      >
         {items.map((printing) => (
-          <li key={printing.id} style={{ width: TOKEN_TILE_WIDTH }}>
+          // `cardScaleVars` here rather than inside the tile, because the tile is a fragment —
+          // its button and its two captions are siblings, so the `<li>` is the one box above all
+          // three. The two captions read `--mark-scale` off it.
+          <li
+            key={printing.id}
+            style={{ width: stackCardWidth(zoom), ...cardScaleVars(zoom) }}
+          >
             <PrintingTile
               printing={printing}
               tokenName={token.name}
@@ -187,7 +241,7 @@ function PickerBody({
           promise the backend makes and not one this file can keep — `list_printings` clamps, and
           a wall that silently drew the newest 400 of a longer list would read as an answer. */}
       {total > items.length && (
-        <p className="mt-2 text-[0.6875rem] text-dim">
+        <p className="shrink-0 px-1.5 pb-1.5 pt-2 text-[calc(0.6875rem*var(--mark-scale,1))] text-dim">
           Showing {items.length} of {count(total)} printings.
         </p>
       )}
@@ -260,10 +314,17 @@ function PrintingTile({
         />
       </button>
       {/* Two elements, never one line with a separator in it. They are outside the button, so
-          neither is in its accessible name and neither can be run together with the other. */}
-      <p className="mt-1 truncate text-[0.6875rem] text-dim">{label}</p>
+          neither is in its accessible name and neither can be run together with the other.
+
+          Both read `--mark-scale` off the `<li>` above, for the wall's own reason: a 420px
+          picture over an 11px credit at 2× is the tile disagreeing with itself. */}
+      <p className="mt-[calc(0.25rem*var(--mark-scale,1))] truncate text-[calc(0.6875rem*var(--mark-scale,1))] text-dim">
+        {label}
+      </p>
       {printing.artist !== null && (
-        <p className="truncate text-[0.6875rem] text-dim">{printing.artist}</p>
+        <p className="truncate text-[calc(0.6875rem*var(--mark-scale,1))] text-dim">
+          {printing.artist}
+        </p>
       )}
     </>
   );

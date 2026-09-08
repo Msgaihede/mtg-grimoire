@@ -728,17 +728,24 @@ interface AppState {
    * Which overlay the card detail modal has open **over itself**, or `null` for none.
    *
    * **One field, so at most one is ever open** — the same shape {@link printingsRequest} uses one
-   * line up, and it is load-bearing twice over. All three are opened from one options rail on one
+   * line up, and it is load-bearing twice over. All four are opened from one options rail on one
    * modal, so a reader is asking exactly one of these questions at a time and a field apiece
    * would only be somewhere for two of them to disagree; and `LAYER.overlayStacked` is one rung
-   * for the three *because* of it — a rung is only allowed to serve surfaces that cannot overlap
+   * for the four *because* of it — a rung is only allowed to serve surfaces that cannot overlap
    * each other, which this field is what guarantees.
    *
    * **It carries nothing but which one**, unlike `printingsRequest`, which carries a question:
    * that one names the printing the reader asked *from* and the row a press would rewrite, and it
-   * is opened from card menus all over the app rather than from this modal alone. These three are
+   * is opened from card menus all over the app rather than from this modal alone. These four are
    * read-only surfaces about {@link selectedCardId} and there is nothing else for them to say —
-   * so the printings modal keeps its own field rather than becoming a fourth value here.
+   * so the printings modal keeps its own field rather than becoming a fifth value here.
+   *
+   * **An overlay with filters of its own is still nothing but a name here**, which is worth
+   * stating because `"combos"` is the first one that has any: its size and owned-only narrowing
+   * are the dialog's own state, asked *inside* it by the reader who is already looking at it.
+   * The line this field draws is about who asks — an opener that has to say something beyond
+   * which surface to show needs a payload, and a surface whose questions are all asked after it
+   * is on screen does not.
    *
    * **It goes with the card, and every writer that changes which card is open clears it.** An
    * overlay outliving the card under it is a legality grid for a card nobody has open, or — worse,
@@ -823,15 +830,18 @@ interface AppState {
  * Which surface the card detail modal has open over itself — see {@link AppState.cardOverlay},
  * the only field of this type and where the single-field design is argued.
  *
- * A union of three names rather than three booleans, which is the same statement the field makes
- * about there being at most one: three flags can all be true at once and one of them would then
- * have to be declared the winner somewhere, by a reader rather than by the type.
+ * A union of four names rather than four booleans, which is the same statement the field makes
+ * about there being at most one: four flags can all be true at once and one of them would then
+ * have to be declared the winner somewhere, by a reader rather than by the type. **It was three
+ * until `"combos"` joined**, and that a new surface costs one word here rather than a flag, a
+ * clear and a winner is the whole of the argument — the count in this paragraph moves and
+ * nothing else does.
  *
- * **The printings modal is deliberately not a fourth name** — it carries a question
+ * **The printings modal is deliberately not a fifth name** — it carries a question
  * ({@link PrintingsRequest}) and is opened from card menus that have nothing to do with this
  * modal, so it keeps the field it already has.
  */
-export type CardOverlay = "legality" | "oracleTags" | "cardText";
+export type CardOverlay = "legality" | "oracleTags" | "cardText" | "combos";
 
 /**
  * The question the printings modal is open on — see {@link AppState.printingsRequest}, which is
@@ -1224,9 +1234,11 @@ export const useAppStore = create<AppState>((set) => ({
   //
   // **Nor `cardOverlay`**, which is the one opener that leaves it alone and is worth saying out
   // loud beside the four that clear it: this verb means "another printing of the card that is
-  // already open", and all three overlays are about the *card* rather than the printing — a
-  // legality table, an oracle-tag list and an oracle text are the same answer for every printing
-  // of one card. Clearing here would shut a popup for a change it does not see.
+  // already open", and all four overlays are about the *card* rather than the printing — a
+  // legality table, an oracle-tag list, an oracle text and a combo list are the same answer for
+  // every printing of one card. The newest of them makes that structural rather than merely true:
+  // `cardCombosKey` keys on the **oracle** id, so stepping between printings cannot even miss the
+  // cache. Clearing here would shut a popup for a change it does not see.
   viewPrinting: (selectedCardId) => set({ selectedCardId }),
   // Decks opens on the gallery: a deck is something the reader picks, and reopening the last
   // one would be a decision made for them by the previous session.

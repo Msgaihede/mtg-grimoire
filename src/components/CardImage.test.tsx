@@ -121,6 +121,35 @@ describe("CardImage", () => {
   });
 
   /**
+   * **The one attribute whose wrong value is invisible to every other check in this repo.**
+   *
+   * `decoding="async"` tells the browser it may present the frame before the picture is
+   * decoded and paint it when the decode lands — and measured in the shipped window, that
+   * second paint is sometimes never made: the `<img>` reports `complete` and a real
+   * `naturalWidth` while the frame on screen stays the empty surface colour, for the rest of
+   * the session. Nothing in the DOM says so, which is why this is asserted rather than left to
+   * the eye: jsdom decodes nothing, the watchdog below is *by design* satisfied by
+   * `complete && naturalWidth > 0`, and a screenshot taken through CDP forces a frame. Every
+   * instrument this repo owns reads a blank tile as a drawn one.
+   *
+   * So the value is pinned here, at the one element every card picture in the app goes
+   * through. Ten call sites used to pass `decoding="async"` by hand; deleting this line puts
+   * the browser back on the path the bug lives on, and no other test in the suite would move.
+   */
+  it("decodes a card picture before the frame is shown, never after", () => {
+    render(<CardImage src={BOLT} alt="Lightning Bolt" />);
+
+    expect(screen.getByAltText("Lightning Bolt")).toHaveAttribute("decoding", "sync");
+  });
+
+  /** A default, like `draggable` above: written before the spread, so a caller can still choose. */
+  it("lets a caller choose a different decode", () => {
+    render(<CardImage src={BOLT} alt="Lightning Bolt" decoding="async" />);
+
+    expect(screen.getByAltText("Lightning Bolt")).toHaveAttribute("decoding", "async");
+  });
+
+  /**
    * The watchdog — an image that never answers at all.
    *
    * `useImageRetry` heals a picture the protocol *refused*: a 502 or a 503 arrives as an

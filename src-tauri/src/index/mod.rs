@@ -428,6 +428,21 @@ pub(crate) mod fixtures {
         std::fs::create_dir_all(&dir).unwrap();
         crate::split::convert(&dir).unwrap();
         let conn = crate::db::open_write(&dir).unwrap();
+        // **The corpus is brought to head, because a launch brings it to head.** `convert`
+        // builds the file through the frozen `migrate_single_file` ladder and then stamps
+        // `CORPUS_SCHEMA_VERSION` on it, so what comes out of it wears head while carrying
+        // whatever shape that ladder last built — and `db::open_write` migrates nothing, by
+        // design: `schema::prepare_database` is the one door all three targets go through.
+        // Without this line the fixture is a database no launch can produce, and every test
+        // built on it is asking its question of the wrong file.
+        //
+        // It went unnoticed for as long as no corpus rung had ever changed a table's shape.
+        // Corpus schema 2 did — four columns on `combos` — and the tell was one route test
+        // failing with `no such column: c.description` against a fixture whose header said it
+        // was current. `prepare_database` itself is deliberately *not* what is called here: it
+        // also installs the capture triggers, and arming sync's op log under twenty fixtures
+        // that never asked for it is a much larger change than the one this needs.
+        crate::schema::migrate_corpus(&conn).unwrap();
         seed(&conn);
         let read = crate::db::open_read(&dir).unwrap();
         // **Hooked up, so what these fixtures drive runs with the cross-file fence

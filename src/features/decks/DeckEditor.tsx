@@ -54,6 +54,7 @@ import { cn } from "@/lib/utils";
 import { newestWrite, writeFailure } from "@/lib/writes";
 import {
   DECK_CARD_VARIANT,
+  deckSpotlightProps,
   focusDeckGroup,
   keepsSelection,
   type DeckCardActions,
@@ -3423,6 +3424,32 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   );
 
   /**
+   * **The game-changer spotlight**, in two facts and one derivation.
+   *
+   * The ledger's count is a press as well as a readout (`DeckLedger`): hovering it, or the caret
+   * landing on it, fades every card in the deck that is not a game changer to a quarter, and a
+   * click latches the same state so it survives the pointer leaving. Two gestures, so two pieces
+   * of state — a latch the reader set and a hover the pointer is making — and `gcSpotlight` is
+   * the `||` of them, **derived at render and never stored**. A third `useState` synced in an
+   * effect would be the derived-state pattern this repo's lint refuses (and refuses only at
+   * `npm run verify`), and it would also make hover-while-latched a write that could turn the
+   * latch off when the pointer left.
+   *
+   * **The `gameChangers > 0` gate is the fence a latch can outlive its own control.** The chip is
+   * drawn only for a deck that has one — so it cannot be *pressed* on a deck with none — but the
+   * latch is this component's state and the count is a `useMemo` over the deck's rows: an edit
+   * that removes the last game changer takes the chip away and leaves `gcLatched` standing, which
+   * would be a whole deck stuck at a quarter with nothing on screen to press to get it back.
+   * Gating the derivation rather than clearing the flag keeps that a *read*: the flag is
+   * meaningless while there is nothing to spotlight and means what it always did the moment a
+   * game changer comes back, so a reader who steps a card to zero and undoes it finds the
+   * spotlight exactly where they left it.
+   */
+  const [gcLatched, setGcLatched] = useState(false);
+  const [gcHovered, setGcHovered] = useState(false);
+  const gcSpotlight = (gcLatched || gcHovered) && gameChangers > 0;
+
+  /**
    * Where the docked panel's adds land, and the quick add with them — **the deck row's answer**
    * (`decks.default_category_id`), read here and handed down.
    *
@@ -4043,6 +4070,14 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           marketplace={marketplace}
           formatName={spec?.displayName ?? row.formatName ?? null}
           gameChangers={gameChangers}
+          // **The latch and never `gcSpotlight`.** `aria-pressed` describes a toggle, and the
+          // pointer resting on the chip is not a press — the chip draws that state for itself
+          // with a `hover:` variant, which is also what keeps its three appearances (off,
+          // touched, latched) distinguishable. The composite is what the *deck* is drawn under,
+          // one element down.
+          spotlight={gcLatched}
+          onSpotlightToggle={() => setGcLatched((on) => !on)}
+          onSpotlightHover={setGcHovered}
           tight={tightHeader}
           // Four terms rather than five on a Virtual deck — the `Owned` figure is the one thing
           // on this line that is about a *binder* rather than about the deck. See {@link tracks}.
@@ -4490,7 +4525,18 @@ export function DeckEditor({ deckId }: { deckId: number }) {
            * below is unconditional, and all four views are drawn in one box with one rule — which
            * is also what the reader asked for, a table at its full height with no scrollbar on it.
            */}
-          <div className={cn("min-w-0 flex-1", DECK_HEIGHT_FLOOR)}>
+          <div
+            // **The game-changer spotlight is armed here, and this box is the one that may take
+            // it.** `deckSpotlightProps` stamps an attribute the stylesheet reads as *fade every
+            // `deck-gc-dimmed` under me*, so what it must not contain is any card that is not in
+            // the deck. This box holds the four views and nothing else — the docked search
+            // column is its **sibling** inside the desk row above, so its tiles (cards the reader
+            // is shopping for, most of which are not game changers of anything) are outside the
+            // attribute by construction. The desk row would have been the wrong ancestor for
+            // exactly that reason, and the editor's own root worse again.
+            {...deckSpotlightProps(gcSpotlight)}
+            className={cn("min-w-0 flex-1", DECK_HEIGHT_FLOOR)}
+          >
             {/* Neither `columnHeight` nor a measured height reaches a view any more. `StackView`
                 packs nothing — every pile is a flex item that wraps on width — and `TextView`
                 still packs, to a fixed readable target rather than to the desk, which is as tall
@@ -4571,7 +4617,39 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       />
 
       {row && (
-        // What the deck adds up to — the foot of the page, and the last thing under the deck.
+        // What this deck puts on the table beside itself — the tokens and emblems its cards
+        // make, resolved out of each card's `all_parts` on every open and never stored.
+        //
+        // **Under the price strip and _over_ the stats band since 2026-09-08, where it was under
+        // both.** The pair that may not be split is the deck and the strip: the remove tray is
+        // drawn on that strip for the length of a drag, at `-top-3` over this column's own
+        // `gap-3`, so a band inserted between them would put a wall of tokens between a card in
+        // the air and the one drop that takes it out. This band is below that pair either way —
+        // what moved is which side of the four charts it takes. The reader's reason is that a
+        // token wall is a *list of cards* the deck is about to want, and the cards belong beside
+        // the cards; the old ordering was argued only as "the far side of a pair that may not be
+        // split", which was true of both positions and therefore never chose between them.
+        //
+        // **A `section` and `shrink-0`** for the two reasons the band below spells out in full —
+        // a second complementary landmark answered `getByRole("complementary")` and broke five of
+        // `App.test.tsx`'s pane assertions, and `shrink-0` on the bands below the desk is the
+        // whole of why this editor scrolls. Both live on the panel's own root, so this mount
+        // cannot get either wrong.
+        //
+        // `tokensOpen` is the deck's own column (`decks.tokens_open`, schema v37) rather than
+        // editor state, for `separateXGroup`'s reason one control over: whether a reader wants
+        // the token wall in front of them is an answer about a *particular* deck, and a
+        // `useState` here would ask it again every time they opened one.
+        <DeckTokensPanel
+          deckId={deckId}
+          variant={variant}
+          open={row.tokensOpen}
+          onToggle={(next) => deck.update.mutate({ tokensOpen: next })}
+        />
+      )}
+
+      {row && (
+        // What the deck adds up to — the foot of the page, and the last band on it.
         //
         // **It was an aside on the desk row with a toggle in the toolbar, and both halves of
         // that cost more than they bought.** The block took 280px off a row that already had to
@@ -4590,6 +4668,13 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         // during a drag, exactly `-top-3` over the gap under the deck; putting the band between
         // them would leave a reader dragging a card the height of four charts to reach the one
         // drop that takes it out.
+        //
+        // **And below the Tokens & emblems band since 2026-09-08**, where it was above it. That
+        // band is a wall of cards; this one is four charts. A reader scanning down the page
+        // reads the deck, then what the deck puts on the table beside it, then what it all adds
+        // up to — and the charts, which nothing is dragged into and nothing is pressed on, are
+        // the honest last thing. Neither band may go above the strip, so the two are only ever
+        // ordered against each other.
         //
         // **A `section`, not an `aside`** — the same call `DeckSearchPanel` makes and for the
         // same measured reason: the docked card detail pane was the app's one complementary
@@ -4659,35 +4744,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             separateXGroup={separateX}
           />
         </section>
-      )}
-
-      {row && (
-        // What this deck puts on the table beside itself — the tokens and emblems its cards
-        // make, resolved out of each card's `all_parts` on every open and never stored.
-        //
-        // **After the stats band, which is the far side of a pair that may not be split.** The
-        // price strip is where the remove tray is drawn for the length of a drag, at `-top-3`
-        // over this column's own `gap-3`, so the strip and the deck above it stay adjacent; the
-        // stats band is already below that pair, and this is below the stats. Between the strip
-        // and the band it would put a wall of tokens between a card in the air and the one drop
-        // that takes it out.
-        //
-        // **A `section` and `shrink-0`** for the two reasons the band above spells out in full —
-        // a second complementary landmark answered `getByRole("complementary")` and broke five of
-        // `App.test.tsx`'s pane assertions, and `shrink-0` on the bands below the desk is the
-        // whole of why this editor scrolls. Both live on the panel's own root, so this mount
-        // cannot get either wrong.
-        //
-        // `tokensOpen` is the deck's own column (`decks.tokens_open`, schema v37) rather than
-        // editor state, for `separateXGroup`'s reason one control over: whether a reader wants
-        // the token wall in front of them is an answer about a *particular* deck, and a
-        // `useState` here would ask it again every time they opened one.
-        <DeckTokensPanel
-          deckId={deckId}
-          variant={variant}
-          open={row.tokensOpen}
-          onToggle={(next) => deck.update.mutate({ tokensOpen: next })}
-        />
       )}
 
       {/* The overlays, mounted **at the editor's top level and as siblings of the layout

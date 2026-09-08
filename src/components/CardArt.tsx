@@ -231,7 +231,6 @@ export function CardArt({
           // preload scanner — on exactly the two dozen pictures the reader is about to look
           // at. A wall with **no** virtualiser has no such bound and passes `"lazy"`.
           loading={loading}
-          decoding="async"
           onError={image.onError}
           className={cn(
             "size-full object-cover",
@@ -285,9 +284,12 @@ export function CardArt({
  * rather than two chips, because a tile's fourth corner is the only one left and a second box
  * beside it would start a row of stickers.
  *
- * The crown is the same glyph the deck stack's `GameChangerBanner` stamps on its ribbon, and the
- * same fact the deck's table and text views abbreviate as `GameChangerBadge`'s gold `GC`; see
- * `GameChangerMark` for why one fact is drawn three ways.
+ * The crown is the same glyph the deck prints on its **quantity** — folded into `QuantityTag` on
+ * a deck card's face, and drawn in the quantity column on its two row views. It used to be one
+ * fact in three drawings (this crown, a stamped ribbon, two gold letters); since 2026-09-08 there
+ * is one glyph everywhere and what differs is only what it is printed *on*. `GameChangerMark`
+ * carries the whole record, including why it is gold here and takes the tag's own foreground
+ * there.
  *
  * The enclosing element needs `relative` and `overflow-hidden`; `CardArt` has both.
  */
@@ -315,17 +317,15 @@ export function FoilOverlay({
   treatments?: readonly Treatment[];
   /**
    * Optional, and it has to stay optional: two callers outside `CardArt` draw this overlay
-   * (`CardModalArt`'s main art and the deck stack's card) and neither says anything about
-   * the bracket. Those surfaces have their own drawings of it — `GameChangerBanner` on the
-   * stack, `GameChangerBadge` on the deck's table and text views. The deck's **Grid** view was
-   * a third such caller until 2026-08-16 and is now a `CardArt` like the search wall, so it gets
-   * the crown through this prop rather than a `GC` of its own.
+   * (`CardModalArt`'s main art and the deck's card face) and neither says anything about the
+   * bracket. The deck has its own drawing of it — the crown printed on `QuantityTag`, which is
+   * one mark for the count and the fact together, on both of the views that draw a card face.
    */
   gameChanger?: boolean;
   /**
    * Draw the chip as well as the sheen. `false` for a frame that says the finish **in words
-   * somewhere else** — the deck stack's card, whose data line under the art carries a
-   * {@link FinishMark} beside the price.
+   * somewhere else** — the deck's card face, whose chin under the art carries a
+   * {@link FinishMark} beside the price on both views that draw one.
    *
    * That is not a weaker version of this frame, it is the rule below applied: the chip and the
    * sheen do different jobs, and the chip's job is done better by a mark on a line the reader
@@ -334,9 +334,10 @@ export function FoilOverlay({
    *
    * **It governs the crown too, and has to.** The chip is the only thing a crown can be drawn
    * as here, so a frame that has moved the finish into words has moved the whole corner: the
-   * one caller that passes `false` is the deck stack, which draws `GameChangerBanner` across
-   * the card instead. A crown surviving that switch would be the second badge this prop exists
-   * to remove.
+   * one caller that passes `false` is the deck's card face, which prints the crown on its
+   * quantity tag instead. A crown surviving that switch would be the second badge this prop
+   * exists to remove — and on that view it would be the *third* crown, since the tag under it
+   * is already wearing one.
    */
   mark?: boolean;
 }) {

@@ -103,10 +103,16 @@ function renderRail(
 
 describe("the card modal's options rail", () => {
   /**
-   * The three read-only overlays are one store field with one writer, so the rail's whole job for
+   * The four read-only overlays are one store field with one writer, so the rail's whole job for
    * them is to name which — see `AppState.cardOverlay`. Asserting against the live store rather
-   * than a spy is what makes this break if that field is renamed or if a fourth surface starts
+   * than a spy is what makes this break if that field is renamed or if a fifth surface starts
    * keeping open-state of its own.
+   *
+   * **Each assertion reads the *value*, and that is the whole of what this file can catch here.**
+   * All four of these rows call the identical `openCardOverlay`, so a check that only counted the
+   * calls — or that only asserted the writer ran — passes against a `Combos` row wired to
+   * `"legality"`, which is a row that opens the wrong dialog and looks completely correct in the
+   * DOM. The store read is what tells the four apart.
    */
   it("opens each overlay through the store's single writer", async () => {
     const user = userEvent.setup();
@@ -120,6 +126,11 @@ describe("the card modal's options rail", () => {
 
     await user.click(screen.getByRole("button", { name: "Card text" }));
     expect(useAppStore.getState().cardOverlay).toBe("cardText");
+
+    // Issue #359's row. Last of the four because it went last in the block, which is the one
+    // thing about its placement a reader could have learnt from the other three.
+    await user.click(screen.getByRole("button", { name: "Combos" }));
+    expect(useAppStore.getState().cardOverlay).toBe("combos");
   });
 
   /**
@@ -164,11 +175,18 @@ describe("the card modal's options rail", () => {
 
   /**
    * The rail is a list rather than a fixed set of slots — spec §7 — so the count of entries is a
-   * property of the surface and not of this file. A component with four named slots plus an
-   * "extras" hole would draw the deck's six and the search's four differently; this draws one
-   * list and the surface says how long it is.
+   * property of the surface and not of this file. A component with seven named slots plus an
+   * "extras" hole would draw the deck editor's eight and the search wall's seven differently;
+   * this draws one list and the surface says how long it is — **nine** below, because the fixture
+   * hands it two actions where the editor hands one (`CardDetailModal`'s `railActions`).
+   *
+   * **The order is asserted whole, and that is what places `Combos` rather than merely finding
+   * it.** A `getByRole` for the row passes wherever it sits, including four rows down among the
+   * `Open on …` links — where it would read as somewhere this app sends you rather than a surface
+   * it draws. `toEqual` against the full list is the only assertion here that goes red for a row
+   * that is present and in the wrong block.
    */
-  it("appends the surface's own entries after the six every surface has", async () => {
+  it("appends the surface's own entries after the seven every surface has", async () => {
     const setCommander = vi.fn();
     const user = userEvent.setup();
     renderRail({
@@ -184,6 +202,7 @@ describe("the card modal's options rail", () => {
       "Legality",
       "Oracle tags",
       "Card text",
+      "Combos",
       "Open on Scryfall",
       "Open on EDHREC",
       "Open on TCGplayer",
@@ -193,6 +212,26 @@ describe("the card modal's options rail", () => {
 
     await user.click(screen.getByRole("button", { name: "Set as commander" }));
     expect(setCommander).toHaveBeenCalledOnce();
+  });
+
+  /**
+   * The other half of the block boundary, and the half the order above cannot see: `external` is
+   * what draws the arrow glyph, and a row can be in the right place with the wrong mark on it.
+   *
+   * The glyph is `aria-hidden`, so it is invisible to every name query in this file — which is
+   * deliberate (it must not join the accessible name) and is exactly why it needs an assertion of
+   * its own rather than falling out of one. Asserted as a **pair**: `Combos` bare and
+   * `Open on Scryfall` marked, because a `svg` count of zero also passes on a rail that has
+   * stopped drawing the mark at all.
+   */
+  it("draws no outbound arrow on Combos, and still draws one on the links", () => {
+    renderRail();
+
+    const combos = screen.getByRole("button", { name: "Combos" });
+    const scryfall = screen.getByRole("button", { name: "Open on Scryfall" });
+
+    expect(combos.querySelector("svg")).toBeNull();
+    expect(scryfall.querySelector("svg")).not.toBeNull();
   });
 
   /**

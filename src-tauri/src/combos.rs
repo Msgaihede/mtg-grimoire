@@ -63,15 +63,33 @@
 //! # What survives the reduction
 //!
 //! Per variant: its id, its `bracketTag`, its colour identity, its popularity, how many
-//! `requires[]` templates it also needs, and its `produces[]` feature names joined with `\n`.
-//! Per `uses[]` entry: an oracle id, a name, a quantity and whether the card must be the
-//! commander. Everything else is read and dropped.
+//! `requires[]` templates it also needs, its `produces[]` feature names joined with `\n`, and
+//! **four prose fields** — `description`, `easyPrerequisites`, `notablePrerequisites` and
+//! `manaNeeded`. Per `uses[]` entry: an oracle id, a name, a quantity and whether the card must
+//! be the commander. Everything else is read and dropped.
+//!
+//! **The four prose fields are stored for [`card_combos`] and for nothing else.** The bracket
+//! estimate never reads them and [`match_combos`] does not select them: they are what a reader
+//! looking at *one card's* combos needs in order to be told how the combo is actually played,
+//! and a panel that could only say "Infinite mana" over two card names is a panel that sends
+//! them to Spellbook's website to find out how. `description` is the numbered steps,
+//! `\n`-separated; the other three are one line each. **All four are commonly `""` in the file
+//! itself** — Spellbook writes an empty string rather than null — so `""` is a *value* here and
+//! never a reason to skip a variant.
+//!
+//! **Deliberately not stored**, though the wire carries them: `notes` (Spellbook's editorial
+//! remarks to itself), `manaValueNeeded` (derivable from `manaNeeded` and read by nothing),
+//! `of` / `includes` / `variantCount` (the feed's own graph of which variants generalise which,
+//! which this app draws no conclusion from), `spoiler`, `prices` (this app has two price feeds
+//! of its own and neither is Spellbook's), and the per-`uses` `zoneLocations` and `*CardState`
+//! strings — "on the battlefield, tapped" is a fact about *playing* the combo that the
+//! description already spells out in prose.
 
 use crate::sync::AppState;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 use serde::de::{DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Read;
 use std::path::Path;
 #[cfg(not(target_family = "wasm"))]
@@ -212,11 +230,18 @@ pub const TOO_MANY_CARDS: &str =
 // The file, as it arrives
 // ---------------------------------------------------------------------------------------
 
-/// One `variants[]` entry, narrowed to the nine keys that matter.
+/// One `variants[]` entry, narrowed to the thirteen keys that matter.
 ///
 /// `#[serde(rename_all = "camelCase")]` because the file is camelCase throughout —
 /// `bracketTag`, `oracleId`, `mustBeCommander`. Every field is `Option` or defaulted and none
 /// of the structs here is `deny_unknown_fields`: see the module header.
+///
+/// **The four prose fields are `Option<String>` on the way in and `String` on the way out**,
+/// which is this module's rule read against a field the file writes as `""` rather than as
+/// null. `None` (the key is absent) and `Some("")` (the key is there and empty) are two
+/// different documents and exactly one storable answer — [`reduce`] flattens both to `""`,
+/// because "the combo has no stated mana cost" is what each of them means and a panel with two
+/// spellings of *nothing* is a panel with two empty states.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RawVariant {
@@ -232,6 +257,17 @@ struct RawVariant {
     popularity: Option<i64>,
     #[serde(default)]
     legalities: Option<RawLegalities>,
+    /// The numbered steps, `\n`-separated. Read the module header for why this and the three
+    /// below are the only prose the reduction keeps.
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    easy_prerequisites: Option<String>,
+    #[serde(default)]
+    notable_prerequisites: Option<String>,
+    /// What the combo costs to run, in Scryfall's mana-symbol spelling — `{6}`, `{2}{U}`.
+    #[serde(default)]
+    mana_needed: Option<String>,
     #[serde(default)]
     uses: Vec<RawUse>,
     /// **Read for its length and nothing else.** `IgnoredAny` parses each template and builds
@@ -329,6 +365,19 @@ pub struct Combo {
     pub identity: String,
     /// Feature names, `\n`-joined.
     pub produces: String,
+    /// How the combo is actually played: the numbered steps, `\n`-separated.
+    ///
+    /// **`""` is a value and not a skip reason**, for all four of these. The file writes an
+    /// empty string where a variant has no prose, so a missing description is the ordinary
+    /// state of thousands of published combos and refusing one would throw away a combo whose
+    /// *cards* are perfectly storable.
+    pub description: String,
+    /// Setup the combo needs that any deck can arrange — "all permanents are untapped".
+    pub easy_prerequisites: String,
+    /// Setup worth calling out — "you have infinite mana available".
+    pub notable_prerequisites: String,
+    /// What it costs to run, the feed's own mana-symbol spelling: `{6}`.
+    pub mana_needed: String,
     pub popularity: Option<i64>,
     /// The file's order, which is the order [`combos_for_cards`] answers in.
     pub cards: Vec<ComboCard>,
@@ -428,6 +477,16 @@ fn reduce(raw: RawVariant) -> Option<Combo> {
         template_count: (raw.requires.len() + unidentified) as i64,
         identity: raw.identity.unwrap_or_default(),
         produces,
+        // **Verbatim, and untrimmed.** These are the only fields here whose *formatting* is
+        // part of the value: `description`'s newlines are the numbered steps, and a trim would
+        // be this crate concluding something about prose it is only carrying. `unwrap_or_default`
+        // is what collapses an absent key and an empty string into the one storable answer —
+        // see [`RawVariant`]. **None of the four may ever return `None` from this function**: a
+        // combo with no prose is a combo, and skipping it would take its cards with it.
+        description: raw.description.unwrap_or_default(),
+        easy_prerequisites: raw.easy_prerequisites.unwrap_or_default(),
+        notable_prerequisites: raw.notable_prerequisites.unwrap_or_default(),
+        mana_needed: raw.mana_needed.unwrap_or_default(),
         popularity: raw.popularity,
         cards,
     })
@@ -768,10 +827,19 @@ pub fn store(
         let mut conn = crate::db::lock_blocking(db);
         let tx = conn.transaction()?;
         {
+            // **Every column named, and that is the whole of the defence.** The four prose
+            // columns were added to `combos` and `combos_staging` after this statement was
+            // first written, and `INSERT INTO t VALUES (…)` binds by *position* — so a column
+            // list is what makes the schema's order and this statement's order two separate
+            // facts rather than one silent dependency. `TEXT NOT NULL DEFAULT ''` on the
+            // schema side and a named column here means a rung that inserts one of them
+            // somewhere else in the table cannot quietly file a description under `identity`.
             let mut combo = tx.prepare_cached(
                 "INSERT INTO combos_staging
-                    (id, bracket_tag, card_count, template_count, identity, produces, popularity)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    (id, bracket_tag, card_count, template_count, identity, produces,
+                     popularity, description, easy_prerequisites, notable_prerequisites,
+                     mana_needed)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             )?;
             let mut card = tx.prepare_cached(
                 "INSERT INTO combo_cards_staging
@@ -786,7 +854,11 @@ pub fn store(
                     c.template_count,
                     c.identity,
                     c.produces,
-                    c.popularity
+                    c.popularity,
+                    c.description,
+                    c.easy_prerequisites,
+                    c.notable_prerequisites,
+                    c.mana_needed
                 ])?;
                 // **In the file's order, and that is load-bearing**: `combo_cards` has no
                 // ordinal column, so insert order is rowid order and rowid order is what
@@ -1352,6 +1424,483 @@ pub fn match_combos(conn: &Connection, card_ids: &[String]) -> Result<Vec<DeckCo
 }
 
 // ---------------------------------------------------------------------------------------
+// One card's combos
+// ---------------------------------------------------------------------------------------
+
+/// The largest page [`card_combos`] will hand back, however much was asked for.
+///
+/// **A ceiling on one answer, not a ceiling on the question** — [`CardCombosPage::total`] says
+/// how many there really are and the caller pages through them. 100 because the dialog asks for
+/// 25 and a bound that is not comfortably above what the only caller wants is a bound that will
+/// be raised by the next feature rather than thought about; and because the expensive part of
+/// this call is the two passes over the hit set rather than the page, so a page four times too
+/// big costs a fraction of what the counts already cost. The worst card in the catalogue —
+/// Ashnod's Altar, 6 044 combos — is 61 pages of 100 and 242 of 25.
+pub const MAX_PAGE: i64 = 100;
+
+/// One card a combo names, with everything a panel needs to draw it.
+///
+/// Serialised `camelCase` to the shape `src/lib/ipc.ts` mirrors by hand.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ComboPiece {
+    pub oracle_id: String,
+    /// **`combo_cards.name` — the feed's spelling, and deliberately not the corpus's.** A
+    /// combo can name a card this database has never synced (a brand-new set, a
+    /// language-limited corpus, a card Scryfall renamed), and the row that answers *which* card
+    /// has to stay readable when the id stops resolving. That is the same argument every user
+    /// table in this schema makes for denormalising a printing's name.
+    pub name: String,
+    pub quantity: i64,
+    pub must_be_commander: bool,
+    /// The printing this app draws the card as: **[`crate::deck_tokens`]' tie-break, verbatim.**
+    ///
+    /// `None` when no `cards` row carries this oracle id, which is a supported state and not an
+    /// error — see [`Self::name`]. A piece in that state still carries its name, its quantity
+    /// and its [`owned`](Self::owned) count, because none of those came from `cards`.
+    pub card_id: Option<String>,
+    /// The front face's picture for that printing, per variant. `None` alongside a `None`
+    /// [`card_id`](Self::card_id), and also for a printing the corpus has no fetchable image
+    /// for — [`crate::image_uri::front_face_map`]'s rule, not one respelled here.
+    pub image_uris: Option<BTreeMap<String, String>>,
+    /// Copies of this card the reader owns, across **every printing and every finish**.
+    ///
+    /// `0` is an answer rather than a gap: this panel exists to tell a reader which of a
+    /// combo's pieces they are missing, and a blank where the zero belongs is the same
+    /// rendering as "we did not look".
+    pub owned: i64,
+}
+
+/// One combo that names the card being asked about.
+///
+/// **Not [`DeckCombo`], and the difference is the question.** That one answers *which combos
+/// does this deck completely hold* and carries the card **names** because that is all a
+/// one-line bracket advisory needs. This answers *which combos name this card at all*, makes
+/// no claim about the other pieces, and therefore has to say what each of them is and whether
+/// the reader has it.
+///
+/// Serialised `camelCase` to the shape `src/lib/ipc.ts` mirrors by hand.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CardCombo {
+    pub id: String,
+    /// One of [`BRACKET_TAGS`].
+    pub bracket_tag: String,
+    /// Distinct oracle ids the combo names — the same stored count the size filter matches on.
+    pub card_count: i64,
+    /// Templates it also needs ("a creature with flying"), which this app cannot resolve to a
+    /// card and therefore never counts as held. `0` is a combo whose every piece is nameable.
+    pub template_count: i64,
+    pub identity: String,
+    /// What it does — feature names, one per line.
+    pub produces: String,
+    /// How it is played — the numbered steps, `\n`-separated. `""` where the feed carries none.
+    pub description: String,
+    /// `""` where the feed carries none, which is the common case for all three of these.
+    pub easy_prerequisites: String,
+    pub notable_prerequisites: String,
+    /// What it costs to run, the feed's mana-symbol spelling. `""` where the feed carries none.
+    pub mana_needed: String,
+    pub popularity: Option<i64>,
+    /// Every card the combo names, **in the feed's order** — `combo_cards` rowid order, which
+    /// is what [`match_combos`] reads its names in and what a reader comparing this against
+    /// Spellbook's own page needs.
+    pub pieces: Vec<ComboPiece>,
+}
+
+/// How many of this card's combos need exactly `cards` cards.
+///
+/// Over the **unfiltered** set, so the size chips can say what each one would show without a
+/// round trip per chip — and so a chip whose count is zero can be left off the row entirely
+/// rather than offered and then answering nothing.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ComboCountBucket {
+    pub cards: i64,
+    pub combos: i64,
+}
+
+/// One page of one card's combos, with the three counts the panel's chrome is drawn from.
+///
+/// **Three counts and not one, because they answer three questions and a panel that conflated
+/// any two of them would lie about the other.** `total` is what the card is *in*; `matching` is
+/// what the filters left; `owned_total` is how many of the whole set the reader could actually
+/// assemble today — which is the number the "you own every piece of N of these" line is drawn
+/// from, and it deliberately ignores the size filter so that narrowing to two-card combos does
+/// not make that line change its meaning underneath the reader.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CardCombosPage {
+    /// Combos naming this oracle card. No filters.
+    pub total: i64,
+    /// After `card_count` **and** `owned_only`.
+    pub matching: i64,
+    /// Of [`total`](Self::total), those the reader owns every piece of — **no size filter**.
+    pub owned_total: i64,
+    /// Over the unfiltered set, ascending, and only the sizes that occur.
+    pub by_card_count: Vec<ComboCountBucket>,
+    /// This page, `limit` long at most.
+    pub combos: Vec<CardCombo>,
+}
+
+/// Every combo naming one oracle card, once each.
+///
+/// **Start from `combo_cards`, never from `combos`** — [`MATCH_SQL`]'s rule read the other way
+/// round, and its reason: `idx_combo_cards_oracle` turns one oracle id into a point lookup,
+/// where asking `combos` "does this one name the card" is a scan of the whole catalogue every
+/// time the dialog opens.
+///
+/// **`DISTINCT`, and it costs about 3 ms of the 6 044 rows Ashnod's Altar produces.** A combo
+/// may name the same card twice — a copy in the command zone and one in the library — so
+/// without it that combo would be counted twice by the histogram and listed twice on the page.
+/// Only the histogram's `GROUP BY` would have collapsed it anyway; spending the three
+/// milliseconds is what keeps *one* definition of the hit set instead of one that is safe here
+/// and a trap one statement over.
+const HIT_CTE: &str =
+    "hit(combo_id) AS (SELECT DISTINCT combo_id FROM combo_cards WHERE oracle_id = ?)";
+
+/// Which oracle cards the reader owns at least one copy of.
+///
+/// **The set form of [`crate::collection_source::copies_of_oracle`] under
+/// [`Availability::Everything`](crate::collection_source::Availability::Everything)**, and it
+/// is a fourth statement naming `collection_entries` by hand — the three that module's header
+/// lists, plus this. It earns that the way they do, by asking a question no fragment there
+/// answers: not *how many copies of this card*, correlated per row, but *the whole set of
+/// cards the reader owns any of*, materialised once. The naive shape is the fragment in a
+/// `NOT EXISTS` per candidate combo — ~21 000 correlated probes for the worst card, measured
+/// at 1.3–2.5 s where this is 7 ms.
+///
+/// **`CROSS JOIN` rather than `JOIN`, and it is worth 65 ms.** Written as a plain join, SQLite
+/// drove it from `cards` — a full scan of `idx_cards_collapse`, 117 606 rows, probing
+/// `collection_entries` for each — and took 72.7 ms against a 276-row collection. `CROSS JOIN`
+/// is SQLite's documented way to pin the outer loop, and pinning it to the *small* table takes
+/// the same answer to 7.1 ms.
+///
+/// **`k.oracle_id IS NOT NULL` is a correctness fence and not tidiness.** The column is
+/// nullable; one NULL in this set makes `p.oracle_id IN (SELECT …)` return NULL for every
+/// unowned piece, and SQLite's `min()` *skips* NULLs — so a combo with one owned piece and one
+/// unowned would answer `all_owned = 1`, reporting a combo the reader cannot assemble as one
+/// they can. It is the empty-set trap this repo has already paid for once, one operator over.
+///
+/// **`e.quantity > 0` is redundant against a healthy database and is here anyway**, which is the
+/// one guard in this statement that is *not* load-bearing today. A collection row cannot hold
+/// zero copies: `set_quantity(id, 0)` deletes the row, the user ladder's v24 rung deleted every
+/// stored zero, and the importer's `set` mode does the same — so `EXISTS` and `sum(quantity) > 0`
+/// are the same question, which is exactly why `collection_source::owns_printing` is allowed to
+/// be an `EXISTS` at all (`collection-folders.md`, *Zero quantity deletes the row*).
+///
+/// It is here because of what the *disagreement* looks like if that invariant is ever broken
+/// somewhere else. `ComboPiece::owned` is `copies_of_oracle`, which sums; this decides the
+/// `all_owned` the filter reads. Without the clause those two answer differently for a zero row,
+/// and the panel prints *Not owned* on a piece line inside a combo it is simultaneously offering
+/// under **I own every piece** — one screen contradicting itself about one card, with no error
+/// anywhere. The Storybook fake reached that state on the first try, off a fixture written before
+/// the zero-row rule changed. A guard that costs nothing on 276 rows is cheaper than an invariant
+/// two modules have to keep agreeing about.
+const OWNED_CTE: &str = "owned(oracle_id) AS (
+        SELECT DISTINCT k.oracle_id
+          FROM collection_entries e CROSS JOIN cards k ON k.id = e.card_id
+         WHERE k.oracle_id IS NOT NULL AND e.quantity > 0)";
+
+/// One row per hit combo, saying whether the reader owns **every** card it names.
+///
+/// `min()` over a 0/1 per piece is *all of them*, in one pass over the hit set's cards, where
+/// a `NOT EXISTS` per combo is a correlated probe per candidate. Requires [`OWNED_CTE`]'s
+/// NULL fence to mean what it says — see there.
+///
+/// **Ownership here is presence and not quantity**, which is [`match_combos`]' rule: that one
+/// asks whether a deck *lists* each named card and never how many copies, and a combo needing
+/// two Altars is not a combo the reader half-owns. `ComboPiece::owned` carries the count for a
+/// reader who wants to judge that themselves.
+const GRP_CTE: &str = "grp(combo_id, all_owned) AS (
+        SELECT p.combo_id, min(p.oracle_id IN (SELECT oracle_id FROM owned))
+          FROM combo_cards p JOIN hit h ON h.combo_id = p.combo_id
+         GROUP BY p.combo_id)";
+
+/// The one pass that touches every combo the card is in — and therefore the one that answers
+/// **three** of [`CardCombosPage`]'s four numbers.
+///
+/// `by_card_count` is the rows; `total` is their sum; `owned_total` is the sum of the third
+/// column; and `matching` is the same sums taken over the buckets the filters keep. Splitting
+/// those into four statements would be four scans of 6 044 rows to answer questions one scan
+/// already has in hand, and — worse — four chances for the panel's chrome to disagree with
+/// itself about a set that has not changed. **The page is the only other pass**, because it is
+/// the only thing here that needs the rows rather than counts of them.
+fn counts_sql() -> String {
+    format!(
+        "WITH {HIT_CTE},
+              {OWNED_CTE},
+              {GRP_CTE}
+         SELECT c.card_count, count(*), sum(g.all_owned)
+           FROM grp g JOIN combos c ON c.id = g.combo_id
+          GROUP BY c.card_count
+          ORDER BY c.card_count"
+    )
+}
+
+/// One page of combos, ordered and narrowed in SQL.
+///
+/// **`LIMIT`/`OFFSET` in the statement, never in Rust.** A dialog handed 6 044 rows — every
+/// one of them carrying a description, a produces list and its own card rows — is the failure
+/// this whole shape exists to avoid, and a `.take(25)` after the fact would have paid for all
+/// of it first.
+///
+/// **The order is [`match_combos`]' own, one term different.** That one leads with
+/// `template_count` because a deck asking *what have I got* wants the combos it can be sure of;
+/// this leads with `card_count` because a reader asking *what does this card do* wants the
+/// two-card combos before the five-card ones. Then `popularity DESC`, then the id so two runs
+/// over one card cannot answer in two different orders. SQLite sorts NULLs first, so
+/// `popularity DESC` already puts an unranked combo last — the same sentence [`match_combos`]
+/// writes, and the reason neither needs a `NULLS LAST`.
+///
+/// **The size filter is `coalesce(?, c.card_count)` rather than a clause that comes and goes.**
+/// One SQL text, one bound parameter in one position, whichever way the caller asked: a filter
+/// spliced in by a `format!` is a filter whose parameter index moves, and every `?` after it
+/// moves with it.
+fn page_sql(owned_only: bool) -> String {
+    // The columns, in the order `card_combos` reads them back by index.
+    const COLUMNS: &str = "SELECT c.id, c.bracket_tag, c.card_count, c.template_count,
+                                  c.identity, c.produces, c.description, c.easy_prerequisites,
+                                  c.notable_prerequisites, c.mana_needed, c.popularity";
+    const TAIL: &str = "ORDER BY c.card_count, c.popularity DESC, c.id LIMIT ? OFFSET ?";
+    if owned_only {
+        // `grp` is already one row per hit combo, so it stands in for `hit` here rather than
+        // being joined beside it.
+        format!(
+            "WITH {HIT_CTE},
+                  {OWNED_CTE},
+                  {GRP_CTE}
+             {COLUMNS}
+               FROM grp g JOIN combos c ON c.id = g.combo_id
+              WHERE g.all_owned = 1 AND c.card_count = coalesce(?, c.card_count)
+              {TAIL}"
+        )
+    } else {
+        format!(
+            "WITH {HIT_CTE}
+             {COLUMNS}
+               FROM hit h JOIN combos c ON c.id = h.combo_id
+              WHERE c.card_count = coalesce(?, c.card_count)
+              {TAIL}"
+        )
+    }
+}
+
+/// Where [`pieces_sql`]'s image expressions start — one past `card_id`, the last named column.
+///
+/// Named rather than inlined for [`crate::deck_tokens`]' reason, and it carries that module's
+/// failure too: the pair is (top-level, face) and `for_face` prefers the face, so a read one
+/// column out still answers a perfectly real URL — the right picture from the wrong slot. It
+/// moves with every column added to the list above it.
+const PIECE_IMAGE_COL: usize = 7;
+
+/// Every card of every combo on one page, in one statement.
+///
+/// **One statement over the page's ids, and the pieces are matched back to their combos by
+/// id.** A statement per combo is 68 µs each — fine for 25 and 410 ms if anyone ever ran it
+/// over a whole hit set — and matching back by *position* would quietly mis-file every piece
+/// the moment a combo on the page turned out to have no rows at all.
+///
+/// **`ORDER BY p.rowid` is the feed's order**, [`store`]'s contract: `combo_cards` carries no
+/// ordinal column, the ingest inserts in the order the file listed, and the staging swap is a
+/// rename, which keeps rowids.
+///
+/// Two reads join the corpus to this, and neither is spelled twice:
+///
+/// * **The default printing is [`crate::deck_tokens`]' `newest_printing`, verbatim** —
+///   `released_at DESC, set_code ASC, collector_number ASC, id ASC` over `cards` for the oracle
+///   id. Verbatim on purpose: the art in this panel and the art of a token derived from the
+///   same oracle card must not disagree about which printing *is* that card, and two orderings
+///   that mean to be the same are two orderings that will not be. A `LEFT JOIN`, so a piece the
+///   corpus has never synced answers `NULL` for the id and for all four picture columns rather
+///   than dropping the piece.
+/// * **The owned count is [`crate::collection_source::copies_of_oracle`]** under
+///   [`Availability::Everything`](crate::collection_source::Availability::Everything), which is
+///   this crate's single definition of *copies of an oracle card*. **`Everything` and not
+///   `ForDeck`, deliberately**: a locked folder is a drawer the app stops *offering* from, and
+///   this panel is telling the reader a fact about their collection rather than offering to
+///   move anything out of it. Narrowing here would report a card they own, and can see on the
+///   Collection page, as one they do not.
+///
+/// `{holes}` is a placeholder per combo id. **Never interpolated values** — the ids come off
+/// the wire, and `p` / `d` / `n` are the only aliases free to use: `copies_of_oracle` binds `e`
+/// and `k` inside itself.
+fn pieces_sql(conn: &Connection, holes: &str) -> String {
+    format!(
+        "SELECT p.combo_id, p.oracle_id, p.name, p.quantity, p.must_be_commander,
+                {owned}, d.id, {images}
+           FROM combo_cards p
+           LEFT JOIN cards d
+             ON d.id = (SELECT n.id FROM cards n WHERE n.oracle_id = p.oracle_id
+                         ORDER BY n.released_at DESC, n.set_code ASC,
+                                  n.collector_number ASC, n.id ASC
+                         LIMIT 1)
+          WHERE p.combo_id IN ({holes})
+          ORDER BY p.rowid",
+        owned = crate::collection_source::copies_of_oracle(
+            conn,
+            "p.oracle_id",
+            crate::collection_source::Availability::Everything,
+        ),
+        images = crate::image_uri::front_face_selects("d").join(", "),
+    )
+}
+
+/// Every combo that **names** one card, paged.
+///
+/// **The opposite question to [`match_combos`], and a second statement rather than a parameter
+/// on the first.** That one asks *which combos does this deck completely hold* and answers only
+/// the ones it does; this asks *which combos name this card at all* and makes no claim about
+/// the rest of the pieces — which is the only question a reader looking at a single card can
+/// be asking. Folding the two into one query would mean a `have = card_count` that is sometimes
+/// applied and sometimes not, which is two queries wearing one name.
+///
+/// Three statements, in this order and for these reasons:
+///
+/// 1. [`counts_sql`] — the histogram, and with it `total`, `owned_total` and `matching`.
+/// 2. [`page_sql`] — the rows, narrowed and ordered and `LIMIT`ed in SQL.
+/// 3. [`pieces_sql`] — every card of the combos on that page, in one statement, folded back
+///    per combo **by id**.
+///
+/// The third is skipped when the page is empty, because `IN ()` is not SQL. The first two run
+/// unconditionally: an unknown oracle id costs one index probe that finds nothing, and deciding
+/// to skip the page from a count derived by the statement before it is exactly the shape that
+/// hides the bug where those two disagree.
+///
+/// **An unknown oracle id and a database that has never ingested answer the same empty page**,
+/// which is [`match_combos`]' documented rule and holds here for its reason: the caller tells
+/// those two apart from [`ComboStatus::fetched_at`], and a reader shown "this card is in no
+/// combos" when the truth is "we have no combos at all" has been told something false.
+pub fn card_combos(
+    conn: &Connection,
+    oracle_id: &str,
+    card_count: Option<i64>,
+    owned_only: bool,
+    limit: i64,
+    offset: i64,
+) -> Result<CardCombosPage, String> {
+    let oracle_id = oracle_id.trim();
+    // Clamped rather than refused: every one of these is a number a page composed and none is
+    // a reader's answer to anything, so a bound this app can meet quietly is worth more than a
+    // sentence nobody will read. `limit` is clamped *up* as well — a `0` asked for by a page
+    // that has not finished setting itself up is an empty list forever otherwise.
+    let limit = limit.clamp(1, MAX_PAGE);
+    let offset = offset.max(0);
+
+    let mut counts = conn
+        .prepare_cached(&counts_sql())
+        .map_err(|e| format!("could not look for this card's combos: {e}"))?;
+    let buckets: Vec<(i64, i64, i64)> = counts
+        .query_map(params![oracle_id], |r| {
+            // `sum()` over a group is never NULL here — every group has a row and `all_owned`
+            // is a 0 or a 1 — but a count read as an `Option` costs nothing and cannot panic a
+            // reader's window over an arithmetic surprise.
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get::<_, Option<i64>>(2)?.unwrap_or(0),
+            ))
+        })
+        .and_then(|rows| rows.collect())
+        .map_err(|e| format!("could not look for this card's combos: {e}"))?;
+
+    let total: i64 = buckets.iter().map(|(_, n, _)| n).sum();
+    let owned_total: i64 = buckets.iter().map(|(_, _, owned)| owned).sum();
+    // **The filters, applied to the buckets rather than asked of the database again.** They are
+    // the same two predicates the page statement carries, over a set the statement above has
+    // already partitioned by exactly the column one of them tests — so a fourth pass over 6 044
+    // rows would spend 60 ms to arrive at a sum this loop takes in nanoseconds.
+    let matching: i64 = buckets
+        .iter()
+        .filter(|(cards, _, _)| card_count.is_none_or(|want| *cards == want))
+        .map(|(_, n, owned)| if owned_only { owned } else { n })
+        .sum();
+    let by_card_count = buckets
+        .iter()
+        .map(|(cards, combos, _)| ComboCountBucket {
+            cards: *cards,
+            combos: *combos,
+        })
+        .collect();
+
+    let mut page = conn
+        .prepare_cached(&page_sql(owned_only))
+        .map_err(|e| format!("could not look for this card's combos: {e}"))?;
+    let mut combos: Vec<CardCombo> = page
+        .query_map(params![oracle_id, card_count, limit, offset], |r| {
+            Ok(CardCombo {
+                id: r.get(0)?,
+                bracket_tag: r.get(1)?,
+                card_count: r.get(2)?,
+                template_count: r.get(3)?,
+                identity: r.get(4)?,
+                produces: r.get(5)?,
+                description: r.get(6)?,
+                easy_prerequisites: r.get(7)?,
+                notable_prerequisites: r.get(8)?,
+                mana_needed: r.get(9)?,
+                popularity: r.get(10)?,
+                pieces: Vec::new(),
+            })
+        })
+        .and_then(|rows| rows.collect())
+        .map_err(|e| format!("could not look for this card's combos: {e}"))?;
+
+    if !combos.is_empty() {
+        // **By id, never by position.** The statement returns the page's cards in rowid order,
+        // which is neither the page's order nor one row per combo, and a combo whose cards this
+        // database somehow has none of contributes no rows at all — so anything that walked the
+        // two lists in step would file the next combo's pieces under it.
+        //
+        // The index is keyed off `ids` rather than off `combos` for a plain borrow reason: the
+        // fold below takes `combos` mutably, and a map holding `&str` into it could not still
+        // be alive by then.
+        let ids: Vec<String> = combos.iter().map(|c| c.id.clone()).collect();
+        let where_to: HashMap<&str, usize> = ids
+            .iter()
+            .enumerate()
+            .map(|(i, id)| (id.as_str(), i))
+            .collect();
+        let holes = vec!["?"; ids.len()].join(",");
+        let mut stmt = conn
+            .prepare_cached(&pieces_sql(conn, &holes))
+            .map_err(|e| format!("could not read a combo's cards: {e}"))?;
+        let rows: Vec<(String, ComboPiece)> = stmt
+            .query_map(params_from_iter(ids.iter()), |r| {
+                Ok((
+                    r.get(0)?,
+                    ComboPiece {
+                        oracle_id: r.get(1)?,
+                        name: r.get(2)?,
+                        quantity: r.get(3)?,
+                        must_be_commander: r.get(4)?,
+                        owned: r.get(5)?,
+                        card_id: r.get(6)?,
+                        image_uris: crate::image_uri::front_face_map(|i| {
+                            r.get::<_, Option<String>>(PIECE_IMAGE_COL + i)
+                        })?,
+                    },
+                ))
+            })
+            .and_then(|rows| rows.collect())
+            .map_err(|e| format!("could not read a combo's cards: {e}"))?;
+        for (combo_id, piece) in rows {
+            if let Some(i) = where_to.get(combo_id.as_str()) {
+                combos[*i].pieces.push(piece);
+            }
+        }
+    }
+
+    Ok(CardCombosPage {
+        total,
+        matching,
+        owned_total,
+        by_card_count,
+        combos,
+    })
+}
+
+// ---------------------------------------------------------------------------------------
 // Refresh
 // ---------------------------------------------------------------------------------------
 
@@ -1719,6 +2268,42 @@ pub async fn combos_for_cards(
     .map_err(|e| format!("could not look for combos: {e}"))?
 }
 
+/// Every combo that names one card, a page at a time.
+///
+/// **The card is named by `oracle_id` and not by a printing id**, which is the one place this
+/// command's wire shape differs from [`combos_for_cards`]' and is not an oversight: a combo is
+/// a fact about a *card*, `combo_cards` is keyed on the oracle id, and asking about a printing
+/// would mean resolving it to its oracle card first only to answer identically for all of them.
+/// Every surface that opens this panel is looking at a card rather than at a deck row.
+///
+/// `card_count` is an exact size — `Some(2)` is *two-card combos*, `None` is every size — and
+/// `owned_only` narrows to the combos the reader owns every piece of. `limit` is clamped to
+/// [`MAX_PAGE`] and `offset` to zero; neither is refused, because both are a page's own numbers
+/// rather than a reader's.
+///
+/// `async`, and answered on the blocking pool, for [`combos_status`]'s reason: a sync command
+/// body runs inline on the IPC thread and this one takes `db_read`'s mutex. The body is
+/// [`card_combos`], which is also what the web target's router calls — one answer to the
+/// question, reached two ways.
+#[cfg(not(target_family = "wasm"))]
+#[tauri::command]
+pub async fn combos_for_card(
+    state: tauri::State<'_, Arc<AppState>>,
+    oracle_id: String,
+    card_count: Option<i64>,
+    owned_only: bool,
+    limit: i64,
+    offset: i64,
+) -> Result<CardCombosPage, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = crate::sync::lock_db_read(&state);
+        card_combos(&conn, &oracle_id, card_count, owned_only, limit, offset)
+    })
+    .await
+    .map_err(|e| format!("could not look for this card's combos: {e}"))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1854,6 +2439,12 @@ mod tests {
                 template_count: 0,
                 identity: "UB".into(),
                 produces: "Infinite mana".into(),
+                // The fixture carries a `description` and no other prose, so this is also the
+                // assertion that an **absent** key lands as `""` rather than as anything else.
+                description: "Long prose.".into(),
+                easy_prerequisites: String::new(),
+                notable_prerequisites: String::new(),
+                mana_needed: String::new(),
                 popularity: Some(4200),
                 cards: vec![
                     ComboCard {
@@ -1873,9 +2464,15 @@ mod tests {
         );
         // Said again from the other end, because the point of the streaming parse is that
         // 23× of the file never becomes anything: no field of the result may hold a URL.
+        //
+        // **`notes` is the prose canary now that `description` is kept.** The fixture carries
+        // both, and the difference between them is the whole of what "read and dropped" means
+        // after the four prose fields landed: one is what a reader is told how to play the
+        // combo with, and the other is Spellbook's editorial remarks to itself.
         let rendered = format!("{:?}", file.combos);
         assert!(!rendered.contains("scryfall.io"), "{rendered}");
-        assert!(!rendered.contains("Long prose"), "{rendered}");
+        assert!(!rendered.contains("More prose"), "{rendered}");
+        assert!(!rendered.contains("tcgplayer"), "{rendered}");
     }
 
     /// The two conditions a variant has to meet, each failed on its own. Everything else in
@@ -2023,6 +2620,115 @@ mod tests {
             file.combos[0].produces, "Infinite mana\nInfinite lifegain",
             "a feature with no name contributes no line"
         );
+    }
+
+    /// **The four prose fields, in the three states the file actually sends them in**, all the
+    /// way from the wire to a row read back out of the database.
+    ///
+    /// The three are *different inputs*: a key carrying text, a key carrying `""` — which is
+    /// what Spellbook writes for a variant with no prose, rather than null — and a key that is
+    /// not in the document at all. Two of them must land as the same stored value and the
+    /// third must not, so a reduction that dropped one field, or that read one field into
+    /// another's column, cannot pass. The `INSERT` names its columns for exactly the second of
+    /// those failures.
+    #[test]
+    fn the_four_prose_fields_survive_the_wire_the_reduction_and_the_write() {
+        let full = r#"{"id":"full","status":"OK","bracketTag":"P","identity":"C",
+            "legalities":{"commander":true},
+            "uses":[{"card":{"name":"Altar","oracleId":"o-altar"}}],"requires":[],
+            "produces":[{"feature":{"name":"Infinite mana"}}],
+            "description":"Activate Marneus by paying {6}.\nRepeat.",
+            "easyPrerequisites":"All permanents are untapped.",
+            "notablePrerequisites":"Marneus is on the battlefield.",
+            "manaNeeded":"{6}",
+            "notes":"Editorial remarks.","manaValueNeeded":6,"variantCount":3}"#;
+        let empty = r#"{"id":"empty","status":"OK","bracketTag":"P","identity":"C",
+            "legalities":{"commander":true},
+            "uses":[{"card":{"name":"Altar","oracleId":"o-altar"}}],"requires":[],
+            "produces":[],
+            "description":"","easyPrerequisites":"","notablePrerequisites":"","manaNeeded":""}"#;
+        let absent = r#"{"id":"absent","status":"OK","bracketTag":"P","identity":"C",
+            "legalities":{"commander":true},
+            "uses":[{"card":{"name":"Altar","oracleId":"o-altar"}}],"requires":[],
+            "produces":[]}"#;
+
+        let file = parse(&document(&[
+            full.to_owned(),
+            empty.to_owned(),
+            absent.to_owned(),
+        ]));
+
+        // **All three are kept.** `""` in every prose field is not a reason to skip a variant:
+        // it is the ordinary state of thousands of published combos, and dropping them would
+        // take their cards with them.
+        assert_eq!(file.skipped, 0, "no prose is not a reason to skip");
+        assert_eq!(file.combos.len(), 3);
+        let by_id = |id: &str| file.combos.iter().find(|c| c.id == id).unwrap();
+        assert_eq!(
+            by_id("full").description,
+            "Activate Marneus by paying {6}.\nRepeat.",
+            "the newlines are the numbered steps and are part of the value"
+        );
+        assert_eq!(
+            by_id("full").easy_prerequisites,
+            "All permanents are untapped."
+        );
+        assert_eq!(
+            by_id("full").notable_prerequisites,
+            "Marneus is on the battlefield."
+        );
+        assert_eq!(by_id("full").mana_needed, "{6}");
+        for id in ["empty", "absent"] {
+            let c = by_id(id);
+            assert_eq!(
+                (
+                    c.description.as_str(),
+                    c.easy_prerequisites.as_str(),
+                    c.notable_prerequisites.as_str(),
+                    c.mana_needed.as_str()
+                ),
+                ("", "", "", ""),
+                "`{id}`: an empty key and an absent one are two documents and one value"
+            );
+        }
+        // And the fields beside them are still dropped, which is what makes this an assertion
+        // about *which four* rather than about prose in general.
+        let rendered = format!("{:?}", file.combos);
+        assert!(!rendered.contains("Editorial remarks"), "{rendered}");
+
+        // Through `store` and back out, per column and by name — the half a parse test cannot
+        // reach, and the one a column list left out of the `INSERT` breaks.
+        let db = mem_db();
+        store(&db, &file, None, 1_800_000_000, &mut |_, _| {}).unwrap();
+        let conn = crate::db::lock_blocking(&db);
+        let row: (String, String, String, String) = conn
+            .query_row(
+                "SELECT description, easy_prerequisites, notable_prerequisites, mana_needed
+                   FROM combos WHERE id = 'full'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            row,
+            (
+                "Activate Marneus by paying {6}.\nRepeat.".to_owned(),
+                "All permanents are untapped.".to_owned(),
+                "Marneus is on the battlefield.".to_owned(),
+                "{6}".to_owned(),
+            ),
+            "each field in its own column, and not one shifted into the next"
+        );
+        let blanks: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM combos
+                  WHERE description = '' AND easy_prerequisites = ''
+                    AND notable_prerequisites = '' AND mana_needed = ''",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(blanks, 2, "`empty` and `absent`, stored the same way");
     }
 
     // ---- the write --------------------------------------------------------------------
@@ -2535,6 +3241,673 @@ mod tests {
         assert_eq!(
             match_combos(&conn, &["p-a".to_owned()]).unwrap(),
             Vec::new()
+        );
+    }
+
+    // ---- one card's combos ------------------------------------------------------------
+
+    /// A `cards` row carrying everything the default-printing tie-break sorts on **and** a
+    /// picture in both variants, so an assertion about which printing was named is also an
+    /// assertion about whose art came back with it.
+    fn seed_printing(
+        conn: &Connection,
+        id: &str,
+        oracle: &str,
+        name: &str,
+        set_code: &str,
+        collector_number: &str,
+        released_at: &str,
+    ) {
+        conn.execute(
+            "INSERT INTO cards (id, oracle_id, name, set_code, collector_number, lang, layout,
+                                released_at, image_uris, raw)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'en', 'normal', ?6,
+                     json_object(
+                       'display',
+                       'https://cards.scryfall.io/display/front/0/0/' || ?1 || '.webp?1',
+                       'art',
+                       'https://cards.scryfall.io/art/front/0/0/' || ?1 || '.webp?1'),
+                     '{}')",
+            params![id, oracle, name, set_code, collector_number, released_at],
+        )
+        .unwrap();
+    }
+
+    /// Copies of one printing in the reader's collection.
+    ///
+    /// `finish` and `folder` are two of the eleven grain terms, so two calls differing only in
+    /// either are two rows rather than a UNIQUE violation — which is what lets one card be
+    /// owned in two finishes across two printings and in two places at once.
+    fn own(conn: &Connection, card_id: &str, finish: &str, quantity: i64, folder: Option<i64>) {
+        conn.execute(
+            "INSERT INTO collection_entries (card_id, set_code, collector_number, lang, finish,
+                                             condition, quantity, folder_id, created_at,
+                                             updated_at)
+                  VALUES (?1, 'tst', '1', 'en', ?2, 'NM', ?3, ?4, 0, 0)",
+            params![card_id, finish, quantity, folder],
+        )
+        .unwrap();
+    }
+
+    /// [`ok_variant`] with the one field every ordering assertion below turns on. `None` is the
+    /// unranked combo the wire really sends, which SQLite sorts first and `DESC` puts last.
+    fn ranked_variant(id: &str, popularity: Option<i64>, cards: &[(&str, &str)]) -> String {
+        let pop = popularity.map_or("null".to_owned(), |p| p.to_string());
+        let uses: Vec<String> = cards.iter().map(|(n, o)| uses(n, o)).collect();
+        format!(
+            r#"{{"id":"{id}","status":"OK","bracketTag":"P","identity":"C",
+                 "popularity":{pop},"legalities":{{"commander":true}},
+                 "uses":[{}],"requires":[],
+                 "produces":[{{"feature":{{"name":"Infinite mana"}}}}],
+                 "manaNeeded":"{{6}}"}}"#,
+            uses.join(",")
+        )
+    }
+
+    /// Six combos naming `o-altar`, one that does not, and a reader who owns two of the four
+    /// cards involved.
+    ///
+    /// **Every list here disagrees with every list asserted against it.** The variants are
+    /// stored in an order that is neither the expected answer nor its reverse nor sorted by id,
+    /// because a fixture already in the right order is green against an implementation that
+    /// does no sorting at all; the pieces of `c3b` are stored with the *unsynced* card in the
+    /// middle, so a `LEFT JOIN` turned into a `JOIN` shifts the two around it rather than
+    /// merely losing one off the end; and two printings of one card differ on release date
+    /// while two others differ only on set code, so each half of the tie-break is measured on
+    /// its own.
+    ///
+    /// | combo | cards | popularity | every piece owned |
+    /// | --- | --- | --- | --- |
+    /// | `c2a` | Altar, Basalt | 10 | yes |
+    /// | `c2z` | Altar, Basalt | 10 | yes |
+    /// | `c2b` | Altar, Curio | 90 | no |
+    /// | `c3a` | Altar, Basalt, Curio | 50 | no |
+    /// | `c3b` | Altar, Chaos Orb, Basalt | — | no |
+    /// | `c4` | Altar, Basalt, Curio, Sword | 20 | no |
+    /// | `cnone` | Basalt, Curio | 99 | — (does not name the Altar) |
+    fn card_combo_db() -> Mutex<Connection> {
+        let db = mem_db();
+        {
+            let conn = crate::db::lock_blocking(&db);
+            seed_printing(
+                &conn,
+                "p-altar",
+                "o-altar",
+                "Ashnod's Altar",
+                "atq",
+                "12",
+                "1994-03-04",
+            );
+            // Two printings a decade apart: `released_at DESC` is what picks between them.
+            seed_printing(
+                &conn,
+                "p-basalt-old",
+                "o-basalt",
+                "Basalt Monolith",
+                "zzz",
+                "1",
+                "2000-01-01",
+            );
+            seed_printing(
+                &conn,
+                "p-basalt-new",
+                "o-basalt",
+                "Basalt Monolith",
+                "aaa",
+                "9",
+                "2020-01-01",
+            );
+            // Two printings released the same day: only `set_code ASC` can separate them.
+            seed_printing(
+                &conn,
+                "p-curio-b",
+                "o-curio",
+                "Cloudstone Curio",
+                "bbb",
+                "5",
+                "2010-01-01",
+            );
+            seed_printing(
+                &conn,
+                "p-curio-a",
+                "o-curio",
+                "Cloudstone Curio",
+                "aaa",
+                "5",
+                "2010-01-01",
+            );
+            // A locked display case, and the Altar sleeved into it.
+            conn.execute(
+                "INSERT INTO collection_folders (id, name, kind, sort_order, created_at,
+                                                 updated_at, locked)
+                      VALUES (7, 'Display case', 'user', 0, 0, 0, 1)",
+                [],
+            )
+            .unwrap();
+            own(&conn, "p-altar", "nonfoil", 2, Some(7));
+            own(&conn, "p-basalt-old", "nonfoil", 3, None);
+            own(&conn, "p-basalt-new", "foil", 1, None);
+        }
+
+        let altar = ("Ashnod's Altar", "o-altar");
+        let basalt = ("Basalt Monolith", "o-basalt");
+        let curio = ("Cloudstone Curio", "o-curio");
+        let orb = ("Chaos Orb", "o-nothing");
+        let sword = ("Sword of Nothing", "o-unsynced");
+        let variants = vec![
+            ranked_variant("c3b", None, &[altar, orb, basalt]),
+            ranked_variant("c4", Some(20), &[altar, basalt, curio, sword]),
+            ranked_variant("c2z", Some(10), &[altar, basalt]),
+            ranked_variant("c2a", Some(10), &[altar, basalt]),
+            ranked_variant("c3a", Some(50), &[altar, basalt, curio]),
+            ranked_variant("c2b", Some(90), &[altar, curio]),
+            ranked_variant("cnone", Some(99), &[basalt, curio]),
+        ];
+        let file = parse(&document(&variants));
+        assert_eq!(file.combos.len(), 7, "the fixture itself must have stored");
+        store(&db, &file, None, 1_800_000_000, &mut |_, _| {}).unwrap();
+        db
+    }
+
+    fn ids(page: &CardCombosPage) -> Vec<&str> {
+        page.combos.iter().map(|c| c.id.as_str()).collect()
+    }
+
+    /// **Smallest first, then most played, then the id** — and the combo the card is not in
+    /// never appears at all.
+    ///
+    /// The fixture stores them in a sixth order on purpose: with the rows already sorted, this
+    /// assertion is green against a statement with no `ORDER BY` in it. Each of the three
+    /// terms is separable — two sizes, two combos of one size on different popularities, and
+    /// two on the *same* popularity that only the id can split.
+    #[test]
+    fn card_combos_orders_by_size_then_popularity_then_id() {
+        let db = card_combo_db();
+        let conn = crate::db::lock_blocking(&db);
+
+        let page = card_combos(&conn, "o-altar", None, false, 25, 0).unwrap();
+
+        assert_eq!(
+            ids(&page),
+            vec!["c2b", "c2a", "c2z", "c3a", "c3b", "c4"],
+            "size ascending; within a size popularity descending; `c2a` before `c2z` on the id"
+        );
+        assert_eq!(
+            page.combos[4].popularity, None,
+            "and an unranked combo sorts last inside its own size, not first"
+        );
+        assert!(
+            !ids(&page).contains(&"cnone"),
+            "a combo that does not name the card is not this card's combo"
+        );
+    }
+
+    /// **Three numbers, three questions, three different values on one call.** `total` is what
+    /// the card is in; `matching` is what the filters left; `owned_total` is how much of the
+    /// whole set the reader could assemble — and it deliberately ignores the size filter, so
+    /// narrowing to two-card combos must not move it.
+    ///
+    /// 6, 3 and 2 rather than any two of them being equal: a wiring that answered `matching`
+    /// with `total`, or `owned_total` with `matching`, passes a fixture where they coincide.
+    #[test]
+    fn card_combos_counts_total_matching_and_owned_total_as_three_different_numbers() {
+        let db = card_combo_db();
+        let conn = crate::db::lock_blocking(&db);
+
+        let page = card_combos(&conn, "o-altar", Some(2), false, 25, 0).unwrap();
+
+        assert_eq!(page.total, 6, "every combo naming the Altar, unfiltered");
+        assert_eq!(page.matching, 3, "the three two-card ones");
+        assert_eq!(
+            page.owned_total, 2,
+            "`c2a` and `c2z`, and the size filter must not touch this"
+        );
+        assert_eq!(page.combos.len(), 3, "and the page is the matching ones");
+        assert_eq!(ids(&page), vec!["c2b", "c2a", "c2z"]);
+    }
+
+    /// The histogram is over the **unfiltered** set, ascending, and names only the sizes that
+    /// occur — a chip row cannot offer a size that would answer nothing.
+    #[test]
+    fn by_card_count_is_ascending_and_names_only_the_sizes_that_occur() {
+        let db = card_combo_db();
+        let conn = crate::db::lock_blocking(&db);
+
+        // Asked with a filter on, deliberately: the histogram describes the whole set whatever
+        // the page is showing, or the chips would empty themselves as soon as one was pressed.
+        let page = card_combos(&conn, "o-altar", Some(4), true, 25, 0).unwrap();
+
+        assert_eq!(
+            page.by_card_count,
+            vec![
+                ComboCountBucket {
+                    cards: 2,
+                    combos: 3
+                },
+                ComboCountBucket {
+                    cards: 3,
+                    combos: 2
+                },
+                ComboCountBucket {
+                    cards: 4,
+                    combos: 1
+                },
+            ],
+            "ascending, and there is no bucket for a size no combo has"
+        );
+        assert_eq!(page.total, 6);
+        assert_eq!(page.matching, 0, "no four-card combo is fully owned");
+        assert!(page.combos.is_empty());
+    }
+
+    /// The two filters, alone and together, against the page **and** against `matching` —
+    /// which have to agree, because one is derived from the histogram and the other is a
+    /// `WHERE` clause in a different statement.
+    #[test]
+    fn the_size_and_owned_filters_narrow_the_page_and_the_matching_count_together() {
+        let db = card_combo_db();
+        let conn = crate::db::lock_blocking(&db);
+        let ask = |cards: Option<i64>, owned: bool| {
+            let page = card_combos(&conn, "o-altar", cards, owned, 25, 0).unwrap();
+            assert_eq!(
+                page.matching as usize,
+                page.combos.len(),
+                "the count and the page disagree for {cards:?}/{owned}"
+            );
+            ids(&page).iter().map(|s| s.to_string()).collect::<Vec<_>>()
+        };
+
+        assert_eq!(ask(None, false).len(), 6);
+        assert_eq!(ask(Some(3), false), vec!["c3a", "c3b"]);
+        assert_eq!(
+            ask(None, true),
+            vec!["c2a", "c2z"],
+            "the Curio and the two cards with no printing keep the rest out"
+        );
+        assert_eq!(ask(Some(2), true), vec!["c2a", "c2z"]);
+        assert_eq!(ask(Some(3), true), Vec::<String>::new());
+        assert_eq!(
+            ask(Some(9), false),
+            Vec::<String>::new(),
+            "a size nothing has"
+        );
+    }
+
+    /// **Paging walks the one order with no gap and no repeat**, and the limit is clamped
+    /// rather than obeyed.
+    ///
+    /// Three pages of two are concatenated and compared against the whole list, so an `OFFSET`
+    /// that was dropped shows up as the first page repeated and a mis-ordered statement shows
+    /// up as a set that does not reassemble.
+    #[test]
+    fn paging_walks_the_order_with_no_gap_and_no_repeat_and_clamps_the_limit() {
+        let db = card_combo_db();
+        let conn = crate::db::lock_blocking(&db);
+        let all = card_combos(&conn, "o-altar", None, false, 25, 0).unwrap();
+        let whole: Vec<String> = ids(&all).iter().map(|s| s.to_string()).collect();
+
+        let mut walked: Vec<String> = Vec::new();
+        for offset in [0, 2, 4, 6] {
+            let page = card_combos(&conn, "o-altar", None, false, 2, offset).unwrap();
+            assert_eq!(page.total, 6, "the counts do not move as the page does");
+            assert!(page.combos.len() <= 2, "the limit is a limit");
+            walked.extend(ids(&page).iter().map(|s| s.to_string()));
+        }
+        assert_eq!(walked, whole, "no gap and no repeat");
+
+        // The clamp, from both ends. SQLite reads a negative `LIMIT` as *no limit* and a `0`
+        // as *nothing*, so an unclamped `limit` fails loudly in one direction and silently in
+        // the other; `MAX_PAGE + 50` is the ceiling the caller does not get to raise.
+        assert_eq!(
+            card_combos(&conn, "o-altar", None, false, 0, 0)
+                .unwrap()
+                .combos
+                .len(),
+            1,
+            "a zero is clamped up to one row, not down to none"
+        );
+        assert_eq!(
+            card_combos(&conn, "o-altar", None, false, -1, 0)
+                .unwrap()
+                .combos
+                .len(),
+            1
+        );
+        assert_eq!(
+            card_combos(&conn, "o-altar", None, false, MAX_PAGE + 50, 0)
+                .unwrap()
+                .combos
+                .len(),
+            6,
+            "and a page larger than the answer is the answer"
+        );
+    }
+
+    /// **A combo can name a card this corpus has never synced**, and that is a supported state
+    /// rather than a reason to drop the piece: the name and the owned count did not come from
+    /// `cards`, so they are still answerable.
+    ///
+    /// `c3b` stores that card **between** two the corpus does have, so a `LEFT JOIN` written as
+    /// a `JOIN` reorders the pieces around it instead of merely shortening the list.
+    #[test]
+    fn a_piece_the_corpus_has_never_synced_keeps_its_name_and_its_owned_count() {
+        let db = card_combo_db();
+        let conn = crate::db::lock_blocking(&db);
+
+        let page = card_combos(&conn, "o-altar", Some(3), false, 25, 0).unwrap();
+        let c3b = page.combos.iter().find(|c| c.id == "c3b").unwrap();
+
+        assert_eq!(
+            c3b.pieces
+                .iter()
+                .map(|p| p.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Ashnod's Altar", "Chaos Orb", "Basalt Monolith"],
+            "three pieces, the unsynced one still in the middle where the feed put it"
+        );
+        let orb = &c3b.pieces[1];
+        assert_eq!(orb.oracle_id, "o-nothing");
+        assert_eq!(orb.card_id, None, "no `cards` row to name a printing from");
+        assert_eq!(orb.image_uris, None, "and therefore no picture");
+        assert_eq!(orb.owned, 0, "which is an answer, not a gap");
+        assert_eq!(orb.quantity, 1);
+    }
+
+    /// **The default printing is [`crate::deck_tokens`]' tie-break, and both halves of it are
+    /// measured.** The Basalt pair differ on release date; the Curio pair were released the
+    /// same day and can only be split by set code. The art comes off the row that won, so this
+    /// is also the assertion that the picture and the id describe the same printing.
+    #[test]
+    fn a_pieces_default_printing_is_the_token_resolvers_tie_break() {
+        let db = card_combo_db();
+        let conn = crate::db::lock_blocking(&db);
+
+        let page = card_combos(&conn, "o-altar", Some(4), false, 25, 0).unwrap();
+        let pieces = &page.combos[0].pieces;
+        let by_oracle = |o: &str| pieces.iter().find(|p| p.oracle_id == o).unwrap();
+
+        assert_eq!(
+            by_oracle("o-basalt").card_id.as_deref(),
+            Some("p-basalt-new"),
+            "the newest release, not the lowest set code"
+        );
+        assert_eq!(
+            by_oracle("o-curio").card_id.as_deref(),
+            Some("p-curio-a"),
+            "released the same day, so the lowest set code wins"
+        );
+        assert_eq!(
+            by_oracle("o-basalt").image_uris.as_ref().unwrap()["display"],
+            "https://cards.scryfall.io/display/front/0/0/p-basalt-new.webp?1",
+            "the art belongs to the printing that was named"
+        );
+        assert!(
+            by_oracle("o-basalt")
+                .image_uris
+                .as_ref()
+                .unwrap()
+                .contains_key("art"),
+            "both list variants, folded up by `front_face_map`"
+        );
+    }
+
+    /// **The pieces come back in the feed's order, under their own combo.**
+    ///
+    /// Two combos on one page whose card lists start with the same card and then diverge, so a
+    /// fold that matched pieces to combos by *position* rather than by id files the wrong three
+    /// under one of them and still returns the right total number of pieces.
+    #[test]
+    fn the_pieces_come_back_in_the_feeds_order_under_their_own_combo() {
+        let db = card_combo_db();
+        let conn = crate::db::lock_blocking(&db);
+
+        let page = card_combos(&conn, "o-altar", Some(3), false, 25, 0).unwrap();
+
+        assert_eq!(ids(&page), vec!["c3a", "c3b"]);
+        assert_eq!(
+            page.combos[0]
+                .pieces
+                .iter()
+                .map(|p| p.oracle_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["o-altar", "o-basalt", "o-curio"],
+        );
+        assert_eq!(
+            page.combos[1]
+                .pieces
+                .iter()
+                .map(|p| p.oracle_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["o-altar", "o-nothing", "o-basalt"],
+            "the feed's order for this combo, which is not the alphabet's and not the other's"
+        );
+        assert!(
+            !page.combos[0].pieces[0].must_be_commander,
+            "and the per-piece facts came across with it"
+        );
+        assert_eq!(page.combos[0].pieces[0].quantity, 1);
+    }
+
+    /// **The owned count crosses printings and finishes, and counts a locked binder.**
+    ///
+    /// Basalt is held as 3 nonfoil of one printing and 1 foil of another — four copies of one
+    /// card. The Altar's two copies are sleeved into a locked display case, which is exactly
+    /// the row [`Availability::ForDeck`](crate::collection_source::Availability::ForDeck) drops:
+    /// a locked folder is a drawer the app stops *offering* from, and this panel is reporting
+    /// what the reader owns rather than offering to move any of it.
+    #[test]
+    fn an_owned_count_crosses_printings_and_finishes_and_counts_a_locked_binder() {
+        let db = card_combo_db();
+        let conn = crate::db::lock_blocking(&db);
+
+        let page = card_combos(&conn, "o-altar", Some(2), false, 25, 0).unwrap();
+        let c3 = page.combos.iter().find(|c| c.id == "c3a");
+        assert!(c3.is_none(), "the size filter is on");
+        let pieces = &page.combos.iter().find(|c| c.id == "c2a").unwrap().pieces;
+
+        assert_eq!(
+            pieces
+                .iter()
+                .map(|p| (p.oracle_id.as_str(), p.owned))
+                .collect::<Vec<_>>(),
+            vec![("o-altar", 2), ("o-basalt", 4)],
+            "two in a locked case, and four across two printings and two finishes"
+        );
+        let curio = card_combos(&conn, "o-altar", Some(3), false, 25, 0)
+            .unwrap()
+            .combos[0]
+            .pieces
+            .iter()
+            .find(|p| p.oracle_id == "o-curio")
+            .unwrap()
+            .owned;
+        assert_eq!(curio, 0, "a printing with a `cards` row and no copies is 0");
+    }
+
+    /// **A card the reader owns whose printing carries no `oracle_id` cannot make a combo look
+    /// owned.**
+    ///
+    /// The column is nullable, and one NULL in the owned set turns `piece IN (owned)` into NULL
+    /// for every *unowned* piece — which `min()` then skips, reporting a combo the reader
+    /// cannot assemble as one they can. This is the empty-set trap this repo has paid for
+    /// before, one operator over, and the fence is `k.oracle_id IS NOT NULL`.
+    #[test]
+    fn an_owned_printing_with_no_oracle_id_cannot_make_a_combo_read_as_owned() {
+        let db = card_combo_db();
+        let conn = crate::db::lock_blocking(&db);
+        assert_eq!(
+            card_combos(&conn, "o-altar", None, false, 25, 0)
+                .unwrap()
+                .owned_total,
+            2,
+            "before: `c2a` and `c2z`"
+        );
+
+        conn.execute(
+            "INSERT INTO cards (id, name, set_code, collector_number, lang, layout, raw)
+                  VALUES ('p-nameless', 'A Token', 'tst', '1', 'en', 'token', '{}')",
+            [],
+        )
+        .unwrap();
+        own(&conn, "p-nameless", "nonfoil", 1, None);
+
+        assert_eq!(
+            card_combos(&conn, "o-altar", None, false, 25, 0)
+                .unwrap()
+                .owned_total,
+            2,
+            "a NULL oracle id in the collection owns nothing and hides nothing"
+        );
+        assert_eq!(
+            ids(&card_combos(&conn, "o-altar", None, true, 25, 0).unwrap()),
+            vec!["c2a", "c2z"],
+            "and the owned page is the same two it was"
+        );
+    }
+
+    /// **A combo naming the asked-about card twice is one combo, counted once and listed
+    /// once.** `combo_cards` really does carry two rows for it — that is what `card_count`
+    /// being a distinct count is for — so the hit set has to be a `DISTINCT` one or the
+    /// histogram double-counts and the page repeats.
+    #[test]
+    fn a_combo_naming_the_asked_card_twice_is_counted_and_listed_once() {
+        let db = mem_db();
+        let twice = r#"{"id":"twice","status":"OK","bracketTag":"S","identity":"R",
+            "popularity":5,"legalities":{"commander":true},
+            "uses":[{"card":{"name":"Kiki-Jiki","oracleId":"o-kiki"},"quantity":1},
+                    {"card":{"name":"Kiki-Jiki","oracleId":"o-kiki"},"quantity":1}],
+            "requires":[],"produces":[]}"#;
+        let file = parse(&document(&[twice.to_owned()]));
+        assert_eq!(file.combos[0].card_count, 1);
+        store(&db, &file, None, 1_800_000_000, &mut |_, _| {}).unwrap();
+
+        let conn = crate::db::lock_blocking(&db);
+        let page = card_combos(&conn, "o-kiki", None, false, 25, 0).unwrap();
+
+        assert_eq!(page.total, 1);
+        assert_eq!(ids(&page), vec!["twice"]);
+        assert_eq!(
+            page.by_card_count,
+            vec![ComboCountBucket {
+                cards: 1,
+                combos: 1
+            }]
+        );
+        assert_eq!(
+            page.combos[0].pieces.len(),
+            2,
+            "and both rows are still named to the reader"
+        );
+    }
+
+    /// **An unknown card and a database that has never ingested answer the same empty page,
+    /// and neither is an error.** Telling those two apart is `ComboStatus::fetchedAt`'s job —
+    /// [`match_combos`]' documented rule, and it holds here for its reason: a reader told
+    /// "this card is in no combos" when the truth is "we hold no combos" has been told
+    /// something false.
+    #[test]
+    fn an_unknown_card_and_a_database_with_no_combos_both_answer_an_empty_page() {
+        let empty = CardCombosPage {
+            total: 0,
+            matching: 0,
+            owned_total: 0,
+            by_card_count: Vec::new(),
+            combos: Vec::new(),
+        };
+
+        let never = crate::schema::memory_pair();
+        assert_eq!(
+            card_combos(&never, "o-altar", None, false, 25, 0).unwrap(),
+            empty,
+            "never ingested"
+        );
+
+        let db = card_combo_db();
+        let conn = crate::db::lock_blocking(&db);
+        assert_eq!(
+            card_combos(&conn, "o-who", None, false, 25, 0).unwrap(),
+            empty,
+            "a card no combo names"
+        );
+        assert_eq!(
+            card_combos(&conn, "  ", None, false, 25, 0).unwrap(),
+            empty,
+            "and a blank is a card nothing names, rather than a match on everything"
+        );
+    }
+
+    /// The wire shapes this panel is drawn from, mirrored by hand on the other side of the IPC
+    /// boundary. A field renamed on either side is a page reading `undefined`, which no type
+    /// checker on either side would catch.
+    #[test]
+    fn the_card_combo_dtos_use_the_camel_case_names_the_frontend_expects() {
+        let page = CardCombosPage {
+            total: 6_044,
+            matching: 61,
+            owned_total: 3,
+            by_card_count: vec![ComboCountBucket {
+                cards: 2,
+                combos: 61,
+            }],
+            combos: vec![CardCombo {
+                id: "628-2034--5".into(),
+                bracket_tag: "S".into(),
+                card_count: 2,
+                template_count: 1,
+                identity: "B".into(),
+                produces: "Infinite colorless mana".into(),
+                description: "Sacrifice a token.\nRepeat.".into(),
+                easy_prerequisites: "All permanents are untapped.".into(),
+                notable_prerequisites: String::new(),
+                mana_needed: "{6}".into(),
+                popularity: None,
+                pieces: vec![ComboPiece {
+                    oracle_id: "o-altar".into(),
+                    name: "Ashnod's Altar".into(),
+                    quantity: 1,
+                    must_be_commander: false,
+                    card_id: Some("p-altar".into()),
+                    image_uris: Some(BTreeMap::from([(
+                        "art".to_owned(),
+                        "https://cards.scryfall.io/art/front/0/0/p-altar.webp?1".to_owned(),
+                    )])),
+                    owned: 2,
+                }],
+            }],
+        };
+
+        assert_eq!(
+            serde_json::to_value(page).unwrap(),
+            serde_json::json!({
+                "total": 6_044,
+                "matching": 61,
+                "ownedTotal": 3,
+                "byCardCount": [{"cards": 2, "combos": 61}],
+                "combos": [{
+                    "id": "628-2034--5",
+                    "bracketTag": "S",
+                    "cardCount": 2,
+                    "templateCount": 1,
+                    "identity": "B",
+                    "produces": "Infinite colorless mana",
+                    "description": "Sacrifice a token.\nRepeat.",
+                    "easyPrerequisites": "All permanents are untapped.",
+                    "notablePrerequisites": "",
+                    "manaNeeded": "{6}",
+                    "popularity": null,
+                    "pieces": [{
+                        "oracleId": "o-altar",
+                        "name": "Ashnod's Altar",
+                        "quantity": 1,
+                        "mustBeCommander": false,
+                        "cardId": "p-altar",
+                        "imageUris": {
+                            "art": "https://cards.scryfall.io/art/front/0/0/p-altar.webp?1"
+                        },
+                        "owned": 2,
+                    }],
+                }],
+            })
         );
     }
 

@@ -185,10 +185,27 @@ export const Default: Story = {
     expect(canvas.getAllByText("RULE")).toHaveLength(2);
     expect(canvas.getByText("INACTIVE")).toBeInTheDocument();
     expect(canvas.getByText("Nothing here yet.")).toBeInTheDocument();
-    // The rule break and the game changer, side by side and unmistakable. This view has room
-    // for the words, so the game changer is the banner rather than the grid tile's `GC`.
+    // The rule break and the game changer, in the two corners they never share — and since
+    // 2026-09-08 only one of them is spelled out. `RULE BREAK` is still the only mark on a card
+    // face drawn in words; the game changer's `Game Changer` ribbon is deleted, and the fact is a
+    // crown printed before the number on the card's own copy count, in the tag's foreground
+    // rather than in gold. This view had the room for the ribbon and the Grid tile did not, which
+    // is why the two were briefly one fact drawn two ways; folded into the tag it costs 14px, so
+    // both card-face views draw the same mark and neither spells anything out.
     expect(canvas.getByText("RULE BREAK")).toBeInTheDocument();
-    expect(canvas.getByText("Game Changer")).toBeInTheDocument();
+    expect(canvas.queryByText("Game Changer")).not.toBeInTheDocument();
+    // The crown, found by the glyph's own class: the whole tag is `aria-hidden`, the crown inside
+    // it again, and its sentence is a `useTooltip()` binding rather than a `title` — so neither a
+    // role nor a title query can reach it. One crowned card in this deck (Lightning Bolt), the
+    // crown printed *on* the count rather than standing beside it in the strip.
+    const crowned = canvas.getByRole("button", { name: /^Lightning Bolt/ });
+    const crowns = crowned.querySelectorAll(".lucide-crown");
+    expect(crowns).toHaveLength(1);
+    const tag = crowns[0].parentElement as HTMLElement;
+    expect(tag).toHaveAttribute("aria-hidden", "true");
+    expect(tag.textContent).toBe("1");
+    // The words are the button's, as every mark on this card face is decoration once it is named.
+    expect(crowned).toHaveAccessibleName(expect.stringContaining("game changer"));
   },
 };
 

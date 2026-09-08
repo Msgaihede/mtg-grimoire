@@ -10,89 +10,83 @@ export const GAME_CHANGER_LABEL = "Game changer";
 export const GAME_CHANGER_HINT = "Game changer — one of the cards the Commander bracket counts";
 
 /**
- * A game changer, where there is no room for the words.
+ * A game changer, as a crown standing on its own.
  *
- * **The crown is lifted from `GameChangerBanner`, and only the crown.** The deck stack stamps
- * that ribbon across a card — a gold seal, a 9px crown and `Game Changer` in Cinzel — and it is
- * exactly right there and far too much anywhere the card is drawn smaller: a wall tile is 170px
- * of somebody else's artwork, where a ribbon is a sticker over the picture the reader came to
- * look at. The deck's **table** and **text** views made the same call in the other direction and
- * abbreviate to `GameChangerBadge`'s gold `GC` — a row of type has no art to lay a glyph on.
+ * **This is the search side's mark, and since 2026-09-08 it is only that.** Two surfaces draw it:
+ * `components/CardArt`'s `FoilOverlay` chip — the search wall's tiles, the collection's, the
+ * wishlist's and the three docked search columns, all of which are `features/search/CardGrid`
+ * over that frame — and `features/search/SearchPage`'s printings **rows**, where it sits beside
+ * the finish glyph in the cell that identifies the row. Both are places where the app is showing
+ * a reader *cards*, one of which happens to be a game changer.
  *
- * So one fact is drawn three ways, and **that is a difference of room, never of meaning**: a
- * banner where a card is 295px tall and a whole row is spare, two letters where a table cell
- * has a column, and this wherever a card is drawn as a *face* with no room for a sentence — the
- * search wall's tiles, the collection's, the wishlist's and the three docked search columns, all
- * of which are `features/search/CardGrid` over `components/CardArt`, and — since 2026-09-08 —
- * the deck's own Grid tile. A `CardArt` tile's art has three corners already spoken for (the
- * owned badge bottom-left, the printings count top-left, the finish chip top-right) and about
- * two glyphs of chip in the fourth. Letters at that size are an abbreviation of an abbreviation,
- * which nobody reads. A crown is read without being read — which is what the banner was already
- * relying on.
+ * ## The deck used to be on this rule and is not any more
  *
- * ## The deck's Grid tile is on this arm for a reason about **width**, and a live pass found it
+ * This block spent most of its life stating a rule called **one fact, three drawings** — a
+ * spelled-out gold ribbon on the deck's stacked card, two gold letters in the deck's table and
+ * text rows, and this crown wherever a card was drawn as a face too small for a sentence — with
+ * the closing line *"a difference of room, never of meaning"*. The rule was sound and the deck
+ * has stopped needing it.
  *
- * This paragraph used to put that view here "since 2026-08-16", on the grounds that it "draws the
- * same `CardArt` frame as all three" — the crown went in `FoilOverlay`'s corner chip, beside the
- * finish glyph, exactly as it does on the search wall. **Both halves of that premise went on
- * 2026-09-08.** The tile draws `features/decks/DeckCardFace` — the stacked card, shared — with
- * `FoilOverlay mark={false}`, so there is **no chip on a deck tile at all**, and this mark stands
- * in the card's own 27px marks strip, in the place the ribbon occupies on the stack.
+ * The deck's four views now print the crown **on the quantity**. Its two card-face views fold it
+ * into `features/decks/CardMarks`' `QuantityTag` — the crown before the number, inside the tag
+ * the reader is already reading — and its two row views draw a gold crown in the quantity column
+ * beside the number. So the deck spends no room on the fact at all: it annotates a mark it was
+ * already drawing on every card, and `GameChangerBanner` and `GameChangerBadge` are both gone.
  *
- * So that change drew the **banner** here and the docs pass filed this view on that arm, and it
- * was the reasonable reading rather than a careless one: the tile had become the stack's card,
- * the design decision was that it adopts the stack's marks, and the stack's game-changer mark is
- * the ribbon. **The ribbon is the one mark it could not adopt, and nothing in the source or in
- * either suite could see why.** The three marks in that strip — `QuantityTag`, this fact and
- * `TheoryMatchMark` — are every one of them sized off `--mark-scale`, so none of them gets
- * narrower when the *card* does.
+ * **What that retired was a real bug and not just a redundancy.** The ribbon was 130px at
+ * `cardZoom` 1.1, and the deck's Grid tile is 165px — measured in the shipped window 2026-09-08
+ * (debug build, 1920×1080, a real Commander deck): a tag, a ribbon and the plan's tick came to
+ * 163px of marks in a `overflow-hidden` strip, 11px past the edge, clipping the tick by nearly
+ * half at every stop of the zoom ladder. That is why `DeckCardFace` briefly carried a required
+ * `gameChanger: "banner" | "crown"` prop putting its two card-face views on different arms of the
+ * old rule. The crowned tag is about 42px, narrower than either arm was, so the prop is gone and
+ * the two views draw one card again.
  *
- * Driven in the shipped window 2026-09-08 (`npm run tauri dev`, a **debug** build, 1920×1080,
- * against the real corpus, on a 101-card Commander deck at `cardZoom` 1.1): a card that is both a
- * game changer and an exact plan match put a **28px** tag, a **130px** ribbon and a **28px** tick
- * into a **163px** strip on a **165px** tile — **11px of overflow**, and the face is
- * `overflow-hidden`, so the plan's tick was clipped by nearly half. Every term scales with the
- * zoom, so the ratio is constant and it was clipped at *every* stop of the ladder; photographed
- * at 2× to confirm. Re-measured after the fix in the same session: tag at x=1 (28 wide), crown at
- * x=29 (13 wide), tick at x=136 (28 wide), **overflow 0**, with the stack still drawing the
- * ribbon.
+ * ## Gold here, and the tag's own colour there — which is the same rule, not an exception
  *
- * So the **two card-face views are on different arms of this rule for the first time**, which is
- * the rule working rather than the app disagreeing with itself — they are two widths, and *a
- * difference of room, never of meaning* is what that sentence says. It is emphatically **not** a
- * return to `CardArt`'s corner chip: the mark is in the same strip in the same place on both
- * views, and top-right is `TheoryMatchMark`'s on both. `DeckCardFace`'s required `gameChanger`
- * prop is where the choice is made and carries the same figures at the call; jsdom lays nothing
- * out, so the overflow itself is a live claim and `views.test.tsx` can only pin *which* drawing
- * each view asks for.
+ * This glyph is `text-pie-gold`, and the deck's row views draw their crown in that same gold.
+ * **A crown printed on `QuantityTag` takes the tag's foreground instead**, so it is white on a
+ * blue label, dark on a gold one, and the neutral foreground on an unlabelled card.
  *
- * **Gold, and the same gold.** `text-pie-gold` is what `features/decks/CardMarks.tsx` tints its
- * badge with, and one colour for one fact is the point: a game changer is a *fact about a
- * powerful card*, never a problem with the deck. The destructive colour belongs to the thing
- * that is a problem — `RuleBreakMark` — and the spec is explicit that the two must never be
- * confusable. A crown drawn in red would have thrown that away on the first wall it appeared on.
+ * That is not two colours for one fact. Gold is what an *unfilled* mark laid over somebody's
+ * artwork has to carry, because nothing else there says which fact it is. A filled tag already
+ * carries a colour, and that colour already means something — it is the card's **label** — so a
+ * gold crown printed on a blue tag would be a second colour inside one object, saying nothing the
+ * shape was not already saying. The fact is the crown; gold is how the crown is found when it is
+ * floating on art.
  *
- * **Two strings because there are two readers.** `aria-label` is the accessible name and stays
- * to the point — a screen reader announcing "crown" beside a card would be describing the icon
- * rather than the card, and announcing the whole sentence beside forty of them would be worse
- * than either. The tooltip is what a pointer gets on hover, where there is room to say *which*
- * rules count it — bound `describes: false`, since {@link GAME_CHANGER_LABEL} already names the
- * glyph and a wired `aria-describedby` would repeat it. The same split `FinishMark` makes, for
- * the same reason.
+ * The colour that must stay separate is the other one: a game changer is a *fact about a powerful
+ * card*, never a problem with the deck, and the destructive colour belongs to `RuleBreakMark`,
+ * which is the mark that does say something is wrong. The spec is explicit that the two must
+ * never be confusable, and a crown drawn in red would have thrown that away on the first wall it
+ * appeared on.
  *
- * The mark names itself; it does not hide itself. A caller that draws it inside a button whose
- * name is **computed from its contents** is the caller that must hide it — see `FoilOverlay`,
- * which wraps this in `aria-hidden` precisely so a wall of tiles does not become forty buttons
- * called "Rhystic Study Game changer". **The deck's Grid tile is the second caller and needs no
- * such wrapper**, which is worth stating so that nobody adds one by resemblance: the crown is
- * inside that tile's button too, but the button carries an explicit `aria-label`
- * (`deckCardName`, which already says *game changer* in words), and an explicit name is not
- * computed from contents at all.
+ * ## Two strings because there are two readers
  *
- * **The 12px is a size at 100% zoom.** Every surface that draws this draws a card the reader can
- * zoom, so the glyph reads the card's own `--mark-scale` (`lib/cardZoom.ts`) rather than holding
- * still while the art doubles — the crown was two pixels of gold on a 340px card. The `, 1`
- * fallback keeps it exactly where it is anywhere the variable is not set.
+ * `aria-label` is the accessible name and stays to the point — a screen reader announcing "crown"
+ * beside a card would be describing the icon rather than the card, and announcing the whole
+ * sentence beside forty of them would be worse than either. The tooltip is what a pointer gets on
+ * hover, where there is room to say *which* rules count it — bound `describes: false`, since
+ * {@link GAME_CHANGER_LABEL} already names the glyph and a wired `aria-describedby` would repeat
+ * it. The same split `FinishMark` makes, for the same reason.
+ *
+ * ## The mark names itself; it does not hide itself
+ *
+ * A caller that draws it inside a button whose name is **computed from its contents** is the
+ * caller that must hide it. `FoilOverlay` is that caller and wraps this in `aria-hidden` — a wall
+ * of tiles must not become forty buttons called "Rhystic Study Game changer" — and `CardGrid`
+ * puts the words back as an `sr-only` clause on the tile's own name instead.
+ *
+ * `SearchPage`'s printings row is the other caller and needs no such wrapper, which is worth
+ * saying so that nobody adds one by resemblance: a table cell's text is really read, so the glyph
+ * stands there under its own name.
+ *
+ * ## The 12px is a size at 100% zoom
+ *
+ * Every surface that draws this draws a card the reader can zoom, so the glyph reads the card's
+ * own `--mark-scale` (`lib/cardZoom.ts`) rather than holding still while the art doubles — the
+ * crown was two pixels of gold on a 340px card. The `, 1` fallback keeps it exactly where it is
+ * anywhere the variable is not set, which is what `SearchPage`'s rows get.
  */
 export function GameChangerMark({ className }: { className?: string }) {
   const tip = useTooltip();

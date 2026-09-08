@@ -335,8 +335,14 @@ const BRACKETS: readonly { value: number; label: string; name: string; clause: s
  * `B` (banned) is in the table because a row can carry it; it raises no floor here, because a
  * banned card is a *legality* finding and the check chip beside this control already reports it
  * off the banned list.
+ *
+ * **Exported since the card modal's `CombosDialog` grew a second reader of it**, and exported
+ * rather than copied for the reason the paragraph above gives about the floor: two tables
+ * spelling Spellbook's seven letters would be two things that can come to disagree about what
+ * `S` means, in two surfaces a reader moves between in one session. The letters are the *feed's*
+ * classification, so there is one right answer and it is not per-panel.
  */
-const COMBO_TAG: Record<ComboBracketTag, { name: string; forces: string }> = {
+export const COMBO_TAG: Record<ComboBracketTag, { name: string; forces: string }> = {
   E: { name: "Exhibition", forces: "for any deck" },
   C: { name: "Core", forces: "for unoptimized decks in bracket 2+" },
   O: { name: "Oddball", forces: "probably 2 or 3, but hard to classify" },
