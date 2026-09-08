@@ -2245,6 +2245,30 @@ either colour at `--mark-scale` 0.5 and 1.75; and a custom colour a reader has p
 `-fg` the luminance formula chose for it. #158 and #182 were both reported by a reader off one
 screenshot after a green suite; that is the standing record of what a green suite is worth here.
 
+### The sign is the action (issue #400, 2026-09-08)
+
+**Nothing in this section's geometry moved — only which way the sign points.**
+[Issue #400](https://github.com/Msgaihede/mtg-grimoire/issues/400) is the same reader who asked for
+the number at all, back with what the number could not do: *"the displayed number indicates what is
+missing as a minus and what is over the required quantity as a plus. This does not directly tell
+the user what action to take."* So the delta is **`planned − live`** now, at whichever grain the
+tier already used — **positive is copies to add, negative is copies to remove**, `0` is still the
+tick — where it was `live − planned` from 2026-08-26 (issue #212) until this. The reader's own
+eight-Forests case reads **green +6** on the planned printing rather than green −6; the rule, both
+tiers and the floor are unchanged and live in
+[`src/features/decks/CLAUDE.md`](../../src/features/decks/CLAUDE.md).
+
+**Every measurement above still stands, and that is the point of recording it here.** The box is
+the same box: `COUNT_TAG_BOX_MIRRORED`'s `8/3` over the `1ch + 1.125rem` floor, the 24.59-against-24.61
+agreement between the strip's two bookends, the count drawn *in place of* the tick and never beside
+it. **ASCII `+` and `-` are untouched too** — a typographic minus is still outside the
+`tabular-nums` run, and inverting a sign changes nothing about which glyph draws it. What did move
+is the **words**: `theoryMatchLabel` says `In the theory list · 2 to add` and
+`In the theory list · 3 to remove`, so the tooltip, the badge and the `sr-only` twin no longer
+carry *"more than planned"* / *"fewer than planned"*. A one-character swing in the box's content is
+the only thing a photograph could catch here, which is why this subsection adds no pass to the one
+the section above still owes.
+
 ## The two marks a deck card carries: picked, and just landed
 
 Added 2026-08-14. The rules and the routing live in
