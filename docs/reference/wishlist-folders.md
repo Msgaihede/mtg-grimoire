@@ -670,9 +670,45 @@ results and both deck panels draw, answering "do I already own this card I am ab
 at the moment of adding. It is not a statement about a wish, and removing it would have made one
 search wall differ from the other four.
 
-**Nothing here has been driven in the shipped window as of this writing.** jsdom loads no
-stylesheet and computes no layout, so every geometric claim above is a class assertion or
-arithmetic off `QuantityStepper`'s own constants.
+### Driven in the shipped window, 2026-09-08
+
+Debug build, 1920×1080, `tauri dev` over a copy of the real database — 87 wishes, `cardZoom` at
+the reader's own stored value, which drew a **221px** tile against the 170 base (≈1.3×). Every
+figure below is off that window rather than off the suite, which loads no stylesheet and computes
+no layout.
+
+**The ring wraps art and chin.** The selected tile carries `ring-accent` on its root and
+`querySelector('.ring-accent')` inside it finds **nothing** — the two halves asserted together,
+because a ring in both places looks identical and is a different bug.
+
+**The column is three boxes and a fourth under them, all one size.** Increase, Decrease and the
+pencil each measured **40×40** at the same `x` (922) — 36px × `CONTROL_SHRINK` × the reader's zoom
+— with **4px** between the stepper's foot and the pencil's head, which is the stepper's own
+`0.25rem × --control-scale` gutter at that zoom. The pencil is the stepper's box at every stop
+because it is read off the same constant, and this is the reading that confirms it.
+
+**The panel anchors to the tile, which is what the widened wrapper is for.** Opened on a
+third-column tile at `x=746`, the 288px panel opened at **x=746** and ended at 1034. Opened on the
+**first** column, tile at `x=280`, it opened at **280** and ended at **568**, against a scroller
+running 208→1920. Anchored to the pencil instead it would have started at the button's own left
+edge — 922 and 466 respectively — and the first-column case is the one that used to run off the
+scroller.
+
+**The un-hovered column is not a hit target.** Pointer parked on the page header,
+`getComputedStyle` reads `pointer-events: none` on the tile-wide band, on the `data-no-drag`
+wrapper *and* on the button; `elementFromPoint` at the Increase button's centre answers the card's
+**`IMG`**. So the press that opens the card still reaches it through 130px of invisible controls,
+which is the regression the gate's move from the box to its children had to avoid.
+
+**The two prices are two numbers, and the header agrees with them.** A wish stepped to `×2` drew
+`$98.30` in its bottom-right corner over `$49.15` in its chin, and the page header moved from
+**$680.21** to **$729.36** — exactly one more copy of that card. `×2` and its `2 copies wanted`
+sentence were both in the tree.
+
+**One thing to look at rather than a defect.** On a single-copy wish the corner and the chin print
+the same figure, because `unit × 1` is the unit price — two true statements about the same wish,
+and most of a real wishlist is single-copy. It reads as a repeat rather than as an error; whether
+it is worth suppressing is a design question rather than a bug, and no rule here decides it.
 
 ## The copies control, and the floor that stopped being 1
 

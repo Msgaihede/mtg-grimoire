@@ -4158,9 +4158,13 @@ to reach for the `<img>`'s parent climb to `[data-grid-index]` instead, and
 `CollectionSearchTab`'s `ringed` helper asserts the class is on the tile **and** on nothing inside
 it — so a ring that crept back onto a descendant is red rather than silently equivalent.
 
-**Not driven in the shipped window as of this writing.** jsdom loads no stylesheet, so everything
-above is a class assertion; how the ring reads against the chin's own border at 0.5× and 2× is a
-live question.
+**Driven in the shipped window** (2026-09-08, debug build, 1920×1080, the wishlist wall at the
+reader's own stored zoom — a 221px tile): the selected tile carries `ring-accent` on its **root**,
+and `querySelector('.ring-accent')` inside it finds **nothing**. Both halves are read together,
+because a ring drawn in both places looks identical on screen and is a different bug. The gold runs
+unbroken from the top of the picture round the chin's rounded foot, which is what the move was for.
+**0.5× and 2× are still owed** — the pass was at one zoom, and how the ring reads against the
+chin's own 1px border at the bottom of the ladder is the reading nothing here has taken.
 
 ## Drag and drop: what `@dnd-kit/dom` 0.5.0 actually requires
 
