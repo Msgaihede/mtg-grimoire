@@ -449,12 +449,12 @@ export const Card: Story = {
 };
 
 /**
- * **Open on**, expanded — the one submenu whose second row changes name with a setting.
+ * **Open on**, expanded — the one submenu whose last row changes name with a setting.
  *
- * Scryfall first and then the selected marketplace, and the pair is deliberately **not**
+ * Scryfall, then EDHREC, then the selected marketplace, and the ladder is deliberately **not**
  * alphabetical: the app's option-list rule orders lists a reader *searches*, and this is a
- * two-row ladder. Sorting it would put Card Kingdom above Scryfall and Cardmarket below it, so
- * the row a reader has learnt the position of would move when they changed marketplace. Exactly
+ * three-row ladder. Sorting it would put Card Kingdom above both and Cardmarket between them, so
+ * the rows a reader has learnt the position of would move when they changed marketplace. Exactly
  * one marketplace, because a menu offering all five would be a marketplace picker, and Settings
  * already is one.
  */
@@ -481,7 +481,7 @@ export const SubmenuExpanded: Story = {
     await expect(canvas.getByRole("menuitem", { name: "Cardmarket" })).toBeVisible();
 
     const rows = within(panels[1]).getAllByRole("menuitem");
-    await expect(rows.map((r) => r.textContent)).toEqual(["Scryfall", "Cardmarket"]);
+    await expect(rows.map((r) => r.textContent)).toEqual(["Scryfall", "EDHREC", "Cardmarket"]);
   },
 };
 
