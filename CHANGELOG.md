@@ -30,6 +30,71 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.22.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.21.0...v0.22.0) (2026-09-08)
+
+
+### Features
+
+* **card:** EDHREC in the context menu's Open on submenu ([ac134e5](https://github.com/Msgaihede/mtg-grimoire/commit/ac134e5fbc3f8d9887364eff2d3d73e00e389ab3))
+* **card:** EDHREC in the context menu's Open on submenu ([b2466df](https://github.com/Msgaihede/mtg-grimoire/commit/b2466dfa18bb608382542d2b8aea45c5ce09dfc8))
+* **card:** Open on EDHREC and the selected marketplace in the card modal's rail ([0cbb542](https://github.com/Msgaihede/mtg-grimoire/commit/0cbb5429048c34d40b53555fd140be5fabe1e1e6))
+* **card:** Open on EDHREC and the selected marketplace in the card modal's rail ([9b4b419](https://github.com/Msgaihede/mtg-grimoire/commit/9b4b419b28e1a72890788ea66510eb526ab9d9a5)), closes [#402](https://github.com/Msgaihede/mtg-grimoire/issues/402)
+* **combos:** download the combo feed at launch instead of on a button ([23058e4](https://github.com/Msgaihede/mtg-grimoire/commit/23058e46f16f8b0d6726cfa9e30b462001072642))
+* **combos:** download the combo feed at launch instead of on a button ([c581776](https://github.com/Msgaihede/mtg-grimoire/commit/c58177681f9e566c896c2bf23de0b227c1215347))
+* **combos:** list every Spellbook combo a card is in, from the card modal ([24c2d93](https://github.com/Msgaihede/mtg-grimoire/commit/24c2d93a68252e038191a0f6d6ae303b28d876e2))
+* **combos:** list every Spellbook combo a card is in, from the card modal ([5f060a4](https://github.com/Msgaihede/mtg-grimoire/commit/5f060a4fad8a720f015aa69d689b2100892e5406))
+* **combos:** search the combo list, and collapse every row to a header ([7e0ab7a](https://github.com/Msgaihede/mtg-grimoire/commit/7e0ab7a2718c17db28f94e07a98dba3ffab88762))
+* **core:** let a call carry bytes and headers, and refuse them on the web ([92f9e5d](https://github.com/Msgaihede/mtg-grimoire/commit/92f9e5d9ab7313b1966deef0ae2d614f141d0a59))
+* **decks:** a third deck kind for decks with no cardboard behind them ([3387dbe](https://github.com/Msgaihede/mtg-grimoire/commit/3387dbe52d63d29e60de44f6b390342ef1c43166))
+* **decks:** a third deck kind for decks with no cardboard behind them ([3a7c140](https://github.com/Msgaihede/mtg-grimoire/commit/3a7c1405ae47ffbc828f7a16196fd72f8d99cce7))
+* **decks:** a third theory mark for the cards the plan does not ask for ([021aea5](https://github.com/Msgaihede/mtg-grimoire/commit/021aea5b6f4e8b0f7730a327f9bcf8716ff0dec2))
+* **decks:** a third theory mark for the cards the plan does not ask for ([e3d310b](https://github.com/Msgaihede/mtg-grimoire/commit/e3d310b0815e8a0f0eaffbec4bc80b1f86953df3))
+* **decks:** add missing copies to the collection from the deck editor ([369f3c6](https://github.com/Msgaihede/mtg-grimoire/commit/369f3c6b44aa1f424d5d4e345edc3edb8f6ed338))
+* **decks:** bring the deck's alternate views up to the stacks' style ([a99fa63](https://github.com/Msgaihede/mtg-grimoire/commit/a99fa6350e130a117fff99a6cbea89ebd8e157da))
+* **decks:** bring the deck's three alternate views up to the stacks' style ([c6bbee0](https://github.com/Msgaihede/mtg-grimoire/commit/c6bbee0e59467c861dce5d05395425d99f6aaa8c))
+* **decks:** drag-resize and collapse the folder tree ([df24291](https://github.com/Msgaihede/mtg-grimoire/commit/df242915c33242755daf0893002ac2d50fca9008))
+* **decks:** draw the token wall at the stacked card's size and zoom ([5908761](https://github.com/Msgaihede/mtg-grimoire/commit/59087617f46b58518b0c8493555543aa93b2582c))
+* **decks:** draw the token wall at the stacked card's size and zoom ([e8d021f](https://github.com/Msgaihede/mtg-grimoire/commit/e8d021f012ed64f6fecb98a190b47e07a7f2d4d5))
+* **decks:** fold the game changer into the quantity tag, and spotlight it from the ledger ([b58d4c5](https://github.com/Msgaihede/mtg-grimoire/commit/b58d4c5942c89e5433b91282ea05d47052659bd9))
+* **decks:** fold the game changer into the quantity tag, and spotlight it from the ledger ([33cdf95](https://github.com/Msgaihede/mtg-grimoire/commit/33cdf95ba27430dd216ac3dd7d65c19e3b30a732))
+* **decks:** read the Table's bands in the order the deck is laid out ([37ffe7e](https://github.com/Msgaihede/mtg-grimoire/commit/37ffe7ea3bab50ec3832c25a6716982dfa4f0675))
+* **decks:** read the Table's bands in the order the deck is laid out ([cfe1c7a](https://github.com/Msgaihede/mtg-grimoire/commit/cfe1c7a8cf432fff32a67efcc0942187cd5f86dd))
+* **decks:** redesign the gallery — fused mana bands, tile-format folders, a drawn tree ([669de89](https://github.com/Msgaihede/mtg-grimoire/commit/669de8941664271f4fe1d31d945360febe5bd162))
+* **decks:** the theory mark's sign is the action to take ([5165040](https://github.com/Msgaihede/mtg-grimoire/commit/51650405e018462ff656aa79650b25d8b1005c47))
+* **decks:** the theory mark's sign is the action to take ([59cd00e](https://github.com/Msgaihede/mtg-grimoire/commit/59cd00e973861cc477629a9d6e7dfcb5fcd77fbf)), closes [#400](https://github.com/Msgaihede/mtg-grimoire/issues/400)
+* **ipc:** the four scanner wrappers, and snake-case mirror rows for the verdict ([c5ecfe0](https://github.com/Msgaihede/mtg-grimoire/commit/c5ecfe0c983e2d186632ae1ab3dfc099addd6bf6))
+* **scanner:** decide a card by votes toward a bar, and freeze the tally ([143d515](https://github.com/Msgaihede/mtg-grimoire/commit/143d5155a7b15903bad3a06b06b8abd5752a7acb))
+* **scanner:** sixteen dev-profile overrides, the four measurements, and the crate's scripts under lint ([0e571fa](https://github.com/Msgaihede/mtg-grimoire/commit/0e571fa464e99e98fcf504c403b525f143d5117d))
+* **scanner:** the camera stream, the single-in-flight pump and the overlay ([4f9eb0f](https://github.com/Msgaihede/mtg-grimoire/commit/4f9eb0f9841bf8edb96626206de69b2d777c3c77))
+* **scanner:** the card scanner as a crate, a decision by votes, and a Scanner view in the app ([b0b78c5](https://github.com/Msgaihede/mtg-grimoire/commit/b0b78c520271ad03d44104b6a1d9ab30c78fc63a))
+* **scanner:** the crate's session behind four app commands ([43fa475](https://github.com/Msgaihede/mtg-grimoire/commit/43fa47578013c95c2dab63277144d7a9a37a3f76))
+* **scanner:** the panel column, folded in the store, with its stories ([afa049d](https://github.com/Msgaihede/mtg-grimoire/commit/afa049d37a6bf3636a5b465867c5d779d1097a78))
+* **scanner:** the Scanner view — camera beside the verdict, a sentence on the web ([9f81abe](https://github.com/Msgaihede/mtg-grimoire/commit/9f81abed909e63395030e5b53bbf2612179618bc))
+* **scanner:** the view's options, sentences and fixtures ([f9e07ee](https://github.com/Msgaihede/mtg-grimoire/commit/f9e07eeebba8865d302d22afc075cf1b5bc84120))
+* **shell:** a Scanner view in the rail, Ctrl+6, and Settings on Ctrl+7 ([c80cbc8](https://github.com/Msgaihede/mtg-grimoire/commit/c80cbc83aa3fd10fb60b747ba7730a64d6a1f5bd))
+
+
+### Bug Fixes
+
+* **decks:** give the Grid tile the crown, where the ribbon clipped the plan's tick ([407b597](https://github.com/Msgaihede/mtg-grimoire/commit/407b597995675d150e0b0553fdf07b6c68ff8155))
+* **decks:** raise the folder tree floor to 176, measured not counted ([81fc479](https://github.com/Msgaihede/mtg-grimoire/commit/81fc479c419a11940c5e065cec01700ef344a403))
+* **decks:** three tiles that were not the height of the tiles beside them ([38822f7](https://github.com/Msgaihede/mtg-grimoire/commit/38822f7180720955fe447dd682bef7f77ea49ef8))
+* **decks:** three tiles that were not the height of the tiles beside them ([8cd145b](https://github.com/Msgaihede/mtg-grimoire/commit/8cd145b3e88f228e34f4525811048305fe47f0cc))
+* **dialog:** cap every modal at 90vh, and let the phone's fill the screen ([6c0b247](https://github.com/Msgaihede/mtg-grimoire/commit/6c0b247da4ef2b84693a5537933b9345d707c083))
+* **dialog:** cap every modal at 90vh, and let the phone's fill the screen ([e5491fd](https://github.com/Msgaihede/mtg-grimoire/commit/e5491fd2791e171976e0e606877a469106f9ff6d))
+* **images:** decode a card picture before its frame is shown, not after ([037f7b8](https://github.com/Msgaihede/mtg-grimoire/commit/037f7b8c83beac846bb9ed5f8f40ebf6f56b8813))
+* **images:** decode a card picture before its frame is shown, not after ([bc04228](https://github.com/Msgaihede/mtg-grimoire/commit/bc04228e9b149078e4623ed82689b2c5ee138603))
+* **ipc:** escape non-ASCII in the scanner's header JSON so a card name survives the hop ([c937359](https://github.com/Msgaihede/mtg-grimoire/commit/c9373599200ec3bfd26509382b63c2d81190e899))
+* **printings:** cap the All printings panel at 90vh ([4d65021](https://github.com/Msgaihede/mtg-grimoire/commit/4d650217fbb59d46d873fea38a6b7c3a27a07017))
+* **printings:** cap the All printings panel at 90vh ([6cd8c52](https://github.com/Msgaihede/mtg-grimoire/commit/6cd8c52d0d8e5da34620d43d4a969ad5272d5050))
+* **scanner:** give the narrow arm's camera box the stream's own aspect so a panel cannot crush it ([2339817](https://github.com/Msgaihede/mtg-grimoire/commit/23398173e59665fa5b2c2b9d10cdf2a487e7df85))
+* **scanner:** letterbox the overlay, latch the readouts, name the three asset states, and run the crate's suite in CI ([a7004c8](https://github.com/Msgaihede/mtg-grimoire/commit/a7004c8f14d725000c9170a630f6f3d1f9770536))
+* **scanner:** pin the OCR key in the page census, and state the collector tier's weight truthfully ([9fe83e1](https://github.com/Msgaihede/mtg-grimoire/commit/9fe83e14bb91b69aeba782fe0597b0a999e6542b))
+* **scanner:** point aria-controls at the panel body only while it is in the tree ([8398890](https://github.com/Msgaihede/mtg-grimoire/commit/83988908e61e7b87c3b5145664c86121a2d29989))
+* **scanner:** scale the overlay's strokes with the canvas, as the debug page does ([2a69728](https://github.com/Msgaihede/mtg-grimoire/commit/2a6972815a14727c7e22e312b0a9c8994f2b994c))
+* **scanner:** test the capture payload, and refuse an unreadable sidecar header ([5b816d8](https://github.com/Msgaihede/mtg-grimoire/commit/5b816d88ad193bc3d19db8dc4753fa076082b448))
+* **shell:** finish the seven-view count sweep, and pin the scanner scope empty ([1bd6241](https://github.com/Msgaihede/mtg-grimoire/commit/1bd6241511cc688cfcb075d8de80d5dfd2632a11))
+
 ## [0.21.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.20.0...v0.21.0) (2026-09-07)
 
 
