@@ -1510,9 +1510,12 @@ pub struct CardCombo {
 
 /// How many of this card's combos need exactly `cards` cards.
 ///
-/// Over the **unfiltered** set, so the size chips can say what each one would show without a
-/// round trip per chip — and so a chip whose count is zero can be left off the row entirely
-/// rather than offered and then answering nothing.
+/// **Over the searched set and over neither facet**, so the size chips can say what each one
+/// would show without a round trip per chip — and so a chip whose count is zero can be left off
+/// the row entirely rather than offered and then answering nothing. It read *unfiltered* until
+/// the search box landed, and the difference is [`CardCombosPage`]'s subject-versus-facet rule:
+/// a chip counted over a set the search has already left behind offers a number pressing it
+/// cannot produce.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ComboCountBucket {
@@ -1524,20 +1527,29 @@ pub struct ComboCountBucket {
 ///
 /// **Three counts and not one, because they answer three questions and a panel that conflated
 /// any two of them would lie about the other.** `total` is what the card is *in*; `matching` is
-/// what the filters left; `owned_total` is how many of the whole set the reader could actually
+/// what the narrowings left; `owned_total` is how many of the set the reader could actually
 /// assemble today — which is the number the "you own every piece of N of these" line is drawn
-/// from, and it deliberately ignores the size filter so that narrowing to two-card combos does
-/// not make that line change its meaning underneath the reader.
+/// from, and it deliberately ignores the **size** filter so that narrowing to two-card combos
+/// does not make that line change its meaning underneath the reader.
+///
+/// **The search is not one of those filters, and that is why it moves three of these four
+/// numbers where the size chip moves one.** A needle is the reader changing the *subject* —
+/// "only the combos with Thassa's Oracle in them" — and the chips and the owned toggle are
+/// facets *of* a subject; a facet has to count what pressing it would yield. So `by_card_count`
+/// and `owned_total` are taken over the searched set, and `total` alone stays the card's own
+/// census, because "this card is in 6 044 combos" is a fact the search does not touch and the
+/// one thing the panel can still say over a list of four. [`card_combos`] has the table.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct CardCombosPage {
-    /// Combos naming this oracle card. No filters.
+    /// Combos naming this oracle card. **No filters and no search** — the only number here
+    /// a needle leaves alone.
     pub total: i64,
-    /// After `card_count` **and** `owned_only`.
+    /// After the search **and** `card_count` **and** `owned_only`.
     pub matching: i64,
-    /// Of [`total`](Self::total), those the reader owns every piece of — **no size filter**.
+    /// Of the **searched** set, those the reader owns every piece of — **no size filter**.
     pub owned_total: i64,
-    /// Over the unfiltered set, ascending, and only the sizes that occur.
+    /// Over the searched set, ascending, and only the sizes that occur.
     pub by_card_count: Vec<ComboCountBucket>,
     /// This page, `limit` long at most.
     pub combos: Vec<CardCombo>,
@@ -1556,8 +1568,68 @@ pub struct CardCombosPage {
 /// Only the histogram's `GROUP BY` would have collapsed it anyway; spending the three
 /// milliseconds is what keeps *one* definition of the hit set instead of one that is safe here
 /// and a trap one statement over.
+///
+/// **This is the card's own census and nothing narrows it** — [`SEL_CTE`] is where a search
+/// lands, and [`total_sql`] is the one statement that still counts *this*. Keeping the two
+/// apart is what lets [`CardCombosPage::total`] go on answering "this card is in 6 044 combos"
+/// while every other number on the page describes what the reader asked for.
+///
+/// **`?1` and not a bare `?`**, since [`SEL_CTE`] introduced a second parameter that has to
+/// keep one index across four composed statements — see [`page_sql`].
 const HIT_CTE: &str =
-    "hit(combo_id) AS (SELECT DISTINCT combo_id FROM combo_cards WHERE oracle_id = ?)";
+    "hit(combo_id) AS (SELECT DISTINCT combo_id FROM combo_cards WHERE oracle_id = ?1)";
+
+/// The hit set narrowed by the reader's search: **the one place "which combos are we talking
+/// about" is decided**, and what [`GRP_CTE`], [`counts_sql`] and [`page_sql`] all read.
+///
+/// A sibling of [`HIT_CTE`] rather than a clause inside it, because those two are different
+/// questions and exactly one of them may narrow: `hit` is the card's census and `sel` is the
+/// subject. Bolting the predicate onto the three statements separately was the other option
+/// and is how a histogram, a page and an owned count come to disagree about a set nobody
+/// changed.
+///
+/// # Any piece's name, the asked-about card included
+///
+/// The `EXISTS` walks **every** `combo_cards` row of the combo, so typing the asked-about
+/// card's own name matches all of its combos. That is the rule that needs no explaining in the
+/// UI: a reader looking at Ashnod's Altar and typing "ashnod" is not shown an empty list.
+///
+/// # `instr`, and why the wildcards cannot come off the wire
+///
+/// **`instr(lower(name), lower(?2)) > 0` rather than `LIKE`, and the reason is the fence rather
+/// than the speed.** A `LIKE` needle has three metacharacters to neutralise — `%`, `_` and
+/// whatever `ESCAPE` character is chosen to neutralise them — and getting that wrong is
+/// *silent*: a reader typing `%` would match every combo and a reader typing `_` would match
+/// every one-character difference, with nothing anywhere to say the search had stopped meaning
+/// what they typed. `instr` has no pattern language at all, so there is nothing to escape and
+/// no escaping to get wrong. This is `{holes}`' rule in [`pieces_sql`] read one layer up: the
+/// safety comes from the shape of the statement, never from a sanitiser.
+///
+/// It costs nothing to prefer it. `LIKE '%x%'` cannot use an index either — the search is a
+/// scan of the hit set's names whichever operator spells it — and SQLite's built-in `LIKE` is
+/// ASCII-only for case folding, exactly as `lower()` is.
+///
+/// **Both sides are folded by the *same* function**, which is why the needle is lowered in SQL
+/// and not in Rust: `str::to_lowercase` is Unicode-aware and SQLite's `lower()` is ASCII-only,
+/// so folding the needle in Rust would make `Æ` and `æ` two different searches over a column
+/// that holds neither folded. Measured at no cost — 58.3 ms against 59.2 ms for a needle
+/// pre-lowered in Rust, median of 15 over the real corpus.
+///
+/// # `?2 = ''` is *no search*
+///
+/// [`card_combos`] trims the needle and binds `''` for `None`, for a blank and for a string
+/// that trims to one, so those three cases are one bound value and one code path rather than
+/// three. The comparison short-circuits the `EXISTS` for every combo, which is what keeps an
+/// unsearched read at the cost it had before this constant existed: [`counts_sql`] for Ashnod's
+/// Altar measures **59.2 ms with `sel` in it and 59.0 ms without**, the two statements
+/// interleaved in one run, median of 15.
+const SEL_CTE: &str = "sel(combo_id) AS (
+        SELECT h.combo_id
+          FROM hit h
+         WHERE ?2 = ''
+            OR EXISTS (SELECT 1 FROM combo_cards s
+                        WHERE s.combo_id = h.combo_id
+                          AND instr(lower(s.name), lower(?2)) > 0))";
 
 /// Which oracle cards the reader owns at least one copy of.
 ///
@@ -1602,11 +1674,18 @@ const OWNED_CTE: &str = "owned(oracle_id) AS (
           FROM collection_entries e CROSS JOIN cards k ON k.id = e.card_id
          WHERE k.oracle_id IS NOT NULL AND e.quantity > 0)";
 
-/// One row per hit combo, saying whether the reader owns **every** card it names.
+/// One row per **searched** combo, saying whether the reader owns **every** card it names.
 ///
-/// `min()` over a 0/1 per piece is *all of them*, in one pass over the hit set's cards, where
+/// `min()` over a 0/1 per piece is *all of them*, in one pass over the subject's cards, where
 /// a `NOT EXISTS` per combo is a correlated probe per candidate. Requires [`OWNED_CTE`]'s
 /// NULL fence to mean what it says — see there.
+///
+/// **It joins [`SEL_CTE`] and not [`HIT_CTE`], which is what makes `owned_total` narrow with
+/// the search.** That is the design decision this whole shape turns on: the owned toggle and
+/// the size chips are *facets of a subject*, and a facet's count has to predict what pressing
+/// it yields — so once a reader has typed, "you own every piece of N of these" has to be N of
+/// the ones they can see. `total` is the one number that stays put, because it answers a
+/// different question that the search does not change.
 ///
 /// **Ownership here is presence and not quantity**, which is [`match_combos`]' rule: that one
 /// asks whether a deck *lists* each named card and never how many copies, and a combo needing
@@ -1614,21 +1693,55 @@ const OWNED_CTE: &str = "owned(oracle_id) AS (
 /// reader who wants to judge that themselves.
 const GRP_CTE: &str = "grp(combo_id, all_owned) AS (
         SELECT p.combo_id, min(p.oracle_id IN (SELECT oracle_id FROM owned))
-          FROM combo_cards p JOIN hit h ON h.combo_id = p.combo_id
+          FROM combo_cards p JOIN sel h ON h.combo_id = p.combo_id
          GROUP BY p.combo_id)";
 
-/// The one pass that touches every combo the card is in — and therefore the one that answers
-/// **three** of [`CardCombosPage`]'s four numbers.
+/// How many combos name this card at all — [`CardCombosPage::total`], and nothing else.
 ///
-/// `by_card_count` is the rows; `total` is their sum; `owned_total` is the sum of the third
-/// column; and `matching` is the same sums taken over the buckets the filters keep. Splitting
-/// those into four statements would be four scans of 6 044 rows to answer questions one scan
-/// already has in hand, and — worse — four chances for the panel's chrome to disagree with
-/// itself about a set that has not changed. **The page is the only other pass**, because it is
-/// the only thing here that needs the rows rather than counts of them.
+/// **A statement of its own, because it is the one number the search does not narrow.** It
+/// used to be the sum of [`counts_sql`]'s rows, which was free while the histogram was over
+/// the whole hit set; now that the histogram describes the *searched* set, a sum over it
+/// answers a different question, and a search that matched nothing would have no rows to sum
+/// at all — the case where the panel most needs to be able to say "this card is in 6 044
+/// combos, none of them matching".
+///
+/// **It counts [`HIT_CTE`] rather than re-spelling it**, so "combos naming this card" is
+/// written down once and this is literally the size of that set. A hand-typed
+/// `count(DISTINCT combo_id) …` beside it would be a second definition to keep in step.
+///
+/// **What it costs, measured against the real corpus** (107 016 combos, 378 197 `combo_cards`
+/// rows; `node:sqlite` over the dev pair, median of 15, warm): **0.02 ms** for an ordinary card
+/// — 52 combos — and **11.1 ms** for Ashnod's Altar, the worst card in the catalogue at 6 044.
+/// The whole of that is `idx_combo_cards_oracle` not being a covering index: the same count
+/// without the `DISTINCT` is 0.14 ms, so what the 11 ms buys is 6 044 row lookups to fetch a
+/// `combo_id` the index does not carry. A `(oracle_id, combo_id)` index would take it back to
+/// nothing and would speed [`HIT_CTE`] up in every statement here; that is a `COMBO_INDEXES_SQL`
+/// change, deliberately not made under a feature branch that only reads.
+fn total_sql() -> String {
+    format!("WITH {HIT_CTE} SELECT count(*) FROM hit")
+}
+
+/// The one pass that touches every combo in the **searched** set — and therefore the one that
+/// answers three of [`CardCombosPage`]'s five numbers.
+///
+/// `by_card_count` is the rows; `owned_total` is the sum of the third column; and `matching` is
+/// the same sums taken over the buckets the two facets keep. Splitting those into three
+/// statements would be three scans of 6 044 rows to answer questions one scan already has in
+/// hand, and — worse — three chances for the panel's chrome to disagree with itself about a set
+/// that has not changed. **The page is the only other pass over the subject**, because it is the
+/// only thing here that needs the rows rather than counts of them; [`total_sql`] is a fourth
+/// statement over a *different* set, which is exactly why it is not folded in here.
+///
+/// **Every row of it moved under the search on the day the box was added**, and that is the
+/// decision rather than a side effect. A text search is the reader changing the *subject* —
+/// "I only care about combos with Thassa's Oracle in them" — where the size chips and the owned
+/// toggle are facets *of* that subject. A facet's count has to predict what pressing it yields,
+/// so the census has to be taken over the searched set or every chip on the row is a lie from
+/// the first keystroke.
 fn counts_sql() -> String {
     format!(
         "WITH {HIT_CTE},
+              {SEL_CTE},
               {OWNED_CTE},
               {GRP_CTE}
          SELECT c.card_count, count(*), sum(g.all_owned)
@@ -1653,34 +1766,46 @@ fn counts_sql() -> String {
 /// `popularity DESC` already puts an unranked combo last — the same sentence [`match_combos`]
 /// writes, and the reason neither needs a `NULLS LAST`.
 ///
-/// **The size filter is `coalesce(?, c.card_count)` rather than a clause that comes and goes.**
+/// **The size filter is `coalesce(?3, c.card_count)` rather than a clause that comes and goes.**
 /// One SQL text, one bound parameter in one position, whichever way the caller asked: a filter
 /// spliced in by a `format!` is a filter whose parameter index moves, and every `?` after it
 /// moves with it.
+///
+/// **Every index is written out since the search landed, and that is that rule enforced rather
+/// than restated.** `?2` lives inside [`SEL_CTE`], which is *ahead* of these `?`s in the text
+/// and absent from neither branch — with bare `?`s, SQLite would number what follows by
+/// position and the two branches would only agree by luck. Spelled `?1` oracle id, `?2` needle,
+/// `?3` size, `?4` limit, `?5` offset, both branches and [`counts_sql`] bind the same list
+/// prefix and a reordered `WITH` cannot silently renumber anything.
 fn page_sql(owned_only: bool) -> String {
     // The columns, in the order `card_combos` reads them back by index.
     const COLUMNS: &str = "SELECT c.id, c.bracket_tag, c.card_count, c.template_count,
                                   c.identity, c.produces, c.description, c.easy_prerequisites,
                                   c.notable_prerequisites, c.mana_needed, c.popularity";
-    const TAIL: &str = "ORDER BY c.card_count, c.popularity DESC, c.id LIMIT ? OFFSET ?";
+    const TAIL: &str = "ORDER BY c.card_count, c.popularity DESC, c.id LIMIT ?4 OFFSET ?5";
     if owned_only {
-        // `grp` is already one row per hit combo, so it stands in for `hit` here rather than
-        // being joined beside it.
+        // `grp` is already one row per searched combo, so it stands in for `sel` here rather
+        // than being joined beside it.
         format!(
             "WITH {HIT_CTE},
+                  {SEL_CTE},
                   {OWNED_CTE},
                   {GRP_CTE}
              {COLUMNS}
                FROM grp g JOIN combos c ON c.id = g.combo_id
-              WHERE g.all_owned = 1 AND c.card_count = coalesce(?, c.card_count)
+              WHERE g.all_owned = 1 AND c.card_count = coalesce(?3, c.card_count)
               {TAIL}"
         )
     } else {
+        // **`sel` and not `hit`.** The page is a window onto the same subject the counts
+        // describe, so a page still reading the unsearched hit set would list combos the
+        // histogram above it had already stopped counting.
         format!(
-            "WITH {HIT_CTE}
+            "WITH {HIT_CTE},
+                  {SEL_CTE}
              {COLUMNS}
-               FROM hit h JOIN combos c ON c.id = h.combo_id
-              WHERE c.card_count = coalesce(?, c.card_count)
+               FROM sel h JOIN combos c ON c.id = h.combo_id
+              WHERE c.card_count = coalesce(?3, c.card_count)
               {TAIL}"
         )
     }
@@ -1755,17 +1880,42 @@ fn pieces_sql(conn: &Connection, holes: &str) -> String {
 /// be asking. Folding the two into one query would mean a `have = card_count` that is sometimes
 /// applied and sometimes not, which is two queries wearing one name.
 ///
-/// Three statements, in this order and for these reasons:
+/// Four statements, in this order and for these reasons:
 ///
-/// 1. [`counts_sql`] — the histogram, and with it `total`, `owned_total` and `matching`.
-/// 2. [`page_sql`] — the rows, narrowed and ordered and `LIMIT`ed in SQL.
-/// 3. [`pieces_sql`] — every card of the combos on that page, in one statement, folded back
+/// 1. [`total_sql`] — how many combos name the card at all, over [`HIT_CTE`] and no filters.
+/// 2. [`counts_sql`] — the histogram over the *searched* set, and with it `owned_total` and
+///    `matching`.
+/// 3. [`page_sql`] — the rows, narrowed and ordered and `LIMIT`ed in SQL.
+/// 4. [`pieces_sql`] — every card of the combos on that page, in one statement, folded back
 ///    per combo **by id**.
 ///
-/// The third is skipped when the page is empty, because `IN ()` is not SQL. The first two run
+/// The last is skipped when the page is empty, because `IN ()` is not SQL. The first three run
 /// unconditionally: an unknown oracle id costs one index probe that finds nothing, and deciding
 /// to skip the page from a count derived by the statement before it is exactly the shape that
-/// hides the bug where those two disagree.
+/// hides the bug where those two disagree. **The first runs even when there is no search**, for
+/// that same reason: `total` computed one way with a needle and another way without it is two
+/// definitions of one number, and the cheap path would be the one nothing exercises.
+///
+/// # What the search narrows, and what it does not
+///
+/// | field | over what set |
+/// | --- | --- |
+/// | `total` | combos naming this card, **no filters at all** |
+/// | `by_card_count` | the search-filtered set |
+/// | `owned_total` | the search-filtered set |
+/// | `matching` | after the search **and** `card_count` **and** `owned_only` |
+///
+/// A text search is the reader changing the **subject** — "I only care about combos with
+/// Thassa's Oracle in them" — where the size chips and the owned toggle are **facets** of that
+/// subject. A facet's count has to predict what pressing it yields, so the census behind the
+/// chips and behind "you own every piece of N of these" is taken over the searched set or both
+/// are lies the moment anybody types. `total` stays the card's own census because it answers a
+/// question the search does not change, and it is what lets the panel go on saying *this card
+/// is in 6 044 combos* over a list showing four of them.
+///
+/// The needle is matched case-insensitively against **any** piece's `combo_cards.name`,
+/// the asked-about card's own row included — see [`SEL_CTE`] for that rule, for why the
+/// wildcards cannot come off the wire, and for what a blank one means.
 ///
 /// **An unknown oracle id and a database that has never ingested answer the same empty page**,
 /// which is [`match_combos`]' documented rule and holds here for its reason: the caller tells
@@ -1774,12 +1924,22 @@ fn pieces_sql(conn: &Connection, holes: &str) -> String {
 pub fn card_combos(
     conn: &Connection,
     oracle_id: &str,
+    search: Option<&str>,
     card_count: Option<i64>,
     owned_only: bool,
     limit: i64,
     offset: i64,
 ) -> Result<CardCombosPage, String> {
     let oracle_id = oracle_id.trim();
+    // **`None`, `Some("")` and a `Some` that trims to empty are one value and one code path.**
+    // A text box that has been typed into and cleared sends a string the reader means nothing
+    // by, and a caller that has no box at all sends nothing — folding both to `""` here is what
+    // makes [`SEL_CTE`]'s `?2 = ''` the single spelling of *no search*, rather than a branch
+    // that has to be taken identically in three composed statements.
+    let needle = search
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("");
     // Clamped rather than refused: every one of these is a number a page composed and none is
     // a reader's answer to anything, so a bound this app can meet quietly is worth more than a
     // sentence nobody will read. `limit` is clamped *up* as well — a `0` asked for by a page
@@ -1787,11 +1947,19 @@ pub fn card_combos(
     let limit = limit.clamp(1, MAX_PAGE);
     let offset = offset.max(0);
 
+    // **Before the histogram, and unfiltered by anything.** See the table above: this is the
+    // only number the search leaves alone, and the only one a search that matched nothing still
+    // has to be able to answer.
+    let total: i64 = conn
+        .prepare_cached(&total_sql())
+        .and_then(|mut s| s.query_row(params![oracle_id], |r| r.get(0)))
+        .map_err(|e| format!("could not look for this card's combos: {e}"))?;
+
     let mut counts = conn
         .prepare_cached(&counts_sql())
         .map_err(|e| format!("could not look for this card's combos: {e}"))?;
     let buckets: Vec<(i64, i64, i64)> = counts
-        .query_map(params![oracle_id], |r| {
+        .query_map(params![oracle_id, needle], |r| {
             // `sum()` over a group is never NULL here — every group has a row and `all_owned`
             // is a 0 or a 1 — but a count read as an `Option` costs nothing and cannot panic a
             // reader's window over an arithmetic surprise.
@@ -1804,12 +1972,13 @@ pub fn card_combos(
         .and_then(|rows| rows.collect())
         .map_err(|e| format!("could not look for this card's combos: {e}"))?;
 
-    let total: i64 = buckets.iter().map(|(_, n, _)| n).sum();
     let owned_total: i64 = buckets.iter().map(|(_, _, owned)| owned).sum();
-    // **The filters, applied to the buckets rather than asked of the database again.** They are
-    // the same two predicates the page statement carries, over a set the statement above has
-    // already partitioned by exactly the column one of them tests — so a fourth pass over 6 044
-    // rows would spend 60 ms to arrive at a sum this loop takes in nanoseconds.
+    // **The two facets, applied to the buckets rather than asked of the database again.** They
+    // are the same two predicates the page statement carries, over a set the statement above has
+    // already partitioned by exactly the column one of them tests — so another pass over 6 044
+    // rows would spend 60 ms to arrive at a sum this loop takes in nanoseconds. The search is
+    // *not* one of them and cannot be applied here: it is already in the set these buckets
+    // describe.
     let matching: i64 = buckets
         .iter()
         .filter(|(cards, _, _)| card_count.is_none_or(|want| *cards == want))
@@ -1827,7 +1996,7 @@ pub fn card_combos(
         .prepare_cached(&page_sql(owned_only))
         .map_err(|e| format!("could not look for this card's combos: {e}"))?;
     let mut combos: Vec<CardCombo> = page
-        .query_map(params![oracle_id, card_count, limit, offset], |r| {
+        .query_map(params![oracle_id, needle, card_count, limit, offset], |r| {
             Ok(CardCombo {
                 id: r.get(0)?,
                 bracket_tag: r.get(1)?,
@@ -2276,10 +2445,17 @@ pub async fn combos_for_cards(
 /// would mean resolving it to its oracle card first only to answer identically for all of them.
 /// Every surface that opens this panel is looking at a card rather than at a deck row.
 ///
-/// `card_count` is an exact size — `Some(2)` is *two-card combos*, `None` is every size — and
-/// `owned_only` narrows to the combos the reader owns every piece of. `limit` is clamped to
-/// [`MAX_PAGE`] and `offset` to zero; neither is refused, because both are a page's own numbers
-/// rather than a reader's.
+/// `search` is a case-insensitive substring over **any** piece's name, the asked-about card's
+/// own included; `card_count` is an exact size — `Some(2)` is *two-card combos*, `None` is every
+/// size — and `owned_only` narrows to the combos the reader owns every piece of. `limit` is
+/// clamped to [`MAX_PAGE`] and `offset` to zero; neither is refused, because both are a page's
+/// own numbers rather than a reader's.
+///
+/// **`search` is `Option<String>` for `card_count`'s reason and answers to the same three
+/// spellings of nothing.** An absent key, a `null` and a box the reader cleared are one state
+/// and [`card_combos`] flattens them into it; what the three of them mean — *no search*, an
+/// answer identical to the one this command gave before the box existed — is that function's
+/// contract and not this wrapper's.
 ///
 /// `async`, and answered on the blocking pool, for [`combos_status`]'s reason: a sync command
 /// body runs inline on the IPC thread and this one takes `db_read`'s mutex. The body is
@@ -2290,6 +2466,7 @@ pub async fn combos_for_cards(
 pub async fn combos_for_card(
     state: tauri::State<'_, Arc<AppState>>,
     oracle_id: String,
+    search: Option<String>,
     card_count: Option<i64>,
     owned_only: bool,
     limit: i64,
@@ -2298,7 +2475,15 @@ pub async fn combos_for_card(
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let conn = crate::sync::lock_db_read(&state);
-        card_combos(&conn, &oracle_id, card_count, owned_only, limit, offset)
+        card_combos(
+            &conn,
+            &oracle_id,
+            search.as_deref(),
+            card_count,
+            owned_only,
+            limit,
+            offset,
+        )
     })
     .await
     .map_err(|e| format!("could not look for this card's combos: {e}"))?
@@ -3425,7 +3610,7 @@ mod tests {
         let db = card_combo_db();
         let conn = crate::db::lock_blocking(&db);
 
-        let page = card_combos(&conn, "o-altar", None, false, 25, 0).unwrap();
+        let page = card_combos(&conn, "o-altar", None, None, false, 25, 0).unwrap();
 
         assert_eq!(
             ids(&page),
@@ -3454,7 +3639,7 @@ mod tests {
         let db = card_combo_db();
         let conn = crate::db::lock_blocking(&db);
 
-        let page = card_combos(&conn, "o-altar", Some(2), false, 25, 0).unwrap();
+        let page = card_combos(&conn, "o-altar", None, Some(2), false, 25, 0).unwrap();
 
         assert_eq!(page.total, 6, "every combo naming the Altar, unfiltered");
         assert_eq!(page.matching, 3, "the three two-card ones");
@@ -3466,8 +3651,12 @@ mod tests {
         assert_eq!(ids(&page), vec!["c2b", "c2a", "c2z"]);
     }
 
-    /// The histogram is over the **unfiltered** set, ascending, and names only the sizes that
-    /// occur — a chip row cannot offer a size that would answer nothing.
+    /// The histogram is over the set **neither facet has touched**, ascending, and names only
+    /// the sizes that occur — a chip row cannot offer a size that would answer nothing.
+    ///
+    /// A *search* does narrow it, which is the one narrowing that is not a facet;
+    /// `a_search_narrows_the_histogram_the_owned_count_and_matching_but_never_total` is that
+    /// half and this call passes no needle.
     #[test]
     fn by_card_count_is_ascending_and_names_only_the_sizes_that_occur() {
         let db = card_combo_db();
@@ -3475,7 +3664,7 @@ mod tests {
 
         // Asked with a filter on, deliberately: the histogram describes the whole set whatever
         // the page is showing, or the chips would empty themselves as soon as one was pressed.
-        let page = card_combos(&conn, "o-altar", Some(4), true, 25, 0).unwrap();
+        let page = card_combos(&conn, "o-altar", None, Some(4), true, 25, 0).unwrap();
 
         assert_eq!(
             page.by_card_count,
@@ -3508,7 +3697,7 @@ mod tests {
         let db = card_combo_db();
         let conn = crate::db::lock_blocking(&db);
         let ask = |cards: Option<i64>, owned: bool| {
-            let page = card_combos(&conn, "o-altar", cards, owned, 25, 0).unwrap();
+            let page = card_combos(&conn, "o-altar", None, cards, owned, 25, 0).unwrap();
             assert_eq!(
                 page.matching as usize,
                 page.combos.len(),
@@ -3543,12 +3732,12 @@ mod tests {
     fn paging_walks_the_order_with_no_gap_and_no_repeat_and_clamps_the_limit() {
         let db = card_combo_db();
         let conn = crate::db::lock_blocking(&db);
-        let all = card_combos(&conn, "o-altar", None, false, 25, 0).unwrap();
+        let all = card_combos(&conn, "o-altar", None, None, false, 25, 0).unwrap();
         let whole: Vec<String> = ids(&all).iter().map(|s| s.to_string()).collect();
 
         let mut walked: Vec<String> = Vec::new();
         for offset in [0, 2, 4, 6] {
-            let page = card_combos(&conn, "o-altar", None, false, 2, offset).unwrap();
+            let page = card_combos(&conn, "o-altar", None, None, false, 2, offset).unwrap();
             assert_eq!(page.total, 6, "the counts do not move as the page does");
             assert!(page.combos.len() <= 2, "the limit is a limit");
             walked.extend(ids(&page).iter().map(|s| s.to_string()));
@@ -3559,7 +3748,7 @@ mod tests {
         // as *nothing*, so an unclamped `limit` fails loudly in one direction and silently in
         // the other; `MAX_PAGE + 50` is the ceiling the caller does not get to raise.
         assert_eq!(
-            card_combos(&conn, "o-altar", None, false, 0, 0)
+            card_combos(&conn, "o-altar", None, None, false, 0, 0)
                 .unwrap()
                 .combos
                 .len(),
@@ -3567,14 +3756,14 @@ mod tests {
             "a zero is clamped up to one row, not down to none"
         );
         assert_eq!(
-            card_combos(&conn, "o-altar", None, false, -1, 0)
+            card_combos(&conn, "o-altar", None, None, false, -1, 0)
                 .unwrap()
                 .combos
                 .len(),
             1
         );
         assert_eq!(
-            card_combos(&conn, "o-altar", None, false, MAX_PAGE + 50, 0)
+            card_combos(&conn, "o-altar", None, None, false, MAX_PAGE + 50, 0)
                 .unwrap()
                 .combos
                 .len(),
@@ -3594,7 +3783,7 @@ mod tests {
         let db = card_combo_db();
         let conn = crate::db::lock_blocking(&db);
 
-        let page = card_combos(&conn, "o-altar", Some(3), false, 25, 0).unwrap();
+        let page = card_combos(&conn, "o-altar", None, Some(3), false, 25, 0).unwrap();
         let c3b = page.combos.iter().find(|c| c.id == "c3b").unwrap();
 
         assert_eq!(
@@ -3622,7 +3811,7 @@ mod tests {
         let db = card_combo_db();
         let conn = crate::db::lock_blocking(&db);
 
-        let page = card_combos(&conn, "o-altar", Some(4), false, 25, 0).unwrap();
+        let page = card_combos(&conn, "o-altar", None, Some(4), false, 25, 0).unwrap();
         let pieces = &page.combos[0].pieces;
         let by_oracle = |o: &str| pieces.iter().find(|p| p.oracle_id == o).unwrap();
 
@@ -3661,7 +3850,7 @@ mod tests {
         let db = card_combo_db();
         let conn = crate::db::lock_blocking(&db);
 
-        let page = card_combos(&conn, "o-altar", Some(3), false, 25, 0).unwrap();
+        let page = card_combos(&conn, "o-altar", None, Some(3), false, 25, 0).unwrap();
 
         assert_eq!(ids(&page), vec!["c3a", "c3b"]);
         assert_eq!(
@@ -3700,7 +3889,7 @@ mod tests {
         let db = card_combo_db();
         let conn = crate::db::lock_blocking(&db);
 
-        let page = card_combos(&conn, "o-altar", Some(2), false, 25, 0).unwrap();
+        let page = card_combos(&conn, "o-altar", None, Some(2), false, 25, 0).unwrap();
         let c3 = page.combos.iter().find(|c| c.id == "c3a");
         assert!(c3.is_none(), "the size filter is on");
         let pieces = &page.combos.iter().find(|c| c.id == "c2a").unwrap().pieces;
@@ -3713,7 +3902,7 @@ mod tests {
             vec![("o-altar", 2), ("o-basalt", 4)],
             "two in a locked case, and four across two printings and two finishes"
         );
-        let curio = card_combos(&conn, "o-altar", Some(3), false, 25, 0)
+        let curio = card_combos(&conn, "o-altar", None, Some(3), false, 25, 0)
             .unwrap()
             .combos[0]
             .pieces
@@ -3736,7 +3925,7 @@ mod tests {
         let db = card_combo_db();
         let conn = crate::db::lock_blocking(&db);
         assert_eq!(
-            card_combos(&conn, "o-altar", None, false, 25, 0)
+            card_combos(&conn, "o-altar", None, None, false, 25, 0)
                 .unwrap()
                 .owned_total,
             2,
@@ -3752,14 +3941,14 @@ mod tests {
         own(&conn, "p-nameless", "nonfoil", 1, None);
 
         assert_eq!(
-            card_combos(&conn, "o-altar", None, false, 25, 0)
+            card_combos(&conn, "o-altar", None, None, false, 25, 0)
                 .unwrap()
                 .owned_total,
             2,
             "a NULL oracle id in the collection owns nothing and hides nothing"
         );
         assert_eq!(
-            ids(&card_combos(&conn, "o-altar", None, true, 25, 0).unwrap()),
+            ids(&card_combos(&conn, "o-altar", None, None, true, 25, 0).unwrap()),
             vec!["c2a", "c2z"],
             "and the owned page is the same two it was"
         );
@@ -3782,7 +3971,7 @@ mod tests {
         store(&db, &file, None, 1_800_000_000, &mut |_, _| {}).unwrap();
 
         let conn = crate::db::lock_blocking(&db);
-        let page = card_combos(&conn, "o-kiki", None, false, 25, 0).unwrap();
+        let page = card_combos(&conn, "o-kiki", None, None, false, 25, 0).unwrap();
 
         assert_eq!(page.total, 1);
         assert_eq!(ids(&page), vec!["twice"]);
@@ -3817,7 +4006,7 @@ mod tests {
 
         let never = crate::schema::memory_pair();
         assert_eq!(
-            card_combos(&never, "o-altar", None, false, 25, 0).unwrap(),
+            card_combos(&never, "o-altar", None, None, false, 25, 0).unwrap(),
             empty,
             "never ingested"
         );
@@ -3825,14 +4014,366 @@ mod tests {
         let db = card_combo_db();
         let conn = crate::db::lock_blocking(&db);
         assert_eq!(
-            card_combos(&conn, "o-who", None, false, 25, 0).unwrap(),
+            card_combos(&conn, "o-who", None, None, false, 25, 0).unwrap(),
             empty,
             "a card no combo names"
         );
         assert_eq!(
-            card_combos(&conn, "  ", None, false, 25, 0).unwrap(),
+            card_combos(&conn, "  ", None, None, false, 25, 0).unwrap(),
             empty,
             "and a blank is a card nothing names, rather than a match on everything"
+        );
+    }
+
+    // ---- one card's combos: the search ------------------------------------------------
+
+    /// Seven combos naming `o-altar`, one that does not, and six pieces chosen so that **every
+    /// number the search touches moves by a different amount**.
+    ///
+    /// | combo | pop | cards | size | names Basalt | every piece owned |
+    /// | --- | --- | --- | --- | --- | --- |
+    /// | `s2a` | 90 | Altar, `_____ Goblin` | 2 | no | yes |
+    /// | `s2b` | 80 | Altar, Basalt Monolith | 2 | **yes** | yes |
+    /// | `s3a` | 70 | Altar, Basalt Monolith, Cloudstone Curio | 3 | **yes** | no |
+    /// | `s3e` | 70 | Altar, Basalt Monolith, Chaos Orb | 3 | **yes** | no |
+    /// | `s3b` | 60 | Altar, `_____ Goblin`, `Discount 50% Off` | 3 | no | yes |
+    /// | `s3c` | 50 | Altar, Cloudstone Curio, Chaos Orb | 3 | no | no |
+    /// | `s4a` | 40 | Altar, Basalt Monolith, `_____ Goblin`, `Discount 50% Off` | 4 | **yes** | yes |
+    /// | `snone` | 30 | Basalt Monolith, Cloudstone Curio | — | — | — |
+    ///
+    /// Searching `basalt` leaves `total` at **7**, the histogram summing to **4**,
+    /// `owned_total` at **2** and — with the two-card chip pressed — `matching` at **1**. Four
+    /// numbers, four values, and each one strictly below what the same call answers with no
+    /// search (7, 7, 4, 2): a wiring that read any of them off the wrong set lands on a number
+    /// that is in this table and is not the one asserted.
+    ///
+    /// **Two of the six card names are here for the wildcard fence.** `_____ Goblin` is a real
+    /// Magic card and the live corpus holds eleven `combo_cards` rows whose names carry an
+    /// underscore; nothing in it carries a `%` at all, measured, so `Discount 50% Off` is an
+    /// invention against a name Spellbook has not published yet. Under an unescaped
+    /// `LIKE '%_%'` or `LIKE '%%%'` both needles match every one of the seven, which is why the
+    /// fixture also holds `s3c`, whose names contain neither.
+    ///
+    /// **`s3a` and `s3e` share a popularity on purpose**, so the searched order is one only the
+    /// id can finish and the paging walk below is a real walk.
+    fn search_combo_db() -> Mutex<Connection> {
+        let db = mem_db();
+        {
+            let conn = crate::db::lock_blocking(&db);
+            for (id, oracle, name) in [
+                ("p-altar", "o-altar", "Ashnod's Altar"),
+                ("p-basalt", "o-basalt", "Basalt Monolith"),
+                ("p-goblin", "o-goblin", "_____ Goblin"),
+                ("p-off", "o-off", "Discount 50% Off"),
+                ("p-curio", "o-curio", "Cloudstone Curio"),
+                ("p-orb", "o-orb", "Chaos Orb"),
+            ] {
+                seed_printing(&conn, id, oracle, name, "tst", "1", "2020-01-01");
+            }
+            // Four of the six. The Curio and the Orb are what keep `s3a`, `s3e` and `s3c` out
+            // of `owned_total`, and they are in different combos so the owned count and the
+            // search narrow along different lines.
+            for printing in ["p-altar", "p-basalt", "p-goblin", "p-off"] {
+                own(&conn, printing, "nonfoil", 1, None);
+            }
+        }
+
+        let altar = ("Ashnod's Altar", "o-altar");
+        let basalt = ("Basalt Monolith", "o-basalt");
+        let goblin = ("_____ Goblin", "o-goblin");
+        let off = ("Discount 50% Off", "o-off");
+        let curio = ("Cloudstone Curio", "o-curio");
+        let orb = ("Chaos Orb", "o-orb");
+        let variants = vec![
+            // Stored in an order that is neither the answer nor its reverse, for
+            // `card_combo_db`'s reason.
+            ranked_variant("s3c", Some(50), &[altar, curio, orb]),
+            ranked_variant("s4a", Some(40), &[altar, basalt, goblin, off]),
+            ranked_variant("s2a", Some(90), &[altar, goblin]),
+            ranked_variant("s3e", Some(70), &[altar, basalt, orb]),
+            ranked_variant("snone", Some(30), &[basalt, curio]),
+            ranked_variant("s2b", Some(80), &[altar, basalt]),
+            ranked_variant("s3a", Some(70), &[altar, basalt, curio]),
+            ranked_variant("s3b", Some(60), &[altar, goblin, off]),
+        ];
+        let file = parse(&document(&variants));
+        assert_eq!(file.combos.len(), 8, "the fixture itself must have stored");
+        store(&db, &file, None, 1_800_000_000, &mut |_, _| {}).unwrap();
+        db
+    }
+
+    /// [`card_combos`] over [`search_combo_db`] with the three narrowings named.
+    ///
+    /// **`None, None` at a call site is the positional trap `deck::IMAGE_COL` warns about, read
+    /// one module over**: `search` and `card_count` are adjacent and both `Option`, so the one
+    /// spelling that swaps them silently is exactly the one every default call uses. Every
+    /// assertion below goes through this, and the compiler checks the order once.
+    fn ask(
+        conn: &Connection,
+        search: Option<&str>,
+        cards: Option<i64>,
+        owned_only: bool,
+    ) -> CardCombosPage {
+        card_combos(conn, "o-altar", search, cards, owned_only, 25, 0).unwrap()
+    }
+
+    fn bucket_sum(page: &CardCombosPage) -> i64 {
+        page.by_card_count.iter().map(|b| b.combos).sum()
+    }
+
+    /// **The whole design decision, in four numbers that cannot be confused for one another.**
+    ///
+    /// A search is the reader changing the *subject*, so the histogram and the owned count —
+    /// which are facets *of* that subject and have to predict what pressing them yields — move
+    /// with it, while `total` goes on answering the question the card page asks ("this card is
+    /// in seven combos") whatever is typed.
+    ///
+    /// 7, 4, 2 and 1, and each is strictly below the 7, 7, 4 and 2 the same call answers with
+    /// no search at all — so a field read off the wrong set lands on a number this test is
+    /// already asserting somewhere else.
+    #[test]
+    fn a_search_narrows_the_histogram_the_owned_count_and_matching_but_never_total() {
+        let db = search_combo_db();
+        let conn = crate::db::lock_blocking(&db);
+
+        let wide = ask(&conn, None, Some(2), false);
+        assert_eq!(wide.total, 7, "every combo naming the Altar");
+        assert_eq!(bucket_sum(&wide), 7, "the histogram, unsearched");
+        assert_eq!(wide.owned_total, 4, "s2a, s2b, s3b and s4a");
+        assert_eq!(wide.matching, 2, "the two two-card ones");
+
+        let narrow = ask(&conn, Some("basalt"), Some(2), false);
+        assert_eq!(
+            narrow.total, 7,
+            "`total` is the card's own census and a search does not change the question it \
+             answers"
+        );
+        assert_eq!(
+            narrow.by_card_count,
+            vec![
+                ComboCountBucket {
+                    cards: 2,
+                    combos: 1
+                },
+                ComboCountBucket {
+                    cards: 3,
+                    combos: 2
+                },
+                ComboCountBucket {
+                    cards: 4,
+                    combos: 1
+                },
+            ],
+            "the chips count the searched set, or every one of them is a lie once somebody types"
+        );
+        assert_eq!(bucket_sum(&narrow), 4);
+        assert_eq!(
+            narrow.owned_total, 2,
+            "s2b and s4a — `s2a` and `s3b` are owned and name no Basalt"
+        );
+        assert_eq!(narrow.matching, 1, "s2b alone is a searched two-card combo");
+        assert_eq!(ids(&narrow), vec!["s2b"]);
+    }
+
+    /// **No search, an empty search and a whitespace-only search are one answer.**
+    ///
+    /// Compared as whole pages rather than field by field, so a difference anywhere in the
+    /// shape is a failure — including in the combos and their pieces.
+    #[test]
+    fn a_missing_a_blank_and_a_whitespace_only_search_all_answer_what_no_search_answers() {
+        let db = search_combo_db();
+        let conn = crate::db::lock_blocking(&db);
+
+        let none = ask(&conn, None, None, false);
+        assert_eq!(
+            none.total, 7,
+            "the fixture, so the comparisons below mean something"
+        );
+        assert_eq!(ids(&none).len(), 7);
+
+        assert_eq!(ask(&conn, Some(""), None, false), none, "an empty box");
+        assert_eq!(
+            ask(&conn, Some("   "), None, false),
+            none,
+            "and one holding only spaces — this is what the trim is for, and without it the \
+             needle would be three literal spaces and match nothing"
+        );
+        assert_eq!(
+            ask(&conn, Some("  basalt  "), None, false),
+            ask(&conn, Some("basalt"), None, false),
+            "the trim is on both ends of a real needle too"
+        );
+    }
+
+    /// **Case-insensitive in both directions, which is two halves of one expression.**
+    ///
+    /// Dropping `lower(?2)` fails the shouted needle; dropping `lower(s.name)` fails the
+    /// whispered one. Neither half can be removed and leave this green.
+    #[test]
+    fn a_search_is_case_insensitive_in_both_directions() {
+        let db = search_combo_db();
+        let conn = crate::db::lock_blocking(&db);
+
+        let want = vec!["s2b", "s3a", "s3e", "s4a"];
+        assert_eq!(ids(&ask(&conn, Some("basalt"), None, false)), want);
+        assert_eq!(
+            ids(&ask(&conn, Some("BASALT"), None, false)),
+            want,
+            "an upper-case needle against a mixed-case name"
+        );
+        assert_eq!(
+            ids(&ask(&conn, Some("basalt monolith"), None, false)),
+            want,
+            "and a lower-case needle against the same name's capitals"
+        );
+    }
+
+    /// **The asked-about card's own name matches every one of its combos**, which is the rule
+    /// that needs no explaining in the UI: a reader looking at Ashnod's Altar and typing
+    /// "ashnod" is not shown an empty list.
+    ///
+    /// An `EXISTS` that excluded the subject's own `combo_cards` row — `AND s.oracle_id <> ?1`,
+    /// which is a perfectly reasonable-looking line — answers nothing here and passes every
+    /// other test in this file.
+    #[test]
+    fn searching_for_the_asked_about_cards_own_name_matches_all_of_its_combos() {
+        let db = search_combo_db();
+        let conn = crate::db::lock_blocking(&db);
+
+        assert_eq!(
+            ask(&conn, Some("ashnod"), None, false),
+            ask(&conn, None, None, false),
+            "the card's own name is a search that narrows nothing"
+        );
+        assert_eq!(
+            ids(&ask(&conn, Some("Altar"), None, false)).len(),
+            7,
+            "and so is any part of it"
+        );
+    }
+
+    /// **A `%` and a `_` are searched for as characters, never as patterns.**
+    ///
+    /// This is the whole reason the predicate is `instr` and not `LIKE`: `LIKE '%' || ?2 || '%'`
+    /// with either of these needles matches **all seven** combos, and does it silently — the
+    /// reader gets a full list back and no error anywhere says the search stopped meaning what
+    /// they typed. Three counts, none of them seven, and `s3c`'s names carry neither character
+    /// so the broken answer is always strictly larger than the right one.
+    ///
+    /// There is no third case to write, and that is the argument for `instr` rather than for a
+    /// careful escape: `LIKE` needs `%`, `_` **and** whatever `ESCAPE` character neutralises
+    /// them, where `instr` has no pattern language and therefore no character to get wrong.
+    #[test]
+    fn a_percent_and_an_underscore_in_a_search_are_matched_literally() {
+        let db = search_combo_db();
+        let conn = crate::db::lock_blocking(&db);
+
+        let underscore = ask(&conn, Some("_"), None, false);
+        assert_eq!(
+            ids(&underscore),
+            vec!["s2a", "s3b", "s4a"],
+            "the three naming `_____ Goblin`, not the seven a single-character wildcard reaches"
+        );
+        assert_eq!(underscore.total, 7, "and the census is still the census");
+
+        assert_eq!(
+            ids(&ask(&conn, Some("%"), None, false)),
+            vec!["s3b", "s4a"],
+            "the two naming `Discount 50% Off`"
+        );
+        assert_eq!(
+            ids(&ask(&conn, Some("50% Off"), None, false)),
+            vec!["s3b", "s4a"],
+            "and a needle carrying one inside a longer string still means the character"
+        );
+        assert_eq!(
+            ids(&ask(&conn, Some("_____ Gob"), None, false)),
+            vec!["s2a", "s3b", "s4a"],
+            "five of them in a row are five characters"
+        );
+    }
+
+    /// **The search composes with the size chip and the owned toggle rather than replacing
+    /// either**, and `matching` agrees with the page on every one of the eight combinations —
+    /// which it has to, because one is summed off the histogram in Rust and the other is a
+    /// `WHERE` clause in a different statement.
+    ///
+    /// The `?2` this feature added sits *ahead* of the size, limit and offset parameters in the
+    /// composed text, so a `TAIL` left holding bare `?`s renumbers all three: the size filter
+    /// would read the needle, and `LIMIT`/`OFFSET` would read the size and the limit. Every row
+    /// below is wrong in that world.
+    #[test]
+    fn the_search_composes_with_the_size_filter_and_the_owned_toggle() {
+        let db = search_combo_db();
+        let conn = crate::db::lock_blocking(&db);
+        let check = |search: Option<&str>, cards: Option<i64>, owned: bool| {
+            let page = ask(&conn, search, cards, owned);
+            assert_eq!(
+                page.matching as usize,
+                page.combos.len(),
+                "the count and the page disagree for {search:?}/{cards:?}/{owned}"
+            );
+            assert_eq!(page.total, 7, "and `total` never moves");
+            ids(&page).iter().map(|s| s.to_string()).collect::<Vec<_>>()
+        };
+
+        assert_eq!(check(None, None, false).len(), 7);
+        assert_eq!(
+            check(Some("basalt"), None, false),
+            vec!["s2b", "s3a", "s3e", "s4a"]
+        );
+        assert_eq!(check(Some("basalt"), Some(3), false), vec!["s3a", "s3e"]);
+        assert_eq!(check(Some("basalt"), None, true), vec!["s2b", "s4a"]);
+        assert_eq!(check(Some("basalt"), Some(2), true), vec!["s2b"]);
+        assert_eq!(check(Some("basalt"), Some(4), true), vec!["s4a"]);
+        assert_eq!(
+            check(None, Some(3), true),
+            vec!["s3b"],
+            "the owned three-card combo the search would have removed"
+        );
+        assert_eq!(
+            check(Some("curio"), None, true),
+            Vec::<String>::new(),
+            "searched but owned by nobody, which is a narrowing rather than a fallback to all"
+        );
+        assert_eq!(
+            check(Some("zzz"), None, false),
+            Vec::<String>::new(),
+            "and a needle nothing carries is an empty list, not the whole one"
+        );
+    }
+
+    /// **Paging walks the *searched* order with no gap and no repeat**, and the counts do not
+    /// move as the page does.
+    ///
+    /// The one mutation only this catches: a page statement still reading `hit` where the
+    /// counts read `sel`. Its first page would be `s2a`, `s2b` — the head of the *unsearched*
+    /// list — which is why `s2a` is asserted absent by name as well as by the concatenation.
+    #[test]
+    fn paging_walks_the_searched_order_with_no_gap_and_no_repeat() {
+        let db = search_combo_db();
+        let conn = crate::db::lock_blocking(&db);
+
+        let whole: Vec<String> = ids(&ask(&conn, Some("basalt"), None, false))
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(whole, vec!["s2b", "s3a", "s3e", "s4a"]);
+
+        let mut walked: Vec<String> = Vec::new();
+        for offset in [0, 2, 4] {
+            let page =
+                card_combos(&conn, "o-altar", Some("basalt"), None, false, 2, offset).unwrap();
+            assert_eq!(page.total, 7, "the counts do not move as the page does");
+            assert_eq!(page.matching, 4);
+            assert!(page.combos.len() <= 2, "the limit is a limit");
+            walked.extend(ids(&page).iter().map(|s| s.to_string()));
+        }
+        assert_eq!(walked, whole, "no gap and no repeat");
+        assert!(
+            !walked.contains(&"s2a".to_owned()),
+            "`s2a` is the head of the unsearched order and names no Basalt; a page reading the \
+             hit set instead of the searched one puts it first"
         );
     }
 

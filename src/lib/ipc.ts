@@ -4979,8 +4979,9 @@ export interface CardCombo {
    * rather than derived because it is also the filter key and the bucket key.
    *
    * A reader narrowing to two-card combos is asking about this number, and
-   * {@link CardCombosPage.byCardCount} is a census of it over the whole unfiltered match set —
-   * neither of which the page in hand could answer, because the page is a slice.
+   * {@link CardCombosPage.byCardCount} is a census of it over the **searched** set — the set
+   * {@link CardCombosQuery.search} leaves standing, before this filter and `ownedOnly` are
+   * applied. Neither of which the page in hand could answer, because the page is a slice.
    */
   cardCount: number;
   /**
@@ -5033,8 +5034,10 @@ export interface CardCombo {
 /**
  * How many combos name this card at each combo size — one bar of the size census.
  *
- * **Computed over the *unfiltered* match set**, so the numbers do not move as the reader
- * narrows; see {@link CardCombosPage.byCardCount}.
+ * **Computed over the *searched* set**, so the numbers hold still while the reader picks a size
+ * or turns the owned box on, and move the moment they type. A text search changes the *subject*
+ * — "only combos with Thassa in them" — and a size is a **facet** of whatever subject is in
+ * force; see {@link CardCombosPage.byCardCount} for the whole argument.
  */
 export interface ComboCountBucket {
   /** The combo size — {@link CardCombo.cardCount}, and the value to pass back as
@@ -5051,27 +5054,64 @@ export interface ComboCountBucket {
  * **Three counts rather than one, because the page cannot answer any of them.** `combos` below
  * is a slice — up to `limit` rows — so a caption counting it would say "20 combos" for a card
  * with six hundred, and a filter chip counting it would say the same thing twice.
+ *
+ * **The three are taken over three different sets, and that is the shape rather than an
+ * inconsistency** (2026-09-08, when {@link CardCombosQuery.search} landed). A text search is the
+ * reader changing **the subject** — *only combos with Thassa in them* — where the size chips and
+ * the owned toggle are **facets of that subject**. A facet's count has to predict what pressing
+ * it yields, so `byCardCount` and `ownedTotal` are censuses of the **searched** set: otherwise
+ * every chip is a lie the moment somebody types, offering a size the searched list does not
+ * contain and an owned count drawn from combos the search has already excluded. `total` stays the
+ * card's own census, because it answers a question the search does not change — *how many combos
+ * is this card in* — and it is what the heading is about and what `ownedTotal` used to be a share
+ * of. Nothing about `matching` moved: it was always the whole filter stack, and the stack grew a
+ * rung.
+ *
+ * The shape did not change with any of that. **`total` and `matching` mean exactly what they
+ * meant and `byCardCount` and `ownedTotal` do not**, which is the drift a type cannot catch — a
+ * caller that goes on treating `ownedTotal` as a share of `total` compiles, draws a number that
+ * is never out of range, and is quietly wrong in one direction: the searched set is a *subset* of
+ * `total`, so the fraction can only ever read **too low**, and it reads lowest exactly when the
+ * search has done the most work. A ratio that overflowed would at least be visible.
  */
 export interface CardCombosPage {
-  /** Combos naming this card with **no filter applied at all** — the number the screen's
-   *  heading is about, and the denominator {@link CardCombosPage.ownedTotal} is a share of. */
+  /**
+   * Combos naming this card with **no filter applied at all** — including no search. The number
+   * the screen's heading is about.
+   *
+   * **It is no longer the denominator {@link CardCombosPage.ownedTotal} is a share of**, which
+   * this line said until the search landed: that count is over the searched set now, so
+   * `ownedTotal / total` is a fraction of two different questions. It cannot go out of range —
+   * the searched set is a subset of this one — which is precisely what makes it a bad way to be
+   * wrong: it simply reads low, and lowest on the searches that narrowed the most.
+   */
   total: number;
-  /** Combos matching after **both** filters — {@link CardCombosQuery.cardCount} *and*
-   *  `ownedOnly`. This is what the pager pages through, so it is the one to compare `offset`
-   *  against and never {@link CardCombosPage.total}. */
+  /** Combos matching after **every** filter — {@link CardCombosQuery.search},
+   *  {@link CardCombosQuery.cardCount} *and* `ownedOnly`. This is what the pager pages through,
+   *  so it is the one to compare `offset` against and never {@link CardCombosPage.total}. */
   matching: number;
-  /** Of {@link CardCombosPage.total}, how many the reader owns **every piece** of — the
-   *  `ownedOnly` filter's own count, answered whether or not that filter is on, so the checkbox
-   *  can say what pressing it would leave. */
+  /**
+   * How many of the **searched** combos the reader owns **every piece** of — the `ownedOnly`
+   * filter's own count, answered whether or not that filter is on, so the checkbox can say what
+   * pressing it would leave.
+   *
+   * **A share of the searched set and not of {@link CardCombosPage.total}** — changed with the
+   * search box, and it is the toggle's own promise: a checkbox saying *42* over a searched list
+   * of nine would be predicting something the press cannot produce. With no search term the two
+   * sets are the same one, which is why an unsearched screen reads exactly as it did before.
+   */
   ownedTotal: number;
   /**
    * The size census — one {@link ComboCountBucket} per combo size that matches at all, ascending
    * by `cards`.
    *
-   * **Over the unfiltered set, which is the whole point of it.** A census recomputed under the
-   * current filter would zero every bucket but the selected one the moment a reader picked a
-   * size, leaving them no way back and no way to see that the card has forty three-card combos
-   * as well. It is a menu of what is available, not a description of what is shown.
+   * **Over the searched set, and over nothing narrower.** A census recomputed under the *whole*
+   * filter stack would zero every bucket but the selected one the moment a reader picked a size,
+   * leaving them no way back and no way to see that the card has forty three-card combos as well:
+   * it is a menu of what is available, not a description of what is shown. The search is the one
+   * narrowing that belongs in it, because it is not a facet of the same question but a different
+   * question to take facets of — a chip reading *2 (12)* under a search that leaves no two-card
+   * combo at all is a control that answers `[]`.
    */
   byCardCount: ComboCountBucket[];
   /** This page — at most {@link CardCombosQuery.limit} rows, starting at
@@ -5080,13 +5120,18 @@ export interface CardCombosPage {
 }
 
 /**
- * The five arguments {@link ipc.combosForCard} takes, bundled.
+ * The six arguments {@link ipc.combosForCard} takes, bundled.
  *
- * **Not a mirror of anything.** `combos_for_card` declares five flat parameters, so this object
+ * **Not a mirror of anything.** `combos_for_card` declares six flat parameters, so this object
  * exists on this side alone — it is what the wrapper spreads and what a query key is built from,
  * so the call site and `cardCombosKey` cannot disagree about what was asked. The header's list
  * of mirrored structs deliberately does not name it, and `ipc.test.ts`'s field-parity table
  * cannot either: there is no Rust struct to compare it with.
+ *
+ * **The fields are declared in the command's own parameter order** — `oracleId`, `search`,
+ * `cardCount`, `ownedOnly`, `limit`, `offset` — and `cardCombosKey` takes its first four in the
+ * same order for the same reason: three files describe one call, and an order that agrees is the
+ * cheapest way for a reader to check they are all talking about the same thing.
  */
 export interface CardCombosQuery {
   /** Which card — the **oracle** id, never a printing id. {@link ComboPiece.oracleId}'s rule,
@@ -5094,12 +5139,41 @@ export interface CardCombosQuery {
    *  between two printings of it must not miss the cache. */
   oracleId: string;
   /**
+   * A case-insensitive substring matched against **any piece's name** in the combo — the
+   * asked-about card's own included — or `null` for no search.
+   *
+   * `Option<String>` on the Rust side, and **`null` and `""` are the same request**: the empty
+   * string is what a cleared search box produces, and a backend that treated it as a substring
+   * would match everything anyway. That equivalence is why this field travels verbatim — the
+   * wrapper below sends whatever it is handed, and `""` is folded into `null` by `cardCombosKey`
+   * in `lib/query.ts`, where the difference is the only thing it can cost: two cache entries for
+   * one question. **Do not fold it a second time in the wrapper** — that would be the same rule
+   * written twice, and both copies would look right. A *caller* normalising further is a
+   * different matter and is allowed: `CombosDialog` trims, which decides what gets sent rather
+   * than what gets filed, and it does so before the key is built.
+   *
+   * It matches **names and nothing else** — not the steps, not the produced results, not the
+   * prerequisites. A reader narrowing 6 044 combos is naming a card they want in them, and a
+   * search that also hit `description` would answer with combos that merely *mention* a word.
+   *
+   * **It narrows in SQL, before the page is cut**, like the two filters below, and it moves two
+   * of the answer's counts with it — {@link CardCombosPage.byCardCount} and
+   * {@link CardCombosPage.ownedTotal} are censuses of the set this leaves standing. See
+   * {@link CardCombosPage} for why the facets follow the subject.
+   */
+  search: string | null;
+  /**
    * An exact combo size, or `null` for every size — the value comes from a
-   * {@link ComboCountBucket}, so it is always a size that matches something.
+   * {@link ComboCountBucket}, so it is always a size that matched something *when the census was
+   * taken*. **Since the census is over the searched set, a size held across a change to
+   * `search` can name a bucket that no longer exists**, and the answer is an empty page rather
+   * than an error; whether the reader keeps the chip or loses it is the surface's decision, not
+   * this shape's.
    *
    * `Option<i64>` on the Rust side, and `null` is how `None` is spelled on the wire: the key
    * has to travel even when there is no filter, because Tauri fills parameters by name and an
-   * absent one is a rejection rather than a default. `ipc.test.ts` pins exactly that.
+   * absent one is a rejection rather than a default. `ipc.test.ts` pins exactly that, for this
+   * field and for {@link CardCombosQuery.search} beside it.
    */
   cardCount: number | null;
   /**
@@ -5108,6 +5182,9 @@ export interface CardCombosQuery {
    * **Narrowed in SQL, before the page is cut** — which is what makes it a filter and not
    * something a caller could do to the rows it already has. See `cardCombosKey` in
    * `lib/query.ts` for what a client-side version of this would show a reader.
+   *
+   * Its own count, {@link CardCombosPage.ownedTotal}, is taken over the searched set — so the
+   * number the checkbox advertises is what pressing it would leave *given what is on screen*.
    */
   ownedOnly: boolean;
   /** Page size. */
@@ -7946,20 +8023,32 @@ export const ipc = {
    * Bolts have one answer, and a printing-keyed read would fetch it again every time the reader
    * stepped between printings of the card they are already reading about.
    *
-   * The five arguments are named one by one rather than spread from {@link CardCombosQuery},
+   * The six arguments are named one by one rather than spread from {@link CardCombosQuery},
    * because this is the one place the wire names are written down: a field added to that
    * interface for this side's own use — a sort the backend does not have, say — would otherwise
    * travel to a command that never declared it.
    *
-   * **Both filters narrow in SQL before the page is cut**, so a filtered answer is a different
-   * question rather than a subset of the unfiltered one — see `cardCombosKey` in `lib/query.ts`,
-   * which is why they are in the key. Safe on a database that has never ingested the feed: the
-   * answer is an empty page with three zeros, which is also what a card in no combo answers, and
-   * {@link ipc.combosStatus} is what tells those two apart.
+   * **All three narrowings happen in SQL before the page is cut**, so a filtered answer is a
+   * different question rather than a subset of the unfiltered one — see `cardCombosKey` in
+   * `lib/query.ts`, which is why all three are in the key.
+   *
+   * **`search` is forwarded exactly as given, `""` included.** It is the same request as `null`
+   * by the command's contract, and folding one into the other here would be the second place
+   * that rule was written down — `cardCombosKey` is the first and only one, because the cache is
+   * where the difference between `""` and `null` can actually cost something. What this wrapper
+   * owes is that the key *travels*: `search: null` is sent as an explicit `null`, never dropped,
+   * for `cardCount`'s reason one field over — Tauri fills parameters by name and an absent one is
+   * a rejection rather than a default. `ipc.test.ts` asserts the key set rather than the object,
+   * because `toHaveBeenCalledWith` cannot tell an absent key from one holding `undefined`.
+   *
+   * Safe on a database that has never ingested the feed: the answer is an empty page with three
+   * zeros, which is also what a card in no combo answers, and {@link ipc.combosStatus} is what
+   * tells those two apart.
    */
   combosForCard: (q: CardCombosQuery) =>
     invoke<CardCombosPage>("combos_for_card", {
       oracleId: q.oracleId,
+      search: q.search,
       cardCount: q.cardCount,
       ownedOnly: q.ownedOnly,
       limit: q.limit,

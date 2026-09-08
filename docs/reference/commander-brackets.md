@@ -872,6 +872,93 @@ count** is `collection_source::copies_of_oracle` under `Availability::Everything
 and not `ForDeck`, because a locked folder is a drawer the app stops *offering* from and this
 panel is stating a fact about the collection rather than offering to move anything out of it.
 
+### The search box, and what a search is allowed to narrow (2026-09-08)
+
+The dialog shipped with 25-at-a-time paging and no way to look for anything, and the first thing
+driving it in the shipped window said was that 6 044 combos is too many to look through. So
+`card_combos` takes a `search`: **a case-insensitive substring against any piece's name in the
+combo, the asked-about card included.** Including it is the least surprising rule and the one that
+needs no sentence in the UI — searching a card's own list for its own name matching everything is
+what a reader expects, where "the *other* pieces only" is a rule somebody has to be told.
+
+**`instr(lower(name), lower(?)) > 0`, never `LIKE`, and the fence is structural rather than a
+sanitiser.** `LIKE` has three characters to neutralise — `%`, `_`, and whatever `ESCAPE` char
+neutralises those — and getting it wrong is silent: a reader typing `%` gets the whole list back
+with no error anywhere. `instr` has no pattern language, so there is nothing to escape and no
+third test to remember. It costs nothing, because `LIKE '%x%'` cannot use an index either. This is
+not hypothetical: the corpus holds **11 `combo_cards` rows whose name contains `_`** (`_____
+Goblin`, `Last Voyage of the _____`) and none containing `%`, so the needle `_` narrows Ashnod's
+Altar's 6 044 to **1** where an unescaped `LIKE` answers all 6 044.
+
+**The needle is lowered in SQL and not in Rust.** `str::to_lowercase` is Unicode-aware and
+SQLite's `lower()` is ASCII-only, so folding one side in Rust would make the two disagree on
+exactly the names that need folding most. Both sides now fold by the same function, which is the
+property that matters; the cost of that choice is that `Æther` and `æther` do not fold together,
+and it is written at the site rather than quietly fixed.
+
+**What the search narrows is the design decision.** A search changes the **subject** — *only
+combos with Thassa in them* — where the size chips and the owned toggle are **facets of that
+subject**. A facet's count has to predict what pressing it yields, so:
+
+| Field | Over what set |
+| --- | --- |
+| `total` | combos naming this card, **no filters at all** |
+| `by_card_count` | the **search-filtered** set |
+| `owned_total` | the **search-filtered** set |
+| `matching` | after the search *and* the size chip *and* `owned_only` |
+
+Read the other way: the chip counts move when the reader types and hold still when a chip is
+pressed. `total` stays the card's own census because it answers a question the search does not
+change, and it is the number the heading is about. **It therefore stops being the denominator
+`owned_total` is a share of** — that ratio is now two different questions, and because the
+searched set is a *subset* it cannot go out of range, which is what makes it a bad way to be
+wrong: it simply reads low, and lowest on the searches that narrowed the most.
+
+`total` needs its own one-line statement for that reason. The histogram describes the searched
+set, so on a search that matches nothing there are **no rows to sum** — which is precisely when
+the panel most needs to say *6 044 combos, none matching*. It runs unconditionally rather than
+only when a needle is present, because a `total` computed one way with a search and another way
+without is two definitions, and the cheap path would be the one nothing exercises.
+
+**Measured 2026-09-08**, same method as the table below (Node's `node:sqlite` over the statements'
+own SQL, median of 15, warm, all statements interleaved in one process), on Ashnod's Altar:
+
+| Needle | total + counts + page | Against 84.1 ms unsearched |
+| --- | --- | --- |
+| none | 95.2 ms | **+11.1** |
+| matches nothing | 65.7 ms | −18.4 |
+| 5 of 6 044 | 69.0 ms | −15.1 |
+| 427 of 6 044 | 71.7 ms | −12.4 |
+| all 6 044 (`ashnod`) | 121.9 ms | **+37.8** |
+
+**Driven in the shipped window the same day, against the migrated corpus**, and the cross-check is
+the part worth keeping: the dialog's chips were read off the screen and the identical census was
+taken from SQL, and they agree to the row.
+
+| Needle | On screen | From SQL |
+| --- | --- | --- |
+| none | `All · 6 044` · `2:61` `3:1 999` `4:3 016` `5:968` | 6 044 · 2:61 3:1999 4:3016 5:968 |
+| `mikaeus` | `All · 69` · `2:1` `3:48` `4:11` `5:9` | 69 · 2:1 3:48 4:11 5:9 |
+| `_` | `All · 1` · `4 cards · 1` | 1 · 4:1 |
+
+That third row **is the wildcard fence, proven end to end rather than argued**: typing a single
+underscore answers the one combo naming `_____ Goblin`, where an unescaped `LIKE` would have
+answered all 6 044. The empty size buckets drop out of the chip row with it, so a searched list
+offers only the sizes it actually contains.
+
+The accordion was driven on the same pass: **25 header buttons, 0 expanded**, and no `PRODUCES`,
+`STEPS` or Spellbook link anywhere in the DOM until a header is pressed — the body is unmounted
+rather than hidden, which is what the count is evidence of. The built accessible name came back as
+`Grenzo, Dungeon Warden + Epitaph Golem + _____ Goblin + Ashnod's Altar — E Exhibition`, which is
+the name-computation trap avoided rather than merely commented on.
+
+So a real search is *faster* than no search, and the worst case is a term that narrows nothing.
+**The whole +11.1 ms on the common path is `total_sql`, and it is one card**: for a card at the
+median of the 7 330 it is 0.02 ms. The cause is that `idx_combo_cards_oracle` does not cover
+`combo_id`, so the `DISTINCT` pays 6 044 row lookups — the same count without `DISTINCT` is
+0.14 ms. **A covering `(oracle_id, combo_id)` index would erase it** and speed the hit set in all
+three statements; it is not built, and this paragraph is the note for whoever decides to.
+
 ### The corpus these run against, measured
 
 **2026-09-08**, against the live dev databases (`user.db` with `corpus.db` `ATTACH`ed,
@@ -916,6 +1003,30 @@ Every timing below is against that worst card unless it says otherwise:
 **Upper bound once the four prose columns carry data**, measured against a TEMP table with 301
 bytes of prose on **every** row — deliberately an over-estimate, since most rows in the real feed
 carry `""`: **~123 ms** first page, **~185 ms** at offset 6 000.
+
+### What the real migrated corpus then measured — 2026-09-08, and it beat the estimate
+
+The figures above were taken **before** corpus schema 2 existed, so the prose bound was a
+projection. It has since been taken on the real thing: a copy of the dev pair at corpus
+`user_version` **1** with the seven-column `combos`, migrated by launching the app, which dropped
+the combo tables, re-downloaded the feed and re-ingested it. Same method as above — Node's
+`node:sqlite` over each statement's own SQL, median of 9.
+
+| | |
+| --- | --- |
+| Counts pass (the histogram) | **28.3 ms** (min 27.0, max 29.2) |
+| Page of 25, no filters | **28.0 ms** (min 27.2, max 29.3) |
+| The two together | **56.3 ms** |
+
+So the populated columns cost **less** than the 301-byte-per-row projection, because the feed
+really is mostly empty in three of the four: of 107 016 rows, **all** carry `description`, 47 612
+carry `notable_prerequisites`, 43 484 a `mana_needed` and 21 694 an `easy_prerequisites`.
+
+**One figure on that run was 552.9 ms and it is not a result.** It was the first read after the
+re-ingest, against a database SQLite had just rewritten end to end — a cold page cache and a
+full WAL, not a query plan. It is written down because it is the number a careless pass would
+have reported: taken once, immediately after the thing that made it meaningless. Warm it up
+before believing it.
 
 ### `CROSS JOIN` is worth 65 ms, and two other shapes were rejected
 
@@ -983,6 +1094,40 @@ not entitled to make. So an empty answer always says **which** empty it is, and 
 | `NO_COMBOS` | Spellbook has none on record naming this card | `total === 0` and the feed *is* here |
 | `NO_MATCH` | The reader's own filter left nothing | `total > 0` and `matching === 0` — so it can never stand in for the row above it, because a database with no rows has no chips to have narrowed with |
 
+**A search that matches nothing is `NO_MATCH` and not `NO_COMBOS`**, which is the fourth row
+earning its keep a second time: the search narrows `matching` and leaves `total` alone precisely
+so that a term with no hits still knows there are 6 044 combos behind it. Had `total` followed the
+search, an unmatched term would have printed *Spellbook has none on record naming this card* over
+a card in six thousand of them.
+
+### Every row is a collapsed accordion (2026-09-08)
+
+The same live pass reported the second half of the problem: every row drew everything it had, so
+one row was most of a screen and 25 of them read as a wall. A row is now a header and a body.
+
+**The header is the pieces and the bracket rating, and it *is* the toggle**; the body — what it
+produces, the mana, both prerequisite blocks, the numbered steps, the template caveat and the
+Spellbook link — is **collapsed by default and genuinely not rendered** until it is opened, rather
+than hidden with a class. That is `Dialog`'s own *closed is nothing mounted* rule one level down,
+and it is what keeps a 25-row page cheap.
+
+Three things about it that are decisions rather than styling:
+
+- **Ownership marks stay in the header** with the pieces. The whole point of *I own every piece*
+  is scanning a long list for something buildable tonight, and a mark you have to open a row to
+  see cannot be scanned.
+- **The accessible name is built, not computed** — `"Boros Reckoner + Boros Charm — S Spicy"`.
+  Left to the layout it reads `Boros ReckonerOwnedBoros Charm…`, because a CSS `gap` is not a word
+  separator to the accessible-name computation. This repo has paid for that one before.
+- **A row the reader opened stays open across a filter change.** Rows are keyed on the combo id,
+  so only a row that *arrives* arrives closed. Forcing every row shut on every change would also
+  shut the reader's row on any background refetch, which is a worse failure than the one it fixes.
+
+A pressed size chip **survives a search that empties its bucket**, drawn as `3 cards · 0`. Without
+that, narrowing to `3 cards` and then typing a term no three-card combo matches removes the very
+chip that is emptying the list, and the reader is left looking at *No combo matches that filter*
+above a row of controls with nothing switched on and no way back.
+
 **`NEVER_FETCHED` may never be folded into `NO_COMBOS`, and that is the whole reason this dialog
 reads `combos_status` at all.** `combos_for_card` cannot tell a card with no combos from a
 database with no combo table, because both are zero rows — and the two answers are not close: one
@@ -1009,6 +1154,33 @@ Three states above and beside those four are not empties at all and are drawn as
 card detail still loading, a printing the corpus has since dropped (`card_detail` answers `null`,
 which a collection or deck holding a retired printing reaches honestly), and a failed read, which
 says so and names the error rather than reading as an absence.
+
+### Driven in the shipped window — 2026-09-08, debug build
+
+Not the suite and not Storybook: a `tauri dev` window over a **copy of the real dev pair**, taken
+at corpus `user_version` 1 with the seven-column `combos`, 107 016 combo rows and 117 628 cards.
+The whole rung ran on launch, unattended.
+
+**The migration, end to end.** `user_version` 1 → **2**; the four columns present and in the
+feed's order between `produces` and `popularity`; `cards` still holding all **117 628** rows,
+which is the assertion that the drop stayed narrow and did not take the corpus with it; and
+`combo_meta.fetched_at` moved, so the launch refresh really did re-download 27.5 MB and re-ingest
+it uninvited, arriving back at **107 016** rows. The prose is genuinely stored rather than
+defaulted — the census in the timing section above is that check, and it is the one the widened
+`combos_staging` INSERT would have failed silently.
+
+**The dialog, on Ashnod's Altar.** The chips read `All · 6 044`, `2 cards · 61`, `3 cards · 1 999`,
+`4 cards · 3 016`, `5 cards · 968` — the same census this document measured off SQL, arrived at
+independently through the command, the IPC mirror and the component. Pressing `2 cards` gave
+`SHOWING 25 OF 61` **with every chip's count unmoved**, which is the census-versus-`matching`
+distinction working where a reader can see it; `Show more` went to `SHOWING 50 OF 61`; and
+`I own every piece · 0` on top of it drew **"No combo matches that filter."** rather than the
+never-fetched or the nothing-on-record sentence, which is the fourth empty state doing the one
+job it exists for.
+
+**What could not be driven.** The never-downloaded state, because this corpus has the feed and
+the launch refresh fetches it uninvited — it is reachable only through Settings' *Clear combos*
+without a relaunch, and it is covered in the suite and in Storybook instead.
 
 ## Where each piece lives
 

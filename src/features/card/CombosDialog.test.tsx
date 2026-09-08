@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -169,6 +169,43 @@ function page(combos: CardCombo[], over: Partial<CardCombosPage> = {}): CardComb
   };
 }
 
+/**
+ * The command over a fixed list — **search first, then the chips, then the window**, which is the
+ * contract rather than an arrangement this fixture chose.
+ *
+ * Getting the order wrong is the thing this exists to make unstageable. `total` is over everything;
+ * `byCardCount` and `ownedTotal` are over what the **search** leaves standing; `matching` is over
+ * that with the chips applied as well. A mock that censused before the search would encode a page
+ * the backend cannot produce, and every chip assertion below would then be about a world that does
+ * not exist — which is a test that passes over the defect it was written for.
+ */
+function answering(all: CardCombo[]) {
+  const owns = (c: CardCombo) => c.pieces.every((p) => p.owned >= p.quantity);
+  return (q: CardCombosQuery): Promise<CardCombosPage> => {
+    // The command's own rule: a case-insensitive substring against **any** piece's name, the
+    // asked-about card included. `null` and `""` are the same no-search, which is the half the
+    // wrapper is supposed to make unreachable.
+    const term = (q.search ?? "").toLowerCase();
+    const searched = all.filter(
+      (c) => term === "" || c.pieces.some((p) => p.name.toLowerCase().includes(term)),
+    );
+    const sizes = new Map<number, number>();
+    for (const c of searched) sizes.set(c.cardCount, (sizes.get(c.cardCount) ?? 0) + 1);
+    const matched = searched.filter(
+      (c) => (q.cardCount === null || c.cardCount === q.cardCount) && (!q.ownedOnly || owns(c)),
+    );
+    return Promise.resolve({
+      total: all.length,
+      matching: matched.length,
+      ownedTotal: searched.filter(owns).length,
+      byCardCount: [...sizes.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([cards, combos]) => ({ cards, combos })),
+      combos: matched.slice(q.offset, q.offset + q.limit),
+    });
+  };
+}
+
 /** The empty page a card with no combos gets — three zeros and no buckets, which is also exactly
  *  what a database with no combo table answers. Telling those apart is what the status read is
  *  for, and the two tests below are the two halves of it. */
@@ -215,6 +252,47 @@ function renderWithCard(over: Partial<CardDetail> = {}) {
   useAppStore.setState({ selectedCardId: "c1" });
   useAppStore.getState().openCardOverlay("combos");
   return render(wrap(<CombosDialog />));
+}
+
+/**
+ * The rows, in list order — the `<ul>`'s **own** children and not every `listitem` under it.
+ *
+ * `within(list).getAllByRole("listitem")` was enough while a row drew everything it had: the
+ * combo's own `<li>` came first in document order and the piece and step items were nested behind
+ * it. With the bodies collapsed the nested lists appear and disappear as rows are opened, so a
+ * positional index into a flat list of every `listitem` on the panel would name a different element
+ * depending on which rows happened to be expanded.
+ */
+function comboRows(list: HTMLElement): HTMLElement[] {
+  return [...list.children] as HTMLElement[];
+}
+
+/** One row's header — the disclosure that *is* the row, and the first control in it. The body's
+ *  Spellbook button is the other one and comes after it in document order. */
+function header(row: HTMLElement): HTMLElement {
+  return within(row).getAllByRole("button")[0] as HTMLElement;
+}
+
+/** The list, once it has arrived. */
+async function combosList(): Promise<HTMLElement> {
+  return await screen.findByRole("list", { name: "Combos" });
+}
+
+/** Every argument `combos_for_card` has been called with, in order. */
+function calls(): CardCombosQuery[] {
+  return combosForCard.mock.calls.map(([q]) => q as CardCombosQuery);
+}
+
+/** The calls a *search* produced — the initial unsearched read and the chips' reads are not
+ *  among them, which is what lets the debounce be counted. */
+function searchCalls(): CardCombosQuery[] {
+  return calls().filter((q) => q.search !== null);
+}
+
+/** The search box, by its own name. Never a bare `Search`: the card modal is on screen behind this
+ *  dialog and the app is full of boxes, and a `getByLabelText` cannot tell two of one name apart. */
+function searchBox(): HTMLElement {
+  return screen.getByLabelText("Search these combos");
 }
 
 it("asks nothing at all until the overlay is opened", async () => {
@@ -274,44 +352,115 @@ it("says Spellbook has nothing on record when the list is here and answers none"
   expect(screen.queryByText(/has not been downloaded/i)).not.toBeInTheDocument();
 });
 
-it("draws a combo's pieces, what it does, its prerequisites and its steps", async () => {
-  // Catches: deleting any one of the four `Section`s, or the piece list — each assertion below
-  // names a different field of the row.
-  combosForCard.mockResolvedValue(
-    page([
-      combo({
-        easyPrerequisites: "Boros Reckoner is on the battlefield.",
-        notablePrerequisites: "You have a way to deal damage to your own creature.",
-        description: "Target Boros Reckoner with Boros Charm.\nDeal damage to Boros Reckoner.",
-        manaNeeded: "{2}",
-      }),
-    ]),
-  );
+/** The row with every optional field filled — the one the two accordion tests below open. */
+const FULL = combo({
+  easyPrerequisites: "Boros Reckoner is on the battlefield.",
+  notablePrerequisites: "You have a way to deal damage to your own creature.",
+  description: "Target Boros Reckoner with Boros Charm.\nDeal damage to Boros Reckoner.",
+  manaNeeded: "{2}",
+});
+
+it("draws a row's pieces and its rating collapsed, and none of its body", async () => {
+  // **The wall this dialog read as is what the accordion is for**: expanded, one row is the
+  // pieces, the bracket line, produces, both prerequisite blocks, the numbered steps, the mana,
+  // the template caveat and the Spellbook link — most of a screen, twenty-five to a page.
+  //
+  // Catches: rendering the body unconditionally, and — the failure that would look identical on
+  // screen — hiding it with a class instead of not mounting it, since every `queryBy` below reads
+  // the document rather than the pixels.
+  combosForCard.mockResolvedValue(page([FULL]));
   renderWithCard();
 
-  // The combo's own `<li>` is the first in document order inside the list, ahead of the piece and
-  // step items nested in it.
-  const list = await screen.findByRole("list", { name: "Combos" });
-  const first = within(list).getAllByRole("listitem")[0] as HTMLElement;
+  const rows = comboRows(await combosList());
+  expect(rows).toHaveLength(1);
+  const first = rows[0] as HTMLElement;
 
-  // The pieces, each named by its own card.
+  // The header, closed, and it is a real disclosure rather than a `<summary>`.
+  expect(header(first)).toHaveAttribute("aria-expanded", "false");
+  // The pieces, each named by its own card — these stay in the header, because the whole reason to
+  // filter on *I own every piece* is to find the combo you could build tonight and a reader
+  // scanning the list has to see which pieces are missing without opening anything.
   expect(within(first).getByText("Boros Reckoner")).toBeInTheDocument();
   expect(within(first).getByText("Boros Charm")).toBeInTheDocument();
   // Spellbook's own letter and Spellbook's own words for it — one text node, so a screen reader
-  // and this query read the same sentence.
+  // and this query read the same sentence. Also the header: *how strong is this* is the other half
+  // of what a reader is scanning for.
   expect(within(first).getByText(/^S · Spicy — probably 3 or 4/)).toBeInTheDocument();
+
+  // And nothing else. `Produces` is named explicitly because it is the field a large share of the
+  // feed's rows have and the one most likely to be left in the header by mistake.
+  expect(screen.queryByText("Produces")).not.toBeInTheDocument();
+  expect(screen.queryByText("Infinite lifegain")).not.toBeInTheDocument();
+  expect(screen.queryByText("Mana needed")).not.toBeInTheDocument();
+  expect(screen.queryByRole("list", { name: "Steps" })).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: "View on Commander Spellbook" }),
+  ).not.toBeInTheDocument();
+});
+
+it("names the combo a header opens, in words rather than as one run-together token", async () => {
+  // **A `gap` is not a word separator to the accessible-name computation.** Left to compute itself
+  // this button would read `Boros ReckonerOwnedBoros CharmOwnedS · Spicy…` — every caption and
+  // ownership mark in the pieces run together, which is the `Missing2` failure this repo has
+  // already shipped once.
+  //
+  // Catches: dropping the `aria-label`, which is silent — the button still opens the row, and the
+  // name it computes instead is still *findable*, just not by anything a reader would say.
+  combosForCard.mockResolvedValue(page([FULL]));
+  renderWithCard();
+
+  expect(
+    await screen.findByRole("button", { name: "Boros Reckoner + Boros Charm — S Spicy" }),
+  ).toBeInTheDocument();
+});
+
+it("draws what a combo does, its prerequisites and its steps once its header is pressed", async () => {
+  // Catches: deleting any one of the four `Section`s, the mana block, or the `{open && …}` gate
+  // itself — each assertion below names a different field of the body.
+  combosForCard.mockResolvedValue(page([FULL]));
+  const user = userEvent.setup();
+  renderWithCard();
+
+  const first = comboRows(await combosList())[0] as HTMLElement;
+  await user.click(header(first));
+
+  expect(header(first)).toHaveAttribute("aria-expanded", "true");
   // What it does, split off the feed's newline-joined string.
   expect(within(first).getByText("Infinite lifegain")).toBeInTheDocument();
   expect(within(first).getByText("Infinite lifegain triggers")).toBeInTheDocument();
   // Both prerequisite kinds, under their own headings.
   expect(within(first).getByText(/Boros Reckoner is on the battlefield/)).toBeInTheDocument();
   expect(within(first).getByText(/deal damage to your own creature/)).toBeInTheDocument();
+  expect(within(first).getByText("Mana needed")).toBeInTheDocument();
   // The steps, in order.
   const steps = within(first).getByRole("list", { name: "Steps" });
   expect(within(steps).getAllByRole("listitem").map((li) => li.textContent)).toEqual([
     "Target Boros Reckoner with Boros Charm.",
     "Deal damage to Boros Reckoner.",
   ]);
+});
+
+it("opens one row without opening the others", async () => {
+  // **A row's expansion is per row.** Lifted to one flag in `Body` the dialog would draw the same
+  // wall it drew before, one press further in.
+  //
+  // Catches: a single `open` in `Body` (or a `Set` written back with `=`), which is exactly the
+  // shape a "expand all" refactor reaches for — and which nothing on screen names, because the
+  // first row looks right.
+  const second = combo({ id: "second", produces: "Infinite damage" });
+  combosForCard.mockResolvedValue(page([FULL, second]));
+  const user = userEvent.setup();
+  renderWithCard();
+
+  const rows = comboRows(await combosList());
+  await user.click(header(rows[0] as HTMLElement));
+
+  expect(header(rows[0] as HTMLElement)).toHaveAttribute("aria-expanded", "true");
+  expect(header(rows[1] as HTMLElement)).toHaveAttribute("aria-expanded", "false");
+  expect(within(rows[0] as HTMLElement).getByText("Infinite lifegain")).toBeInTheDocument();
+  // The second row's own `produces` is a different string on purpose: asserting the *absence* of
+  // the first row's text inside the second would pass against a component that drew nothing.
+  expect(within(rows[1] as HTMLElement).queryByText("Infinite damage")).not.toBeInTheDocument();
 });
 
 it("draws no heading for a field the feed left empty", async () => {
@@ -321,11 +470,15 @@ it("draws no heading for a field the feed left empty", async () => {
   // Catches: removing `Section`'s `lines.length === 0` guard — every heading would be drawn for
   // every combo whatever the feed sent.
   combosForCard.mockResolvedValue(page([combo()]));
+  const user = userEvent.setup();
   renderWithCard();
 
+  const first = comboRows(await combosList())[0] as HTMLElement;
+  await user.click(header(first));
+
   // The one section this fixture *does* fill, so the assertion is not vacuously green against a
-  // dialog that drew nothing at all.
-  expect(await screen.findByText("Produces")).toBeInTheDocument();
+  // row that never opened at all.
+  expect(screen.getByText("Produces")).toBeInTheDocument();
   expect(screen.queryByText("Steps")).not.toBeInTheDocument();
   expect(screen.queryByText("Prerequisites")).not.toBeInTheDocument();
   expect(screen.queryByText("Notable prerequisites")).not.toBeInTheDocument();
@@ -336,9 +489,13 @@ it("says a combo also needs something no card list can name", async () => {
   // Catches: dropping the `templateCount > 0` block, which would leave a three-piece combo
   // reading as though the two cards named were the whole of it.
   combosForCard.mockResolvedValue(page([combo({ templateCount: 1 })]));
+  const user = userEvent.setup();
   renderWithCard();
 
-  expect(await screen.findByText(/no card list can name/i)).toBeInTheDocument();
+  const first = comboRows(await combosList())[0] as HTMLElement;
+  await user.click(header(first));
+
+  expect(screen.getByText(/no card list can name/i)).toBeInTheDocument();
 });
 
 it("marks a piece the reader does not own, in words", async () => {
@@ -417,6 +574,7 @@ it("narrows to a combo size at the backend when its chip is pressed", async () =
 
   expect(combosForCard).toHaveBeenCalledWith({
     oracleId: "o1",
+    search: null,
     cardCount: 3,
     ownedOnly: false,
     limit: 25,
@@ -440,6 +598,7 @@ it("sends the owned filter to the backend when the toggle is pressed", async () 
 
   expect(combosForCard).toHaveBeenCalledWith({
     oracleId: "o1",
+    search: null,
     cardCount: null,
     ownedOnly: true,
     limit: 25,
@@ -484,6 +643,7 @@ it("appends the next page rather than replacing the one in hand", async () => {
   expect(await screen.findByText("Showing 30 of 30")).toBeInTheDocument();
   expect(combosForCard).toHaveBeenLastCalledWith({
     oracleId: "o1",
+    search: null,
     cardCount: null,
     ownedOnly: false,
     limit: 25,
@@ -502,10 +662,16 @@ it("opens a combo on Commander Spellbook through the app's one external call", a
   //
   // Catches: an `<a href>` or a `window.open`, and a malformed permalink — the URL is asserted
   // whole rather than merely "something was opened".
+  //
+  // **The link is in the body, and that is the accordion's constraint agreeing with its own**: a
+  // control nested inside the header's disclosure button would be invalid markup and a press on it
+  // would also toggle the row it left.
   const user = userEvent.setup();
   renderWithCard();
 
-  await user.click(await screen.findByRole("button", { name: "View on Commander Spellbook" }));
+  const first = comboRows(await combosList())[0] as HTMLElement;
+  await user.click(header(first));
+  await user.click(screen.getByRole("button", { name: "View on Commander Spellbook" }));
 
   expect(vi.mocked(openExternal)).toHaveBeenCalledExactlyOnceWith(
     "https://commanderspellbook.com/combo/3422-3587/",
@@ -520,7 +686,7 @@ it("says where the combos came from, and does not blame the card sync for their 
   // Catches: rewording the caption to name the card sync, and moving it inside the scroller (the
   // second is what the story checks; this pins the sentence).
   renderWithCard();
-  await screen.findByText("Infinite lifegain");
+  await combosList();
 
   expect(screen.getByText(/as of the last combo refresh/i)).toBeInTheDocument();
   expect(screen.queryByText(/card-data sync/i)).not.toBeInTheDocument();
@@ -540,4 +706,215 @@ it("names the panel after the card it is about", async () => {
 
   await screen.findByText(/none on record naming this card/i);
   expect(screen.getByText("Boros Reckoner")).toBeInTheDocument();
+});
+
+/* -------------------------------------------------------------------- the search box ---------
+ *
+ * Ashnod's Altar is in **6 044** combos on the real corpus, 25 to a page. Paging is not a way to
+ * *find* anything, so the box is not a convenience: without it there is no way to ask "which of
+ * these has Krark-Clan Ironworks in it", and no way for a reader to discover that there might be.
+ */
+
+/** Two two-card combos and one three-card one, the third naming a card the other two do not — so a
+ *  term can narrow the *census* rather than only the rows, which is what the chip tests below are
+ *  about. Avacyn is also the piece nobody owns, which keeps `ownedTotal` from moving in step with
+ *  the sizes and makes each assertion about its own number. */
+const THREE = [
+  combo({ id: "a" }),
+  combo({ id: "b", pieces: [piece(), piece({ oracleId: "o5", name: "Vigor", cardId: "c5" })] }),
+  combo({
+    id: "c",
+    pieces: [
+      piece(),
+      piece({ oracleId: "o2", name: "Boros Charm", cardId: "c2" }),
+      piece({ oracleId: "o3", name: "Avacyn, Angel of Hope", cardId: "c3", owned: 0 }),
+    ],
+  }),
+];
+
+it("sends the trimmed term, and opens the searched list at its top", async () => {
+  // **`offset: 0` is the half worth staging rather than asserting from a fresh mount**, which is
+  // why this presses *Show more* first: a search that inherited the pager's offset would open on
+  // page 2 of a list that has just become shorter than two pages, and the rows a reader typed a
+  // word to find would be above the top of it.
+  //
+  // Catches: leaving `search` out of `cardCombosKey` (the key never changes, so nothing is asked
+  // at all and the pages in hand — and their offset — survive); sending `asked` untrimmed, which
+  // opens a second cache entry per trailing space; and any hand-rolled pager that kept its own
+  // offset across a filter change.
+  const rows = Array.from({ length: 30 }, (_, i) =>
+    combo({
+      id: `combo-${i}`,
+      pieces: [piece(), piece({ oracleId: `o${i}`, name: `Partner ${i}`, cardId: `c${i}` })],
+    }),
+  );
+  combosForCard.mockImplementation(answering(rows));
+  const user = userEvent.setup({ delay: null });
+  renderWithCard();
+
+  expect(await screen.findByText("Showing 25 of 30")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Show more" }));
+  await screen.findByText("Showing 30 of 30");
+
+  await user.type(searchBox(), "  boros  ");
+
+  await waitFor(() => expect(searchCalls()).toHaveLength(1));
+  expect(searchCalls()[0]).toEqual({
+    oracleId: "o1",
+    search: "boros",
+    cardCount: null,
+    ownedOnly: false,
+    limit: 25,
+    offset: 0,
+  });
+});
+
+it("asks with null for an empty box rather than with an empty string", async () => {
+  // `null` and `""` mean the same thing to the command, which is exactly why only one of them may
+  // ever travel: two spellings of *no search* are two query keys that have to answer identically
+  // for ever, and the second is a cache entry nothing else in the app will ever hit.
+  //
+  // Catches: `search: asked.trim()` without the collapse to `null`.
+  //
+  // **The first call is where that mutation is visible, which is why it is asserted rather than
+  // the round trip back to empty.** `cardCombosKey` normalises `""` to `null` itself, so a
+  // component sending the empty string would key *identically* to one sending `null` and the
+  // emptied box would answer from cache without a call at all — the wire would never show it. The
+  // opening read has no cache to hide behind. The clear is still driven afterwards, and the sweep
+  // over every call is what says the empty string never travelled at any point.
+  combosForCard.mockImplementation(answering([combo()]));
+  const user = userEvent.setup({ delay: null });
+  renderWithCard();
+  await combosList();
+
+  expect(calls()[0]).toEqual({
+    oracleId: "o1",
+    search: null,
+    cardCount: null,
+    ownedOnly: false,
+    limit: 25,
+    offset: 0,
+  });
+
+  // A term that empties the list and then a clear that brings it back, so the sweep below runs
+  // **after** the debounce has fired rather than racing it: the rows returning is the proof that
+  // the emptied box reached the query, whether the answer came off the wire or out of the cache.
+  await user.type(searchBox(), "krark");
+  await screen.findByText(/no combo matches that filter/i);
+  await user.clear(searchBox());
+  await combosList();
+
+  expect(calls().filter((q) => q.search === "")).toEqual([]);
+});
+
+it("asks once for a word rather than once per keystroke", async () => {
+  // Four letters is four renders and four query keys without the debounce, and on a card in six
+  // thousand combos that is four full reads for a word the reader had not finished typing.
+  //
+  // Catches: dropping the `setTimeout` and keying the query on `text` directly — the last call
+  // still carries the whole word, so only the *count* can see it.
+  //
+  // Real timers on purpose: `userEvent` inside `vi.useFakeTimers` hangs on its own scheduler and
+  // takes every later test in the file with it. `delay: null` is what keeps the four keystrokes
+  // inside one debounce window without one.
+  combosForCard.mockImplementation(answering([combo()]));
+  const user = userEvent.setup({ delay: null });
+  renderWithCard();
+  await combosList();
+
+  await user.type(searchBox(), "boro");
+
+  // The whole word has arrived — asserted before the count, so a debounce that had been deleted
+  // fails on the *number* of calls rather than by timing out on a term that never came.
+  await waitFor(() => {
+    const made = searchCalls();
+    expect(made[made.length - 1]?.search).toBe("boro");
+  });
+  expect(searchCalls()).toHaveLength(1);
+});
+
+it("says the filter left nothing when a term matches no combo", async () => {
+  // **A search that matches nothing is the filter's empty, not a fifth sentence** — and above all
+  // not one of the two that are claims about the card or the database. `total` is over the
+  // unfiltered set and a term does not move it, which is what keeps this branch reachable.
+  //
+  // Catches: a bespoke "no combo matches that search" sentence, and — the one that would be a
+  // false statement rather than a duplicated one — testing `total` after the search rather than
+  // `matching`, which would print *Spellbook has none on record* over a card in three combos.
+  combosForCard.mockImplementation(answering([combo()]));
+  const user = userEvent.setup({ delay: null });
+  renderWithCard();
+  await combosList();
+
+  await user.type(searchBox(), "krark-clan");
+
+  expect(await screen.findByText(/no combo matches that filter/i)).toBeInTheDocument();
+  expect(screen.queryByText(/none on record naming this card/i)).not.toBeInTheDocument();
+  expect(screen.queryByText(/has not been downloaded/i)).not.toBeInTheDocument();
+  // And the box that emptied the list is still on screen holding the term that did it, which is
+  // the whole of the way back.
+  expect(searchBox()).toHaveValue("krark-clan");
+});
+
+it("moves the chip counts with the search and not with a chip press", async () => {
+  // **The search changes the subject; the chips are facets of it.** So the counts follow what is
+  // typed and stand still when a chip is pressed — a chip that recounted itself the moment it was
+  // used would be a control that changed its mind about what it was counting.
+  //
+  // Catches: the `All` chip reading `page.total` (the *unfiltered* census) instead of the sum of
+  // `byCardCount` — after a search it would claim a wider set than the union of the chips beside
+  // it, which is the one arithmetic a reader can check at a glance.
+  combosForCard.mockImplementation(answering(THREE));
+  const user = userEvent.setup({ delay: null });
+  renderWithCard();
+
+  expect(await screen.findByRole("button", { name: "All · 3" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "2 cards · 2" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "3 cards · 1" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "I own every piece · 2" })).toBeInTheDocument();
+
+  await user.type(searchBox(), "avacyn");
+
+  // Only the three-card combo names Avacyn, so every count is now over that one row — including
+  // the owned one, which drops to zero because Avacyn is the piece nobody has.
+  expect(await screen.findByRole("button", { name: "All · 1" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /^2 cards/ })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "3 cards · 1" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "I own every piece · 0" })).toBeInTheDocument();
+
+  // And pressing a chip narrows the list without touching any of them.
+  await user.click(screen.getByRole("button", { name: "3 cards · 1" }));
+
+  await screen.findByText("Showing 1 of 1");
+  expect(screen.getByRole("button", { name: "All · 1" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "3 cards · 1" })).toBeInTheDocument();
+});
+
+it("keeps the size chip that is emptying the list, so there is a way back out", async () => {
+  // The state a search-narrowed census makes reachable: a reader narrows to `3 cards`, then types
+  // a term no three-card combo matches. The size is still in the query, so the list is empty — and
+  // without this the chip doing the emptying would drop out of the row it is drawn from, leaving
+  // *No combo matches that filter* over a row of controls none of which is on.
+  //
+  // Catches: building the chips from `byCardCount` alone. It is the case the rule "a bucket at
+  // zero is dropped" was written before, and the pressed chip is its one exception — a control
+  // that can only ever empty the list, at the moment it is the control that already has.
+  combosForCard.mockImplementation(answering(THREE));
+  const user = userEvent.setup({ delay: null });
+  renderWithCard();
+
+  await user.click(await screen.findByRole("button", { name: "3 cards · 1" }));
+  await screen.findByText("Showing 1 of 1");
+
+  // Vigor is a piece of a two-card combo only, so the searched census has no three-card bucket.
+  await user.type(searchBox(), "vigor");
+
+  expect(await screen.findByText(/no combo matches that filter/i)).toBeInTheDocument();
+  const stranding = screen.getByRole("button", { name: "3 cards · 0" });
+  expect(stranding).toHaveAttribute("aria-pressed", "true");
+
+  // And pressing it again is the way out — back to All, over the term still in the box.
+  await user.click(stranding);
+  expect(await screen.findByText("Showing 1 of 1")).toBeInTheDocument();
+  expect(screen.getByText("Vigor")).toBeInTheDocument();
 });

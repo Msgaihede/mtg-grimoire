@@ -12018,12 +12018,14 @@ describe("the combos one card is in", () => {
   const RECKONER = CARDS.find((c) => c.name === "Boros Reckoner")!;
   const AVACYN = CARDS.find((c) => c.name === "Avacyn, Angel of Hope")!;
 
-  /** The five-argument call with its ordinary answers filled in — `limit: 100` because most of
+  /** The six-argument call with its ordinary answers filled in — `limit: 100` because most of
    *  these are about *what* comes back rather than about the page, and the paging test names its
-   *  own. */
+   *  own. `search: null` is the default because *no search* is what every assertion written
+   *  before 2026-09-08 assumed, and those answers have to be exactly what they were. */
   function ask(db: FakeDb, over: Partial<CardCombosQuery> = {}): CardCombosPage {
     return readHandlers(db).combos_for_card({
       oracleId: RECKONER.oracleId,
+      search: null,
       cardCount: null,
       ownedOnly: false,
       limit: 100,
@@ -12217,6 +12219,247 @@ describe("the combos one card is in", () => {
     expect(joined).toEqual(idsOf(ask(db)));
     // Both pages describe the same match, not the page in hand.
     expect(second.matching).toBe(31);
+  });
+
+  /**
+   * **The search term, and the four numbers it moves three of** — the 2026-09-08 argument, and
+   * the assertion the fixture's 26 *different* filler partners were what made possible.
+   *
+   * `ar` is the term because it cuts the fixture four ways at once: Boros **Char**m (two-card,
+   * owned), Nightm**ar**es and Plowsh**ar**es and Llanow**ar** (three-card, not owned) and
+   * T**ar**mogoyf (three-card, owned). Six of the 31 survive, across **both** sizes, **three** of
+   * them owned — four figures off one term and no two of them equal, which is what makes each
+   * assertion able to fail on its own.
+   *
+   * Four one-line mutations die here, one per assertion:
+   *
+   * * `total: searched.length` — the heading would read 6 and the card would appear to be in six
+   *   combos because somebody typed two letters.
+   * * `matching` filtered from `all` instead of `searched` — the search accepted and ignored, 31
+   *   rows back.
+   * * `ownedTotal: all.filter(owned)` — the *old* behaviour, and the one this change is: the
+   *   `I own every piece` box would promise 5 over a list of 6 it can only cut to 3.
+   * * the bucket loop walking `all` — every chip a lie, `2 (4)` and `3 (27)` over a searched list
+   *   holding two and four.
+   */
+  it("narrows the match and both censuses, and leaves the card's own total alone", () => {
+    const db = seed("starter");
+    // The unsearched answer, so the four numbers are shown to have *moved* rather than to have
+    // happened to be right — three of them do and the fourth must not.
+    const plain = ask(db);
+    expect([plain.total, plain.matching, plain.ownedTotal]).toEqual([31, 31, 5]);
+    expect(plain.byCardCount).toEqual([
+      { cards: 2, combos: 4 },
+      { cards: 3, combos: 27 },
+    ]);
+
+    const page = ask(db, { search: "ar" });
+
+    expect(page.total).toBe(31);
+    expect(page.matching).toBe(6);
+    expect(page.ownedTotal).toBe(3);
+    expect(page.byCardCount).toEqual([
+      { cards: 2, combos: 2 },
+      { cards: 3, combos: 4 },
+    ]);
+    // And the page itself, in the same `cardCount ASC, popularity DESC, id ASC` it always was:
+    // the search narrows the set and never reorders it.
+    expect(idsOf(page)).toEqual([
+      "3422-3587",
+      "3422-3587--5",
+      "3587-9146--26",
+      "3587-9146--21",
+      "3587-9146--13",
+      "3587-9146--05",
+    ]);
+  });
+
+  /**
+   * **`null`, `""` and a term that trims to nothing are one request**, which is `CardCombosQuery`'s
+   * own rule: a cleared box produces `""`, `lib/query.ts` folds that to `null` for the cache key
+   * alone, and a caller written before the box existed sends neither. All three have to answer
+   * what the fixture answered on 2026-09-07, to the byte.
+   *
+   * Two mutations die. Dropping the `.trim()` makes `"   "` a substring search for three spaces —
+   * no name in the corpus has one, so the page empties and `total` is the only number left
+   * standing. Dropping the `=== ""` guard is invisible on its own (an empty substring matches
+   * every string), which is why the blank one is here: it is the arm that cannot be got right by
+   * accident.
+   */
+  it("reads null, an empty term and a blank one as no search at all", () => {
+    const db = seed("starter");
+    const none = ask(db);
+
+    expect(ask(db, { search: "" })).toEqual(none);
+    expect(ask(db, { search: "   " })).toEqual(none);
+    // And a term with a real word in it is trimmed rather than searched for with its spaces:
+    // `"  ar  "` is `"ar"`, not a search for two letters between two spaces.
+    expect(ask(db, { search: "  ar  " })).toEqual(ask(db, { search: "ar" }));
+  });
+
+  /**
+   * **Case-insensitive from both ends**, which needs both directions to be shown: a term in one
+   * case against a name in another, and then the same pair inverted. `Urza's Saga` carries an
+   * upper-case letter the lower-case term has to reach and lower-case letters the upper-case term
+   * has to reach, so one name does both.
+   *
+   * The mutation is `p.name.includes(term)` with either `toLowerCase` dropped: whichever half
+   * goes, one of these two answers an empty page while the other still passes.
+   */
+  it("matches a name whichever case either side is written in", () => {
+    const db = seed("starter");
+    const saga = ["3587-9146--14"];
+
+    expect(idsOf(ask(db, { search: "urza's saga" }))).toEqual(saga);
+    expect(idsOf(ask(db, { search: "URZA'S SAGA" }))).toEqual(saga);
+    expect(ask(db, { search: "URZA'S SAGA" })).toEqual(ask(db, { search: "urza's saga" }));
+  });
+
+  /**
+   * **The asked-about card's own name is one of the names searched**, which is the rule that
+   * needs no explaining in the UI: every one of these 31 combos names Boros Reckoner, so a term
+   * out of it matches all 31 and the whole page is the unsearched one.
+   *
+   * The mutation is a handler that searched only the *other* pieces —
+   * `pieces.filter((p) => p.oracleId !== oracleId)` — which is a plausible thing to write and
+   * answers an empty page here. `toEqual` against the unsearched answer rather than a count,
+   * because the claim is that nothing at all moved.
+   */
+  it("matches every combo on a term out of the asked-about card's own name", () => {
+    const db = seed("starter");
+
+    expect(ask(db, { search: "reckoner" })).toEqual(ask(db));
+    expect(ask(db, { search: "Boros" }).matching).toBe(31);
+  });
+
+  /**
+   * **A `%` and a `_` are searched for, not read** — the fence that keeps this fake honest about
+   * what the crate does. `combos::card_combos` escapes both (and the escape character) before it
+   * builds its `LIKE`, so the reader cannot reach SQL's wildcards through a text box, and a fake
+   * that let them would let a story do something the app refuses.
+   *
+   * The mutation is any pattern-shaped implementation — a `LIKE`-ish translation, or a `RegExp`
+   * built from the term. Each of these three answers **31** under one: `%` and `_` are SQL's
+   * *any* and *any one*, and `Boros_Reckoner` is the one that survives an implementation that
+   * escaped only `%`.
+   *
+   * `total` stays 31 throughout, which is the other half: a search matching nothing is **not** the
+   * empty page an unknown oracle id gets, and the dialog needs the difference to say *nothing
+   * matches that* rather than *this card is in no combos*.
+   */
+  it("searches for a % and a _ rather than reading them as wildcards", () => {
+    const db = seed("starter");
+
+    for (const search of ["%", "_", "Boros_Reckoner", "%Charm%"]) {
+      const page = ask(db, { search });
+
+      expect(page.matching).toBe(0);
+      expect(page.combos).toEqual([]);
+      expect(page.byCardCount).toEqual([]);
+      expect(page.ownedTotal).toBe(0);
+      // The card is still in 31 combos. Only the search found none of them.
+      expect(page.total).toBe(31);
+    }
+  });
+
+  /**
+   * **The search composes with both filters rather than replacing either**, and the three calls
+   * are arranged so each narrowing has something left to do: `ar` leaves six, the size chip cuts
+   * those six to two, the owned box cuts them to three, and the two together to one.
+   *
+   * Three mutations die. A handler where the search *replaces* `cardCount` answers six rows to
+   * the first call; one where `cardCount` replaces the search answers the unsearched four; and
+   * one that dropped `ownedOnly` once a search was in force answers six to the second.
+   *
+   * The two censuses hold still across all of it, which is the facet rule from the other side:
+   * they follow the **subject** and neither of these two controls is one.
+   */
+  it("composes with the size chip and the owned box rather than replacing either", () => {
+    const db = seed("starter");
+    const census = [
+      { cards: 2, combos: 2 },
+      { cards: 3, combos: 4 },
+    ];
+
+    const sized = ask(db, { search: "ar", cardCount: 2 });
+    expect(idsOf(sized)).toEqual(["3422-3587", "3422-3587--5"]);
+    expect(sized.matching).toBe(2);
+
+    const owned = ask(db, { search: "ar", ownedOnly: true });
+    expect(idsOf(owned)).toEqual(["3422-3587", "3422-3587--5", "3587-9146--13"]);
+    expect(owned.matching).toBe(3);
+
+    const both = ask(db, { search: "ar", cardCount: 3, ownedOnly: true });
+    expect(idsOf(both)).toEqual(["3587-9146--13"]);
+    expect(both.matching).toBe(1);
+
+    // Every one of them censuses the searched set and nothing narrower, and reports the card's
+    // own total unchanged.
+    for (const page of [sized, owned, both]) {
+      expect(page.byCardCount).toEqual(census);
+      expect(page.ownedTotal).toBe(3);
+      expect(page.total).toBe(31);
+    }
+  });
+
+  /**
+   * **Paging is over the searched set**, which is the composition the pager actually performs:
+   * `CombosDialog.tsx` compares its offset against `matching`, and `matching` is now a count the
+   * search moves.
+   *
+   * Two mutations die. Slicing before the search — `searched` computed from an already-cut page —
+   * answers a first page of four out of the first four *unsearched* rows and a second page that
+   * repeats one of them. And a `matching` that counted the page rather than the searched match
+   * answers 4 and 2 to the last assertion, which is exactly the number that tells the dialog
+   * whether there is a second page at all.
+   */
+  it("pages a searched set with no gap and no repeat", () => {
+    const db = seed("starter");
+    const whole = idsOf(ask(db, { search: "ar" }));
+
+    const first = ask(db, { search: "ar", limit: 4, offset: 0 });
+    const second = ask(db, { search: "ar", limit: 4, offset: 4 });
+
+    expect(first.combos).toHaveLength(4);
+    expect(second.combos).toHaveLength(2);
+    const joined = [...idsOf(first), ...idsOf(second)];
+    expect(new Set(joined).size).toBe(6);
+    expect(joined).toEqual(whole);
+    // Both pages describe the searched match, not the page in hand — and not the card's 31.
+    expect([first.matching, second.matching]).toEqual([6, 6]);
+  });
+
+  /**
+   * **The plural read is untouched by the singular one having searched**, which is the mutation a
+   * search is most likely to introduce and the only one the tests above cannot see: an
+   * implementation that narrowed `db.combos` or `db.comboCards` in place — a `db.combos =
+   * db.combos.filter(…)`, or a `splice` — would answer every assertion in this block correctly
+   * and quietly rewrite the bracket advisory's fixture for the rest of the run.
+   *
+   * So the deck's answer is read **first**, then three searches run against the same store, then
+   * it is read again and compared with what it said — the before is captured rather than typed,
+   * so this cannot drift from the deck fixture. The one literal (`1268-2357`) is the neighbouring
+   * test's on purpose, so a change to deck 2 fails both of them loudly rather than leaving this
+   * one comparing an empty list with an empty list.
+   */
+  it("leaves the plural read untouched, having searched the same store", () => {
+    const db = seed("starter");
+    const deckTwo = db.deckCards.filter((c) => c.deckId === 2).map((c) => c.cardId);
+    const before = readHandlers(db).combos_for_cards({ cardIds: deckTwo }).map((c) => c.id);
+    const stored = db.combos.length;
+    const storedCards = db.comboCards.length;
+    expect(before).toEqual(["1268-2357"]);
+
+    ask(db, { search: "ar" });
+    ask(db, { search: "%" });
+    ask(db, { search: "reckoner", cardCount: 3, ownedOnly: true });
+
+    expect(readHandlers(db).combos_for_cards({ cardIds: deckTwo }).map((c) => c.id)).toEqual(before);
+    // And both stores themselves, counted rather than named: a `filter` assigned back would have
+    // shortened one of them, and pinning the fixture's size here would break the day somebody
+    // adds a combo for an unrelated reason.
+    expect([db.combos.length, db.comboCards.length]).toEqual([stored, storedCards]);
+    expect(ask(db).total).toBe(31);
   });
 
   /**
