@@ -9,7 +9,7 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 
 const shareList = vi.hoisted(() => vi.fn());
@@ -32,6 +32,7 @@ import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import type { CollectionFolder, ShareRow, SupporterStatus } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
+import { stubNarrowWindow } from "@/test-viewport";
 import { shareFor, ShareFolderMenu, shareTargetFor, type ShareTarget } from "./ShareFolderMenu";
 
 /* ------------------------------------------------------------------ fixtures ---------- */
@@ -602,5 +603,76 @@ describe("opening somebody else's share", () => {
 
     await user.click(await screen.findByRole("button", { name: "Open a shared collection" }));
     expect(await screen.findByLabelText("Link to a shared collection")).toBeInTheDocument();
+  });
+
+  /**
+   * ⚠️ **The caret comes back to the *Open* button, and `back()` cannot do it.**
+   *
+   * `Dialog` hands the caret to whatever opened it and says the host owes that; this host has two
+   * openers, and `back()` focuses the **Share** button — which for the reader driven here is not
+   * drawn at all, because they have connected nothing. So the shared callback would leave the
+   * caret on `<body>` for exactly the reader most likely to press *Open*, and their next Tab
+   * would restart at the top of the app. Driven in the shipped window and reproduced twice
+   * before it was fixed, by Escape and by the ✕.
+   *
+   * **Nothing connected on purpose**, so this case would still be red if the fix had been to
+   * point the existing `back()` at the Open button and leave one ref.
+   */
+  it("hands the caret back to the Open button when the paste box closes", async () => {
+    syncSupporterStatus.mockResolvedValue(NOTHING_CONNECTED);
+    const user = userEvent.setup();
+    mount(<ShareFolderMenu target={COLLECTION} />);
+
+    const opener = await screen.findByRole("button", { name: "Open a shared collection" });
+    await user.click(opener);
+    await screen.findByLabelText("Link to a shared collection");
+
+    await user.click(screen.getByRole("button", { name: "Close open a shared collection" }));
+
+    await waitFor(() => expect(document.activeElement).toBe(opener));
+  });
+});
+
+/* ------------------------------------------------------------- below the fold ---------- */
+
+describe("the phone's frame", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  /**
+   * **The words give way, never the controls** — `ImportExportPair`'s own rule, applied here
+   * because this group and that pair share one row's right-hand end. Worded they measured
+   * **421.67px** against the phone's **335px** row and took `Export` off the window; as two glyph
+   * pairs they are about 156px.
+   *
+   * **The accessible names do not move**, which is the half that keeps every other case in this
+   * file honest: the name is an `aria-label` at both widths, so a reader on a phone hears the
+   * same sentence and every query above still addresses the same control.
+   */
+  it("draws both buttons as glyphs below the phone fold, keeping their names", async () => {
+    stubNarrowWindow(true);
+    mount(<ShareFolderMenu target={BINDER} />);
+
+    const share = await screen.findByRole("button", { name: "Share Trade binder" });
+    const open = screen.getByRole("button", { name: "Open a shared collection" });
+    // The box `ImportExportPair` compacts to, so the two groups are the same shape on the line.
+    expect(share).toHaveClass("w-9", "px-0");
+    expect(open).toHaveClass("w-9", "px-0");
+    // …and the words are gone, which is the whole of what buys the room back.
+    expect(share).not.toHaveTextContent("Share");
+    expect(open).not.toHaveTextContent("Open a shared collection");
+  });
+
+  /** Above it, the same two controls carry their words — the state every other case here is in,
+   *  asserted once so the branch cannot silently compact the desk. */
+  it("keeps the words above the phone fold", async () => {
+    stubNarrowWindow(false);
+    mount(<ShareFolderMenu target={BINDER} />);
+
+    const share = await screen.findByRole("button", { name: "Share Trade binder" });
+    expect(share).toHaveTextContent("Share");
+    expect(share).not.toHaveClass("w-9");
+    expect(screen.getByRole("button", { name: "Open a shared collection" })).toHaveTextContent(
+      "Open a shared collection",
+    );
   });
 });

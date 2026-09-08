@@ -36,8 +36,22 @@ export function FigureRow({ children, actions }: { children: ReactNode; actions?
       <dl className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-6 gap-y-2">{children}</dl>
       {/* `ml-auto` as well as the `flex-1` above, so the actions stay against the right edge on
           the line they wrap onto — a wrapped flex item is at the start of its own line, and the
-          `flex-1` that pushed it right is on a box that is no longer beside it. */}
-      <div className="ml-auto shrink-0">{actions}</div>
+          `flex-1` that pushed it right is on a box that is no longer beside it.
+
+          ⚠️ **Not `shrink-0`, and the reason is a defect this row shipped with for one day**
+          (2026-09-08). The `<dl>` beside it is `flex-1` with a `0%` basis, so it *grows* into
+          whatever is left and never shrinks — which means a `shrink-0` here made the actions'
+          **max-content** a hard floor on the whole row. The collection's block grew from one
+          `ImportExportPair` (158.86px) to that plus a sharing group (421.67px), and at the phone's
+          390px frame — a 335px row — the row's `scrollWidth` went to 421 against a `clientWidth`
+          of 335 with `documentElement.scrollWidth` still 390: `Import` cut mid-word, `Export`
+          entirely off screen and **not reachable by scrolling**, because the overflow was in a
+          box the page does not scroll. Shrinkable, a block whose own content can wrap falls onto
+          two lines instead and nothing leaves the window. The floor that replaces `shrink-0` is
+          the automatic one every flex item has — its min-content — so an `actions` node that
+          *cannot* wrap is unchanged by this, and the wishlist's lone pair (158.86px, never
+          shrunk at any width this app is drawn at) is one such node. */}
+      <div className="ml-auto">{actions}</div>
     </div>
   );
 }

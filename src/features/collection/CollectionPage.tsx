@@ -2605,7 +2605,10 @@ export function CollectionPage() {
           // Two bordered groups on one line — sharing, then transfer. `items-start` rather than
           // `items-center`: the Share group carries a status line under it that grows and
           // shrinks, and centring would lift the transfer pair off the row every time it said
-          // something.
+          // something. `flex-wrap` is what puts them on two lines rather than out of the window
+          // when the row is short, and it is inert unless `FigureRow`'s actions box can be
+          // squeezed — see that file, where the `shrink-0` that made this wrap unreachable is
+          // recorded with the measurement that found it.
           <div className="flex flex-wrap items-start justify-end gap-2">
             <ShareFolderMenu target={shareTarget} />
             <ImportExportPair
@@ -2613,6 +2616,11 @@ export function CollectionPage() {
               onExport={() => setExporting(true)}
               importLabel="Import cards"
               exportLabel="Export collection"
+              // **Glyphs below the phone fold**, which is this pair's own rule applied by the
+              // caller: what it competes with for the line is the sharing group beside it, and
+              // worded the two came to 421.67px in the phone's 335px row. `ShareFolderMenu` reads
+              // the same fold for the same reason and carries the argument.
+              compact={narrowWindow}
             />
           </div>
         }

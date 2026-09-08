@@ -40,6 +40,7 @@ import { useCallback, useMemo, useRef, useState, type JSX, type MouseEvent } fro
 import { Dialog } from "@/components/Dialog";
 import { useContextMenu } from "@/components/menu/useContextMenu";
 import type { MenuItem } from "@/components/menu/types";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { ConfirmDialog } from "@/features/settings/ConfirmDialog";
 import { BUTTON } from "@/features/settings/controls";
 import { OpenShareDialog } from "@/features/share/OpenShareDialog";
@@ -49,6 +50,7 @@ import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError, type CollectionFolder, type ShareFields, type ShareRow } from "@/lib/ipc";
 import { SUPPORTER_KEY, supporterState } from "@/lib/query";
 import { useAppStore } from "@/lib/store";
+import { useNarrowWindow } from "@/lib/useNarrowWindow";
 import { cn } from "@/lib/utils";
 
 /**
@@ -75,6 +77,15 @@ export const WHOLE_COLLECTION_TITLE = "Collection";
  * at the same next thing to do.
  */
 export const UNLOCK_FIRST = "unlock it first";
+
+/**
+ * The entry point's name, spelled once.
+ *
+ * It is the button's `aria-label`, its visible words above the phone fold and its tooltip below
+ * one — three places that must not drift, since WCAG 2.5.3 asks that the visible label be
+ * contained in the accessible name and here they are the same string.
+ */
+export const OPEN_A_SHARE = "Open a shared collection";
 
 /**
  * The folder's `sync_uid`, or `null` where the list did not name one.
@@ -176,6 +187,30 @@ export function ShareFolderMenu({ target }: { target: ShareTarget | null }): JSX
   const { menuClick } = useContextMenu();
   const shares = useShares();
   const setActiveView = useAppStore((s) => s.setActiveView);
+  const tip = useTooltip();
+
+  /**
+   * **Below the phone fold both buttons are glyphs, and the word is what gives way.**
+   *
+   * `ImportExportPair`'s own rule — *the word gives way as the column narrows, never the
+   * control* — applied by the caller, because only the caller knows what it is competing with
+   * for the line. Here that is a great deal: this group and that pair share the figures band's
+   * right-hand end, and worded they come to **421.67px** against the phone's **335px** row,
+   * which took `Export` off the window entirely (measured in the shipped WebView2 at 390×844,
+   * 2026-09-08). Two glyph pairs are about 156px and leave the figures beside them their room.
+   *
+   * **`useNarrowWindow` and not a container query, and the reason is this component rather than
+   * this row**: `@container` makes a box the containing block for every `fixed` descendant, and
+   * three dialogs are mounted below this one — a query here would clamp their scrims to the
+   * band. It is a *consumption* of the shell's own answer rather than a second viewport branch,
+   * which is `ScannerPage`'s precedent: the question is whether the app is in its phone shape,
+   * and the shell has already decided that.
+   *
+   * **It is the quality half rather than the correctness half.** What keeps the row inside the
+   * window at every other width is `FigureRow`'s actions box being shrinkable, so a block whose
+   * content wraps falls onto two lines; see `components/Figure.tsx`.
+   */
+  const compact = useNarrowWindow();
 
   /**
    * The membership, through the one key and the one reading of the four fields.
@@ -207,11 +242,22 @@ export function ShareFolderMenu({ target }: { target: ShareTarget | null }): JSX
   /** The one line under the buttons: what the last press did, or why it did not. */
   const [note, setNote] = useState<string | null>(null);
   const shareRef = useRef<HTMLButtonElement | null>(null);
+  /**
+   * ⚠️ **A second ref, because `back()` cannot serve the Open button and the difference is not
+   * tidiness.** `Dialog` hands the caret back to *whatever opened it* and says the host owes
+   * that; this host draws two openers, and the one that raises the paste box is the one a reader
+   * with **no membership** presses — the state in which `shareRef` is `null` because the Share
+   * button is not drawn at all. So a shared `back()` would drop the caret on `<body>` for exactly
+   * the reader most likely to be here. Driven in the shipped window (2026-09-08) and reproduced
+   * twice, by Escape and by the ✕.
+   */
+  const openRef = useRef<HTMLButtonElement | null>(null);
 
-  /** The caret goes back to the button the layer was raised from — `Dialog` cannot know which
-   *  control that was, and there is exactly one here. Declared above the writes because every
-   *  one of them closes a layer. */
+  /** The caret goes back to the control the layer was raised from — `Dialog` cannot know which
+   *  one that was. Declared above the writes because every one of them closes a layer, and
+   *  `focus()` on a detached or absent node is a silent no-op rather than a throw. */
   const back = useCallback(() => shareRef.current?.focus(), []);
+  const backToOpen = useCallback(() => openRef.current?.focus(), []);
 
   const existing = useMemo(
     () => (target === null ? null : shareFor(shares.data ?? [], target)),
@@ -389,27 +435,33 @@ export function ShareFolderMenu({ target }: { target: ShareTarget | null }): JSX
             // long as the menu is up. `CollectionFolderCard`'s `⋯` makes the same declaration.
             aria-haspopup="menu"
             onClick={openMenu}
-            className={cn(SHARE_BUTTON, "gap-1.5 px-2.5")}
+            // Bound exactly when the word is not there to be read. `describes: false`, because
+            // the sentence is identical to the `aria-label` above.
+            {...(compact ? tip(shareName, { describes: false }) : {})}
+            className={cn(SHARE_BUTTON, compact ? "w-9 px-0" : "gap-1.5 px-2.5")}
           >
             <Share2 className="size-4 shrink-0" aria-hidden="true" />
-            Share
+            {!compact && "Share"}
           </button>
         )}
         <button
+          ref={openRef}
           type="button"
+          aria-label={OPEN_A_SHARE}
           aria-haspopup="dialog"
           onClick={() => {
             setNote(null);
             setOpening(true);
           }}
+          {...(compact ? tip(OPEN_A_SHARE, { describes: false }) : {})}
           className={cn(
             SHARE_BUTTON,
-            "gap-1.5 px-2.5",
+            compact ? "w-9 px-0" : "gap-1.5 px-2.5",
             target !== null && connected && "border-l border-border",
           )}
         >
           <Link2 className="size-4 shrink-0" aria-hidden="true" />
-          Open a shared collection
+          {!compact && OPEN_A_SHARE}
         </button>
       </div>
 
@@ -460,7 +512,18 @@ export function ShareFolderMenu({ target }: { target: ShareTarget | null }): JSX
 
       <OpenShareDialog
         open={opening}
-        onClose={() => setOpening(false)}
+        // **The caret is this host's to hand back**, which `Dialog` states and which the paste
+        // box cannot do for itself: it forwards one `onClose` to both `Dialog.onDismiss` and
+        // `Dialog.onClose`, so Escape, the ✕ and a press on the scrim all arrive here as the same
+        // callback. Returning the caret on all three is a shade more eager than the app's rule
+        // (an outside click deliberately does not), and it is the closest this side can get
+        // without changing that component's API — the alternative, which shipped for a day, is
+        // `<body>` on every exit. On a link that *opened*, the reader has already been navigated
+        // to the shared view and the button is gone, so the `focus()` is a no-op.
+        onClose={() => {
+          setOpening(false);
+          backToOpen();
+        }}
         // The dialog reports that a link answered and does not decide where the reader goes —
         // which is what lets it be drawn from inside the shared view as well as from here.
         onOpened={() => setActiveView("shared")}

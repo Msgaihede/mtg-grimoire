@@ -886,18 +886,55 @@ figure keeps its date and the open question is named beside it.
 
 ## The bugs still open, and the work still owed
 
-**No live pass on either UI surface.** Neither the collection's Share control nor the in-app viewer
-has been driven in the shipped window over CDP. A green suite and a green Storybook prove nothing
-about the real window, and every UI task in Plans 2–3 found something the suite could not.
+**The live pass happened on 2026-09-08, and it found two defects.** Both were in the collection's
+Share control, both are fixed, and both are recorded here because neither suite could see either.
 
-**`BottomTabBar` at eight destinations is undriven.** The row is `flex` with no wrap, so a 390px
-window divides by whatever it is given: the 65px-per-tab figure was measured at **six** tabs on
-2026-08-29, and eight gives **48.75px**. The word `Collection` is the longest in the list and inks
-more than that at `text-xs` — **and the tree currently carries two figures for that ink width**,
-54.98 (`BottomTabBar.stories.tsx`, and the 2026-08-28 mobile-layout spec it came from) against
-55.23 (`BottomTabBar.tsx`). They disagree by a quarter of a pixel and both exceed 48.75, so the
-conclusion is unaffected: **the longest word truncates or the row overflows, and which of those it
-does has not been driven.** Somebody should re-measure once and make the two files agree.
+* 🔴 **The action block overhung its row at the phone's frame, and `Export` was off the window.**
+  `FigureRow`'s actions box was `ml-auto shrink-0` while the `<dl>` beside it is `flex-1` with a
+  `0%` basis — so the box's **max-content** was a hard floor on the row. One `ImportExportPair`
+  (158.86px) fitted; that pair plus a sharing group (**421.67px**) did not, and at 390×844 the row
+  read `scrollWidth` **421** against `clientWidth` **335** with `documentElement.scrollWidth` still
+  **390** — `Import` cut mid-word, `Export` entirely off screen and **unreachable by scrolling**,
+  because the overflow was in a box the page does not scroll. Two changes: the actions box lost
+  `shrink-0`, so a block whose content wraps falls onto two lines at any width; and below the phone
+  fold both groups draw as glyph pairs (`ImportExportPair`'s own *the word gives way, never the
+  control*, and `ShareFolderMenu` reads the same fold). Re-measured over the built stylesheet at a
+  **335px** row: compact, sharing **74** + transfer **74** on **one** line with the `<dl>` keeping
+  **155px**; worded, **251.78** + **155.70** on **two** lines with the `<dl>` on its own; and
+  `scrollWidth === clientWidth === 335` with no button past the right edge in either.
+* 🟠 **The *Open a shared collection* dialog dropped the caret on `<body>`**, reproduced by Escape
+  and by the ✕. `Dialog` says the host owes the caret and this host draws **two** openers — and the
+  shared `back()` focuses the *Share* button, which is not drawn at all for a reader who has
+  connected nothing, i.e. exactly the reader most likely to press *Open*. The Open button has its
+  own ref now. The other two dialogs were already correct.
+
+Confirmed clean in the same pass: the greyed row's accessible name reads *"Share this folder…
+unlock it first"* in Chromium's AX tree (a real space — not the `Missing2` failure); the
+`NOT_DEPLOYED` sentence matches `publish.rs` byte for byte with **no `error_log` row written**; the
+malformed-link refusal keeps the dialog open and the text; `Ctrl+6/7/8` all land correctly and the
+*Shared* row hides again on leaving. Zero console errors or warnings across the pass.
+
+**`BottomTabBar` at eight destinations was driven, and it truncates rather than overflowing.** The
+row is `flex` with no wrap, so a 390px window divides by whatever it is given: the 65px-per-tab
+figure was measured at **six** tabs on 2026-08-29, and eight gives **48.75px**. Driven at 390×844
+(2026-09-08, WebView2): every tab draws at exactly **48.75 × 52**, `nav.scrollWidth ===
+clientWidth === 390`, and `documentElement`/`body` likewise — **nothing overflows**, and the 44px
+`--target-min` never binds. **Exactly one label truncates**: `Collection`, 55 against 49, drawn as
+`Collecti…`; every other span reports `scrollWidth === clientWidth`.
+
+The same pass settled the two figures the tree carried for that ink width. Re-measured at 12px
+Geist Variable: Search 38.67, Tagger 37.50, Decks 34.27, **Collection 55.23**, Wishlist 43.30,
+Shared 39.06, Scanner 45.73, Settings 45.42 — and `Search` reproduces the 2026-08-29 headless
+figure exactly, which is the cross-check that the face is the right one. So **`BottomTabBar.tsx`'s
+55.23 was correct and `BottomTabBar.stories.tsx`'s 54.98 was not**; the story is corrected and
+dated.
+
+**The action row at 1280 with the search column docked does neither of the two things this page
+predicted.** The premise that the inner `flex-wrap` is inert was right — `FigureRow` used to size
+the actions at max-content — but the `<dl>` beside it is `min-w-0 flex-1` and absorbed the whole
+cost: the wrapper drew **421.67** flush to the row's right edge, the `<dl>` was squeezed to
+**571.33**, both children stayed on one line, and nothing overflowed at 1280 **or** at the 1024
+floor. It broke only below a row width of **445.67**, which is the phone defect above.
 
 **Automatic refresh is deliberately not built, and no plan task ever assigned it.** Spec §4.1
 promises *"on app launch and after a sync that touched a shared folder, debounced, plus a manual

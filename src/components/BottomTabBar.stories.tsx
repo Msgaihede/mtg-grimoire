@@ -136,10 +136,21 @@ export const Default: Story = {
  * `Collection` is the longest word in the list, and this is the frame that shows what a tab does
  * to it.
  *
- * The 54.98px it inks at `text-xs` had ten to spare in the **65px** tab six destinations bought
- * on a 390px window (2026-08-29). This story draws all eight, where the same window gives 48.75 —
- * so what it now shows is the word against a tab too narrow for it. Whether that truncates or
- * overflows is undriven; see `BottomTabBar.tsx`'s header.
+ * The **55.23px** it inks at `text-xs` had ten to spare in the **65px** tab six destinations
+ * bought on a 390px window. This story draws all eight, where the same window gives 48.75 — so
+ * what it now shows is the word against a tab too narrow for it.
+ *
+ * **This paragraph said 54.98 until 2026-09-08 and was the one figure in the app that disagreed
+ * with `BottomTabBar.tsx`'s own.** Re-measured in the shipped WebView2 at 12px Geist Variable
+ * on that date: Search 38.67, Tagger 37.50, Decks 34.27, **Collection 55.23**, Wishlist 43.30,
+ * Shared 39.06, Scanner 45.73, Settings 45.42. `Search` reproduces the 2026-08-29 headless
+ * figure exactly, which is the cross-check that the face is the right one — so the component's
+ * number was correct and this file's was not.
+ *
+ * **And what happens to it is no longer undriven: it truncates** — every tab draws at exactly
+ * 48.75 × 52 in a 390px `nav`, `nav.scrollWidth === clientWidth === 390`, and `Collection` is
+ * the *only* label whose span reports `scrollWidth > clientWidth` (55 against 49), drawn as
+ * `Collecti…`. See `docs/reference/collection-sharing.md`.
  */
 export const CollectionOpen: Story = {
   args: { activeView: "collection" },
