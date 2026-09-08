@@ -134,6 +134,8 @@
     content:""; position:absolute; top:-2px; bottom:-2px; width:1px;
     background:var(--ink-3); left:70%;
   }
+  /* Under the vote rule the bar is the tally against the bar itself, so the mark is the end. */
+  .ev.votes::after { left:calc(100% - 1px); }
   .frames { font-family:var(--mono); font-size:10.5px; color:var(--ink-3); }
   /* The per-frame guess, kept visible but demoted — it is the thing that flickers, and
      watching it flicker while the answer above stays put is how you see the tracker work. */
@@ -230,7 +232,11 @@
       </div>
       <div class="ev" id="ev"><i id="ev-fill"></i></div>
       <dl class="metrics">
-        <dt>confidence</dt><dd id="mt-share">&mdash;</dd>
+        <dt id="mt-share-k">confidence</dt><dd id="mt-share">&mdash;</dd>
+        <!-- The vote rule's margin: the leader over its best rival. It is what refuses a
+             dead heat that has reached the bar, so it gets its own row rather than a
+             clause that wrapped the votes row onto three lines. -->
+        <dt>lead</dt><dd id="mt-lead">&mdash;</dd>
         <dt>distance &darr;</dt><dd id="mt-dist">&mdash;</dd>
         <dt>margin</dt><dd id="mt-margin">&mdash;</dd>
         <dt>orientation</dt><dd id="mt-rot">&mdash;</dd>
@@ -314,6 +320,16 @@
 
     <div class="card">
       <h2 tabindex="0" role="button" aria-expanded="true">Controls</h2>
+      <!-- Two verdicts over one accumulator. Votes add up without decay toward the bar, and
+           a decision freezes the tally until reset, the card leaving, or the bar being
+           raised above it. Confidence is the two-way contest with the best rival, re-judged
+           every frame. -->
+      <div class="seg" id="rule">
+        <button data-v="votes" aria-pressed="true">votes</button>
+        <button data-v="confidence" aria-pressed="false">confidence</button>
+      </div>
+      <label class="row">decide at<input type="range" id="decide" min="1" max="40" step="1" value="8"><output id="decide-o">8</output></label>
+      <label class="row">lead margin<input type="range" id="margin" min="10" max="30" step="1" value="13"><output id="margin-o">1.3</output></label>
       <div class="seg" id="method">
         <button data-v="canny" aria-pressed="true">canny</button>
         <button data-v="otsu" aria-pressed="false">otsu</button>
@@ -366,6 +382,9 @@ const opts = () => ({
   cardness: (+$('cardness').value / 100).toFixed(2),
   stages: document.querySelector('#stages-toggle [aria-pressed=true]').dataset.v,
   send: +$('send').value,
+  rule: document.querySelector('#rule [aria-pressed=true]').dataset.v,
+  decide: +$('decide').value,
+  margin: (+$('margin').value / 10).toFixed(1),
 });
 
 function segment(container, onChange) {
@@ -377,6 +396,7 @@ function segment(container, onChange) {
   });
 }
 segment($('method'));
+segment($('rule'));
 segment($('stages-toggle'), (v) => { $('stages-card').hidden = v !== '1'; });
 $('mt-reset').addEventListener('click', () => { fetch('/reset', { method: 'POST' }); });
 
@@ -406,6 +426,7 @@ $('cap-add').addEventListener('click', async () => {
     expected: $('cap-name').value.trim(),
     reported: lead?.label?.name ?? '',
     confidence: t?.confidence != null ? t.confidence.toFixed(3) : '',
+    votes: lead?.evidence != null ? lead.evidence.toFixed(2) : '',
     distance: latest?.match?.candidates?.[0]?.distance ?? '',
   });
   status('saving…');
@@ -423,6 +444,8 @@ $('cap-add').addEventListener('click', async () => {
   }
 });
 for (const [id, fmt] of [['edge', String], ['lo', String], ['hi', String], ['send', String],
+                         ['decide', String],
+                         ['margin', (v) => (v / 10).toFixed(1)],
                          ['aspect', (v) => (v / 100).toFixed(2)],
                          ['cardness', (v) => (v / 100).toFixed(2)]]) {
   const el = $(id), out = $(id + '-o');
@@ -667,6 +690,11 @@ function renderMatch(j, detected, hasBundle) {
   // and every one-off runner-up inflates that denominator — a card correctly first on every
   // frame still read as 40-60%. Confidence is the leader against its single best rival.
   const confidence = tr?.confidence ?? 0;
+  // The vote rule: the leader's tally against the bar is the number that decides, so the
+  // bar, the headline and the standings all read in votes. Under the confidence rule
+  // everything below is exactly as it was.
+  const votes = tr?.rule === 'votes';
+  const tally = lead?.evidence ?? 0;
 
   if (!hasBundle) {
     name.textContent = '—';
@@ -676,7 +704,8 @@ function renderMatch(j, detected, hasBundle) {
     name.textContent = lead.label
       ? `${lead.label.name} — ${lead.label.set.toUpperCase()} ${lead.label.number}`
       : lead.id.slice(0, 8);
-    conf.textContent = tr.committed ? 'confirmed' : 'gathering';
+    conf.textContent = votes ? (tr.committed ? 'decided' : 'voting')
+                             : (tr.committed ? 'confirmed' : 'gathering');
     conf.className = 'match-conf' + (tr.committed ? ' sure' : ' maybe');
   } else {
     name.textContent = '—';
@@ -684,11 +713,16 @@ function renderMatch(j, detected, hasBundle) {
     conf.className = 'match-conf';
   }
 
-  $('ev').className = 'ev' + (tr?.committed ? ' on' : '');
-  $('ev-fill').style.width = `${Math.min(100, confidence * 100).toFixed(0)}%`;
+  $('ev').className = 'ev' + (tr?.committed ? ' on' : '') + (votes ? ' votes' : '');
+  const fill = votes ? (tr.decide_at > 0 ? tally / tr.decide_at * 100 : 0) : confidence * 100;
+  $('ev-fill').style.width = `${Math.min(100, fill).toFixed(0)}%`;
 
   const set = (id, v, warn) => { const el = $(id); el.textContent = v; el.classList.toggle('warn', !!warn); };
-  set('mt-share', tr ? `${(confidence * 100).toFixed(0)}% over ${tr.frames}f` : '—');
+  set('mt-share-k', votes ? 'votes' : 'confidence');
+  set('mt-lead', !tr || !votes || !lead ? '—' : tr.lead == null ? 'unopposed' : `×${tr.lead.toFixed(1)}`);
+  set('mt-share', !tr ? '—'
+    : votes ? `${tally.toFixed(1)}/${tr.decide_at} · ${tr.frames}f`
+    : `${(confidence * 100).toFixed(0)}% over ${tr.frames}f`);
 
   const best = m?.candidates?.[0];
   const aspectOk = best && best.normalized <= SURE_DISTANCE;
@@ -722,7 +756,8 @@ function renderMatch(j, detected, hasBundle) {
   list.innerHTML = (tr?.standings ?? []).map((c, i) => {
     const label = c.label ? `${c.label.name} · ${c.label.set.toUpperCase()} ${c.label.number}`
                           : c.id.slice(0, 13);
-    return `<li class="${i === 0 ? 'best' : ''}"><span>${esc(label)}</span><span>${(c.share * 100).toFixed(0)}%</span></li>`;
+    const score = votes ? c.evidence.toFixed(1) : `${(c.share * 100).toFixed(0)}%`;
+    return `<li class="${i === 0 ? 'best' : ''}"><span>${esc(label)}</span><span>${score}</span></li>`;
   }).join('');
 
   $('mt-guess').textContent = best

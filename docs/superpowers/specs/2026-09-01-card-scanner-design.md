@@ -76,6 +76,7 @@ fetches from that host sets a User-Agent or it gets nothing — and the failure 
 | 6 | **Fast mode auto-picks and marks provisional** | Never blocks the stream on a dialog; honest that the printing is a guess |
 | 7 | **Fourth AI tier: interface only, unimplemented** | Nothing has to be restructured if measured accuracy turns out to need it |
 | 8 | **Both Canny and Otsu, behind a flag** | Which wins is empirical and the sample corpus decides |
+| 9 | **A card is _decided_ by undecayed votes toward a bar, and a decision freezes the tally** — `track::CommitRule::Votes`, since 2026-09-08 | A per-frame answer flickers and a decayed confidence never stops revising; a reader wants one answer, then the next card. A clean appearance frame is one vote, a read name six, a collector line two; the bar and the lead margin are sliders on the debug page, and the original confidence rule stays behind a toggle there for the A/B |
 
 ### 3.1 The stack is genuinely pure Rust
 

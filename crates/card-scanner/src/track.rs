@@ -60,13 +60,65 @@
 //!
 //! It also matches what fast mode promises — a card now, its exact printing marked
 //! provisional — so the number that gates the commit is the number about the card.
+//!
+//! ## Two verdicts on one accumulator
+//!
+//! Everything above is how evidence is *gathered*. What turns it into an answer is a
+//! [`CommitRule`], and there are two, chosen per session and switchable on a held card:
+//!
+//! **Confidence** is the original: evidence decays, the leader must hold a share of its
+//! two-way contest with its best rival, have been seen enough and led for a streak, and the
+//! commit is re-evaluated on every frame and can lapse. It is a *belief*, and it never stops
+//! being revised.
+//!
+//! **Votes** is a *decision*. Each observation is worth its tier weight scaled only by how far
+//! behind the frame's best it is — a clean appearance frame is one vote, a read name six, a
+//! collector line two — and the votes accumulate with no decay toward a bar. The card is
+//! decided the moment its votes reach the bar while it leads its best rival by a margin, and
+//! from then on the tally is **frozen**: later frames count only misses, so the verdict
+//! cannot flicker back. The freeze lifts when the decided card is gone for
+//! `reset_after_misses` frames — out of the lens, or replaced by another card held steady —
+//! when the reader resets, or when the bar is raised above the tally.
+//!
+//! Two things left the score on purpose. **Decay**, because a threshold and decay cannot
+//! coexist: evidence saturates at `w / (1 - decay)` and the bar becomes a ceiling a
+//! weaker-but-correct match can never reach — the exact failure `commit_seen` records.
+//! **Quality**, the candidate's own distance across the usable range, because it made a vote
+//! worth 0.47 at 41 bits and 0.13 at 66, so the bar read in no unit anyone could picture;
+//! a vote is worth the same anywhere inside the gate, and the gate is what rejects noise.
 
 use crate::index::ID_LEN;
 use std::collections::HashMap;
 
+/// How accumulated evidence becomes an answer. See the module doc for the two.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CommitRule {
+    /// Undecayed votes toward a bar; a decision freezes the tally.
+    Votes,
+    /// Decayed evidence, the leader's share of its contest with its rival, re-evaluated every
+    /// frame.
+    Confidence,
+}
+
 #[derive(Debug, Clone)]
 pub struct TrackerOptions {
-    /// Per-frame multiplier applied to all accumulated evidence.
+    /// Which verdict to draw from the accumulator.
+    pub rule: CommitRule,
+    /// Votes the leader needs before it can be decided. Vote rule only.
+    ///
+    /// In frames of clean appearance: 8 is eight of them, or a read name plus two, or a
+    /// collector line plus six. Under a second at the measured ~12 detections a second, and
+    /// short enough that a single read cannot decide on its own.
+    pub decide_at: f32,
+    /// How far ahead of its best rival the leader must be to decide. Vote rule only.
+    ///
+    /// The same 1.3 as `switch_margin`, and for the same reason: two candidates a bit apart
+    /// gather votes at nearly the same rate, and letting the first to touch the bar win is
+    /// letting a coin toss decide. At 1.0 it is first past the post, which the page can ask
+    /// for.
+    pub lead_margin: f32,
+    /// Per-frame multiplier applied to all accumulated evidence. Confidence rule only.
     ///
     /// 0.93 gives an effective memory of ~1/(1-0.93) ≈ 14 frames, a little over a second at
     /// the measured ~12 detections a second.
@@ -83,6 +135,7 @@ pub struct TrackerOptions {
     /// commits confidently to nothing.
     pub max_normalized: f32,
     /// How much of the *two-way contest with its best rival* the leader must hold.
+    /// Confidence rule only.
     ///
     /// **Not its share of all accumulated evidence, and the difference is the whole point.**
     /// A share is a fraction of a denominator that grows every time a new candidate appears
@@ -96,7 +149,7 @@ pub struct TrackerOptions {
     /// unaffected by however much noise drifts through behind them.
     pub commit_confidence: f32,
     /// Informative frames the leader must have appeared in, so one lucky frame cannot commit
-    /// alone.
+    /// alone. Confidence rule only.
     ///
     /// **This counts frames, not accumulated weight, and the difference is not cosmetic.** It
     /// was an absolute evidence threshold at first, and that silently made commitment
@@ -109,9 +162,13 @@ pub struct TrackerOptions {
     /// Match quality is already gated by `max_normalized`. This gate is for *consistency*, and
     /// consistency is a count.
     pub commit_seen: u32,
-    /// Consecutive frames the leader must have led for.
+    /// Consecutive frames the leader must have led for. Confidence rule only.
     pub commit_streak: u32,
     /// Frames with nothing usable before the accumulator is cleared — the card has left.
+    ///
+    /// Under a vote-rule freeze the same count ends the decision, and a miss there is any
+    /// frame the decided card was not in — empty, or showing the same other card. See
+    /// [`Tracker::observe`].
     pub reset_after_misses: u32,
     /// How many of each frame's candidates contribute.
     pub top_k: usize,
@@ -142,6 +199,9 @@ pub struct TrackerOptions {
 impl Default for TrackerOptions {
     fn default() -> Self {
         TrackerOptions {
+            rule: CommitRule::Votes,
+            decide_at: 8.0,
+            lead_margin: 1.3,
             decay: 0.93,
             max_normalized: 0.30,
             commit_confidence: 0.70,
@@ -322,8 +382,19 @@ pub struct Tracked {
     pub confidence: f32,
     /// Frames observed since the last reset.
     pub frames: u32,
-    /// Consecutive frames with nothing usable in them.
+    /// Consecutive frames with nothing usable in them — or, once decided, consecutive frames
+    /// the decided card was not in.
     pub misses: u32,
+    /// Which verdict `committed` was drawn by.
+    pub rule: CommitRule,
+    /// The bar the vote rule is counting toward, so the page can draw it.
+    pub decide_at: f32,
+    /// The leader's evidence over its best rival's. `None` when it is unopposed, which is
+    /// not a lead of infinity but the absence of a contest.
+    pub lead: Option<f32>,
+    /// Decided under the vote rule and the tally no longer moves. Always false under the
+    /// confidence rule.
+    pub frozen: bool,
 }
 
 impl Tracked {
@@ -363,6 +434,11 @@ pub struct Tracker {
     streak: u32,
     frames: u32,
     misses: u32,
+    /// Decided under the vote rule: the tally no longer moves. See the module doc.
+    frozen: bool,
+    /// Under a freeze, the other card the last frames have been naming instead of the decided
+    /// one — a swap in progress, if it keeps naming the same one.
+    other: Option<[u8; ID_LEN]>,
 }
 
 impl Default for Tracker {
@@ -383,11 +459,28 @@ impl Tracker {
             streak: 0,
             frames: 0,
             misses: 0,
+            frozen: false,
+            other: None,
         }
     }
 
     pub fn options(&self) -> &TrackerOptions {
         &self.opts
+    }
+
+    /// Replace the options and keep the tally.
+    ///
+    /// The page drives this on every frame, so the bar, the margin and the rule itself can
+    /// be changed on a card being held still and the verdict answers at once. A freeze
+    /// outlives only the verdict that produced it: raising the bar above a frozen tally, or
+    /// switching to the confidence rule, puts the tracker back to gathering with everything
+    /// it had. Lowering the bar under a frozen tally changes nothing — it was decided, and
+    /// it still is.
+    pub fn set_options(&mut self, opts: TrackerOptions) {
+        self.opts = opts;
+        if self.frozen {
+            self.frozen = self.opts.rule == CommitRule::Votes && self.snapshot().committed;
+        }
     }
 
     /// Was the last frame's verdict a commit?
@@ -408,6 +501,8 @@ impl Tracker {
         self.streak = 0;
         self.frames = 0;
         self.misses = 0;
+        self.frozen = false;
+        self.other = None;
     }
 
     /// Feed one frame's candidates where each id is its own group — no card grouping.
@@ -432,6 +527,53 @@ impl Tracker {
             .take(self.opts.top_k)
             .filter(|o| o.normalized < self.opts.max_normalized)
             .collect();
+        let voting = self.opts.rule == CommitRule::Votes;
+
+        // **Decided: nothing moves until the decided card is gone.** A frozen tally is what
+        // makes a decision a decision — the frame is counted so the panel sees time pass, but
+        // no vote lands and the leader cannot change. What ends it is the miss count reaching
+        // `reset_after_misses`, and under a freeze a miss is a frame the decided card was not
+        // in: an empty one, or one whose best usable candidate is some *other* card — the
+        // same other card each time, because a foil's hash offers a different near-random
+        // neighbour every frame and a churn of strangers is not a card being swapped in.
+        //
+        // A frame with candidates but nothing inside the gate is *not* a miss here, and that
+        // is a measured fix rather than a nicety. Once a card is decided the server drops the
+        // extra framings it no longer needs; a Plains that cleared the gate at 74 bits with
+        // them matched at 84 without, so every frame after the decision counted as a miss and
+        // at ten the decision reset itself with the card still locked in frame. A frozen
+        // tally takes no evidence, so the gate has nothing to judge — the only question is
+        // whether something is still in front of the lens.
+        if self.frozen {
+            let present = !candidates.is_empty();
+            match usable.first().map(|o| o.key) {
+                Some(k) if Some(k) == self.leader => {
+                    self.misses = 0;
+                    self.other = None;
+                }
+                Some(k) => {
+                    if self.other == Some(k) {
+                        self.misses += 1;
+                    } else {
+                        self.other = Some(k);
+                        self.misses = 1;
+                    }
+                }
+                None if present => {
+                    self.misses = 0;
+                    self.other = None;
+                }
+                None => self.misses += 1,
+            }
+            if self.misses < self.opts.reset_after_misses {
+                return self.snapshot();
+            }
+            self.reset();
+            if usable.is_empty() {
+                return self.snapshot();
+            }
+            // The frame that ended the decision is the first of the next card's tally.
+        }
 
         // **Only an informative frame decays the accumulator.** Decay models "older evidence
         // matters less than newer evidence" — but a frame that saw nothing is not newer
@@ -440,20 +582,20 @@ impl Tracker {
         // in three, evidence saturates at 1.21 against a 1.5 threshold and the tracker can
         // never commit, however long you hold the card there. A card that has genuinely gone
         // is handled by `reset_after_misses`, which is the mechanism that should own it.
-        if !usable.is_empty() {
+        //
+        // Votes do not decay at all — see the module doc for why a bar and decay cannot share
+        // an accumulator.
+        if !usable.is_empty() && !voting {
             for v in self.scores.values_mut() {
                 *v *= self.opts.decay;
             }
-            self.scores.retain(|_, v| *v > 0.001);
             // In lockstep with the card scores above: decaying one and not the other would
             // leave the printing weighted by history the card is no longer weighted by.
             for members in self.members.values_mut() {
                 for v in members.values_mut() {
                     *v *= self.opts.decay;
                 }
-                members.retain(|_, v| *v > 0.001);
             }
-            self.members.retain(|_, m| !m.is_empty());
         }
 
         if usable.is_empty() {
@@ -490,12 +632,18 @@ impl Tracker {
                 // with a good match in it. **Relative** is how far behind the frame's best it
                 // is, which is what stops a stable list of runners-up out-accumulating the
                 // winner they consistently lose to.
+                //
+                // A vote keeps only the second. Quality made a vote worth a different amount
+                // on every frame, so the bar was in no unit a reader could picture, and a far
+                // but consistent card climbed to it several times slower than a close one —
+                // the gate has already said its distance is usable, and consistency is what
+                // the bar is counting.
                 let quality = ((self.opts.max_normalized - normalized)
                     / self.opts.max_normalized)
                     .clamp(0.0, 1.0);
                 let behind = (normalized - best_n).max(0.0);
                 let relative = (-behind / self.opts.relative_falloff.max(1e-4)).exp();
-                let base = quality * relative;
+                let base = if voting { relative } else { quality * relative };
                 *self.scores.entry(*key).or_insert(0.0) += base * o.weight.max(0.0);
                 *self.seen.entry(*key).or_insert(0) += 1;
                 // The printing accumulates separately, on its own weight — see
@@ -507,6 +655,14 @@ impl Tracker {
                 let seen_best = self.best_n.entry(*key).or_insert(normalized);
                 *seen_best = seen_best.min(normalized);
             }
+            // Whatever is now negligible goes — decayed away under one rule, or a runner-up
+            // ten falloff widths behind that entered at a millionth of a vote under the
+            // other. Without this a long session without a reset grows the map by the churn.
+            self.scores.retain(|_, v| *v > 0.001);
+            for members in self.members.values_mut() {
+                members.retain(|_, v| *v > 0.001);
+            }
+            self.members.retain(|_, m| !m.is_empty());
         }
 
         // The raw best, and then the *sticky* leader: an incumbent keeps the lead until a
@@ -536,7 +692,16 @@ impl Tracker {
             self.streak = u32::from(next.is_some());
         }
 
-        self.snapshot()
+        let mut verdict = self.snapshot();
+        // The decision is the moment the vote rule is first satisfied; from here the tally is
+        // frozen and `snapshot` keeps returning the same verdict because nothing it reads can
+        // change. The deciding frame reports the freeze too, rather than one frame late. The
+        // confidence rule never freezes — it is a belief, and it keeps revising.
+        if voting && verdict.committed {
+            self.frozen = true;
+            verdict.frozen = true;
+        }
+        verdict
     }
 
     fn snapshot(&self) -> Tracked {
@@ -594,12 +759,29 @@ impl Tracker {
             (Some(_), None) => 1.0,
             _ => 0.0,
         };
+        // The same contest as a ratio, which is what the vote rule's margin is stated in.
+        let lead = match (standings.first(), standings.get(1)) {
+            (Some(first), Some(second)) if second.evidence > 0.0 => {
+                Some(first.evidence / second.evidence)
+            }
+            _ => None,
+        };
 
-        let committed = standings.first().is_some_and(|s| {
-            confidence >= self.opts.commit_confidence
-                && s.seen >= self.opts.commit_seen
-                && self.streak >= self.opts.commit_streak
-        });
+        let committed = match self.opts.rule {
+            CommitRule::Confidence => standings.first().is_some_and(|s| {
+                confidence >= self.opts.commit_confidence
+                    && s.seen >= self.opts.commit_seen
+                    && self.streak >= self.opts.commit_streak
+            }),
+            // At the bar, and ahead of the rival by the margin. The leader here is the
+            // *held* one, so a challenger that has just crossed the bar while the incumbent
+            // still holds the lead decides nothing until it is clearly ahead — which is the
+            // same hysteresis the reported leader already has.
+            CommitRule::Votes => standings.first().is_some_and(|s| {
+                s.evidence >= self.opts.decide_at
+                    && lead.is_none_or(|l| l >= self.opts.lead_margin)
+            }),
+        };
 
         Tracked {
             standings,
@@ -608,6 +790,10 @@ impl Tracker {
             streak: self.streak,
             frames: self.frames,
             misses: self.misses,
+            rule: self.opts.rule,
+            decide_at: self.opts.decide_at,
+            lead,
+            frozen: self.frozen,
         }
     }
 }
@@ -622,6 +808,11 @@ mod tests {
         b
     }
 
+    /// The original rule, which every test up to the vote section was written against.
+    fn confidence() -> Tracker {
+        Tracker::new(TrackerOptions { rule: CommitRule::Confidence, ..Default::default() })
+    }
+
     /// The card in front of the lens, matched well every frame.
     fn good(n: u8) -> Vec<([u8; ID_LEN], f32)> {
         vec![(id(n), 0.16)]
@@ -629,7 +820,7 @@ mod tests {
 
     #[test]
     fn a_consistent_card_commits_and_stays() {
-        let mut t = Tracker::default();
+        let mut t = confidence();
         let mut committed_at = None;
         for f in 1..=12 {
             let r = t.observe_ids(&good(1));
@@ -650,7 +841,7 @@ mod tests {
     fn one_good_frame_alone_never_commits() {
         // The guard against a single lucky frame: the count and the streak both have to build,
         // and a perfect distance cannot buy its way past either.
-        let mut t = Tracker::default();
+        let mut t = confidence();
         let r = t.observe_ids(&[(id(1), 0.02)]);
         assert!(!r.committed, "a single frame committed on its own");
     }
@@ -663,7 +854,7 @@ mod tests {
         // long the card was held there — it led every frame with a 100% share and was refused.
         // 0.26 is comfortably inside `max_normalized` and comfortably below what the old gate
         // needed.
-        let mut t = Tracker::default();
+        let mut t = confidence();
         let mut r = None;
         for _ in 0..12 {
             r = Some(t.observe_ids(&[(id(1), 0.26)]));
@@ -678,7 +869,7 @@ mod tests {
         // **The reported problem.** Rank 1 alternates between three cards; the real card is
         // top on three frames in five, the impostors on one each. Every frame is a plausible
         // match, so no single frame settles it.
-        let mut t = Tracker::default();
+        let mut t = confidence();
         let mut r = None;
         for cycle in 0..5 {
             for step in 0..5 {
@@ -705,7 +896,7 @@ mod tests {
         // every time — so it proved only that the best candidate wins. Card 1 is now a genuine
         // close second, losing every single frame to a different impostor, and still has to
         // win on consistency.
-        let mut t = Tracker::default();
+        let mut t = confidence();
         let mut r = None;
         for k in 0..20u8 {
             r = Some(t.observe_ids(&[(id(20 + k), 0.10), (id(1), 0.12)]));
@@ -726,7 +917,7 @@ mod tests {
         // together outweighed it: 30% share after 53 frames, against a 45% bar, so it could
         // never commit. The premise that wrong answers are random and wash out is false for a
         // card held still.
-        let mut t = Tracker::default();
+        let mut t = confidence();
         let frame = [
             Observation::appearance(id(1), id(1), 0.215),
             Observation::appearance(id(2), id(2), 0.250),
@@ -753,7 +944,7 @@ mod tests {
     fn noise_beyond_the_threshold_is_not_evidence() {
         // Everything is past the usable distance, so nothing should accumulate and the
         // tracker must never claim a result.
-        let mut t = Tracker::default();
+        let mut t = confidence();
         let mut r = None;
         for _ in 0..15 {
             r = Some(t.observe_ids(&[(id(1), 0.34), (id(2), 0.36)]));
@@ -767,7 +958,7 @@ mod tests {
     fn an_empty_run_resets_the_accumulator() {
         // The card was taken away. After `reset_after_misses` blank frames the tracker must
         // forget it, or the next card is judged against the last one's evidence.
-        let mut t = Tracker::default();
+        let mut t = confidence();
         for _ in 0..10 {
             t.observe_ids(&good(1));
         }
@@ -787,7 +978,7 @@ mod tests {
     fn a_new_card_takes_over_within_the_decay_window() {
         // Swapping cards must not require a manual reset, and must not take long. The old
         // card's evidence decays while the new one's builds.
-        let mut t = Tracker::default();
+        let mut t = confidence();
         for _ in 0..15 {
             t.observe_ids(&good(1));
         }
@@ -809,7 +1000,7 @@ mod tests {
     fn dropped_frames_do_not_break_it() {
         // The live view drops frames by design, so evidence has to survive an irregular feed.
         // Interleaving blank frames below the reset threshold must still reach a commit.
-        let mut t = Tracker::default();
+        let mut t = confidence();
         let mut r = None;
         for _ in 0..12 {
             t.observe_ids(&good(1));
@@ -826,7 +1017,7 @@ mod tests {
         // evidence was split across its own reprints, so no single printing crossed the bar.
         //
         // Same card (key 1), three different printings (members 20/21/22), rotating.
-        let mut t = Tracker::default();
+        let mut t = confidence();
         let mut r = None;
         for i in 0..12u8 {
             let member = id(20 + (i % 3));
@@ -839,7 +1030,7 @@ mod tests {
         assert!(lead.share > 0.9, "share was {} across one card's reprints", lead.share);
 
         // And the printing reported is the one the frames keep choosing, not the most recent.
-        let mut t = Tracker::default();
+        let mut t = confidence();
         t.observe(&[Observation::appearance(id(1), id(20), 0.10)]);
         t.observe(&[Observation::appearance(id(1), id(21), 0.10)]);
         t.observe(&[Observation::appearance(id(1), id(20), 0.10)]);
@@ -856,7 +1047,7 @@ mod tests {
         // ordinary 0.15. Nothing here is asking the hash to *win* — the read is much stronger
         // evidence and should lead — only that thirty frames of a consistent appearance match
         // leave a mark at all.
-        let mut t = Tracker::default();
+        let mut t = confidence();
         let mut r = None;
         for _ in 0..30 {
             r = Some(t.observe(&[
@@ -887,7 +1078,7 @@ mod tests {
         //
         // Here the hash says card 1 on every frame and the collector line says card 2 on every
         // fourth. The art should still win.
-        let mut t = Tracker::default();
+        let mut t = confidence();
         let mut r = None;
         for i in 0..24u32 {
             let mut obs = vec![Observation::appearance(id(1), id(1), 0.12)];
@@ -911,7 +1102,7 @@ mod tests {
         // printing 11. The card is never in doubt, and the printing should be the one the
         // number gave, not the one the hash guessed — nothing else can tell two printings of
         // one card apart.
-        let mut t = Tracker::default();
+        let mut t = confidence();
         let mut r = None;
         for i in 0..24u32 {
             let mut obs = vec![Observation::appearance(id(1), id(10), 0.12)];
@@ -936,7 +1127,7 @@ mod tests {
         // the index happened to store. Letting that cast a vote put an arbitrary choice up
         // against the collector line, which actually knows — so a name carries the card and
         // abstains on the printing.
-        let mut t = Tracker::default();
+        let mut t = confidence();
         let mut r = None;
         for _ in 0..12 {
             r = Some(t.observe(&[
@@ -964,7 +1155,7 @@ mod tests {
         // Here member 21 gets one excellent frame and member 20 gets fifteen ordinary ones.
         // The card is the same either way; the printing reported must be the one the evidence
         // actually supports.
-        let mut t = Tracker::default();
+        let mut t = confidence();
         t.observe(&[Observation::appearance(id(1), id(21), 0.02)]);
         let mut r = None;
         for _ in 0..15 {
@@ -990,7 +1181,7 @@ mod tests {
     fn ungrouped_ids_still_split_as_they_should() {
         // The convenience API must not silently group: two genuinely different cards are two
         // contenders, and neither should inherit the other's evidence.
-        let mut t = Tracker::default();
+        let mut t = confidence();
         let mut r = None;
         for _ in 0..10 {
             r = Some(t.observe_ids(&[(id(1), 0.16), (id(2), 0.16)]));
@@ -1007,7 +1198,7 @@ mod tests {
         // every one of them added to the denominator of a fraction-of-total share. The
         // alternatives changing is evidence the leader is right, and it was being counted as
         // though it were evidence against.
-        let mut t = Tracker::default();
+        let mut t = confidence();
         let mut r = None;
         for f in 0..24u8 {
             // The same leader every frame; three rivals that are never seen twice.
@@ -1032,7 +1223,7 @@ mod tests {
     fn a_genuine_two_way_contest_still_refuses_to_commit() {
         // The other side of the same coin: two cards that are both consistently strong are a
         // real ambiguity, and no amount of holding still should resolve it into a claim.
-        let mut t = Tracker::default();
+        let mut t = confidence();
         let mut r = None;
         for _ in 0..24 {
             r = Some(t.observe_ids(&[(id(1), 0.180), (id(2), 0.181)]));
@@ -1048,7 +1239,7 @@ mod tests {
 
     #[test]
     fn an_unopposed_leader_is_fully_confident() {
-        let mut t = Tracker::default();
+        let mut t = confidence();
         let mut r = None;
         for _ in 0..8 {
             r = Some(t.observe_ids(&[(id(1), 0.15)]));
@@ -1064,7 +1255,7 @@ mod tests {
         // card."** The top two on a difficult card are routinely a bit or two apart, so
         // without hysteresis the reported answer changed on a single noisy frame while the
         // accumulated evidence had barely moved.
-        let mut t = Tracker::default();
+        let mut t = confidence();
         for _ in 0..14 {
             t.observe_ids(&[(id(1), 0.17)]);
         }
@@ -1097,7 +1288,7 @@ mod tests {
         // neighbour every frame at 55-66 bits, while OCR read the title correctly every time
         // it ran — but it ran on one frame in five and counted the same as a guess, so the
         // guesses out-accumulated it and the tracker committed to the wrong card.
-        let mut t = Tracker::default();
+        let mut t = confidence();
         let mut r = None;
         for f in 0..30u8 {
             let mut obs = vec![
@@ -1133,7 +1324,7 @@ mod tests {
 
     #[test]
     fn reset_clears_everything() {
-        let mut t = Tracker::default();
+        let mut t = confidence();
         for _ in 0..10 {
             t.observe_ids(&good(1));
         }
@@ -1142,5 +1333,364 @@ mod tests {
         assert!(r.standings.is_empty());
         assert_eq!(r.frames, 1);
         assert_eq!(r.streak, 0);
+    }
+
+    // ---- The vote rule -------------------------------------------------------------------
+
+    /// The default: votes toward a bar of 8, a lead of 1.3 over the best rival.
+    fn voting() -> Tracker {
+        Tracker::new(TrackerOptions { rule: CommitRule::Votes, ..Default::default() })
+    }
+
+    fn votes_of(r: &Tracked, n: u8) -> f32 {
+        r.standings.iter().find(|s| s.id == id(n)).map(|s| s.evidence).unwrap_or(0.0)
+    }
+
+    #[test]
+    fn the_default_rule_is_votes() {
+        assert_eq!(TrackerOptions::default().rule, CommitRule::Votes);
+        assert_eq!(Tracker::default().options().rule, CommitRule::Votes);
+    }
+
+    #[test]
+    fn a_consistent_card_decides_exactly_at_the_bar() {
+        // One clean appearance frame is one vote, so a bar of 8 is eight frames: not decided
+        // on the seventh, decided on the eighth, and frozen from then on.
+        let mut t = voting();
+        for f in 1..=7 {
+            let r = t.observe_ids(&good(1));
+            assert!(!r.committed, "decided early, at frame {f}");
+            assert!(!r.frozen);
+        }
+        let r = t.observe_ids(&good(1));
+        assert!(r.committed, "eight clean frames did not reach a bar of 8");
+        assert!(r.frozen);
+        assert_eq!(r.rule, CommitRule::Votes);
+        assert!((r.decide_at - 8.0).abs() < 1e-6);
+        assert!((votes_of(&r, 1) - 8.0).abs() < 1e-4, "votes were {}", votes_of(&r, 1));
+        assert_eq!(r.lead, None, "an unopposed leader has no rival to lead");
+    }
+
+    #[test]
+    fn a_far_but_consistent_card_reaches_the_bar_as_fast_as_a_close_one() {
+        // **The regression the old absolute threshold had, made impossible by construction.**
+        // Under decay, evidence saturated at `w / (1 - decay)` scaled by match quality, so a
+        // correct card matching at 26% could never reach the bar however long it was held
+        // there. A vote is worth the same whatever its distance inside the gate, and nothing
+        // decays, so eight frames at 26% decide exactly when eight frames at 16% do.
+        let mut close = voting();
+        let mut far = voting();
+        let mut at = (None, None);
+        for f in 1..=12 {
+            if close.observe_ids(&[(id(1), 0.16)]).committed && at.0.is_none() {
+                at.0 = Some(f);
+            }
+            if far.observe_ids(&[(id(1), 0.26)]).committed && at.1.is_none() {
+                at.1 = Some(f);
+            }
+        }
+        assert_eq!(at, (Some(8), Some(8)), "(close, far) decided at");
+    }
+
+    #[test]
+    fn a_read_name_is_worth_six_frames_and_a_corrected_one_three() {
+        // The tier weights are unchanged: a clean read is six votes, a corrected one three, a
+        // collector line two. So a clean read plus two frames crosses a bar of 8.
+        let mut t = voting();
+        let r = t.observe(&[Observation::from_ocr(id(1), id(1), 0)]);
+        assert!((votes_of(&r, 1) - 6.0).abs() < 1e-4);
+        assert!(!r.committed, "a single read decided on its own against a bar of 8");
+        t.observe_ids(&good(1));
+        let r = t.observe_ids(&good(1));
+        assert!(r.committed, "a read plus two frames did not reach 8");
+
+        let mut t = voting();
+        let r = t.observe(&[Observation::from_ocr(id(1), id(1), 2)]);
+        assert!((votes_of(&r, 1) - 3.0).abs() < 1e-4);
+        let mut t = voting();
+        let r = t.observe(&[Observation::from_collector(id(1), id(1))]);
+        assert!((votes_of(&r, 1) - 2.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_dead_heat_refuses_at_the_default_margin_and_decides_at_one() {
+        // Two candidates a bit apart on every frame. The runner-up is scaled by the relative
+        // falloff, so it gathers a little less than the leader and the lead settles near 1.07
+        // — under the default 1.3 that is a refusal however long the card is held. Dragged to
+        // 1.0, first past the post decides it at the bar.
+        let frame = [(id(1), 0.180), (id(2), 0.181)];
+        let mut t = voting();
+        let mut r = None;
+        for _ in 0..30 {
+            r = Some(t.observe_ids(&frame));
+        }
+        let r = r.expect("frames");
+        assert!(!r.committed, "a dead heat decided under a 1.3 margin");
+        let lead = r.lead.expect("two candidates have a lead");
+        assert!((1.0..1.3).contains(&lead), "lead was {lead}");
+        assert!(votes_of(&r, 1) >= 8.0, "the bar was reached, so the margin is what refused");
+
+        let mut t = Tracker::new(TrackerOptions { lead_margin: 1.0, ..Default::default() });
+        let mut at = None;
+        for f in 1..=30 {
+            if t.observe_ids(&frame).committed {
+                at = Some(f);
+                break;
+            }
+        }
+        assert_eq!(at, Some(8), "first past the post should decide at the bar");
+    }
+
+    #[test]
+    fn a_decision_freezes_the_tally() {
+        // Once decided, later frames move nothing: a different card, better than the decided
+        // one ever was, appears in nine frames and neither enters the standings nor unseats
+        // the answer. The frame count still advances, so the panel can see time passing, and
+        // the miss count says how long the decided card has been out of sight.
+        let mut t = voting();
+        for _ in 0..8 {
+            t.observe_ids(&good(1));
+        }
+        let mut r = None;
+        for _ in 0..9 {
+            r = Some(t.observe_ids(&[(id(2), 0.05)]));
+        }
+        let r = r.expect("frames");
+        assert!(r.committed && r.frozen);
+        assert_eq!(r.leader().expect("leader").id, id(1));
+        assert!((votes_of(&r, 1) - 8.0).abs() < 1e-4, "the frozen tally moved");
+        assert_eq!(votes_of(&r, 2), 0.0, "a frame after the decision was counted");
+        assert_eq!(r.frames, 17);
+        assert_eq!(r.misses, 9, "nine frames of another card are nine without this one");
+
+        // The decided card coming back clears the count.
+        let r = t.observe_ids(&good(1));
+        assert!(r.frozen);
+        assert_eq!(r.misses, 0);
+    }
+
+    #[test]
+    fn a_decided_card_matched_past_the_gate_has_not_left() {
+        // **Measured on the debug server.** Once a card is decided the server drops the extra
+        // framings it no longer needs, and a Plains that cleared the gate at 74 bits with them
+        // matched at 84 without — past the gate, so every frame after the decision counted as
+        // a miss, at ten the decision reset itself with the card still locked in frame, and
+        // it then re-voted, re-decided and did it again. A frozen tally takes no evidence, so
+        // the gate has nothing to judge; the only question is whether something is still in
+        // front of the lens, and a frame that produced candidates at all answers yes.
+        let mut t = voting();
+        for _ in 0..8 {
+            t.observe_ids(&good(1));
+        }
+        let mut r = None;
+        for _ in 0..30 {
+            r = Some(t.observe_ids(&[(id(1), 0.33), (id(7), 0.35)]));
+        }
+        let r = r.expect("frames");
+        assert!(r.committed && r.frozen, "a decided card matched past the gate was counted as gone");
+        assert_eq!(r.misses, 0);
+        // An empty frame is still a miss.
+        assert_eq!(t.observe_ids(&[]).misses, 1);
+    }
+
+    #[test]
+    fn a_different_card_held_steady_ends_the_decision() {
+        // **The swap.** A reader decides one card and slides the next in under the lens, and
+        // the lock drops for a few frames while it re-acquires — never the ten empty frames
+        // that mean "gone". If only emptiness could end a freeze, the old decision would sit
+        // there until the reset button. The same ten frames of a *consistent* other card end
+        // it instead, and the frame that ends it is the first of the new card's tally.
+        let mut t = voting();
+        for _ in 0..8 {
+            t.observe_ids(&good(1));
+        }
+        for _ in 0..3 {
+            assert!(t.observe_ids(&[]).frozen);
+        }
+        let mut ended = None;
+        for f in 1..=20 {
+            let r = t.observe_ids(&good(2));
+            if !r.frozen {
+                ended = Some((f, r));
+                break;
+            }
+        }
+        let (f, r) = ended.expect("the old decision never gave way to the new card");
+        assert!(f <= 10, "the swap took {f} frames of the new card");
+        assert!(r.standings.iter().all(|s| s.id != id(1)), "the old card's tally survived");
+        assert!((votes_of(&r, 2) - 1.0).abs() < 1e-4, "the ending frame was not counted");
+        let mut decided = None;
+        for f in 1..=12 {
+            if t.observe_ids(&good(2)).committed {
+                decided = Some(f);
+                break;
+            }
+        }
+        assert_eq!(decided, Some(7), "the new card should decide on its own eight frames");
+    }
+
+    #[test]
+    fn a_parade_of_different_neighbours_does_not_end_a_decision() {
+        // The other side of the swap rule, and the reason it asks for a *consistent* other
+        // card. On a foil the hash offers a different near-random neighbour every frame; the
+        // decision came from a read name, and after it the read stands down. If any other
+        // card counted, ten such frames would end every foil's decision a second after it was
+        // made.
+        let mut t = voting();
+        t.observe(&[Observation::from_ocr(id(1), id(1), 0)]);
+        t.observe_ids(&good(1));
+        assert!(t.observe_ids(&good(1)).frozen);
+        let mut r = None;
+        for f in 0..40u8 {
+            r = Some(t.observe_ids(&[(id(60 + f), 0.23)]));
+        }
+        let r = r.expect("frames");
+        assert!(r.committed && r.frozen, "churning neighbours ended a decision");
+        assert!(r.misses < 10);
+    }
+
+    #[test]
+    fn the_card_leaving_lifts_the_freeze() {
+        // The decided card goes away; after `reset_after_misses` empty frames the tracker
+        // forgets it and the next card is judged on its own.
+        let mut t = voting();
+        for _ in 0..8 {
+            t.observe_ids(&good(1));
+        }
+        assert!(t.observe_ids(&good(1)).frozen);
+        let mut r = None;
+        for _ in 0..10 {
+            r = Some(t.observe_ids(&[]));
+        }
+        let r = r.expect("frames");
+        assert!(!r.committed && !r.frozen);
+        assert!(r.standings.is_empty());
+
+        let mut at = None;
+        for f in 1..=12 {
+            if t.observe_ids(&good(2)).committed {
+                at = Some(f);
+                break;
+            }
+        }
+        assert_eq!(at, Some(8));
+    }
+
+    #[test]
+    fn the_reset_button_clears_a_decision() {
+        let mut t = voting();
+        for _ in 0..8 {
+            t.observe_ids(&good(1));
+        }
+        t.reset();
+        let r = t.observe_ids(&[]);
+        assert!(!r.committed && !r.frozen);
+        assert!(r.standings.is_empty());
+    }
+
+    #[test]
+    fn raising_the_bar_lifts_the_freeze_and_keeps_the_tally() {
+        // A slider drag has to show immediately. Decided at 8 and raised to 12, the verdict
+        // goes back to voting with its eight votes intact, and four more frames decide it
+        // again. Lowering the bar under a frozen tally leaves it decided.
+        let mut t = voting();
+        for _ in 0..8 {
+            t.observe_ids(&good(1));
+        }
+        t.set_options(TrackerOptions { decide_at: 12.0, ..Default::default() });
+        let r = t.observe_ids(&good(1));
+        assert!(!r.committed && !r.frozen, "raising the bar left it decided");
+        assert!((votes_of(&r, 1) - 9.0).abs() < 1e-4, "the tally did not survive set_options");
+        t.observe_ids(&good(1));
+        t.observe_ids(&good(1));
+        let r = t.observe_ids(&good(1));
+        assert!(r.committed && r.frozen, "twelve votes did not reach a bar of 12");
+
+        t.set_options(TrackerOptions { decide_at: 4.0, ..Default::default() });
+        let r = t.observe_ids(&good(1));
+        assert!(r.committed && r.frozen, "lowering the bar undid a decision");
+        assert!((votes_of(&r, 1) - 12.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn switching_rules_keeps_the_tally_and_lifts_the_freeze() {
+        // The two rules are the same accumulator with a different verdict, so the page can
+        // flip between them on one held card. Only the vote rule freezes.
+        let mut t = voting();
+        for _ in 0..8 {
+            t.observe_ids(&good(1));
+        }
+        t.set_options(TrackerOptions { rule: CommitRule::Confidence, ..Default::default() });
+        let r = t.observe_ids(&good(1));
+        assert_eq!(r.rule, CommitRule::Confidence);
+        assert!(!r.frozen, "the confidence rule never freezes");
+        // Decayed by one frame now that decay applies again, so a little under the eight it
+        // had — a cleared tally would hold only this frame's half-vote.
+        assert!(votes_of(&r, 1) > 5.0, "the tally was cleared by a rule change");
+    }
+
+    #[test]
+    fn a_stable_list_of_runners_up_still_loses_under_votes() {
+        // The Took Reaper fixture again: four stable runners-up three or four bits behind.
+        // The relative falloff scales each to about a tenth of a vote, so the leader's lead is
+        // near ten and it decides at the bar.
+        let mut t = voting();
+        let frame = [
+            Observation::appearance(id(1), id(1), 0.215),
+            Observation::appearance(id(2), id(2), 0.250),
+            Observation::appearance(id(3), id(3), 0.254),
+            Observation::appearance(id(4), id(4), 0.258),
+            Observation::appearance(id(5), id(5), 0.262),
+        ];
+        let mut at = None;
+        for f in 1..=20 {
+            let r = t.observe(&frame);
+            if r.committed {
+                at = Some((f, r.lead));
+                break;
+            }
+        }
+        let (f, lead) = at.expect("the winner never decided");
+        assert_eq!(f, 8);
+        assert!(lead.is_some_and(|l| l > 5.0), "lead was {lead:?}");
+    }
+
+    #[test]
+    fn dropped_frames_still_reach_the_bar_under_votes() {
+        // Nothing decays, so two blank frames between every good one cost only time.
+        let mut t = voting();
+        let mut at = None;
+        for f in 1..=12 {
+            let r = t.observe_ids(&good(1));
+            t.observe_ids(&[]);
+            t.observe_ids(&[]);
+            if r.committed {
+                at = Some(f);
+                break;
+            }
+        }
+        assert_eq!(at, Some(8));
+    }
+
+    #[test]
+    fn the_number_settles_the_printing_under_votes_too() {
+        // The printing accumulates on the member weight, scaled the same way the card is.
+        // Appearance names printing 10 on every frame; the collector line names 11 on every
+        // fourth, at twenty times the member weight, so 11 is the printing reported when the
+        // card decides.
+        let mut t = voting();
+        let mut r = None;
+        for i in 0..8u32 {
+            let mut obs = vec![Observation::appearance(id(1), id(10), 0.12)];
+            if i % 4 == 0 {
+                obs.insert(0, Observation::from_collector(id(1), id(11)));
+            }
+            r = Some(t.observe(&obs));
+        }
+        let r = r.expect("frames");
+        assert!(r.committed);
+        let lead = r.leader().expect("leader");
+        assert_eq!(lead.id, id(1));
+        assert_eq!(lead.best_member, id(11));
     }
 }

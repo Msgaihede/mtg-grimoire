@@ -31,7 +31,7 @@ use card_scanner::index::{Bundle, Mask};
 use card_scanner::lock::QuadLock;
 use card_scanner::ocr::TitleReader;
 use card_scanner::reference::Reference;
-use card_scanner::track::Tracker;
+use card_scanner::track::{CommitRule, Tracker, TrackerOptions};
 use clap::Parser;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -121,6 +121,17 @@ struct FrameOptions {
     /// Return the binary and contour images as well as the quad. Roughly doubles the
     /// response time, so the page asks for it only while the panel is open.
     stages: bool,
+    /// How the tracker decides — votes toward a bar, or the two-way confidence contest.
+    ///
+    /// **Chosen per frame from the page, so the two rules can be A/B'd on one held card
+    /// without a rebuild.** `Tracker::set_options` keeps the tally, so flipping the segment
+    /// or dragging a slider re-judges the evidence already gathered rather than starting
+    /// over.
+    rule: CommitRule,
+    /// Votes the leader needs under the vote rule.
+    decide_at: f32,
+    /// How far ahead of its best rival the leader must be to decide.
+    lead_margin: f32,
 }
 
 impl FrameOptions {
@@ -147,6 +158,21 @@ impl FrameOptions {
             aspect_tolerance: num("aspect", 0.18),
             min_cardness: num("cardness", card_scanner::cardness::MIN_SCORE),
             stages: get("stages").as_deref() == Some("1"),
+            rule: match get("rule").as_deref() {
+                Some("confidence") => CommitRule::Confidence,
+                _ => CommitRule::Votes,
+            },
+            decide_at: num("decide", 8.0).clamp(0.5, 100.0),
+            lead_margin: num("margin", 1.3).clamp(1.0, 5.0),
+        }
+    }
+
+    fn tracker_options(&self) -> TrackerOptions {
+        TrackerOptions {
+            rule: self.rule,
+            decide_at: self.decide_at,
+            lead_margin: self.lead_margin,
+            ..Default::default()
         }
     }
 
@@ -212,6 +238,7 @@ fn save_capture(dir: &std::path::Path, url: &str, body: &[u8]) -> serde_json::Va
         // What the scanner believed at the moment of capture, verbatim from the panel.
         "reported": get("reported"),
         "confidence": get("confidence"),
+        "votes": get("votes"),
         "distance": get("distance"),
     });
     let json = stem.with_extension("json");
@@ -338,6 +365,12 @@ fn handle_frame(
         Some(m) => vec![m],
         None => vec![EdgeMethod::Canny, EdgeMethod::Otsu],
     };
+
+    // The page's rule and bar, applied before anything reads the verdict: the tally is kept,
+    // only the judgement of it changes.
+    if let Ok(mut t) = tracker.lock() {
+        t.set_options(opts.tracker_options());
+    }
 
     // Asked once, before the loop, so both detectors and the re-rectify below all see the
     // same decision.
@@ -678,12 +711,25 @@ fn handle_frame(
                     .collect()
             })
             .unwrap_or_default();
+        // Under the vote rule the number that decides is the leader's tally against the
+        // bar, so that is what the line shows; the confidence contest keeps its percentage.
+        let verdict = if out["tracked"]["rule"].as_str() == Some("votes") {
+            format!(
+                "votes={:5.1}/{}",
+                out["tracked"]["standings"][0]["evidence"].as_f64().unwrap_or(0.0),
+                out["tracked"]["decide_at"].as_f64().unwrap_or(0.0)
+            )
+        } else {
+            format!(
+                "conf={:5.1}%",
+                out["tracked"]["confidence"].as_f64().unwrap_or(0.0) * 100.0
+            )
+        };
         eprintln!(
-            "frame lock={:<9} cardness={:.2} aspect={:.3} conf={:5.1}% {} | {}",
+            "frame lock={:<9} cardness={:.2} aspect={:.3} {verdict} {} | {}",
             out["lock"]["phase"].as_str().unwrap_or("-"),
             out["cardness"]["score"].as_f64().unwrap_or(0.0),
             out["score"]["aspect"].as_f64().unwrap_or(0.0),
-            out["tracked"]["confidence"].as_f64().unwrap_or(0.0) * 100.0,
             if out["tracked"]["committed"].as_bool().unwrap_or(false) { "OK " } else { "..." },
             if cands.is_empty() {
                 out["error"].as_str().unwrap_or("(not matched)").to_string()
@@ -776,6 +822,10 @@ fn tracked_json(
     serde_json::json!({
         "committed": tracked.committed,
         "confidence": tracked.confidence,
+        "rule": tracked.rule,
+        "decide_at": tracked.decide_at,
+        "lead": tracked.lead,
+        "frozen": tracked.frozen,
         "streak": tracked.streak,
         "frames": tracked.frames,
         "misses": tracked.misses,
