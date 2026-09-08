@@ -216,7 +216,24 @@ CREATE TABLE collection_shares (
 );
 CREATE UNIQUE INDEX idx_collection_shares_folder
   ON collection_shares (folder_uid) WHERE folder_uid IS NOT NULL;
+
+-- The whole-collection share, of which there is at most one. **On the EXPRESSION and not on the
+-- column**, and the difference is the whole of whether this index refuses anything.
+CREATE UNIQUE INDEX idx_collection_shares_whole
+  ON collection_shares ((folder_uid IS NULL)) WHERE folder_uid IS NULL;
 ```
+
+⚠️ **This spec carried `ON collection_shares (folder_uid) WHERE folder_uid IS NULL` until
+2026-09-08, and that index refuses nothing.** The reasoning written beside it — *every admitted
+row shares the same null key, so at most one row can exist* — is exactly backwards: **SQLite holds
+NULLs in a UNIQUE index as distinct from each other**, so a second whole-collection share went
+straight in. Measured on SQLite 3.53.0 and then reproduced as a red Rust test. Indexing the
+expression `(folder_uid IS NULL)` stores the same non-null `1` for every row the partial index
+admits, which is what makes the second one collide.
+
+The one-index alternative — `UNIQUE (coalesce(folder_uid, ''))`, which is what the relay's own
+`shares_folder` does — was available and deliberately not taken here: two indexes say the two
+rules separately, and the relay's version has to fold a `group_id` in anyway.
 
 **It is a cache, and `SYNCED_TABLES` stays at 13.** The relay's `GET /g/{group}/shares` is the
 roster, exactly as the rewrapped key set is the roster for group membership — and for the same
