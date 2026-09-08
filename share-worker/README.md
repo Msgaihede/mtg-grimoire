@@ -57,6 +57,44 @@ attacker has.
 which needs a membership; viewing needs the link and nothing else, which is what issue #360 asked
 for. The link *is* the capability — there is no viewer account and no per-viewer access control.
 
+`GET /assets/*` reaches **no code here**. `wrangler.jsonc`'s `assets` binding names `/s/*` and
+`/g/*` as the only prefixes that `run_worker_first`, so the viewer bundle is served at the edge:
+a static asset request is free and unlimited even on the free plan, and that is what keeps a share
+that goes viral off the account's 100,000-request/day budget. Adding a route for the bundle would
+undo it.
+
+## The blob, and the two-step
+
+`POST` writes the metadata row with `object_key` **NULL**; `PUT` stores the bytes in R2 and only
+then points the row at them. That order is the whole of what makes a failed upload harmless: a
+publish that dies in between leaves either *no* snapshot or the *previous* snapshot, and never a
+link to something that was never written. The superseded object is deleted **after** the row has
+moved, and only when the key actually changed — a republish of an unchanged collection is
+content-addressed to the same key, and a delete that skipped that comparison would erase the
+object it had just written.
+
+The key is `shares/{id}/{hash}.json.gz`, where `hash` is the first 16 hex characters of the body's
+SHA-256. ⚠️ **That is why the `PUT` buffers rather than streaming straight into R2**: the digest
+has to be known before the object can be named, and R2's Workers binding has no rename. The buffer
+is bounded by the 8 MB cap, which is checked as it fills, so a caller who omits or lies about
+`content-length` still cannot make this Worker hold more than the cap.
+
+`GET /s/{id}/{hash}.json.gz` is `public, max-age=31536000, immutable` with `caches.default` in
+front of R2, so a warm view costs no storage read. What `immutable` costs is that revoking cannot
+recall an edge copy somebody already holds; what revoking *does* stop is every new viewer, because
+the shell is the only thing that hands out that URL and it is `max-age=300`.
+
+`GET /s/{id}` is rendered from the D1 row — that is what carries the OpenGraph card, and it is the
+only thing decision 2's plaintext storage buys. **It inlines the blob's URL** as
+`<link id="snapshot" rel="preload" as="fetch" crossorigin href="/s/{id}/{hash}.json.gz">` rather
+than offering an `index.json` route beside it, because the response is already holding the fact a
+second request would go and fetch. A row whose `object_key` is still NULL gets the shell, a
+sentence, and **no `<link>`** — its absence is the signal the viewer reads.
+
+⚠️ **`src/page.ts` interpolates a title and an owner's name that a reader typed, and there is no
+template engine.** One `esc()` covers every value; a new field rendered without it is an XSS on a
+page strangers open.
+
 ## Deploying
 
 ⚠️ **No agent may run `wrangler deploy`, `wrangler d1 execute --remote` or `wrangler secret put`.**
@@ -76,8 +114,12 @@ because it has no address yet.**
    left a deployed Worker 500ing on 2026-08-30.
 3. **Set the one secret**: `npx wrangler secret put RELAY_HMAC_KEY`, with the **same value** the
    relay holds. A different one means every publish is a 401 and nothing else says why.
-4. `npx wrangler deploy`, and read the address it prints.
-5. **Write that address into two places, byte for byte**: `wrangler.jsonc`'s `SHARE_BASE` var
+4. **Build the viewer** so `dist-share/` exists. ⚠️ `wrangler.jsonc` declares an `assets`
+   binding over `../dist-share`, and **`wrangler deploy` fails naming that directory when it is
+   absent** — the binding is declared ahead of the build for the same reason the R2 bucket is, so
+   the deploy question is asked once.
+5. `npx wrangler deploy`, and read the address it prints.
+6. **Write that address into two places, byte for byte**: `wrangler.jsonc`'s `SHARE_BASE` var
    (currently the placeholder `<set on first deploy>`) and `share::SHARE_BASE` in the Rust. Then
    deploy again, because a `var` is baked at deploy time. The same trap `RELAY_BASE` documents
    for the OAuth redirect URI applies with less mercy here: a mismatched `SHARE_BASE` produces

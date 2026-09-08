@@ -43,6 +43,29 @@
     },
   ],
 
+  // The viewer bundle. **The first `assets` binding in this repo**, and the reason it is here
+  // rather than on a route: a static asset request is **free and unlimited even on the free
+  // plan**, which is what keeps a share that goes viral off the account's 100,000-request/day
+  // budget — the cliff every paying reader's sync shares (spec §7.1). A `GET /assets/share.js`
+  // served by this Worker would cost a Worker request per viewer; served from here it costs
+  // nothing.
+  //
+  // `run_worker_first` names the two prefixes that must **not** be answered from disk: `/s/*` is
+  // rendered from the D1 row (that is what carries the OpenGraph card, and a static file could
+  // not), and `/g/*` is the gated API. Everything else tries the assets first and falls through
+  // to the Worker's own 404 when no file matches.
+  //
+  // ⚠️ **`../dist-share` does not exist yet — Task 9's Vite build writes it** — and
+  // `wrangler deploy` fails naming this directory until it does. The binding is declared here
+  // rather than in that task so the deploy question is asked once, exactly as the R2 bucket above
+  // is. `share-worker/src/page.ts` points at `/assets/share.js` by a **fixed** name, so that
+  // build has to pin its entry file name rather than content-hashing it.
+  "assets": {
+    "directory": "../dist-share",
+    "binding": "ASSETS",
+    "run_worker_first": ["/s/*", "/g/*"],
+  },
+
   "vars": {
     // ⚠️ **A placeholder, and deliberately one that cannot be mistaken for an address.** Only a
     // deploy can produce the real host, and it must then be written here **and** into the Rust's

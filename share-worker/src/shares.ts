@@ -38,7 +38,16 @@ const MAX_TEXT_CHARS = 200;
 const SHARE_LIMIT = "share_limit";
 
 /** What `state` a share that is not withdrawn is not. Bound, never written as a SQL literal. */
-const REVOKED = "revoked";
+export const REVOKED = "revoked";
+
+/**
+ * The state the daily pass writes when a membership ends, and the only one it can take back.
+ *
+ * Exported beside `REVOKED` because the two public routes have to tell them apart: they are the
+ * same 410 with **different sentences**, and a viewer learning "withdrawn" when the owner's
+ * Patreon simply lapsed would be told the owner made a decision they did not make.
+ */
+export const LAPSED = "lapsed";
 
 /** One share's metadata, as the app sends it and as the columns take it. */
 interface Meta {
@@ -238,6 +247,51 @@ function wireRow(env: Env, row: ShareRow): Record<string, unknown> {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+// ---------------------------------------------------------------------------------------
+// The row the two public routes read
+// ---------------------------------------------------------------------------------------
+
+/**
+ * What a share looks like to a stranger holding the link: the metadata the shell renders, the
+ * object the snapshot lives in, and the state that decides whether either is answered at all.
+ *
+ * **`group_id` is deliberately absent, and so are `folder_uid` and `marketplace`.** A viewer is
+ * never told which group published a share — that is the sync side's identifier — and a projection
+ * is the cheapest place to make that true, rather than a rule about what the page happens to
+ * interpolate.
+ */
+export interface PublicRow {
+  id: string;
+  title: string;
+  owner_name: string;
+  card_count: number;
+  object_key: string | null;
+  state: string;
+  updated_at: number;
+}
+
+const PUBLIC_COLUMNS = `id, title, owner_name, card_count, object_key, state, updated_at`;
+
+/**
+ * The one row `GET /s/{id}` and `GET /s/{id}/{hash}.json.gz` each read, or `null` for an id
+ * nobody minted.
+ *
+ * ⚠️ **No join to `entitlements`, and that is spec §6's whole point.** Whether a membership is
+ * live is written into `state` by the daily pass, once a day, so the anonymous read path branches
+ * on a column rather than re-deciding an entitlement — otherwise every stranger who clicks a
+ * Discord link would cost a two-table read on the D1 budget the account's paying readers share,
+ * to answer a question whose answer changes at most daily.
+ *
+ * **It does not exclude revoked rows**, which is the opposite of every statement above it: a
+ * tombstone is exactly what the public routes need to find, because answering 410 *"this was
+ * withdrawn"* rather than 404 *"you mistyped it"* is the only reason the row was kept.
+ */
+export async function publicShare(env: Env, id: string): Promise<PublicRow | null> {
+  return env.DB.prepare(`SELECT ${PUBLIC_COLUMNS} FROM shares WHERE id = ?`)
+    .bind(id)
+    .first<PublicRow>();
 }
 
 // ---------------------------------------------------------------------------------------

@@ -35,6 +35,18 @@ export interface Env {
   SHARES: R2Bucket;
 
   /**
+   * The viewer bundle, served from `dist-share/`.
+   *
+   * ⚠️ **Nothing in this Worker calls it, and that is the point.** `wrangler.jsonc`'s
+   * `run_worker_first` names `/s/*` and `/g/*` as the only prefixes that reach the handler, so
+   * `/assets/*` is answered at the edge and never costs a Worker request — which is what keeps a
+   * share that goes viral off the account's per-day budget (spec §7.1). It is declared here so
+   * the binding in `wrangler.jsonc` has a name in the type and nobody adds a route for the bundle
+   * without meeting this paragraph first.
+   */
+  ASSETS: Fetcher;
+
+  /**
    * The relay's signing key, and the whole of the coupling between the two Workers. A token this
    * Worker accepts is one the relay minted — which means a membership the relay checked — and
    * verifying it is an HMAC over memory rather than a lookup, so the gate costs no storage read.

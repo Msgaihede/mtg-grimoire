@@ -1,4 +1,6 @@
+import { handleSnapshot, handleUpload } from "./blob";
 import { authorised, json, type Env } from "./env";
+import { handleShell } from "./page";
 import { handleCreate, handleList, handleRevoke } from "./shares";
 
 /**
@@ -6,10 +8,16 @@ import { handleCreate, handleList, handleRevoke } from "./shares";
  * `shares.ts`; every decision about who may take one is in `env.ts`'s `authorised`.
  *
  * **The whole entitlement asymmetry is which side of the gate a route stands on** (spec §5.4).
- * Publishing, listing and revoking need a token, which needs a membership. Viewing — the public
- * `/s/…` routes Task 5 adds — needs the link and nothing else, which is what the issue asked
+ * Publishing, uploading, listing and revoking need a token, which needs a membership. Viewing —
+ * the two public `/s/…` routes — needs the link and nothing else, which is what the issue asked
  * for. There is no third state and no viewer identity: the link *is* the capability, and the UI
  * says so in those words.
+ *
+ * **`/assets/*` is not routed here at all and must not be**, which is the other half of what
+ * makes anonymous traffic affordable: `wrangler.jsonc`'s `assets` binding names `/s/*` and `/g/*`
+ * as the only prefixes that reach this Worker, and a static asset request is free and unlimited
+ * even on the free plan. Adding a route for the bundle would put every viewer's JavaScript on the
+ * account's 100,000-request budget — the cliff spec §7.1 says nothing else can raise.
  *
  * **Nothing here reaches a Durable Object and this Worker binds none**, which is the reason
  * anonymous traffic is affordable at all: a request that reaches a DO costs a Durable Object
@@ -43,17 +51,36 @@ const GROUP_SEGMENT = "[A-Za-z0-9_-]{1,128}";
 const WRITE = new RegExp(`^/g/(${GROUP_SEGMENT})/(share|shares)(?:/(${SHARE_ID}))?$`);
 
 /**
- * The method each of those four shapes takes, keyed by the action and whether an id came with
- * it. A `Map` and not a `Record`, so a shape that is not a route reads as `undefined` rather
+ * The digest a snapshot is named by: sixteen lowercase hex characters, `blob.ts`'s `digest`.
+ *
+ * **Constrained here rather than checked in the handler**, for `GROUP_SEGMENT`'s reason: an
+ * unconstrained segment lets `/s/{id}/../../x.json.gz` and `/s/{id}/ABC.json.gz` be spelled at
+ * all, and every one of them would reach a storage lookup before being refused. The character
+ * class is the refusal.
+ */
+const HASH = "[0-9a-f]{16}";
+
+/**
+ * The two public routes: the rendered shell, and the immutable snapshot under it.
+ *
+ * The hash is optional in the pattern for the reason the id is above — one regex, so a path that
+ * carries a third segment is a 404 rather than being read as either.
+ */
+const PUBLIC = new RegExp(`^/s/(${SHARE_ID})(?:/(${HASH})\\.json\\.gz)?$`);
+
+/**
+ * The methods each of those four gated shapes takes, keyed by the action and whether an id came
+ * with it. A `Map` and not a `Record`, so a shape that is not a route reads as `undefined` rather
  * than as a value the type system has promised is there.
  *
- * `share/id` is `DELETE` alone until Task 5's `PUT` lands beside it; the blob upload is the same
- * path with the other method.
+ * `share/id` takes **two**: the blob upload is the same path as the withdrawal with the other
+ * method, because both are statements about one share and inventing `/share/{id}/blob` beside it
+ * would be a second name for the same thing.
  */
-const METHOD = new Map<string, string>([
-  ["share", "POST"],
-  ["share/id", "DELETE"],
-  ["shares", "GET"],
+const METHOD = new Map<string, readonly string[]>([
+  ["share", ["POST"]],
+  ["share/id", ["PUT", "DELETE"]],
+  ["shares", ["GET"]],
 ]);
 
 function methodNotAllowed(expected: string): Response {
@@ -64,8 +91,26 @@ function methodNotAllowed(expected: string): Response {
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  /**
+   * `ctx` is optional because the suite calls `worker.fetch(request, env)` — there is no workerd
+   * here to supply one, by `vite.config.ts`'s deliberate choice — and `handleSnapshot` is written
+   * to await its cache write when it is absent, which is also what lets a test assert that a warm
+   * view costs no R2 read.
+   */
+  async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+
+    // **The public pair is matched first, because it is the only traffic that scales.** A gated
+    // request comes from one of five devices; these two come from everyone the link reaches.
+    const seen = PUBLIC.exec(url.pathname);
+    if (seen !== null) {
+      if (request.method !== "GET") return methodNotAllowed("GET");
+      const id = seen[1];
+      const hash: string | undefined = seen[2];
+      return hash === undefined
+        ? handleShell(env, id, Date.now())
+        : handleSnapshot(request, env, id, hash, ctx);
+    }
 
     const write = WRITE.exec(url.pathname);
     if (write === null) return json({ error: "not found" }, 404);
@@ -80,7 +125,7 @@ export default {
     if (expected === undefined) return json({ error: "not found" }, 404);
     // Ahead of the gate, as the relay answers 405 before 401: the method is a fact about the
     // request that costs nothing to check, and an HMAC verify is not free.
-    if (request.method !== expected) return methodNotAllowed(expected);
+    if (!expected.includes(request.method)) return methodNotAllowed(expected.join(", "));
 
     if (!(await authorised(request, env, group))) return json({ error: "unauthorized" }, 401);
 
@@ -90,6 +135,7 @@ export default {
     const now = Date.now();
     if (action === "shares") return handleList(env, group);
     if (id === undefined) return handleCreate(request, env, group, now);
+    if (request.method === "PUT") return handleUpload(request, env, group, id, now);
     return handleRevoke(env, group, id, now);
   },
 } satisfies ExportedHandler<Env>;
