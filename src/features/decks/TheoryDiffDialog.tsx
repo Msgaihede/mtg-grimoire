@@ -878,7 +878,6 @@ function Row({
             // Lazy, for the zone column's reason and not the wall's: this is a plain scroller, so
             // a sixty-card difference really is sixty mounted rows.
             loading="lazy"
-            decoding="async"
             className="size-full object-cover"
           />
         )}

@@ -416,7 +416,6 @@ function Preview({
           alt=""
           src={image.src}
           onError={image.onError}
-          decoding="async"
           className="size-full object-cover"
         />
       )}

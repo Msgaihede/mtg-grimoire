@@ -231,7 +231,6 @@ export function CardArt({
           // preload scanner — on exactly the two dozen pictures the reader is about to look
           // at. A wall with **no** virtualiser has no such bound and passes `"lazy"`.
           loading={loading}
-          decoding="async"
           onError={image.onError}
           className={cn(
             "size-full object-cover",
