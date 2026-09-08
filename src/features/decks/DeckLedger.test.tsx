@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { TOOLTIP_OPEN_MS, TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import type { DeckCard } from "@/lib/ipc";
@@ -32,6 +32,10 @@ describe("DeckLedger", () => {
           formatName="Commander"
           gameChangers={0}
           tight={false}
+          // The ordinary deck, which is what every case above the virtual block is a claim
+          // about — so the `Owned` term goes on being asserted exactly as it was before the prop
+          // existed. The `false` arm is passed explicitly, and only there.
+          tracksCollection
           check={null}
           bracket={null}
           {...props}
@@ -233,5 +237,89 @@ describe("DeckLedger", () => {
     const list = container.querySelector("dl")!;
 
     expect([...list.children].every((child) => child.tagName === "DIV")).toBe(true);
+  });
+
+  /**
+   * **A Virtual deck (issue #401): the `Owned` figure goes, and the hairline in front of it goes
+   * with it.**
+   *
+   * Counted as `<dt>`s below — six on a regular deck and five here — which is the five *figures*
+   * plus the `Format` term, the one pair on this line that is not a figure and is drawn as one.
+   *
+   * The rows are the ones the `Owned` cases above use — short of three of four — so the term
+   * would draw `1` and a red `3 missing` if the condition were missed. Which is the same fixture
+   * read two ways, and deliberately: the two blocks are the two arms of one prop.
+   */
+  describe("a deck that does not track a collection", () => {
+    const virtual = (props: Partial<Parameters<typeof DeckLedger>[0]> = {}) =>
+      ledger([card({ name: "Bolt", quantity: 4, ownedQuantity: 1 })], {
+        tracksCollection: false,
+        ...props,
+      });
+
+    it("draws no Owned term and says nothing about a shortfall", () => {
+      virtual();
+
+      expect(screen.queryByText("Owned", { selector: "dt" })).not.toBeInTheDocument();
+      expect(screen.queryByText(/missing/)).not.toBeInTheDocument();
+    });
+
+    /** The tight column's shortfall is a *second* element with a second sentence, so it needs a
+     *  claim of its own: the `sr-only` twin is exactly the kind of thing a visual check misses. */
+    it("draws neither half of the tight shortfall either", () => {
+      virtual({ tight: true });
+
+      expect(screen.queryByText("−3")).not.toBeInTheDocument();
+      expect(screen.queryByText("3 missing")).not.toBeInTheDocument();
+    });
+
+    /**
+     * **The hairline in front of it goes too, and nothing else moves.**
+     *
+     * Every term on this line is preceded by its own `Rule`, so dropping the last term without
+     * its rule leaves a divider between Price and the controls pinned right — punctuation with
+     * nothing after it. Counted rather than eyeballed, and **against the regular deck's own
+     * count in the same test**: a bare "four hairlines" would be satisfied by an arrangement
+     * that had dropped one from somewhere else entirely. `aria-hidden` is what tells a hairline
+     * from a term, since both are `div` children of the `<dl>`.
+     */
+    it("drops the hairline that stood in front of the Owned term", () => {
+      const shape = (root: ParentNode) => ({
+        rules: root.querySelectorAll("dl > div[aria-hidden]").length,
+        terms: root.querySelectorAll("dl > div > dt").length,
+      });
+
+      expect(shape(virtual().container)).toEqual({ rules: 4, terms: 5 });
+
+      cleanup();
+      const regular = ledger([card({ name: "Bolt", quantity: 4, ownedQuantity: 1 })]);
+      expect(shape(regular.container)).toEqual({ rules: 5, terms: 6 });
+    });
+
+    /** Everything that is a fact about the *list* rather than about a binder stays — including
+     *  the controls pinned right, which the missing term sits directly in front of. */
+    it("keeps the other four terms and the controls beside them", () => {
+      virtual({
+        gameChangers: 2,
+        check: <button type="button">2 issues</button>,
+        bracket: <button type="button">Bracket ~4</button>,
+      });
+
+      for (const label of ["Format", "Cards", "Lands", "Avg. mana", "Price"]) {
+        expect(screen.getByText(label, { selector: "dt" })).toBeInTheDocument();
+      }
+      expect(screen.getByText("2 issues")).toBeInTheDocument();
+      expect(screen.getByText("2 game changers")).toBeInTheDocument();
+      expect(screen.getByText("Bracket ~4")).toBeInTheDocument();
+    });
+
+    /** The `<dl>` is still a valid description list with a term taken out of it — a fragment
+     *  renders no element, so the children are still all `div`s. */
+    it("keeps every child of the list a div", () => {
+      const { container } = virtual();
+      const list = container.querySelector("dl")!;
+
+      expect([...list.children].every((child) => child.tagName === "DIV")).toBe(true);
+    });
   });
 });

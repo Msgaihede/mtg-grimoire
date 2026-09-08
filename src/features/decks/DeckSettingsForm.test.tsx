@@ -6,6 +6,9 @@ import type { DeckCategory, DeckFolder } from "@/lib/ipc";
 import { openDropdown, pickOption } from "@/test-dropdown";
 import { AUTO_CATEGORY } from "./autoCategory";
 import type { DeckCoverPickerProps } from "./DeckCoverPicker";
+// The contract the group is drawn from. Imported rather than respelled, so a test that
+// passed against a label this file had invented could not exist.
+import { DECK_KIND_HINT, DECK_KIND_LABEL } from "./deckKind";
 import {
   DeckSettingsForm,
   folderPaths,
@@ -40,7 +43,10 @@ const VALUE: DeckSettingsValue = {
   formatKey: "modern",
   description: "Twenty damage, quickly.",
   notes: "Sideboard plan lives in the Maybeboard.",
+  // Both false, which `deckKind` reads as `regular` — the kind every deck is born as, and
+  // the state every deck that predates `decks.virtual_only` (schema v40) is in.
   theoryEnabled: false,
+  virtualOnly: false,
   // All three marks on, which is what `decks.theory_mark_exact`/`_name`/`_unplanned` default to
   // — so a deck that has never been asked about them is the fixture, and switching one off is
   // what a test does deliberately rather than what it starts from.
@@ -147,6 +153,28 @@ function form(props: Parameters<typeof Harness>[0] = {}) {
   return { onChange, onCommit, ...view };
 }
 
+/**
+ * Every kind button that is pressed, by its visible word.
+ *
+ * A **list**, so "exactly one" is a claim a test can make: a helper answering the first pressed
+ * button would pass just as happily against a group that had lit two.
+ *
+ * Addressed through `aria-pressed` rather than through the `bg-accent` class the pressed half
+ * wears — a class assertion is vacuous here twice over, since jsdom loads no stylesheet and the
+ * unpressed half's `hover:text-text` would satisfy a substring match on the same attribute.
+ */
+function pressedKinds(): string[] {
+  return screen
+    .queryAllByRole("button", { pressed: true })
+    .map((b) => b.textContent ?? "")
+    .filter((word) => (Object.values(DECK_KIND_LABEL) as string[]).includes(word));
+}
+
+/** The one pressed kind, for the cases where "exactly one" is not what is being asserted. */
+function pressedKind(): string | undefined {
+  return pressedKinds()[0];
+}
+
 describe("DeckSettingsForm", () => {
   /**
    * **The rule the whole component exists for**: no `useDeck`, no `useDeckFolders`, no
@@ -161,7 +189,11 @@ describe("DeckSettingsForm", () => {
     expect(screen.getByRole("button", { name: "Format" })).toHaveTextContent("Modern");
     expect(screen.getByLabelText("Description")).toHaveValue("Twenty damage, quickly.");
     expect(screen.getByLabelText("Notes")).toHaveValue("Sideboard plan lives in the Maybeboard.");
-    expect(screen.getByRole("switch", { name: "Theory deck Disabled" })).toBeInTheDocument();
+    // The kind is a group of three now rather than one switch, and the fixture's own kind is
+    // the pressed one. Addressed by `aria-pressed` and never by a class: a `hover:` variant
+    // makes a class assertion vacuous, and jsdom loads no stylesheet to resolve one anyway.
+    expect(screen.getByRole("group", { name: "Deck kind" })).toBeInTheDocument();
+    expect(pressedKind()).toBe("Regular");
     expect(screen.getByRole("button", { name: "Folder" })).toHaveTextContent("Top level");
   });
 
@@ -369,40 +401,89 @@ describe("DeckSettingsForm", () => {
   });
 
   /**
-   * A press, and the two sentences the switch owes the reader in both directions.
+   * **Three buttons, and the deck's own kind is the pressed one** — asserted for each of the
+   * three stored combinations rather than for the fixture alone, because the group's whole job
+   * is folding two booleans into one word and a reader of one row cannot see the fold go wrong.
    *
-   * **Turning it on moves the deck into the plan and leaves the live list empty.** It used to
-   * copy, and this description used to say so; a description still promising a copy would be the
-   * app telling a reader their sleeved-up deck is safe as they press the thing that empties it.
-   * Turning it *off* is still not a delete. `DeckSettingsDialog.test.tsx` pins the same pair
-   * through the host — the sentence lives here now, and both surfaces draw it.
+   * The three rows are written out here rather than derived from `deckKindPatch`, which is
+   * `an assertion must not read its own constant`: a patch function that answered the same
+   * wrong pair on both sides would satisfy a derived expectation exactly.
    */
-  it("fires only onChange for the theory switch, and says what it does in both directions", async () => {
-    const { onChange, onCommit } = form();
+  it("presses the button for the kind the two columns spell, all three of them", () => {
+    type Case = {
+      flags: Pick<DeckSettingsValue, "theoryEnabled" | "virtualOnly">;
+      label: string;
+    };
+    const cases: Case[] = [
+      { flags: { theoryEnabled: false, virtualOnly: false }, label: "Regular" },
+      { flags: { theoryEnabled: true, virtualOnly: false }, label: "Theory + Actual" },
+      { flags: { theoryEnabled: false, virtualOnly: true }, label: "Virtual" },
+    ];
 
-    const toggle = screen.getByRole("switch", { name: "Theory deck Disabled" });
-    expect(toggle).toHaveAttribute("aria-checked", "false");
-    expect(
-      screen.getByText(/makes the deck you have the plan and starts the actual list empty/),
-    ).toBeInTheDocument();
-    // The sentence it must no longer make: nothing is copied any more.
-    expect(screen.queryByText(/copies the live deck/)).not.toBeInTheDocument();
-    expect(screen.getByText(/keeps every row/)).toBeInTheDocument();
-
-    await userEvent.click(toggle);
-
-    expect(onChange).toHaveBeenCalledWith({ theoryEnabled: true });
-    expect(onCommit).not.toHaveBeenCalled();
-    expect(screen.getByRole("switch", { name: "Theory deck Enabled" })).toBeChecked();
+    for (const { flags, label } of cases) {
+      const view = form({ value: { ...VALUE, ...flags } });
+      // Exactly one pressed, which is what makes the group readable as a choice rather than
+      // as three independent toggles that happen to agree today.
+      expect(pressedKinds()).toEqual([label]);
+      view.unmount();
+    }
   });
 
   /**
-   * The three marks are drawn **under** the theory switch and only while it is on. A deck with no
-   * plan has nothing for any of them to compare against, so a control for them there would be a
-   * switch that changes nothing — and the reader would have no way to find that out.
+   * **Every press names both columns**, which is the one rule this control cannot get wrong
+   * quietly: naming only the column that changed would leave the other standing, and a `theory`
+   * deck patched with `{ virtualOnly: true }` alone is the `true, true` row `deckKind.ts`
+   * exists to keep out of the database.
    *
-   * Driven through the switch above rather than through two renders, because the transition is
-   * the case: a reader turns the plan on and the three rows have to arrive under it.
+   * Driven from a `theory` deck so that every one of the three presses has *both* columns to
+   * move or hold: from `regular` the two that matter most would each be writing one `false`
+   * that was already `false`, and a patch missing that key would pass.
+   */
+  it("writes theoryEnabled and virtualOnly together, whichever kind is pressed", async () => {
+    const { onChange, onCommit } = form({ value: { ...VALUE, theoryEnabled: true } });
+
+    await userEvent.click(screen.getByRole("button", { name: "Virtual" }));
+    expect(onChange).toHaveBeenLastCalledWith({ theoryEnabled: false, virtualOnly: true });
+
+    await userEvent.click(screen.getByRole("button", { name: "Regular" }));
+    expect(onChange).toHaveBeenLastCalledWith({ theoryEnabled: false, virtualOnly: false });
+
+    await userEvent.click(screen.getByRole("button", { name: "Theory + Actual" }));
+    expect(onChange).toHaveBeenLastCalledWith({ theoryEnabled: true, virtualOnly: false });
+
+    // A press settles in one act, like the three dropdowns and the mark switches — so there is
+    // nothing for the second callback to add.
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The caption is the **selected** kind's line and swaps with the press.
+   *
+   * Three sentences on screen at once would be a paragraph about a choice rather than the
+   * meaning of the one that has been made — so the two that are not the answer are asserted
+   * absent, which is the half a test of the pressed line alone would pass without.
+   */
+  it("draws only the pressed kind's caption", async () => {
+    form();
+
+    expect(screen.getByText(DECK_KIND_HINT.regular)).toBeInTheDocument();
+    expect(screen.queryByText(DECK_KIND_HINT.theory)).toBeNull();
+    expect(screen.queryByText(DECK_KIND_HINT.virtual)).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: "Virtual" }));
+
+    expect(screen.getByText(DECK_KIND_HINT.virtual)).toBeInTheDocument();
+    expect(screen.queryByText(DECK_KIND_HINT.regular)).toBeNull();
+  });
+
+  /**
+   * The three marks are drawn **under the kind group** and only while it reads
+   * `Theory + Actual`. A deck with no plan has nothing for any of them to compare against, so a
+   * control for them there would be a switch that changes nothing — and the reader would have
+   * no way to find that out.
+   *
+   * Driven through the group above rather than through two renders, because the transition is
+   * the case: a reader presses `Theory + Actual` and the three rows have to arrive under it.
    */
   it("offers every mark switch only when the theory list is on", async () => {
     form();
@@ -415,7 +496,7 @@ describe("DeckSettingsForm", () => {
     // the control and what a reader would look for.
     expect(screen.queryByText("Not in the theory list")).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("switch", { name: "Theory deck Disabled" }));
+    await userEvent.click(screen.getByRole("button", { name: "Theory + Actual" }));
 
     expect(screen.getByRole("switch", { name: /matching printing/i })).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: /different printing/i })).toBeInTheDocument();
@@ -453,7 +534,9 @@ describe("DeckSettingsForm", () => {
   it("draws no mark switch for a host that cannot write them, plan or no plan", () => {
     form({ value: { ...VALUE, theoryEnabled: true }, canSetTheoryMarks: false });
 
-    expect(screen.getByRole("switch", { name: "Theory deck Enabled" })).toBeInTheDocument();
+    // The kind is still asked and still reads `Theory + Actual` — this gate takes the marks
+    // away and never the choice that would make them mean something.
+    expect(pressedKind()).toBe("Theory + Actual");
     expect(screen.queryByRole("switch", { name: /matching printing/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("switch", { name: /different printing/i })).not.toBeInTheDocument();
     expect(
@@ -638,6 +721,37 @@ describe("DeckSettingsForm", () => {
     expect(screen.queryByRole("button", { name: "Add cards to" })).toBeNull();
     // And the rest of the form is untouched by its absence.
     expect(screen.getByRole("button", { name: "Folder" })).toBeInTheDocument();
+  });
+
+  /**
+   * **The mark rows vanish for `Regular` *and* for `Virtual`, through the one condition that was
+   * already there.**
+   *
+   * `deckKindPatch` writes both columns on every press and only `theory` sets `theoryEnabled`, so
+   * the form's `value.theoryEnabled &&` gate covers both of the other two kinds with no arm of
+   * its own — and a second `deckKind(value) === "theory"` beside it would be one fact spelled
+   * twice. This is what says so out loud: it fails the moment a kind stops clearing the column,
+   * which is the failure nothing else in this file could see.
+   */
+  it("hides the mark rows for both of the other two kinds", async () => {
+    form({ value: { ...VALUE, theoryEnabled: true } });
+
+    expect(screen.getByRole("switch", { name: /matching printing/i })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Virtual" }));
+
+    expect(pressedKind()).toBe("Virtual");
+    expect(screen.queryByRole("switch", { name: /matching printing/i })).toBeNull();
+    expect(screen.queryByRole("switch", { name: /different printing/i })).toBeNull();
+    expect(screen.queryByRole("switch", { name: /not in the theory list/i })).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: "Theory + Actual" }));
+    expect(screen.getByRole("switch", { name: /matching printing/i })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Regular" }));
+
+    expect(pressedKind()).toBe("Regular");
+    expect(screen.queryByRole("switch", { name: /matching printing/i })).toBeNull();
   });
 });
 

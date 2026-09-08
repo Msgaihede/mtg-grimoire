@@ -336,7 +336,17 @@ pub const LEGACY_SINGLE_FILE_VERSION: i64 = 26;
 /// state a reader wants here is the mark on. One column and not a widening of either of 38's,
 /// for that rung's own "two rather than one three-valued" argument read a tier further — the
 /// three switches are independent, and a reader who wants only this one is asking a coherent
-/// question.
+/// question. 40 is one column on `decks`, `virtual_only` — the third deck kind, for a deck the
+/// reader tracks without owning cardboard for it (MTGO, Arena, proxies). **`NOT NULL DEFAULT
+/// 0`**, which is 34's choice rather than 38's and made for that rung's reason: every deck that
+/// already exists is a deck about cardboard, so the upgrade is invisible and no reader's deck
+/// changes kind under them. **A second boolean rather than a `kind` column**, which is 38's
+/// "two rather than one three-valued" argument read from the other end: the three kinds are
+/// derived from `theory_enabled` and this one — `0/0` regular, `1/0` theory-and-actual, `0/1`
+/// virtual — so a rung that stored the enum would have had to rewrite `theory_enabled` on every
+/// row and leave two columns able to disagree. `1/1` is the one pair with no meaning, and
+/// `deck::update_deck` is where it is made unreachable rather than a `CHECK`, because
+/// `ALTER TABLE … ADD COLUMN` cannot carry a table-level one and a refusal in Rust can say why.
 ///
 /// **Both of the last two rungs were written as 35 and renumbered on the way in — the token
 /// rung twice, the theory rung three times.** The sixth grade took 35, the deck-group sweep
@@ -349,7 +359,7 @@ pub const LEGACY_SINGLE_FILE_VERSION: i64 = 26;
 /// for taking the next free number at the moment you land rather than at the moment you start.
 /// The
 /// user's ladder can never restart, because its rungs describe rows nothing else can produce.
-pub const USER_SCHEMA_VERSION: i64 = 39;
+pub const USER_SCHEMA_VERSION: i64 = 40;
 
 /// `corpus.db`'s version, on a number line of its own.
 ///
@@ -3552,7 +3562,7 @@ CREATE TABLE {schema}.decks (
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
              , folder_id INTEGER
-                REFERENCES deck_folders(id) ON DELETE SET NULL, notes TEXT, theory_enabled INTEGER NOT NULL DEFAULT 0, last_variant TEXT NOT NULL DEFAULT 'live', last_group_by TEXT NOT NULL DEFAULT 'category', last_sort_by TEXT NOT NULL DEFAULT 'alphabetical', separate_x_group INTEGER NOT NULL DEFAULT 0, default_category_id INTEGER NOT NULL DEFAULT 0, game_key TEXT NOT NULL DEFAULT 'any', bracket INTEGER NOT NULL DEFAULT 0, sync_uid TEXT, tokens_open INTEGER NOT NULL DEFAULT 0, theory_mark_exact INTEGER NOT NULL DEFAULT 1, theory_mark_name INTEGER NOT NULL DEFAULT 1, theory_mark_unplanned INTEGER NOT NULL DEFAULT 1);
+                REFERENCES deck_folders(id) ON DELETE SET NULL, notes TEXT, theory_enabled INTEGER NOT NULL DEFAULT 0, last_variant TEXT NOT NULL DEFAULT 'live', last_group_by TEXT NOT NULL DEFAULT 'category', last_sort_by TEXT NOT NULL DEFAULT 'alphabetical', separate_x_group INTEGER NOT NULL DEFAULT 0, default_category_id INTEGER NOT NULL DEFAULT 0, game_key TEXT NOT NULL DEFAULT 'any', bracket INTEGER NOT NULL DEFAULT 0, sync_uid TEXT, tokens_open INTEGER NOT NULL DEFAULT 0, theory_mark_exact INTEGER NOT NULL DEFAULT 1, theory_mark_name INTEGER NOT NULL DEFAULT 1, theory_mark_unplanned INTEGER NOT NULL DEFAULT 1, virtual_only INTEGER NOT NULL DEFAULT 0);
 
 CREATE TABLE {schema}.app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
@@ -5613,6 +5623,69 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
         tx.commit()?;
     }
 
+    // v40: the third deck kind (2026-09-08). A **Virtual** deck is one the reader tracks
+    // without owning cardboard for it — an MTGO or Arena list, a proxy pile, a deck they are
+    // reading about. It keeps one `live` list and has no integration with the collection or the
+    // wishlist at all: nothing it names is owned, missing, pullable or shoppable, because there
+    // is no cardboard for any of those words to be about.
+    //
+    // **`NOT NULL DEFAULT 0`, which is v34's choice rather than v38's**, and made for v34's
+    // reason read here: every deck already on a reader's disk is a deck about cardboard, so the
+    // default is the state that leaves every existing deck exactly as it was and makes the
+    // upgrade invisible. v38's argument — the default is what the reader gets, so default the
+    // headline on — is the *opposite* answer to the same question and is right there because
+    // the mark is a way of *reading* a deck; a kind is what a deck **is**, and no rung may
+    // change that under a reader who did not ask.
+    //
+    // **A second boolean rather than a `kind` column, and the three kinds are derived from the
+    // pair.** `theory_enabled` / `virtual_only` reads `0/0` regular, `1/0` theory-and-actual and
+    // `0/1` virtual; `1/1` is the one pair with no meaning. Storing the enum instead would have
+    // meant a rung that rewrites `theory_enabled` on every row — a column three commands, a
+    // sync spec, an undo journal and a history payload already name — to gain nothing but a
+    // second spelling of a fact those readers would then have to be taught. It is v38's "two
+    // booleans, not one three-valued column" argument arriving from the other end, and the price
+    // is the same one: two columns that *can* disagree.
+    //
+    // **The pair is fenced in Rust and not by a `CHECK`, and this rung could not have carried
+    // one anyway.** SQLite's documented `ADD COLUMN` restrictions rule out a table-level CHECK,
+    // and the column-level one that is legal cannot see `theory_enabled` — so the fence would
+    // have had to be v35's kind of table rebuild for a rule one command can hold. `deck::
+    // update_deck` is where it lives: a patch that sets either flag clears the other in the
+    // *values it binds*, which is `valid_game`'s and `valid_bracket`'s standing — a refusal in
+    // Rust can say why, and a command parameter reaches this column.
+    //
+    // **Appended at the end**, which is what keeps `deck.rs`'s positional reads honest, and this
+    // is the ninth time that sentence has been owed: every `r.get(n)` over `DECK_SELECT` is an
+    // index into this column order, and an `INTEGER` inserted anywhere but last hands one
+    // column's value to another with nothing going red. `deck::IMAGE_COL` moves 25 → 26 with it.
+    // The trap here is v39's read one grain sharper still: the column it most reads like a
+    // neighbour of is `theory_enabled`, which is the *other half of the same pair*, so an index
+    // that landed there would swap a deck's kind for its own opposite and every field would
+    // still hold a `0` or a `1`.
+    //
+    // **`decks` is in [`SYNCED_TABLES`] and this column travels — but only because it was put on
+    // the capture spec by hand**, v38's and v39's note verbatim: `sync_engine::capture`'s `Spec`
+    // for this table spells its field list out literally and there is **no fence in the other
+    // direction**, so a column added here and nowhere else is captured by nothing and goes red
+    // nowhere. What a deck *is* is the strongest case on that list — a deck that is virtual on
+    // the machine it was made on and a cardboard deck everywhere else would have its collection
+    // integration back on every other device, offering to buy cards for a list that is not about
+    // cards. `DEFAULT 0` is what makes the old-peer direction safe: `apply::updates` walks the
+    // local spec and `continue`s past a field an incoming op lacks, `apply::creations` omits it
+    // from the INSERT and this DDL default fills it in, so a deck built from an op a device on
+    // v39 sent arrives as an ordinary deck — which is what a device that has never heard of the
+    // kind can only have meant.
+    if v < 40 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch("ALTER TABLE decks ADD COLUMN virtual_only INTEGER NOT NULL DEFAULT 0;")?;
+        // Literal `40`, for the reason every step before it writes its own: this step is what
+        // *makes* a database version 40. **After the `ALTER` and inside the same transaction** —
+        // the stamp and the column commit together or neither does, which is v39's rule
+        // unchanged one rung later.
+        tx.execute_batch("PRAGMA main.user_version = 40;")?;
+        tx.commit()?;
+    }
+
     // **The clock, repaired on every launch at every version — and this is not belt-and-braces.**
     //
     // Every capture trigger ends `FROM sync_clock c, sync_identity i, sync_group g`. That is a
@@ -6897,7 +6970,33 @@ pub(crate) mod tests {
     /// `idx_device_names_uid` with it.
     const UNDO_V31: &str = "DROP TABLE IF EXISTS device_names;";
 
-    /// v39's third theory-mark switch, and the newest rewind on the user ladder.
+    /// v40's deck kind, and the newest rewind on the user ladder.
+    ///
+    /// Owed for [`UNDO_V13`]'s **loud** reason rather than [`UNDO_V14`]'s quiet one:
+    /// `ALTER TABLE decks ADD COLUMN` is not idempotent, so a fixture that kept the column
+    /// dies at `duplicate column name` on the way back up — a failure no real upgrade can
+    /// produce, and one that takes every unrelated test in the chain with it rather than only
+    /// the ones about the deck kind.
+    ///
+    /// **It runs first, before [`UNDO_V39`]**, for that constant's stated reason: a rewind walks
+    /// the ladder backwards and this is now the top of it. The doc directly below said the same
+    /// of itself and told whoever wrote rung 40 to expect to collect the line; this is that
+    /// line, and the sentence is a prediction rather than history for exactly one rung at a
+    /// time.
+    ///
+    /// **One statement**, [`UNDO_V39`]'s shape: v40 appends a single column, so there is a
+    /// single column to take back off and the stored table text lands back on exactly what v39
+    /// left.
+    ///
+    /// **No index needs a line of its own**, [`UNDO_V20`]'s rule: the rung creates none, and
+    /// `DROP COLUMN` would refuse a column an index named. **Nor does a `CHECK`** — the pair
+    /// this column is half of is fenced in `deck::update_deck` and not in the DDL, which is the
+    /// rung's own argument read here as the thing that makes the rewind a one-liner: a
+    /// table-level `CHECK (NOT (theory_enabled AND virtual_only))` would have been the other
+    /// thing `DROP COLUMN` refuses over.
+    const UNDO_V40: &str = "ALTER TABLE decks DROP COLUMN virtual_only;";
+
+    /// v39's third theory-mark switch — the rewind directly under [`UNDO_V40`].
     ///
     /// Owed for [`UNDO_V13`]'s **loud** reason rather than [`UNDO_V14`]'s quiet one:
     /// `ALTER TABLE decks ADD COLUMN` is not idempotent, so a fixture that kept the column
@@ -6905,10 +7004,11 @@ pub(crate) mod tests {
     /// produce, and one that takes every unrelated test in the chain with it rather than only
     /// the ones about the theory mark.
     ///
-    /// **It runs first, before [`UNDO_V38`]**, for that constant's stated reason: a rewind
-    /// walks the ladder backwards, and this is now the top of it. The sentence directly below
-    /// said the same about [`UNDO_V38`] for one rung, which is this file's own prose-rot note
-    /// read as a prediction rather than as history.
+    /// **It runs after [`UNDO_V40`] and before [`UNDO_V38`]**, for that constant's stated
+    /// reason: a rewind walks the ladder backwards. It was the top of it for one rung — this
+    /// line read "it runs first" until v40 landed, exactly as the sentence directly below had
+    /// read it about [`UNDO_V38`] one rung earlier, which is this file's own prose-rot note
+    /// arriving on schedule for the third time.
     ///
     /// **One statement where the rung below it needs two**, and for the same reason read one
     /// grain finer: v39 appends a single column, so there is a single column to take back off,
@@ -7154,7 +7254,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
+            "{UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
              PRAGMA main.user_version = 28;"
         ))
         .unwrap();
@@ -7186,7 +7286,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 31;"
+            "{UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 31;"
         ))
         .unwrap();
         conn
@@ -7213,7 +7313,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} PRAGMA main.user_version = 33;"
+            "{UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} PRAGMA main.user_version = 33;"
         ))
         .unwrap();
         conn
@@ -7240,7 +7340,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
+            "{UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
         ))
         .unwrap();
         conn
@@ -7250,19 +7350,21 @@ pub(crate) mod tests {
     /// a second tier, and the only population the v38 rung is *for*.
     ///
     /// Rewound from head rather than written out a second time, [`user_file_at_34`]'s device
-    /// one rung up. It read "one rewind does it, because v38 is the only rung above 37" and
-    /// **collected the line it was told to expect the moment v39 landed** — [`UNDO_V39`] first,
-    /// then [`UNDO_V38`], newest first, which is what every chain on this ladder does. Read the
-    /// count as owing a line to whoever writes rung 40 rather than as a fact.
+    /// one rung up. It read "one rewind does it, because v38 is the only rung above 37", then
+    /// **collected the line it was told to expect the moment v39 landed**, and has now
+    /// collected a third the moment v40 did — [`UNDO_V40`] first, then [`UNDO_V39`], then
+    /// [`UNDO_V38`], newest first, which is what every chain on this ladder does. Read the
+    /// count as owing a line to whoever writes rung 41 rather than as a fact; twice in two days
+    /// is not a coincidence.
     ///
-    /// **It takes no `foreign_keys` parameter**, for the same reason the two below it do not:
-    /// v38 and v39 are `ADD COLUMN`s against `decks`, and no setting of that pragma can make an
-    /// `ADD COLUMN` behave two ways.
+    /// **It takes no `foreign_keys` parameter**, for the same reason the three below it do not:
+    /// v38, v39 and v40 are `ADD COLUMN`s against `decks`, and no setting of that pragma can
+    /// make an `ADD COLUMN` behave two ways.
     fn user_file_at_37() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V39} {UNDO_V38} PRAGMA main.user_version = 37;"
+            "{UNDO_V40} {UNDO_V39} {UNDO_V38} PRAGMA main.user_version = 37;"
         ))
         .unwrap();
         conn
@@ -7271,17 +7373,39 @@ pub(crate) mod tests {
     /// A user file at 38 — the shape every machine carries the day before the theory mark grew
     /// a *third* tier, and the only population the v39 rung is *for*.
     ///
-    /// [`user_file_at_37`]'s construction one rung up, and one rewind does it because v39 is
-    /// the only rung above 38 — the sentence directly above records what that claim is worth,
-    /// so read this one as owing a line to rung 40 too.
+    /// [`user_file_at_37`]'s construction one rung up. It read "one rewind does it because v39
+    /// is the only rung above 38", with the sentence directly above recording what that claim
+    /// was worth — and it was worth one day: [`UNDO_V40`] joined it when the deck kind landed,
+    /// newest first. Read *this* count as owing a line to rung 41 too.
     ///
-    /// **It takes no `foreign_keys` parameter**, for [`user_file_at_37`]'s reason: v39 is a
-    /// single `ADD COLUMN` against `decks`, and no setting of that pragma can make one behave
-    /// two ways.
+    /// **It takes no `foreign_keys` parameter**, for [`user_file_at_37`]'s reason: v39 and v40
+    /// are single `ADD COLUMN`s against `decks`, and no setting of that pragma can make one
+    /// behave two ways.
     fn user_file_at_38() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
-        conn.execute_batch(&format!("{UNDO_V39} PRAGMA main.user_version = 38;"))
+        conn.execute_batch(&format!(
+            "{UNDO_V40} {UNDO_V39} PRAGMA main.user_version = 38;"
+        ))
+        .unwrap();
+        conn
+    }
+
+    /// A user file at 39 — the shape every machine carries the day before a deck could be a
+    /// *kind*, and the only population the v40 rung is *for*.
+    ///
+    /// [`user_file_at_38`]'s construction one rung up, and one rewind does it because v40 is
+    /// the only rung above 39. The two docs above record exactly what that claim has been worth
+    /// on this ladder — one rung each, twice running — so read it as owing a line to rung 41
+    /// rather than as a fact about the file.
+    ///
+    /// **It takes no `foreign_keys` parameter**, for [`user_file_at_37`]'s reason: v40 is a
+    /// single `ADD COLUMN` against `decks`, and no setting of that pragma can make one behave
+    /// two ways.
+    fn user_file_at_39() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        create_user_schema(&conn, "main").unwrap();
+        conn.execute_batch(&format!("{UNDO_V40} PRAGMA main.user_version = 39;"))
             .unwrap();
         conn
     }
@@ -7330,7 +7454,7 @@ pub(crate) mod tests {
         // without `{UNDO_V38}` v38 dies at `duplicate column name`; the third tier adds one
         // more, so without `{UNDO_V39}` v39 dies the same way. Newest first.
         conn.execute_batch(&format!(
-            "{UNDO_V39} {UNDO_V38} {UNDO_V37} PRAGMA main.user_version = 35;"
+            "{UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} PRAGMA main.user_version = 35;"
         ))
         .unwrap();
         seed_v35_groups(&conn);
@@ -7487,7 +7611,7 @@ pub(crate) mod tests {
         .unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 32;"
+            "{UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 32;"
         ))
         .unwrap();
         conn
@@ -7544,7 +7668,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} \
+            "{UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} \
              PRAGMA main.user_version = 27;"
         ))
         .unwrap();
@@ -7922,7 +8046,7 @@ pub(crate) mod tests {
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, USER_SCHEMA_VERSION);
-        assert_eq!(USER_SCHEMA_VERSION, 39);
+        assert_eq!(USER_SCHEMA_VERSION, 40);
     }
 
     /// **It is synced, and `sync_devices` still is not.** The whole point is that a NAME
@@ -8902,7 +9026,7 @@ pub(crate) mod tests {
         .unwrap();
 
         conn.execute_batch(&format!(
-            "{UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
+            "{UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
         ))
         .unwrap();
 
@@ -8989,7 +9113,7 @@ pub(crate) mod tests {
         // The literal, for the reason the two tests below spell out. It is **head**, not this
         // rung's own number — `migrate_user` climbs the whole ladder — so every rung that lands
         // moves it.
-        assert_eq!(version, 39);
+        assert_eq!(version, 40);
         assert_eq!(
             in_group(&conn, DECK_A, "bolt-lea", "nonfoil"),
             2,
@@ -9279,10 +9403,12 @@ pub(crate) mod tests {
         // is this line**: it is head rather than this rung's own number, because `migrate_user`
         // climbs the whole ladder, so **every rung that lands owes these three assertions an
         // edit** — which is a cost the sentence above accepts rather than a defect. Paid four
-        // times now: 35 → 36, 36 → 37 for the token rung, 37 → 38 for the theory-mark rung, and
+        // times now: 35 → 36, 36 → 37 for the token rung, 37 → 38 for the theory-mark rung,
         // 38 → 39 for the mark's third tier — which landed with the rung and missed these three
-        // lines on the first pass, exactly the way this sentence says a rung would.
-        assert_eq!(version, 39);
+        // lines on the first pass, exactly the way this sentence says a rung would — and
+        // 39 → 40 for the deck kind, which missed them the same way and was told so by these
+        // three tests going red. **Five times**, and the count is the argument.
+        assert_eq!(version, 40);
         assert_eq!(
             in_group(&conn, DECK_A, "bolt-m10", "nonfoil"),
             1,
@@ -9304,7 +9430,7 @@ pub(crate) mod tests {
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
         // The literal, for the reason the test above spells out — head, which every rung moves.
-        assert_eq!(version, 39);
+        assert_eq!(version, 40);
     }
 
     /// The fixture is a real v35 file and not head wearing a v35 label.
@@ -9587,6 +9713,148 @@ pub(crate) mod tests {
         );
     }
 
+    /// **v40's column, and the deck that already existed when the rung ran.**
+    ///
+    /// `v39_gives_every_deck_the_unplanned_mark`'s job one rung up, with the default the *other*
+    /// way round — and that reversal is the whole of what this test is for. `NOT NULL DEFAULT 0`
+    /// is the rung: every deck on a reader's disk is a deck about cardboard, so the upgrade has
+    /// to be invisible, and a rung that wrote `DEFAULT 1` would turn every deck in the database
+    /// virtual at the first launch on the new build — no error, no empty state, just a
+    /// collection that has quietly stopped knowing about any of them.
+    ///
+    /// **The deck is seeded before the climb rather than after it**, the rung below's argument
+    /// verbatim: a row inserted at head takes the column default through the *frozen*
+    /// [`USER_SCHEMA_SQL`] and would pass while the rung wrote `DEFAULT 1` — the one population
+    /// a fresh worktree cannot be, because a fresh install never climbs a rung at all.
+    #[test]
+    fn v40_leaves_every_existing_deck_a_cardboard_deck() {
+        let conn = user_file_at_39();
+        conn.execute(
+            "INSERT INTO decks (id, name, format_key, created_at, updated_at)
+             VALUES (1, 'Burn', 'modern', 0, 0)",
+            [],
+        )
+        .unwrap();
+
+        migrate_user(&conn).unwrap();
+
+        assert_eq!(has_column(&conn, "decks", "virtual_only"), 1);
+        let virtual_only: i64 = conn
+            .query_row("SELECT virtual_only FROM decks WHERE id = 1", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(
+            virtual_only, 0,
+            "a deck that existed before the rung is still a deck about cardboard after it"
+        );
+
+        // And a deck made *after* the climb reads the same, which is the half a fresh install
+        // gets — the two populations must not disagree, and the fence that makes them agree is
+        // `the_user_schema_is_byte_identical_to_what_the_ladder_builds` rather than this line.
+        conn.execute(
+            "INSERT INTO decks (id, name, format_key, created_at, updated_at)
+             VALUES (2, 'Storm', 'modern', 0, 0)",
+            [],
+        )
+        .unwrap();
+        let virtual_only: i64 = conn
+            .query_row("SELECT virtual_only FROM decks WHERE id = 2", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(virtual_only, 0, "a deck is born owning cardboard");
+    }
+
+    /// The second pass has to be a no-op rather than `duplicate column name`.
+    ///
+    /// `the_v39_rung_is_idempotent_over_an_already_upgraded_database`'s job one rung up. SQLite
+    /// offers no `IF NOT EXISTS` on `ALTER TABLE … ADD COLUMN`, so the version stamp is the only
+    /// thing making a second launch survivable — and it is inside the rung's transaction with
+    /// the `ALTER`, so a launch that died mid-rung left neither.
+    #[test]
+    fn the_v40_rung_is_idempotent_over_an_already_upgraded_database() {
+        let conn = user_file_at_39();
+        migrate_user(&conn).unwrap();
+        migrate_user(&conn).unwrap();
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, USER_SCHEMA_VERSION);
+    }
+
+    /// The fixture is a real v39 file and not head wearing a v39 label.
+    ///
+    /// `the_v38_fixture_carries_none_of_v39`'s job one rung up. What it catches is the fixture
+    /// rewound in only one of its two halves: the column really gone but the version left at
+    /// head would leave `migrate_user` no rung to run, and every test above would pass while
+    /// watching nothing happen. The other order is loud on its own — a fixture that kept the
+    /// column dies at `duplicate column name`, which is [`UNDO_V40`]'s whole reason.
+    ///
+    /// **`theory_mark_unplanned` is probed as *present*, and that is the half a version number
+    /// cannot give you**, the test directly above reading `theory_mark_name` for its reason: the
+    /// rewind above this one is three rungs of `decks` columns stacked, and a chain that ran
+    /// [`UNDO_V39`] as well would leave a file the stamp still calls 39 while it is really a 38
+    /// — which would then climb v39 and v40 together and pass every assertion about the kind
+    /// while testing the wrong rung.
+    #[test]
+    fn the_v39_fixture_carries_none_of_v40() {
+        let conn = user_file_at_39();
+
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 39);
+        assert_eq!(
+            has_column(&conn, "decks", "virtual_only"),
+            0,
+            "virtual_only must not exist before the rung that adds it"
+        );
+        assert_eq!(
+            has_column(&conn, "decks", "theory_mark_unplanned"),
+            1,
+            "a v39 file still has v39's own column"
+        );
+    }
+
+    /// A v39 file walks all the way up keeping the deck it had, and the deck's other columns
+    /// are the ones it went in with.
+    ///
+    /// **The rewind's round trip, which no single-column probe covers.** `user_file_at_39` is
+    /// head with [`UNDO_V40`] run over it, so this is the only test that says the *pair* —
+    /// `DROP COLUMN` down, `ADD COLUMN` up — lands back on a file the rest of the crate can
+    /// read: every `decks` column `DECK_SELECT` names is still there, in an order the positional
+    /// reads still agree with, with the seeded row's values intact.
+    #[test]
+    fn a_v39_file_round_trips_through_the_v40_rung() {
+        let conn = user_file_at_39();
+        conn.execute(
+            "INSERT INTO decks (id, name, format_key, theory_enabled, theory_mark_unplanned,
+                                created_at, updated_at)
+             VALUES (1, 'Burn', 'modern', 1, 0, 0, 0)",
+            [],
+        )
+        .unwrap();
+
+        migrate_user(&conn).unwrap();
+
+        let (name, theory, unplanned, virtual_only): (String, i64, i64, i64) = conn
+            .query_row(
+                "SELECT name, theory_enabled, theory_mark_unplanned, virtual_only
+                   FROM decks WHERE id = 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(name, "Burn");
+        assert_eq!(
+            theory, 1,
+            "the rung must not touch the other half of the pair"
+        );
+        assert_eq!(unplanned, 0, "nor the rung below it");
+        assert_eq!(virtual_only, 0);
+    }
+
     /// A v28 file walks up keeping every row it had, and twice is the same as once.
     #[test]
     fn migrating_a_v28_user_file_keeps_its_rows_and_is_idempotent() {
@@ -9677,7 +9945,7 @@ pub(crate) mod tests {
             })
             .collect();
         conn.execute_batch(&format!(
-            "{UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
+            "{UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
              PRAGMA main.user_version = 28;"
         ))
         .unwrap();

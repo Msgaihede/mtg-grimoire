@@ -519,7 +519,7 @@ one per surface plus the deck's "start a new one":
 
 | Destination | Modes | Grain the write folds on | Notes |
 | --- | --- | --- | --- |
-| `deck` (existing) | `merge` / `replace` | `deck_id, variant, category_id, card_id, coalesce(finish,'')` (`schema::DECK_CARD_GRAIN`) | `replace` clears one **variant** first, named before it does; the mode radio says how many cards that would cost, and on a `live` list a note under the radios says where the cardboard goes — since 2026-09-01 (issue #336) the commit calls `deck::release_live_copies` before that clear, so every copy the deck's group held lands in `Recently removed` instead of being stranded under a deck that no longer lists it. Since 2026-08-23 it also draws the optional ["Add cards to collection" box](#the-deck-arms-add-cards-to-collection-box), which makes the press two writes |
+| `deck` (existing) | `merge` / `replace` | `deck_id, variant, category_id, card_id, coalesce(finish,'')` (`schema::DECK_CARD_GRAIN`) | `replace` clears one **variant** first, named before it does; the mode radio says how many cards that would cost, and on a `live` list a note under the radios says where the cardboard goes — since 2026-09-01 (issue #336) the commit calls `deck::release_live_copies` before that clear, so every copy the deck's group held lands in `Recently removed` instead of being stranded under a deck that no longer lists it. Since 2026-08-23 it also draws the optional ["Add cards to collection" box](#the-deck-arms-add-cards-to-collection-box), which makes the press two writes. **A [Virtual deck](#a-virtual-deck-moves-two-sentences-and-takes-one-control-away) names no variant, gets no note, and is offered no "Add cards to collection" box** |
 | `newDeck` | `merge` only | same grain, on the deck just created | No mode radios at all — there is nothing to replace one line after `deck_create`, and `merge` is the mode that cannot clear anything if that ever stops being true. Draws the same "Add cards to collection" box, from the **same** exported `OwnCopies` rather than a second one written here |
 | `collection` | `add` / `set` | Every term of the storage grain (`schema::COLLECTION_GRAIN` — `card_id, finish, condition, lang, altered, signed, proxy, misprint, coalesce(serial_number,''), coalesce(grading,''), coalesce(folder_id, 0)`) the importer can vary, so nine of the eleven. `lang` follows `cardId` and `folder_id` is always the root. It was `cardId, finish, condition` alone until 2026-08-23 — see the fold section above for what that cost | No `replace`: the deck's version would empty a multi-thousand-row collection from a 40-line paste with the file that caused it looking ordinary |
 | `wishlist` | `add` / `set` | `oracleId, cardId, finish` (`destinations/wishlist.ts`) — the storage grain is `coalesce(oracle_id,''), coalesce(card_id,''), coalesce(preferred_finish,''), coalesce(folder_id,0)` (`schema::WISHLIST_GRAIN`) | `wishlist_set_quantity(id, 0)` **deletes** the wish — a wish for nothing is not a wish (`CHECK (quantity > 0)`) — but an import can never reach it: `parse.ts` refuses a quantity below 1 before a plan is even built (`:460`, `:671`), so `set` through this dialog never carries a 0 |
@@ -545,6 +545,45 @@ the grain, a line for a card the reader has already filed in `Ordered` lands as 
 the root instead of folding into the one they filed. `WishRow.elsewhere` is what tells them — the
 imported row draws an "also on your list" mark. Whole reasoning:
 [wishlist-folders.md](wishlist-folders.md).
+
+### A Virtual deck moves two sentences and takes one control away
+
+The third deck kind landed 2026-09-08 (user schema v40,
+[issue #401](https://github.com/Msgaihede/mtg-grimoire/issues/401)) and the import dialog is one of
+the surfaces it reaches. It reaches it in **prose only**: nothing about the plan, the grain, the
+modes or the commit changes, because importing a decklist into a deck the reader owns no cardboard
+for is an ordinary act that writes `deck_cards` and nothing else. `deck_import_commit` grew no
+refusal, and it needed none — its `replace` arm's `release_live_copies` walks an empty set on a
+deck with no group.
+
+- **The heading drops its variant segment.** `DeckImportSubtitle` reads `Into Arena Standard`
+  rather than `Into Arena Standard · Actual`, through `variantSegment(variant, virtual)`, which is
+  `variantName` with a `null` arm in front of it. A virtual deck's rows are `live` rows, so
+  `variantName` answers `Actual` for it — a label out of a two-tab switch the reader has never
+  been shown, naming the half of a pair whose other half does not exist. The segment is **dropped
+  rather than reworded**: there is nothing to disambiguate on a deck with one list, and `Into
+  Arena Standard · Deck` is a heading explaining that a deck is a deck. `null` and not `""`, so
+  the caller filters rather than joining a blank and leaving a trailing separator — that line is a
+  `join(" · ")`. **A deck whose row has not landed guesses `false`**, and the direction is the
+  argument: the segment appears and then goes, where the other way round it would appear late on
+  a heading the reader had already read.
+- **The mode radios say `the deck`.** `What this does to the deck`, `Replace — removes the 60
+  cards in the deck first`, lowercase because it lands mid-sentence where `Actual` and `Theory`
+  are proper labels. Same argument, one control down.
+- **The release promise is not drawn.** *"Any copies you own go back to Recently removed."* now
+  has **four** conditions, each of them a promise the app could not otherwise keep: a `merge`
+  removes nothing, a `theory` list has never held a copy, an empty list has none to give back —
+  and a **virtual** deck has no collection group at all, so its rows are live rows that have still
+  never held one. **The virtual condition is the one that could not be spelled as a variant**, and
+  it is why the list grew rather than being tightened: the other three are all answerable from the
+  list in front of the reader, where this one is a fact about the *deck*, and `live` is the same
+  word on a deck that tracks cardboard and a deck that never will.
+- **The control is the "Add cards to collection" box, and it is not drawn at all.** It asks *"Tick
+  this if you already own these cards"* of a reader who has told the app they own none of them,
+  and it is the only press in this dialog that writes `collection_entries` — so it is the one
+  place the deck kind removes a control rather than rewording a sentence. **Absent rather than
+  greyed**, and the commit fences it anyway (`alsoOwn && !virtual`), because a deck can turn
+  virtual under an open step through a sync from another device. See the end of the next section.
 
 ### The deck arms' "Add cards to collection" box
 
@@ -576,11 +615,21 @@ Four rules the pair holds, each with a reason that is not obvious:
 - **Absent and an empty array are the same statement**, which is what keeps every caller written
   before the box existed unchanged by construction.
 - **The invalidation is the union of the deck's roots and the collection's**, and it is fired
-  when the box was ticked **or** when the press was a `replace` on a `live` list. The collection's
+  when the box was ticked **or** when the press was a `replace` on a `live` list **that is not a
+  virtual deck's**. The collection's
   list and summary, the wishlist's owned progress and the search wall's owned badges each answer a
   question those copies just changed — and since 2026-09-01 a live `replace` changes it without
   the box being ticked at all, because the release files the deck's copies into `Recently removed`
-  (issue #336). It is the same `OWNED_WRITE_KEYS` union rather than a second set, because it is
+  (issue #336). **The third clause landed 2026-09-08 with the deck kinds (issue #401), and it is
+  not a variant**: a virtual deck has no collection group, so `release_live_copies` walks an empty
+  set and the press moves no `collection_entries` row at all — while its rows are `live` rows, so
+  the variant beside it says the opposite. `CommitImport.virtual` rides `variables` into the
+  invalidation for exactly this and is **not** a fifth argument of the command: the backend reads
+  the column itself and needs no telling, and this is the one decision on the hook that a virtual
+  deck changes. It is **optional**, because the caller that cannot be virtual means `false` by
+  saying nothing: `importIntoNewDeck`'s `ImportAsNewDeck` carries no kind at all, so the deck it
+  makes is always an ordinary one, and it omits the `clearing` argument entirely besides. Absent
+  is also right for every caller written before the field. It is the same `OWNED_WRITE_KEYS` union rather than a second set, because it is
   the same claim about which roots a `collection_entries` write moves, and it is read off the
   mutation's own variables because every press is the same mutation. **No count fence on that
   arm**: whether the list held anything is not something the hook knows without another read, and
@@ -603,6 +652,27 @@ as a rule about imports rather than about deck-driven writes. A deck with no gro
 than falling back to the root, and the refusal rides back in `ownRefusal` like every other on this
 half. `OWN_COPIES_HINT` says the consequence a checkbox label cannot imply: *"They are filed into
 this deck's own folder, so no other deck can use them."*
+
+**That refusal stopped being unreachable on 2026-09-08, and the box is gated rather than left to
+reach it** (schema v40, [issue #401](https://github.com/Msgaihede/mtg-grimoire/issues/401)).
+`deckGroupId`'s own doc reads *"Every deck has a group — schema v25 made one for every deck that
+existed and `deck_create` makes one for every deck since — so this is a database that has been
+edited by hand"*, and a **Virtual** deck is the case that sentence does not cover: it is given no
+group on purpose, because the *absence* of that row is what makes every owned readout answer 0.
+Left alone, ticking the box would have landed the decklist and then answered *"n cards imported.
+The copies could not be added to your collection — That deck has no folder to hold its cards."*
+**The refusal is the right sentence and the box was the wrong offer**: a reader was being asked
+whether they had physically built a deck they have told the app they own none of.
+
+So `OwnCopies` is **not drawn** on a virtual deck — absent rather than greyed, the deck feature's
+own rule — **and the commit fences it anyway**, `alsoOwn && !virtual`. The second half is not
+belt-and-braces: a deck can turn virtual under an open step through a sync from another device,
+which needs no press on this machine, and a tick nobody can see must never travel. It is the only
+press in this dialog that writes `collection_entries`, which is what makes it the one place the
+deck kind removes a *control* rather than rewording a sentence. Pinned by
+`draws no box on a virtual deck, and still imports the list`, which asserts the deck half of the
+import lands in full — a test that only checked the absence would pass against a build that had
+broken the import.
 
 **It shipped filing at the root for one PR**, with `commit_import` hard-coding `folder_id: None`,
 and the symptom is worth keeping: the deck went on reading *missing* on every line the reader had

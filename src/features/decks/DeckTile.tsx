@@ -1,6 +1,7 @@
 /**
  * One deck on the gallery wall, and the three things drawn inside it: the cover frame, the
- * badge that says which of a deck's two lists exist, and the question the trash icon asks.
+ * badge that says what kind of deck it is — which of its two lists exist, or that it keeps no
+ * cardboard at all — and the question the trash icon asks.
  *
  * Lifted out of `DecksPage.tsx` on 2026-08-16, whole. **The tile's own menu handlers stay on
  * the tile's own `<button>`** — `src/CLAUDE.md`'s rule, and the reason this component is the one
@@ -28,6 +29,7 @@ import { PRESS } from "@/lib/motion";
 import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
 import { DeckColorBar } from "./DeckColorBar";
+import { rowKind } from "./deckKind";
 import { buildDeckMenu, type DeckMenuDeps } from "./deckMenu";
 import { deckColorsLabel } from "./deckPips";
 import { deckDraggable, MoveToFolder, type FolderNode } from "./FolderTree";
@@ -62,7 +64,7 @@ const ICON_BUTTON = cn(
 const ICON = "size-[calc(0.875rem*var(--control-scale,1))]";
 
 /**
- * The box both of the art's marks are drawn in — the theory badge at its bottom-left, the bracket
+ * The box both of the art's marks are drawn in — the kind badge at its bottom-left, the bracket
  * pill at its bottom-right.
  *
  * **One constant because they are one mark drawn twice**, rather than two that happen to agree
@@ -77,9 +79,9 @@ const ICON = "size-[calc(0.875rem*var(--control-scale,1))]";
  * the variable is inherited from the tile's root so no call site is involved — `cardZoom.ts`'s
  * arrangement.
  *
- * Accent on both, where the dim arm used to be the one-list deck's: every badge left is a deck
- * that keeps two lists, and a bracket is a reading worth pointing at. What is *not* shared is the
- * dash — see {@link deckBadge} and the pill's own comment.
+ * Accent on both, where the dim arm used to be the ordinary deck's: every badge left is a deck
+ * that is not the ordinary case, and a bracket is a reading worth pointing at. What is *not*
+ * shared is the dash — see {@link deckBadge} and the pill's own comment.
  */
 const TILE_MARK = cn(
   "absolute bottom-[calc(0.375rem*var(--mark-scale,1))] rounded-sm border bg-bg/70",
@@ -90,10 +92,10 @@ const TILE_MARK = cn(
 );
 
 /**
- * Which of a deck's two lists exist — the one thing a tile can say about a deck that a
- * card count cannot.
+ * What kind of deck this is, in one word — which of its two lists exist, or that it keeps no
+ * cardboard at all. The one thing a tile can say about a deck that a card count cannot.
  *
- * Derived rather than stored, from the two fields `deck_list` already answers.
+ * Derived rather than stored, from fields `deck_list` already answers.
  * {@link DeckRow.cardCount} counts the **actual** list only, so a deck with theory switched on
  * and nothing in that list is a plan and not yet a deck: `THEORY ONLY`. One derivation, because
  * a badge and the editor's Theory/Actual switch must never disagree about which lists a deck
@@ -102,7 +104,20 @@ const TILE_MARK = cn(
  * **A deck that keeps no plan wears no badge at all**, and that is the caption's `Any` argument
  * read across: one list is what every deck is born with, so a word for it would sit on nearly
  * every tile in the gallery and say nothing about the deck under it. The badge is here to mark
- * the deck that keeps *two*, and `null` is the answer for the rest.
+ * the deck that is *not* the ordinary case, and `null` is the answer for the deck that is.
+ *
+ * **A Virtual deck earns a word by exactly that test, and it is why widening this was not a
+ * betrayal of the argument above** (issue #401). `regular` is still `null` and still for the
+ * same reason. But a deck the reader tracks without owning the cardboard reads nothing off
+ * their collection — no owned count, no shortage mark, no wishlist — so a tile that said nothing
+ * would be a deck whose whole *relationship to the binder* is invisible until it is opened.
+ * That is the badge's job: one list is unremarkable, and no cardboard is not.
+ *
+ * **It answers before the theory arms, and {@link rowKind} is what makes that structural.**
+ * `theory_enabled` and `virtual_only` are two columns spelling one three-way choice, and the
+ * impossible `true, true` row resolves to `virtual` in the one place that folds them — see
+ * `deckKind.ts`, which argues why that is the safer of the two readings. Asking the flags here
+ * in this file's own order would be a second answer to that question, agreeing today.
  *
  * `THEORY ONLY` is the state **switching the theory list on now produces**, rather than an
  * unusual one: the write moves the actual list into the plan and leaves it empty, so the badge
@@ -111,12 +126,15 @@ const TILE_MARK = cn(
  * **`Actual` is the word and `live` is still the stored variant** — the split the editor's
  * switch argues, which this file only follows. Issue #357 was this badge still reading
  * `LIVE + THEORY` a week after the tabs stopped: the vocabulary a reader meets inside a deck and
- * the one on its tile are one vocabulary.
+ * the one on its tile are one vocabulary. A Virtual deck's rows are `live` rows too, which is
+ * exactly why its badge cannot be built out of the variant either.
  */
-export type DeckBadge = "THEORY + ACTUAL" | "THEORY ONLY";
+export type DeckBadge = "VIRTUAL" | "THEORY + ACTUAL" | "THEORY ONLY";
 
 export function deckBadge(deck: DeckRow): DeckBadge | null {
-  if (!deck.theoryEnabled) return null;
+  const kind = rowKind(deck);
+  if (kind === "virtual") return "VIRTUAL";
+  if (kind === "regular") return null;
   return deck.cardCount === 0 ? "THEORY ONLY" : "THEORY + ACTUAL";
 }
 
@@ -463,9 +481,9 @@ export function DeckTile({
             no platform. **The `Any` row is deliberately not drawn**: it is what every deck is
             born as, so printing it would put a word that says nothing on nearly every tile in
             the gallery — and this caption already truncates in a narrow column. A deck that
-            *has* been pinned is the one worth marking, which is the same argument the theory
-            badge above makes about the lists a deck keeps — a deck with only the one list wears
-            none.
+            *has* been pinned is the one worth marking, which is the same argument the badge
+            above makes about what kind of deck this is — the ordinary deck, one list read
+            against the reader's binder, wears none.
 
             **The bracket was a fourth segment here for one iteration and is a pill on the art
             now** — see the overlay below. What sent it there is this line's own weakness: it is
@@ -491,7 +509,7 @@ export function DeckTile({
         </span>
       </button>
 
-      {/* The art's two marks — which lists this deck keeps, and what bracket it reads as — in one
+      {/* The art's two marks — what kind of deck this is, and what bracket it reads as — in one
           box that *is* the art.
 
           **Both stay outside the `<button>`, and that is the badge's own rule rather than a new
@@ -529,14 +547,24 @@ export function DeckTile({
           className="pointer-events-none absolute inset-x-0 top-0"
           style={{ aspectRatio: ART_ASPECT }}
         >
-          {/* That this deck keeps a plan. Absent on a deck with one list — {@link deckBadge}
-              argues why. */}
+          {/* What kind of deck this is — that it keeps a plan, or that it keeps no cardboard.
+              Absent on the ordinary one-list deck, which is the majority of the wall;
+              {@link deckBadge} argues why that absence is the rule rather than an omission. */}
           {badge !== null && (
             <span
               className={cn(
                 TILE_MARK,
                 "left-[calc(0.375rem*var(--mark-scale,1))]",
                 // Dashed means provisional, here as on a folder card: a theory list is a plan.
+                //
+                // **`VIRTUAL` is therefore solid, and that is a ruling rather than an omission**
+                // (issue #401). A virtual deck's list is not a sketch of a deck the reader
+                // intends to sleeve up — it *is* the deck, and the cards in it are as real as
+                // any other deck's; what they are not is cardboard the reader owns. Dashing it
+                // would spend the vocabulary this file already gave `THEORY ONLY` on a
+                // completely different fact and tell a reader who has learned the dash that a
+                // finished MTGO list is a plan. The mark for "you own none of this" is the word
+                // itself.
                 badge === "THEORY ONLY" && "border-dashed",
               )}
             >
@@ -802,7 +830,6 @@ function Cover({ deck }: { deck: DeckRow }) {
           // See the note above the component for the key this had while a cover could be a file.
           src={image.src}
           loading="lazy"
-          decoding="async"
           onError={image.onError}
           className={cn(
             "size-full object-cover transition-transform duration-150",

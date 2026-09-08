@@ -58,6 +58,10 @@ const meta = {
     // this strip makes. Same `fn()` and same cast, for the same two reasons, and its `null` is
     // {@link OnTheTheoryList}'s too: a plan holds no cards, so both of these go together there.
     onAddMissing: fn() as (() => void) | null,
+    // The ordinary deck — one with a binder behind it — which is what every story on this page but
+    // {@link OnAVirtualDeck} is a shape of. The `false` arm takes the whole shortfall half of the
+    // band away, so it is written once, in the story that is about it.
+    tracksCollection: true,
   },
   // The strip wraps rather than truncates — at 1024px with the card pane docked beside the editor
   // this row is a few hundred pixels wide — so a story is rendered at the editor's own width
@@ -416,6 +420,55 @@ export const OnTheTheoryList: Story = {
     ).toBeInTheDocument();
     await expect(canvas.queryByRole("button", { name: "Pull from collection" })).toBeNull();
     await expect(canvas.queryByRole("button", { name: "Add missing to collection" })).toBeNull();
+  },
+};
+
+/**
+ * A **Virtual** deck — one the reader tracks without owning the cards, on MTGO, on Arena or in
+ * proxies (issue #401) — where the whole shortfall half of this band is absent.
+ *
+ * It is a different absence from {@link OnTheTheoryList} above, and the two are worth reading
+ * together. That one is about a *list*: a plan holds no cards, so two of the three answers to a
+ * shortfall have nothing to act on, and the wishlist press stays because wanting a card you do not
+ * own is what a plan is for. This one is about the *deck*: there is no collection behind it at
+ * all, so there is no shortfall to state — the count, all three presses **and the `All N owned.`
+ * fallback** go together. That last one is the reason this cannot be left to the arithmetic: every
+ * row reads `ownedQuantity: 0`, so a virtual deck would otherwise print `20 of 20 missing` over
+ * three buttons offering to move, record and shop for cardboard the reader never claimed to have.
+ *
+ * The rows below are the same shortfall {@link OnTheTheoryList} draws, and both callbacks are live
+ * — so nothing on screen is missing for the *theory* list's reason, which is what makes this a
+ * story about this prop.
+ *
+ * What stays is everything that is a fact about the list rather than about a binder: the pips row
+ * and all four charts.
+ */
+export const OnAVirtualDeck: Story = {
+  args: {
+    tracksCollection: false,
+    cards: [
+      deckCard(printing("mh2", "138"), { quantity: 4, ownedQuantity: 0 }),
+      deckCard(printing("fut", "153"), { quantity: 4, ownedQuantity: 0 }),
+      deckCard(printing("lea", "288"), { quantity: 12, ownedQuantity: 0 }),
+    ],
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // `20 of 20 missing` is what these rows would say, so this is the discriminating half. The
+    // `All N owned.` fallback is the other arm of the same block and is asserted where a fixture
+    // can actually reach it — `DeckStats.test.tsx`'s virtual block owns every copy for exactly
+    // that reason, because it is the worse of the two sentences to leave standing.
+    await expect(canvas.queryByText(/missing/)).toBeNull();
+    for (const name of [
+      "Pull from collection",
+      "Add missing to collection",
+      "Send missing to wishlist",
+    ]) {
+      await expect(canvas.queryByRole("button", { name })).toBeNull();
+    }
+    // …and the half that says this is not simply an empty band.
+    await expect(canvas.getByRole("group", { name: "Color pips" })).toBeInTheDocument();
+    await expect(canvas.getByRole("list", { name: "Mana curve" })).toBeInTheDocument();
   },
 };
 

@@ -129,16 +129,21 @@ export const FilingTheDeck: Story = {
 };
 
 /**
- * The notebook and the plan switch, both of which write and stick.
+ * The notebook and the deck's kind, both of which write and stick.
  *
  * `notes` is **not** `description` — a caption is what the gallery tile shows and this is the
  * long-form thing nothing else draws.
  *
- * And switching the theory list on **moves the live list into it**, in the same write: the deck
- * the reader built becomes the plan, the live list starts empty, and the copies it was holding
- * go back to every other deck. Only when the plan is empty, and only on the way on — a plan
- * somebody has already started is not something a re-press may pour the deck over. Switching it
- * off keeps every row: it hides a switch, it does not delete a list.
+ * And setting the kind to `Theory + Actual` **moves the live list into the plan**, in the same
+ * write: the deck the reader built becomes the plan, the live list starts empty, and the copies
+ * it was holding go back to every other deck. Only when the plan is empty, and only on the way
+ * on — a plan somebody has already started is not something a re-press may pour the deck over.
+ * Setting it back to `Regular` keeps every row: it hides a tab, it does not delete a list.
+ *
+ * **It was a `Theory deck` switch until issue #401 made the choice three-way.** What is on trial
+ * is unchanged — that a press writes and the panel comes back saying so — and the control is a
+ * `role="group"` of three `aria-pressed` buttons rather than a `switch`, because a deck is now a
+ * regular deck, a deck with a plan, or one whose cardboard the reader does not own.
  */
 export const NotesAndTheory: Story = {
   play: async ({ canvasElement }) => {
@@ -149,16 +154,73 @@ export const NotesAndTheory: Story = {
     // Blur, which is what commits a text field here.
     await userEvent.click(canvas.getByLabelText("Name"));
 
-    // A `switch`, named by the heading beside it *and* by its own visible word — `aria-label`
-    // would replace "Disabled" with something that does not contain it, which is the WCAG 2.5.3
-    // failure a control labelled by its own text exists to avoid.
-    const theory = canvas.getByRole("switch", { name: "Theory deck Disabled" });
-    await userEvent.click(theory);
+    // Named by the heading a reader can see rather than by an `aria-label` repeating it, and
+    // each button by its own visible word — the WCAG 2.5.3 rule a control labelled by its own
+    // text exists to keep.
+    const kind = canvas.getByRole("group", { name: "Deck kind" });
+    await expect(within(kind).getByRole("button", { name: "Regular" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await userEvent.click(within(kind).getByRole("button", { name: "Theory + Actual" }));
 
     await waitFor(async () => {
-      await expect(canvas.getByRole("switch", { name: "Theory deck Enabled" })).toBeChecked();
+      await expect(within(kind).getByRole("button", { name: "Theory + Actual" })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
     });
+    // The caption is the answer to the press, so it changes with it — and it is the one place
+    // the deck's cards being poured into the plan is said before it happens.
+    await expect(canvas.getByText(/starts the actual list empty/)).toBeInTheDocument();
     await expect(notes).toHaveValue("Swap the Bolts for Bowmasters when the sideboard arrives.");
+  },
+};
+
+/**
+ * **Deck 5, the Arena Brawl ladder list — a Virtual deck**, which is the third kind and the one
+ * this dialog answers with an *absence*.
+ *
+ * The reader tracks it without owning the cardboard, so there is nothing in their binder for it
+ * to be short of: the whole `Fill this deck from your collection` block is gone — heading, small
+ * print and the `Import missing cards from collection…` press alike — rather than drawn and
+ * greyed. **Absent, not greyed** is this panel's own standing rule, the same one that keeps
+ * `Clear theory list…` off a deck with no plan: a greyed control under a state the reader chose
+ * reads as something broken rather than as something absent.
+ *
+ * **`Empty a list` survives, and its wording is the thing to look at.** A deck the reader owns
+ * none of still has a hundred cards in it and can still be emptied — but it keeps *one* list and
+ * never meets the word `Actual`, which is half of a pair that only exists where there is a plan.
+ * So the button's noun comes from `listName` rather than from a literal, and there is exactly one
+ * of them.
+ *
+ * The seed is the fake's `virtualDeck`, whose deck has **no collection group at all** — which is
+ * where the isolation actually comes from rather than from a branch at each reader.
+ */
+export const VirtualDeck: Story = {
+  args: { deckId: 5 },
+  parameters: { fake: { seed: "virtualDeck" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(await canvas.findByLabelText("Name")).toHaveValue("Arena Brawl Ladder");
+
+    const kind = canvas.getByRole("group", { name: "Deck kind" });
+    await expect(within(kind).getByRole("button", { name: "Virtual" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    await expect(canvas.queryByText("Fill this deck from your collection")).toBeNull();
+    await expect(
+      canvas.queryByRole("button", { name: /Import missing cards from collection/ }),
+    ).toBeNull();
+
+    // And the section that stays: one press, and no `Clear theory list…` beside it — a virtual
+    // deck's `theoryEnabled` is `false` by construction, so that arm's existing gate is the whole
+    // of what keeps it away.
+    await expect(canvas.getByText("Empty a list")).toBeInTheDocument();
+    const clears = canvas.getAllByRole("button", { name: /^Clear / });
+    await expect(clears).toHaveLength(1);
   },
 };
 

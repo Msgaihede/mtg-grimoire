@@ -537,15 +537,35 @@ export interface MissingWrite {
  * charts. The second of those arrived with the pull (2026-09-03) and the third with the add
  * (2026-09-08) — they are `onPull` and `onAddMissing` below, the shortfall's other two answers,
  * and the argument for them living here rather than in the header is made on {@link Missing}.
+ *
+ * **A deck that owns nothing is short of nothing, and `tracksCollection` is where that is said**
+ * (2026-09-08, issue #401). A *Virtual* deck is one the reader tracks without owning the
+ * cardboard — MTGO, Arena, proxies — so every row's `ownedQuantity` is `0` and the whole shortfall
+ * half of this band would read `99 of 99 missing` over three buttons offering to move, record and
+ * shop for cards there is nothing to be short of. Absent rather than greyed, which is this
+ * feature's standing answer (`DeckSettingsDialog.tsx`, `DeckEditor.tsx`) — and **the `All N owned.`
+ * fallback goes with them**, because it is the same sentence read from the other end and the
+ * worst of the two to show a reader who owns none of it. The charts and the pips are untouched: a
+ * curve is a fact about the list, not about a binder.
  */
 export function DeckStats({
   cards,
   send,
   onPull,
   onAddMissing,
+  tracksCollection,
   separateXGroup = false,
 }: {
   cards: readonly DeckCard[];
+  /**
+   * The wishlist write, narrowed — see {@link MissingWrite}.
+   *
+   * **Taken whatever kind of deck this is, and read only when `tracksCollection` is true.** The
+   * type is unchanged on purpose: the host holds one mutation for the editor and a prop that
+   * disappeared with the kind would make every call site answer a second question about a write
+   * it is already holding. What a virtual deck gets is the button never drawn, so the mutation is
+   * never pressed.
+   */
   send: MissingWrite;
   /**
    * Opens the pull dialog. `null` where there is nothing to open — the theory list, whose rows
@@ -577,6 +597,28 @@ export function DeckStats({
    * both lists and has to answer for each.
    */
   onAddMissing: (() => void) | null;
+  /**
+   * Does this deck read the collection at all? `deckKind.ts`'s `tracksCollection(deck)`, answered
+   * by the host.
+   *
+   * `false` is a **Virtual** deck (issue #401) and takes the whole shortfall block with it — the
+   * `N of M missing` line, all three presses, and the `All N owned.` fallback. See the argument on
+   * the component above; what it is *not* is a second reading of `onPull`/`onAddMissing` being
+   * `null`, which is the **theory list** and a fact about which of a deck's two lists is on screen
+   * rather than about the deck. The two absences stack: a virtual deck keeps one live list and
+   * still draws none of this.
+   *
+   * **The boolean and not the deck**, and **not the helper either**: this component is handed
+   * facts and draws them, exactly as it is handed `separateXGroup` rather than reading
+   * `deck.separateXGroup`. `DeckEditor` answers it once and hands the same value to the four
+   * surfaces that owe a reader an owned readout, so they cannot come to disagree about whether
+   * this deck has a binder behind it.
+   *
+   * **Required rather than optional**, which is `onPull`'s own rule one prop over: a host that has
+   * not thought about it must not silently get the collection-reading case, because that is the
+   * arm that draws a shortfall over a deck the reader was never claiming to own.
+   */
+  tracksCollection: boolean;
   /**
    * The deck's own `separateXGroup`, and it has to be **the same value the grouping beside this
    * strip was built with**.
@@ -631,6 +673,12 @@ export function DeckStats({
   // `<body>` and the reader's next Tab restarts from the top of the app. The button is still
   // here when the write settles, so it takes the caret back — and only from `<body>`, because a
   // reader who has moved on in the meantime owns where they are.
+  //
+  // **Left unconditional on a virtual deck rather than gated**, because it already is: the ref is
+  // attached by a button {@link Missing} never draws there, so `sendRef.current` is `null` and the
+  // hand-back is a no-op. Adding `tracksCollection` to the guard would be a second statement of a
+  // fact the ref already carries — and the effect cannot be *skipped*, since a hook called from a
+  // branch is a hook called conditionally.
   const pending = send.isPending;
   useEffect(() => {
     if (wasPending.current && !pending && document.activeElement === document.body) {
@@ -649,20 +697,31 @@ export function DeckStats({
 
       <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
         <Pips pips={stats.pips} />
-        <Missing
-          stats={stats}
-          pending={send.isPending}
-          spent={spent}
-          onSend={() => {
-            setSentFor(stats.missing);
-            send.mutate();
-          }}
-          onPull={onPull}
-          onAddMissing={onAddMissing}
-          sendRef={sendRef}
-          added={added}
-          failure={failure}
-        />
+        {/* **The whole shortfall half, or none of it** — the count, the three presses, the
+            `All N owned.` fallback and the two answer lines are one component precisely so that
+            a deck with no binder behind it can be given none of them in one place. A virtual
+            deck's rows are live rows with `ownedQuantity: 0`, so every one of those sentences
+            would be true of the arithmetic and false about the reader.
+
+            The pips stay: what colours a deck wants is a fact about the list, and this row is
+            the only line the two share. It is `flex-wrap`, so losing the second cluster costs
+            the first nothing. */}
+        {tracksCollection && (
+          <Missing
+            stats={stats}
+            pending={send.isPending}
+            spent={spent}
+            onSend={() => {
+              setSentFor(stats.missing);
+              send.mutate();
+            }}
+            onPull={onPull}
+            onAddMissing={onAddMissing}
+            sendRef={sendRef}
+            added={added}
+            failure={failure}
+          />
+        )}
       </div>
 
       {stats.copies > 0 && (
@@ -745,6 +804,11 @@ function Pips({ pips }: { pips: Record<PipKey, number> }) {
  * **The third one costs this row nothing to hold**, which is why width was never the question:
  * the line is `flex-wrap`, so it wraps rather than overflowing, and that is the same property
  * that let the pull in rather than sending it to the header.
+ *
+ * **Nothing here knows about a virtual deck, and that is deliberate**: `tracksCollection` is read
+ * once at {@link DeckStats}, which draws this component or does not. A fourth arm inside these
+ * hundred lines would be a fourth way for the count, the buttons and the `All N owned.` fallback
+ * to come apart from each other — and the whole point is that they arrive and leave together.
  */
 function Missing({
   stats,

@@ -5,6 +5,9 @@ import type { DeckCard, DeckCategory, DeckRow } from "@/lib/ipc";
 import { openDropdown, pickOption } from "@/test-dropdown";
 import { AUTO_CATEGORY } from "./autoCategory";
 import type { DeckCoverPickerProps } from "./DeckCoverPicker";
+// The three kinds and the patch that spells them. Imported rather than respelled, so a story
+// cannot describe a kind in words the app does not use.
+import { DECK_KIND_HINT, deckKindPatch, type DeckKind } from "./deckKind";
 import { DeckSettingsForm, folderPaths, type DeckSettingsValue } from "./DeckSettingsForm";
 import { DEFAULT_FORMAT } from "./FormatSelect";
 import { useDeck } from "./useDeck";
@@ -25,6 +28,7 @@ import { pickerFormats, useFormatSpecs } from "./useFormatSpecs";
  */
 function Form({
   deckId,
+  kind,
   foldersUnread,
   onChange,
   onCommit,
@@ -32,6 +36,15 @@ function Form({
 }: {
   /** The deck to open on, or `null` for a deck that does not exist yet. */
   deckId: number | null;
+  /**
+   * Which of the three kinds to open the draft on, or absent to take the deck's own.
+   *
+   * A **story control** rather than a prop of the form — the kind is two fields of
+   * `DeckSettingsValue` like every other answer, and this is the host seeding them. It exists
+   * so the three kinds can be drawn side by side without three deck fixtures, which is what
+   * a wall of stories is for: the fake answers one row per deck and the kind is a draft value.
+   */
+  kind?: DeckKind;
   /** Draw the folder select as a list that could not be read. Set here rather than through a
    *  fault because `busy` would take the deck read and the format table with it. */
   foldersUnread: string | null;
@@ -56,6 +69,7 @@ function Form({
     <Body
       key={deck.deck?.id ?? "new"}
       row={deck.deck}
+      kind={kind}
       cards={deck.cards}
       // **`undefined` for the create shape**, which is what stops the "Add cards to" row being
       // drawn there at all: a deck that does not exist has no piles to offer. `useDeck(null)`
@@ -75,6 +89,7 @@ function Form({
 /** The host proper: the draft, the two lists the form takes ready-made, and the cover props. */
 function Body({
   row,
+  kind,
   cards,
   categories,
   canSetTheoryMarks,
@@ -84,6 +99,7 @@ function Body({
   onSubmit,
 }: {
   row: DeckRow | null;
+  kind: DeckKind | undefined;
   cards: readonly DeckCard[];
   categories: readonly DeckCategory[] | undefined;
   canSetTheoryMarks: boolean;
@@ -102,9 +118,16 @@ function Body({
     formatKey: row?.formatKey ?? DEFAULT_FORMAT,
     description: row?.description ?? "",
     notes: row?.notes ?? "",
-    theoryEnabled: row?.theoryEnabled ?? false,
+    // **The kind's two columns, from one answer.** A story that names a `kind` gets
+    // `deckKindPatch`'s pair; one that does not takes the deck's own. Spread from that
+    // function rather than written out as two ternaries, so no fixture here can seed the
+    // `theoryEnabled && virtualOnly` row `deckKind.ts` exists to keep out — which is exactly
+    // the shape a workbench value is likeliest to be given by hand.
+    ...(kind === undefined
+      ? { theoryEnabled: row?.theoryEnabled ?? false, virtualOnly: row?.virtualOnly ?? false }
+      : deckKindPatch(kind)),
     // All three on for a deck that does not exist, which is the columns' own `DEFAULT 1`. The
-    // three rows they draw appear only under a switched-on theory list.
+    // three rows they draw appear only where the kind group above reads `Theory + Actual`.
     theoryMarkExact: row?.theoryMarkExact ?? true,
     theoryMarkName: row?.theoryMarkName ?? true,
     theoryMarkUnplanned: row?.theoryMarkUnplanned ?? true,
@@ -341,13 +364,18 @@ export const EveryChangeAndEveryCommit: Story = {
   play: async ({ args, canvasElement }) => {
     const canvas = within(canvasElement);
 
-    // A switch settles in one press, so it never commits — it only changes. Pressed first, so
+    // A press settles in one act, so it never commits — it only changes. Pressed first, so
     // that "has not committed" is still a claim about the whole story rather than about a spy
     // somebody reset.
     await canvas.findByLabelText("Name");
-    await userEvent.click(canvas.getByRole("switch", { name: /Theory deck/ }));
+    await userEvent.click(canvas.getByRole("button", { name: "Theory + Actual" }));
 
-    await expect(args.onChange).toHaveBeenLastCalledWith({ theoryEnabled: true });
+    // **Both columns on one press**, which is `deckKindPatch`'s whole rule: naming only the
+    // one that changed would leave the other standing.
+    await expect(args.onChange).toHaveBeenLastCalledWith({
+      theoryEnabled: true,
+      virtualOnly: false,
+    });
     await expect(args.onCommit).not.toHaveBeenCalled();
 
     // A text field does not settle in one act, which is the whole reason for the second
@@ -380,5 +408,93 @@ export const FoldersUnread: Story = {
       await canvas.findByText("Could not read the folders — Database is busy."),
     ).toBeVisible();
     await expect(canvas.getByRole("button", { name: "Folder" })).toBeDisabled();
+  },
+};
+
+/**
+ * **The kind is one control with three exclusive presses, and this is the one every deck is born
+ * as.** It was a `Theory deck` switch until 2026-09-08, when `virtual` became a third kind
+ * ([#401](https://github.com/Msgaihede/mtg-grimoire/issues/401)) and the question stopped being a
+ * yes-or-no one.
+ *
+ * `role="group"` with `aria-pressed` per button rather than a radiogroup — the scanner's
+ * `ControlsPanel` grammar: these are toggles that happen to be exclusive, and a radio's roving
+ * tab stop would put the reader inside a three-way keyboard mode to change one word. The caption
+ * under the group is the **selected** kind's line and swaps with the press; three sentences at
+ * once would be a paragraph about a choice rather than the meaning of the one that was made.
+ */
+export const KindRegular: Story = {
+  args: { kind: "regular" },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await canvas.findByLabelText("Name");
+    await expect(canvas.getByRole("group", { name: "Deck kind" })).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: "Regular" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await expect(canvas.getByText(DECK_KIND_HINT.regular)).toBeVisible();
+    // No plan, so no mark rows — the same gate the switch had, reached by a different control.
+    await expect(canvas.queryByRole("switch", { name: /matching printing/i })).toBeNull();
+  },
+};
+
+/**
+ * **`Theory + Actual`, and the three mark rows that come with it.**
+ *
+ * They are indented under the group because they are one subject: a mark is the live list read
+ * *against* the plan, so a deck with no plan has nothing for any of them to compare against. The
+ * words are the gallery tile's badge — one deck named one way wherever it is drawn.
+ */
+export const KindTheoryAndActual: Story = {
+  args: { kind: "theory" },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await canvas.findByLabelText("Name");
+    await expect(canvas.getByRole("button", { name: "Theory + Actual" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await expect(canvas.getByText(DECK_KIND_HINT.theory)).toBeVisible();
+    await expect(canvas.getByRole("switch", { name: /matching printing/i })).toBeInTheDocument();
+    await expect(canvas.getByRole("switch", { name: /different printing/i })).toBeInTheDocument();
+    await expect(
+      canvas.getByRole("switch", { name: /not in the theory list/i }),
+    ).toBeInTheDocument();
+  },
+};
+
+/**
+ * **`Virtual` — a deck the reader tracks without owning the cardboard**: MTGO, Arena, a proxy
+ * pile. No owned count, no missing count, no wishlist, no Collection tab in the deck's own
+ * search panel.
+ *
+ * The mark rows are gone here for the same reason they are gone on `Regular` and through the
+ * same condition: `deckKindPatch` clears `theoryEnabled` on every press that is not
+ * `Theory + Actual`, so the form needs no arm of its own for this kind.
+ */
+export const KindVirtual: Story = {
+  args: { kind: "virtual" },
+  play: async ({ args, canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await canvas.findByLabelText("Name");
+    await expect(canvas.getByRole("button", { name: "Virtual" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await expect(canvas.getByText(DECK_KIND_HINT.virtual)).toBeVisible();
+    await expect(canvas.queryByRole("switch", { name: /matching printing/i })).toBeNull();
+
+    // Back to the plan, and both columns move on the one press — the caption follows.
+    await userEvent.click(canvas.getByRole("button", { name: "Theory + Actual" }));
+
+    await expect(args.onChange).toHaveBeenLastCalledWith({
+      theoryEnabled: true,
+      virtualOnly: false,
+    });
+    await expect(canvas.getByText(DECK_KIND_HINT.theory)).toBeVisible();
   },
 };

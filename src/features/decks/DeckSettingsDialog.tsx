@@ -4,7 +4,9 @@ import { ipc, ipcError, type DeckVariant } from "@/lib/ipc";
 import { writeFailure } from "@/lib/writes";
 import { Dialog } from "@/components/Dialog";
 import { ClearDeck } from "./ClearDeck";
+import { deckKind, deckKindPatch, tracksCollection } from "./deckKind";
 import { DeckSettingsForm, folderPaths, type DeckSettingsValue } from "./DeckSettingsForm";
+import { listName } from "./listNames";
 import { RowAction } from "./metaRows";
 import { PullFromCollectionDialog } from "./PullFromCollectionDialog";
 import { useDeck, usePullPlan } from "./useDeck";
@@ -140,6 +142,27 @@ function Settings({ deckId }: { deckId: number }) {
   const gone = !loading && !deck.query.isError && deck.query.data === null;
 
   /**
+   * Does this deck read the reader's collection at all — and therefore, does this screen draw
+   * anything collection-shaped?
+   *
+   * **One boolean for three consequences**, because they are one fact rather than three: the
+   * pull plan is not asked for, the `Fill this deck from your collection` section is not drawn,
+   * and the dialog it opens is not mounted. Spelling `!row.virtualOnly` at each of the three
+   * would be three places for a fourth kind that also owns nothing to be missed at.
+   * {@link tracksCollection} is the app-wide predicate and this is one of ~ten callers; it takes
+   * the flags rather than a kind, precisely so a site like this one asks *may I draw an owned
+   * count* rather than *which of the three is it*.
+   *
+   * **`row !== null` is folded in on purpose and is not merely a null check.** It was the pull
+   * plan's whole gate before this — `deck_pull_plan` refuses a deck that is not there rather
+   * than answering `[]` — and a virtual deck is the same refusal one axis over: Rust refuses
+   * `deck_pull_plan` for one **by name** (`deck::VIRTUAL_HOLDS_NOTHING`), so a query left
+   * running would put a real error on screen under a section that has no business being there.
+   * Two reasons not to ask, one gate.
+   */
+  const collects = row !== null && tracksCollection(row);
+
+  /**
    * Which list a destructive question is up about, or `null` while the two buttons are drawn.
    *
    * **One piece of state rather than a flag each**, so "only one question at a time" is
@@ -168,20 +191,23 @@ function Settings({ deckId }: { deckId: number }) {
    * button's own **name** is a statement about the plan, so the plan has to have been asked for
    * before the press rather than because of it.
    *
-   * **`row !== null` is the rest of it, and it is the section's own `{row && …}` said one render
-   * earlier.** `useDeck` answers `null` both while `deck_get` is in flight and when it came back
-   * empty, and `deck_pull_plan` refuses a deck that is not there rather than answering `[]` — so
-   * without this a dialog opened on a deck another view has deleted, or one whose read was
-   * refused, spends the widest query on this screen on a question that can only be refused in
-   * turn. What it costs is that the two reads run in series rather than side by side, which is the
-   * right way round: this one is behind a button the reader has to be *shown* first, and the
-   * section it is drawn in does not exist until the same `row` arrives.
+   * **{@link collects} is the rest of it, and it is the section's own `{collects && …}` said one
+   * render earlier.** It carries two refusals rather than one, and they are the same refusal.
+   * `useDeck` answers `null` both while `deck_get` is in flight and when it came back empty, and
+   * `deck_pull_plan` refuses a deck that is not there rather than answering `[]` — so without
+   * this a dialog opened on a deck another view has deleted, or one whose read was refused,
+   * spends the widest query on this screen on a question that can only be refused in turn. A
+   * **virtual** deck is refused by name for the second reason, so the same gate keeps a real
+   * error message off a screen that draws no section for it. What it costs is that the two reads
+   * run in series rather than side by side, which is the right way round: this one is behind a
+   * button the reader has to be *shown* first, and the section it is drawn in does not exist
+   * until the same `row` arrives.
    *
    * The key is the deck's, under the `["decks"]` root, so this is the same cached answer the
    * editor's own entrance draws — two entrances to one dialog can never show two plans for one
    * deck, and the pull itself invalidates it.
    */
-  const pullPlan = usePullPlan(deckId, row !== null);
+  const pullPlan = usePullPlan(deckId, collects);
 
   /**
    * **Nothing to import, as distinct from nothing known yet** — and the difference is what keeps
@@ -346,7 +372,24 @@ function Settings({ deckId }: { deckId: number }) {
     // One write and one field: the game narrows the format list on the next render and touches
     // `format_key` neither here nor in Rust.
     if (patch.gameKey !== undefined) update({ gameKey: patch.gameKey });
-    if (patch.theoryEnabled !== undefined) update({ theoryEnabled: patch.theoryEnabled });
+    // **The deck's kind is one write carrying both columns, normalised on the way out.**
+    // `DeckSettingsForm`'s three-way group hands back `deckKindPatch`'s pair, so both fields
+    // arrive together and that is the ordinary path; the round trip through `deckKind` is what
+    // makes it a *guarantee* rather than a convention — no combination of a half patch and the
+    // row it is patching can leave the `theoryEnabled && virtualOnly` row `deckKind.ts` exists
+    // to keep out of the database. **Two `update` calls were the other shape and are refused**:
+    // that is two transactions, two history lines for one press, and one moment in between in
+    // which the deck is neither kind — and switching *to* theory pours the live list into the
+    // plan, so the moment in between is one a card write could land in.
+    if (patch.theoryEnabled !== undefined || patch.virtualOnly !== undefined)
+      update(
+        deckKindPatch(
+          deckKind({
+            theoryEnabled: patch.theoryEnabled ?? row?.theoryEnabled ?? false,
+            virtualOnly: patch.virtualOnly ?? row?.virtualOnly ?? false,
+          }),
+        ),
+      );
     // The three marks, relayed one field at a time for the reason there are three of them: blue
     // without green is a real answer and so is red alone, so a write that carried the set would
     // make them a single ordered control the columns deliberately are not. Unlike the switch
@@ -408,6 +451,11 @@ function Settings({ deckId }: { deckId: number }) {
               description: description.value,
               notes: notes.value,
               theoryEnabled: row.theoryEnabled,
+              // The other half of the kind. Passed even though this host reads it only through
+              // {@link collects}: the value shape is the *form's*, one shape for both hosts,
+              // and `deckKind(value)` — which is what the group draws itself from — needs the
+              // pair rather than either column.
+              virtualOnly: row.virtualOnly,
               theoryMarkExact: row.theoryMarkExact,
               theoryMarkName: row.theoryMarkName,
               theoryMarkUnplanned: row.theoryMarkUnplanned,
@@ -469,31 +517,45 @@ function Settings({ deckId }: { deckId: number }) {
 
               **No `cardName`**, which is the whole of what makes this the deck-wide press: the
               per-card entrance narrows the rows it hands over and passes a name so the subtitle
-              says so, and this one hands over the plan entire. */}
-          <div className="mt-5 border-t border-border pt-4">
-            <h3 className="text-xs">Fill this deck from your collection</h3>
-            <p className="mt-1 text-[0.6875rem] leading-relaxed text-dim">
-              Copies you already own move into this deck&rsquo;s folder. Nothing is added to the
-              list and nothing is bought.
-            </p>
-            {/* The small print states the one thing a reader standing here has not seen: this
-                writes no `deck_cards` row, so a 4-copy line the deck is 3 short of stays a
-                4-copy line. The pull's own footer says it too, and that footer is behind the
-                press. */}
-            <div className="mt-2.5">
-              {/* The reason travels in the *name* for the Clear buttons' reason below, and the
-                  words are the visible ones for the same one. */}
-              <RowAction
-                ref={importTrigger}
-                disabled={nothingToPull}
-                onClick={() => setImporting(true)}
-              >
-                {nothingToPull
-                  ? "Import missing cards from collection… (nothing to import)"
-                  : "Import missing cards from collection…"}
-              </RowAction>
+              says so, and this one hands over the plan entire.
+
+              **A Virtual deck draws none of this, and *absent* is the whole of the rule** (issue
+              #401). Not a greyed button, not a sentence saying the deck owns nothing: a greyed
+              control under a state the reader chose reads as something broken rather than as
+              something absent, which is the argument the `Clear theory list…` arm below has
+              made since it shipped, met here for a second reason. The deck has no
+              `collection_folders` group at all, so there is nothing this press could move and no
+              shortfall for it to be measured against — and Rust refuses `deck_pull_plan` and
+              `deck_pull` for one by name, so a drawn-but-dead section would be the one place on
+              this screen a reader could produce a real error message on purpose. The way to get
+              the section back is the kind control a few rows up, which is where the fact lives.
+              */}
+          {collects && (
+            <div className="mt-5 border-t border-border pt-4">
+              <h3 className="text-xs">Fill this deck from your collection</h3>
+              <p className="mt-1 text-[0.6875rem] leading-relaxed text-dim">
+                Copies you already own move into this deck&rsquo;s folder. Nothing is added to the
+                list and nothing is bought.
+              </p>
+              {/* The small print states the one thing a reader standing here has not seen: this
+                  writes no `deck_cards` row, so a 4-copy line the deck is 3 short of stays a
+                  4-copy line. The pull's own footer says it too, and that footer is behind the
+                  press. */}
+              <div className="mt-2.5">
+                {/* The reason travels in the *name* for the Clear buttons' reason below, and the
+                    words are the visible ones for the same one. */}
+                <RowAction
+                  ref={importTrigger}
+                  disabled={nothingToPull}
+                  onClick={() => setImporting(true)}
+                >
+                  {nothingToPull
+                    ? "Import missing cards from collection… (nothing to import)"
+                    : "Import missing cards from collection…"}
+                </RowAction>
+              </div>
             </div>
-          </div>
+          )}
 
           {/* **Emptying a whole list is drawn here because this is the deck's cheapest
               screen, and that is an argument rather than a placement.** The other candidate
@@ -508,12 +570,19 @@ function Settings({ deckId }: { deckId: number }) {
               owns no mutation and reaches no backend precisely so that it can be drawn there,
               and a destructive control is the one thing that cannot follow it.
 
-              **The actual button is unconditional and the theory one is not**, because the two
-              lists are not peers. Every deck has an actual list. A deck with `theoryEnabled` off
-              has no plan at all, so a greyed `Clear theory list…` under it would be a control
-              about a feature the reader has not turned on — which reads as something broken
-              rather than as something absent, on a screen whose own switch is the way to turn
-              it on. */}
+              **The first button is unconditional and the theory one is not**, because the two
+              lists are not peers. Every deck has one list — a Virtual deck included, which is
+              why this whole section survives on one where the section above it does not: a deck
+              the reader owns none of still has cards in it and can still be emptied. A deck with
+              `theoryEnabled` off has no plan at all, so a greyed `Clear theory list…` under it
+              would be a control about a feature the reader has not turned on — which reads as
+              something broken rather than as something absent, on a screen whose own switch is
+              the way to turn it on.
+
+              **What the first button is *called* is not unconditional**, and that is the one
+              thing about this section a Virtual deck does move: `Actual` is half of a pair the
+              reader only meets where there is a plan, so the word comes from {@link listName}
+              rather than from a literal here. See the row itself. */}
           <div className="mt-5 border-t border-border pt-4">
             <h3 className="text-xs">Empty a list</h3>
             <p className="mt-1 text-[0.6875rem] leading-relaxed text-dim">
@@ -526,16 +595,35 @@ function Settings({ deckId }: { deckId: number }) {
                     the bare label reads to a screen reader — and to a test — as a control
                     that is missing rather than one that has nothing to do. It is the visible
                     words that carry it: `RowAction` is a row's small print and takes no label
-                    of its own, and a sighted reader is owed the same sentence. */}
+                    of its own, and a sighted reader is owed the same sentence.
+
+                    **The noun is {@link listName}'s, never a literal, and that is what makes
+                    this row honest on a Virtual deck.** `Actual` is one half of a pair — it
+                    means *the list you have actually sleeved up, as against the plan* — and a
+                    virtual deck has no plan and no such pair, so a button offering to clear its
+                    "actual list" would be naming a distinction the deck does not draw and the
+                    reader has never been shown. `live` is still the stored variant on such a
+                    deck (see `DeckRow.virtualOnly`), so the *argument* is unchanged and only the
+                    prose moves — which is the same join this helper was extracted to be. */}
                 <RowAction
                   ref={liveTrigger}
                   destructive
                   disabled={liveCount === 0 || deck.clearDeck.isPending}
                   onClick={() => setConfirming("live")}
                 >
-                  {liveCount === 0 ? "Clear actual list… (already empty)" : "Clear actual list…"}
+                  {/* One expression and therefore one text node: two adjacent children would
+                      be two, and the accessible-name algorithm trims each contribution before
+                      joining — the `Missing2` failure this repo has already had once. */}
+                  {`Clear ${listName("live", { virtual: !collects })}…` +
+                    (liveCount === 0 ? " (already empty)" : "")}
                 </RowAction>
 
+                {/* **Gated on the plan, which is already the whole of the virtual gate** —
+                    `theory_enabled` and `virtual_only` are two columns spelling one three-way
+                    choice, so a virtual deck's `theoryEnabled` is `false` by construction and
+                    Rust writes the pair defensively (`deckKind.ts`). A second `collects` test
+                    here would be a redundant guard that reads as though the two facts were
+                    independent, which is exactly the misreading `deckKind.ts` exists to stop. */}
                 {row.theoryEnabled && (
                   <RowAction
                     ref={theoryTrigger}
@@ -543,9 +631,8 @@ function Settings({ deckId }: { deckId: number }) {
                     disabled={theoryCount === 0 || deck.clearDeck.isPending}
                     onClick={() => setConfirming("theory")}
                   >
-                    {theoryCount === 0
-                      ? "Clear theory list… (already empty)"
-                      : "Clear theory list…"}
+                    {`Clear ${listName("theory")}…` +
+                      (theoryCount === 0 ? " (already empty)" : "")}
                   </RowAction>
                 )}
               </div>
@@ -557,6 +644,10 @@ function Settings({ deckId }: { deckId: number }) {
                  what `ClearDeck` taking `pending` rather than closing itself is for. */
               <ClearDeck
                 variant={asking}
+                // The same answer `collects` is drawn from, inverted at the one call site that
+                // needs it that way round: this asks *does this deck keep cardboard*, and the
+                // confirmation's second sentence is a promise about where that cardboard goes.
+                virtual={!collects}
                 cardCount={asking === "theory" ? theoryCount : liveCount}
                 // The list that is *not* being emptied, which is the reassurance the sentence
                 // is there to give — so it is the other one of the same pair, never a repeat
@@ -600,19 +691,31 @@ function Settings({ deckId }: { deckId: number }) {
               one `onClose` because where the caret lands is the *opener's* half of the contract.
               The trigger is drawn over rather than replaced — unlike the clear's, which the
               question takes the place of — so it is in the tree on this very render and needs no
-              effect to reach it. */}
-          <PullFromCollectionDialog
-            open={importing}
-            deckName={row.name}
-            rows={pullPlan.data ?? null}
-            loading={pullPlan.isLoading}
-            readError={pullPlan.isError ? ipcError(pullPlan.error) : null}
-            pull={deck.pullFromCollection}
-            onClose={() => {
-              setImporting(false);
-              importTrigger.current?.focus();
-            }}
-          />
+              effect to reach it.
+
+              **Behind the same {@link collects} gate as the section that opens it, and that is
+              belt as well as braces on purpose.** `importing` cannot be set true on a Virtual
+              deck because the only thing that sets it is a button that is not drawn — so this
+              could have been left mounted and closed. It is not, for two reasons that both
+              outlive today's wiring: the pull is fed `pullPlan`, which this deck deliberately
+              never asks for, so a mounted panel would be one whose `rows` and `readError` are
+              permanently the answers to a question nobody put; and *unreachable* is a property
+              of one call site, where *not mounted* is a property of the tree. A second entrance
+              added to this file later inherits the second and not the first. */}
+          {collects && (
+            <PullFromCollectionDialog
+              open={importing}
+              deckName={row.name}
+              rows={pullPlan.data ?? null}
+              loading={pullPlan.isLoading}
+              readError={pullPlan.isError ? ipcError(pullPlan.error) : null}
+              pull={deck.pullFromCollection}
+              onClose={() => {
+                setImporting(false);
+                importTrigger.current?.focus();
+              }}
+            />
+          )}
         </>
       )}
     </div>

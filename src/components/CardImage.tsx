@@ -61,6 +61,19 @@ import { IMAGE_STALL_LIMIT, imageStallDeadlineMs } from "@/lib/images";
  * every card picture in the app passes through, and it owns the `<img>` and its `key`, which
  * is the whole of what asking again requires.
  *
+ * **The fourth rule, and it is the one the third turned out not to cover: a picture that
+ * arrives is still not a picture that is drawn.** The watchdog above asks again when a frame
+ * has heard *nothing*, and its first question is `el.complete && el.naturalWidth > 0` —
+ * whether the picture arrived. The failure readers kept reporting after it shipped answers
+ * that question **yes**: the bytes are decoded and in memory, and the frame is empty anyway,
+ * because `decoding="async"` let the browser present the frame first and then lost the paint.
+ * So `decoding` is a default this component sets rather than a prop its callers pass; the
+ * measurements are at the attribute.
+ *
+ * The two failures look identical to a reader and are opposites underneath — one is a picture
+ * that never came, the other a picture that came and was not drawn — which is why the first
+ * fix could not have caught the second, and why both live here.
+ *
  * What is deliberately *not* here is anything else. No backoff (that is `useImageRetry`, whose
  * `src` this takes), no frame, no fallback, no aspect ratio — the five surfaces that draw
  * card art disagree about all of those, and agree only about these.
@@ -128,6 +141,52 @@ export function CardImage({ src, alt, onError, onLoad, ...rest }: CardImageProps
     <img
       key={url}
       draggable={false}
+      // **The fourth rule, and the one that actually empties a wall: a picture decoded after
+      // its frame was painted is never painted at all.**
+      //
+      // `decoding="async"` is a promise the page makes *to the browser* — "you may present
+      // this frame before this image is decoded, and paint it whenever the decode lands".
+      // Every call site made it, for the ordinary reason: a screenful of card art is a dozen
+      // 672×936 WEBPs arriving at once and none of them should hold up the scroll. What it
+      // buys in principle it does not buy here, and what it costs is a tile that stays empty
+      // for the rest of the session.
+      //
+      // Measured in the shipped window on 2026-09-08 (debug build, 1920×1080 client, the
+      // reader's own corpus and image cache), by driving real `mouseWheel` bursts down the
+      // search wall and reading the **screen's own framebuffer** rather than a screenshot:
+      // frames whose `<img>` reported `complete === true` and `naturalWidth === 672` were
+      // drawn as flat surface colour — `sd 0`, `mean 24.09`, the exact colour of the empty
+      // frame underneath — and *stayed* that way six seconds later with nothing touching the
+      // page. Three runs, blanks by pass 3, 4 and 11. They come in contiguous right-hand
+      // blocks that break at the same column on consecutive rows, which is a raster region
+      // and not anything the app can see. With `"sync"`: **432 tile-measurements over 40
+      // passes, zero**.
+      //
+      // **Why the watchdog above cannot help, and this is the part worth remembering.** Its
+      // first guard is `el.complete && el.naturalWidth > 0` — the honest answer to "did this
+      // picture arrive", and in this failure the answer is *yes*. Nothing arrived late and
+      // nothing was refused; the bytes are decoded and in memory. So the silence watchdog,
+      // `useImageRetry`, the console and the error log are all correct and all blind, which
+      // is exactly why this outlived the fix that was supposed to be it.
+      //
+      // **`"sync"` rather than dropping the attribute.** Absent, the value is `auto` and the
+      // choice is Chromium's heuristic — which measured clean too, over a smaller sample, and
+      // is free to pick the async path again under memory pressure or for a bigger image. The
+      // bug is that the deferred-presentation step loses its paint; `"sync"` is the one value
+      // that removes the step rather than betting on the heuristic avoiding it.
+      //
+      // **It is not the trade it sounds like.** Same gesture, same build, 60 wheel bursts:
+      // `sync` 47 long tasks / 2 985 ms / worst **79 ms** against `auto`'s 48 / 3 288 ms /
+      // worst **128 ms**, with `TaskDuration` 12.34 s against 12.61 s. Inside the noise, and
+      // certainly not slower — a WEBP this size decodes in well under a frame, and the decode
+      // was always going to happen. What `async` bought was never the decode; it was the
+      // right to show the frame without it.
+      //
+      // Before the spread, so a caller can still override it, and here rather than at the ten
+      // call sites that used to pass `decoding="async"` by hand — `draggable` above is in this
+      // position for the same reason, and it is the reason the two of them are: a rule every
+      // caller has to remember is a rule some caller forgets, and this one forgets silently.
+      decoding="sync"
       src={url}
       alt={alt}
       onLoad={(event) => {

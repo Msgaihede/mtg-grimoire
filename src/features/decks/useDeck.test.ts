@@ -91,6 +91,7 @@ const DECK: DeckRow = {
   folderId: null,
   notes: null,
   theoryEnabled: false,
+  virtualOnly: false,
   theoryMarkExact: true,
   theoryMarkName: true,
   theoryMarkUnplanned: true,
@@ -1083,6 +1084,38 @@ describe("useDeck", () => {
 
     expect(deckToCollection).toHaveBeenCalledWith(BOLT.id, 3);
     expect(deckSetCardQuantity).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **A virtual deck takes the absolute write, and this was a live defect rather than a
+   * hypothetical** (2026-09-08, issue #401).
+   *
+   * A virtual deck keeps its rows in `live` on purpose — the gallery's card count and colour bar
+   * both read that variant — so it satisfies the `variant === "live"` condition on the only list
+   * it has, and `collection_alloc::deck_to_collection` then refuses it by name. Every removal in
+   * the editor reaches this one route, so without the fourth condition the stepper's zero,
+   * `Remove card` and the remove tray would all have failed on a deck the reader never owned a
+   * card of.
+   *
+   * **`held` is supplied deliberately**, which is the whole point: the caller answers "where the
+   * copies are" exactly as it does for an ordinary deck, and the route refuses on the *deck*
+   * instead. A test that simply left `held` out would pass against the broken build.
+   */
+  it("cuts a virtual deck's row through the absolute write, never through the collection", async () => {
+    deckGet.mockResolvedValue({ ...DETAIL, deck: { ...DECK, virtualOnly: true } });
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.cards).toEqual([BOLT]));
+
+    await result.current.setQuantity.mutateAsync({
+      cardId: "p1",
+      categoryId: MAIN.id,
+      finish: null,
+      quantity: 1,
+      held: { deckCardId: BOLT.id, quantity: BOLT.quantity },
+    });
+
+    expect(deckSetCardQuantity).toHaveBeenCalledWith(4, "p1", MAIN.id, "live", null, 1);
+    expect(deckToCollection).not.toHaveBeenCalled();
   });
 
   /**
