@@ -1,0 +1,107 @@
+import { useEffect, useLayoutEffect, useRef, type JSX, type RefObject } from "react";
+import type { ScannerCorner, ScannerVerdict } from "./types";
+
+/** The smoothed quad, once it has held still. */
+const QUAD = "#5ed69a";
+/** This frame's own detection, behind it. Faint red so the gap between the two reads as jitter. */
+const RAW = "#e88";
+/** The corner the rectifier treats as top-left, so a 180° flip is visible live. */
+const CORNER = "#e05ad0";
+
+/**
+ * The box over the video — the one part of the scanner that has to keep up with the camera.
+ *
+ * **The detector answers around nine times a second and the camera runs at thirty to sixty, so
+ * the overlay redraws on `requestAnimationFrame` and reads the verdict from a ref.** Drawing on
+ * a React render instead would tie the box to the detector's rate and make every answer a
+ * commit; reading through a ref means the parent's re-render costs one assignment and the
+ * canvas keeps painting at the display's rate either way. Nothing here ever calls `setState`.
+ *
+ * **The quad is in the coordinates of the frame that was *sent*, not the video's**, which is
+ * smaller by the send slider's scale — hence `sx`/`sy` off `verdict.frame`. Scaling here rather
+ * than in the crate keeps the wire payload independent of how big the preview happens to be.
+ *
+ * No unit test: jsdom's canvas has no 2D context, so every line below is a no-op there and a
+ * test could only assert that the calls were made. The live pass is what proves this one.
+ */
+export function Overlay({
+  videoRef,
+  verdict,
+}: {
+  videoRef: RefObject<HTMLVideoElement | null>;
+  verdict: ScannerVerdict | null;
+}): JSX.Element {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const verdictRef = useRef(verdict);
+  // A layout effect, not an assignment during render: the ref has to be current before the next
+  // animation frame reads it, and `useEffect` alone is not guaranteed to run before that.
+  useLayoutEffect(() => {
+    verdictRef.current = verdict;
+  });
+
+  useEffect(() => {
+    let raf = 0;
+
+    function draw() {
+      raf = requestAnimationFrame(draw);
+      const canvas = canvasRef.current;
+      const video = videoRef.current;
+      if (canvas === null || video === null) return;
+
+      // Sized to the video's own pixels rather than to the element's CSS box: the canvas is
+      // stretched to fit by `h-full w-full`, so one coordinate system serves every layout.
+      // Assigning either dimension clears the canvas, so only do it when it actually changed.
+      if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+      }
+      const ctx = canvas.getContext("2d");
+      if (ctx === null || canvas.width === 0 || canvas.height === 0) return;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      const v = verdictRef.current;
+      if (v === null || v.frame.w === 0 || v.frame.h === 0) return;
+      const sx = canvas.width / v.frame.w;
+      const sy = canvas.height / v.frame.h;
+
+      if (v.quad_raw !== null) {
+        ctx.save();
+        ctx.setLineDash([4, 6]);
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = RAW;
+        trace(ctx, v.quad_raw, sx, sy);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      if (v.quad !== null) {
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = QUAD;
+        trace(ctx, v.quad, sx, sy);
+        ctx.stroke();
+        const first = v.quad[0];
+        if (first !== undefined) {
+          ctx.fillStyle = CORNER;
+          ctx.beginPath();
+          ctx.arc(first[0] * sx, first[1] * sy, 6, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    }
+
+    raf = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(raf);
+  }, [videoRef]);
+
+  return (
+    // Decorative: the headline and the panels beside the video say everything a screen reader
+    // needs, and a box drawn around a card has no description an `alt` could usefully carry.
+    <canvas ref={canvasRef} aria-hidden="true" className="absolute inset-0 h-full w-full" />
+  );
+}
+
+function trace(ctx: CanvasRenderingContext2D, quad: ScannerCorner[], sx: number, sy: number): void {
+  ctx.beginPath();
+  quad.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x * sx, y * sy) : ctx.lineTo(x * sx, y * sy)));
+  ctx.closePath();
+}
