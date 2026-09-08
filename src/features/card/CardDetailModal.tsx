@@ -118,8 +118,10 @@ import { useCardMenuDeps } from "./useCardMenuDeps";
  * how big a panel to ask for out of that glass is a question about the glass. All three folds are
  * spelled out whole — Tailwind scans source text for whole class names and an interpolated one
  * emits no rule at all — and all three are `min-[…]`, which is not a style choice; see
- * {@link PANEL_SIZE}. 640 is the same fold `Dialog`'s own `p-0 sm:p-6` uses, spelled the other
- * way because that file has no arbitrary variant on padding to be out-ordered by.
+ * {@link PANEL_SIZE}. 640 is the same fold `Dialog`'s own `p-0 sm:px-6 sm:py-[max(1.5rem,5vh)]`
+ * uses, spelled the other way because that file has no arbitrary *variant* on padding to be
+ * out-ordered by — an arbitrary **value** behind a named variant, which is what the scrim's
+ * vertical inset is, is a different thing and orders fine.
  *
  * ## The two clamps are what keep the inside honest
  *
@@ -182,9 +184,18 @@ import { useCardMenuDeps } from "./useCardMenuDeps";
  * The panel's ceiling from the 640 rung up: **825px, or 80% of the window when that is less.**
  *
  * **Not on the phone rung, and that is the point of the variant.** Below 640 the panel is
- * full-bleed by design — `Dialog`'s own `p-0 sm:p-6`, a 16px inset and rounded corners on a
- * 358px panel being chrome nobody chose — so a ceiling there would put the glass back and undo
- * exactly that. The cap belongs to the widths where the panel is a card floating over something.
+ * full-bleed by design — `Dialog`'s own `p-0`, a 16px inset and rounded corners on a 358px panel
+ * being chrome nobody chose — so a ceiling there would put the glass back and undo exactly that.
+ * The cap belongs to the widths where the panel is a card floating over something.
+ *
+ * **The shell grew a ceiling of its own on 2026-09-08 and this one still binds, which is not an
+ * accident of ordering.** `Dialog`'s scrim is `sm:py-[max(1.5rem,5vh)]`, so above the fold every
+ * dialog in the app is clamped to 90vh — but it says that as an **inset** rather than as a
+ * `max-h` on the panel, precisely so it cannot enter the cascade against this line. Had it been a
+ * `sm:max-h-…`, Tailwind's named-variant group is emitted *after* the arbitrary `min-[…]` one
+ * (the trap {@link PANEL_SIZE} opens with), so the shell would have replaced this ceiling at every
+ * width ≥640 without a word. As an inset the two compose: `min(825px,80vh)` is tighter than 90vh
+ * at every window, so it is still the one that decides and every figure below is unmoved.
  *
  * **It is also the ceiling the floors below are written against.** `min-height` beats
  * `max-height` in the cascade, so a floor above this cap would win and the ceiling would read as
@@ -192,8 +203,8 @@ import { useCardMenuDeps } from "./useCardMenuDeps";
  * floor therefore carries the same two terms, and none of them can outrank this.
  *
  * The `100%` those floors used to carry is gone rather than kept beside `80vh`: the scrim's
- * column is `100vh` less its `p-6`, so `80vh` is the tighter of the two for any window taller
- * than 240px and the term it replaces could never have been the binding one.
+ * column is `100vh` less its vertical inset, so `80vh` is the tighter of the two for any window
+ * taller than 240px and the term it replaces could never have been the binding one.
  */
 const PANEL_MAX_H = "min-[640px]:max-h-[min(825px,80vh)]";
 
