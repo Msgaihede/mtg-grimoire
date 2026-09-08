@@ -576,8 +576,8 @@ take their number from the message, not from the binding.
 
 ## 14. Open, and only a measurement or a deploy can close it
 
-1. **The real snapshot size**, over a collection larger than 275 rows. Plan step 1. The caps in
-   §5.3 are provisional until it lands.
+1. ~~**The real snapshot size**~~ — **closed 2026-09-08.** §3.1 now carries the measurement:
+   **41.3 B/card gzipped**, so the 8 MB cap is ~190 000 cards.
 2. **Whether R2 can be enabled on the account** without changing the plan — the free tier is
    generous, but enabling R2 is a dashboard action only Markus can take, and *ask the host, never
    a document* applies.
@@ -588,6 +588,19 @@ take their number from the message, not from the binding.
 5. **The new Worker's name and URL**, which become a compiled-in constant beside `RELAY_BASE` and
    must match byte for byte on both sides — the trap `wrangler.jsonc` already documents for the
    OAuth redirect URI.
+
+6. **Whether `caches.default` works at all on a `workers.dev` address.** Cloudflare's Cache API
+   page grants functional cache operations to *custom domains* and to Pages functions on
+   `*.pages.dev`, and conspicuously does not name `workers.dev` — which is the address §7.1's own
+   example uses and item 4 defers moving off. If the Cache API is inert there, "a warm view costs
+   no R2 read" quietly stops holding on the first deploy. **It fails open** — an extra R2 read,
+   nothing breaks — so this is a `curl -I` to run after the first deploy, not a document to argue
+   with. *Ask the host, never a document.*
+
+   Related, and true either way: **the Cache API does not read through, so even a cache hit still
+   costs a Worker request.** §7.1's "a warm view costs zero" holds via the *browser's* `max-age`,
+   not via `caches.default` — every distinct viewer inside the shell's 300 s still spends one
+   Worker request against the account's shared daily budget.
 
 No agent may deploy any of it. `wrangler dev --local` is the only wrangler command an agent may
 run.
