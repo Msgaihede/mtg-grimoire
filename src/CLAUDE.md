@@ -81,11 +81,11 @@ Every one of these has its measurement and its story in
   [image-cache.md](../docs/reference/image-cache.md).
 - **A card frame is `components/CardArt`** — the 5:7 box, `CardImage`, `useImageRetry`, the
   no-art fallback and the foil marking, in one place. **Every wall of card faces draws it**: the
-  search's, the collection's, the deck editor's docked search column and — since 2026-08-16 —
-  the deck's own Grid view, which had kept an inline copy and drifted from it in four ways at
-  once (`rounded-md`, `aspect-[488/680]` rather than `CARD_ASPECT`, a smaller no-picture
-  fallback, no hover lift), so the deck and the wall docked beside it drew one card two ways on
-  one screen. A surface that draws its own frame instead says why at its own site, and each
+  search's, the collection's, the wishlist's and the three docked search columns — all of them
+  `features/search/CardGrid`, which is the one wall. Grep `from "@/components/CardArt"` for the
+  census rather than trusting a list here; the two callers that are **not** that wall are the deck's
+  own `DeckTokensPanel` and `TokenArtPicker`, which draw tokens rather than deck rows. A surface
+  that draws its own frame instead says why at its own site, and each
   reason is that it is not a 5:7 box with an aspect-driven height — the stack's card (a computed
   pixel height its whole geometry rests on), the open card's main art in `CardModalArt` (a flip
   fade, and since 2026-08-22 a **turn**: a quarter-turned card is a landscape box, so that frame
@@ -93,6 +93,17 @@ Every one of these has its measurement and its story in
   `PrintingPreview` (672×936) was a fifth until it was deleted with the docked pane on
   2026-09-03; the printings wall it drew is `AllPrintingsDialog`'s `CardGrid` now, so it goes
   through `CardArt` like every other wall.
+  **The deck's own Grid view was on the first list from 2026-08-16 to 2026-09-08 and is on the
+  second now, and the move is the opposite of drift.** It joined because it had kept an inline copy
+  of this component and had drifted from it in four ways at once (`rounded-md`,
+  `aspect-[488/680]` rather than `CARD_ASPECT`, a smaller no-picture fallback, no hover lift), so
+  the deck and the wall docked beside it drew one card two ways on one screen. That finding stands
+  and the fix was aimed one surface too far: the wall a deck tile is **one toolbar press** from is
+  the deck's own `Stacks`, not the search column, and those two had drifted from each other the
+  whole time. So the tile draws `features/decks/DeckCardFace` — the *stacked card's* face,
+  shared — and its reason for not being `CardArt` is the stack's own, because it **is** the
+  stack's: a computed pixel height that the stack's whole geometry rests on, with the printed
+  frame under the picture having to fill exactly it. One card, two boxes to put it in.
 - **Four layouts are not printed the way up they are stored, and turning one to read it is not
   "distorting a card image"** — it is the card at its own proportions, which is what a reader
   does with the cardboard and what Scryfall's own card pages offer. `split` (347 live printings,
@@ -120,6 +131,12 @@ Every one of these has its measurement and its story in
   views' `GC`, this), differing only in the room each has. One gold (`text-pie-gold`) everywhere,
   never the destructive colour, which belongs to a rule break. `FoilOverlay mark={false}` turns
   the whole chip off, crown included, for a frame that names these somewhere else.
+  **The crown is no longer only this chip's, and the count of drawings did not change with it**
+  (2026-09-08): the deck's Grid tile draws `GameChangerMark` in `DeckCardFace`'s marks strip, in
+  the place the stack's ribbon stands, because that tile draws no chip at all. So the third
+  drawing has two homes — a corner chip on every wall of `CardArt` tiles, and the deck tile's own
+  strip — and *the difference of room is the rule* rather than which component the mark is nested
+  in. `components/GameChangerMark`'s header carries the measurement that put it there.
   **Top-right is that chip's**, on every surface that draws a card as a face, and a surface's own
   marks go in the corners it leaves: top-left, bottom-left. The deck's Grid view put its copy count
   there too, in a full-width strip, and the two overlapped on any foil card in a deck — invisible
@@ -129,9 +146,16 @@ Every one of these has its measurement and its story in
   asks for it (`features/decks/theoryMatch.ts`). It has to be one corner across both card-face
   views, and on the stack that corner is free — `CardStack` draws `FoilOverlay mark={false}` and
   says the finish in its foot — so honouring the rule on the Grid tile would have put one fact in
-  two different corners of one deck. The chip still wins the corner: on Grid the tick **stacks
-  under it**, offset by the chip's own measured box (`1.5rem × --mark-scale`) on the cards that
-  draw one. A *third* mark wanting this corner is a sign the corner is full, not a precedent.
+  two different corners of one deck.
+  **The rule is unchanged for every wall that draws a chip, and the exception it needed is gone.**
+  What stood here read: *the chip still wins the corner: on Grid the tick **stacks under it**,
+  offset by the chip's own measured box (`1.5rem × --mark-scale`) on the cards that draw one.* That
+  was the honest answer while the Grid tile was a `CardArt` frame with a chip in that corner; since
+  2026-09-08 both of the deck's card-face views draw one component (`features/decks/DeckCardFace`)
+  with `FoilOverlay mark={false}`, and both say the finish in the chin. So **there is no chip on a
+  deck card at all**, top-right is the tick's on both views, and the measured offset was deleted
+  rather than kept — an offset that clears something nothing draws is a mark 24px from where it
+  belongs. A *third* mark wanting this corner is a sign the corner is full, not a precedent.
   What moved to make room is the `RULE BREAK` mark, which held the stack's top-right until then
   and is now bottom-left on both views — a tick and a red box adjacent in one corner is exactly
   the confusion `CardMarks.tsx`'s four separations exist to prevent.
@@ -163,7 +187,15 @@ Every one of these has its measurement and its story in
 - **A hint is `useTooltip()`'s spread, never a `title` attribute or an SVG `<title>`.** One
   `fixed` panel mounts at the app root (`LAYER.tooltip`) because a virtualised row is both
   `position: absolute` and transformed, which caps a nested `z-index` *and* makes the row the
-  containing block for a `fixed` descendant — root-mounting is what escapes both at once. **The
+  containing block for a `fixed` descendant — root-mounting is what escapes both at once.
+  **That premise is still true of three of the four tables and stopped being true of the fourth on
+  2026-09-08**, when the deck's table took `VirtualTable`'s `grow`: its rows are in normal flow,
+  `relative` with a `minHeight`, so they are neither transformed nor a containing block for
+  anything `fixed`. Nothing about the rule moves — the search, the collection and the wishlist
+  still virtualise, one of them is enough, and a panel mounted at the root is correct on a row
+  that traps nothing as well as on one that traps both. **Do not "simplify" this by mounting a
+  hint inside a deck table row**: the trap is a property of the caller, and a hook whose placement
+  depended on which caller drew it would be four answers to one question. **The
   sweep is done**: every real tooltip in the app binds through `useTooltip()`. **Two native
   `title`s survive on purpose, and they are the same one drawn twice** — the drag-inert entry in
   `AppShell.tsx`'s rail and its twin in `BottomTabBar.tsx` (added 2026-08-29 with the phone's tab
@@ -357,12 +389,15 @@ Every one of these has its measurement and its story in
   edge and its floor is `MIN_PANEL_WIDTH_PX`, **206**, so the narrowest content box a filter
   control has to survive is ~193 rather than ~371. Wrapping is what makes that free — a wrapped
   group's min-content is one chip — and it is why the drag needed no change to `FilterBar`. A flex item cannot shrink below its own min-content, so an unwrapped row just
-  hangs out of the panel, and `DeckEditor`'s page section is `overflow-y-auto` — which computes
+  hangs out of the panel, and the scroller behind it is `overflow-auto` — which computes
   `overflow-x` to **`auto`** — so the overhang becomes a horizontal scrollbar across the whole
-  deck builder. (That section is the *only* scroller in the editor since 2026-08-14: the deck's
-  three wall views were given a height of their own and now grow instead — see
-  [`features/decks/CLAUDE.md`](features/decks/CLAUDE.md). Nothing here moves; the section itself
-  is unchanged and an overhang still reaches it.)
+  deck builder. (**That scroller is `AppShell`'s `main` since 2026-08-24**; this sentence named
+  `DeckEditor`'s own page section, which carried `overflow-y-auto` from 2026-08-14 until `f02b284`
+  took it off, leaving one scroller where there had been one nested in another. The views
+  themselves are given **no height** and grow — three of the four from 2026-08-14 and the table
+  too since 2026-09-08, when `VirtualTable` gained `grow` — see
+  [`features/decks/CLAUDE.md`](features/decks/CLAUDE.md). Nothing about *this* rule moved: the
+  overhang still reaches whichever box carries the `overflow`, and there is now exactly one.)
   That is the one thing the 1024px floor forbids, and it arrives with **no test
   going red and nothing on screen naming the culprit**. It shipped: `ManaValueChips` was nine
   `size-9` chips at `9 × 36 + 8 × 4` = 356 and fitted, the **X chip** made it ten at 396 against
@@ -689,8 +724,13 @@ Every one of these has its measurement and its story in
   carry `FOCUS` — `outline-2 outline-offset-2`, 4px proud — and half a focus indicator is a WCAG
   2.4.7 failure. It goes on the box carrying the `overflow`; one level in is not the same fix,
   since the ring is then drawn outside _that_ child and lands back on the clip. The alternative is
-  `ring-inset`, which is what `TableView` draws for rows absolutely positioned inside a
-  virtualiser. **jsdom has no layout engine and therefore no clip**, so nothing here is visible to
+  `ring-inset`, which is what `TableView` reached first — **written down here as "for rows
+  absolutely positioned inside a virtualiser", which was that view's reason until 2026-09-08 and
+  is not its reason now**: it takes `VirtualTable`'s `grow`, so its rows sit in normal flow with a
+  `minHeight`. The inset answer outlived the premise twice over — rows are still stacked flush
+  against each other, so an outset mark would paint over a neighbour whether or not a scroller
+  clipped it, and `DROP_RING` has been inset app-wide since 2026-09-03 anyway (below).
+  **jsdom has no layout engine and therefore no clip**, so nothing here is visible to
   the suite — `views.test.tsx` sweeps the class instead.
   **Since 2026-09-03 that alternative is the default and this rule survives for `FOCUS` alone.**
   `DROP_RING` is `ring-1 ring-inset ring-accent/45`, so the drop ring is painted *within* the
@@ -746,7 +786,13 @@ Every one of these has its measurement and its story in
   sink below its pickable ones (`SetCombobox` also floats the picked ones to the top, because
   the list is capped). **Ordering is a display decision, so it lives in TS** — Rust's `ORDER BY`
   is not the bug when a picker reads wrong. Pinned rows (`Any card`, `Any format`, `Custom…`,
-  `Auto (by what it does)`, `Top level`) stay outside the sort, and `CategoriesDialog`'s
+  `Auto (by what it does)`, `Top level`, and — since 2026-09-08 — the deck toolbar's `Stacks`)
+  stay outside the sort. **`Stacks` is the first pinned row that is an ordinary member of its own
+  list** rather than a widening or an absence, and it earns the pin the same way: it is what every
+  deck opens on (`DeckEditor`'s `DEFAULT_VIEW`, one constant serving the `useState` seed and the
+  pin, so the two cannot part), the other three are the alternates *to* it, and it is the row a
+  reader learns the position of. Everything the pin does not name still sorts, so this is a shape
+  and not a third exemption. And `CategoriesDialog`'s
   destructive answer — `go with it` since schema v25, because the `deck_cards` rows go but the
   copies the reader owns are filed into `Recently removed` rather than destroyed — stays pinned
   **last**, so the alphabet can never make it the row the select opens on. **The search's format

@@ -304,6 +304,15 @@ jsdom measures every element at zero.**
     The numbers that measure the column's own contents — 847, 384, 230, 92/229 — did not move,
     and neither did anything horizontal: the sidebar stayed 208px precisely so the `DECK_FLOOR`
     bullet below would keep holding.
+    **"All four views agree to the pixel" was true when it was taken and stopped being true the
+    same week**, which is worth marking because the sentence reads as current. The table became
+    the height exception on 2026-08-14 — it kept `min-h-0 overflow-auto` on the view box and
+    `min-h-96` on the desk row, because `VirtualTable` was a scrollport by construction — so from
+    then until 2026-09-08 the Table row of that four-way agreement was a different arrangement
+    from the other three. It is one arrangement again now, by the opposite route: the table opts
+    into `VirtualTable`'s `grow` and takes no height either. **None of the four figures above has
+    been re-driven at 1280×800 since**; the 2026-09-08 pass at the foot of this file measures the
+    grown table at 1920×1080 and answers a different question.
 - **`DECK_FLOOR` had to drop 208 → 192, and the pass is the only thing that could have found
   it.** A page scroller is a second scrollbar, and the row pays for it: at 1280 with a card pane
   docked the desk measured **602** against the **617** in `DECK_FLOOR`'s own table, leaving the
@@ -1641,3 +1650,87 @@ and a green Storybook say nothing about the window that ships.
   20-character folder name truncates to about eight. The 16px step and the 10px tick gutter spend
   width the old 14px step did not. It is the design as approved, names have always truncated, and
   nobody has yet looked at a genuinely deep cabinet in it.
+
+## The three alternate views brought up to the stacks' style — 2026-09-08, `npm run tauri dev` (debug), 1920×1080, a copy of the real db
+
+Driven on **Azula**, a 101-card Commander deck, at `cardZoom` **1.1** unless a figure says
+otherwise. The pass was taken twice: once against `main` to record what was being fixed, once
+after, against the branch.
+
+### What it was — the three readings the change was aimed at
+
+- **The Table drew its own scrollbar inside the page's.** The view sat in a bounded box roughly
+  **500px** tall with `main` scrolling underneath it — two scrollbars an inch apart moving
+  different things, which is the failure `StackView`, `GridView` and `TextView` were given no
+  height to avoid on 2026-08-14 and which the table was left carrying as the documented
+  exception.
+- **The Grid put the piles played *beside* the deck above it.** The wall read
+  `Commander → Sideboard (3 cards) → Maybeboard (19) → the deck`, so the reader's own columns
+  started roughly **900px** down. `StackView` and `TextView` have called `splitRail` since it
+  existed; this view rendered `groups` straight through.
+- **The View picker read `Grid · Stacks · Table · Text`** — a straight alphabet, so the view
+  every deck opens on was drawn third.
+
+### What it reads now
+
+- **The picker** answers `["Stacks", "Grid", "Table", "Text"]` — the pinned row first, the other
+  three alphabetical under it.
+- **The Grid's piles** come out `Commander`, then the deck's own nine, then `Sideboard`,
+  `Maybeboard`, `(New) Maybeboard`. The two switched-off ones carry `bg-surface/60` on the
+  section and `opacity-60` on the tiles; the active Sideboard carries neither, which is the
+  asymmetry the wash exists for.
+- **The Table is one tall document**: `role="table"` measured **5978px** with
+  `overflow-y: visible` and `scrollHeight === clientHeight`, **136 rows** in the tree (13 bands
+  and 123 cards — every row of the deck, none virtualised away), inside a `main` of **6446**
+  against a **988** client height. The sticky header resolves against `main`: at
+  `scrollTop = 1200` it sat at **112**, which is `main`'s own top (92) plus its `p-5` — a
+  scrollport is the padding box, so `top: 0` is 112 and not 92.
+- **The scrollbar census, re-taken across all four views**: exactly **one** Y scroller in each —
+  `MAIN.relative` — and **zero** X scrollers. The table's second scrollbar is gone, which is the
+  number `frontend-design.md`'s census was carrying as expected-but-unverified.
+- **The Grid tile is the stacked card.** At `cardZoom` 1.1 a tile measured **165 × 259** with a
+  **1px** `oklch(0.3 0.01 270)` border, a **10px** radius and
+  `rgba(0,0,0,0.45) 0 10px 15px -3px, rgba(0,0,0,0.45) 0 4px 6px -4px` — `CardStack`'s resting
+  shadow, character for character. The face is **230px** (`cardFaceHeight(165)`) and the chin
+  **31px** (`chinHeight(1.1)`), which is `230 + 2 + (31 − 4) = 259` exactly.
+- **The control column** on a 150px tile at 1×: **31 × 99**, `top` **37** inside the tile, **7px**
+  of right margin and **99px** of clearance above the card's foot — the stack's `card-column`,
+  with more room below it than the stack has and less beside it.
+- **The console is clean** across a full cycle of the four views: 85 entries, no error and no
+  warning.
+
+### The one defect the pass found, which is the reason it exists
+
+**The `Game Changer` ribbon does not fit on a Grid tile, and it clipped the plan's tick.**
+
+Everything in the marks strip is sized off `--mark-scale`, so the three marks in it do not get
+narrower when the card does. On a card that is both a game changer and an exact plan match, the
+strip held a **28px** quantity tag, a **130px** ribbon and a **28px** tick inside a **163px** box
+— **11px of overflow** on a 165px tile, and the face is `overflow-hidden`, so the tick was cut by
+nearly half. Every term scales with the zoom, so the ratio is constant: it was clipped at *every*
+stop of the ladder, and it was photographed at 2× (a 300px tile) to be sure rather than inferred.
+
+The tell in the DOM is `strip.scrollWidth − strip.clientWidth`, and the three marks' own offsets
+say the same thing: tag at `x=1` w28, ribbon at `x=18` w130, tick at `x=147` w28 — 175 into 163.
+
+**Nothing in either suite could see it.** jsdom lays nothing out, so it has no clip; Storybook
+draws the tile at a story's own width with a fixture that has to carry a game changer *and* a
+theory match on one card to produce it at all. It is the class of thing this file exists for.
+
+The fix is `DeckCardFace`'s `gameChanger` prop — the ribbon on the stack, the crown alone on the
+tile, in the same place in the same strip. Re-measured immediately after, same session, same
+deck: tag at `x=1` w28, crown at `x=29` w13, tick at `x=136` w28, **overflow 0**, and the stack
+still drew the ribbon (`Game Changer` present, no bare crown) on the same four cards.
+
+### Two traps worth keeping
+
+- **HMR resets the view.** The editor's view is `useState`, not `rememberView`, so every hot
+  reload during a pass drops the window back to Stacks. A measurement taken after an edit is a
+  measurement of whatever view the window fell back to unless you re-pick it — which is the
+  general rule this file already carries about driving a `tauri dev` window while anything is
+  editing the frontend, arriving through the one piece of state nobody thinks of as state.
+- **`cardZoom` outlives the process** (`app_meta`, since issue #175), so a pass that steps the
+  zoom hands the next pass a window at 1.1 or 2 and every pixel figure in it is off by that
+  factor. Read `--mark-scale` off the tile rather than assuming 1, or set the zoom deliberately
+  at the top of the run — this pass did the first and then the second.
+
