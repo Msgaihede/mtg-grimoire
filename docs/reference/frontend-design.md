@@ -2796,6 +2796,74 @@ document overflow in any of them**.
 the suite — and so is the difference between the fix and the wrong fix, which are identical in
 every DOM assertion. `DeckEditor.test.tsx` pins the class and states the figures instead.
 
+### The card walls stopped being letterboxes too — three of the four (2026-09-03, 2026-09-08)
+
+The deck builder's answer above, arriving on the pages: **a wall of cards is not a band, so it is
+as tall as its rows and the page scrolls it.** `CardGrid` gained an opt-in `grow` on 2026-09-03 and
+the **search** page took it; the **collection** and the **wishlist** took it on 2026-09-08. Under
+it the wall is `p-3 shrink-0` — no scrollport, no height, and **no frame**, because a border round
+a box as tall as its list is two vertical lines running off the top and bottom of the window. The
+virtualiser is unchanged; only which box it measures moves, from the wall to
+`nearestScroller`'s answer, which on a page is `AppShell`'s `main`.
+
+**The other three surfaces are deliberately untouched, and each has its own reason.** The deck
+editor's docked panel is 206px at its floor — one column — so a browse fetched through in there
+would make the editor many times taller than the deck beside it, and its tiles are drag *sources*
+into that deck. `AllPrintingsDialog` is inside a `Dialog`, where the panel is clamped to the window
+by design. And the **Tags** page is simply not done — it is the fourth page-width wall and still
+its own scrollport.
+
+**Two boxes above each wall had to give up their height with it**, and they are the whole of what
+these three pages changed: the page `<section>`'s `h-full` and the desk row's `min-h-0 flex-1` are
+now written `view === "table" && …`. Both are still exactly right for the table, whose
+`VirtualTable` is a scrollport by construction and has a height only while every box above it has
+one — take the `h-full` off and the table collapses to nothing.
+
+**Measured in a real browser** — headless Edge over Storybook at 1400×900, 2026-09-08, the
+`collection-page--large` fixture (600 rows) in the file's own 1032×640 `main` stand-in.
+
+| read | grid | table |
+| --- | --- | --- |
+| the wall / the table, height | **5 492** | 373 |
+| …its own scrollable overflow | **0** | **4 065** |
+| desk row height | 5 525 | 406 |
+| page `<section>` height | 5 759 | 640 |
+| the `main` stand-in's scrollable overflow | **5 119** | **0** |
+| boxes actually drawing a scrollbar | **1** (the page) | **1** (the table) |
+| tiles / rows mounted, of 600 | 20 | 19 |
+
+**One scroller in each view, and the virtualiser still virtualises against it** — 20 tiles of 600
+at rest, 35 at `scrollTop` 2 600 with the fifteen in view running from −154 to +394 inside a 640px
+port, which is the `scrollMargin` remeasurement doing its job: rows drawn from the scroller's
+origin land where the wall is, not 234px above it. `documentElement.scrollWidth − clientWidth` was
+**0**, so nothing here reintroduces the sideways scrollbar the 1024px floor forbids.
+
+**The docked search column's `sticky top-0` had never engaged before this, and now it does.** On
+`collection-page--with-search`, grid view: at rest the dock sits **234px** below the scrollport's
+top with `useDockHeight` writing **406px**, and its panel's bottom edge lands exactly on the
+scrollport's (640). Scrolled to the end of the page's 234px, the dock reads **0** from the top —
+pinned — and the hook has grown it to the full **640**, the panel bottom still exactly 640. Both
+ends exact and no second scrollbar in either, which is what that hook's `visible − max(0, below)`
+was written for and what nothing had previously exercised. The wishlist reads the same two pairs
+(234/406 → 0/640) on `wishlist-page--with-search-column`.
+
+**The story decorators are what made this measurable, and they were wrong until this pass.** All
+three page story files stood their page in a bare `h-[640px] w-[1032px]` box; a growing wall asks
+for the nearest *scrolling* ancestor, found none, fell back to itself, and drew every row of the
+fixture out through the frame. They are `relative … overflow-auto` now — `main`'s own arrangement,
+`relative` for the rule this section is about — so both views read in the workbench exactly as they
+do in the window. **The search page's was owed from 2026-09-03 and landed here.**
+
+**What is still owed: the shipped window.** Nothing above was driven in WebView2 — the app lock was
+free but a debug build from the main checkout was already running, and killing another window is
+not a measurement anybody is allowed to take. The Storybook figures are a real browser over the
+real stylesheet and the real components, and the one thing they cannot settle is that
+`nearestScroller` finds `main` rather than something between; the search page has run that path
+since 2026-09-03, which is evidence and not proof for these two. **The per-view scrollbar counts in
+the paragraph above are from 2026-08-15 and now read wrong for two of them**: `Collection` and
+`Wishlist` were **0** there and are **1** in grid view. They have not been re-driven in the window
+either; do not quote them for those two.
+
 ## The drop ring with a side missing
 
 **2026-08-17.** Reported from the shipped window as "when dragging a card the outline is cut off by
