@@ -7,7 +7,20 @@ import { shortcut } from "@/lib/shortcuts";
 describe("the navigation census", () => {
   it("names every view exactly once", () => {
     const ids = NAV.map((e) => e.id);
-    expect(ids).toEqual(["search", "tags", "decks", "collection", "wishlist", "scanner", "settings"]);
+    expect(ids).toEqual([
+      "search",
+      "tags",
+      "decks",
+      "collection",
+      "wishlist",
+      // Beside the three lists the reader owns, because it is a fourth list of cards — and
+      // before Scanner so that Settings stays last. `AppShell` is what hides the row until a
+      // share has been opened; this module stays the whole set, which is what lets this
+      // assertion be a literal.
+      "shared",
+      "scanner",
+      "settings",
+    ]);
     expect(new Set(ids).size).toBe(ids.length);
   });
 
@@ -36,7 +49,7 @@ describe("the navigation census", () => {
    * Every destination is reachable from the keyboard — the one thing about this list that lives
    * in another module.
    *
-   * `Ctrl+1…7` is bound **by index**: `AppShell` walks `switchView`'s chords and activates
+   * `Ctrl+1…8` is bound **by index**: `AppShell` walks `switchView`'s chords and activates
    * `NAV[i]`. So the two lists are one binding written down twice, and nothing in the program
    * holds them together — `shortcuts.ts` deliberately does not import this module, because the
    * catalogue is pure data over a plain event and a runtime edge from it to a file of React
@@ -44,16 +57,22 @@ describe("the navigation census", () => {
    * at runtime.
    *
    * **Growth is the direction that goes silent, which is why the fence is here rather than in
-   * `shortcuts.test.ts`.** An eighth entry added to the array above with no eighth chord is
+   * `shortcuts.test.ts`.** A ninth entry added to the array above with no ninth chord is
    * simply unreachable, while the panel goes on saying "Jump to a section" over a range that no
    * longer covers the rail — and the catalogue's own tests would all still pass, because they
-   * pin `Ctrl+1` through `Ctrl+7` literally and have never heard of this list. The other two
+   * pin `Ctrl+1` through `Ctrl+8` literally and have never heard of this list. The other two
    * directions are already answered: a shrink is caught by `AppShell`'s `i >= NAV.length` floor,
    * and a reorder remapping the digits is the design working as intended.
    *
-   * A length rather than a literal seven, because the literal is `shortcuts.test.ts`' job and
-   * stating it twice would make a legitimate eighth view two edits away from green instead of
-   * one. The pair is what pins it: that file says the chords are `Ctrl+1…7`, this one says there
+   * **It counts `NAV` and not the rail, and since 2026-09-08 those differ.** The Shared row is
+   * hidden until a reader has opened a link, and `AppShell` binds these chords against the whole
+   * of `NAV` anyway — so what has to hold is that every *destination* has a chord, which is what
+   * this asserts. A count of the drawn rail would go green on eight chords and seven rows and
+   * say nothing about the one that is only reachable by pressing `Ctrl+6`.
+   *
+   * A length rather than a literal eight, because the literal is `shortcuts.test.ts`' job and
+   * stating it twice would make a legitimate ninth view two edits away from green instead of
+   * one. The pair is what pins it: that file says the chords are `Ctrl+1…8`, this one says there
    * are as many of them as there are places to go.
    */
   it("has a chord for every destination", () => {

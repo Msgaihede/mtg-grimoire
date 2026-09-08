@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   PanelLeftClose,
@@ -106,6 +106,9 @@ export function AppShell({ children, update }: { children: ReactNode; update: Up
 function Shell({ children, update }: { children: ReactNode; update: Update }) {
   const activeView = useAppStore((s) => s.activeView);
   const setActiveView = useAppStore((s) => s.setActiveView);
+  // Only its length is read, and only to decide whether the rail draws the Shared row — see
+  // `entries` below.
+  const openedShares = useAppStore((s) => s.openedShares);
   // The flag `TitleBar` draws the map from and this component's `F1` turns over — see its doc in
   // `store.ts` for why one press and one panel need a store between them.
   const setKeyMapOpen = useAppStore((s) => s.setKeyMapOpen);
@@ -209,16 +212,16 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   // app, and passed down `isWebTarget()`-gated at the call site below.
   const deviceSync = useDeviceSyncLive();
   /**
-   * The app's two window-wide chords: `Ctrl+1`…`Ctrl+6` to jump between the six destinations,
+   * The app's two window-wide chords: `Ctrl+1`…`Ctrl+8` to jump between the eight destinations,
    * and `F1` to open the map that says so.
    *
    * **Both matched against `@/lib/shortcuts` rather than compared by hand**, which is what makes
    * the panel's rows and these bindings one fact instead of two that drift silently past both CI
    * jobs. The `switchView` entry's chords are `NAV`'s own order, and the *index* is the binding —
    * so the rail stays the single list of destinations rather than being restated here as a
-   * seventh copy, exactly as `nav.ts` argues about the label being the ribbon's `<h1>`.
+   * ninth copy, exactly as `nav.ts` argues about the label being the ribbon's `<h1>`.
    *
-   * **The modal guard is `[aria-modal="true"]`, and it covers `Ctrl+1…6` alone.** `Dialog.tsx`
+   * **The modal guard is `[aria-modal="true"]`, and it covers `Ctrl+1…8` alone.** `Dialog.tsx`
    * is the one modal chrome in this app and always sets the attribute, so asking the document is
    * asking the thing that knows, with nothing to register and nothing to keep in step. A view
    * that switched out from under an open dialog would leave that dialog sitting over a page it
@@ -248,7 +251,7 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
         // meaning depends on the state it changes.** Holding a key fires `keydown` at the OS
         // repeat rate, and a toggle on that is the panel strobing through its own fade for as
         // long as the finger is down — it lands on whichever side the reader let go on.
-        // `Ctrl+1…6` below is left alone deliberately: re-selecting the view you are on is
+        // `Ctrl+1…8` below is left alone deliberately: re-selecting the view you are on is
         // idempotent, so a guard there would be a rule with no failure behind it, and hoisting
         // one to the top of the handler would decide the question for every chord this shell
         // ever grows — including a stepping chord, where repeating *is* the binding.
@@ -259,9 +262,17 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
       const i = SWITCH_VIEW.chords.findIndex((c) => matchesChord(c, e));
       // `-1` is "not one of ours". The second half is not ceremony: the chords and the
       // destinations are two lists that agree by construction rather than by type, and the day
-      // a seventh chord is written without a seventh `NAV` entry, `NAV[i]` is `undefined` and
-      // this handler throws on every press. The reverse — a seventh destination with no chord —
+      // a ninth chord is written without a ninth `NAV` entry, `NAV[i]` is `undefined` and
+      // this handler throws on every press. The reverse — a ninth destination with no chord —
       // costs nothing and needs no guard.
+      //
+      // **`NAV` and never the filtered `entries` below**, which is the one thing about this line
+      // that is a decision rather than arithmetic. The rail hides the Shared row until a reader
+      // has opened a link; binding against what is *drawn* would move Scanner and Settings
+      // between `Ctrl+6…7` and `Ctrl+7…8` depending on that, so one chord would mean two things
+      // to two readers. Against the whole list the digits are fixed, and `Ctrl+6` is how a reader
+      // reaches the shared view before its row exists — landing on the empty state that is where
+      // the first link gets pasted.
       if (i === -1 || i >= NAV.length) return;
       e.preventDefault();
       setActiveView(NAV[i].id);
@@ -369,6 +380,25 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   const activityVisible = useDelayedFlag(activity !== null, ACTIVITY_DELAY_MS);
 
   const title = NAV.find((n) => n.id === activeView)?.label ?? "";
+
+  /**
+   * The destinations this reader actually has, which is `NAV` minus the row they have not earned.
+   *
+   * **Shared appears once a link has been opened** (spec decision 6): a reader who never trades
+   * pays no rail slot for a view they will never press. It is filtered *here* rather than in
+   * `nav.ts` so that module stays a plain list — one `nav.test.ts` can assert literally, and one
+   * `switchView`'s chords can bind against by index.
+   *
+   * **`activeView === "shared"` keeps the row while the reader is standing on it**, which is what
+   * makes closing the last binder safe: without it the row would vanish from under the reader in
+   * the same frame the view emptied, and the way back would be a chord they have not been told
+   * about. `Ctrl+6` is the way *in* before there is a row at all.
+   */
+  const entries = useMemo(
+    () =>
+      NAV.filter((n) => n.id !== "shared" || openedShares.length > 0 || activeView === "shared"),
+    [openedShares.length, activeView],
+  );
 
   return (
     // A column now, where it was a row: the title bar spans the window and the sidebar starts
@@ -504,7 +534,7 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
               collapsed ? "w-17" : "w-52",
             )}
           >
-            {NAV.map(({ id, label, Icon }) => (
+            {entries.map(({ id, label, Icon }) => (
               <NavItem
                 key={id}
                 label={label}
@@ -715,7 +745,14 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
                 )}
                 <CardMenuRefusal error={cardToDeckRefusal} />
               </div>
-              <BottomTabBar activeView={activeView} onSelect={setActiveView} {...drops} />
+              <BottomTabBar
+                activeView={activeView}
+                onSelect={setActiveView}
+                // The same filtered list the rail draws, so the two drawings of navigation
+                // cannot disagree about which destinations this reader has.
+                entries={entries}
+                {...drops}
+              />
             </>
           )}
         </div>

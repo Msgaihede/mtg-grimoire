@@ -562,7 +562,7 @@ Every one of these has its measurement and its story in
   entries rather than one loose comparison — and it narrowed `Ctrl+Shift+Y` and `Shift+Delete`
   away, both of which only ever worked because the old guards never tested `shiftKey`. The
   `isTextField` yield stays at each **call site**: the deck editor's undo must yield to the
-  browser's own and `Ctrl+1…6` must not. Four rows stand outside the fence and
+  browser's own and `Ctrl+1…8` must not. Four rows stand outside the fence and
   [keyboard-shortcuts.md](../docs/reference/keyboard-shortcuts.md) names each — `Escape` and
   `Shift+F10` are bound by `useDismissOnEscape` and `menu/useContextMenu`, which do not read the
   catalogue, and the two pointer rows can never be matched by construction.

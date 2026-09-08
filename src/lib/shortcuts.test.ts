@@ -419,7 +419,7 @@ describe("the catalogue's shape", () => {
     ]);
   });
 
-  it("gives switchView one chord per rail entry, Ctrl+1 through Ctrl+7", () => {
+  it("gives switchView one chord per rail entry, Ctrl+1 through Ctrl+8", () => {
     const chords = shortcut("global", "switchView").chords;
     expect(chords.map((c) => chordParts(c))).toEqual([
       ["Ctrl", "1"],
@@ -429,6 +429,7 @@ describe("the catalogue's shape", () => {
       ["Ctrl", "5"],
       ["Ctrl", "6"],
       ["Ctrl", "7"],
+      ["Ctrl", "8"],
     ]);
   });
 

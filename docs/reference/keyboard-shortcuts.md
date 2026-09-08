@@ -85,7 +85,7 @@ reverse, and it is smaller than teaching a wrong meaning.
 - **`Ctrl+Z` in the deck editor yields**, and that is the whole of what keeps the quick-add box, the
   deck name and the notes usable — they get the browser's own undo, which this app cannot replace
   and must not swallow.
-- **`Ctrl+1…7` in `AppShell` does not**, and must not. `Ctrl+1` has no native meaning in a text
+- **`Ctrl+1…8` in `AppShell` does not**, and must not. `Ctrl+1` has no native meaning in a text
   field at all, so yielding would only make view-switching dead exactly where a reader's caret
   usually is — in the quick-add box, in a search field.
 
@@ -99,7 +99,7 @@ list is rebuilt on every press and `isTextField` is the cheap guard, here matchi
 arithmetic over an event while `isTextField` is a `closest()` walk up the DOM, paid on every
 keystroke typed into the quick-add box for the two presses in a session that are `Ctrl+Z`.
 
-`Ctrl+1…7` carries a different guard instead: `document.querySelector('[aria-modal="true"]')`.
+`Ctrl+1…8` carries a different guard instead: `document.querySelector('[aria-modal="true"]')`.
 `Dialog.tsx` is the one modal chrome in this app and always sets the attribute, so asking the
 document is asking the thing that knows, with nothing to register and nothing to keep in step. **`F1`
 passes that guard on purpose** — the map is *more* use with a dialog up, not less.
@@ -119,8 +119,9 @@ question. `"global"` is first and always present.
 an open editor would list chords for a page that is not on screen. `deckEditor` is therefore not a
 `ViewId` and never will be.
 
-**A scope with no shortcuts draws nothing — not a heading over a gap.** **All seven view scopes are
-empty today** — `search`, `tags`, `decks`, `collection`, `wishlist`, `scanner`, `settings` — and
+**A scope with no shortcuts draws nothing — not a heading over a gap.** **All eight view scopes are
+empty today** — `search`, `tags`, `decks`, `collection`, `wishlist`, `shared`, `scanner`,
+`settings` — and
 `SHORTCUTS` spells each of them out with an empty array rather than leaving them off the record:
 making the emptiness explicit is what stops a scope being forgotten when a view starts binding
 something.
@@ -129,8 +130,9 @@ the shape of the mistake rather than as a state anything is still in: it counts 
 the editor's chords, and `deckEditor` *replaces* `decks` rather than nesting under it — the
 paragraph above. The design and `KeyMap.tsx`'s comment were corrected first, `KeyMap.stories.tsx`
 and `KeyMap.test.tsx` on the review pass that found them still saying it. Six, not five, in all
-four — a count this page has since carried one further to seven, for `scanner`.) That emptiness is
-the whole reason `Ctrl+1…7` sits in
+four — a count this page has since carried two further, to eight, for `scanner` and `shared`.)
+That emptiness is
+the whole reason `Ctrl+1…8` sits in
 `"global"` — it is what gives the panel something true to say on a page that binds nothing.
 
 **Scanner joined the rail on 2026-09-08, before Settings, and that is the design working rather
@@ -140,20 +142,42 @@ reads `Ctrl+7` now, not because Settings changed, but because Scanner took the r
 to name. A reader whose hands knew `Ctrl+6` for Settings has to relearn it; that cost is the price
 of keeping Settings the rail's last row rather than the price of a bug.
 
+**`shared` joined the same day, between Wishlist and Scanner, and moved both of them again** —
+Scanner is `Ctrl+7` and Settings `Ctrl+8`. The paragraph above is the whole argument and it is
+unchanged; what is new is the half that does not follow from it.
+
+**A chord reaches a destination the rail may not be drawing, and that is deliberate.** Shared is
+somebody else's collection opened from a link, and its rail row appears only once a reader has
+opened one (the collection-sharing spec's decision 6) — but `AppShell` binds these chords against
+the **whole** of `NAV` rather than against the filtered rail. Two things follow, and the second is
+why:
+
+- `Ctrl+6` opens the shared view whether or not its row is on screen, landing on the view's own
+  empty state, which is where the first link is pasted. Before the cabinet grows its own Share
+  control that is the *only* way in, so binding it is what keeps the view reachable at all.
+- The digits never move under a reader. Bound against the filtered rail instead, Scanner and
+  Settings would be `Ctrl+6`/`Ctrl+7` for a reader who has opened no share and `Ctrl+7`/`Ctrl+8`
+  for one who has — one binding with two answers, decided by something they did last week. The
+  index rule above says a chord moves when the *list* changes; it must not move when a row is
+  merely hidden.
+
+`AppShell`'s existing `i >= NAV.length` floor is untouched and still does its job: it is about
+chords with no destination behind them, which is the direction that throws.
+
 ## `range` is declared, never counted
 
-`switchView` carries seven chords and the panel draws `Ctrl` `1` **to** `Ctrl` `7`; `redo` carries
+`switchView` carries eight chords and the panel draws `Ctrl` `1` **to** `Ctrl` `8`; `redo` carries
 two and the panel draws `Ctrl` `Y` **or** `Ctrl` `Shift` `Z`. Which shape to draw is a
 `range?: boolean` on the entry, and the panel reads the flag.
 
 **It was `chords.length > 2` first, and that was right for exactly as long as `switchView` was the
-only long entry.** A count cannot tell seven steps of one sequence from three genuine alternatives,
+only long entry.** A count cannot tell eight steps of one sequence from three genuine alternatives,
 so the first shortcut ever written with three spellings would have drawn "`A` **to** `C`" — a
 promise about a chord nothing binds, in the one panel whose whole job is to be true. Whether the
 middle of a run can be inferred is a fact about the run, so it is the entry's to state and nobody
 else's.
 
-Both ends are drawn whole (`Ctrl` `1` to `Ctrl` `7`, not `Ctrl` `1` to `7`): collapsing the second
+Both ends are drawn whole (`Ctrl` `1` to `Ctrl` `8`, not `Ctrl` `1` to `8`): collapsing the second
 chord's modifiers assumes the run shares them, which is true of the one range that exists today and
 is not a fact the component can check. The separator is a **word** in both shapes — an en dash
 between two caps is read out as nothing at all by a screen reader, and `1 6` is a different
@@ -175,7 +199,7 @@ so only a browser can confirm the row is unchanged to the pixel.**
 Both landed on the review pass, 2026-09-03, and neither is visible in the shipped window without
 looking for it.
 
-**`F1` swallows auto-repeat, and `Ctrl+1…7` deliberately does not.** Holding a key fires `keydown`
+**`F1` swallows auto-repeat, and `Ctrl+1…8` deliberately does not.** Holding a key fires `keydown`
 at the OS repeat rate, so a *toggle* on that press strobes the panel through its own fade for as
 long as the finger is down and lands on whichever side the reader let go on. The guard is on the
 `F1` branch alone: re-selecting the view you are already on is idempotent, so a guard there would

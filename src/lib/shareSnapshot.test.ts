@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import golden from "../../src-tauri/src/share/__golden__/snapshot.json?raw";
 import {
   parseSnapshot,
+  parseSnapshotValue,
   SNAPSHOT_NOT_A_SNAPSHOT,
   SNAPSHOT_TOO_NEW,
   SNAPSHOT_VERSION,
@@ -127,5 +128,44 @@ describe("the share snapshot mirror", () => {
     }
     expect(caught).toBeInstanceOf(Error);
     expect((caught as Error).message).not.toMatch(/JSON/i);
+  });
+});
+
+/**
+ * The value door, which is the one `ipc.shareOpen` comes through.
+ *
+ * That command answers `serde_json::Value`, so the in-app viewer already holds a parsed object —
+ * and `parseSnapshot(JSON.stringify(v))` over a whole binder is a serialise-and-reparse of the
+ * measured 2.07 MB at 50 000 cards for an answer that was already in hand. Every refusal has to
+ * be the same one `parseSnapshot` throws, or the two viewers would disagree about what a
+ * snapshot is.
+ */
+describe("the value door", () => {
+  it("reads an already-parsed snapshot without a round trip", () => {
+    const s = parseSnapshotValue(JSON.parse(golden));
+    expect(s.owner).toBe("Giradeli");
+    expect(s.cards).toHaveLength(2);
+  });
+
+  it("refuses the same ways the text door does", () => {
+    expect(() => parseSnapshotValue(null)).toThrow(SNAPSHOT_NOT_A_SNAPSHOT);
+    expect(() => parseSnapshotValue([])).toThrow(SNAPSHOT_NOT_A_SNAPSHOT);
+    expect(() => parseSnapshotValue(7)).toThrow(SNAPSHOT_NOT_A_SNAPSHOT);
+    expect(() => parseSnapshotValue({ ...JSON.parse(golden), v: SNAPSHOT_VERSION + 1 })).toThrow(
+      SNAPSHOT_TOO_NEW,
+    );
+    const noCards = JSON.parse(golden) as Record<string, unknown>;
+    delete noCards.cards;
+    expect(() => parseSnapshotValue(noCards)).toThrow(SNAPSHOT_NOT_A_SNAPSHOT);
+  });
+
+  /**
+   * The text door **is** the value door with a `JSON.parse` in front of it, and this is what
+   * says so. Two implementations of the four refusals is exactly the drift the delegation
+   * exists to prevent, and it is the kind that goes unnoticed: both would pass their own tests
+   * while one viewer refused a document the other drew.
+   */
+  it("is what the text door delegates to", () => {
+    expect(parseSnapshot(golden)).toEqual(parseSnapshotValue(JSON.parse(golden)));
   });
 });

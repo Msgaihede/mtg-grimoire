@@ -9,6 +9,7 @@ const cardPrintings = vi.hoisted(() => vi.fn());
 const collectionList = vi.hoisted(() => vi.fn());
 const collectionSummary = vi.hoisted(() => vi.fn());
 const wishlistList = vi.hoisted(() => vi.fn());
+const shareOpen = vi.hoisted(() => vi.fn());
 const deckList = vi.hoisted(() => vi.fn());
 const deckGet = vi.hoisted(() => vi.fn());
 const deckSwapPrinting = vi.hoisted(() => vi.fn());
@@ -196,6 +197,11 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     prewarmCollection: vi.fn().mockResolvedValue(0),
     // And so is the wishlist, which asks one question on the way up.
     wishlistList,
+    // The shared view's one read: somebody else's snapshot, from the link the reader pasted.
+    // Mocked here rather than left off because the view is reachable from the rail like any
+    // other, and this file is the one place `ViewId`, `NAV` and `ActiveView` are checked to
+    // agree about a word.
+    shareOpen,
     // The deck gallery is the fourth live view. It reads its wall, and the create form
     // behind it reads the seeded format table — mocked here too, because a `vi.fn()` that
     // is not there is a synchronous `TypeError` inside a query rather than a rejection.
@@ -558,6 +564,7 @@ beforeEach(() => {
   cardPrintings.mockReset().mockResolvedValue({ items: [], total: 0 });
   collectionList.mockReset().mockResolvedValue({ items: [], total: 0 });
   wishlistList.mockReset().mockResolvedValue({ items: [], total: 0 });
+  shareOpen.mockReset();
   deckList.mockReset().mockResolvedValue([]);
   deckGet.mockReset().mockResolvedValue(detail([]));
   deckSwapPrinting.mockReset().mockResolvedValue({ folded: false, quantity: 1 });
@@ -724,6 +731,27 @@ it("opens the wishlist on the wishlist entry", async () => {
 
   expect(await screen.findByText(/nothing on your wishlist yet/i)).toBeInTheDocument();
   expect(screen.queryByText(/coming in a later plan/i)).not.toBeInTheDocument();
+});
+
+/**
+ * The eighth view, and the one whose rail row is conditional — so this is the only place the
+ * whole wire is checked: `NAV`'s eighth id, `ViewId`'s eighth member, `ActiveView`'s eighth arm
+ * and `AppShell`'s filter all agreeing about the word `shared`.
+ *
+ * `Ctrl+6` rather than a press on the rail, because that is the state a reader is actually in
+ * before their first link: the row is not drawn, and the chord is the way in.
+ */
+it("opens the shared view on Ctrl+6, with no share and no rail row", async () => {
+  render(<App />);
+
+  await userEvent.keyboard("{Control>}6{/Control}");
+
+  expect(
+    await screen.findByRole("heading", { name: "Open a collection somebody shared with you" }),
+  ).toBeInTheDocument();
+  expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Shared");
+  // Nothing was fetched: an empty state asks the network for nothing.
+  expect(shareOpen).not.toHaveBeenCalled();
 });
 
 /**

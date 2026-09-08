@@ -290,7 +290,17 @@ beforeEach(() => {
   // popover full of rows and captions into the tree of whatever ran next — where the queries are
   // `screen`-wide rather than scoped — and the red would land on that test rather than on the
   // one that pressed the key.
-  useAppStore.setState({ activeView: "search", openDeckId: null, keyMapOpen: false });
+  //
+  // `openedShares` is reset with them for the plainest version of it: it decides whether the rail
+  // draws an eighth row, and this file's very first case asserts the rail's buttons **literally**.
+  // A share left open by one test would fail a case about something else entirely, naming the
+  // wrong culprit.
+  useAppStore.setState({
+    activeView: "search",
+    openDeckId: null,
+    keyMapOpen: false,
+    openedShares: [],
+  });
   queryClient.clear();
   invalidate.mockClear();
   syncStatus.mockReset().mockResolvedValue(status());
@@ -342,6 +352,72 @@ it("renders nav and refresh button", async () => {
   ]);
   expect(await screen.findByRole("button", { name: /refresh/i })).toBeInTheDocument();
   expect(screen.getByText("content")).toBeInTheDocument();
+});
+
+/**
+ * The eighth destination, and the only one the rail does not always draw.
+ *
+ * Shared is somebody else's collection opened from a link, and a reader who never opens one never
+ * sees the row (spec decision 6) — so the case above, which asserts the rail's buttons literally,
+ * is also the *absence* half of this rule.
+ *
+ * **The filter is `AppShell`'s and not `nav.ts`'s**, which is what keeps `NAV` a plain list that
+ * `nav.test.ts` asserts whole and that `switchView`'s chords bind against by index. `Ctrl+6`
+ * therefore reaches this view whether or not the row is drawn, which is the way in before the
+ * first link has been pasted.
+ */
+describe("the Shared row", () => {
+  const railButtons = () =>
+    within(screen.getByRole("navigation", { name: "Views" }))
+      .getAllByRole("button")
+      .map((b) => b.textContent);
+
+  it("is absent from the rail until a share has been opened", () => {
+    render(
+      <AppShell update={noUpdate}>
+        <div>content</div>
+      </AppShell>,
+    );
+
+    expect(railButtons()).not.toContain("Shared");
+  });
+
+  it("appears once a link has been opened, between Wishlist and Scanner", () => {
+    useAppStore.setState({ openedShares: ["https://share.example/s/testshareid00000"] });
+    render(
+      <AppShell update={noUpdate}>
+        <div>content</div>
+      </AppShell>,
+    );
+
+    expect(railButtons()).toEqual([
+      "Search",
+      "Tagger",
+      "Decks",
+      "Collection",
+      "Wishlist",
+      "Shared",
+      "Scanner",
+      "Settings",
+      "Collapse",
+    ]);
+  });
+
+  /**
+   * And it stays for as long as the reader is standing on the view. Without this the row would
+   * vanish from under them in the same frame they closed their last binder, leaving the page they
+   * are looking at reachable only by a chord nobody has told them about.
+   */
+  it("stays while the reader is on the view with nothing open", () => {
+    useAppStore.setState({ activeView: "shared", openedShares: [] });
+    render(
+      <AppShell update={noUpdate}>
+        <div>content</div>
+      </AppShell>,
+    );
+
+    expect(railButtons()).toContain("Shared");
+  });
 });
 
 /**
@@ -1677,6 +1753,51 @@ describe("the shell's keyboard bindings", () => {
     // than as `NAV[2].id`, per the rule that an assertion must not read its own constant.
     expect(useAppStore.getState().activeView).toBe("decks");
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Decks");
+  });
+
+  /**
+   * `Ctrl+6` reaches the Shared view even though the rail is not drawing a row for it — and that
+   * is not a curiosity, it is the only way in before a link has ever been pasted.
+   *
+   * The chords bind against the **whole** of `NAV`, not against the filtered rail, so the digits
+   * never move under a reader: Scanner is `Ctrl+7` and Settings `Ctrl+8` whether or not a share
+   * is open. Bound against what is drawn, one chord would mean two things to two readers.
+   */
+  it("reaches the Shared view on Ctrl+6 with no share open and no row drawn", async () => {
+    const user = userEvent.setup();
+    render(
+      <AppShell update={noUpdate}>
+        <div>content</div>
+      </AppShell>,
+    );
+    expect(
+      within(screen.getByRole("navigation", { name: "Views" })).queryByRole("button", {
+        name: "Shared",
+      }),
+    ).toBeNull();
+
+    await user.keyboard("{Control>}6{/Control}");
+
+    expect(useAppStore.getState().activeView).toBe("shared");
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Shared");
+    // And the row is there now, because the reader is standing on it.
+    expect(screen.getByRole("button", { name: "Shared" })).toBeInTheDocument();
+  });
+
+  /** The two rows the eighth destination pushed along, so the shift itself is pinned. */
+  it("keeps Scanner on Ctrl+7 and Settings on Ctrl+8", async () => {
+    const user = userEvent.setup();
+    render(
+      <AppShell update={noUpdate}>
+        <div>content</div>
+      </AppShell>,
+    );
+
+    await user.keyboard("{Control>}7{/Control}");
+    expect(useAppStore.getState().activeView).toBe("scanner");
+
+    await user.keyboard("{Control>}8{/Control}");
+    expect(useAppStore.getState().activeView).toBe("settings");
   });
 
   it("does not switch view while a modal is open", async () => {

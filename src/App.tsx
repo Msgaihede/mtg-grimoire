@@ -16,6 +16,7 @@ import { DeckEditor } from "@/features/decks/DeckEditor";
 import { DecksPage } from "@/features/decks/DecksPage";
 import { ScannerPage } from "@/features/scanner/ScannerPage";
 import { SearchPage } from "@/features/search/SearchPage";
+import { SharedPage } from "@/features/share/SharedPage";
 import { SettingsPage } from "@/features/settings/SettingsPage";
 import { TagsPage } from "@/features/tags/TagsPage";
 import { WishlistPage } from "@/features/wishlist/WishlistPage";
@@ -31,6 +32,10 @@ function ActiveView({ update }: { update: Update }) {
   if (activeView === "tags") return <TagsPage />;
   if (activeView === "collection") return <CollectionPage />;
   if (activeView === "wishlist") return <WishlistPage />;
+  // Somebody else's collection, opened from a link. The rail may not be drawing a row for it —
+  // it appears once a share has been opened (spec decision 6) — but `Ctrl+6` reaches it either
+  // way, and the view's own empty state is where a reader pastes their first link.
+  if (activeView === "shared") return <SharedPage />;
   if (activeView === "scanner") return <ScannerPage />;
   if (activeView === "settings") return <SettingsPage update={update} />;
   // The gallery is the Decks view in its first state and the editor is the same view with a

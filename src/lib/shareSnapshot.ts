@@ -159,6 +159,27 @@ export function parseSnapshot(text: string): ShareSnapshot {
   } catch (e) {
     throw new Error(SNAPSHOT_UNREADABLE, { cause: e });
   }
+  return parseSnapshotValue(parsed);
+}
+
+/**
+ * The same read, over a value that has **already been parsed** — and the door the in-app viewer
+ * comes through.
+ *
+ * `ipc.shareOpen` answers `unknown` because `share::commands::share_open` answers
+ * `serde_json::Value`: spec §10 wants a snapshot published by a newer build *told about* rather
+ * than refused, which a strict Rust struct turns into a parse error at the wrong layer. So the
+ * page is handed an object, and `parseSnapshot(JSON.stringify(value))` would serialise and
+ * reparse a whole binder — the measured 2.07 MB at 50 000 cards — to learn nothing that was not
+ * already in hand.
+ *
+ * **The refusals live here and `parseSnapshot` delegates**, rather than the other way round or
+ * both spelling them out. Two implementations of "what is a snapshot" is precisely the drift
+ * this format's golden file exists to prevent, and it is the silent kind: each would pass its
+ * own tests while one viewer refused a document the other drew. The one thing the text door adds
+ * is [`SNAPSHOT_UNREADABLE`], which cannot arise here — a value is already past `JSON.parse`.
+ */
+export function parseSnapshotValue(parsed: unknown): ShareSnapshot {
   // ⚠️ **Only the `null` arm is load-bearing on its own; the other two overlap the arrays check
   // below, and neither half may be tidied away on the strength of that.** Measured by mutation:
   // drop `Array.isArray(parsed)` and `parseSnapshot("[]")` is still refused *by name*, because an

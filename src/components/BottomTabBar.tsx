@@ -1,6 +1,6 @@
 import { useRef } from "react";
 import type { LucideIcon } from "lucide-react";
-import { NAV } from "@/components/nav";
+import { NAV, type NavEntry } from "@/components/nav";
 import { useSidebarDropTarget, type SidebarDrop } from "@/components/useSidebarDrops";
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { PRESS } from "@/lib/motion";
@@ -38,12 +38,23 @@ import { cn } from "@/lib/utils";
 export function BottomTabBar({
   activeView,
   onSelect,
+  entries = NAV,
   dragging,
   decks,
   wishlist,
 }: {
   /** Which of the six is open — the one that wears `aria-current`. */
   activeView: ViewId;
+  /**
+   * Which destinations to draw, defaulting to the whole of `NAV`.
+   *
+   * **A prop rather than this file filtering, and a default rather than a required one.** The
+   * Shared row appears only once a reader has opened a link (spec decision 6), and the shell is
+   * where that is decided — passing the shell's own answer down is what keeps the rail and this
+   * bar from being two components with two opinions about it. The default is what lets a story
+   * or a test draw the bar without knowing about the rule.
+   */
+  entries?: readonly NavEntry[];
   /** A tab was pressed. The bar reports and does not navigate: the store write is the shell's,
    *  exactly as it is for the rail. */
   onSelect: (view: ViewId) => void;
@@ -72,7 +83,7 @@ export function BottomTabBar({
       className="flex shrink-0 border-t border-border bg-surface"
       style={{ paddingBottom: "var(--safe-b)" }}
     >
-      {NAV.map(({ id, label, Icon }) => (
+      {entries.map(({ id, label, Icon }) => (
         <Tab
           key={id}
           label={label}

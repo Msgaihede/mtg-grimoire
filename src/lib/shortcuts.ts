@@ -46,9 +46,9 @@ export interface Shortcut {
    * list of spellings a reader picks one of.
    *
    * **Declared here because nothing downstream can work it out.** The panel draws the two apart
-   * (`Ctrl` `1` *to* `Ctrl` `7` against `Ctrl` `Y` *or* `Ctrl` `Shift` `Z`), and the only thing
-   * it has to go on otherwise is how many chords there are — which cannot tell seven steps of one
-   * sequence from seven alternatives. Under a count rule the first entry ever written with three
+   * (`Ctrl` `1` *to* `Ctrl` `8` against `Ctrl` `Y` *or* `Ctrl` `Shift` `Z`), and the only thing
+   * it has to go on otherwise is how many chords there are — which cannot tell eight steps of one
+   * sequence from eight alternatives. Under a count rule the first entry ever written with three
    * genuine spellings draws "A **to** C", promising a reader a chord nothing binds: a documented
    * chord with no handler behind it, which is precisely the drift this module exists to end.
    * Whether the middle of a run can be inferred is a fact about the run, so it is the entry's to
@@ -84,16 +84,23 @@ export const SHORTCUTS: Record<ShortcutScope, readonly Shortcut[]> = {
       id: "switchView",
       label: "Jump to a section",
       /**
-       * A run rather than seven alternatives: the digits are consecutive and a reader shown the
+       * A run rather than eight alternatives: the digits are consecutive and a reader shown the
        * ends knows every chord between them, which is what buys the panel one row instead of
-       * fourteen caps of arithmetic (`Caps` draws each chord as two `<kbd>`s, `Ctrl` plus the
+       * sixteen caps of arithmetic (`Caps` draws each chord as two `<kbd>`s, `Ctrl` plus the
        * digit).
        */
       range: true,
       /**
-       * Seven chords in `NAV` order, and the *index* is the binding: `AppShell` walks these and
+       * Eight chords in `NAV` order, and the *index* is the binding: `AppShell` walks these and
        * activates `NAV[i]`, so the rail's own order stays the single list rather than being
-       * restated as a seventh copy here.
+       * restated as an eighth copy here.
+       *
+       * **`Ctrl+6` reaches a destination the rail may not be drawing**, and that is the one thing
+       * about this run that is not obvious. Shared is hidden until the reader has opened a link
+       * (spec decision 6), while these chords bind against the *whole* of `NAV` — so the digits
+       * never shift under a reader, and the press is what puts the row on screen. Binding against
+       * the filtered rail instead would move Scanner and Settings between `Ctrl+6…8` and
+       * `Ctrl+7…8` depending on something the reader did last week.
        */
       chords: [
         { key: "1", ctrl: true },
@@ -103,6 +110,7 @@ export const SHORTCUTS: Record<ShortcutScope, readonly Shortcut[]> = {
         { key: "5", ctrl: true },
         { key: "6", ctrl: true },
         { key: "7", ctrl: true },
+        { key: "8", ctrl: true },
       ],
     },
     { id: "keyMap", label: "Show this list", chords: [{ key: "F1" }] },
@@ -140,6 +148,7 @@ export const SHORTCUTS: Record<ShortcutScope, readonly Shortcut[]> = {
   decks: [],
   collection: [],
   wishlist: [],
+  shared: [],
   scanner: [],
   settings: [],
   deckEditor: [
