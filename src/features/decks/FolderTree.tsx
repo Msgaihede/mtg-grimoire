@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useId,
   useRef,
   useState,
   type KeyboardEventHandler,
@@ -7,9 +8,10 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { Check, Folder, FolderOpen, FolderPlus, Layers } from "lucide-react";
+import { Check, ChevronLeft, Folder, FolderOpen, FolderPlus, Layers } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { FolderDropLine } from "@/components/FolderDropLine";
+import { ResizeHandle } from "@/components/ResizeHandle";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { plural } from "@/lib/counts";
@@ -22,7 +24,7 @@ import {
 } from "@/lib/folderDrag";
 import { FOCUS } from "@/lib/focus";
 import type { DeckFolder } from "@/lib/ipc";
-import { statusLine } from "@/lib/motion";
+import { statusLine, TRANSITION } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import { useDeckDropTarget, type DeckDrag } from "./deckDrag";
 import type { FolderNode } from "./folders";
@@ -91,6 +93,55 @@ export type FolderNaming =
  *  closes. An attribute for `data-deck-id`'s reason: the row the layer replaced is a *different
  *  element* by the time the layer is gone, so a ref taken when it opened points at nothing. */
 export const FOLDER_ROW_ATTR = "data-folder-id";
+
+/**
+ * The width the tree is drawn at on a database nobody has dragged, in px — today's `w-52`.
+ *
+ * The number is unchanged and the *kind* of number it is has changed: it was a Tailwind class on
+ * the `<nav>`, so it was the tree's width full stop, and it is now the seed the reader's own
+ * width starts from. What that means for a reader who never touches the edge is nothing at all,
+ * which is the point — 208 is the column this screen shipped with and was laid out against, so a
+ * default of anything else would move a wall nobody asked to move.
+ *
+ * **A pixel default rather than a share of the window**, which is `DEFAULT_PANEL_WIDTH_PX`'s rule
+ * one column over: on a 2560px monitor a proportional default is a 400px filing cabinet nobody
+ * asked for, and what a wider window should buy is room to *drag* rather than a wider tree.
+ */
+export const DEFAULT_FOLDER_TREE_WIDTH_PX = 208;
+
+/**
+ * The narrowest the tree may be dragged, in px.
+ *
+ * **Counted off the markup rather than chosen**, and off the two rows that have to survive it.
+ * A top-level folder row is a 26px guide gutter (`GUIDE_STEP · 1 + GUIDE_TICK`), the button's own
+ * `pl-2` (8), its 16px glyph, the `gap-2` either side of the name (8 + 8), a two-digit count
+ * (~14 at `text-[0.7rem]` tabular mono) and the `pr-8` (32) the row's `+` control is absolutely
+ * positioned inside — **112px that cannot shrink** — over the nav's own `pr-3` and its hairline,
+ * which is **125**. The heading row above it is a second sum on the same width: a 28px chevron, a
+ * 24px `New folder`, a `gap-2` either side of the word and the same `px-1`, `pr-3` and hairline,
+ * which is **89**.
+ *
+ * So 160 leaves a folder's truncating name **35px** and the word `Folders` **71**, which is the
+ * narrowest either of them says anything at. Below it the name is the ellipsis alone and the
+ * gutter, the glyph and the count are the whole of the row — a filing cabinet whose drawers have
+ * no labels on them.
+ *
+ * It is the floor a *drag* is clamped to and the width a page decides there is no room for the
+ * tree at all by, exactly as `MIN_PANEL_WIDTH_PX` is for the docked search columns: below it the
+ * tree rails rather than being squeezed, and the width the reader had dragged to is still here
+ * when the room comes back.
+ */
+export const MIN_FOLDER_TREE_WIDTH_PX = 160;
+
+/**
+ * Why the disclosure will not open, said where it is refused.
+ *
+ * `CardSearchPanel`'s `NO_ROOM` with this page's own remedies in it, and the difference is the
+ * point rather than drift: there is no card pane on this screen to close, and the row's floor is
+ * **one deck tile at the reader's own zoom** — so zooming the wall out really does buy the tree
+ * its width back, and it is the remedy a reader is least likely to think of.
+ */
+const NO_ROOM = "Not enough room — zoom the decks out or widen the window";
 
 /**
  * How a test finds one hairline of the nesting, and which piece of the drawing it found.
@@ -217,6 +268,42 @@ export interface FolderRowMenu {
 }
 
 export interface FolderTreeProps {
+  /**
+   * How wide to draw the column when it is open, in px — the reader's own answer, held by the
+   * page (`useFolderPane`) rather than here.
+   *
+   * Hoisted for `CardSearchPanel`'s reason read from the other end: this component is drawn
+   * once, so it *could* hold the number — but the number outlives the tree (it is remembered
+   * across sessions) and a component that owned a persisted width would be a component that had
+   * to know about storage. The page owns both halves of the pair and hands them down.
+   */
+  width: number;
+  /**
+   * What the **reader** pressed, and never what is drawn.
+   *
+   * A narrow window is a measurement, not a press — see {@link roomy} — so a railing must never
+   * write back through {@link onCollapse}. Fold the two together and the first reader who
+   * narrows their window loses the tree permanently: the measurement records itself as a choice
+   * and widening the window back gives nothing.
+   */
+  collapsed: boolean;
+  /** The widest the tree may be dragged, in px — the page's measurement, because the page is what
+   *  holds the row the tree and the wall share. */
+  maxWidth: number;
+  /**
+   * Whether the row has room to draw the tree open — measured, not guessed.
+   *
+   * `false` draws the rail whatever {@link collapsed} says, and the chevron goes with it:
+   * `aria-disabled` with the reason in a tooltip, which is the docked search columns' refusal
+   * word for word. **It decides what is _drawn_ and never what the reader chose**, which is the
+   * whole of why it is a prop of its own.
+   *
+   * Absent is `true`: a story or a test that says nothing about width gets the tree it has always
+   * drawn, and an unmeasured row is not a narrow one.
+   */
+  roomy?: boolean;
+  onResize: (width: number) => void;
+  onCollapse: (collapsed: boolean) => void;
   nodes: readonly FolderNode[];
   /** Every live deck there is — what the "All decks" row counts. */
   totalDecks: number;
@@ -245,9 +332,10 @@ export interface FolderTreeProps {
    *  layer — two Escape peers are not ordered by the handshake at all. */
   naming: FolderNaming | null;
   onOpenNew: (parentId: number | null, opener: HTMLButtonElement) => void;
-  /** F2 on a row. There is no trigger *on* the row: a 208px column with an indent, a glyph, a
-   *  name, a count and a "new folder" control has no width left for a second one, so the
-   *  pointer's route is the wall's own "Rename folder" and this is the keyboard's. */
+  /** F2 on a row. There is no trigger *on* the row: a column 208px wide by default — and as
+   *  narrow as {@link MIN_FOLDER_TREE_WIDTH_PX} by the reader's own drag — with an indent, a
+   *  glyph, a name, a count and a "new folder" control has no width left for a second one, so
+   *  the pointer's route is the wall's own "Rename folder" and this is the keyboard's. */
   onOpenRename: (folderId: number) => void;
   /** Focus left the field on its own: it closes and hands nothing back. */
   onCloseNaming: () => void;
@@ -336,6 +424,12 @@ function drawOrder(nodes: readonly FolderNode[], trail: readonly boolean[] = [])
  * a place a deck can be dropped.
  */
 export function FolderTree({
+  width,
+  collapsed,
+  maxWidth,
+  roomy = true,
+  onResize,
+  onCollapse,
   nodes,
   totalDecks,
   selectedId,
@@ -360,152 +454,328 @@ export function FolderTree({
   const rows = drawOrder(nodes);
   /** Where a "new folder" field is open, or `undefined` when the open field is a rename. */
   const newAt = naming?.kind === "new" ? naming.parentId : undefined;
+  const treeId = useId();
+  /**
+   * Whether the tree is **drawn** — the reader's press, unless the row has no room for it.
+   *
+   * The two facts are kept apart all the way down: `collapsed` is what the reader chose and is
+   * what the chevron's own name is about, `roomy` is a measurement of the row, and this is the
+   * one place they meet. Nothing derived from here may ever be written back through
+   * {@link FolderTreeProps.onCollapse}.
+   */
+  const open = !collapsed && roomy;
+
+  /**
+   * What is actually **drawn**: the reader's width inside the page's cap, and never below the one
+   * a row is measured from.
+   *
+   * **The clamp split, which is the docked search columns' rule and may not be re-decided here.**
+   * A narrowing window, a wall of tiles that will not give any more — each of those caps what can
+   * be drawn without being a thing the reader asked for, so none of them may overwrite what they
+   * did ask for. Let the environment write back through {@link FolderTreeProps.onResize} instead
+   * and a momentary squeeze is permanent: widen the window again and the tree stays where the
+   * narrow moment left it. A *drag* does write clamped, because there the bound is the edge the
+   * reader is pushing against rather than something that happened to the window while they were
+   * not looking.
+   *
+   * The `max` around the cap matters at exactly one moment — a row too narrow for the minimum,
+   * where `roomy` is already false and this column is 36px of rail whose width nothing reads.
+   */
+  const floor = Math.max(maxWidth, MIN_FOLDER_TREE_WIDTH_PX);
+  const drawnWidth = Math.min(Math.max(width, MIN_FOLDER_TREE_WIDTH_PX), floor);
+
+  /**
+   * The disclosure, in both of its states — one control, one element, and `aria-expanded` for
+   * the difference.
+   *
+   * Refused, with the reason, in the one state where pressing it could not work: the row cannot
+   * hold the tree and a deck tile side by side, so the press would be recorded and nothing would
+   * move. `aria-disabled` and a press that does nothing, **not** `disabled` — a disabled button
+   * leaves the tab order, which would hang the reason on a hover a keyboard reader cannot
+   * perform. It is the docked search columns' arrangement, and it is deliberately the same one:
+   * a reader who has learnt the rail on the right of the deck editor has learnt this.
+   */
+  const toggle = (
+    <button
+      type="button"
+      aria-expanded={open}
+      aria-controls={treeId}
+      aria-disabled={!roomy || undefined}
+      // **It names the result, not the state** — `aria-expanded` above already says which way
+      // round it is, and a reader who has just heard "collapsed" wants to know what pressing it
+      // will do about that.
+      //
+      // **Read off what is _drawn_ and deliberately not off the reader's stored answer**, which
+      // is `CardSearchPanel`'s wiring character for character (`shown` feeds both its
+      // `aria-expanded` and its label). The two agree everywhere except the one state where the
+      // room has been taken away from a tree the reader left open — and there, naming the press
+      // announces "Collapse folders, collapsed", a control that contradicts the state word it is
+      // sitting next to. Naming the drawing says "Expand folders, collapsed", which is coherent
+      // with what is on screen; that the press is then refused is what `aria-disabled` and the
+      // tooltip are for, and they are the two things a reader meets before pressing anything.
+      aria-label={open ? "Collapse folders" : "Expand folders"}
+      {...tip(roomy ? null : NO_ROOM)}
+      onClick={() => roomy && onCollapse(!collapsed)}
+      className={cn(
+        "flex size-7 shrink-0 items-center justify-center rounded-md text-dim",
+        "transition-colors duration-150 motion-reduce:transition-none",
+        roomy ? "hover:text-text" : "cursor-not-allowed opacity-60",
+        // Railed, the button is centred in the rail's own content box rather than sitting 28px
+        // wide at the start of a 35px column — the hairline comes out of the 36px, so a bare
+        // `size-7` would be 3px off the centre line the vertical heading below it is on.
+        open || "w-full",
+        FOCUS,
+      )}
+    >
+      {/* **The chevron points where the tree is going**, which is what makes it readable without
+          words: left when the tree is open, because pressing it slides this column away to the
+          left edge it is docked against, and right when it is a rail, because pressing it brings
+          the column back out. That is the mirror image of the docked search column's, which is
+          docked against the *right* edge — same rule, opposite page.
+
+          **One icon turned over, never `ChevronRight` swapped in for `ChevronLeft`.** A different
+          element in the same slot is unmounted and remounted, so the indicator *teleports*, and
+          the whole of what the press means is that the direction reversed. Half a turn is that
+          fact, drawn.
+
+          `initial={false}`, so a tree that mounts already railed draws its chevron turned rather
+          than spinning it on first paint. `flex` on the span is load-bearing and not decoration:
+          a bare `<span>` is a non-replaced inline box, a transform does not apply to one at all,
+          and the rotation would silently do nothing. */}
+      <motion.span
+        aria-hidden="true"
+        initial={false}
+        animate={{ rotate: open ? 0 : 180 }}
+        transition={TRANSITION.fast}
+        className="flex"
+      >
+        <ChevronLeft className="size-4" />
+      </motion.span>
+    </button>
+  );
 
   return (
+    // **The `<nav>` is the positioned, non-scrolling container now, and the scroller is one box
+    // in.** The resize handle is `absolute inset-y-0` against this element, and an absolutely
+    // positioned child of a scroller scrolls away with the content and is clipped at the padding
+    // box — so a grab strip down the tree's edge would slide up the page as the reader scrolled
+    // their folders. Moving the `overflow-y-auto` inward fixes that and takes the heading row and
+    // its `New folder` button out of the scroll as a side effect, which is an improvement: the
+    // one control that makes a folder no longer disappears above a long cabinet.
+    //
+    // **The hairline is drawn in both states**, exactly as the docked search column's is: the
+    // rail and the tree are one edge, so a collapse changes what is *in* this column and not what
+    // it is. `box-sizing` is `border-box`, so `w-9` stays 36px and the line comes out of the rail
+    // rather than out of the wall beside it.
+    //
+    // The width is an inline style rather than a class for Tailwind's own reason — it scans
+    // source text for whole class names, so a `w-[${width}px]` emits no rule at all.
     <nav
+      id={treeId}
       aria-label="Folders"
-      className="flex w-52 flex-none flex-col overflow-y-auto border-r border-border pr-3"
+      className={cn(
+        "relative flex min-h-0 flex-none flex-col border-r border-border",
+        open ? "pr-3" : "w-9",
+      )}
+      style={open ? { width: drawnWidth } : undefined}
     >
-      <div className="flex items-center justify-between px-1 pb-2">
-        <h2 className="font-heading text-lg leading-none">Folders</h2>
-        <button
-          type="button"
-          aria-label="New folder at the top level"
-          aria-expanded={newAt === null}
-          {...tip("New folder", { describes: false })}
-          onClick={(e) => onOpenNew(null, e.currentTarget)}
+      {open && (
+        <ResizeHandle
+          controls={treeId}
+          label="folders"
+          width={drawnWidth}
+          min={MIN_FOLDER_TREE_WIDTH_PX}
+          max={floor}
+          // Docked against the row's left edge, so the strip is over this column's *right*
+          // hairline and Right is the key that widens it.
+          side="left"
+          // The drag's own clamp: a gesture cannot ask for a width the page has already refused,
+          // where a *window* that refuses one may not write back at all — see {@link drawnWidth}.
+          onResize={(next) => onResize(Math.min(Math.max(next, MIN_FOLDER_TREE_WIDTH_PX), floor))}
+        />
+      )}
+      {/* **The heading row, and railed it _is_ the whole nav.** It takes the height then and lets
+          the rail stretch down it — a 36px strip reads as an edge, an 80px one reads as a stray
+          button — with the word turned on its side so 36px of chrome still says what this column
+          is rather than leaving a bare chevron to be guessed at.
+
+          `self-center` is what centres the heading down the rail and `text-center` is not: in
+          `vertical-rl` the *block* axis runs right to left, so `text-align` moves the words up and
+          down against a box whose height is their own content. Stretched by the row's
+          `items-stretch` the word's centre would sit right of the chevron's in a 36px column.
+
+          `select-none` in that state alone: there the word *is* the rail, so a pointer dragged
+          down the shut column with the button held selects the whole of what the tree has left on
+          screen. Open it is an ordinary heading over a list and there is nothing to protect it
+          from. */}
+      <div
+        className={cn(
+          "flex gap-2",
+          open ? "shrink-0 items-center px-1 pb-2" : "min-h-0 flex-1 flex-col items-stretch",
+        )}
+      >
+        {toggle}
+        <h2
           className={cn(
-            "grid size-6 place-items-center rounded-md border border-border text-dim",
-            "transition-colors duration-150 hover:border-accent hover:text-accent",
-            "motion-reduce:transition-none",
-            FOCUS,
+            "font-heading text-lg leading-none",
+            open ? "min-w-0 flex-1 truncate" : "select-none self-center",
           )}
+          style={open ? undefined : { writingMode: "vertical-rl" }}
         >
-          <FolderPlus className="size-3.5" aria-hidden="true" />
-        </button>
+          Folders
+        </h2>
+        {open && (
+          <button
+            type="button"
+            aria-label="New folder at the top level"
+            aria-expanded={newAt === null}
+            {...tip("New folder", { describes: false })}
+            onClick={(e) => onOpenNew(null, e.currentTarget)}
+            className={cn(
+              "grid size-6 flex-none place-items-center rounded-md border border-border text-dim",
+              "transition-colors duration-150 hover:border-accent hover:text-accent",
+              "motion-reduce:transition-none",
+              FOCUS,
+            )}
+          >
+            <FolderPlus className="size-3.5" aria-hidden="true" />
+          </button>
+        )}
       </div>
 
-      {/* A failed **read**, reported the way this screen reports its other one (the wall's own
-          "Reading your decks…" line): `status`, not `alert`. `alert` is reserved here for a
-          write the app refused, which is a thing that just happened rather than a condition
-          that is. Mounted only when there is something to say — a tree that has loaded has no
-          slot for a sentence. */}
-      {/* Grown into place: the whole tree below it is what moves otherwise. The gap under the
-          sentence is `pb-2` on the child rather than a margin on the animated element, which is
-          the split `motion.ts` asks for — a margin on a box whose height is animating to 0
-          still occupies its margin, so the layout would jump by 8px instead of by 32 and read
-          as a bug rather than as a fix. `overflow-hidden` on the wrapper, since the sentence is
-          laid out at full size whatever the box around it is doing. */}
-      <AnimatePresence initial={false}>
-        {failure && (
-          <motion.div {...statusLine} className="overflow-hidden">
-            <p role="status" className="px-1 pb-2 text-xs text-destructive">
-              Could not read your folders — {failure}
-            </p>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {/* Everything below the heading row, and only while there is room to draw it.
 
-      <ul className="flex flex-col gap-0.5">
-        {/* **The root takes a folder, and only into itself.**
-            "All decks" is not a folder — it cannot be picked up, renamed or deleted — but it is
-            the one row that means *the top level*, and filing a folder back there is otherwise
-            unreachable by this gesture: every other row is a folder, so dragging a folder **out**
-            of a drawer would always mean dragging it **into** another one. The pointer needs
-            somewhere that is nowhere, and this is it.
-            Its two positional landings are refused instead. A line above or below this row would
-            promise a place in a level it does not itself sit in — it stands above every top-level
-            folder rather than among them — and the position it looks like it offers ("first at
-            the top level") is already the first folder's own leading edge, which is the same drop
-            spelled once. */}
-        <FolderRow
-          label={ROOT_LABEL}
-          count={totalDecks}
-          depth={0}
-          selected={selectedId === null}
-          Glyph={Layers}
-          drag={drag}
-          canDrop={(d) => canDropIn(d, null)}
-          onDropDeck={(d) => onDropIn(d, null)}
-          canDropFolder={(d, at) => canDropFolder(d, null, at)}
-          onDropFolder={(d, at) => onDropFolder(d, null, at)}
-          onSelect={() => onSelect(null)}
-          trunkBelow={rows.length > 0}
-        />
+          **The rows are gone at 36px, so a deck cannot be dragged _into the tree_ while it is
+          railed** — and nothing here tries to buy that back. Filing still works two other ways
+          the reader can see: the wall's own folder cards take a deck dropped on them, and the
+          tile's row menu carries `Move to folder…`. A hover-to-expand-mid-drag would be a
+          mechanism — and a mode, and a timer — for a gesture the wall already serves at full
+          size. */}
+      {open && (
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {/* A failed **read**, reported the way this screen reports its other one (the wall's own
+              "Reading your decks…" line): `status`, not `alert`. `alert` is reserved here for a
+              write the app refused, which is a thing that just happened rather than a condition
+              that is. Mounted only when there is something to say — a tree that has loaded has no
+              slot for a sentence. */}
+          {/* Grown into place: the whole tree below it is what moves otherwise. The gap under the
+              sentence is `pb-2` on the child rather than a margin on the animated element, which is
+              the split `motion.ts` asks for — a margin on a box whose height is animating to 0
+              still occupies its margin, so the layout would jump by 8px instead of by 32 and read
+              as a bug rather than as a fix. `overflow-hidden` on the wrapper, since the sentence is
+              laid out at full size whatever the box around it is doing. */}
+          <AnimatePresence initial={false}>
+            {failure && (
+              <motion.div {...statusLine} className="overflow-hidden">
+                <p role="status" className="px-1 pb-2 text-xs text-destructive">
+                  Could not read your folders — {failure}
+                </p>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
-        {rows.map(({ node, last, trail }) =>
-          // Renaming replaces the row rather than opening a field under it: the folder already
-          // has a place in the tree, and correcting its name is not a new thing arriving.
-          naming?.kind === "rename" && naming.folderId === node.folder.id ? (
-            <li key={node.folder.id}>
-              <TreeNameField
-                depth={node.depth + 1}
-                initial={node.folder.name}
-                label={`Rename ${node.folder.name}`}
-                submitLabel="Rename folder"
-                pending={busy}
-                onCancel={onCloseNaming}
-                onSubmit={onName}
-              />
-            </li>
-          ) : (
+          <ul className="flex flex-col gap-0.5">
+            {/* **The root takes a folder, and only into itself.**
+                "All decks" is not a folder — it cannot be picked up, renamed or deleted — but it is
+                the one row that means *the top level*, and filing a folder back there is otherwise
+                unreachable by this gesture: every other row is a folder, so dragging a folder **out**
+                of a drawer would always mean dragging it **into** another one. The pointer needs
+                somewhere that is nowhere, and this is it.
+                Its two positional landings are refused instead. A line above or below this row would
+                promise a place in a level it does not itself sit in — it stands above every top-level
+                folder rather than among them — and the position it looks like it offers ("first at
+                the top level") is already the first folder's own leading edge, which is the same drop
+                spelled once. */}
             <FolderRow
-              key={node.folder.id}
-              folder={node.folder}
-              label={node.folder.name}
-              count={node.count}
-              depth={node.depth + 1}
-              last={last}
-              trail={trail}
-              selected={selectedId === node.folder.id}
-              Glyph={selectedId === node.folder.id ? FolderOpen : Folder}
+              label={ROOT_LABEL}
+              count={totalDecks}
+              depth={0}
+              selected={selectedId === null}
+              Glyph={Layers}
               drag={drag}
-              canDrop={(d) => canDropIn(d, node.folder.id)}
-              onDropDeck={(d) => onDropIn(d, node.folder.id)}
-              canDropFolder={(d, at) => canDropFolder(d, node.folder.id, at)}
-              onDropFolder={(d, at) => onDropFolder(d, node.folder.id, at)}
-              onSelect={() => onSelect(node.folder.id)}
-              onRename={() => onOpenRename(node.folder.id)}
-              onNewChild={(opener) => onOpenNew(node.folder.id, opener)}
-              addingChild={newAt === node.folder.id}
-              menu={rowMenu(node.folder)}
-              menuOpenerRef={menuOpenerRef}
-            >
-              {newAt === node.folder.id && (
+              canDrop={(d) => canDropIn(d, null)}
+              onDropDeck={(d) => onDropIn(d, null)}
+              canDropFolder={(d, at) => canDropFolder(d, null, at)}
+              onDropFolder={(d, at) => onDropFolder(d, null, at)}
+              onSelect={() => onSelect(null)}
+              trunkBelow={rows.length > 0}
+            />
+
+            {rows.map(({ node, last, trail }) =>
+              // Renaming replaces the row rather than opening a field under it: the folder already
+              // has a place in the tree, and correcting its name is not a new thing arriving.
+              naming?.kind === "rename" && naming.folderId === node.folder.id ? (
+                <li key={node.folder.id}>
+                  <TreeNameField
+                    depth={node.depth + 1}
+                    initial={node.folder.name}
+                    label={`Rename ${node.folder.name}`}
+                    submitLabel="Rename folder"
+                    pending={busy}
+                    onCancel={onCloseNaming}
+                    onSubmit={onName}
+                  />
+                </li>
+              ) : (
+                <FolderRow
+                  key={node.folder.id}
+                  folder={node.folder}
+                  label={node.folder.name}
+                  count={node.count}
+                  depth={node.depth + 1}
+                  last={last}
+                  trail={trail}
+                  selected={selectedId === node.folder.id}
+                  Glyph={selectedId === node.folder.id ? FolderOpen : Folder}
+                  drag={drag}
+                  canDrop={(d) => canDropIn(d, node.folder.id)}
+                  onDropDeck={(d) => onDropIn(d, node.folder.id)}
+                  canDropFolder={(d, at) => canDropFolder(d, node.folder.id, at)}
+                  onDropFolder={(d, at) => onDropFolder(d, node.folder.id, at)}
+                  onSelect={() => onSelect(node.folder.id)}
+                  onRename={() => onOpenRename(node.folder.id)}
+                  onNewChild={(opener) => onOpenNew(node.folder.id, opener)}
+                  addingChild={newAt === node.folder.id}
+                  menu={rowMenu(node.folder)}
+                  menuOpenerRef={menuOpenerRef}
+                >
+                  {newAt === node.folder.id && (
+                    <TreeNameField
+                      depth={node.depth + 2}
+                      where={`in ${node.folder.name}`}
+                      label="New folder name"
+                      submitLabel="Create folder"
+                      pending={busy}
+                      onCancel={onCloseNaming}
+                      onSubmit={onName}
+                    />
+                  )}
+                </FolderRow>
+              ),
+            )}
+
+            {newAt === null && (
+              <li>
                 <TreeNameField
-                  depth={node.depth + 2}
-                  where={`in ${node.folder.name}`}
+                  depth={1}
+                  where="at the top level"
                   label="New folder name"
                   submitLabel="Create folder"
                   pending={busy}
                   onCancel={onCloseNaming}
                   onSubmit={onName}
                 />
-              )}
-            </FolderRow>
-          ),
-        )}
+              </li>
+            )}
 
-        {newAt === null && (
-          <li>
-            <TreeNameField
-              depth={1}
-              where="at the top level"
-              label="New folder name"
-              submitLabel="Create folder"
-              pending={busy}
-              onCancel={onCloseNaming}
-              onSubmit={onName}
-            />
-          </li>
-        )}
-
-        {!pending && !failure && rows.length === 0 && naming === null && (
-          <li className="px-1 pt-2 text-[0.7rem] leading-relaxed text-dim">
-            Folders file decks the way drawers file paper. Make one, then drag a deck onto it.
-          </li>
-        )}
-      </ul>
+            {!pending && !failure && rows.length === 0 && naming === null && (
+              <li className="px-1 pt-2 text-[0.7rem] leading-relaxed text-dim">
+                Folders file decks the way drawers file paper. Make one, then drag a deck onto it.
+              </li>
+            )}
+          </ul>
+        </div>
+      )}
     </nav>
   );
 }
@@ -876,8 +1146,9 @@ function FolderGuides({
  * registrations and only the top one acts — and was never the argument: the field has nothing to
  * dismiss that the page is not already dismissing.)
  *
- * What is *not* kept is that field's visible Cancel: at 208px less an indent there is no room
- * for two text buttons beside the input, and this screen's other half-made decisions (the new
+ * What is *not* kept is that field's visible Cancel: at the tree's default 208px less an indent
+ * there is no room for two text buttons beside the input, and less again wherever the reader has
+ * pulled the edge in, and this screen's other half-made decisions (the new
  * deck form, the delete question, both move pickers) are all discarded the same two ways —
  * Escape, or looking away.
  */

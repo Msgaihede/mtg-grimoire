@@ -76,6 +76,12 @@ const meta = {
           "{@link Folders} is the story about the shape; {@link FoldersUnavailable} is the one " +
           "about a refused read, which now needs the `deckMeta` fault rather than a missing " +
           "handler.\n\n" +
+          "**The tree is a column the reader owns the width of** (2026-09-08) — dragged from " +
+          "its right edge, folded to a 36px rail with the chevron, and both remembered across " +
+          "restarts in one `app_meta` row. It is the deck builder's docked card search " +
+          "column's control on the opposite edge of the page, so Right widens here where Left " +
+          "widens there. {@link ResizableFolders} is that story, and `Decks/FolderTree` is the " +
+          "column on its own at four widths.\n\n" +
           "**A failed read is a `status`; a refused write is an `alert`.** The wall's " +
           "“Reading your decks…” line and the tree's refusal are the first kind, the " +
           "“Could not change your decks” banner the second — which is what keeps " +
@@ -543,6 +549,75 @@ export const Folders: Story = {
     ).toBeVisible();
     // An empty folder says so rather than drawing a blank strip.
     await expect(within(wall).getByText("Empty")).toBeInTheDocument();
+  },
+};
+
+/**
+ * **The tree is a column the reader owns the width of**, dragged from its right edge and folded
+ * to a 36px rail — the deck builder's docked card search column's control, on the opposite edge
+ * of the page. Both answers are one `app_meta` row (`deck_folder_pane`) and outlive the window,
+ * so a reader who rails the cabinet meets a rail on their next launch.
+ *
+ * **Hover the tree's right edge to see the grip.** At rest that edge is the hairline the column
+ * already had; the strip is 9px of `col-resize` straddling the border, 4px of it out in the
+ * desk's own gap. `components/ResizeHandle` is the same component the card search column uses
+ * with `side="left"`, which is the whole of the difference — **Right widens here where Left
+ * widens there**. `Decks/FolderTree` is the page for the column itself, at four widths; this
+ * story is the one that shows what a wider tree *costs*, because the wall beside it is real.
+ *
+ * **Folded, the folder rows are gone rather than hidden**, so filing a deck by drag goes through
+ * the wall's own folder cards or the tile's `Move to folder…` while the rail is up — a list that
+ * was merely invisible would still be a tab stop per row and a drop target for a deck nobody can
+ * see landing.
+ *
+ * The drag is not driven here and the play does not attempt it: jsdom ships no `PointerEvent`,
+ * so a `userEvent.pointer` on the handle carries no `clientX` and the resize reads `undefined`.
+ * `FolderTree.test.tsx` drives it with a hand-built `MouseEvent`, and `DecksPage.test.tsx` drives
+ * the page's half — that the two gestures reach `set_deck_folder_pane` with both facts, and that
+ * the cap comes off a measurement of the desk row rather than out of a constant.
+ */
+export const ResizableFolders: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const tree = await canvas.findByRole("navigation", { name: "Folders" });
+
+    // 208px, which is the `w-52` this column shipped with — a database nobody has dragged stores
+    // a `null` width, and this side is where that becomes a pixel count. Written as a literal
+    // rather than read back off `DEFAULT_FOLDER_TREE_WIDTH_PX`: an assertion that reads its own
+    // constant passes for whatever that constant becomes.
+    await expect(tree).toHaveStyle({ width: "208px" });
+
+    const handle = within(tree).getByRole("separator", { name: "Resize folders" });
+    await expect(handle).toHaveAttribute("aria-orientation", "vertical");
+    await expect(handle).toHaveAttribute("aria-valuenow", "208");
+    // The floor is counted off this tree's own markup and is deliberately not the card wall's
+    // 206. The ceiling is the page's live measurement of the desk row and is therefore not
+    // asserted — it is a different number in a browser from the one a layout-less runner sees.
+    await expect(handle).toHaveAttribute("aria-valuemin", "160");
+    await expect(handle).toHaveAttribute("tabindex", "0");
+    await expect(handle).toHaveAttribute("aria-controls", tree.id);
+
+    // The fold. One control, one element, named for what pressing it would do rather than for
+    // the state it is in — `aria-expanded` beside it is what says which way round it is.
+    const chevron = within(tree).getByRole("button", { name: "Collapse folders" });
+    await expect(chevron).toHaveAttribute("aria-expanded", "true");
+    await userEvent.click(chevron);
+
+    await expect(chevron).toHaveAccessibleName("Expand folders");
+    await expect(within(tree).queryByRole("button", { name: /^Constructed, / })).toBeNull();
+    await expect(within(tree).queryByRole("separator", { name: "Resize folders" })).toBeNull();
+    // 36px of chevron over the word turned on its side: a rail still says what this column is,
+    // rather than leaving a bare glyph to be guessed at.
+    await expect(within(tree).getByRole("heading", { name: "Folders" })).toBeVisible();
+    // And the wall is untouched — the rail gives the decks width back, it does not narrow what
+    // the reader came here to look at.
+    await expect(canvas.getByRole("list", { name: "Your decks" })).toBeInTheDocument();
+
+    await userEvent.click(chevron);
+
+    // Back at the width it was folded from, on the same `<nav>` and the same chevron throughout.
+    await expect(within(tree).getByRole("button", { name: /^Constructed, / })).toBeVisible();
+    await expect(tree).toHaveStyle({ width: "208px" });
   },
 };
 

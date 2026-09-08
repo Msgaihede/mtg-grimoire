@@ -18,9 +18,10 @@ use crate::sync::AppState;
 use crate::{
     camera, card, collection, collection_alloc, collection_folders, combos, db, deck, deck_audit,
     deck_meta, deck_missing, deck_pull, deck_quick_add, deck_theory, deck_tokens, deck_undo,
-    decksort, errors, export, flatten, images, import, index, listview, markcolors, marketplace,
-    marketplace_feed, mirror, nav, paths, reset, schema, scryfall, search, searchopen, sync,
-    sync_engine, sync_pair, tags, update, wishlist, wishlist_folders, wishlist_optimize, zoom,
+    deckpane, decksort, errors, export, flatten, images, import, index, listview, markcolors,
+    marketplace, marketplace_feed, mirror, nav, paths, reset, schema, scryfall, search, searchopen,
+    sync, sync_engine, sync_pair, tags, update, wishlist, wishlist_folders, wishlist_optimize,
+    zoom,
 };
 // **Not in the list above, because this file compiles for Android too.** Its name says
 // `desktop`, but its gate is `cfg(not(target_family = "wasm"))` — desktop *and* mobile — while
@@ -503,6 +504,10 @@ pub fn run() {
             markcolors::set_mark_color,
             decksort::deck_sort,
             decksort::set_deck_sort,
+            // The decks page's folder tree — how wide the reader dragged it, and whether they
+            // shut it down to a rail. One row and one pair, beside the deck gallery's own order.
+            deckpane::deck_folder_pane,
+            deckpane::set_deck_folder_pane,
             flatten::flatten_state,
             flatten::set_flatten_state,
             marketplace_feed::marketplace_feed_refresh,

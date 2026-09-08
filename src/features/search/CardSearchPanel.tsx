@@ -9,6 +9,7 @@ import {
 } from "react";
 import { ChevronLeft } from "lucide-react";
 import { motion } from "motion/react";
+import { ResizeHandle } from "@/components/ResizeHandle";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { FOCUS } from "@/lib/focus";
 import { TRANSITION } from "@/lib/motion";
@@ -89,10 +90,6 @@ export const DEFAULT_PANEL_WIDTH_PX = 384;
  * component stays mounted through a railing.
  */
 export const MIN_PANEL_WIDTH_PX = 206;
-
-/** How far one arrow press moves the edge. A pointer drags continuously; a caret needs a step
- *  big enough to be worth pressing and small enough to aim with. */
-const RESIZE_STEP_PX = 24;
 
 export interface CardSearchPanelProps {
   /**
@@ -536,7 +533,14 @@ export function CardSearchPanel({
             controls={bodyId}
             label={toggleLabel}
             width={drawnWidth}
+            // The floor is this panel's own and is now told to the splitter rather than read by
+            // it — see `components/ResizeHandle.tsx`, which serves the folder tree on the other
+            // edge of the deck gallery and measures its floor from something else entirely.
+            min={MIN_PANEL_WIDTH_PX}
             max={Math.max(maxWidth, MIN_PANEL_WIDTH_PX)}
+            // Docked against the row's right edge, so the strip is over this panel's left
+            // hairline and Left is the key that widens it.
+            side="right"
             onResize={resize}
           />
         )}
@@ -639,130 +643,5 @@ export function CardSearchPanel({
         )}
       </section>
     </>
-  );
-}
-
-/**
- * The panel's left edge, as something to pull on.
- *
- * A `separator` with a `tabIndex` and a value, which is the ARIA window-splitter pattern: the
- * pointer path and the keyboard path are one control rather than a drag with a settings dialog
- * beside it for anyone who cannot perform one. `aria-valuenow` is the width in px — the unit the
- * reader is actually choosing, and the one the page's cap is expressed in — so a screen reader
- * announcing "206" is announcing the same number the panel is drawn at.
- *
- * **Absolutely positioned over the hairline, not a flex item beside it.** This column is a
- * `flex-col`, so a child of it would be one row's worth of grab strip at the top of a
- * several-hundred-pixel edge. It straddles the border instead — 9px wide, 4px of it out in the
- * row's own 16px gap and the rest over the panel's padding — which is Fitts' law rather than
- * taste: a 1px hairline is not a target, and every pixel of the strip that is *outside* the panel
- * is a pixel the reader can overshoot into without hitting the list.
- *
- * **Pointer capture rather than window listeners**, which is what makes the drag survive the
- * pointer leaving the strip — and it will, immediately, because the strip moves with the edge
- * and the hand does not track it exactly. Capture also ends the drag correctly when the pointer
- * is released outside the window, where a `pointerup` listener on `window` hears nothing.
- *
- * The grip is drawn only on hover and focus. At rest this edge is the hairline the panel already
- * had — the one piece of chrome it adds — and a permanent handle down it would be a second line
- * saying the same thing, on the border this app spent a lot of care making quiet.
- */
-function ResizeHandle({
-  controls,
-  label,
-  width,
-  max,
-  onResize,
-}: {
-  controls: string;
-  label: string;
-  width: number;
-  max: number;
-  onResize: (width: number) => void;
-}) {
-  // Where the drag started, in both senses. `null` is "not dragging", which is also what a
-  // `pointermove` over an idle handle has to be told.
-  const from = useRef<{ x: number; width: number } | null>(null);
-
-  return (
-    <div
-      role="separator"
-      aria-orientation="vertical"
-      aria-controls={controls}
-      // Named for what pulling it does, not for what it is: "separator" is the role's job and
-      // "Resize card search" is the reader's.
-      aria-label={`Resize ${label}`}
-      aria-valuenow={width}
-      aria-valuemin={MIN_PANEL_WIDTH_PX}
-      aria-valuemax={max}
-      tabIndex={0}
-      onPointerDown={(e) => {
-        // The primary button only: a right-press opening a context menu mid-drag would leave the
-        // capture on and the panel following the pointer with nothing held down.
-        if (e.button !== 0) return;
-        e.preventDefault();
-        from.current = { x: e.clientX, width };
-        e.currentTarget.setPointerCapture(e.pointerId);
-      }}
-      onPointerMove={(e) => {
-        const start = from.current;
-        if (!start) return;
-        // Leftward is wider: the panel is docked right, so its edge moving left is the column
-        // growing into the row.
-        onResize(start.width + (start.x - e.clientX));
-      }}
-      onPointerUp={(e) => {
-        from.current = null;
-        e.currentTarget.releasePointerCapture(e.pointerId);
-      }}
-      // A cancelled pointer — the OS taking the gesture, a touch turning into a scroll — is an
-      // ended drag and not a dropped one. Without this the handle stays armed and the next
-      // ordinary move over it resizes the panel.
-      onPointerCancel={() => {
-        from.current = null;
-      }}
-      onKeyDown={(e) => {
-        // Left widens and right narrows, matching the pointer: the key moves the *separator*,
-        // which is what the role says this is, rather than moving a value that happens to be a
-        // width. Home and End are the two ends of the same range.
-        const next =
-          e.key === "ArrowLeft"
-            ? width + RESIZE_STEP_PX
-            : e.key === "ArrowRight"
-              ? width - RESIZE_STEP_PX
-              : e.key === "Home"
-                ? MIN_PANEL_WIDTH_PX
-                : e.key === "End"
-                  ? max
-                  : null;
-        if (next === null) return;
-        // The arrows scroll the page otherwise, and Home and End take it to its ends.
-        e.preventDefault();
-        onResize(next);
-      }}
-      // `touch-none` so a drag on a touch screen is a drag rather than the browser deciding
-      // partway through that it was a scroll and cancelling the pointer.
-      className={cn(
-        // No z-index, and none is owed: the strip lives in the panel's own left padding and the
-        // row's gap, where nothing else in this column paints. `LAYER` is the only place a
-        // z-index may come from in this app, and asking it for one here would be asking for a
-        // rung this element does not need.
-        "group absolute inset-y-0 -left-1 flex w-[9px] cursor-col-resize touch-none items-center justify-center",
-        FOCUS,
-      )}
-    >
-      {/* The grip: three columns of nothing, drawn as one 2px line the height of a fingertip.
-          `bg-border` at rest under the pointer and `bg-accent` while the caret is on it, so the
-          keyboard's own state is visible on a control whose whole affordance is otherwise a
-          cursor change. */}
-      <span
-        aria-hidden="true"
-        className={cn(
-          "h-8 w-0.5 rounded-full bg-border opacity-0",
-          "transition-opacity duration-150 motion-reduce:transition-none",
-          "group-hover:opacity-100 group-focus-visible:bg-accent group-focus-visible:opacity-100",
-        )}
-      />
-    </div>
   );
 }

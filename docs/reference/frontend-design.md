@@ -765,6 +765,32 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   scrollbar across the whole deck builder. That is the one thing the 1024px floor forbids, and it
   arrives with nothing on screen naming the culprit. At two columns or more the cap cannot bind,
   by construction.
+- **The decks page's folder tree is draggable from its right edge, and rails to 36px**
+  (2026-09-08) — the same `ResizeHandle` as the search columns, `side="left"`, and the same
+  three-state root the docked panels use. It was `w-52`/208px and fixed; 208 is now the width a
+  database nobody has dragged opens at (`DEFAULT_FOLDER_TREE_WIDTH_PX`), and
+  `MIN_FOLDER_TREE_WIDTH_PX` is **160** — counted off the two rows that have to survive it rather
+  than chosen, leaving a folder's truncating name 35px and the word `Folders` 71. Below that the
+  name is the ellipsis alone: a cabinet whose drawers have no labels. **The two sums are spelled
+  once, on the constant itself** — repeating them here is how the figure and the markup drift
+  apart, which this file has watched happen before.
+  - **The cap is the desk's, through `useDeskWidth`**, which grew an options bag the same day so
+    one hook serves both arrangements: `{ gap, min }`, defaulting to the search rows' `gap-4`/206
+    so the collection and wishlist call sites are behaviourally untouched. The decks desk passes
+    `gap: 20` (its `gap-5`) and a floor of `scaled(TILE_MIN_WIDTH, zoom)` — **one deck tile at the
+    reader's own zoom**, so zooming the gallery out genuinely buys the tree width back, which is
+    why this page's `NO_ROOM` says *zoom the decks out or widen the window* rather than repeating
+    the deck editor's remedy (there is no card pane here to close).
+  - **The rail costs the tree's drop targets, and that is accepted rather than worked around.**
+    Railed, no folder row is mounted, so a deck cannot be dragged *into the tree*; filing still
+    goes through the wall's own folder cards and the row menu's `Move to folder…`. A
+    hover-to-expand-mid-drag would be mechanism for a gesture the wall already serves.
+  - **The chevron's name is read off what is _drawn_, not off the reader's stored answer**, which
+    is `CardSearchPanel`'s wiring and matters in exactly one state: a tree the reader left open on
+    a row that has since lost the room. Naming the press there announced *"Collapse folders,
+    collapsed"* — a control contradicting the state word beside it. Naming the drawing says
+    *"Expand folders, collapsed"*; that the press is then refused is what `aria-disabled` and the
+    tooltip say, and they are what a reader meets first.
 - **The deck editor's search column is draggable from its left edge** (2026-08-14) —
   `DeckSearchPanel`'s `ResizeHandle`, an ARIA window splitter: `role="separator"`,
   `aria-orientation="vertical"`, a `tabIndex`, and `aria-valuenow`/`min`/`max` in **px**, the unit
@@ -817,10 +843,18 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   ([issue #356](https://github.com/Msgaihede/mtg-grimoire/issues/356)), because both pages' empty
   states said in as many words that the way to add a card was to leave the page. The chrome is
   **extracted, not copied**: `CardSearchPanel.tsx` is the shell — the three-state `<section>`, the
-  36px rail, the disclosure and its `NO_ROOM` tooltip, the vertical rail heading, `ResizeHandle`,
+  36px rail, the disclosure and its `NO_ROOM` tooltip, the vertical rail heading,
   the width `useState` and the clamp split, the `open`/`shown`/`over`/`overlaid` derivations and
   the caret hand-back — and `CardSearchBody.tsx` is the wall and its furniture in the order the
-  deck panel always drew them. Copying it twice would have been the mistake this repo has made and
+  deck panel always drew them.
+  **`ResizeHandle` left that list on 2026-09-08 and is now `components/ResizeHandle.tsx`**, a
+  second extraction with the same argument one level up: the decks page's folder tree needed the
+  identical splitter docked the other way round, and the alternative was a fourth copy of the
+  pointer capture, the ARIA and the key map. It takes `side: "left" | "right"` — the edge the
+  panel is docked against — which flips exactly three things and nothing else: the strip's offset
+  (`-left-1`/`-right-1`), the drag arithmetic's sign, and which arrow widens. **The proof the
+  extraction was faithful is that `CardSearchPanel.test.tsx` and `DeckSearchPanel.test.tsx` both
+  stayed green with no edit** — the same standard the shell's own extraction was held to. Copying it twice would have been the mistake this repo has made and
   undone twice already (`CollectionSearchTab`'s own filter row, the deck Grid view's inline card
   frame): **a resemblance is N independent decisions that happen to agree today.**
   `DeckSearchPanel` went **1595 → 778 lines on the day** and kept every deck-shaped thing — the tab

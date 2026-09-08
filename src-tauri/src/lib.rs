@@ -71,6 +71,14 @@ pub mod deck_theory;
 /// the eleven modules around it. Nothing here reaches a filesystem or a network.
 pub mod deck_tokens;
 pub mod deck_undo;
+/// **[`decksort`]'s neighbour and its argument, one page over.** It is [`listview`]'s shape with a
+/// *fixed* field list — one `app_meta` row holding a width and a collapse, an infallible read and
+/// a write whose only refusal is a width outside a storage band — and it is filed up here rather
+/// than beside the view-state run below for the reason the module under it gives: the decks page's
+/// own settings are what somebody looking between `deck_undo` and `errors` came here to find.
+/// Nothing in it touches the filesystem, `tokio` or the network, so it is on the every-target half
+/// of this map like the rest of them.
+pub mod deckpane;
 /// **A view-state module wearing the deck domain's name.** It is [`listview`]'s shape exactly —
 /// one `app_meta` row, an infallible read and a write whose only refusal is a blank — and it is
 /// filed here rather than beside its four siblings below because a `decksort` between
@@ -92,7 +100,10 @@ pub mod filters;
 /// first four were on the other side only because [`app_meta`] used to live inside the portable
 /// updater; PR 10a moved the store and this moves the modules that lean on it hardest.
 /// [`searchopen`] was born here, on 2026-09-07, when `deck.rs`'s one boolean row became a map
-/// three docked search columns share.
+/// three docked search columns share. **They are not the only ones of this shape in the crate** —
+/// [`deckpane`], [`decksort`] and [`markcolors`] are three more, filed where the page they belong
+/// to would be looked for rather than in this run; the run is a place in the alphabet, not the
+/// list of view-state modules.
 pub mod flatten;
 pub mod image_uri;
 pub mod index;

@@ -1,9 +1,17 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { useState } from "react";
+import { fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
+import { TOOLTIP_OPEN_MS, TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import type { DeckFolder } from "@/lib/ipc";
 import { deckDragData, readDeckDrag } from "./deckDrag";
 import { dragData, readDragData } from "./dnd";
-import { FOLDER_GUIDE_ATTR, FolderTree, type FolderTreeProps } from "./FolderTree";
+import {
+  DEFAULT_FOLDER_TREE_WIDTH_PX,
+  FOLDER_GUIDE_ATTR,
+  FolderTree,
+  type FolderTreeProps,
+} from "./FolderTree";
 import { buildFolderTree, flattenFolders, folderDescendants } from "./folders";
 
 const folder = (id: number, parentId: number | null, name: string, sortOrder = 0): DeckFolder => ({
@@ -173,6 +181,11 @@ describe("readDeckDrag", () => {
 function drawTree(folders: DeckFolder[], props: Partial<FolderTreeProps> = {}) {
   return render(
     <FolderTree
+      width={DEFAULT_FOLDER_TREE_WIDTH_PX}
+      collapsed={false}
+      maxWidth={600}
+      onResize={() => {}}
+      onCollapse={() => {}}
       nodes={buildFolderTree(folders, [])}
       totalDecks={0}
       selectedId={null}
@@ -414,5 +427,433 @@ describe("the selected row's rail", () => {
 
     expect(guides(row("All decks"), "rail")).toHaveLength(1);
     expect(guides(row("Commander"), "rail")).toHaveLength(0);
+  });
+});
+
+/**
+ * The column as something with a **width** — dragged from its right edge, folded to a 36px rail,
+ * and both of those remembered by the page above it.
+ *
+ * **The two facts are kept apart in every case below, and that is most of what they are about.**
+ * `collapsed` is what the reader *pressed*; `roomy` is a measurement of the row they are standing
+ * in. Fold the two together and the first reader who narrows their window loses the tree for good:
+ * the measurement writes itself back as a choice, and widening the window again gives nothing. So
+ * every case that rails the tree says which of the two did it.
+ *
+ * **The splitter's own contract is `src/components/ResizeHandle.test.tsx`'s** — the arithmetic,
+ * the guards and the key map on both edges — and none of it is repeated here. What this file adds
+ * is the wiring: that this tree is the **left**-docked one, that the range it announces is this
+ * column's own, and what the width and the fold do to the rows.
+ *
+ * jsdom lays nothing out, so nothing below measures a box: the width is an inline style the
+ * component writes, and the rail is a class.
+ */
+
+/** One folder, which is all the rows any case below needs — what is under test here is the
+ *  column, not the tree in it. */
+const COMMANDER = folder(1, null, "Commander", 0);
+
+/**
+ * The tree with the page's half of the pair held for it — a width and a fold that a drag or a
+ * press really changes, the way `DecksPage` holds them through `useFolderPane`.
+ *
+ * **Nothing in here clamps.** The number goes back in exactly as it came out, so a clamp asserted
+ * below is the component's own and cannot be this harness agreeing with it.
+ */
+function liveTree({
+  collapsed = false,
+  roomy,
+  width = DEFAULT_FOLDER_TREE_WIDTH_PX,
+  maxWidth = 600,
+}: { collapsed?: boolean; roomy?: boolean; width?: number; maxWidth?: number } = {}) {
+  const onResize = vi.fn();
+  const onCollapse = vi.fn();
+  function Live({ room, max }: { room?: boolean; max: number }) {
+    const [drawnWidth, setDrawnWidth] = useState(width);
+    const [folded, setFolded] = useState(collapsed);
+    return (
+      <FolderTree
+        width={drawnWidth}
+        collapsed={folded}
+        maxWidth={max}
+        roomy={room}
+        onResize={(next) => {
+          onResize(next);
+          setDrawnWidth(next);
+        }}
+        onCollapse={(next) => {
+          onCollapse(next);
+          setFolded(next);
+        }}
+        nodes={buildFolderTree([COMMANDER], [])}
+        totalDecks={0}
+        selectedId={null}
+        onSelect={() => {}}
+        drag={null}
+        canDropIn={() => false}
+        onDropIn={() => {}}
+        canDropFolder={() => false}
+        onDropFolder={() => {}}
+        naming={null}
+        onOpenNew={() => {}}
+        onOpenRename={() => {}}
+        onCloseNaming={() => {}}
+        onName={() => {}}
+        busy={false}
+        failure={null}
+        pending={false}
+        rowMenu={() => ({ onContextMenu: () => {}, onKeyDown: () => {} })}
+        menuOpenerRef={{ current: null }}
+      />
+    );
+  }
+  const view = render(<Live room={roomy} max={maxWidth} />);
+  return {
+    onResize,
+    onCollapse,
+    /** Re-render with the room the page measured changed — what a window resize does. Same
+     *  component in the same position, so the reader's own answers survive it, which is exactly
+     *  the property the room cases are about. */
+    setRoom: (room: boolean) => view.rerender(<Live room={room} max={maxWidth} />),
+    /** Re-render with the page's cap changed — a window widened, or a deck tile that has stopped
+     *  needing so much of the row. */
+    setMax: (max: number) => view.rerender(<Live room={roomy} max={max} />),
+  };
+}
+
+const tree = () => screen.getByRole("navigation", { name: "Folders" });
+const handle = () => screen.getByRole("separator", { name: "Resize folders" });
+const noHandle = () => screen.queryByRole("separator", { name: "Resize folders" });
+const chevron = () => screen.getByRole("button", { name: /^(Expand|Collapse) folders$/ });
+
+/**
+ * One pointer event with a real `clientX` on it.
+ *
+ * `CardSearchPanel.test.tsx`'s helper, for its reason: **jsdom ships no `PointerEvent`**, so
+ * Testing Library's pointer helpers fall back to a plain `Event` and the coordinate never
+ * arrives — every assertion below would be about `NaN`. React dispatches on the event's *type*.
+ */
+function pointer(type: string, clientX: number) {
+  const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX, button: 0 });
+  Object.defineProperty(event, "pointerId", { value: 1 });
+  fireEvent(handle(), event);
+}
+
+/** A whole drag: press at `from`, move to `to`, let go. This column is docked **left**, so
+ *  rightward is wider. */
+function drag(from: number, to: number) {
+  pointer("pointerdown", from);
+  pointer("pointermove", to);
+  pointer("pointerup", to);
+}
+
+describe("the column's width", () => {
+  it("draws the tree at the width it is given, and announces this column's own range", () => {
+    drawTree([COMMANDER], { width: 260, maxWidth: 500 });
+
+    expect(tree()).toHaveStyle({ width: "260px" });
+    expect(handle()).toHaveAttribute("aria-valuenow", "260");
+    // 160 written out: this floor is counted off the tree's own markup — a row's guides, glyph,
+    // count and the reserved `+` column — and is deliberately not the card wall's 206.
+    expect(handle()).toHaveAttribute("aria-valuemin", "160");
+    expect(handle()).toHaveAttribute("aria-valuemax", "500");
+    // It points at the column it sizes, which is how a screen reader ties the two together.
+    expect(handle()).toHaveAttribute("aria-controls", tree().id);
+  });
+
+  /**
+   * **Docked left, so pulling the edge _right_ widens it** — the mirror image of the deck
+   * editor's card search column, and the one thing about this tree the shared splitter could get
+   * exactly backwards while every one of its own right-docked cases stayed green.
+   */
+  it("widens as its right edge is pulled right, and narrows going left", () => {
+    const { onResize } = liveTree();
+
+    drag(400, 500);
+    expect(onResize).toHaveBeenLastCalledWith(308);
+    expect(tree()).toHaveStyle({ width: "308px" });
+
+    drag(500, 450);
+    expect(onResize).toHaveBeenLastCalledWith(258);
+  });
+
+  /** The keyboard turns over with it: Right widens, Left narrows. A caret cannot perform a drag,
+   *  and there is no other control anywhere that sets this width. */
+  it("steps wider with Right and narrower with Left", async () => {
+    const { onResize } = liveTree();
+    handle().focus();
+
+    await userEvent.keyboard("{ArrowRight}");
+    expect(onResize).toHaveBeenLastCalledWith(232);
+
+    await userEvent.keyboard("{ArrowLeft}{ArrowLeft}");
+    expect(onResize).toHaveBeenLastCalledWith(184);
+  });
+
+  /**
+   * **The floor and the ceiling are the drag's, not merely the announcement's.**
+   *
+   * `aria-valuemin`/`aria-valuemax` say what the range is; this is the range being *enforced*. A
+   * reader who overshoots sees the column stop, which is what an edge is — and the number that
+   * stops is the number that reaches storage, so an unclamped drag is a tree remembered at 12px,
+   * or at the whole width of the wall, for every session after this one.
+   *
+   * Driven past both ends by a long way, and the harness feeds back whatever it is handed, so
+   * nothing outside the component can be the thing doing the clamping.
+   */
+  it("stops at either end of its range however far the edge is pulled", () => {
+    const { onResize } = liveTree();
+
+    // 208 + (10 − 400) = −182 unclamped, which is not a width at all.
+    drag(400, 10);
+    expect(onResize).toHaveBeenLastCalledWith(160);
+    expect(tree()).toHaveStyle({ width: "160px" });
+
+    // 160 + (2000 − 400) = 1760 unclamped, against a page that has said 600.
+    drag(400, 2000);
+    expect(onResize).toHaveBeenLastCalledWith(600);
+    expect(tree()).toHaveStyle({ width: "600px" });
+  });
+
+  /**
+   * **The clamp split, which is the whole of "reopens at the width the reader chose".**
+   *
+   * The environment clamps what is *drawn*; a drag clamps what is *stored*. A window narrowing,
+   * or a deck tile that will not give any more of the row, is not the reader changing their
+   * mind — so when the room comes back, so does their column. Clamp the stored number instead
+   * and every momentary squeeze is permanent, and the failure is invisible until somebody widens
+   * a window.
+   *
+   * The two halves are asserted together on purpose: that the cap is honoured on screen, and
+   * that honouring it wrote **nothing** back through `onResize`.
+   */
+  it("draws inside the page's cap and gives the reader's width back when it lifts", () => {
+    const { onResize, setMax } = liveTree({ width: 400, maxWidth: 300 });
+
+    expect(tree()).toHaveStyle({ width: "300px" });
+    expect(handle()).toHaveAttribute("aria-valuenow", "300");
+
+    setMax(600);
+
+    expect(tree()).toHaveStyle({ width: "400px" });
+    expect(onResize).not.toHaveBeenCalled();
+  });
+
+  /** The same clamp at the other end — a stored width under the floor is *drawn* at the floor,
+   *  which is what a row a newer build has narrowed, or a hand-edited row, arrives as. */
+  it("draws no narrower than its floor whatever width it is handed", () => {
+    liveTree({ width: 40 });
+
+    expect(tree()).toHaveStyle({ width: "160px" });
+    expect(handle()).toHaveAttribute("aria-valuenow", "160");
+  });
+});
+
+describe("the rail", () => {
+  /**
+   * **One root in both states.** React reconciles by position, so two shapes either side of a
+   * fold would make the chevron a *different* button — and a caret handed back to it would be
+   * dropped one commit later around a freshly mounted copy. The identity check is what would fail
+   * a "tidy" that split the two arms into separate roots.
+   */
+  it("keeps one nav and one chevron across a fold", async () => {
+    liveTree();
+    const before = tree();
+    const button = chevron();
+
+    await userEvent.click(chevron());
+
+    expect(tree()).toBe(before);
+    expect(chevron()).toBe(button);
+  });
+
+  it("folds to a 36px rail and drops the inline width", async () => {
+    liveTree();
+    await userEvent.click(chevron());
+
+    expect(tree().classList.contains("w-9")).toBe(true);
+    // Read off the property rather than the attribute: React empties the declaration and leaves a
+    // bare `style=""` behind. The rail's width is the class and never an inline number, so the
+    // reader's dragged width cannot leak into a state that has no edge to drag.
+    expect(tree().style.width).toBe("");
+    // The hairline is on the column in *both* states — a fold changes what is in this column,
+    // not what it is.
+    expect(tree().classList.contains("border-r")).toBe(true);
+    // Nothing to pull on: there is no edge in a rail, and a strip down it would be an affordance
+    // for a width the column has given up.
+    expect(noHandle()).toBeNull();
+  });
+
+  /**
+   * **The rows are not in the tree at all** — unmounted, not hidden. The rail exists to give the
+   * wall this column's width back, and a folder list that was merely invisible would still be a
+   * tab stop per row and a drop target per row for a deck that can no longer be seen landing.
+   */
+  it("takes every row out of the tree, the root row included", async () => {
+    liveTree();
+    expect(screen.getByRole("button", { name: /^Commander, / })).toBeInTheDocument();
+
+    await userEvent.click(chevron());
+
+    expect(screen.queryByRole("button", { name: /^Commander, / })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^All decks, / })).toBeNull();
+    // The one control that makes a folder goes with them: a `+` over no list is a button whose
+    // result the reader cannot see.
+    expect(screen.queryByRole("button", { name: "New folder at the top level" })).toBeNull();
+  });
+
+  /** **It names the result, not the state.** `aria-expanded` already says which way round it is,
+   *  and a reader who has just heard "collapsed" wants to know what pressing it would do. */
+  it("names what pressing it would do, and flips aria-expanded", async () => {
+    liveTree();
+    expect(chevron()).toHaveAccessibleName("Collapse folders");
+    expect(chevron()).toHaveAttribute("aria-expanded", "true");
+
+    await userEvent.click(chevron());
+
+    expect(chevron()).toHaveAccessibleName("Expand folders");
+    expect(chevron()).toHaveAttribute("aria-expanded", "false");
+  });
+
+  /** The press hands the page the negation of what the **reader** chose — never of what happens
+   *  to be drawn, which is the same distinction `roomy` is kept apart for below. */
+  it("hands the page the opposite of the reader's own answer", async () => {
+    const { onCollapse } = liveTree({ collapsed: true });
+
+    await userEvent.click(chevron());
+
+    expect(onCollapse).toHaveBeenCalledWith(false);
+  });
+
+  /** And the reader's width is still theirs on the way back out: it lives in the page beside the
+   *  fold, so somebody who sized this column for a job, shut it and opened it again is not asking
+   *  to start from 208. */
+  it("reopens at the width the reader left it at", async () => {
+    liveTree();
+    drag(400, 500);
+    expect(tree()).toHaveStyle({ width: "308px" });
+
+    await userEvent.click(chevron());
+    await userEvent.click(chevron());
+
+    expect(tree()).toHaveStyle({ width: "308px" });
+  });
+});
+
+/**
+ * **A narrow row is a measurement, and a measurement is not a press.**
+ *
+ * This is the half that cannot be got back once it is lost: a railing written through
+ * `onCollapse` would be recorded as the reader's own choice, and widening the window again would
+ * give them nothing at all. So `roomy === false` draws the rail and touches the stored answer
+ * never.
+ */
+describe("a row with no room for it", () => {
+  it("rails the tree whatever the reader chose, and writes nothing back", async () => {
+    const { onCollapse } = liveTree({ roomy: false });
+
+    expect(tree().classList.contains("w-9")).toBe(true);
+    expect(tree().style.width).toBe("");
+    expect(noHandle()).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Commander, / })).toBeNull();
+
+    // The press is refused rather than recorded — a control that quietly stored a choice it then
+    // did nothing about is the reader being answered by something they never operated.
+    await userEvent.click(chevron());
+    expect(onCollapse).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **The one state where the name and the stored answer disagree, and the name follows the
+   * drawing.**
+   *
+   * Everywhere else `collapsed` and what is on screen are the same fact, so this is the only case
+   * that can tell the two wirings apart — which is exactly why it is pinned. The reader left the
+   * tree open and the row then took the room away, so their stored answer is still "open" while
+   * the column is a rail. Naming the *press* against that answer announces "Collapse folders,
+   * collapsed": a control at odds with the state word beside it. Naming the *drawing* agrees with
+   * `aria-expanded`, and what the control cannot do is left to `aria-disabled` and the tooltip,
+   * which is where a refusal belongs.
+   *
+   * Both halves are asserted together on purpose — the label alone would stay green if
+   * `aria-expanded` were flipped to match the wrong one.
+   */
+  it("names the rail it is drawn as, not the answer the reader still has stored", () => {
+    liveTree({ roomy: false, collapsed: false });
+
+    expect(chevron()).toHaveAccessibleName("Expand folders");
+    expect(chevron()).toHaveAttribute("aria-expanded", "false");
+  });
+
+  /**
+   * **`aria-disabled` and a press that does nothing, never the `disabled` attribute.** A disabled
+   * button leaves the tab order, which would hang the reason on a hover a keyboard reader cannot
+   * perform — a rail that cannot be opened and never says why.
+   */
+  it("stays reachable while it refuses", () => {
+    liveTree({ roomy: false });
+
+    expect(chevron()).toHaveAttribute("aria-disabled", "true");
+    expect(chevron()).toBeEnabled();
+    chevron().focus();
+    expect(chevron()).toHaveFocus();
+  });
+
+  /** And the reader's own answer is what is drawn the moment the room comes back: the railing
+   *  went through no state at all while the row was narrow. */
+  it("draws the tree again, at the reader's own width, the moment the room returns", () => {
+    // Seeded at a width that is not the default, so "the tree came back" and "it came back at
+    // the width the reader had dragged it to" are two claims rather than one number that would
+    // be right either way.
+    const { setRoom } = liveTree({ roomy: false, width: 240 });
+
+    expect(noHandle()).toBeNull();
+
+    setRoom(true);
+
+    expect(tree()).toHaveStyle({ width: "240px" });
+    expect(screen.getByRole("button", { name: /^Commander, / })).toBeInTheDocument();
+  });
+
+  /** Refused in words, on the app's one tooltip — the docked search columns' refusal with this
+   *  page's own remedies in it, because there is no card pane here to close. */
+  it("says why, where it is refusing", async () => {
+    render(
+      <TooltipProvider>
+        <FolderTree
+          width={DEFAULT_FOLDER_TREE_WIDTH_PX}
+          collapsed={false}
+          maxWidth={600}
+          roomy={false}
+          onResize={() => {}}
+          onCollapse={() => {}}
+          nodes={buildFolderTree([COMMANDER], [])}
+          totalDecks={0}
+          selectedId={null}
+          onSelect={() => {}}
+          drag={null}
+          canDropIn={() => false}
+          onDropIn={() => {}}
+          canDropFolder={() => false}
+          onDropFolder={() => {}}
+          naming={null}
+          onOpenNew={() => {}}
+          onOpenRename={() => {}}
+          onCloseNaming={() => {}}
+          onName={() => {}}
+          busy={false}
+          failure={null}
+          pending={false}
+          rowMenu={() => ({ onContextMenu: () => {}, onKeyDown: () => {} })}
+          menuOpenerRef={{ current: null }}
+        />
+      </TooltipProvider>,
+    );
+
+    fireEvent.pointerEnter(chevron());
+
+    const tooltip = await screen.findByRole("tooltip", {}, { timeout: TOOLTIP_OPEN_MS + 1000 });
+    expect(tooltip).toHaveTextContent(/not enough room/i);
+    fireEvent.pointerLeave(chevron());
   });
 });
