@@ -1,4 +1,13 @@
-import { Camera, Heart, Search, Settings, Tags, type LucideIcon } from "lucide-react";
+import {
+  Camera,
+  Heart,
+  Receipt,
+  Search,
+  Settings,
+  Swords,
+  Tags,
+  type LucideIcon,
+} from "lucide-react";
 import { CabinetFiling, Cards } from "@/components/icons";
 import type { ViewId } from "@/lib/store";
 
@@ -10,13 +19,14 @@ export interface NavEntry {
 }
 
 /**
- * The seven destinations, in the order the column draws them — and the order is the point.
+ * The nine destinations, in the order the column draws them — and the order is the point.
  *
- * Two ways into the database first, then the three lists the reader owns, then Settings. Search
- * asks "which card is this"; Tagger asks "what is this card of", which is why it sits directly
- * under Search rather than among the lists. Below the pair the run is by how often a reader is
- * in it: Decks is where the app is used, Collection is what backs a deck, Wishlist is what is
- * not owned yet. Settings is last because it is not a destination in the same sense.
+ * Two ways into the database first, then the three lists the reader owns, then the three things
+ * a reader *does* with them, then Settings. Search asks "which card is this"; Tagger asks "what
+ * is this card of", which is why it sits directly under Search rather than among the lists. Below
+ * the pair the run is by how often a reader is in it: Decks is where the app is used, Collection
+ * is what backs a deck, Wishlist is what is not owned yet. Settings is last because it is not a
+ * destination in the same sense.
  *
  * **The label is also the ribbon's `<h1>`** — `Shell` looks the active view's title up in here,
  * so there is one word per view rather than two that can drift. "Tagger" is Scryfall's own name
@@ -24,7 +34,7 @@ export interface NavEntry {
  * does in a sentence.
  *
  * **This is a module rather than a const inside `AppShell` because the rail is no longer the
- * only thing that draws it.** A bottom tab bar copying seven labels out of the rail is exactly
+ * only thing that draws it.** A bottom tab bar copying nine labels out of the rail is exactly
  * the drift the paragraph above forbids. What deliberately did *not* move is the **row**: a rail
  * entry is a full-width button with a left-anchored icon and a tooltip when narrow, and a tab is
  * a square with its word under the glyph — two drawings, not one component with a flag.
@@ -38,5 +48,13 @@ export const NAV: readonly NavEntry[] = [
   // Before Settings so Settings stays the last row — the chord that moved is `Ctrl+7`, and
   // `docs/reference/keyboard-shortcuts.md` says so.
   { id: "scanner", label: "Scanner", Icon: Camera },
+  // **Two destinations that are a rail entry and a sentence, and nothing else yet.** They are in
+  // the column ahead of their pages on purpose: the rail is where a reader finds out what this app
+  // intends to be, and `WorkInProgress` says so in one line rather than leaving a row that looks
+  // finished and does nothing. They sit here for Scanner's reason — Settings stays the last row —
+  // so the chords after them moved again: Settings reads `Ctrl+9` now, and the keyboard doc has
+  // the whole record of why an insertion anywhere but the end renumbers.
+  { id: "trade", label: "Trade", Icon: Receipt },
+  { id: "playtesting", label: "Playtesting", Icon: Swords },
   { id: "settings", label: "Settings", Icon: Settings },
 ];

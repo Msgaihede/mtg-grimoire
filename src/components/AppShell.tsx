@@ -120,7 +120,7 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   const drops = useSidebarDrops();
   /**
    * Whether there is room for a rail beside the content at all — and, below the phone width,
-   * there is not: the six destinations move to a bar across the foot of the window instead.
+   * there is not: the nine destinations move to a bar across the foot of the window instead.
    *
    * **The one viewport branch in this app**, and `src/lib/viewports.ts` demands a reason wherever
    * one appears. The reason is that *the shell is the window*: every other fold here is a
@@ -209,16 +209,16 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   // app, and passed down `isWebTarget()`-gated at the call site below.
   const deviceSync = useDeviceSyncLive();
   /**
-   * The app's two window-wide chords: `Ctrl+1`…`Ctrl+6` to jump between the six destinations,
+   * The app's two window-wide chords: `Ctrl+1`…`Ctrl+9` to jump between the nine destinations,
    * and `F1` to open the map that says so.
    *
    * **Both matched against `@/lib/shortcuts` rather than compared by hand**, which is what makes
    * the panel's rows and these bindings one fact instead of two that drift silently past both CI
    * jobs. The `switchView` entry's chords are `NAV`'s own order, and the *index* is the binding —
    * so the rail stays the single list of destinations rather than being restated here as a
-   * seventh copy, exactly as `nav.ts` argues about the label being the ribbon's `<h1>`.
+   * second copy, exactly as `nav.ts` argues about the label being the ribbon's `<h1>`.
    *
-   * **The modal guard is `[aria-modal="true"]`, and it covers `Ctrl+1…6` alone.** `Dialog.tsx`
+   * **The modal guard is `[aria-modal="true"]`, and it covers `Ctrl+1…9` alone.** `Dialog.tsx`
    * is the one modal chrome in this app and always sets the attribute, so asking the document is
    * asking the thing that knows, with nothing to register and nothing to keep in step. A view
    * that switched out from under an open dialog would leave that dialog sitting over a page it
@@ -248,7 +248,7 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
         // meaning depends on the state it changes.** Holding a key fires `keydown` at the OS
         // repeat rate, and a toggle on that is the panel strobing through its own fade for as
         // long as the finger is down — it lands on whichever side the reader let go on.
-        // `Ctrl+1…6` below is left alone deliberately: re-selecting the view you are on is
+        // `Ctrl+1…9` below is left alone deliberately: re-selecting the view you are on is
         // idempotent, so a guard there would be a rule with no failure behind it, and hoisting
         // one to the top of the handler would decide the question for every chord this shell
         // ever grows — including a stepping chord, where repeating *is* the binding.
@@ -259,8 +259,8 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
       const i = SWITCH_VIEW.chords.findIndex((c) => matchesChord(c, e));
       // `-1` is "not one of ours". The second half is not ceremony: the chords and the
       // destinations are two lists that agree by construction rather than by type, and the day
-      // a seventh chord is written without a seventh `NAV` entry, `NAV[i]` is `undefined` and
-      // this handler throws on every press. The reverse — a seventh destination with no chord —
+      // a tenth chord is written without a tenth `NAV` entry, `NAV[i]` is `undefined` and
+      // this handler throws on every press. The reverse — a tenth destination with no chord —
       // costs nothing and needs no guard.
       if (i === -1 || i >= NAV.length) return;
       e.preventDefault();
