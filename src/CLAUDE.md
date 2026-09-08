@@ -366,6 +366,19 @@ Every one of these has its measurement and its story in
   `Dialog` paragraph above. **jsdom has no layout engine, so nothing in the suite can go red
   for this** — build a modal on `Dialog` rather than beside it, and check a new one in the
   running window at a short viewport with more content than fits.
+  **What it is clamped _to_ is 90vh above the phone fold and the whole window below it, and a host
+  spells neither** (2026-09-08). `Dialog`'s scrim is `p-0 sm:px-6 sm:py-[max(1.5rem,5vh)]`: 24px
+  across, 5vh down, so a dialog whose body outgrows the window leaves glass above and below and
+  reads as a panel over the app rather than as a page. It is stated as an **inset** rather than as
+  a `max-h` on the panel for two reasons that are both load-bearing. The scrim is where this shell
+  states insets, so `max-h-full` stays the one height rule and only the box it is a percentage of
+  moves; and a `sm:max-h-…` would sit on the same property as `CardDetailModal`'s
+  `min-[640px]:max-h-[min(825px,80vh)]`, where Tailwind emits **named variants after arbitrary
+  ones** — so the shell would have silently replaced that host's own ceiling at every width ≥640.
+  Two things follow for a host. **Do not name a `max-h` in `size`**: `cn`'s `tailwind-merge`
+  deletes the shell's `max-h-full` the moment you do, and below `sm` — where every dialog fills
+  the phone's glass — yours alone would float. And **a host that genuinely needs a tighter ceiling
+  spells it as `min-[640px]:max-h-…`**, matching the card modal's family, never `sm:`.
 - **An anchored popup is pinned to, and grows from, the corner nearest its trigger's own edge**
   — `right-0`/`origin-top-right` at the right end of a row, `left-0`/`origin-top-left` at the
   left. Nothing clips these popups, so one that overflows scrolls the whole app sideways; and
