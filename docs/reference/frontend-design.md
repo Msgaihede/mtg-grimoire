@@ -1108,16 +1108,19 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
     the two would part company the first time one of them was adjusted.
   - **`TableView` and `GridView` never called `splitRail`** — they drew `groups` in the order they
     were handed — so for those two the whole of this change was that the command zones come first.
-    **`GridView` calls it since 2026-09-08 and `TableView` is the one view left that does not.**
-    The wall renders `[...command, ...flow, ...rail]`, the same concatenation the two column views
-    and `deckWalk.ts` make, so the Sideboard, the Maybeboard and every switched-off pile are drawn
-    **last** there. It is **ordering only and deliberately not a rail**: a group on that wall is as
-    wide as the desk, so a 19-card Maybeboard in a one-tile rail column is ~4 500px of scroll
-    against the same nineteen cards in a stack, which `stackHeight` makes roughly a fifth of that
-    (arithmetic, not a reading) — the piles move to the end of the list and stay full-width
-    wrapping groups. What that closes as a side effect is a range: a Shift-click across the grid
-    now follows the tiles under the pointer even where it crosses the rail boundary, which it did
-    not before. The table still can disagree there.
+    **Both call it since 2026-09-08 and no view is outside it now.** Each renders
+    `[...command, ...flow, ...rail]`, the same concatenation the two column views and `deckWalk.ts`
+    make, so the Sideboard, the Maybeboard and every switched-off pile come **last**. On a real
+    Commander deck the old order read `Commander → Sideboard (3) → Maybeboard (19) → the deck` in
+    both — roughly 900px of wall, and four bands, spent on the piles the reader has said are not in
+    the deck, in front of the deck itself (measured 2026-09-08, debug build, 1920×1080).
+    It is **ordering only and deliberately not a rail** in either: a group on the wall is as wide
+    as the desk, so a 19-card Maybeboard in a one-tile rail column is ~4 500px of scroll against
+    the same nineteen cards in a stack, which `stackHeight` makes roughly a fifth of that
+    (arithmetic, not a reading); and a table has one axis, so a rail is not a shape it has. The
+    piles move to the end of the list and stay full-width wrapping groups and bands.
+    What that closes as a side effect is a range: a Shift-click now follows what is under the
+    pointer even where it crosses the rail boundary, on every view rather than on two of four.
   - **The stats band did not change, and it is the thing a reader will assume did.** `DeckStats`
     derives the curve, the average mana value and the type bars from the deck's rows itself and has
     never called `buildGroups`, so a four-drop commander still stands in the `4` bar beside a desk

@@ -2380,11 +2380,17 @@ price | type`). An **inactive category stays its own group in all three grouping
   top of the first column with the companion directly under it and the deck beginning below them —
   the same picture the stack view builds a box to get, for free. (Switched off they rail like any
   other pile; see the switch bullet above for why that leaves both of these reasons intact.)
-  **`TableView` is the one view that does not call `splitRail` at all** — it renders `groups` in
-  the order it was handed, so for it the whole of the 2026-08-20 change is that the command zones
-  come first, which `buildGroups` had already done.
-  **This sentence named `GridView` beside it until 2026-09-08 and no longer may.** That view calls
-  `splitRail` and renders `[...command, ...flow, ...rail]`, which is the same concatenation
+  **All four views call `splitRail` since 2026-09-08, and `deckWalk.ts` with them.** This bullet
+  named `GridView` and then `TableView` as the two that did not, and both went the same day and for
+  the same reason: the piles a reader has said are played *beside* the deck, or not played at all,
+  were drawn **before** it, because they are seeded early in `PREDEFINED_CATEGORIES` and a
+  straight-through render is in `sortOrder`. Four drawings of one deck disagreeing about where
+  somebody's Sideboard is, one toolbar press apart, is the failure this folder's rules keep naming.
+  **The two took the split differently and that is the point of it being a split rather than a
+  layout**: the column views draw the rail as a pinned column, and the wall and the table draw its
+  piles as ordinary groups and bands, last. What `splitRail` decides everywhere is *which run a
+  pile is in*; what a view does with the runs is the view's.
+  Both call it and render `[...command, ...flow, ...rail]`, which is the same concatenation
   `StackView`, `TextView` and `deckWalk.ts` use — so the Sideboard, the Maybeboard and every
   switched-off pile are drawn **last** there instead of wherever `sortOrder` happened to put them.
   On a real Commander deck the old order read Commander → Sideboard (3 cards) → Maybeboard (19) →
