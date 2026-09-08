@@ -298,7 +298,26 @@ const CANDIDATE_SQL: &str = "SELECT e.id, e.quantity, e.folder_id, f.name, f.kin
 ///
 /// **An empty vector is the ordinary answer.** A deck short of nothing and a deck whose whole
 /// shortfall is cards the reader has never owned are both zero rows, and neither is a failure.
+///
+/// # A virtual deck is refused in words rather than answered with that empty vector
+///
+/// [`crate::deck::VIRTUAL_HOLDS_NOTHING`] (issue #401). A virtual deck tracks a deck the reader
+/// owns no cardboard for, and it is the one caller for which the paragraph above stops being
+/// enough: zero rows here already mean *there is nothing in your collection this deck needs*, and
+/// the dialog says exactly that — over a deck that will never need anything from a binder, because
+/// it is not made of cardboard at all. A refusal the caller can show is the honest answer, and it
+/// is the same trade [`crate::deck_missing::plan`] makes for the same reason on the other half of
+/// the shortfall. The two reads refuse together or the dialogs disagree about what a deck is.
 pub fn plan(conn: &Connection, deck_id: i64) -> Result<Vec<PullRow>, String> {
+    // **First, ahead of both walks, and [`crate::deck::is_virtual`]'s own contract is what makes
+    // that safe**: a deck that is not there answers `false` rather than raising, so a stale
+    // editor's dead id falls straight through to [`crate::deck::live_shortfall`] and hears
+    // [`crate::deck::GONE`] from it — `a_deck_that_is_not_there_is_a_sentence` is that pinned,
+    // and "that deck is gone" must not become a sentence about virtual decks. The candidate
+    // walk below, which is the expensive half, is never reached.
+    if crate::deck::is_virtual(conn, deck_id)? {
+        return Err(crate::deck::VIRTUAL_HOLDS_NOTHING.to_owned());
+    }
     // The shortfall walk is [`crate::deck::live_shortfall`] and is not spelled here — the fold's
     // grain, the inactive-pile skip, the read order and the "one pile named once" rule are all
     // written down on it. What is left in this function is the half that is a pull's own: the
@@ -393,6 +412,17 @@ fn candidates(
 /// * more copies than the row holds ([`crate::collection_alloc::NOT_THAT_MANY`]) or than the deck
 ///   is short of ([`MORE_THAN_MISSING`]).
 ///
+/// **A seventh refusal is not about a pick at all**, which is why it is not on that list:
+/// [`crate::deck::VIRTUAL_HOLDS_NOTHING`] (issue #401), asked of the deck before any pick is
+/// looked at. A virtual deck tracks a deck the reader owns no cardboard for, so there is no
+/// binder for a pull to move copies out of and no group to move them into — the refusal is about
+/// what the deck *is*, and every sentence above it is about what one row has become since the
+/// dialog opened. [`plan`] carries the same fence and the re-read below would therefore refuse
+/// with the same sentence; this one is here so that a write's contract does not depend on a
+/// read's. It sits **behind [`crate::deck::touch_deck`]** for that call's own reason — a stale
+/// editor's dead deck id hears [`crate::deck::GONE`] and not a sentence about virtual decks —
+/// and the stamp it lets through rolls back with the transaction.
+///
 /// **One bad pick refuses the whole batch and moves nothing.** A half-applied pull leaves copies
 /// somewhere the reader was not looking at — not the binder they ticked them out of and not the
 /// deck they meant them for — and this write files no undo step, so there is no press that takes
@@ -446,6 +476,13 @@ pub fn from_collection(
     // `collection_to_deck` opens the same way. A pull *is* a change to this deck — what it holds
     // moved — even though its list is untouched, so the stamp is owed on its own account.
     crate::deck::touch_deck(&tx, deck_id)?;
+    // The deck's kind, before a single pick is read: a virtual deck owns no cardboard, so there
+    // is nothing in any binder for this press to move and nowhere of the deck's to move it to.
+    // Behind the stamp so a dead deck id still hears `deck::GONE`; ahead of the group and the
+    // re-plan so the refusal names the deck rather than the folder it has no use for.
+    if crate::deck::is_virtual(&tx, deck_id)? {
+        return Err(crate::deck::VIRTUAL_HOLDS_NOTHING.to_owned());
+    }
     let group = crate::deck::deck_group(&tx, deck_id)?
         .ok_or_else(|| crate::collection_alloc::NO_DECK_GROUP.to_owned())?;
 
@@ -1108,6 +1145,40 @@ mod tests {
         assert_eq!(plan(&conn, 9999).unwrap_err(), crate::deck::GONE);
     }
 
+    /// Turn a deck into one the reader tracks without owning — `decks.virtual_only`, schema v40.
+    ///
+    /// An `UPDATE` rather than a parameter on [`deck_with_group`], so a case that wants one says
+    /// so on its own line and every other case in this file is untouched.
+    fn make_virtual(conn: &Connection, deck: i64) {
+        conn.execute(
+            "UPDATE decks SET virtual_only = 1 WHERE id = ?1",
+            params![deck],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_virtual_deck_has_no_plan_to_read() {
+        // **Not answered with the empty vector**, which here would mean "nothing you own can fill
+        // this deck" and would be drawn as a dialog with nothing in it. The fixture is a deck
+        // short of four with four loose copies waiting, so the plan really does have a row to
+        // give — and the refusal is about what the deck is rather than about an empty binder.
+        let (conn, deck, cat) = fixture();
+        add_deck_card(&conn, deck, cat, "bolt", 4, None);
+        seed_entry(&conn, "bolt", 4, None);
+        assert_eq!(
+            plan(&conn, deck).unwrap().len(),
+            1,
+            "or this proves nothing"
+        );
+        make_virtual(&conn, deck);
+
+        assert_eq!(
+            plan(&conn, deck).unwrap_err(),
+            crate::deck::VIRTUAL_HOLDS_NOTHING
+        );
+    }
+
     // ---- the write ----------------------------------------------------------------
 
     #[test]
@@ -1118,6 +1189,40 @@ mod tests {
             from_collection(&conn, deck, &[]).unwrap_err(),
             NOTHING_PICKED
         );
+    }
+
+    #[test]
+    fn a_virtual_deck_pulls_nothing_out_of_the_collection() {
+        // A pick that is right in every way a pick can be: the row exists, it is at the root and
+        // it holds the four copies the deck is short of. What refuses it is the deck.
+        //
+        // **The deck has no group, because a real virtual deck has none** — `create_deck` skips
+        // it — and that is what makes this case able to tell the two refusals apart. Take the
+        // fence out and the press answers [`crate::collection_alloc::NO_DECK_GROUP`] from the
+        // next statement, which names a folder the reader is supposed to go and repair rather
+        // than a deck that was never going to hold cardboard. Measured: with the fence commented
+        // out this case goes red on that sentence, and with a *grouped* fixture it stayed green —
+        // because [`plan`]'s own fence, one statement further in, answers the identical string.
+        let conn = open();
+        seed_card(&conn, "bolt", "lea", "161");
+        let deck = seed_deck(&conn, "Arena Burn");
+        let cat = crate::schema::tests::category(&conn, deck, "main", "Main deck");
+        make_virtual(&conn, deck);
+        add_deck_card(&conn, deck, cat, "bolt", 4, None);
+        let entry = seed_entry(&conn, "bolt", 4, None);
+
+        let err = from_collection(
+            &conn,
+            deck,
+            &[Pick {
+                entry_id: entry,
+                quantity: 4,
+            }],
+        )
+        .unwrap_err();
+
+        assert_eq!(err, crate::deck::VIRTUAL_HOLDS_NOTHING);
+        assert_eq!(root_copies(&conn, "bolt"), 4, "the copies never moved");
     }
 
     #[test]

@@ -209,8 +209,27 @@ export function DeckPreview({
 
   const runImport = () => {
     if (items.length === 0) return;
+    // **The kind, read once for the two things it decides here**: whether the second write may
+    // happen at all, and what `invalidate` is told about the first.
+    const virtual = into.deck?.virtualOnly ?? false;
     commit.mutate(
-      { deckId, variant, mode, items, collectionItems: alsoOwn ? owned.items : undefined },
+      {
+        deckId,
+        variant,
+        mode,
+        items,
+        // **`&& !virtual` is the fence rather than the checkbox's absence** — the box is not
+        // drawn on a virtual deck, so `alsoOwn` can only be `true` here if the deck turned
+        // virtual under an open step (a sync from another device, which needs no press on this
+        // machine). A tick nobody can see must not travel: this is the one press in this dialog
+        // that writes `collection_entries`, and a virtual deck must make none.
+        collectionItems: alsoOwn && !virtual ? owned.items : undefined,
+        // Not an argument of the command — the backend reads the column. It rides the
+        // variables so `useImport`'s `invalidate` can tell a `replace` that releases copies
+        // from one that cannot, which on a live list is a question the variant no longer
+        // answers. See `CommitImport.virtual`.
+        virtual,
+      },
       {
         onSuccess: ({ outcome, owned: ownedOutcome, ownRefusal }) => {
           onImported?.(deckId, outcome);
@@ -242,15 +261,31 @@ export function DeckPreview({
           name={`${id}-mode`}
           variant={variant}
           cardsInVariant={cardsInVariant}
+          virtual={into.deck?.virtualOnly ?? false}
         />
         {/* Under the mode radios, because those are about the deck and this is about the box on
-            the desk. Last on the step, immediately above the button it changes the meaning of. */}
-        <OwnCopies
-          checked={alsoOwn}
-          onChange={setAlsoOwn}
-          copies={owned.totalCards}
-          id={`${id}-own`}
-        />
+            the desk. Last on the step, immediately above the button it changes the meaning of.
+
+            **Not drawn at all on a virtual deck** (2026-09-08, issue #401), and this is the one
+            place in this dialog where the kind removes a *control* rather than rewording a
+            sentence. The box means "I have physically built this deck", which is the sentence a
+            virtual deck exists to say the opposite of — and ticking it is a real
+            `collection_entries` write, so leaving it on screen would put the reader one press
+            from filing cardboard for a deck whose whole promise is that it tracks none.
+
+            **Absent rather than greyed**, the deck feature's own rule: a checkbox that spends
+            every virtual import refusing teaches a reader to stop reading the line it is in. And
+            `alsoOwn` cannot be stranded `true` by a deck turning virtual underneath the step,
+            because the commit reads it as `alsoOwn && !virtual` — the state is unreachable in
+            practice and the write is fenced anyway, since a tick nobody can see must not travel. */}
+        {into.deck?.virtualOnly !== true && (
+          <OwnCopies
+            checked={alsoOwn}
+            onChange={setAlsoOwn}
+            copies={owned.totalCards}
+            id={`${id}-own`}
+          />
+        )}
       </div>
 
       <CommitBar
@@ -296,14 +331,19 @@ export function DeckImportSubtitle({
 }): JSX.Element {
   const into = useDeck(deckId, variant);
   const deckName = into.deck?.name ?? "this deck";
+  // A deck whose row has not arrived is not yet known to be virtual, and `false` is the right
+  // guess while it is missing: the segment appears and then goes, where the other way round it
+  // would appear late on a heading the reader had already read.
   return (
     <>
       {[
         forcedCategoryName === undefined
           ? `Into ${deckName}`
           : `Into ${forcedCategoryName} · ${deckName}`,
-        variantName(variant),
-      ].join(" · ")}
+        variantSegment(variant, into.deck?.virtualOnly ?? false),
+      ]
+        .filter((part): part is string => part !== null)
+        .join(" · ")}
     </>
   );
 }
@@ -439,6 +479,22 @@ export function OwnCopies({
  *  function is the join between them, and it exists so that the two may differ. */
 export function variantName(variant: DeckVariant): string {
   return variant === "live" ? "Actual" : "Theory";
+}
+
+/**
+ * The same word, or **no word at all** on a deck that has only one list.
+ *
+ * A virtual deck's rows are `live` rows, so {@link variantName} answers `Actual` for it — a
+ * label out of a two-tab switch the reader has never been shown, naming the half of a pair whose
+ * other half does not exist. There is nothing to disambiguate on a deck with one list, and the
+ * segment is dropped rather than reworded: `Into Arena Standard` is complete, where
+ * `Into Arena Standard · Deck` is a heading explaining that a deck is a deck.
+ *
+ * `null` and not `""`, so the caller filters rather than joining a blank and leaving a trailing
+ * separator — the header is a `join(" · ")`.
+ */
+export function variantSegment(variant: DeckVariant, virtual: boolean): string | null {
+  return virtual ? null : variantName(variant);
 }
 
 /**
@@ -717,14 +773,21 @@ function Mode({
   name,
   variant,
   cardsInVariant,
+  virtual,
 }: {
   value: ImportMode;
   onChange: (mode: ImportMode) => void;
   name: string;
   variant: DeckVariant;
   cardsInVariant: number;
+  /** Whether the deck keeps no cardboard — `DeckRow.virtualOnly`. It decides both of this
+   *  fieldset's sentences: what the list is *called*, and whether the copies go anywhere. */
+  virtual: boolean;
 }) {
-  const where = variantName(variant);
+  // `the deck` on a virtual one, for `variantSegment`'s reason: `Actual` is one half of a switch
+  // this reader has never been shown. Lowercase because it lands mid-sentence in both radios
+  // ("removes the 60 cards in the deck first") where `Actual` and `Theory` are proper labels.
+  const where = virtual ? "the deck" : variantName(variant);
   return (
     <fieldset className="space-y-1.5">
       <legend className="mb-1 text-xs text-dim">What this does to {where}</legend>
@@ -766,13 +829,20 @@ function Mode({
           option, so it belongs after the choice — inside the fieldset, because it is still part
           of what "what this does to Actual" answers.
 
-          **Three conditions, and each one is a promise the app could not keep.** A `merge`
+          **Four conditions, and each one is a promise the app could not keep.** A `merge`
           removes nothing, so nothing is released; a theory list is a plan and has never held a
-          copy; and an empty list has none to give back — the radio above already says so, and a
-          folder named under that sentence would be a delivery no reader will ever find. This is
-          `ClearDeck`'s ternary and its `> 0` fence read together: a sentence promising a folder
-          nothing will arrive in is the exact failure both of those exist to avoid. */}
-      {value === "replace" && variant === "live" && cardsInVariant > 0 && (
+          copy; a **virtual** deck has no collection group at all, so its rows are live rows that
+          have still never held one; and an empty list has none to give back — the radio above
+          already says so, and a folder named under that sentence would be a delivery no reader
+          will ever find. This is `ClearDeck`'s ternary and its `> 0` fence read together: a
+          sentence promising a folder nothing will arrive in is the exact failure both of those
+          exist to avoid.
+
+          **The virtual condition is the one that could not be spelled as a variant**, and it is
+          why this list grew rather than being tightened. The other three are all answerable from
+          the list in front of the reader; this one is a fact about the *deck*, and `live` is the
+          same word on a deck that tracks cardboard and a deck that never will. */}
+      {value === "replace" && variant === "live" && !virtual && cardsInVariant > 0 && (
         <p className="text-[0.6875rem] leading-relaxed text-destructive">
           Any copies you own go back to Recently removed.
         </p>

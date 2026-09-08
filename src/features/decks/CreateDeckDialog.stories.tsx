@@ -174,7 +174,10 @@ export const Default: Story = {
     await openDropdown(userEvent.setup(), "Format");
     await userEvent.click(await canvas.findByRole("option", { name: "Modern" }));
     await userEvent.type(canvas.getByLabelText("Description"), "Twenty damage, quickly.");
-    await userEvent.click(canvas.getByRole("switch", { name: /Theory deck/ }));
+    // The three-way kind group, which replaced the `Theory deck` switch when `virtual`
+    // became the third kind. One press writes both `theoryEnabled` and `virtualOnly`, so the
+    // deck this story makes is `Theory + Actual` and cannot be half of two kinds.
+    await userEvent.click(canvas.getByRole("button", { name: "Theory + Actual" }));
 
     await openDropdown(userEvent.setup(), "Folder");
     await userEvent.click(await canvas.findByRole("option", { name: "Constructed › Commander" }));
@@ -189,7 +192,10 @@ export const Default: Story = {
           description: "Twenty damage, quickly.",
           folderId: 2,
           // Set at create, and it seeds nothing: a deck being born has no live cards to copy
-          // into the plan, unlike the patch's off → on transition.
+          // into the plan, unlike the patch's off → on transition. Its pair,
+          // `virtualOnly: false`, travels in the same `deck_create` — the wire is pinned in
+          // `CreateDeckDialog.test.tsx`, which asserts the whole payload rather than the row
+          // the fake happens to answer with.
           theoryEnabled: true,
         }),
       );

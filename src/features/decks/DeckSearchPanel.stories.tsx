@@ -40,11 +40,24 @@ import { useDeck } from "./useDeck";
 function Panel({
   deckId,
   roomy = true,
+  tracksCollection = true,
   defaultFormat = null,
   maxWidth,
 }: {
   deckId: number;
   roomy?: boolean;
+  /**
+   * Does the deck this column is docked beside read the reader's collection at all?
+   *
+   * **An arg rather than `tracksCollection(deck.deck)` off the hook this wrapper already
+   * mounts**, for {@link defaultFormat}'s reason one prop down and one of its own. The editor
+   * answers it once for six surfaces, so a wrapper deriving it here would be standing in for the
+   * *deck row* rather than for the editor — and the row is `null` for the first frames of every
+   * story, which would make the one-tab state a thing the panel arrives at rather than a state a
+   * story can be about. `true` is what every deck in the fake's seeds is; {@link Virtual} is the
+   * story that says otherwise.
+   */
+  tracksCollection?: boolean;
   defaultFormat?: FormatFilterOption | null;
   maxWidth?: number;
 }) {
@@ -62,6 +75,7 @@ function Panel({
       categories={deck.categories}
       deckId={deckId}
       targetCategoryId={deck.deck?.defaultCategoryId ?? AUTO_CATEGORY}
+      tracksCollection={tracksCollection}
       defaultFormat={defaultFormat}
       roomy={roomy}
       maxWidth={maxWidth}
@@ -288,6 +302,49 @@ export const Tabs: Story = {
     await userEvent.click(collection);
     await expect(within(panel).queryByText("37 cards")).toBeNull();
     await expect(within(panel).queryByRole("searchbox", { name: "Search cards" })).toBeNull();
+  },
+};
+
+/**
+ * A **Virtual** deck's column — one search, and no strip over it (issue #401).
+ *
+ * A Virtual deck is one the reader tracks without owning the cardboard, so it has no
+ * `collection_folders` group and reads no owned figure anywhere in the editor. A Collection tab
+ * here would be a search of their binder offering to file copies into a list that counts none of
+ * them, so it is dropped whole — and with one tab left the strip goes too, because a two-way
+ * control drawn with one answer is a control that cannot be used and a lit rule under the only
+ * word on the row says *you are here* to a reader who could not be anywhere else.
+ *
+ * **The seed is not a virtual deck and does not have to be.** `tracksCollection` is a fact the
+ * editor answers and hands down (see the wrapper's own note), so this story is the panel in the
+ * state that answer puts it in — which is exactly what the component is responsible for. What the
+ * *deck* being virtual costs is `DeckEditor`'s to be right about, and `DeckEditor.test.tsx` is
+ * where it is asserted end to end.
+ *
+ * The play is {@link Tabs} read as an absence: no strip, no `Collection` press, and the card
+ * search mounted with no press at all — which is the half that would still pass if the strip were
+ * merely hidden, so it is asserted beside the wall it opens on.
+ */
+export const Virtual: Story = {
+  args: { tracksCollection: false },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const panel = canvas.getByRole("region", { name: "Add cards" });
+
+    // The strip is not drawn at all — not drawn-with-one-tab, and not hidden.
+    await expect(within(panel).queryByRole("group", { name: "Search in" })).toBeNull();
+    await expect(within(panel).queryByRole("button", { name: "Collection" })).toBeNull();
+    await expect(within(panel).queryByRole("button", { name: "All cards" })).toBeNull();
+
+    // And the card search is what the panel opened on, with nobody having pressed anything —
+    // the collection tab is the app-wide default and this deck cannot honour it.
+    await expect(
+      within(panel).getByRole("searchbox", { name: "Search cards" }),
+    ).toBeInTheDocument();
+    await expect(
+      within(panel).queryByRole("searchbox", { name: "Search your collection" }),
+    ).toBeNull();
+    await expect(await within(panel).findByText("37 cards")).toBeInTheDocument();
   },
 };
 

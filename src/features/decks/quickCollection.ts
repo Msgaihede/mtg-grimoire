@@ -71,6 +71,29 @@ export function quickAddShort(card: DeckCard): number {
  * - `"inactive"` — the row is in a switched-off pile, so its `0` owned is a property of the
  *   *pile* rather than of the reader's shelves and there is no shortfall here to answer.
  *
+ * - `"virtual"` — the deck is one the reader tracks **without owning the cardboard** (issue
+ *   #401), so there is no binder for these three presses to write to at all. It is `"theory"`'s
+ *   arm reached from the other side and over the whole deck rather than one list: a virtual deck
+ *   has no `collection_folders` group, so every row reads `0` owned and {@link quickAddShort}
+ *   would answer the row's whole quantity on every card in it.
+ *
+ * **That fourth arm is defence in depth rather than the route a reader takes, and saying which
+ * is the point of writing it down.** `DeckEditor` passes no `quickAdd`, `quickAddAndUnwish` or
+ * `pullCard` for a virtual deck, and `collectionItems` drops the whole `Collection ▸` submenu
+ * when any one of the three is missing — so on the surface as it is built, a virtual deck's
+ * reader never opens a submenu for this arm to grey. Two answers were available and the
+ * structural one won: a submenu present but wholly greyed is three dead rows plus a sentence, on
+ * a menu this file's own comments already call too long, and *there is no binder here* is a fact
+ * about the deck rather than about the row the reader right-clicked.
+ *
+ * The arm stays because {@link QUICK_ADD_REASON} in `deckCardMenu.tsx` is a `Record` over this
+ * union: a state the union cannot spell is a state the menu would grey with `undefined` if the
+ * structural collapse were ever loosened — a wired-up virtual deck offering *Quick add 4 copies*
+ * on a row that owns nothing by definition, which is the inactive arm's own measured failure
+ * (two presses, two copies recorded, the row still reading `0/1`) reached by a new route. A
+ * `Record` that stops being total is how this repo loses a red build; an arm nobody reaches
+ * today costs one line and keeps it.
+ *
  * **That third arm was not here for the length of one fan-out, and driving the shipped window is
  * what found it** (2026-09-03, debug build, real database). `attribute_owned` hands a switched-off
  * pile nothing out of the group — `category_active` is checked before the row is allowed to draw
@@ -89,12 +112,26 @@ export function quickAddShort(card: DeckCard): number {
  * `attribute_owned`'s decision, and a shortfall computed here against a number the app refuses to
  * count would put two answers on one screen. The cure a reader has is the pile's own switch, and
  * `deckCardShort` — the *mark*'s predicate, which guards on `categoryActive` for this very
- * reason — is the precedent rather than a coincidence.
+ * reason — is the precedent rather than a coincidence, and it carries the `virtual` arm too.
+ *
+ * @param tracksCollection `deckKind.ts`'s `tracksCollection(deck)` over the deck this row is in.
+ * **A second argument for `deckCardShort`'s reason**: a {@link DeckCard} says nothing about the
+ * deck it is in, `card.variant` cannot stand in for it — a virtual deck's rows are ordinary
+ * `live` rows on purpose — and neither default is honest, since `true` offers a write with
+ * nowhere to land and `false` greys the three rows on every deck in the gallery.
  */
 export function quickAddBlock(
   card: DeckCard,
-): "theory" | "inactive" | "nothing-missing" | null {
+  tracksCollection: boolean,
+): "theory" | "virtual" | "inactive" | "nothing-missing" | null {
   if (card.variant === "theory") return "theory";
+  // **Ahead of both of the tests below**, and for the same argument that puts `inactive` ahead of
+  // the shortfall: on a virtual deck's row the shortfall is `quantity` for *every* row, so a
+  // later arm would never be reached and the deck would read as short of its whole self. It sits
+  // under `theory` rather than over it only because the two cannot both be true — a virtual deck
+  // keeps no plan (`deckKind.ts`'s table has no `true, true` row) — so the order between those
+  // two is a reading of the table rather than a rule.
+  if (!tracksCollection) return "virtual";
   // **Before the shortfall test and not after it**, because on an inactive row the shortfall is
   // not merely unknown — it is `quantity`, always, for every such row — so a later arm would be
   // unreachable and the row would read as short whatever the reader owns.

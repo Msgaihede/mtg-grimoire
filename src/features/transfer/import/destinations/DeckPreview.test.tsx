@@ -133,6 +133,7 @@ const DECK: DeckRow = {
   archived: false,
   folderId: null,
   theoryEnabled: false,
+  virtualOnly: false,
   theoryMarkExact: true,
   theoryMarkName: true,
   theoryMarkUnplanned: true,
@@ -332,6 +333,34 @@ describe("Add cards to collection", () => {
   it("draws no box when the list resolved nothing", () => {
     deckPreview(NONE_RESOLVED);
     expect(screen.queryByRole("checkbox", { name: /Add cards to collection/ })).toBeNull();
+  });
+
+  /**
+   * A **virtual** deck (issue #401) — and the second reason this box is not drawn, which is a
+   * different kind of reason from the one above.
+   *
+   * *Nothing resolved* is a question with no answer. This is a question whose answer the deck
+   * kind has already given: the box means **"I have physically built this deck"**, which is the
+   * sentence a virtual deck exists to say the opposite of. It is also the one press in this
+   * dialog that writes `collection_entries`, so leaving it on screen would put the reader one
+   * tick from filing cardboard for a deck whose whole promise is that it tracks none.
+   *
+   * The deck import itself is unaffected and that is asserted here too — a virtual deck imports
+   * a decklist like any other, and a test that only checked the absence would pass just as well
+   * against a build that had broken the import.
+   */
+  it("draws no box on a virtual deck, and still imports the list", async () => {
+    deckGet.mockResolvedValue({ ...DETAIL, deck: { ...DETAIL.deck, virtualOnly: true } });
+    deckPreview();
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Import" })).toBeEnabled());
+    expect(screen.queryByRole("checkbox", { name: /Add cards to collection/ })).toBeNull();
+
+    await userEvent.click(importButton());
+    await waitFor(() => expect(deckImportCommit).toHaveBeenCalled());
+    // The deck write landed in full; only the collection half is gone.
+    expect(deckImportCommit.mock.calls[0][3]).toHaveLength(2);
+    expect(collectionImportCommit).not.toHaveBeenCalled();
   });
 
   /**

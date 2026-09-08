@@ -174,7 +174,7 @@ Full record, with every measurement and the provenance of each rung:
   `removal-creature`, so Removal claims Lightning Bolt first. Neither is a defect to tidy.
 - **Where an unfiled add lands is a _deck setting_, not editor state** (changed 2026-08-15).
   `decks.default_category_id` (schema v16), read as `DeckRow.defaultCategoryId`, written through
-  the ordinary `deckUpdate` beside the format and the theory switch, and asked in
+  the ordinary `deckUpdate` beside the format and the deck's **kind**, and asked in
   **`DeckSettingsForm`**. It was a `useState` in `DeckEditor` with an `Add to` select on the
   docked search panel's header row, and both halves of that were wrong: a reader who pointed it
   at their Sideboard lost the choice the moment they closed the deck, and the _other_ surface it
@@ -207,7 +207,10 @@ Full record, with every measurement and the provenance of each rung:
   against a real synced corpus), and it found nothing the suite had not — which is worth
   writing down for the two halves it confirms rather than for a defect. **The absences**: the
   "New deck" dialog draws Name, Format, Description, Notes, the theory switch and Folder and **no
-  `Add cards to` row**, and the docked panel's only `<select>` is the filter row's `Format`. **The
+  `Add cards to` row**, and the docked panel's only `<select>` is the filter row's `Format`. (The
+  control that pass calls *the theory switch* is the three-way **Deck kind** group since
+  2026-09-08 and issue #401 — see the deck-kind section below. The measurement stands; the word
+  for that row does not.) **The
   agreements**: settings opened on `Auto (by what it does)` over
   `Commander · Sideboard · Companion · Maybeboard (off)` — the seeded-inactive pile offered like
   any other — and one press on `Sideboard` moved the quick-add field's label to
@@ -229,7 +232,7 @@ Full record, with every measurement and the provenance of each rung:
 ## Deck settings, and the two surfaces that draw them
 
 Everything a deck carries that is not a card in it — name, format, description, notes, cover,
-folder, theory, and **where an unfiled add lands** — is **one component, `DeckSettingsForm`,
+folder, its **kind**, and **where an unfiled add lands** — is **one component, `DeckSettingsForm`,
 drawn by two hosts** (2026-08-14). The "New deck" dialog used to ask two questions and leave the
 reader to configure the deck they had just made; it now asks all of them.
 
@@ -311,9 +314,17 @@ reader to configure the deck they had just made; it now asks all of them.
   `theoryCount` is `Σ cardCountAllVariants − liveCount`, and mounting `useDeck(deckId, "theory")`
   beside it buys a second `deck_get` for a number already in hand.
   **The live button is unconditional and the theory one is drawn only on `theoryEnabled`**: every
-  deck has a live list, but a deck with the plan switched off has no theory list at all, and a
-  greyed `Clear theory list…` under a switch that turns theory on reads as something broken rather
-  than as something absent.
+  deck has a live list — **a Virtual one included, which is why this whole section survives on a
+  deck where the shortfall section above it does not** — but a deck with the plan switched off has
+  no theory list at all, and a greyed `Clear theory list…` under a control that turns theory on
+  reads as something broken rather than as something absent.
+  **What the live button is *called* is not unconditional, and that is the one thing about this
+  section a Virtual deck moves**: `Actual` is half of a pair the reader only meets where there is
+  a plan, so the noun comes from `listNames.ts`'s `listName("live", { virtual: !collects })` and
+  reads `Clear the deck…`. `live` is still the stored variant on such a deck, so the *argument* is
+  unchanged and only the prose moves. The theory button needs no `virtual` test of its own —
+  `theoryEnabled` is `false` on a virtual deck by construction, and a second guard here would read
+  as though the two facts were independent, which is the misreading `deckKind.ts` exists to stop.
 - **Two callbacks, because the two hosts commit differently.** `onChange` fires for every change
   including each keystroke; `onCommit` fires only for the three text fields, when the reader is
   finished with one. `DeckSettingsDialog` writes on `onChange` for the controls that settle in a
@@ -432,6 +443,108 @@ reader to configure the deck they had just made; it now asks all of them.
   counter-example, imported out of `cardControl.tsx` by 22 modules that wanted nothing else from
   it — so nothing in this folder defines a focus outline any more.
 
+## The three deck kinds, and what a Virtual one turns off
+
+Added 2026-09-08 for [issue #401](https://github.com/Msgaihede/mtg-grimoire/issues/401), user
+schema **v40**. A **Virtual** deck is one the reader tracks without owning the cards for it — an
+MTGO or Arena list, a proxy pile, a deck they are reading about. The storage side, the nine
+backend refusals and the transition that files a deck's copies into `Recently removed` are in
+[decks-storage.md](../../../docs/reference/decks-storage.md); these are the rules that bind this
+layer.
+
+- **`deckKind.ts` is the one place `theoryEnabled` and `virtualOnly` are read together, and it is
+  the only thing any surface may branch on.** Two booleans, one word: `regular` is `false, false`,
+  `theory` is `true, false`, `virtual` is `false, true`. Nothing else in the app asks a deck
+  whether it is `virtualOnly && !theoryEnabled`, and nothing else spells that pair at all. Read
+  the module for what it exports; the two word tables, `DECK_KIND_LABEL` and `DECK_KIND_HINT`, are
+  the reader's words' one home, so no surface can come to describe a kind differently from the
+  control that sets it.
+  **`virtual` wins the impossible `true, true` row**, and which way is a decision rather than an
+  argument order: a database holding it came from a build or a peer this one does not know, and of
+  the two readings the safer is the one that shows the reader *less* of their collection —
+  reading it as `theory` would put a deck that may be tracking cardboard it does not own back in
+  front of every owned count and every wishlist button.
+- **`deckKindPatch` names _both_ columns, always, and no surface may write one alone.** A `theory`
+  deck patched to `virtual` with `{ virtualOnly: true }` by itself would be exactly the `true,
+  true` row the module exists to keep out. Rust writes the pair defensively for the same reason;
+  this is the same rule on the near side, so the two agree rather than one relying on the other.
+  The result drops straight into a `DeckPatch` or a `DeckInput` with no spreading, which is why it
+  is `DeckKindFlags` and not `Pick<DeckRow, …>`: the settings form holds a **draft** that has never
+  been a `DeckRow`, and at create there is no row to pick from.
+- **⚠️ `variant === "live"` no longer answers whether a deck reads the collection, and that is the
+  thing to get wrong.** It was the app's shorthand for it at roughly ten surfaces, and it was
+  correct for as long as there were two kinds: a `theory` row is a plan and owns nothing, a `live`
+  row is cardboard. **A virtual deck's rows are `live` rows, deliberately** — `DeckRow.cardCount`
+  and the gallery's colour bar both count `variant = 'live'` in SQL, so rows parked in `theory`
+  would report `0 cards` under an empty bar on every tile for ever — so the variant answers a
+  question about the *list* and a second fact about the *deck* is now needed beside it.
+  `tracksCollection(deck)` is that fact, one predicate rather than `deckKind(deck) !== "virtual"`
+  spelled at each site: those sites are not asking which kind the deck is, they are asking whether
+  to draw an owned readout, and a fourth kind that also owned nothing would want them all to move
+  together. **The sweep is not finished**, and the one place it stopped short is a *write* rather
+  than a readout: see the cut path in the `## Writes` section below and the third entry under
+  `## Known open bugs`.
+- **What a Virtual deck loses is the whole of what the editor says about a binder**, answered in
+  one place and drawn in six: `DeckStats`' shortfall block and its three presses, `DeckLedger`'s
+  `Owned` term, `PriceStrip`'s `Recently removed` note, `TableView`'s `Owned` column, the docked
+  panel's Collection tab, and the card menu's `Collection ▸` submenu. **Absent, never greyed**, and
+  that is the same argument `Clear theory list…` has made since it shipped: a greyed control under
+  a state the reader chose reads as something broken rather than as something absent — and here it
+  would also be the one place on the screen a reader could produce a real backend error message on
+  purpose, since Rust refuses each of those writes by name.
+- **`tracksCollection` is a _required_ prop on `DeckStats`, `DeckLedger`, `PriceStrip`,
+  `DeckSearchPanel` and all four views, and required is the point.** A host that has not thought
+  about it must not silently get the collection-reading case. `DeckEditor` answers it **once** —
+  `const tracks = row !== null && tracksCollection(row)` — and hands it down, `separateX`'s
+  arrangement one flag over: a curve and a heading that each decided for themselves would be two
+  surfaces answering one question about one deck two ways. **A row that has not answered reads as
+  `false`, and the direction is the argument**: only `PriceStrip` is drawn before `deck_get` lands,
+  so the choice is between its `Recently removed` note appearing a beat late on every deck and
+  appearing then being taken away on a virtual one — a page filling in is what a reader expects of
+  a load, a promise withdrawn is not.
+- **`CardStack` and `deckCardMenu` take it optionally, and neither is drift.** `CardStack` is where
+  a *pile* is drawn rather than where a deck is, and its whole contract is that everything but the
+  cards, the label and the currency has a default; the fence is at both ends of that default, since
+  `StackView` — its only caller in the app — takes the flag as required and forwards it, and
+  `deckCardShort`'s own second argument is required because a *predicate* handed no deck has no
+  honest answer to fall back on. `deckCardMenu`'s absence is structural: `DeckEditor` passes no
+  `quickAdd`, `quickAddAndUnwish` or `pullCard` for a virtual deck, so `collectionItems`'
+  all-three-or-none guard drops the whole `Collection ▸` item before the flag is consulted — a
+  surface that has *not* answered has necessarily wired the three writes, which is what got it past
+  the guard, so `true` is true by construction wherever the line that reads it can run.
+- **The two pure predicates each grew the flag as a second argument rather than a clause.**
+  `deckCardShort(card, tracksCollection)` decides the red `3/4` in a card's chin, and
+  `deckCardName` takes the same flag so the figure and the words it is announced by cannot come to
+  disagree — that is why it is one function and why neither parameter is defaulted.
+  `quickAddBlock(card, tracksCollection)` gained a `"virtual"` arm, placed **ahead of both tests
+  below it** for the same argument that puts `inactive` ahead of the shortfall: on a virtual deck's
+  row the shortfall is `quantity` for *every* row, so a later arm would never be reached and the
+  deck would read as short of its whole self.
+- **`DeckSettingsForm` draws a three-way `role="group"` of `aria-pressed` buttons where the
+  `Theory deck` switch was**, in `DECK_KINDS` order — the kind every deck is born as, then the one
+  that adds a list, then the one that takes the collection away. **Never a radiogroup** — the
+  scanner's `ControlsPanel` grammar and its argument verbatim: these are toggles that happen to be
+  exclusive, and a radio's roving tab stop would put the reader inside a three-way keyboard mode
+  to change one word. It is drawn as the editor's own `Theory | Actual` ribbon switch is, at this
+  panel's `h-8` rather than that row's `h-9`, and the resemblance is the point: this control is
+  what decides whether that one is drawn at all. **It hands back a `DeckKind` and never a patch**,
+  so `deckKindPatch` stays the one place the two columns are spelled together and this component
+  cannot be the thing that writes one alone. The words are `DECK_KIND_LABEL`'s and the caption under
+  the group is `DECK_KIND_HINT`'s — **the selected kind's line and only it**, because three
+  sentences on screen at once is a paragraph nobody reads. Each hint says what the kind *is* and
+  then what pressing it *costs*, which reads oddly on the kind the deck already is and is worth
+  that: `virtual`'s press is the only one of the three that moves the reader's **cardboard**, and a
+  control that quietly refiles a collection is exactly what a caption is for.
+- **`listName(variant, { virtual })` answers `deck`**, and `variant` is ignored under it rather
+  than asserted about. The Theory/Actual vocabulary exists because a deck with a plan keeps two
+  lists and a sentence about emptying one has to say which; a virtual deck keeps exactly one, draws
+  no variant tabs, and its reader never meets the word *Actual* anywhere — so `Clear the actual
+  list?` would name a distinction that is not on their screen, in the editor's own vocabulary for a
+  *plan*, which is the one thing a virtual deck is not. One word rather than `virtual list`, which
+  would be this app teaching a word for a distinction it has just taken away.
+- **The tile badge gained `VIRTUAL` and it is solid**, which is argued with the rest of the badge
+  in the deck-tile section below.
+
 ## Writes
 
 - **A write to what is _in_ a deck goes through a `useDeck` mutation — but the refused-write family
@@ -466,6 +579,12 @@ reader to configure the deck they had just made; it now asks all of them.
   **Three things fall back to the absolute write** — a `theory` list (a plan holds no cards, and
   the backend refuses one outright), an *increase* (putting a card **into** a deck is
   `collectionToDeck`, the Collection Search tab's write), and a caller that could not find the row.
+  **A fourth belongs on that list and is not there, which is [the open bug at the foot of this
+  file](#known-open-bugs)**: a **Virtual** deck's rows are `live` rows, so `variant === "live"`
+  passes, `held` is supplied, and the cut goes to `deckToCollection` — which Rust refuses by name
+  for a deck with no group. This is the `variant === "live"` trap in its sharpest form, one layer
+  below the surfaces that were given `tracksCollection`, and the reason that trap has a rule of
+  its own in the deck-kind section above.
   **And the answer is read, never assumed**: `MoveOutcome.quantity` is `0` for a card the reader
   never owned, and `useDeck` fires `["collection"]` only when copies actually moved. `query.ts`
   caches 30 s, so a missing invalidation there is a ghost row on the collection page rather than a
@@ -1018,8 +1137,15 @@ reader to configure the deck they had just made; it now asks all of them.
   **Three per-deck switches, all defaulting on, and none of the off states is symmetric with
   another.** `decks.theory_mark_exact` / `theory_mark_name` (user schema v38) and
   `theory_mark_unplanned` (**v39**, 2026-09-08) ride `DeckPatch` and are drawn
-  indented under the theory switch in `DeckSettingsForm`, each beside a swatch painted from the
-  mark's own custom property. **Green off re-resolves an exact row as a name row** — blue, with
+  indented under the **Deck kind** group in `DeckSettingsForm` and only on the `Theory + Actual`
+  kind, each beside a swatch painted from the
+  mark's own custom property. **That gate still reads `value.theoryEnabled` and deliberately not
+  the kind**: `deckKindPatch` writes both columns on every press and only `theory` sets this one,
+  so `Regular` and `Virtual` each leave it `false` and the rows vanish for both by the one **gate**
+  that was already there — checked against `deckKindPatch` rather than assumed, and pinned by
+  `DeckSettingsForm.test.tsx`'s *hides the mark rows for both of the other two kinds*. A
+  `deckKind(value) === "theory"` beside it would be a second spelling of one fact, free to drift
+  from the patch the moment a fourth kind is added. **Green off re-resolves an exact row as a name row** — blue, with
   blue's number — because an exact match *is* a name match and what the switch turns off is the
   finer statement: turning the strict mark off asks for less precision, not less information, and
   a reader who saw the row go blank would read the control as broken. Blue off silences a
@@ -1029,7 +1155,7 @@ reader to configure the deck they had just made; it now asks all of them.
   planned row whose own tier switches are off stays unmarked and never falls through to red.** It
   is in the plan, so it is not unplanned, whatever the reader has asked to be shown about it —
   green's fallback goes to blue and blue's goes to nothing, and neither goes here. All off is a
-  real answer and is not a second spelling of the theory switch above being off — which is why
+  real answer and is not a second spelling of the kind above not being `Theory + Actual` — which is why
   this is three booleans rather than one enumerated field: `none | exact | both` cannot spell blue
   *without* green, and no ordering of a single field spells red *without* deciding the other two.
   Settings → Appearance carries the matching third row, **"Not in the theory list"**, with **one**
@@ -1623,9 +1749,20 @@ price | type`). An **inactive category stays its own group in all three grouping
   because the one-list deck's badge was the caption's `Any` row in different type: one list is
   what every deck is born with, so a word for it sat on nearly every tile in the gallery and told
   the reader nothing about any of them. `deckBadge` answers `DeckBadge | null` for it, which is
-  what took the dim-bordered arm out of the badge's own classes — every badge left is a deck that
-  keeps two lists, so accent is unconditional and the dash still means the plan has nothing
-  standing in for it yet.
+  what took the dim-bordered arm out of the badge's own classes — accent is unconditional and the
+  dash still means the plan has nothing standing in for it yet.
+  **It gained a fourth state on 2026-09-08 and the `null` argument survived it intact** (issue
+  #401): `VIRTUAL` is drawn for the third deck kind, `regular` is still `null` and still for the
+  same reason. A deck the reader tracks without owning the cardboard reads *nothing* off their
+  collection — no owned count, no shortage mark, no wishlist — so a tile that said nothing would be
+  a deck whose whole relationship to the binder is invisible until it is opened. That is the test
+  the badge was written to: one list is unremarkable, and no cardboard is not. **`VIRTUAL` is
+  solid, and that is a ruling rather than an omission** — the dash means *provisional*, a virtual
+  deck's list is not a sketch of a deck the reader intends to sleeve up but the deck itself, and
+  dashing it would tell a reader who has learned the dash that a finished MTGO list is a plan. The
+  mark for "you own none of this" is the word itself. It answers **before** the theory arms and
+  through `rowKind`, so the impossible `true, true` row is resolved in `deckKind.ts` and not a
+  second time here.
   **No hairline between the two tabs**, unlike {@link TRANSFER}'s joined pair: one of them is
   always pressed, so the filled half's own edge is the divider. The pair needed one while `Compare`
   sat between them and carried it.
@@ -1730,8 +1867,13 @@ price | type`). An **inactive category stays its own group in all three grouping
   bullet below for why `rememberView` must not invalidate, and
   [decks-live-findings.md](../../../docs/reference/decks-live-findings.md) for the read caught
   answering the old tab mid-write. A marker the restore cannot move is the whole fix.
-- **`useDeck.update` drops the deck's _unwatched_ lists when the patch carries `theoryEnabled`,
-  and that is the write end of the same fact.** An invalidation only refetches what somebody is
+- **`useDeck.update` drops the deck's _unwatched_ lists when the patch carries `theoryEnabled`
+  _or_ `virtualOnly`, and that is the write end of the same fact.** Either column does it, because
+  the two are one three-way choice and `deckKindPatch` names both on every press — so in practice
+  the first test already fires for every kind change the settings form makes. The second is not
+  therefore redundant: it is the fence for a caller that patches one column alone, and a condition
+  that is true only because of how its one caller happens to spell things is a condition waiting
+  to be wrong. An invalidation only refetches what somebody is
   looking at, so the other variant keeps its old row until something mounts it and then serves it
   **stale before the refetch lands** — a reader who switches the plan back on and presses
   `Theory` in the same second reads a row that still says the deck keeps no plan, and the clamp
@@ -3589,13 +3731,36 @@ one edit and not four components disagreeing.
 
 ## Known open bugs
 
-Two, both found by driving the shipped window and **neither of them fixed** — both from the
+**Two, and neither of them fixed.** Both were found by driving the shipped window, both from the
 2026-08-11 builder pass: the title row collapsing the deck name at 1060–1350px, and Table view
 starving the card name. Detail:
 [docs/reference/decks-live-findings.md](../../../docs/reference/decks-live-findings.md).
 
-It was **three** until 2026-08-31, and the third was *a custom deck cover never appearing in the
-gallery*. **That entry was already stale when it was struck**: `DeckTile`'s `coverUrl` had grown
+**A third stood here for part of 2026-09-08 and was fixed the same day, and it is worth keeping
+the account of because it is the `variant === "live"` trap in its purest form.** Cutting a card
+from a Virtual deck refused. `useDeck.setQuantity` routes a *decrease* on a `live` list through
+`ipc.deckToCollection`, and its three conditions — the variant is `live`, the quantity is going
+down, the caller supplied `CutFrom` — were all satisfied on a virtual deck, whose rows are `live`
+rows on purpose; `collection_alloc::deck_to_collection` then refused it by name. Every removal in
+the editor goes through `DeckEditor`'s one `setQuantityAt`, so the stepper's zero, the card menu's
+`Remove card` and the remove tray would all have failed with *"A virtual deck keeps no cardboard…"*
+rather than removing the card.
+
+**The fix is a fourth condition on that route and nothing in Rust** — the absolute write,
+`deckSetCardQuantity`, is the correct command for a deck with no group and is what the same hook
+already falls back to for a theory row. Two things about it are the transferable part. **The fence
+is at the write rather than at the call site**, because `held` is the caller's answer to a
+different question (*where are the copies*) and a route that only refuses when its caller
+remembers to withhold an argument breaks the day a fifth surface calls it. And **the surfaces that
+were given `tracksCollection` are the ones that _draw_ an owned figure, while this one only
+_writes_** — which is why a sweep for owned readouts could not have found it, and why the rule has
+a bullet of its own in the deck-kind section above. It is pinned by
+`cuts a virtual deck's row through the absolute write, never through the collection`, whose
+fixture supplies `held` deliberately: a test that merely left it out would pass against the broken
+build.
+
+**The count stood at three once before, on a different third, until 2026-08-31**: *a custom deck
+cover never appearing in the gallery*. **That entry was already stale when it was struck**: `DeckTile`'s `coverUrl` had grown
 the `coverKind` arm the finding asked for and `DecksPage.test.tsx` pinned it, so it had been fixed
 and this list had not been re-read. What settles it now is a deletion rather than a repair — there
 is no custom cover left for a tile to fail to draw.

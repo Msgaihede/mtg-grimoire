@@ -59,6 +59,17 @@ export interface CommitImport {
   items: ImportItem[];
   /** See {@link OwnedCopies}. Absent is the plain decklist import. */
   collectionItems?: OwnedCopies;
+  /**
+   * Whether the destination deck keeps no cardboard — `DeckRow.virtualOnly`.
+   *
+   * **Not a fifth argument of the command**: the backend reads the column itself and needs no
+   * telling. It is here because it rides `variables` into `invalidate`, which is the one
+   * decision on this hook that a virtual deck changes — a `replace` on its live list releases
+   * no copy, so the collection roots must not be fired. Optional, because the callers that
+   * cannot be virtual (`importIntoNewDeck`, which commits into a deck one statement old) mean
+   * `false` by saying nothing.
+   */
+  virtual?: boolean;
 }
 
 /** A list becoming a deck of its own: the deck-level answers `deck_create` takes, and the
@@ -267,11 +278,19 @@ export function useImport() {
     /** What the press would have cleared. Omitted by `importIntoNewDeck` **on purpose** rather
      *  than by accident: it pins `"merge"` into a deck one statement old, so there is nothing
      *  for it to release and no reading of its variables that could say otherwise. */
-    clearing?: { mode: ImportMode; variant: DeckVariant },
+    clearing?: { mode: ImportMode; variant: DeckVariant; virtual?: boolean },
   ) => {
     const wroteCopies = collectionItems !== undefined && collectionItems.length > 0;
     // Issue #336: this pair *is* a `collection_entries` write, whatever the box said.
-    const releasedCopies = clearing?.mode === "replace" && clearing.variant === "live";
+    //
+    // **`virtual` is the third way to release nothing, and it is not a variant.** A virtual deck
+    // has no collection group, so `release_live_copies` walks an empty set and this press moves
+    // no `collection_entries` row — but its rows are `live` rows, so the variant beside it says
+    // the opposite. Absent means `false` for the callers that predate the field and for
+    // `importIntoNewDeck`, which is right in both: a deck one statement old and a deck that
+    // tracks its collection are both decks this test should not exempt.
+    const releasedCopies =
+      clearing?.mode === "replace" && clearing.variant === "live" && clearing.virtual !== true;
     const keys = wroteCopies || releasedCopies ? OWNED_WRITE_KEYS : [["decks"] as QueryKey];
     for (const queryKey of keys) void queryClient.invalidateQueries({ queryKey });
   };

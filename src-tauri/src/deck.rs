@@ -110,6 +110,29 @@ pub const NO_CATEGORY: &str = "A card needs a category to go in.";
 /// What an adjustment says when the deck it names is not there.
 pub const GONE: &str = "That deck is not there any more.";
 
+/// A virtual deck tracks no cardboard, so no collection or wishlist write may name one.
+///
+/// **[`crate::collection_alloc::THEORY_HOLDS_NOTHING`]'s sibling, one boundary out**, and the two
+/// are worth reading together because they refuse for the same shape of reason and about
+/// different things. A theory *list* is a plan, so the copies it names do not exist yet; a
+/// virtual *deck* is a list of cards the reader is not tracking cardboard for at all, so there is
+/// nothing anywhere in the collection for a comparison to be against. Both refusals exist
+/// because the alternative is a press that reports success and moves nothing, which reads to the
+/// reader as a card that vanished.
+///
+/// **In words rather than by a `CHECK` or by answering zero.** Answering zero was the tempting
+/// one: `owned_by_printing` already answers 0 for a deck with no group, so a "0 owned, all
+/// missing" readout is what a virtual deck would *silently* produce — and that is precisely the
+/// wrong answer, because it says the reader is short of a hundred cards they never meant to buy.
+/// The refusal is what turns that into a sentence.
+///
+/// **Named on the crate rather than per call site**, because five modules say it —
+/// `deck_missing`, `deck_pull`, `deck_quick_add`, `collection_alloc` and `deck_theory`, plus
+/// [`missing_to_wishlist`] here — and a sentence spelled six times is a sentence that will be
+/// spelled six ways.
+pub(crate) const VIRTUAL_HOLDS_NOTHING: &str =
+    "A virtual deck keeps no cardboard, so it has nothing to compare with your collection.";
+
 /// `decks.default_category_id` when the deck files an unnamed add by **what the card does**
 /// rather than into a pile the reader chose — schema v16's default, and the value every deck is
 /// born with.
@@ -321,6 +344,25 @@ pub struct DeckInput {
     ///
     /// Absent is `false` — resolved in Rust rather than by a `coalesce`; see [`create_deck`].
     pub theory_enabled: Option<bool>,
+    /// Whether this is a **Virtual** deck — one the reader tracks without owning cardboard for
+    /// it: an MTGO or Arena list, a proxy pile, a deck read about somewhere. Schema v40.
+    ///
+    /// **The kind is two booleans and never an enum**, and this field is the second of them:
+    /// `theory_enabled`/`virtual_only` reads `0/0` regular, `1/0` theory-and-actual, `0/1`
+    /// virtual. `1/1` has no meaning, which is why [`update_deck`] clears one when a patch sets
+    /// the other — but a *create* has nothing to clear, so this field and
+    /// [`Self::theory_enabled`] are independent here in exactly the way they are not there.
+    /// A caller that sends both `true` gets the deck it asked for and no refusal; the pair is
+    /// made honest on the first edit, and the dialogs on the other side of the wire send one.
+    ///
+    /// **A virtual deck is born with no group**, which is the one thing this field changes about
+    /// [`create_deck`] beyond the column: `create_deck_group` is not called, because a
+    /// `collection_folders` row standing for a deck that owns no cardboard is a drawer nothing
+    /// can ever file into. See that function for what the absence buys every owned readout.
+    ///
+    /// Absent is `false` — resolved in Rust rather than by a `coalesce`, [`Self::theory_enabled`]'s
+    /// arrangement and for its reason.
+    pub virtual_only: Option<bool>,
 }
 
 /// An edit to one deck. Every field is optional: absent means "leave it".
@@ -457,6 +499,27 @@ pub struct DeckPatch {
     /// three switches are independent, and a reader who wants only this one — show me what the
     /// plan does *not* ask for — is asking a question no ladder-shaped encoding can spell.
     pub theory_mark_unplanned: Option<bool>,
+    /// Whether this deck is **Virtual** — tracked without cardboard behind it. Schema v40.
+    ///
+    /// **This is the one field on this struct whose write is not confined to its own column**,
+    /// and both directions are in [`update_deck`]:
+    ///
+    /// * **Setting it clears [`Self::theory_enabled`], and setting that clears this** — in the
+    ///   *values bound*, not in a second UPDATE, so the row can never be observed at `1/1` even
+    ///   from inside the transaction. The three kinds are derived from the pair and `1/1` names
+    ///   none of them; a database that could hold it would be a deck whose kind every reader on
+    ///   both sides of the wire had to guess at.
+    /// * **Becoming virtual releases the deck's copies and drops its group.** A deck that owns
+    ///   no cardboard cannot go on holding a drawer full of it, so every copy the group has is
+    ///   filed into `Recently removed` and the `collection_folders` row goes — after which
+    ///   [`owned_by_printing`] answers 0 for the deck with no new branch anywhere, because the
+    ///   join it makes finds no group. Ceasing to be virtual makes the group again, empty.
+    ///
+    /// **No fence and no `valid_*` call**, [`Self::theory_mark_exact`]'s note: a bool has two
+    /// values and both are answers. What is refused is not a *value* here but a *write
+    /// elsewhere* — [`VIRTUAL_HOLDS_NOTHING`] is what every collection and wishlist command says
+    /// when it is pointed at one of these decks.
+    pub virtual_only: Option<bool>,
 }
 
 /// Where the reader was last looking at one deck — the editor's own tab, grouping and sort.
@@ -570,6 +633,25 @@ pub struct DeckRow {
     /// — a stand-in, a spare or an experiment. The third of three independent switches; see
     /// [`Self::theory_mark_exact`] for the rules all three share.
     pub theory_mark_unplanned: bool,
+    /// Whether this deck is **Virtual** — one the reader tracks without owning cardboard for it
+    /// (MTGO, Arena, proxies). Schema v40, `NOT NULL DEFAULT 0`.
+    ///
+    /// **Read here because the whole of what this flag does is on the other side of the wire.**
+    /// Rust refuses the collection and wishlist writes that name such a deck
+    /// ([`VIRTUAL_HOLDS_NOTHING`]) and keeps the deck's group from existing; what a *reader*
+    /// sees — no owned column, no missing count, no Pull, no shopping list, one list instead of
+    /// two — is TypeScript drawing conclusions from this one boolean, which is the crate's own
+    /// facts/conclusions boundary. A flag the app can set and never see is a flag nothing can
+    /// draw, [`Self::theory_enabled`]'s reason for being on this row at all.
+    ///
+    /// **Together with [`Self::theory_enabled`] it *is* the deck's kind, and the pair is
+    /// exhaustive.** `false/false` regular, `true/false` theory-and-actual, `false/true` virtual.
+    /// The fourth pair is unreachable — [`update_deck`] clears one flag as it sets the other —
+    /// so a reader of this row may treat the three as a closed set without a fallback for a
+    /// combination the database cannot hold. A row that arrives at `1/1` over sync from a
+    /// hand-edited peer is the one exception, and reading `virtual_only` first is the answer
+    /// that loses the least: a deck with no cardboard behind it has no plan to compare against.
+    pub virtual_only: bool,
     /// Whether this deck files its variable-cost cards under a heading of their own — schema
     /// v13.
     ///
@@ -913,6 +995,7 @@ static DECK_SELECT: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
             d.last_variant, d.last_group_by, d.last_sort_by, d.separate_x_group,
             d.default_category_id, d.game_key, d.bracket, d.tokens_open,
             d.theory_mark_exact, d.theory_mark_name, d.theory_mark_unplanned,
+            d.virtual_only,
             {images}
        FROM decks d
        LEFT JOIN format_specs fs ON fs.key = d.format_key
@@ -922,18 +1005,18 @@ static DECK_SELECT: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
 });
 
 fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
-    /// Where `DECK_SELECT`'s image columns start — one past `d.theory_mark_unplanned`, the
+    /// Where `DECK_SELECT`'s image columns start — one past `d.virtual_only`, the
     /// last named column. Named rather than inlined for `deck_card_select`'s reason: the
     /// pairing arithmetic below is `front_face_map`'s and only the *offset* is this function's.
     ///
     /// **It moves with every column added to the end of the named list**, and it has moved
-    /// three times in a week: it read 21 until schema v37 put `tokens_open` there, 22 until v38
-    /// appended the first two theory marks, and 24 until v39 appended the third. Forgetting to
-    /// move it is not silent for `tokens_open`'s
+    /// four times in a week: it read 21 until schema v37 put `tokens_open` there, 22 until v38
+    /// appended the first two theory marks, 24 until v39 appended the third, and 25 until v40
+    /// appended the deck kind. Forgetting to move it is not silent for `tokens_open`'s
     /// kind of column — the image reads are `Option<String>` and an `INTEGER` beside them makes
     /// rusqlite refuse the conversion rather than answer a plausible URL — but it *is* silent
     /// the other way round, which is what the comment on the image read itself describes.
-    const IMAGE_COL: usize = 25;
+    const IMAGE_COL: usize = 26;
     Ok(DeckRow {
         id: r.get(0)?,
         name: r.get(1)?,
@@ -1009,11 +1092,20 @@ fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
         // — three fields all holding a `0` or a `1`, all drawn on the same list, and no way to
         // tell from the row which switch the reader had actually moved.
         theory_mark_unplanned: r.get(24)?,
-        // **From 25**, last of all, for the reason written eight comments up — the
+        // 25, at the end of the list, for the reason written eight comments up — and the ninth
+        // proof of it, this one sharper than v39's was. Schema v40's kind is a `bool` over an
+        // `INTEGER` column like the four before it, and the column it most reads like a
+        // neighbour of is `theory_enabled` at 13 — which is the **other half of the same pair**.
+        // An index that landed there would not merely swap two switches, it would hand a deck's
+        // kind to its own opposite: a virtual deck read as a theory deck and back, both fields
+        // still holding a `0` or a `1`, and the three kinds this pair spells all still looking
+        // like answers.
+        virtual_only: r.get(25)?,
+        // **From 26**, last of all, for the reason written nine comments up — the
         // `crate::image_uri::FRONT_FACE_COLUMNS` expressions `front_face_selects` appended, in
         // the (top-level, face) pairs `front_face_map` folds back up, one pair per variant.
         //
-        // This read carries a failure the twenty-four above it do not. Every one of those is caught
+        // This read carries a failure the twenty-six above it do not. Every one of those is caught
         // by a value of the wrong *kind* turning up in a field; here the pair is
         // (top-level, face) and `for_face` prefers the face, so a read one column out still
         // answers a perfectly real URL — the right picture from the wrong slot, or the crop
@@ -1046,6 +1138,36 @@ const DECK_GROUP_KIND: &str = crate::schema::COLLECTION_FOLDER_KINDS[1];
 /// And the holding area's kind, `[2]` — the single folder copies go to when they leave the
 /// collection without leaving the database.
 const REMOVED_GROUP_KIND: &str = crate::schema::COLLECTION_FOLDER_KINDS[2];
+
+/// Is this deck one the reader tracks without owning? See `decks.virtual_only`.
+///
+/// **The fact, and never the conclusion** — this crate's own boundary, and the reason this is a
+/// `bool` rather than a `Result<(), String>` that refuses. Every caller is a *different* refusal:
+/// `deck_missing`, `deck_pull`, `deck_quick_add`, `collection_alloc`, `deck_theory` and
+/// [`missing_to_wishlist`] all answer [`VIRTUAL_HOLDS_NOTHING`] where they are pointed at one,
+/// and a helper that raised on their behalf would be a helper that could not be asked the
+/// question for any other purpose. [`deck_group`] is the neighbour that makes the same choice
+/// for the same reason, at length.
+///
+/// **A missing deck answers `false`, and that is deliberate.** Nothing here is a fence against a
+/// stale id: every caller of this either writes the deck (and gets [`GONE`] from its own
+/// statement) or reads it (and gets an empty answer), so raising here would put a second,
+/// differently-worded refusal in front of a state each of them already handles — and it would be
+/// the *first* thing a caller said about a deck that is not there, which is the wrong sentence.
+///
+/// **`query_row` over `deck_group`'s `optional()` shape** for that reason: `unwrap_or(false)`
+/// where the row is gone, rather than an `Option` every one of six call sites would then have to
+/// collapse the same way.
+pub(crate) fn is_virtual(conn: &Connection, deck_id: i64) -> Result<bool, String> {
+    conn.query_row(
+        "SELECT virtual_only FROM decks WHERE id = ?1",
+        params![deck_id],
+        |r| r.get(0),
+    )
+    .optional()
+    .map(|found| found.unwrap_or(false))
+    .map_err(|e| e.to_string())
+}
 
 /// The collection group that stands for this deck, or `None`.
 ///
@@ -1501,10 +1623,15 @@ fn create_deck_group(tx: &Connection, deck_id: i64, name: &str) -> Result<(), St
 /// * **No `coalesce` on `folder_id`.** [`update_deck`] wraps every column in one so that an
 ///   absent patch field means "leave it"; there is nothing here to leave, so a `None` is filed
 ///   at the root of the tree and means it. [`DeckInput::folder_id`] carries the full contrast.
-/// * **`theory_enabled`'s absence is resolved in Rust, not in SQL.** The column is
+/// * **`theory_enabled`'s absence is resolved in Rust, not in SQL**, and `virtual_only`'s with
+///   it. Both columns are
 ///   `NOT NULL DEFAULT 0`, so a bound NULL would fail the write outright — and spelling a
 ///   `coalesce(?n, 0)` to avoid that would put the patch's convention into a statement that
 ///   deliberately does not use it. `unwrap_or(false)` says the same thing without the echo.
+/// * **A Virtual deck gets no group** (schema v40), which is the one thing about this function
+///   that is not one statement: [`create_deck_group`] is skipped, because a deck that owns no
+///   cardboard has nothing for a `collection_folders` row to hold and every owned readout is
+///   0 by the join finding nothing. The `if` is beside that call, with the argument.
 /// * **The format is remembered in [`K_LAST_DECK_FORMAT`], here and not at the call sites.**
 ///   Three things about that line are invisible from it. It writes the **validated** key, so a
 ///   blank `formatKey` is remembered as [`DEFAULT_FORMAT`] — what the deck actually is, not what
@@ -1523,11 +1650,13 @@ pub fn create_deck(conn: &Connection, input: &DeckInput) -> Result<DeckRow, Stri
     let format_key = valid_format(conn, &input.format_key)?;
     let game_key = valid_game(&input.game_key)?;
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let virtual_only = input.virtual_only.unwrap_or(false);
     let id: i64 = tx
         .query_row(
             "INSERT INTO decks (name, format_key, game_key, description, notes, cover_card_id,
-                                folder_id, theory_enabled, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, unixepoch(), unixepoch())
+                                folder_id, theory_enabled, virtual_only,
+                                created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, unixepoch(), unixepoch())
              RETURNING id",
             params![
                 name,
@@ -1538,15 +1667,34 @@ pub fn create_deck(conn: &Connection, input: &DeckInput) -> Result<DeckRow, Stri
                 input.cover_card_id,
                 input.folder_id,
                 input.theory_enabled.unwrap_or(false),
+                // Schema v40, and `theory_enabled`'s treatment one column along: the column is
+                // `NOT NULL DEFAULT 0`, a bound NULL would fail the write outright, and
+                // `unwrap_or(false)` says "absent is an ordinary deck" without borrowing the
+                // patch's `coalesce` convention into a statement that deliberately does not use
+                // it. **Not cross-checked against `theory_enabled` here**, unlike
+                // [`update_deck`]: there is nothing to clear on a row that does not exist yet,
+                // and a create that silently rewrote one of the two fields it was handed would
+                // be answering a question the caller did not ask. See [`DeckInput::virtual_only`].
+                virtual_only,
             ],
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
     crate::deck_meta::ensure_predefined_categories(&tx, id)?;
-    create_deck_group(&tx, id, name)?;
-    // **And the group its copies sit in**, for the categories' reason exactly one table over:
+    // **And the group its copies sit in — unless there are no copies to sit in it.** For the
+    // categories' reason exactly one table over:
     // schema v25 gave one to every deck that already existed, and a deck made afterwards needs
     // the same row made for it here or it is the one deck in the database that can hold nothing.
+    //
+    // **A virtual deck is that deck on purpose** (schema v40). It owns no cardboard, so a group
+    // for it would be a drawer every collection command already refuses to file into — and its
+    // *absence* is what makes every owned readout answer 0 with no new branch anywhere, because
+    // [`owned_by_printing`] joins `collection_folders` on `deck_id` and finds nothing. The
+    // alternative — an empty group nothing may write to — is a row that has to be remembered by
+    // every reader instead of by this one `if`.
+    if !virtual_only {
+        create_deck_group(&tx, id, name)?;
+    }
     // The first line of the deck's history, and the one place a `deck` row carries a `from` of
     // null: there was no previous name, because there was no deck. Recorded here rather than
     // left out so that a drawer scrolled to the bottom ends at the deck's own beginning
@@ -1610,6 +1758,11 @@ struct DeckBefore {
     theory_mark_exact: bool,
     theory_mark_name: bool,
     theory_mark_unplanned: bool,
+    /// Schema v40's deck kind. **On this struct for two jobs where every other field has one**:
+    /// the history row, like all of them, *and* the transition — becoming virtual releases the
+    /// deck's copies and drops its group, ceasing to be virtual makes the group again, and
+    /// neither can be told from the patch alone. [`update_deck`] compares against this.
+    virtual_only: bool,
 }
 
 /// What a `deck`/`cover` history row records as the cover: the card's id, and the word
@@ -1629,6 +1782,53 @@ fn cover_value(kind: &str, cover_card_id: Option<&str>) -> serde_json::Value {
         json!(COVER_CUSTOM)
     } else {
         json!(cover_card_id)
+    }
+}
+
+/// What a patch's two kind flags mean once they have been read as **one** answer — the pair
+/// [`update_deck`] binds, in `(theory_enabled, virtual_only)` order.
+///
+/// # The three kinds are derived from two booleans, and the fourth pair has no meaning
+///
+/// `0/0` is a regular deck, `1/0` a deck with a plan beside its actual list, `0/1` a Virtual
+/// deck the reader tracks without owning cardboard for it (schema v40). `1/1` names none of the
+/// three, and there is no fourth kind for it to become: a plan is a list of cards to *acquire*,
+/// and a deck that owns nothing has nothing to acquire them into.
+///
+/// **Enforced here rather than by a `CHECK`, and the schema could not have carried one.**
+/// SQLite's `ALTER TABLE … ADD COLUMN` takes no table-level constraint, so the DDL fence would
+/// have meant v35's kind of table rebuild for a rule one command can hold — and a constraint
+/// failure names the table rather than the mistake, which is `valid_game`'s and
+/// `valid_bracket`'s standing argument for every fence in this module.
+///
+/// # Setting one clears the other, and the clear is a real write
+///
+/// A patch naming one flag is asking for a *kind*, not for a column, so the other half is
+/// written too — which is why this answers two `Option`s rather than passing one through. A
+/// deck moving from theory to virtual has both columns move, and both are the reader's edit:
+/// [`record_deck_edit`] reads this answer for the same reason the UPDATE binds it, so the
+/// drawer records the pair the row actually took rather than the half the caller mentioned.
+///
+/// # Which half wins a tie, and why it is the harmless one
+///
+/// A patch that sets **both** to `true` is a caller's bug — every dialog on the other side of
+/// the wire sends one kind — but it has to resolve to something, and the answer is
+/// theory-and-actual. Becoming virtual is the destructive direction: it files the deck's whole
+/// drawer of cardboard into `Recently removed` and takes its group away. Turning a plan on
+/// moves rows between two of the deck's own lists and touches nothing the reader owns. An
+/// ambiguous press must not be the one that empties a drawer, and the way back from the wrong
+/// guess is one press either way.
+fn deck_kind(patch: &DeckPatch) -> (Option<bool>, Option<bool>) {
+    // `Some(true)` and never `unwrap_or(false)`: absent means "leave it" throughout this struct,
+    // so a patch that says nothing about either flag must leave both alone — and a patch that
+    // turns one *off* is not asking for a kind at all and clears nothing. Only switching a flag
+    // **on** names a kind, because only one of the two can be on.
+    if patch.theory_enabled == Some(true) {
+        (Some(true), Some(false))
+    } else if patch.virtual_only == Some(true) {
+        (Some(false), Some(true))
+    } else {
+        (patch.theory_enabled, patch.virtual_only)
     }
 }
 
@@ -1674,7 +1874,8 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
             "SELECT name, format_key, description, cover_card_id, cover_kind,
                     archived, folder_id, notes, theory_enabled, separate_x_group,
                     default_category_id, game_key, bracket,
-                    theory_mark_exact, theory_mark_name, theory_mark_unplanned
+                    theory_mark_exact, theory_mark_name, theory_mark_unplanned,
+                    virtual_only
                FROM decks WHERE id = ?1",
             params![id],
             |r| {
@@ -1712,6 +1913,14 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                     theory_mark_exact: r.get(13)?,
                     theory_mark_name: r.get(14)?,
                     theory_mark_unplanned: r.get(15)?,
+                    // 16, at the end, same rule — and the one read on this list where a
+                    // crossed index costs more than a wrong history row. This value decides
+                    // whether the transition below **files a drawer of the reader's cardboard
+                    // into `Recently removed` and deletes the deck's group**, so an index that
+                    // landed on `theory_enabled` at 8 would make a deck's copies move because
+                    // the reader switched their plan on. Nine `bool`-over-`INTEGER` columns are
+                    // now in this SELECT and only the position tells them apart.
+                    virtual_only: r.get(16)?,
                 })
             },
         )
@@ -1734,6 +1943,14 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
         Some(category_id) => Some(category_of_deck(&tx, id, category_id)?),
         None => None,
     };
+    // **The kind is a pair, and it is resolved into one before a single value is bound.** See
+    // [`deck_kind`] for the whole of the rule and for which half wins a tie; what matters here
+    // is the *place*. Adjusting the bound values is the only arrangement in which the row can
+    // never be observed at `1/1` — not by a trigger, not by a read inside this transaction, and
+    // not by a launch that dies between two statements. A second `UPDATE` after this one would
+    // leave that pair standing for as long as it took to run, and `sync_engine::capture`'s
+    // triggers fire per statement: the impossible kind would go out on the wire.
+    let (theory_enabled, virtual_only) = deck_kind(patch);
     let changed = tx
         .execute(
             "UPDATE decks SET
@@ -1780,6 +1997,14 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 -- take the same `Option<bool>`, so a crossed number is an UPDATE that succeeds
                 -- and moves the wrong switch.
                 theory_mark_unplanned = coalesce(?18, theory_mark_unplanned),
+                -- `?19`, the next number at the **end**, same rule one rung later — and the
+                -- one hole on this list that is not written from the patch field of the same
+                -- name. Both this and `?9` are bound from [`deck_kind`]'s answer rather than
+                -- from `patch`, which is what makes `theory_enabled = 1, virtual_only = 1` a
+                -- state no statement here can produce. Binding the raw fields would make that
+                -- fence decorative on exactly the path it exists for — `bracket`'s note eight
+                -- lines up, read for a rule about a *pair* rather than about a range.
+                virtual_only = coalesce(?19, virtual_only),
                 updated_at = unixepoch()
               WHERE id = ?1",
             params![
@@ -1791,7 +2016,9 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 patch.archived,
                 patch.folder_id,
                 patch.notes,
-                patch.theory_enabled,
+                // **The resolved half of the pair, not `patch.theory_enabled`** — see `?19`
+                // below and [`deck_kind`].
+                theory_enabled,
                 COVER_CARD_ART,
                 patch.separate_x_group,
                 patch.default_category_id,
@@ -1801,6 +2028,7 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 patch.theory_mark_exact,
                 patch.theory_mark_name,
                 patch.theory_mark_unplanned,
+                virtual_only,
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -1846,7 +2074,15 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
     // nothing left anywhere saying which rows were live — that is the same hole in the audit
     // log's `{field:"theory",from:false,to:true}` that made this feature need a journal at all.
     // Reading both variants unconditionally would be two queries on every rename.
-    let will_move = patch.theory_enabled == Some(true)
+    //
+    // **`theory_enabled` and not `patch.theory_enabled`**, which is the same condition and says
+    // one more thing. [`deck_kind`] only ever answers `Some(true)` here where the patch did, so
+    // no press that moved the live list before moves it now and none that did not starts to —
+    // but a deck *becoming virtual* has its resolved half forced to `Some(false)`, and reading
+    // the raw field would leave a `patch { theoryEnabled: false, virtualOnly: true }` one
+    // careless edit away from pouring the live list into a plan of a deck that is about to have
+    // no cardboard at all. One value, read the same way the UPDATE bound it.
+    let will_move = theory_enabled == Some(true)
         && !before.theory_enabled
         && crate::deck_theory::theory_is_empty(&tx, id)?;
     let cards_before = match will_move {
@@ -1861,6 +2097,57 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
     if will_move {
         crate::deck_theory::move_live_into_theory(&tx, id)?;
     }
+    // **Becoming Virtual puts the deck's cardboard back on the reader's desk, in this
+    // transaction** (schema v40). A virtual deck tracks a list the reader does not own copies
+    // of, so the drawer standing for it cannot go on holding any: the copies are filed into
+    // `Recently removed` — the one place cards wait when they have left the collection's shelves
+    // without leaving the database, and where `deck_clear`, `deck_category_clear`, the category
+    // cascade, the import's `replace` arm and [`delete_deck`] all put them — and then the group
+    // itself goes.
+    //
+    // **Two release calls and neither loop is written here.** [`release_unclaimed_copies`] first,
+    // then [`release_live_copies`], and the order is what empties the drawer rather than a
+    // preference: the first releases what the group holds *over* what the live list claims, the
+    // second releases the claim itself, and running them the other way round would compute the
+    // surplus against a group the second call had already emptied and leave a group holding more
+    // copies than its list names exactly where it was. Between them they are total, which is
+    // what the `DELETE` below needs: `collection_entries.folder_id` is `ON DELETE SET NULL`, so
+    // a row left behind would be scattered to the root of the collection — the wrong
+    // destination, a rewrite of the eleventh term of [`crate::schema::COLLECTION_GRAIN`], and a
+    // `UNIQUE constraint failed` the moment the root already holds that grain.
+    // [`delete_deck`] reaches the same place from the other side and refiles by hand because it
+    // is taking a whole sub-tree; a deck's group has no children (no command may nest one) and
+    // this deck is not going anywhere, so the two shared helpers are the whole of it.
+    //
+    // **And then the group row, rather than an empty group left standing.** Its *absence* is
+    // what makes every owned readout answer 0 with no new branch anywhere — [`owned_by_printing`]
+    // joins `collection_folders` on `deck_id` and finds nothing — where an empty group would be
+    // a row every reader has to remember is special. [`create_deck`] makes the same choice for a
+    // deck born virtual.
+    //
+    // **Ceasing to be Virtual makes the group again, empty**, which is the only way back: a deck
+    // that has been given a group can hold copies, and [`crate::collection_alloc::
+    // collection_to_deck`] refuses in words when there is none. The **name** is the one the deck
+    // is called *after* this patch, because the rename above has already run and a group made
+    // with the old one would be a drawer labelled with a name the gallery stopped using in this
+    // very transaction.
+    //
+    // The two arms are exclusive by construction — `virtual_only` is one `Option<bool>` — and
+    // neither can share a press with the theory move above it: [`deck_kind`] forces the resolved
+    // theory half to `Some(false)` on the way in to virtual, and `before.virtual_only` is true
+    // on the way out, so `will_move`'s `!before.theory_enabled` is the only other thing that
+    // could have been true and a virtual deck's theory switch is already off.
+    if virtual_only == Some(true) && !before.virtual_only {
+        release_unclaimed_copies(&tx, id, LIVE)?;
+        release_live_copies(&tx, id, LIVE, None)?;
+        tx.execute(
+            "DELETE FROM collection_folders WHERE deck_id = ?1 AND kind = ?2",
+            params![id, DECK_GROUP_KIND],
+        )
+        .map_err(|e| e.to_string())?;
+    } else if virtual_only == Some(false) && before.virtual_only {
+        create_deck_group(&tx, id, name.as_deref().unwrap_or(&before.name))?;
+    }
     let audit_id = record_deck_edit(
         &tx,
         id,
@@ -1870,6 +2157,8 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
             format_key: &format_key,
             game_key: &game_key,
             default_category_name: default_category_name.as_deref(),
+            theory_enabled,
+            virtual_only,
         },
         &before,
     )?;
@@ -1911,8 +2200,9 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
     read_deck(conn, id)?.ok_or_else(|| GONE.to_owned())
 }
 
-/// The three values [`update_deck`] validated out of a [`DeckPatch`], plus the one it looked up
-/// — everything the history needs that the patch does not already carry verbatim.
+/// The three values [`update_deck`] validated out of a [`DeckPatch`], the one it looked up and
+/// the pair it resolved — everything the history needs that the patch does not already carry
+/// verbatim.
 ///
 /// **A struct rather than four more parameters, and clippy is only half the reason.** The
 /// signature reached eight arguments when `game_key` joined it and `too_many_arguments` (7)
@@ -1932,6 +2222,19 @@ struct DeckResolved<'a> {
     /// `None` where the patch names no pile *or* names [`AUTO_CATEGORY`]. The one field here
     /// that is a *lookup* rather than a validation, which is why it is a name and not a key.
     default_category_name: Option<&'a str>,
+    /// The plan half of the deck's kind, through [`deck_kind`] — schema v40.
+    ///
+    /// **The first two fields on this struct that are not `Option<&T>` and the first that can be
+    /// `Some` where the patch said nothing**, which is what makes them belong here rather than
+    /// being read off `patch` the way `archived` and `xGroup` are. `deck_kind` writes both
+    /// columns whenever a patch turns either on, so a deck moving from theory to virtual took
+    /// two changes the reader made in one press and only one of them is spelled in the patch.
+    /// A history built from the raw fields would record half of it and leave the drawer saying
+    /// a deck became virtual while its plan silently went out.
+    theory_enabled: Option<bool>,
+    /// The cardboard half of the deck's kind, through [`deck_kind`] — see
+    /// [`Self::theory_enabled`], whose every word this shares.
+    virtual_only: Option<bool>,
 }
 
 /// Write [`update_deck`]'s history: one row per field whose value actually moved.
@@ -1957,6 +2260,8 @@ fn record_deck_edit(
         format_key,
         game_key,
         default_category_name,
+        theory_enabled,
+        virtual_only,
     } = *resolved;
     // The **last** row this writes, which is what the undo journal keys its one step on. A
     // patch that changes two fields is two history rows and one Ctrl+Z: one press is one
@@ -2020,8 +2325,29 @@ fn record_deck_edit(
     // One row, whether or not the theory list was seeded above: the seeding is part of
     // switching the list on, not a second edit, and N `add` rows for one press would read as a
     // deck somebody typed out.
-    if let Some(to) = patch.theory_enabled.filter(|t| *t != before.theory_enabled) {
+    //
+    // **`resolved` and not `patch`**, since schema v40 — see [`DeckResolved::theory_enabled`].
+    // A patch that turns the deck virtual turns this off too, and that is a change the reader
+    // made and can undo, so it earns its row like any other.
+    if let Some(to) = theory_enabled.filter(|t| *t != before.theory_enabled) {
         field("theory", json!(before.theory_enabled), json!(to))?;
+    }
+    // `virtualOnly`, camelCase — `xGroup`'s rule and the sixth multi-word key here. The pair
+    // above and below this line are one press and two rows whenever both columns moved, which is
+    // this function's own "a patch that changes two fields is two facts" applied to a change the
+    // patch only half spells: **two rows rather than one "changed the deck's kind"**, because
+    // the drawer is read months later and "turned the plan off" and "made this a virtual deck"
+    // are two things the reader would want to find separately — and because a single row would
+    // have to invent a vocabulary for a value that is not stored anywhere.
+    //
+    // Booleans on both sides and `json!` straight off `before`, `xGroup`'s shape: no sentinel,
+    // no name to resolve. The copies this write releases and the group it takes away are
+    // deliberately **not** recorded here — those land on the *collection*, and
+    // `collection_alloc`'s own rule is that a move records the deck command it stands in for
+    // rather than inventing a kind. A reader looking for where their cards went finds them in
+    // `Recently removed`, which is what that folder is.
+    if let Some(to) = virtual_only.filter(|v| *v != before.virtual_only) {
+        field("virtualOnly", json!(before.virtual_only), json!(to))?;
     }
     // `xGroup`, camelCase like every other key in a `deck` payload — `src/features/decks/
     // auditText.ts` is the only thing that words these, and it matches on the field name.
@@ -2486,6 +2812,12 @@ struct CopiedCard {
 /// with them for the same reason: copying the rows and leaving the flag off would give the
 /// copy a list it cannot open.
 ///
+/// **A copy of a Virtual deck is a Virtual deck** (schema v40), which is the pair `theory_enabled`
+/// is half of read whole: the two columns together *are* the deck's kind, and a copy that came
+/// back a different kind from its original would be the one thing about a duplicate nobody could
+/// mistake for a feature. Its group is skipped with it — see the `if` beside
+/// [`create_deck_group`] below.
+///
 /// **The cover is `cover_card_id` and copies like any other column**, which is the whole of
 /// what used to be this function's hardest argument. While a cover could be a *file* there was
 /// a trap here: `cover_kind` and `cover_image_path` came across in the `INSERT … SELECT` like
@@ -2516,40 +2848,59 @@ struct CopiedCard {
 /// already holds.
 pub fn duplicate_deck(conn: &Connection, id: i64) -> Result<DeckRow, String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-    let copy: Option<(i64, String)> = tx
+    let copy: Option<(i64, String, bool)> = tx
         .query_row(
-            // **Schema v38's two marks and v39's third are copied, not defaulted**, which is
-            // the same rule
+            // **Schema v38's two marks, v39's third and v40's kind are copied, not defaulted**,
+            // which is the same rule
             // `separate_x_group` and `bracket` are already on this list for and which
             // `DeckRow::separate_x_group` states in words: these are answers *about the deck*
             // that a copy inherits, where the three `last_*` columns are how the reader was
             // looking at it a moment ago and are deliberately absent. Leaving them off would
-            // not have been a no-op — all three columns are `DEFAULT 1`, so a copy of a deck
-            // with a
+            // not have been a no-op — all three mark columns are `DEFAULT 1`, so a copy of a
+            // deck with a
             // mark switched off would have come back with it switched on.
+            //
+            // **`virtual_only` is on this list twice over**, and it is the strongest case here:
+            // it is not a way of *reading* a deck but what the deck **is**, and a copy that came
+            // back an ordinary deck would be one the app immediately started offering to buy
+            // cards for. Its `DEFAULT 0` runs the failure the other way from the marks' — the
+            // copy would be *more* connected to the collection than its original, not less.
+            // `theory_enabled` is beside it and travels for the same reason it always has, which
+            // keeps the pair the two of them spell intact across the copy: the source's kind is
+            // the copy's kind, whichever of the three it is.
             "INSERT INTO decks (name, format_key, description, cover_kind, cover_card_id,
                                 folder_id, notes, theory_enabled,
                                 separate_x_group, bracket, theory_mark_exact, theory_mark_name,
-                                theory_mark_unplanned,
+                                theory_mark_unplanned, virtual_only,
                                 archived, created_at, updated_at)
              SELECT name || ' (copy)', format_key, description, cover_kind, cover_card_id,
                     folder_id, notes, theory_enabled, separate_x_group,
                     bracket, theory_mark_exact, theory_mark_name, theory_mark_unplanned,
+                    virtual_only,
                     0, unixepoch(), unixepoch()
                FROM decks WHERE id = ?1
-             RETURNING id, name",
+             RETURNING id, name, virtual_only",
             params![id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .optional()
         .map_err(|e| e.to_string())?;
-    let Some((copy, copy_name)) = copy else {
+    let Some((copy, copy_name, copy_is_virtual)) = copy else {
         return Err(GONE.to_owned());
     };
-    create_deck_group(&tx, copy, &copy_name)?;
     // **Its own group, and empty** — see this function's doc. Named after the copy, which is the
     // original's name plus ` (copy)`, so the folder tree and the gallery agree about what this
     // deck is called from its first moment.
+    //
+    // **Unless the copy is virtual, in which case there is no group to be empty** (schema v40),
+    // which is [`create_deck`]'s `if` and its argument: a copy of a virtual deck is a virtual
+    // deck, a virtual deck owns no cardboard, and the *absence* of the row is what makes every
+    // owned readout answer 0 with no new branch anywhere. `virtual_only` comes back out of the
+    // `RETURNING` rather than being read a second time, because the copy's kind is the source's
+    // and the statement above has just written it.
+    if !copy_is_virtual {
+        create_deck_group(&tx, copy, &copy_name)?;
+    }
 
     // Read then write, one row at a time with `RETURNING id`, rather than one
     // `INSERT … SELECT`: the map from old id to new is the whole point, and a set insert
@@ -4789,6 +5140,17 @@ pub fn live_shortfall(conn: &Connection, deck_id: i64) -> Result<Vec<ShortfallRo
 /// reallocated; there are no claims to rewrite since schema v25, and this command writes no
 /// deck table at all.)
 pub fn missing_to_wishlist(conn: &Connection, deck_id: i64) -> Result<usize, String> {
+    // **A virtual deck has nothing to be short of** (schema v40), so this is the one press on it
+    // that would otherwise succeed loudly and wrongly. `live_shortfall` reads what the deck
+    // plays against what its group holds; a virtual deck has no group, so every card in it comes
+    // back missing and this button would put the entire decklist on the reader's shopping list —
+    // a hundred cards they never meant to buy, from a deck that exists precisely because they do
+    // not intend to own it. The refusal is [`VIRTUAL_HOLDS_NOTHING`] and it is before the
+    // transaction opens, `update_deck`'s rule for its validations: nothing to roll back, and no
+    // reason to have taken a write lock to find out.
+    if is_virtual(conn, deck_id)? {
+        return Err(VIRTUAL_HOLDS_NOTHING.to_owned());
+    }
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
 
     // Oracle-grained, so the same card short in two categories is one wish for the sum — which
@@ -8374,6 +8736,7 @@ mod tests {
                 cover_card_id: Some("bolt-lea".to_owned()),
                 folder_id: Some(folder),
                 theory_enabled: Some(true),
+                virtual_only: None,
             },
         )
         .unwrap();
@@ -8567,6 +8930,7 @@ mod tests {
                 cover_card_id: Some("bolt-lea".to_owned()),
                 folder_id: Some(folder),
                 theory_enabled: Some(true),
+                virtual_only: None,
             },
         )
         .unwrap();
@@ -9127,6 +9491,11 @@ mod tests {
             // three comments in the expectation below state: `false` is what every deck carries
             // and would read correct on a field that never left Rust.
             tokens_open: true,
+            // `true` rather than the column's `DEFAULT 0`, fifth application of that rule — and
+            // the one where it bites hardest: `false` is what every deck in every database
+            // carries today, so a field that never left Rust would read correct on every deck
+            // the app has ever made.
+            virtual_only: true,
             // Two keys, both real URLs, because this is the one field on the row whose *shape*
             // crosses the boundary rather than a scalar: `Option<BTreeMap>` has to reach
             // TypeScript as an object of variant keys and not as a list or a bare string, and
@@ -9182,6 +9551,12 @@ mod tests {
                 // off the deck row to know whether to draw itself open, and a snake-cased key
                 // would be `undefined` at the call site with no type error anywhere.
                 "tokensOpen": true,
+                // Schema v40, and `virtualOnly` rather than `virtual_only`: the gallery, the
+                // editor and every collection surface read this key to decide whether a deck is
+                // about cardboard at all, and a snake-cased one would be `undefined` at each of
+                // those call sites — which is falsy, so every virtual deck would silently draw
+                // as an ordinary one with no type error anywhere.
+                "virtualOnly": true,
                 // The cover printing's picture, spelled out key by key: this is the deck
                 // gallery's only way to draw a cover on web and on the phone, and it is a map
                 // rather than a URL because `LIST_VARIANTS` decides what a row carries.
@@ -9218,7 +9593,7 @@ mod tests {
         let whole: DeckInput = serde_json::from_str(
             r#"{"name":"Burn","formatKey":"modern","gameKey":"arena","description":"Fast red",
                 "notes":"Sideboard plan","coverCardId":"bolt-lea","folderId":7,
-                "theoryEnabled":true}"#,
+                "theoryEnabled":true,"virtualOnly":true}"#,
         )
         .expect("the create payload, carrying a whole deck");
         assert_eq!(whole.description.as_deref(), Some("Fast red"));
@@ -9227,15 +9602,21 @@ mod tests {
         assert_eq!(whole.folder_id, Some(7));
         assert_eq!(whole.theory_enabled, Some(true));
         assert_eq!(whole.game_key, "arena");
+        // Schema v40. The New deck dialog's kind picker sends this and nothing else does, so a
+        // spelling that drifts from `src/lib/ipc.ts` is a create that quietly makes an ordinary
+        // deck — `#[serde(default)]` reads a misspelled key as an omitted one.
+        assert_eq!(whole.virtual_only, Some(true));
 
         let patch: DeckPatch = serde_json::from_str(
-            r#"{"coverCardId":"bolt-lea","archived":true,"separateXGroup":true,"gameKey":"mtgo"}"#,
+            r#"{"coverCardId":"bolt-lea","archived":true,"separateXGroup":true,"gameKey":"mtgo",
+                "virtualOnly":true}"#,
         )
         .expect("the patch payload");
         assert_eq!(patch.cover_card_id.as_deref(), Some("bolt-lea"));
         assert_eq!(patch.archived, Some(true));
         assert_eq!(patch.separate_x_group, Some(true));
         assert_eq!(patch.game_key.as_deref(), Some("mtgo"));
+        assert_eq!(patch.virtual_only, Some(true));
         assert!(patch.name.is_none(), "an omitted field means leave it");
 
         // And the third: `deck_set_view_state`'s `viewState`, which the editor sends one
@@ -12403,6 +12784,496 @@ mod tests {
             decks_playing(&conn, &[]).unwrap(),
             Vec::<i64>::new(),
             "and nobody plays nothing"
+        );
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Schema v40 — the third deck kind. A **Virtual** deck tracks a list the reader does not
+    // own cardboard for, so it keeps one live list and has no integration with the collection
+    // or the wishlist at all. The kind is `theory_enabled`/`virtual_only` read as one pair.
+    // ---------------------------------------------------------------------------------------
+
+    /// A virtual create, spelled once so the tests below read as being about the kind.
+    fn virtual_input(name: &str) -> DeckInput {
+        DeckInput {
+            name: name.to_owned(),
+            format_key: "modern".to_owned(),
+            virtual_only: Some(true),
+            ..Default::default()
+        }
+    }
+
+    /// Does this deck have a `collection_folders` row standing for it? [`group_of`]'s question
+    /// asked in the form a virtual deck can answer — that helper panics, deliberately, because
+    /// every deck it was written for has one.
+    fn has_group(conn: &Connection, deck_id: i64) -> bool {
+        deck_group(conn, deck_id).unwrap().is_some()
+    }
+
+    /// The deck's kind as the pair that spells it.
+    fn kind_pair(conn: &Connection, deck_id: i64) -> (bool, bool) {
+        conn.query_row(
+            "SELECT theory_enabled, virtual_only FROM decks WHERE id = ?1",
+            params![deck_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap()
+    }
+
+    /// **A virtual deck is born without a group, and that absence is the feature.**
+    ///
+    /// [`owned_by_printing`] joins `collection_folders` on `deck_id`, so a deck with no such row
+    /// answers 0 owned everywhere with no branch of its own — which is why the alternative, an
+    /// empty group nothing may write to, would have been a row every reader had to remember was
+    /// special. The ordinary deck beside it is what says the `if` is a condition rather than a
+    /// removal.
+    #[test]
+    fn a_virtual_deck_is_created_with_no_collection_group() {
+        let conn = seeded();
+
+        let cardboard = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let tracked = create_deck(&conn, &virtual_input("Arena Burn")).unwrap();
+
+        assert!(tracked.virtual_only, "the row says what kind it is");
+        assert!(!cardboard.virtual_only);
+        assert!(
+            !has_group(&conn, tracked.id),
+            "a deck that owns no cardboard has no drawer to keep it in"
+        );
+        assert!(
+            has_group(&conn, cardboard.id),
+            "and every other deck still gets one"
+        );
+        assert_eq!(
+            count(&conn, "collection_folders WHERE kind = 'deck'"),
+            1,
+            "exactly one group, for the one deck that can hold cards"
+        );
+
+        // And it is a deck in every other respect: the four predefined categories are there,
+        // because a virtual deck is a list the reader files exactly like any other.
+        assert_eq!(
+            count(
+                &conn,
+                &format!("deck_categories WHERE deck_id = {}", tracked.id)
+            ),
+            4
+        );
+    }
+
+    /// **Setting one half of the kind clears the other, in the values bound.**
+    ///
+    /// `1/1` names none of the three kinds, and this is the only thing standing between the
+    /// database and it — `ALTER TABLE … ADD COLUMN` takes no table-level `CHECK`, so there is no
+    /// DDL fence to fall back on. Both directions, because [`deck_kind`] is two arms.
+    #[test]
+    fn setting_either_half_of_the_kind_clears_the_other() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap().id;
+
+        // Theory on. Nothing to clear yet, and the pair is the ordinary one.
+        update_deck(
+            &conn,
+            deck,
+            &DeckPatch {
+                theory_enabled: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(kind_pair(&conn, deck), (true, false));
+
+        // Virtual on, and the plan goes with it — the patch names one column and two move.
+        let row = update_deck(
+            &conn,
+            deck,
+            &DeckPatch {
+                virtual_only: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(kind_pair(&conn, deck), (false, true));
+        assert!(
+            row.virtual_only && !row.theory_enabled,
+            "and the row agrees"
+        );
+
+        // And back the other way: turning the plan on takes the deck out of virtual.
+        update_deck(
+            &conn,
+            deck,
+            &DeckPatch {
+                theory_enabled: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(kind_pair(&conn, deck), (true, false));
+
+        // A patch that asks for both — a caller's bug, since every dialog sends one — resolves
+        // to the harmless half. Becoming virtual files a drawer of the reader's cardboard away;
+        // turning a plan on moves rows between two of the deck's own lists.
+        let deck_b = create_deck(&conn, &input("Storm", "modern")).unwrap().id;
+        update_deck(
+            &conn,
+            deck_b,
+            &DeckPatch {
+                theory_enabled: Some(true),
+                virtual_only: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            kind_pair(&conn, deck_b),
+            (true, false),
+            "an ambiguous press must not be the one that empties a drawer"
+        );
+
+        // And turning a flag *off* names no kind at all, so it clears nothing: a patch that
+        // switches the plan off leaves an ordinary deck ordinary rather than making it virtual.
+        update_deck(
+            &conn,
+            deck_b,
+            &DeckPatch {
+                theory_enabled: Some(false),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(kind_pair(&conn, deck_b), (false, false));
+    }
+
+    /// **Both columns moving is both history rows**, even though the patch names one.
+    ///
+    /// The reader turned a theory deck virtual, which is two changes they made in one press and
+    /// can look up separately months later. A history built off the raw patch would record the
+    /// half that was spelled and leave the drawer saying a deck became virtual while its plan
+    /// silently went out.
+    #[test]
+    fn turning_a_theory_deck_virtual_records_both_changes() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap().id;
+        update_deck(
+            &conn,
+            deck,
+            &DeckPatch {
+                theory_enabled: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        update_deck(
+            &conn,
+            deck,
+            &DeckPatch {
+                virtual_only: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let history = crate::deck_audit::list(&conn, deck, 20).unwrap();
+        let fields: Vec<String> = history
+            .iter()
+            .filter_map(|row| {
+                let payload: serde_json::Value = serde_json::from_str(&row.payload).unwrap();
+                payload
+                    .get("field")
+                    .and_then(|f| f.as_str())
+                    .map(str::to_owned)
+            })
+            .collect();
+        assert!(
+            fields.iter().any(|f| f == "virtualOnly"),
+            "the change the reader asked for, in {fields:?}"
+        );
+        assert_eq!(
+            fields.iter().filter(|f| *f == "theory").count(),
+            2,
+            "one row switching the plan on and one switching it off with the kind, in {fields:?}"
+        );
+    }
+
+    /// **Becoming virtual puts the deck's cardboard back on the reader's desk and takes the
+    /// drawer away.**
+    ///
+    /// Every copy the group held is in `Recently removed` — where `deck_clear`, the category
+    /// cascade, the import's `replace` arm and [`delete_deck`] all put copies — and the
+    /// `collection_folders` row is gone, which is what makes the deck's owned readout 0 with no
+    /// branch anywhere. The **unclaimed** copy is in the fixture on purpose: the group is
+    /// emptied by two calls in an order that matters, and a fixture holding only what the live
+    /// list claims would pass with either one of them missing.
+    #[test]
+    fn becoming_virtual_files_the_group_into_recently_removed_and_drops_it() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap().id;
+        let main = main_of(&conn, deck);
+        add(&conn, deck, "bolt-lea", main, 2);
+        file_into_group(&conn, deck, "bolt-lea", 2);
+        // Held over what the list names, and a printing the list does not name at all — the two
+        // shapes `release_unclaimed_copies` exists for.
+        file_into_group(&conn, deck, "bolt-lea", 1);
+        file_into_group(&conn, deck, "serra-lea", 3);
+        let group = group_of(&conn, deck);
+        assert_eq!(folder_copies(&conn, group, "bolt-lea"), 3);
+
+        update_deck(
+            &conn,
+            deck,
+            &DeckPatch {
+                virtual_only: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert!(
+            !has_group(&conn, deck),
+            "the drawer goes with the cardboard"
+        );
+        let removed = removed_group(&conn);
+        assert_eq!(
+            folder_copies(&conn, removed, "bolt-lea"),
+            3,
+            "every copy, claimed and surplus alike"
+        );
+        assert_eq!(
+            folder_copies(&conn, removed, "serra-lea"),
+            3,
+            "including a printing the live list never named"
+        );
+        // Nothing was destroyed and nothing was scattered to the root: the reader still owns
+        // six cards and every one of them is in the holding area.
+        assert_eq!(
+            count(&conn, "collection_entries WHERE folder_id IS NULL"),
+            0,
+            "`ON DELETE SET NULL` must never be what moves these rows"
+        );
+        // And the deck still lists what it lists — this is a change of kind, not a clear.
+        let detail = get_deck(&conn, deck, LIVE, ANY_MARKET).unwrap().unwrap();
+        assert_eq!(card_row(&detail, "bolt-lea", main).quantity, 2);
+        assert_eq!(
+            card_row(&detail, "bolt-lea", main).owned_quantity,
+            0,
+            "and owns none of it, by the join finding no group"
+        );
+    }
+
+    /// **Ceasing to be virtual makes the group again**, which is the only way back: a deck with
+    /// no group can hold nothing, and `collection_alloc::collection_to_deck` refuses in words
+    /// when there is none.
+    #[test]
+    fn ceasing_to_be_virtual_recreates_the_group() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &virtual_input("Arena Burn")).unwrap().id;
+        assert!(!has_group(&conn, deck));
+
+        update_deck(
+            &conn,
+            deck,
+            &DeckPatch {
+                virtual_only: Some(false),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert!(has_group(&conn, deck), "it can hold cards again");
+        assert_eq!(
+            folder_copies(&conn, group_of(&conn, deck), "bolt-lea"),
+            0,
+            "and the new drawer is empty"
+        );
+        assert_eq!(
+            count(&conn, "collection_folders WHERE kind = 'deck'"),
+            1,
+            "one group, not two — the partial unique index would have said so loudly"
+        );
+    }
+
+    /// The group is made under the name the deck is called **after** the patch, because the
+    /// rename in the same press has already run — a drawer labelled with a name the gallery
+    /// stopped using in this very transaction is the failure the ordering prevents.
+    #[test]
+    fn a_rename_that_leaves_virtual_names_the_new_group_after_the_new_name() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &virtual_input("Arena Burn")).unwrap().id;
+
+        update_deck(
+            &conn,
+            deck,
+            &DeckPatch {
+                name: Some("  Paper Burn  ".to_owned()),
+                virtual_only: Some(false),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let name: String = conn
+            .query_row(
+                "SELECT name FROM collection_folders WHERE deck_id = ?1",
+                params![deck],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            name, "Paper Burn",
+            "the trimmed name the deck itself got, not the one it had"
+        );
+    }
+
+    /// **Becoming virtual does not pour the live list into a plan.** [`update_deck`]'s theory
+    /// move reads the *resolved* half of the pair, which the kind forces off on the way in —
+    /// reading the raw patch field would leave a `{theoryEnabled: false, virtualOnly: true}` one
+    /// careless edit away from moving every row of a deck that is about to own nothing.
+    #[test]
+    fn becoming_virtual_never_moves_the_live_list_into_theory() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap().id;
+        let main = main_of(&conn, deck);
+        add(&conn, deck, "bolt-lea", main, 4);
+
+        update_deck(
+            &conn,
+            deck,
+            &DeckPatch {
+                theory_enabled: Some(false),
+                virtual_only: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let live = get_deck(&conn, deck, LIVE, ANY_MARKET).unwrap().unwrap();
+        assert_eq!(
+            card_row(&live, "bolt-lea", main).quantity,
+            4,
+            "the one list a virtual deck keeps is still there"
+        );
+        assert_eq!(
+            count(
+                &conn,
+                &format!("deck_cards WHERE deck_id = {deck} AND variant = 'theory'")
+            ),
+            0
+        );
+    }
+
+    /// And the move the theory switch has always made still happens, unchanged — the fence
+    /// above narrowed nothing it was not meant to.
+    #[test]
+    fn the_theory_move_still_runs_on_the_press_it_always_ran_on() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap().id;
+        let main = main_of(&conn, deck);
+        add(&conn, deck, "bolt-lea", main, 4);
+
+        update_deck(
+            &conn,
+            deck,
+            &DeckPatch {
+                theory_enabled: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            count(
+                &conn,
+                &format!("deck_cards WHERE deck_id = {deck} AND variant = 'live'")
+            ),
+            0,
+            "the live list moved across"
+        );
+        assert_eq!(
+            count(
+                &conn,
+                &format!("deck_cards WHERE deck_id = {deck} AND variant = 'theory'")
+            ),
+            1
+        );
+    }
+
+    /// **A copy of a virtual deck is a virtual deck**, group skipped with it. The columns are
+    /// answers *about the deck* that a duplicate inherits — and this one runs the failure the
+    /// other way from the theory marks': `DEFAULT 0` means a copy that forgot it would come back
+    /// *more* connected to the collection than its original, offering to buy cards for a list
+    /// that exists because the reader owns none of it.
+    #[test]
+    fn duplicating_a_virtual_deck_makes_a_virtual_deck() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &virtual_input("Arena Burn")).unwrap().id;
+        let main = main_of(&conn, deck);
+        add(&conn, deck, "bolt-lea", main, 4);
+
+        let copy = duplicate_deck(&conn, deck).unwrap();
+
+        assert!(copy.virtual_only, "the kind came across");
+        assert!(
+            !has_group(&conn, copy.id),
+            "and so did the absence the kind implies"
+        );
+        assert_eq!(count(&conn, "collection_folders WHERE kind = 'deck'"), 0);
+
+        // And an ordinary deck's copy is still an ordinary deck with a group of its own, which
+        // is what says the carry is a copy rather than a constant.
+        let cardboard = create_deck(&conn, &input("Burn", "modern")).unwrap().id;
+        let cardboard_copy = duplicate_deck(&conn, cardboard).unwrap();
+        assert!(!cardboard_copy.virtual_only);
+        assert!(has_group(&conn, cardboard_copy.id));
+    }
+
+    /// **A virtual deck refuses the shopping list, by name.**
+    ///
+    /// This is the press that would otherwise succeed loudly and wrongly: [`live_shortfall`]
+    /// reads what the deck plays against what its group holds, a virtual deck has no group, so
+    /// every card in it comes back missing and the button would put the whole decklist on the
+    /// reader's wishlist — a hundred cards they never meant to buy. The ordinary deck beside it
+    /// is what says the refusal is a condition rather than a break.
+    #[test]
+    fn missing_to_wishlist_refuses_a_virtual_deck() {
+        let conn = seeded();
+        let tracked = create_deck(&conn, &virtual_input("Arena Burn")).unwrap().id;
+        let main = main_of(&conn, tracked);
+        add(&conn, tracked, "bolt-lea", main, 4);
+
+        let err = missing_to_wishlist(&conn, tracked).unwrap_err();
+        assert_eq!(err, VIRTUAL_HOLDS_NOTHING);
+        assert_eq!(
+            count(&conn, "wishlist_entries"),
+            0,
+            "and nothing reached the wishlist"
+        );
+
+        let cardboard = create_deck(&conn, &input("Burn", "modern")).unwrap().id;
+        let cardboard_main = main_of(&conn, cardboard);
+        add(&conn, cardboard, "bolt-lea", cardboard_main, 4);
+        assert_eq!(
+            missing_to_wishlist(&conn, cardboard).unwrap(),
+            1,
+            "the same press on a deck about cardboard still works"
+        );
+    }
+
+    /// [`is_virtual`] answers the fact and refuses nothing — the five modules that call it each
+    /// word their own refusal, and a deck that is not there is `false` rather than a second,
+    /// differently-worded sentence in front of a state every caller already handles.
+    #[test]
+    fn is_virtual_answers_the_fact_and_reads_a_missing_deck_as_false() {
+        let conn = seeded();
+        let tracked = create_deck(&conn, &virtual_input("Arena Burn")).unwrap().id;
+        let cardboard = create_deck(&conn, &input("Burn", "modern")).unwrap().id;
+
+        assert!(is_virtual(&conn, tracked).unwrap());
+        assert!(!is_virtual(&conn, cardboard).unwrap());
+        assert!(
+            !is_virtual(&conn, 9_999).unwrap(),
+            "a stale id is not this function's refusal to make"
         );
     }
 }

@@ -26,6 +26,11 @@ const meta = {
     // itself is `Settings/MarketplacePanel`; what a view owes it is one currency for the whole
     // screen, so a heading and the cards under it cannot name two.
     marketplace: MARKETPLACES.tcgplayer,
+    // A deck that reads the collection, which is what every deck but a **virtual** one is
+    // (issue #401) — so the red shortage figure in a card's chin and the *you own N of M* clause
+    // in its name are drawn as they always were. Set at the meta rather than per story because it
+    // is the state every story here is about; a virtual deck is one story's `args` away.
+    tracksCollection: true,
     violations: deckViolations(),
     onSelect: fn(),
   },

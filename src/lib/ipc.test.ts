@@ -639,8 +639,28 @@ describe("ipc argument names match the Rust command signatures", () => {
       },
     });
 
+    // The third deck kind, born virtual — `decks.virtual_only`, schema v40. Pinned here for
+    // the reason the whole case exists: serde fills a field it cannot find with that field's
+    // default, so `virtualOnly` misspelt is not a type error but a deck born tracking a
+    // collection the reader said it should not.
+    await ipc.deckCreate({ name: "Arena Standard", formatKey: "standard", virtualOnly: true });
+    expect(invoke).toHaveBeenCalledWith("deck_create", {
+      deck: { name: "Arena Standard", formatKey: "standard", virtualOnly: true },
+    });
+
     await ipc.deckUpdate(4, { archived: true });
     expect(invoke).toHaveBeenCalledWith("deck_update", { id: 4, patch: { archived: true } });
+
+    // **Both kind columns on one patch, and that is the shape rather than an accident.**
+    // `deckKindPatch` in `features/decks/deckKind.ts` always names the pair, because naming
+    // only the column that changed would leave the other standing and spell the one
+    // combination — theory *and* virtual — that neither side allows. Rust writes the pair
+    // defensively as well; this pins that the near side sends it that way in the first place.
+    await ipc.deckUpdate(4, { theoryEnabled: false, virtualOnly: true });
+    expect(invoke).toHaveBeenCalledWith("deck_update", {
+      id: 4,
+      patch: { theoryEnabled: false, virtualOnly: true },
+    });
 
     invoke.mockResolvedValue(undefined);
     await ipc.deckDelete(4);

@@ -273,10 +273,10 @@ const TCG = MARKETPLACES.tcgplayer;
 
 /** The four views, driven identically — every claim below is a claim about all of them. */
 const VIEWS = [
-  { name: "StackView", render: (props: ViewProps) => <StackView {...props} /> },
-  { name: "TableView", render: (props: ViewProps) => <TableView {...props} /> },
-  { name: "TextView", render: (props: ViewProps) => <TextView {...props} /> },
-  { name: "GridView", render: (props: ViewProps) => <GridView {...props} /> },
+  { name: "StackView", render: (props: ViewProps) => <StackView tracksCollection {...props} /> },
+  { name: "TableView", render: (props: ViewProps) => <TableView tracksCollection {...props} /> },
+  { name: "TextView", render: (props: ViewProps) => <TextView tracksCollection {...props} /> },
+  { name: "GridView", render: (props: ViewProps) => <GridView tracksCollection {...props} /> },
 ] as const;
 
 interface ViewProps {
@@ -1217,8 +1217,8 @@ describe.each(VIEWS.filter((v) => v.name !== "TableView"))("$name", ({ render: r
  * is one character and reverting it silently removes the focus indicator altogether.
  */
 describe.each([
-  ["CardStack", (props: ViewProps) => <StackView {...props} />],
-  ["GridView", (props: ViewProps) => <GridView {...props} />],
+  ["CardStack", (props: ViewProps) => <StackView tracksCollection {...props} />],
+  ["GridView", (props: ViewProps) => <GridView tracksCollection {...props} />],
 ] as const)("%s", (_name, renderView) => {
   it("keeps its focus outline inside the box that clips it", () => {
     render(renderView({ groups: GROUPS, marketplace: TCG }));
@@ -1248,9 +1248,9 @@ describe("the views that are not the table", () => {
    * straight into. The sentence is what this asserts either way.
    */
   it.each([
-    ["StackView", <StackView key="s" groups={empty} marketplace={TCG} />],
-    ["TextView", <TextView key="t" groups={empty} marketplace={TCG} />],
-    ["GridView", <GridView key="g" groups={empty} marketplace={TCG} />],
+    ["StackView", <StackView tracksCollection key="s" groups={empty} marketplace={TCG} />],
+    ["TextView", <TextView tracksCollection key="t" groups={empty} marketplace={TCG} />],
+    ["GridView", <GridView tracksCollection key="g" groups={empty} marketplace={TCG} />],
   ])("%s says where the next card goes", (_name, element) => {
     render(element);
     expect(screen.getByText("Nothing here yet.")).toBeInTheDocument();
@@ -1284,9 +1284,9 @@ describe("the views that are not the table", () => {
    * outside a box, and there is no clip for it to be drawn outside of.
    */
   it.each([
-    ["StackView", <StackView key="s" groups={GROUPS} marketplace={TCG} />],
-    ["TextView", <TextView key="t" groups={GROUPS} marketplace={TCG} />],
-    ["GridView", <GridView key="g" groups={GROUPS} marketplace={TCG} />],
+    ["StackView", <StackView tracksCollection key="s" groups={GROUPS} marketplace={TCG} />],
+    ["TextView", <TextView tracksCollection key="t" groups={GROUPS} marketplace={TCG} />],
+    ["GridView", <GridView tracksCollection key="g" groups={GROUPS} marketplace={TCG} />],
   ])("%s leaves its drop marks room inside the box that clips them", (_name, element) => {
     const { container } = render(element);
     const root = container.firstElementChild;
@@ -1346,6 +1346,7 @@ describe("StackView flow", () => {
       );
     render(
       <StackView
+        tracksCollection
         groups={buildGroups(
           [...three("commander"), ...three("main")],
           [COMMANDER, RAMP, DRAW],
@@ -1411,6 +1412,7 @@ describe("StackView flow", () => {
     setDeckZoom(2);
     render(
       <StackView
+        tracksCollection
         groups={buildGroups([card({ name: "Sol Ring" })], [RAMP], "category", "alphabetical")}
         marketplace={TCG}
       />,
@@ -1460,7 +1462,9 @@ describe("StackView flow", () => {
    * the page under the pointer, and that is the same reason `stackHeight` reads the count alone.
    */
   it("keeps one card's lift free at its foot, and scales it with the zoom", () => {
-    const { container, rerender } = render(<StackView groups={GROUPS} marketplace={TCG} />);
+    const { container, rerender } = render(
+      <StackView tracksCollection groups={GROUPS} marketplace={TCG} />,
+    );
     const root = () => container.firstElementChild as HTMLElement;
 
     // `GROUPS` holds a pile of two, so a card in it has somewhere to push.
@@ -1471,7 +1475,7 @@ describe("StackView flow", () => {
     expect(root().className).not.toContain("pb-2");
 
     setDeckZoom(2);
-    rerender(<StackView groups={GROUPS} marketplace={TCG} />);
+    rerender(<StackView tracksCollection groups={GROUPS} marketplace={TCG} />);
     expect(root().style.paddingBottom).toBe(`${8 + stackLiftRoom(2)}px`);
     expect(stackLiftRoom(2)).toBeGreaterThan(stackLiftRoom());
   });
@@ -1493,7 +1497,7 @@ describe("StackView flow", () => {
     );
     expect(singles.map((group) => group.cards.length)).toEqual([1, 1]);
 
-    const { container } = render(<StackView groups={singles} marketplace={TCG} />);
+    const { container } = render(<StackView tracksCollection groups={singles} marketplace={TCG} />);
     expect((container.firstElementChild as HTMLElement).style.paddingBottom).toBe("8px");
   });
 
@@ -1522,6 +1526,7 @@ describe("StackView flow", () => {
   it("lays the flow out as a grid of one-pixel rows, with no row gap", () => {
     render(
       <StackView
+        tracksCollection
         groups={buildGroups([card({ name: "Sol Ring" })], [RAMP], "category", "alphabetical")}
         marketplace={TCG}
       />,
@@ -1571,12 +1576,12 @@ describe("StackView flow", () => {
     // this list — see the case above, which is where that is the claim being made.
     const order = [["Ramp"], ["Draw"]];
 
-    render(<StackView groups={groups} marketplace={TCG} />);
+    render(<StackView tracksCollection groups={groups} marketplace={TCG} />);
     expect(stacks().map((s) => headingsIn(s))).toEqual(order);
     cleanup();
 
     setDeckZoom(2);
-    render(<StackView groups={groups} marketplace={TCG} />);
+    render(<StackView tracksCollection groups={groups} marketplace={TCG} />);
     expect(stacks().map((s) => headingsIn(s))).toEqual(order);
     // …and the boxes grew instead, which is the half that says the zoom still reaches the view.
     expect((stacks()[0] as HTMLElement).style.width).toBe(`${stackColumnWidth(2)}px`);
@@ -1608,6 +1613,7 @@ describe("StackView flow", () => {
       );
     render(
       <StackView
+        tracksCollection
         groups={buildGroups(
           [...three("commander"), ...three("main"), ...three("side")],
           [COMMANDER, RAMP, SIDE, DRAW, MAYBE],
@@ -1648,6 +1654,7 @@ describe("StackView flow", () => {
   it("draws the rail as a plain flex child pinned right, with nothing sticky about it", () => {
     render(
       <StackView
+        tracksCollection
         groups={buildGroups(
           [card({ name: "Blood Moon", categoryKind: "side" })],
           [RAMP, SIDE],
@@ -1701,6 +1708,7 @@ describe("StackView flow", () => {
     (groupBy) => {
       render(
         <StackView
+          tracksCollection
           groups={buildGroups(
             [
               card({ name: "Sol Ring" }),
@@ -1757,6 +1765,7 @@ describe("StackView flow", () => {
       const off = category({ id, name, kind, isActive: false, sortOrder });
       render(
         <StackView
+          tracksCollection
           groups={buildGroups(
             [
               card({ name: "Sol Ring" }),
@@ -1820,6 +1829,7 @@ describe("StackView command zone", () => {
   ) =>
     render(
       <StackView
+        tracksCollection
         groups={buildGroups(COMMAND_DECK, categories, groupBy, "alphabetical")}
         marketplace={TCG}
         {...over}
@@ -1996,6 +2006,7 @@ describe("StackView command zone", () => {
   it("rails a commander pile the reader switched off rather than pinning it to the head", () => {
     render(
       <StackView
+        tracksCollection
         groups={buildGroups(
           [
             card({ name: "Serah Farron", categoryKind: "commander", categoryActive: false }),
@@ -2038,7 +2049,7 @@ describe("StackView group chrome", () => {
    *  `toContain` on the string would answer yes to a box that had lost its width class. */
   const classesOf = (el: Element) => el.className.split(" ");
   const pile = (name: string) => screen.getByRole("region", { name });
-  const draw = () => render(<StackView groups={GROUPS} marketplace={TCG} />);
+  const draw = () => render(<StackView tracksCollection groups={GROUPS} marketplace={TCG} />);
 
   /**
    * The resting pile, which is the one a reader sees fifteen of.
@@ -2113,7 +2124,7 @@ describe("StackView group chrome", () => {
 describe("GridView group chrome", () => {
   /** Whole class names, never a substring — the block above has why. */
   const classesOf = (el: Element) => el.className.split(" ");
-  const draw = () => render(<GridView groups={GROUPS} marketplace={TCG} />);
+  const draw = () => render(<GridView tracksCollection groups={GROUPS} marketplace={TCG} />);
 
   it("washes a switched-off pile and leaves a resting one alone", () => {
     draw();
@@ -2151,7 +2162,7 @@ describe("GridView group chrome", () => {
 const COLUMN_VIEWS = [
   {
     name: "StackView",
-    render: (props: ViewProps) => <StackView {...props} />,
+    render: (props: ViewProps) => <StackView tracksCollection {...props} />,
     /** The id `StackGroup` gives its heading, which is what the section is `aria-labelledby` —
      *  the same handle `StackView flow` reads its layout off. */
     heading: "group-",
@@ -2170,7 +2181,7 @@ const COLUMN_VIEWS = [
   },
   {
     name: "TextView",
-    render: (props: ViewProps) => <TextView {...props} />,
+    render: (props: ViewProps) => <TextView tracksCollection {...props} />,
     /** This view's packed columns carry no attribute of their own — a column here is a box and
      *  nothing else — so its groups are found by the id in `TextGroup`'s `aria-labelledby`. */
     heading: "text-group-",
@@ -2624,6 +2635,7 @@ describe("GridView tiles", () => {
     setDeckZoom(zoom);
     render(
       <GridView
+        tracksCollection
         groups={buildGroups([card({ name: "Sol Ring" })], [RAMP], "category", "alphabetical")}
         marketplace={TCG}
         actions={actions}
@@ -2784,6 +2796,7 @@ describe("GridView tiles", () => {
   it("draws the stacked card's own face, and no marks chip with it", () => {
     render(
       <GridView
+        tracksCollection
         groups={buildGroups(
           [{ ...card({ name: "Sol Ring", quantity: 3 }), finishes: '["foil"]' }],
           [RAMP],
@@ -2848,7 +2861,7 @@ describe("GridView tiles", () => {
       "alphabetical",
     );
 
-    render(<GridView groups={groups} marketplace={TCG} />);
+    render(<GridView tracksCollection groups={groups} marketplace={TCG} />);
     expect(within(tile()).queryByText("Game Changer")).not.toBeInTheDocument();
     expect(within(tile()).getByRole("img", { name: GAME_CHANGER_LABEL })).toBeInTheDocument();
     // The words are the button's either way — the drawing changed, the sentence did not.
@@ -2857,7 +2870,7 @@ describe("GridView tiles", () => {
     ).toBeInTheDocument();
     cleanup();
 
-    render(<StackView groups={groups} marketplace={TCG} />);
+    render(<StackView tracksCollection groups={groups} marketplace={TCG} />);
     const stacked = screen.getAllByRole("listitem")[0];
     expect(within(stacked).getByText("Game Changer")).toBeInTheDocument();
   });
@@ -2870,6 +2883,7 @@ describe("GridView tiles", () => {
   it("names the printing in the tile's chin", () => {
     render(
       <GridView
+        tracksCollection
         groups={buildGroups(
           [card({ name: "Sol Ring", setCode: "c21", collectorNumber: "179" })],
           [RAMP],
@@ -2939,6 +2953,7 @@ describe("GridView tiles", () => {
   it("keeps the printing and the price outside the tile's button", () => {
     render(
       <GridView
+        tracksCollection
         groups={buildGroups(
           [card({ name: "Sol Ring", setCode: "c21", collectorNumber: "179", unitPrice: 1.99 })],
           [RAMP],
@@ -2996,6 +3011,7 @@ describe("GridView tiles", () => {
   it("outlines a broken card in one colour, from its border through its chin", () => {
     render(
       <GridView
+        tracksCollection
         groups={buildGroups([card({ name: "Sol Ring" })], [RAMP], "category", "alphabetical")}
         marketplace={TCG}
         violations={VIOLATIONS}
@@ -3068,12 +3084,12 @@ describe("the deck's two views and their one zoom section", () => {
   it("draws Stacks and Grid at the one zoom the deck section holds", () => {
     setDeckZoom(2);
 
-    render(<StackView groups={ONE_CARD} marketplace={TCG} />);
+    render(<StackView tracksCollection groups={ONE_CARD} marketplace={TCG} />);
     expect(columnWidth()).toBe(`${stackColumnWidth(2)}px`);
     expect(columnWidth()).toBe("434px");
     cleanup();
 
-    render(<GridView groups={ONE_CARD} marketplace={TCG} />);
+    render(<GridView tracksCollection groups={ONE_CARD} marketplace={TCG} />);
     expect(tileWidth()).toBe(`${scaled(150, 2)}px`);
     expect(tileWidth()).toBe("300px");
   });
@@ -3092,12 +3108,12 @@ describe("the deck's two views and their one zoom section", () => {
       cardZoom: { ...DEFAULT_SECTION_ZOOMS, deckSearch: 2, search: MIN_ZOOM },
     });
 
-    render(<StackView groups={ONE_CARD} marketplace={TCG} />);
+    render(<StackView tracksCollection groups={ONE_CARD} marketplace={TCG} />);
     expect(columnWidth()).toBe(`${stackColumnWidth(DEFAULT_ZOOM)}px`);
     expect(columnWidth()).toBe("224px");
     cleanup();
 
-    render(<GridView groups={ONE_CARD} marketplace={TCG} />);
+    render(<GridView tracksCollection groups={ONE_CARD} marketplace={TCG} />);
     expect(tileWidth()).toBe("150px");
   });
 
@@ -3116,8 +3132,8 @@ describe("the deck's two views and their one zoom section", () => {
    * something else would print a number nothing on screen is drawn at.
    */
   it.each([
-    ["StackView", <StackView key="s" groups={ONE_CARD} marketplace={TCG} />],
-    ["GridView", <GridView key="g" groups={ONE_CARD} marketplace={TCG} />],
+    ["StackView", <StackView tracksCollection key="s" groups={ONE_CARD} marketplace={TCG} />],
+    ["GridView", <GridView tracksCollection key="g" groups={ONE_CARD} marketplace={TCG} />],
   ])("steps only the deck section on a ctrl+wheel over %s", (_name, element) => {
     const before = useAppStore.getState().zoomPulse;
     const { container } = render(element);
@@ -3171,7 +3187,7 @@ describe("TableView", () => {
       "category",
       "alphabetical",
     );
-    render(<TableView groups={groups} marketplace={TCG} />);
+    render(<TableView tracksCollection groups={groups} marketplace={TCG} />);
 
     // A band is the row whose single cell spans every column — `aria-colspan` is what says so,
     // and it is the one thing about a band that is structural rather than a class. The name is
@@ -3203,7 +3219,7 @@ describe("TableView", () => {
   it("says the tier in words beside the badge, and the two halves agree", () => {
     render(
       <TooltipProvider>
-        <TableView groups={TIER_GROUPS} marketplace={TCG} theoryPlan={TIER_PLAN} />
+        <TableView tracksCollection groups={TIER_GROUPS} marketplace={TCG} theoryPlan={TIER_PLAN} />
       </TooltipProvider>,
     );
 
@@ -3227,7 +3243,13 @@ describe("TableView", () => {
 
   const setup = () => {
     render(
-      <TableView groups={GROUPS} marketplace={TCG} violations={VIOLATIONS} onSelect={vi.fn()} />,
+      <TableView
+        tracksCollection
+        groups={GROUPS}
+        marketplace={TCG}
+        violations={VIOLATIONS}
+        onSelect={vi.fn()}
+      />,
     );
   };
 
@@ -3288,6 +3310,7 @@ describe("TableView", () => {
     cleanup();
     render(
       <TableView
+        tracksCollection
         groups={GROUPS}
         marketplace={TCG}
         actions={{ setQuantity: vi.fn(), drop: vi.fn() }}
@@ -3326,7 +3349,13 @@ describe("TableView", () => {
     const onSelect = vi.fn();
     render(
       <TooltipProvider>
-        <TableView groups={GROUPS} marketplace={TCG} violations={VIOLATIONS} onSelect={onSelect} />
+        <TableView
+          tracksCollection
+          groups={GROUPS}
+          marketplace={TCG}
+          violations={VIOLATIONS}
+          onSelect={onSelect}
+        />
       </TooltipProvider>,
     );
 
@@ -3394,7 +3423,7 @@ describe("TableView", () => {
   it("bands the rows with a heading that is not itself a row you can open", async () => {
     const user = userEvent.setup();
     const onSelect = vi.fn();
-    render(<TableView groups={GROUPS} marketplace={TCG} onSelect={onSelect} />);
+    render(<TableView tracksCollection groups={GROUPS} marketplace={TCG} onSelect={onSelect} />);
 
     const band = screen.getByText("Ramp").closest("[role=row]");
     expect(band).not.toBeNull();
@@ -3409,6 +3438,7 @@ describe("TableView", () => {
   it("draws no owned badge for a card in a switched-off pile", () => {
     render(
       <TableView
+        tracksCollection
         groups={buildGroups(
           [{ ...card({ name: "Avacyn", categoryKind: "maybe" }), ownedQuantity: 4 }],
           [MAYBE],
@@ -3420,6 +3450,118 @@ describe("TableView", () => {
     );
 
     expect(screen.queryByText("4 in your collection")).not.toBeInTheDocument();
+  });
+
+  /**
+   * **A Virtual deck (issue #401): the Owned column is _dropped_, never left blank.**
+   *
+   * `OwnedBadge` already answers `null` for a row that owns nothing and wishes for nothing, so
+   * the do-nothing implementation of this feature — hand the badge a zero and let it hide itself
+   * — leaves a headed column that is empty on every row of every virtual deck. That is a question
+   * the table keeps asking and never answers, and it is what these cases discriminate against:
+   * every one of them would pass over a blank column if it only asked about the cells.
+   *
+   * **The fixture owns its cards, and that is what makes these three real.** `card()` defaults
+   * to `ownedQuantity: 0`, so `GROUPS` would draw a blank Owned column even on a regular deck —
+   * every assertion below would then hold against the broken implementation *and* against the
+   * fixed one. These rows claim every copy, so under the old code the column is not merely
+   * present, it is populated.
+   */
+  describe("a deck that does not track a collection", () => {
+    const OWNED_GROUPS = buildGroups(
+      CARDS.map((row) => ({ ...row, ownedQuantity: row.quantity })),
+      [COMMANDER, RAMP, MAYBE],
+      "category",
+      "alphabetical",
+    );
+    const table = (tracksCollection: boolean) =>
+      render(
+        <TableView
+          tracksCollection={tracksCollection}
+          groups={OWNED_GROUPS}
+          marketplace={TCG}
+        />,
+      );
+
+    /**
+     * **The header list, in order, in one assertion** — because "Owned is absent" and "the other
+     * eight are where they were" are the two halves of *dropping* a column, and a check that only
+     * made the first would pass an implementation that had reordered the rest.
+     *
+     * `toEqual` on the whole array is what makes this an order assertion: the regular table draws
+     * `… Price · Owned · Labels …`, so the sequence below is one the old code cannot produce, in
+     * membership *or* in position. The regular deck's own list is asserted beside it rather than
+     * left to `draws the nine columns` further up, so the pair reads as one difference.
+     */
+    it("draws eight columns, in the order the ninth was taken out of", () => {
+      const names = () =>
+        screen.getAllByRole("columnheader").map((header) => header.textContent?.trim());
+
+      table(false);
+      expect(names()).toEqual([
+        "Qty",
+        "Card name",
+        "Mana cost",
+        "Type",
+        "Price",
+        "Labels",
+        "Rarity",
+        "Printing",
+      ]);
+
+      cleanup();
+      table(true);
+      expect(names()).toEqual([
+        "Qty",
+        "Card name",
+        "Mana cost",
+        "Type",
+        "Price",
+        "Owned",
+        "Labels",
+        "Rarity",
+        "Printing",
+      ]);
+    });
+
+    /**
+     * **No cell either, and this is the half a header-only check cannot make.** A column dropped
+     * from the list takes its cells with it by construction; a column left in and emptied does
+     * not. `OwnedBadge` draws `N in your collection` as its accessible text, and `GROUPS`' first
+     * row owns copies — so this string is in the tree for a regular deck and must not be here.
+     */
+    it("draws no owned badge on any row", () => {
+      table(false);
+
+      expect(screen.queryByText(/in your collection/)).not.toBeInTheDocument();
+
+      cleanup();
+      table(true);
+      expect(screen.getAllByText(/in your collection/).length).toBeGreaterThan(0);
+    });
+
+    /**
+     * **The 4rem the column held goes back to the two flexible tracks**, which is the point of
+     * this being a column and not a cell: the grid template is built from the list, so the card
+     * name — the column this table exists for — is measured against a smaller fixed budget. The
+     * read-only regular table spends **32rem** on fixed columns (`3 + 5 + 5 + 4 + 5 + 5 + 5`);
+     * without Owned it is **28**. The template is an inline style, so this is one of the few
+     * layout facts jsdom really can see.
+     */
+    it("spends the Owned column's width on the rest of the row", () => {
+      const fixed = () =>
+        (screen.getByText("Arcane Signet").closest("[role=row]") as HTMLElement).style
+          .gridTemplateColumns.split(" ")
+          .filter((track) => track.endsWith("rem"))
+          .reduce((total, track) => total + Number.parseFloat(track), 0);
+
+      table(false);
+      expect(fixed()).toBe(28);
+
+      cleanup();
+      table(true);
+      expect(fixed()).toBe(32);
+    });
   });
 });
 
@@ -3457,7 +3599,14 @@ describe("StackView reordering", () => {
 
   const draw = (over: Partial<DeckCardActions> = {}) => {
     const moveCategory = vi.fn();
-    render(<StackView groups={piles} marketplace={TCG} actions={{ moveCategory, ...over }} />);
+    render(
+      <StackView
+        tracksCollection
+        groups={piles}
+        marketplace={TCG}
+        actions={{ moveCategory, ...over }}
+      />,
+    );
     return moveCategory;
   };
 
@@ -3531,7 +3680,7 @@ describe("StackView reordering", () => {
   /** Absent is the off switch the editor uses under `Group by mana value` — and the state every
    *  story and every other host of this view is in. No grip, and no drop target either. */
   it("draws no grip at all when the host offers no reorder", () => {
-    render(<StackView groups={piles} marketplace={TCG} />);
+    render(<StackView tracksCollection groups={piles} marketplace={TCG} />);
     expect(screen.queryByRole("button", { name: /^Move / })).not.toBeInTheDocument();
   });
 
@@ -3820,7 +3969,15 @@ describe("StackView arrow keys", () => {
 
   const draw = (over: Partial<ViewProps> = {}) => {
     const onSelect = vi.fn();
-    render(<StackView groups={piles} marketplace={TCG} onSelect={onSelect} {...over} />);
+    render(
+      <StackView
+        tracksCollection
+        groups={piles}
+        marketplace={TCG}
+        onSelect={onSelect}
+        {...over}
+      />,
+    );
     return onSelect;
   };
 
@@ -4130,7 +4287,7 @@ describe("StackView arrow keys", () => {
    *  what a host does with the card once it has moved. A story and a test both mount this view
    *  without one. */
   it("moves the caret in a view that was given no onSelect", async () => {
-    render(<StackView groups={piles} marketplace={TCG} />);
+    render(<StackView tracksCollection groups={piles} marketplace={TCG} />);
     const user = userEvent.setup();
 
     act(() => control(RAMP.id, "Arcane Signet")!.focus());
@@ -4172,6 +4329,7 @@ describe("the deck grid's art", () => {
   const draw = () =>
     render(
       <GridView
+        tracksCollection
         groups={buildGroups(
           [{ ...card({ name: "Sol Ring" }), imageUris: SCRYFALL }],
           [RAMP],
