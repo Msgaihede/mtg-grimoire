@@ -1818,3 +1818,98 @@ Tiles are not baseline-aligned: Treasure's subtitle wraps to two lines, so its s
 ~15px below Bird's and Fish's. That is the tile's own `flex-col` and was true at 150px too — it
 is simply easier to see at 231. Not a regression and not part of the ask; noted so the next
 reader does not measure it as one.
+
+## 2026-09-08 — inline rename on the deck wall
+
+`npm run tauri dev`, a **debug** build, 1920×1080, against a copy of the real database (three
+decks, two folders on the wall). The wall's own zoom was the reader's saved 1.2×, so every figure
+below carries `--mark-scale: 1.2` and `--control-scale: 1.02` unless it says otherwise. Console
+recorder attached for the whole pass: **16 entries, no error and no warning.**
+
+### The defect this pass found, which neither suite could
+
+**A deck tile grew 7px the moment the field opened** — 266px at rest, **273** with the rename
+field on the name's line — and every tile in the grid row went with it. The field was
+`h-[calc(1.625rem*…)]` (26px at 1×) standing where a `leading-[1.25rem*…]` name line (20px) had
+been. jsdom lays nothing out and a Storybook frame is not the wall, so nothing in either suite can
+see a reflow; what catches it is a live height read taken in both states.
+
+The fix is one class on each field — `h-[calc(1.25rem*var(--mark-scale,1))]`, the name line's own
+leading — and the box is `border-box`, so the two 1px hairlines come out of those 20 and the 14px
+text has 18 to sit in. After it, **every tile reads 266 in both states**, and the input is never
+clipped: `scrollHeight === clientHeight` at 0.5×, 1.2× and 2×.
+
+**The folder card never had the defect and takes the same number anyway.** Its frame's height is
+the art's aspect plus `BAND_PAD` and does not move — measured 266 in both states before the fix —
+but a taller field grows the caption *upward* over the pictures and shifts the figures line under
+it, which is the one thing on that card a reader is checking while they type.
+
+### The wall, at rest
+
+Five tiles, folders and decks alike, **256 × 266** in one grid track. A folder card's tray sits
+**6.1px** in from the card's right edge (`0.25rem × 1.02` plus the tray's own `0.125rem × 1.02`
+pad) with two **24.47px** buttons — `1.5rem × --control-scale`, 24 × 1.02, exactly. It fades in on
+hover: opacity **0.837 → 1** across the 150ms, read before and after a 400ms rest.
+
+The deck tile's tray is five buttons and **135px** against a 256px tile:
+`Rename the X deck · Move X to a folder · Duplicate X · Archive X · Delete X`.
+
+### Renaming a folder, on the card
+
+Pencil pressed: the input is focused with the name **selected `[0, 15]`**, the card holds at
+**266px**, the caption still reads `Folder · 1 deck`, the tray is `Rename folder` / `Cancel`, and
+**the tree holds no input at all**. That last clause is the whole of the `at` rule proved in the
+window — wired without it, both drawings drew a field.
+
+Escape closes it and the caret lands on `Rename the Expensive Decks folder` — a **new** element,
+built by the render that closed the field, which is why `useFolderFieldReturn` is the hand-back
+and `openerRef` cannot be. A click on dead space does the same, and discards the draft.
+
+`⋯ → Rename…` opens the same field in the same place (one input, `inWall: 1`, `inTree: 0`), and
+the menu it opens is the five rows the tree's own menu offers.
+
+A rename committed with Enter reached `deck_folder_rename` and both drawings redrew:
+`Pricey Decks` on the card and in the tree, card still 266px, caret on the new pencil.
+
+### Renaming a deck, on the tile
+
+Pencil pressed: input focused, name selected `[0, 5]`, tray `Save name` / `Cancel`, the caption
+`Commander · Paper · 101 cards` still drawn under the field. The tick committed and the tile
+redrew at **266px** with the caret on the pencil that render had just built.
+
+`innerText` shows the caption **twice** and that is the design rather than a duplicate: the
+button's own copy is `sr-only`, so its accessible name never changes between states, and the
+visible one beside the field is `aria-hidden`.
+
+### The tree's own field, unmoved
+
+`ContextMenu` on a tree row → `Rename…`: exactly **one** input, `inTree: 1`, `inWall: 0`, focused
+and selected — and Escape puts the caret back on `Expensive Decks, 1 deck`, which is
+`refocusFolderRef` finding the row by attribute after the render that redrew it.
+
+### The drag guard
+
+`pull` on the open field, 40px sideways: the field stayed open and focused, the tree's order was
+unchanged and the folder had not moved. `data-no-drag` on the form root is what makes a press into
+the name a caret rather than the first five pixels of a file.
+
+### Both ends of the zoom ladder
+
+| | 0.5× | 1.2× | 2× |
+| --- | --- | --- | --- |
+| Tile | 109 × 112 | 256 × 266 | 425 × 442 |
+| Deck tray, resting (5 buttons) | 56 | 135 | 224 |
+| Two-button tray (a folder's, or either tile's while renaming) | not read | not read | 92 |
+| Field height | 10 | 24 | 40 |
+| Field font | 7px | not read | 28px |
+| Input clipped | no | no | no |
+
+**The blanks are blanks rather than arithmetic.** Every other cell is a rect read off the window
+in that state; the two-button tray was read only at 2×, and its buttons were read at 1.2× (24.47
+each, which is `1.5rem × 1.02` exactly). Filling a cell from that multiplication would put a
+number here nobody measured, which is the thing this file exists not to do.
+
+Every tile is the same height as its neighbours at every stop, in both states. The widest tray is
+**224px against a 425px tile**, so a five-button row has room at the top of the ladder and 53px of
+slack at the bottom — the case worth checking, because those buttons scale with the card and the
+tile does too, so the ratio is what holds rather than any one figure.

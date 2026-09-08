@@ -1499,13 +1499,21 @@ describe("DecksPage", () => {
    * **The gallery can rename a deck now, and until this it could not.** Renaming meant opening
    * the editor and typing into its settings dialog, which is a round trip for one word.
    *
-   * The field is `metaRows.tsx`'s `RenameField` — the one the folder rename already uses, and a
-   * third rename control would be a third place to get the caret wrong — drawn *under* the tile
-   * rather than over it: the art is how a reader knows which deck they are renaming, and a
-   * `<form>` inside the tile's own `<button>` is invalid HTML.
+   * **The field takes the name's own line, which is 2026-09-08's change.** It was
+   * `metaRows.tsx`'s `RenameField` drawn *under* the whole tile — a bordered strip with `Save` and
+   * `Cancel` spelled out in words, below the object it was about, reflowing every tile after it on
+   * the wall. A tile's name is already in flow under its picture, so the field simply takes that
+   * line: the crop, the colour band and both of the art's marks stay exactly where they are, and
+   * the format caption goes on saying what the deck is. The two answers moved into the tray over
+   * the art, which is the one place on a tile a reader has been taught to find its controls — and
+   * which is where the folder card beside it puts the same pair.
    *
-   * F2 is the route, the file manager's key and the same one the folder tree already answers.
-   * The pointer's route is the tile's context menu, which is wired with the rest of them.
+   * **The tick is `Save name` and the pencil is `Rename the Burn deck`**, so a query naming one of
+   * them cannot match the other; the field keeps the bare `Rename Burn`.
+   *
+   * Three routes: F2 (the file manager's key, and the same one the folder tree answers), the
+   * tile's context menu, and — since 2026-09-08 — the tray's own pencil, which is the *visible*
+   * one.
    */
   it("renames a deck in place, from the tile the caret is on", async () => {
     wrap(<DecksPage />);
@@ -1522,13 +1530,38 @@ describe("DecksPage", () => {
     await userEvent.keyboard("Sunburn");
     expect(field).toHaveValue("Sunburn");
 
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save name" }));
 
     expect(deckUpdate).toHaveBeenCalledWith(4, { name: "Sunburn" });
   });
 
-  /** Escape is the reader saying *put me back*, and the tile is where they were: the field is
-   *  drawn under the tile rather than in place of it, so the opener really is still there. */
+  /**
+   * The pencil in the tile's tray — the way in that does not need a right-click or a key nobody
+   * has been told about. It is the control the field replaces, so the caret comes back to the one
+   * React renders in its place (`useFolderFieldReturn`) rather than to the detached node the page
+   * would otherwise be holding — which is what the Escape assertion here is really about.
+   */
+  it("renames a deck from the tray's pencil, and hands the caret back to it", async () => {
+    wrap(<DecksPage />);
+    await tileFor("Burn");
+
+    const pencil = screen.getByRole("button", { name: "Rename the Burn deck" });
+    await userEvent.click(pencil);
+
+    const field = await screen.findByLabelText("Rename Burn");
+    expect(field).toHaveFocus();
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(screen.queryByLabelText("Rename Burn")).not.toBeInTheDocument();
+    // A *new* element with the same name — the one this render built where the field was.
+    expect(screen.getByRole("button", { name: "Rename the Burn deck" })).toHaveFocus();
+    expect(deckUpdate).not.toHaveBeenCalled();
+  });
+
+  /** Escape is the reader saying *put me back*, and the tile is where they were: the field takes
+   *  the name's line *inside* the tile's own button, which therefore never unmounts, so the opener
+   *  F2 was pressed on really is still there. */
   it("hands the caret back to the tile when a rename is cancelled", async () => {
     wrap(<DecksPage />);
     const tile = await tileFor("Burn");
@@ -2723,6 +2756,45 @@ describe("dragging a folder", () => {
    * right, so `before` is a card's leading *side* where it is a row's top edge — and the mark
    * proves the card was measured along the axis it is laid out on rather than the tree's.
    */
+  /**
+   * **A card whose name is being typed is still a drop target, and it still says so.**
+   *
+   * Both registrations sit on the boxes *around* the card and are untouched by the rename, so a
+   * folder let go on one files perfectly well — but the marks live on the element wearing the
+   * card's own edge, and while the field is open that element is the `<form>`'s frame rather than
+   * the `<button>`. A card that went on accepting drops and stopped advertising them would make
+   * the wall answer a drag differently depending on a state the *dragger* cannot see, which is
+   * the failure `CollectionFolderCard` records and pays for with a ring on its `<li>`. This card
+   * has a border to recolour, so the mark goes where it goes at rest.
+   *
+   * Asserted on the class list rather than on the class string: a substring test passes on
+   * anything that merely contains these.
+   */
+  it("keeps the drag marks on a card whose rename field is open", async () => {
+    wrap(<DecksPage />);
+    await folderCard("Commander");
+    await userEvent.click(screen.getByRole("button", { name: "Rename the Commander folder" }));
+    const frame = (await screen.findByLabelText("Rename Commander")).closest("form")
+      ?.firstElementChild as HTMLElement;
+
+    // The box the folder drop is registered on is the `<div>` *around* the form, unmoved by the
+    // rename — which is the half of this that must not change — and it is what has to be given a
+    // rect, because jsdom measures four zeroes and dnd-kit hit-tests by coordinate.
+    const box = frame.parentElement?.parentElement as HTMLElement;
+    place(box, TARGET_BOX);
+
+    // Armed the moment the folder leaves the ground: this card takes it somehow, and which way is
+    // not a question a `dragstart` has a pointer position to answer.
+    const held = await hold(await folderCard("Modern"));
+    expect(frame.classList.contains("border-accent/45")).toBe(true);
+
+    await held.over(box, MIDDLE);
+    expect(frame.classList.contains("border-accent")).toBe(true);
+    expect(frame.classList.contains("bg-accent/15")).toBe(true);
+
+    await held.drop();
+  });
+
   it("places a folder beside a card, reading the wall's own axis", async () => {
     wrap(<DecksPage />);
     const commander = await folderCard("Commander");
@@ -2926,6 +2998,136 @@ describe("the menus' keyboard route", () => {
 /* ------------------------------------------------------------------------------------------ *
  * The folder row's menu
  * ------------------------------------------------------------------------------------------ */
+
+/**
+ * **A folder is drawn twice on this screen, and since 2026-09-08 either drawing can become the
+ * field.** These cases are about *which one does* — the half no assertion about the write can see.
+ *
+ * The wall's card had no rename affordance at all until then: the verb was on its right-click menu
+ * and on the heading row's `Folder` control, and both opened a field in the **sidebar**, which is
+ * the mismatch this closes. What decides it is `Panel`'s `at`, and the two cases that would fail
+ * without it are *two fields at once* (the naive wiring: both drawings answered one `folderId`) and
+ * *the field in the wrong place* (a rename asked on a row jumping to the wall, or the reverse).
+ *
+ * The two boxes are named rather than counted: the tree is `nav[aria-label="Folders"]` and the wall
+ * is `ul[aria-label="Your decks"]`, so "the field is on the card" is a containment assertion and
+ * not a guess from the DOM order.
+ */
+describe("the folder card's own rename", () => {
+  const tree = () => screen.getByRole("navigation", { name: "Folders" });
+  const wall = () => screen.getByRole("list", { name: "Your decks" });
+
+  /**
+   * The visible way in, and the one that did not exist: a pencil in the card's own tray, beside
+   * the `⋯` — the deck tile's arrangement, at the same insets, so one wall answers a rename one
+   * way whichever kind of tile the pointer is over.
+   *
+   * The field keeps the card's pictures and its `Folder · 2 decks` line, which is why this is not
+   * `NewFolderCard`'s tile with a different label: a reader renaming *Commander* is looking at the
+   * drawer holding two decks, and a box that dropped the count would make them check they had the
+   * right one.
+   */
+  it("renames a folder on the card, from the card's own pencil", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await folderCard("Commander");
+    await userEvent.click(screen.getByRole("button", { name: "Rename the Commander folder" }));
+
+    const field = await screen.findByLabelText("Rename Commander");
+    expect(field).toHaveFocus();
+    expect(field).toHaveValue("Commander");
+    // The card still says what is in the drawer, under the field rather than instead of it.
+    // Asserted off the tile's `textContent` rather than with `getByText`, because the count is a
+    // `font-mono tabular-nums` element of its own — the wall keeps its figures in one column — so
+    // the sentence is three nodes and no text matcher spans them.
+    expect(field.closest("li")?.textContent).toContain("Folder · 2 decks");
+
+    // `keyboard`, never `type`: `type` focuses what it is handed and would repair the very thing
+    // the assertion above makes. The name arrives selected, so typing replaces it.
+    await userEvent.keyboard("EDH");
+    await userEvent.click(screen.getByRole("button", { name: "Rename folder" }));
+
+    expect(deckFolderRename).toHaveBeenCalledWith(1, "EDH");
+  });
+
+  /**
+   * **One field, and it is on the thing the reader pressed.**
+   *
+   * Wired without `at`, both drawings of the folder read the same `renameFolder` panel and drew a
+   * field each — two inputs answering to one `Rename Commander`, each committing the same write,
+   * and `findByLabelText` throwing "found multiple" rather than either of them being wrong. So
+   * this asserts the count *and* the box: exactly one field, inside the wall.
+   */
+  it("leaves the tree's rows resting while the card holds the field", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await folderCard("Commander");
+    await userEvent.click(screen.getByRole("button", { name: "Rename the Commander folder" }));
+
+    const fields = await screen.findAllByLabelText("Rename Commander");
+    expect(fields).toHaveLength(1);
+    expect(wall()).toContainElement(fields[0] ?? null);
+    expect(within(tree()).queryByLabelText("Rename Commander")).not.toBeInTheDocument();
+  });
+
+  /** And the reverse, which is the half a card-only rule would have broken: a rename asked on a
+   *  **row** stays on the row. The heading row's `Folder` control is the same case and asserts it
+   *  from its own door — that one renames the folder the reader is standing *in*, which has a row
+   *  and no card. */
+  it("keeps the field in the tree when the rename was started on a row", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await rightClick(await rowFor("Commander, 2 decks"));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Rename…" }));
+
+    const fields = await screen.findAllByLabelText("Rename Commander");
+    expect(fields).toHaveLength(1);
+    expect(tree()).toContainElement(fields[0] ?? null);
+  });
+
+  /** The card's `⋯` and its right-click are the same door as the pencil, one menu row further in
+   *  — and the row has to reach the *card's* field rather than the tree's, which is what a shared
+   *  `folderMenuDeps` could not have said. */
+  it("opens the card's field from the card's own menu", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await folderCard("Commander");
+    await userEvent.click(screen.getByRole("button", { name: "Manage Commander" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Rename…" }));
+
+    const field = await screen.findByLabelText("Rename Commander");
+    expect(wall()).toContainElement(field);
+  });
+
+  /**
+   * The caret, which is the one thing the page cannot do for this field.
+   *
+   * `dismiss` focuses the element it remembered as the opener, and here that element is exactly
+   * what the field replaced — the card's pencil — so by then it is a detached node whose `focus()`
+   * is a silent no-op and the reader lands on `<body>`, with the next Tab restarting at the top of
+   * the app. `useFolderFieldReturn` refs the pencil React renders in the field's place and
+   * restores only when nothing else has taken the caret, which is the state Escape leaves behind.
+   */
+  it("hands the caret back to the card's pencil when a rename is cancelled", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await folderCard("Commander");
+    await userEvent.click(screen.getByRole("button", { name: "Rename the Commander folder" }));
+    await screen.findByLabelText("Rename Commander");
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(screen.queryByLabelText("Rename Commander")).not.toBeInTheDocument();
+    // A *new* element with the same name — the one this render built where the field was.
+    expect(screen.getByRole("button", { name: "Rename the Commander folder" })).toHaveFocus();
+    expect(deckFolderRename).not.toHaveBeenCalled();
+  });
+});
 
 describe("the folder row's menu", () => {
   /**
