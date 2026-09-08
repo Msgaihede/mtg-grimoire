@@ -361,28 +361,59 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   tile with it since. A `FinishMark` in the chin beside the
   price says the word better than a fourth badge in a corner the rule break and the quantity tag
   are already competing for. What must never happen is _neither_ — a sheen with nothing naming
-  it is decoration, which is the whole of why the chip existed. **It governs the crown too**,
-  since the chip is the only thing a crown can be drawn as and this face has its banner instead.
+  it is decoration, which is the whole of why the chip existed. **It governs the crown too**, in
+  the sense that turning the chip off takes whatever is in it with it — and the second clause of
+  this sentence, *since the chip is the only thing a crown can be drawn as and this face has its
+  banner instead*, was written on 2026-09-08 and stopped being true the same day. A crown is a
+  glyph and can be drawn anywhere there is room for one: the deck's Grid tile draws it in its marks
+  strip, with no chip anywhere on the tile. What each of the two card-face views puts in that
+  strip is its own answer — the stack's ribbon, the tile's bare crown — and the bullet below is
+  where that is settled and measured.
 - **One game changer, three drawings, and the difference is room rather than meaning.** The deck's
-  two card-face views stamp `GameChangerBanner` — a gold seal, a 9px crown, `Game Changer` in
+  **stacked card** stamps `GameChangerBanner` — a gold seal, a 9px crown, `Game Changer` in
   Cinzel — where a
   card is 295px tall; the deck's table and text views abbreviate to `GameChangerBadge`'s gold `GC`
-  where a cell has a column; and **the walls of tiles** — the search's, the collection's, the
-  wishlist's and the docked search columns — get `components/GameChangerMark`, **the banner's
-  crown and nothing else**, because a 170px tile is somebody else's artwork and a ribbon across it
-  is a sticker over the picture the reader came to look at.
-  **This list said the deck's own Grid view was on the third arm, "since 2026-08-16", and it moved
-  to the first on 2026-09-08.** The count of drawings is unchanged and so is the rule that decides
-  them — it is *room*, and the room a mark has is a fact about the surface rather than about the
-  component it borrows. What changed is the surface: the tile draws the stacked card's own 27px
-  marks strip now, which has the width to spell the words out, where a `CardArt` tile had only a
-  corner chip. A wall of *search* tiles still has only the corner, and still gets the crown. `text-pie-gold` in all three: the spec
+  where a cell has a column; and **every other surface that draws a card as a face** — the search
+  wall's tiles, the collection's, the wishlist's, the three docked search columns and the deck's
+  own **Grid tile** — gets `components/GameChangerMark`, **the banner's crown and nothing else**,
+  because a 150–170px tile is somebody else's artwork and a ribbon across it is a sticker over the
+  picture the reader came to look at.
+  `text-pie-gold` in all three: the spec
   is explicit that a game changer (a fact about a powerful card) and a rule break (a problem)
-  must never be confusable, and the destructive colour belongs to the second. It shares the finish
-  chip rather than taking a corner of its own — **a card fact and a printing fact in one box**,
-  since a card can be either, both or neither. Nothing derives it: the backend flattens
+  must never be confusable, and the destructive colour belongs to the second. On the walls it
+  shares the finish chip rather than taking a corner of its own — **a card fact and a printing
+  fact in one box**, since a card can be either, both or neither; on a deck tile there is no chip
+  at all (`FoilOverlay mark={false}`, the bullet above) and the crown stands in the card's own
+  marks strip. Nothing derives it: the backend flattens
   `cards.game_changer`'s NULL into `false` (the column is nullable; only `card_row.rs`'s parser
   struct is a `bool`).
+  **This list put the deck's Grid view on the *banner* arm for a few hours on 2026-09-08, and what
+  moved it back is a measurement rather than a second opinion.** The claim was reasonable and is
+  worth reading before the correction: that view had stopped being a `CardArt` tile with a corner
+  chip and had become `features/decks/DeckCardFace` — the stacked card, shared — so it draws the
+  stack's own 27px marks strip; the design decision was that the tile adopts the stack's marks,
+  and the ribbon is one of them. It had held the crown "since 2026-08-16" only because a `CardArt`
+  tile has nowhere else to put one. **What no source and no suite could see is that the strip does
+  not narrow with the card.** All three marks in it — `QuantityTag`, the game changer and
+  `TheoryMatchMark` — are sized off `--mark-scale`, which is the reader's *zoom* and not the
+  tile's width, so a 130px ribbon is 130px on a 210px stacked card and 130px on a 150px tile.
+  **Driven in the shipped window 2026-09-08** (`npm run tauri dev`, a **debug** build, 1920×1080,
+  against the real corpus, on a 101-card Commander deck at `cardZoom` 1.1), on a card that is both
+  a game changer and an exact plan match: a **28px** tag, a **130px** ribbon and a **28px** tick
+  went into a **163px** strip on a **165px** tile — **11px of overflow**, into a face that is
+  `overflow-hidden`, so the plan's tick was clipped by nearly half. Every term scales with the
+  zoom, so the ratio is constant and it was clipped at *every* stop of the ladder; photographed at
+  2× to confirm. Re-measured after the fix in the same session: tag at **x=1** (28 wide), crown at
+  **x=29** (13 wide), tick at **x=136** (28 wide), **overflow 0** — and the stack, checked in the
+  same pass, still draws the ribbon.
+  **The count of drawings is unchanged and so is the rule that decides them** — it is *room*, and
+  the room a mark has is a fact about the surface rather than about the component it borrows. What
+  is new is that the **two card-face views sit on different arms of it for the first time**,
+  because they are two widths: `DeckCardFace` takes a required `gameChanger: "banner" | "crown"`,
+  `CardStack` passes the first and `GridView` the second. It is **not** a return to the corner
+  chip — the mark is in the same strip in the same place on both views, `FoilOverlay` is
+  `mark={false}` on both, and top-right is `TheoryMatchMark`'s on both. jsdom lays nothing out, so
+  every figure above is a live claim and the suite can only pin which drawing each view asks for.
 - **The rule break's edge is the fourth separation, and on the stacked card it is drawn by _two_
   elements** (fixed 2026-08-14). `CardStack`'s data line is a sibling of the face, not a band
   inside it: `-mx-px` puts its own border exactly where the card's is, and being `relative` and
@@ -3625,7 +3656,9 @@ nothing**, being a plain scroller rather than a virtualiser. **The rest of that 
 `footHeight` local that positioned the controls strip on the chin's top edge, and there is no such
 local since 2026-09-08**: the tile draws the stack's controls column instead, `DeckCardControls
 layout="card-column"` at `absolute top-9 right-1.5`, which needs no computed offset at all —
-`top-9` clears the 27px printed title bar the quantity tag and the ribbon sit in, and the column
+`top-9` clears the 27px printed title bar the quantity tag and the game changer's crown sit in
+(the crown and not the ribbon on this view — see the game-changer bullet near the top of this
+page for the width that decided it), and the column
 runs down the card's right margin from there. An absolutely positioned column takes no height, so
 the tile is still exactly as tall as its face plus its chin. The stacks did not move at all: 28
 is where the number came from, and `stackCardHeight` has always subtracted the rise.
@@ -4891,7 +4924,7 @@ is prose about something else.
 | ~~`features/card/PrintingPreview.tsx:182–183`~~ — `onMouseEnter`/`onMouseLeave`, `PREVIEW_DWELL_MS` 250 (`:25`). **Deleted 2026-09-03 with the docked card pane.** | One printing's art without swapping to that printing. | `onFocus` armed the same dwell when focus arrived in the row (`:185–187`), which was the keyboard's door. On touch, `onPointerDown: cancel` (`:201`) took down whatever the tap's compatibility `mouseenter` armed. **Nothing replaces it**, and nothing needs to: the printings list is `AllPrintingsDialog`'s wall of art tiles now, so the art is the tile and looking at one costs no hover. |
 | `components/menu/ContextMenu.tsx:730` — `onPointerOver`, `SUBMENU_HOVER_MS` 120 (`:48`) | Opening a submenu by resting on its row. | **Yes, at the site**: the submenu row's own `onClick` toggles it (`components/menu/Submenu.tsx:163`). Opening the parent menu is the gestures table's problem, not this one's. |
 | The other **98** `{...tip(…)}` spreads, across 53 shipped files | Everything this app says only in a hint. Two kinds, unequally lost: **11** pass `whenClipped: true`, where the words are the anchor's own truncated text — complete in the DOM and therefore in the accessibility tree, so only the *paint* is cut off; the rest are descriptions, and the ~57 lines passing `describes: false` are the ones whose words are the element's own name or already-visible text, drawn `aria-hidden`. | Nothing generic. Each of the 98 is its own question, and the two kinds have to be told apart before any of them is counted as lost. |
-| The marks on a card face — `components/CardArt.tsx:402`, `components/FinishMark.tsx:104`, `components/GameChangerMark.tsx:68`, `components/CountTag.tsx:212`, `components/OwnedBadge.tsx:55`, `components/RarityGem.tsx:54`, `features/decks/CardMarks.tsx:73`/`:319`/`:424`/`:458`/`:519`/`:578` | What a glyph means. Each binds `describes: false` because the panel carries the mark's *name* and the mark itself is `aria-hidden`. | Nothing on the card. The same facts are set in type in the card pane and in the three tables — a different surface, not the same one reached twice. |
+| The marks on a card face — `components/CardArt.tsx`, `components/FinishMark.tsx`, `components/GameChangerMark.tsx`, `components/CountTag.tsx`, `components/OwnedBadge.tsx`, `components/RarityGem.tsx` and every mark in `features/decks/CardMarks.tsx` (grep `useTooltip` there for the census — the line numbers this row carried moved twice on 2026-09-08 alone, and a stale line number reads as a claim about a site nobody can find) | What a glyph means. Each binds `describes: false` because the panel carries the mark's *name* and the mark itself is `aria-hidden`. | Nothing on the card. The same facts are set in type in the card pane and in the three tables — a different surface, not the same one reached twice. |
 | `components/AppShell.tsx:596` — the app's one native `title` | Nothing at all, and it is in this table so it is not mistaken for a lead. | **The phone answer is never "put the `title` back."** `src/CLAUDE.md` requires a hint to be `useTooltip()`'s spread, and the reason holds twice over here: a native tooltip does not appear on touch either, so restoring one would trade a hint nobody sees for a hint nobody sees. This site survives precisely *because* its sentence is never shown to anybody — Chromium freezes `:hover` at a drag's origin for the whole drag — and is read through the accname spec's description fallback instead. |
 
 ### Gestures with no touch equivalent

@@ -439,6 +439,13 @@ function GridCard({
         <DeckCardFace
           card={card}
           width={scaled(TILE_WIDTH, zoom)}
+          // **The crown, where the stack spells the words out** — the one mark this tile does not
+          // take from the stack, and the reason is arithmetic rather than taste. Measured in the
+          // shipped window 2026-09-08: the ribbon is 130px at `cardZoom` 1.1, which with the
+          // quantity tag and the plan's tick either side of it overflowed a 165px tile's strip by
+          // 11px and clipped the tick. Every term scales with the zoom, so the overflow is
+          // proportional and was there at every stop. See the prop.
+          gameChanger="crown"
           ruleBreakText={ruleBreakText}
           theoryMark={theoryMark}
           landedKey={landedKey}

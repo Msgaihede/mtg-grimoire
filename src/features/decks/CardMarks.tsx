@@ -1,5 +1,5 @@
 /**
- * The marks a card in a deck can carry, in one place because five surfaces draw them.
+ * The marks a card in a deck can carry, in one place because several surfaces draw them.
  *
  * The stack, the table, the text columns, the grid and the categories panel all say the same
  * three things about a card, and the spec is explicit that **a rule break and a game changer
@@ -9,8 +9,16 @@
  * Four things separate them and every surface keeps all four: the words (`RULE BREAK` spelled
  * out against two letters), the colour (destructive against the pie gold), the place (over
  * the card's art against its title bar) and the card's own edge, which only a rule break
- * changes. The place is the caller's — a 150px grid tile and a 224px stacked card put them in
- * different corners — so it rides in `className`; the other three are here.
+ * changes. The place is the caller's, so it rides in `className`; the other three are here.
+ *
+ * **That "the place is the caller's" used to be justified by the two card-face views putting the
+ * marks in different corners, and since 2026-09-08 they do not.** The stacked card and the Grid
+ * tile draw one `DeckCardFace`, so every mark on both is in the same corner of the same strip and
+ * `className` is carrying nothing about *place* on either of them. It stays a caller's argument
+ * because the surfaces that are **not** a card face still decide it — a table cell and a 22px text
+ * line have no corners at all — and because the one thing those two views do still differ about is
+ * which *drawing* of the game changer they have room for, which is `GameChangerMark`'s own rule
+ * and not a corner.
  *
  * **{@link TheoryMatchMark} joined them on 2026-08-20 and made that rule load-bearing rather
  * than merely observed**, because it is a *tick* — the one glyph a reader could take for "this
@@ -48,10 +56,16 @@ import type { TheoryTier } from "./theoryMatch";
  * A dot rather than a word: a label is a mark the reader put there and already knows, and a
  * 224px column has no room for a second word beside a card's name.
  *
- * **8px is its size on a card at 100% zoom.** The Grid view lays this on a card face the reader can
- * zoom, so it reads that card's `--mark-scale` (`lib/cardZoom.ts`); the table and text views take
- * the `, 1` fallback and are unchanged. The 1px ring around it does **not** scale — it is a hairline
- * separating the dot from whatever it sits on, which is a job one pixel does at every size.
+ * **8px is its size on a card at 100% zoom, and since 2026-09-08 no caller draws it on a card.**
+ * The Grid view laid this on a zoomable card face, which is why the size reads that card's
+ * `--mark-scale` (`lib/cardZoom.ts`) rather than being a flat 8; that view draws the shared
+ * `DeckCardFace` now, where the label and the copy count are folded into one {@link QuantityTag}
+ * exactly as they are on the stack. So the two call sites left — `TableView`'s Labels column and
+ * `TextView`'s line — both take the `, 1` fallback, and **the scaled expression is kept rather than
+ * flattened**: it costs nothing where the variable is unset, and a dot on a card face is what this
+ * mark is *for* wherever one comes back. The 1px ring around it does **not** scale — it is a
+ * hairline separating the dot from whatever it sits on, which is a job one pixel does at every
+ * size.
  */
 export function LabelDot({
   name,
@@ -567,6 +581,12 @@ export function TheoryMatchBadge({
  * Gold and abbreviated on purpose: it is a fact about the card, not a problem with the deck,
  * and a deck may hold a dozen of them legally. `bracket.ts` counts them into an advisory;
  * nothing about one is a finding.
+ *
+ * **The deck's table and its text columns, and no card face.** A row of type has no art to lay a
+ * glyph on; a card face has, and takes one of the other two arms of `GameChangerMark`'s
+ * one-fact-three-drawings rule — {@link GameChangerBanner} where the card is 210px wide,
+ * `components/GameChangerMark`'s bare crown where it is 150. This is the arm a width argument
+ * never reaches, which is why nothing here has ever had to be measured.
  */
 export function GameChangerBadge({ className }: { className?: string }) {
   const tip = useTooltip();
@@ -588,16 +608,39 @@ export function GameChangerBadge({ className }: { className?: string }) {
 }
 
 /**
- * The same fact as a **stamped gold banner**, for the one surface with room to spell it out.
+ * The same fact as a **stamped gold banner**, for the one surface with room to spell it out —
+ * the deck's **stacked card**, and since 2026-09-08 that is a statement about a width rather
+ * than about a view.
  *
- * `GC` is what a 150px grid tile and a table row can afford; a 210px card face in the stack can
- * carry the words, and it should — two letters are a code the reader has to have learnt, and
- * this is the surface a new reader meets the concept on. The four separations
- * {@link RuleBreakMark} must keep are all still kept, which is the only thing that made
- * spelling it out safe: the **words** differ (`Game Changer` against `RULE BREAK`), the
- * **colour** differs (the gold stamp against destructive), the **place** differs (tucked into
- * the title strip on the left against the top-right corner), and only a rule break changes the
- * card's own **edge**.
+ * A table row and a text column can afford `GC`; a 210px card face in the stack can carry the
+ * words, and it should — two letters are a code the reader has to have learnt, and this is the
+ * surface a new reader meets the concept on. The four separations {@link RuleBreakMark} must
+ * keep are all still kept, which is the only thing that made spelling it out safe: the **words**
+ * differ (`Game Changer` against `RULE BREAK`), the **colour** differs (the gold stamp against
+ * destructive), the **place** differs (tucked into the title strip at the top against the card's
+ * bottom-left corner — that mark held the stack's top-right until 2026-08-20, when
+ * {@link TheoryMatchMark} took the corner, and the separation survived the move intact), and
+ * only a rule break changes the card's own **edge**.
+ *
+ * ## It is one of two arms of the card-face question, not the deck's answer to it
+ *
+ * The deck's Grid tile draws the same `DeckCardFace` as the stack, with the same 27px marks
+ * strip, and it takes `components/GameChangerMark`'s **crown** in the place this ribbon occupies
+ * — so `DeckCardFace` requires a `gameChanger: "banner" | "crown"` and the two callers answer it
+ * differently. This is `GameChangerMark`'s own rule reaching the two card-face views for the
+ * first time: one fact, three drawings, *a difference of room and never of meaning*.
+ *
+ * **The opening sentence of this block said `GC` was "what a 150px grid tile and a table row can
+ * afford", which was two claims and both have moved.** The tile has never drawn `GC` — it wore
+ * the crown in `FoilOverlay`'s corner chip while it was a `CardArt` frame — and for a few hours
+ * after it became this card it drew *this* mark, because the design decision was that the tile
+ * adopts the stack's marks and that was the reasonable reading of it. What no source and no
+ * suite could see is that the strip's three marks are each sized off `--mark-scale` and so do
+ * not narrow when the card does: driven in the shipped window 2026-09-08 (debug build,
+ * 1920×1080, a real Commander deck at `cardZoom` 1.1), a 28px tag, a **130px** ribbon and a 28px
+ * tick came to a 163px strip on a **165px** tile — 11px past an `overflow-hidden` face, clipping
+ * the plan's tick by nearly half, at every stop of the zoom ladder. `GameChangerMark`'s header
+ * carries the whole reading and the figures after the fix.
  *
  * ## The two details that are not decoration
  *

@@ -16,6 +16,7 @@ import {
   ZOOM_SECTIONS,
   ZOOM_STEPS,
 } from "@/lib/cardZoom";
+import { GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
 import { consumeCaretNote } from "@/lib/caretWalk";
 import { DROP_MARK_ROOM } from "@/lib/dropMarks";
 import type { DeckCard, DeckCategory } from "@/lib/ipc";
@@ -2624,7 +2625,7 @@ describe("GridView tiles", () => {
    * `bottom: chinHeight(zoom)`, and they are the stacked card's column now — `DeckCardControls
    * layout="card-column"` at `absolute top-9 right-1.5`, character for character what `CardStack`
    * passes. **Measured from the card's top, so there is nothing left to keep in step with.**
-   * `top-9` clears the 27px title bar the quantity tag and the Game Changer ribbon stand in, and
+   * `top-9` clears the 27px title bar the quantity tag and the game changer's crown stand in, and
    * the column runs down the card's right margin from there; a fixed utility is the right answer
    * for it rather than a drift waiting for a zoom step. So what is asserted is the class and the
    * **absence** of a computed offset, at both ends of the ladder — the computed one going away is
@@ -2757,6 +2758,50 @@ describe("GridView tiles", () => {
     // No chip, on a card that really is foil — so the finish is said in the chin instead.
     expect(tile().querySelector("[data-card-marks]")).toBeNull();
     expect(within(tile()).getByRole("img", { name: "Foil" })).toBeInTheDocument();
+  });
+
+  /**
+   * **The one mark the tile does not take from the stack, and it is arithmetic rather than taste.**
+   *
+   * Everything in the marks strip is sized off `--mark-scale`, so the three marks in it do not get
+   * narrower when the card does: the tag, the game changer and the plan's tick are the same widths
+   * on a 210px stacked card and on a 150px tile. Driven in the shipped window 2026-09-08 (debug
+   * build, 1920×1080, a real Commander deck at `cardZoom` 1.1), a game changer the plan also asks
+   * for put a 28px tag, a **130px** ribbon and a 28px tick into a 163px strip — **11px of
+   * overflow**, and the face is `overflow-hidden`, so the tick was clipped by nearly half. Every
+   * term scales with the zoom, so the ratio is constant and it was clipped at *every* stop of the
+   * ladder; it was photographed at 2× to be sure.
+   *
+   * So the ribbon stays the stack's and the tile wears the crown — `GameChangerMark`'s own rule,
+   * *"one fact, three drawings, a difference of room and never of meaning"*, applied to the two
+   * card-face views for the first time. It is **not** a return to `CardArt`'s corner chip: the
+   * mark is in the same strip, in the same place in it, on both views.
+   *
+   * **Asserted as a pair across the two views**, because either half alone is satisfied by the bug:
+   * "the tile draws no ribbon" passes against a tile that draws nothing at all, and "the stack
+   * draws one" passes against a face that gives every caller the same mark. jsdom lays nothing out,
+   * so the overflow is a live claim and this is the structural half of it.
+   */
+  it("gives the tile the crown where the stacked card spells it out", () => {
+    const groups = buildGroups(
+      [card({ name: "Sol Ring", gameChanger: true })],
+      [RAMP],
+      "category",
+      "alphabetical",
+    );
+
+    render(<GridView groups={groups} marketplace={TCG} />);
+    expect(within(tile()).queryByText("Game Changer")).not.toBeInTheDocument();
+    expect(within(tile()).getByRole("img", { name: GAME_CHANGER_LABEL })).toBeInTheDocument();
+    // The words are the button's either way — the drawing changed, the sentence did not.
+    expect(
+      within(tile()).getByRole("button", { name: /game changer/i }),
+    ).toBeInTheDocument();
+    cleanup();
+
+    render(<StackView groups={groups} marketplace={TCG} />);
+    const stacked = screen.getAllByRole("listitem")[0];
+    expect(within(stacked).getByText("Game Changer")).toBeInTheDocument();
   });
 
   /**

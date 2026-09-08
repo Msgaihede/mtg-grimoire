@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, within } from "storybook/test";
+import { GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
 import { MARKETPLACES } from "@/lib/marketplace";
 import {
   deckCard,
@@ -56,14 +57,19 @@ export const Default: Story = {
     expect(canvas.getByText("INACTIVE")).toBeInTheDocument();
     // The two marks, in the two corners they never share.
     expect(canvas.getByText("RULE BREAK")).toBeInTheDocument();
-    // **The ribbon, not `GC` and no longer `CardArt`'s crown chip.** This wall drew the chip from
-    // 2026-08-16 until the two card-face views became one card; the marks strip has the room to
-    // spell the words out, and the corner the chip owned is the plan's tick. `GameChangerBadge`'s
-    // two letters are still the table's and the text columns', where there is no art to lay a
-    // ribbon on. The mark is `aria-hidden`, so `getByText` is what reaches it and the words a
-    // screen reader gets are in the button's own label.
+    // **The crown alone, in the marks strip — not `CardArt`'s corner chip and not the stack's
+    // spelled-out ribbon.** This wall drew the chip from 2026-08-16 until the two card-face views
+    // became one card; the strip is where the mark lives on both of them now, and the corner the
+    // chip owned is the plan's tick. Which of the two gold drawings the strip gets is a question
+    // about **width**: the ribbon is ~130px whatever the card is, and on a 150px tile it pushed the
+    // tick off the end of the strip and the face's `overflow-hidden` clipped it (measured in the
+    // shipped window 2026-09-08). So the stack spells it out and the tile wears the crown — one
+    // fact, two drawings, differing by the room each has, which is `GameChangerMark`'s own rule.
+    // `GameChangerBadge`'s two letters are still the table's and the text columns'.
     const crowned = canvas.getByRole("button", { name: /^Lightning Bolt/ });
-    expect(within(crowned).getByText("Game Changer")).toBeInTheDocument();
+    expect(within(crowned).queryByText("Game Changer")).not.toBeInTheDocument();
+    expect(within(crowned).getByRole("img", { name: GAME_CHANGER_LABEL })).toBeInTheDocument();
+    // The words themselves are the button's, which is what a screen reader gets either way.
     expect(crowned).toHaveAccessibleName(expect.stringContaining("game changer"));
   },
 };

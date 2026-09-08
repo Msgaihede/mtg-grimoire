@@ -1873,9 +1873,11 @@ price | type`). An **inactive category stays its own group in all three grouping
   pre-warm has one constant to agree with instead of two call sites.
 - **`Grid`'s tile is `DeckCardFace` — the _stack's_ own card — and only the box around it is this
   view's** (changed 2026-09-08). One component draws the card: the printed frame under the picture,
-  the `CardImage`, `FoilOverlay … mark={false}`, the marks strip (`QuantityTag`, the `Game Changer`
-  ribbon, `TheoryMatchMark`) and the bottom-left `RULE BREAK`, plus `CARD_ASPECT` and
-  `cardFaceHeight(width)`. `CardStack`'s `stackImageHeight(zoom)` is
+  the `CardImage`, `FoilOverlay … mark={false}`, the marks strip (`QuantityTag`, the game changer,
+  `TheoryMatchMark`) and the bottom-left `RULE BREAK`, plus `CARD_ASPECT` and
+  `cardFaceHeight(width)`. **The game changer is the one mark of the three the two views draw
+  differently**, and `DeckCardFace`'s required `gameChanger: "banner" | "crown"` is the whole of
+  that difference — the sub-bullet below has the measurement. `CardStack`'s `stackImageHeight(zoom)` is
   `cardFaceHeight(stackCardWidth(zoom))` by construction, so the two views cannot draw two shapes
   of one card. What the tile keeps for itself is the **box** the face goes in — the `rounded-lg
   border` wrapper and the stack's resting shadow, `CardChin` under it with this view's `seam` and
@@ -1905,13 +1907,36 @@ price | type`). An **inactive category stays its own group in all three grouping
     finish is said in words in the chin instead. **The theory tick's `1.5rem × --mark-scale`
     offset went with the chip**: that offset existed to stack the tick under a chip the tile no
     longer draws, so the tick sits at the right end of the same strip with no offsets of its own.
-  - **The game changer is the ribbon, not the crown and not `GameChangerBadge`'s `GC`.** The
-    2026-08-16 answer was the crown in `CardArt`'s chip, in the corner the docked search column
-    draws it in — right while the tile *was* that component. With `mark={false}` there is no chip
-    to put a crown in, and the marks strip has the room to spell the words out, so the tile draws
-    `GameChangerBanner` exactly as the stack does. `GC` is still the table's and the text columns',
-    where there is no art to lay a glyph on; see `GameChangerMark` for the one-fact-three-ways rule
-    — the count of ways is unchanged, and which of the three this view draws is what moved.
+  - **The game changer is the crown — in the marks strip, in exactly the place the stack's ribbon
+    stands — and this bullet said "the ribbon" for the length of one afternoon.** What it claimed
+    was that with `mark={false}` there is no chip to put a crown in and the marks strip has the
+    room to spell the words out, so the tile draws `GameChangerBanner` exactly as the stack does.
+    The first half is true and is why the 2026-08-16 answer (the crown in `CardArt`'s chip, in the
+    corner the docked search column draws it in) expired with the frame it was about. **The second
+    half was the reasonable inference and it was wrong, and nothing in the source or in either
+    suite could have said so**: the design decision was that the tile adopts the stack's marks,
+    the ribbon is one of them, and the strip's width is not a fact any file states. All three
+    marks in that strip — `QuantityTag`, the game changer and `TheoryMatchMark` — are sized off
+    `--mark-scale`, so they do **not** get narrower when the card does. Driven in the shipped
+    window 2026-09-08 (`npm run tauri dev`, a **debug** build, 1920×1080, against the real corpus,
+    on a 101-card Commander deck at `cardZoom` 1.1): a card that is both a game changer and an
+    exact plan match put a **28px** tag, a **130px** ribbon and a **28px** tick into a **163px**
+    strip on a **165px** tile — **11px of overflow**, into a face that is `overflow-hidden`, so
+    the plan's tick was clipped by nearly half. Every term scales with the zoom, so the ratio is
+    constant and it was clipped at *every* stop of the ladder; photographed at 2× to confirm.
+    Re-measured after the fix in the same session: tag at x=1 (28 wide), crown at x=29 (13 wide),
+    tick at x=136 (28 wide), **overflow 0**, with the stack still drawing the ribbon.
+    So `DeckCardFace` takes a **required** `gameChanger: "banner" | "crown"`; `CardStack` passes
+    `"banner"` (a 210px card has the room, and the ribbon was drawn for it) and `GridView` passes
+    `"crown"` (`components/GameChangerMark`, the 12px gold crown at `--mark-scale`). **It is not a
+    return to the chip**: `FoilOverlay` is still `mark={false}` on both card-face views, top-right
+    is the plan's tick on both, and this view still draws no `CardArt` at all. `GC` is still the
+    table's and the text columns', where there is no art to lay a glyph on. The count of drawings
+    is unchanged — this is `GameChangerMark`'s own rule, *one fact, three drawings, "a difference
+    of room, never of meaning"* — with the **two card-face views on different arms of it for the
+    first time, because they are two widths**. jsdom lays nothing out, so the overflow itself is a
+    live claim; `views.test.tsx` pins the pair (the tile draws no `Game Changer` words and does
+    draw the crown, the stack draws the words) because either half alone is satisfied by the bug.
   - **A rule break is `border-destructive` on the tile's wrapper, not a `ring-2 ring-destructive`
     on the face.** The ring was the right answer while the face had an edge of its own (`CardArt`'s
     neutral `border border-border`, from 2026-08-26) and the wrapper had none — a border on the
@@ -1950,8 +1975,13 @@ price | type`). An **inactive category stays its own group in all three grouping
     border and a shadow, the face is a computed pixel height rather than an `aspect-ratio`, there
     is no `[data-card-marks]` chip, there is no `hoverZoom` and therefore no `group-hover:scale`,
     and the `alt` is empty. The half that still holds is the **width**, 150px at 1×, which is
-    `TILE_WIDTH` and did not move. **Nothing about the new tile has been driven in the shipped
-    window**, and until it has, no figure for it belongs on this page.
+    `TILE_WIDTH` and did not move. **This said "nothing about the new tile has been driven in the
+    shipped window" and it was true for a few hours**: the pass that found the ribbon overflowing
+    (the game-changer bullet above, 2026-09-08) is the one live reading this tile has, and it is
+    the marks strip alone — 165px of tile, a 163px strip, the three marks' widths and their `x`
+    before and after. Everything else about it — the wrapper's border and shadow, the chin's seam,
+    the controls column at each end of the zoom ladder — is still owed, and no figure for any of
+    it belongs on this page until it is taken.
 - **The editor is no longer a scroller at all — `AppShell`'s `main` is the one that scrolls**
   (changed 2026-08-24, `f02b284` "fix scroll"). The `<section>` is `relative flex h-full min-h-0
   flex-col gap-3` and carries no `overflow`, where it carried `overflow-y-auto` from 2026-08-14
@@ -2517,10 +2547,17 @@ price | type`). An **inactive category stays its own group in all three grouping
   because a lazy-loaded category is a wall of `<img>`s and the card is known before its bytes are.
   The frame is the same thing that says "No image", "Retrying…" or "No card".
 - **The marks go left, and they used to go right** (changed 2026-08-13). Over the art go facts
-  about the _deck_ — the quantity tag, the Game Changer banner, `RULE BREAK`. Under it goes the
+  about the _deck_ — the quantity tag, the game changer (the `Game Changer` banner on the stacked
+  card, `GameChangerMark`'s crown in the same place on a Grid tile, which is a difference of width
+  and nothing else — see the Grid bullet above), `RULE BREAK`. Under it goes the
   data line with facts about the _printing_. `QuantityTag` merges the label and the copy count
   into one mark: the count printed on the label's own colour, grey when there is no label, so gold
-  stays something a label says. `LabelDot` is unchanged on the other three views. It costs ~34px of printed
+  stays something a label says. **`LabelDot` is what the other views draw, and since 2026-09-08
+  that is two of them rather than three**: the Grid tile drew a dot beside a `bg-accent` count chip
+  until the two card-face views became one `DeckCardFace`, and it folds both into `QuantityTag`
+  now exactly as the stack does. `TableView`'s Labels column and `TextView`'s line are the call
+  sites left — a row has a column for the count and does not need the two folded together, which is
+  the same sentence `CardMarks.tsx` makes at the component. It costs ~34px of printed
   name, knowingly; the app-drawn frame insets its own name band by exactly that width so a name
   _this app_ wrote is never clipped.
   **The box that mark is drawn in is `components/CountTag.tsx` and no longer this folder's**

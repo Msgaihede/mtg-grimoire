@@ -43,6 +43,7 @@
  */
 import { FoilOverlay } from "@/components/CardArt";
 import { CardImage } from "@/components/CardImage";
+import { GameChangerMark } from "@/components/GameChangerMark";
 import { ManaText } from "@/components/ManaText";
 import { playedFinish } from "@/lib/finish";
 import { cardArtSrc, cardImageUrl } from "@/lib/images";
@@ -159,6 +160,21 @@ export interface DeckCardFaceProps {
    * root publishes.
    */
   width: number;
+  /**
+   * Which of the game changer's two gold drawings this face has room for — the stack's spelled-out
+   * ribbon, or the crown alone.
+   *
+   * **Required, and deliberately not defaulted, because the wrong answer is silent.** A default
+   * would be the wider mark on a narrower card, and what that costs is a *clipped* mark rather
+   * than an ugly one: the three marks in the strip are sized off `--mark-scale`, the face is
+   * `overflow-hidden`, and the measurement is at the call in the strip below. jsdom lays nothing
+   * out, so nothing in the suite can see the overflow itself — only which drawing was asked for.
+   *
+   * It is a question about the width and not about the view, which is why it is a prop rather
+   * than a threshold read off {@link width}: a threshold is a number somebody has to keep in step
+   * with a mark's own type, and each caller already knows how wide its card is.
+   */
+  gameChanger: "banner" | "crown";
   /** The sentence the `RULE BREAK` mark carries, or `null` when there is nothing wrong. */
   ruleBreakText: string | null;
   /** What the deck's plan says about this row — `theoryMatch.ts`'s `theoryMatchMark`, resolved by
@@ -182,6 +198,7 @@ export interface DeckCardFaceProps {
 export function DeckCardFace({
   card,
   width,
+  gameChanger,
   ruleBreakText,
   theoryMark,
   landedKey,
@@ -329,14 +346,27 @@ export function DeckCardFace({
             `LabelDot` and a `bg-accent` chip for: the count is printed on the label's own colour,
             grey where there is no label, so gold stays a thing a label means. */}
         <QuantityTag quantity={card.quantity} name={card.labelName} color={card.labelColor} />
-        {/* Gold, spelled out, tucked under the tag's tail. The `RULE BREAK` mark is red, boxed and
-            in the card's opposite corner — see `CardMarks.tsx` for why the pair is drawn once and
-            what keeps the two from being confusable.
+        {/* Gold, in the card's own strip. The `RULE BREAK` mark is red, boxed and in the card's
+            opposite corner — see `CardMarks.tsx` for why the pair is drawn once and what keeps the
+            two from being confusable.
 
-            **The ribbon rather than the crown chip**, on both views now. The chip is what a wall
-            of `CardArt` tiles draws, in the corner `FoilOverlay` owns; here that corner is the
-            plan's tick, and this strip has the room to spell the words out. */}
-        {card.gameChanger === true && <GameChangerBanner />}
+            **Which of the two gold drawings this is depends on the width, and it is measured
+            rather than judged.** `GameChangerMark`'s own doc has the rule this obeys: one fact,
+            three drawings, *"a difference of room, never of meaning"*. The three marks in this
+            strip are all sized off `--mark-scale`, so their widths do not shrink with the card —
+            and driven in the shipped window 2026-09-08 (debug build, 1920×1080, a real Commander
+            deck at `cardZoom` 1.1) the strip on a **165px** tile came to a 28px tag, a **130px**
+            ribbon and a 28px tick in a 163px box: **11px of overflow**, and the face is
+            `overflow-hidden`, so the plan's tick was clipped by nearly half. Every term scales
+            with the zoom, so the ratio is constant and the clip was at *every* stop of the
+            ladder — photographed at 2× to be sure.
+
+            So the ribbon is the stack's, where a 210px card carries it with room to spare, and the
+            crown alone is the Grid tile's — the same fact in the same corner of the same strip, in
+            the drawing that fits. It is not the chip: `FoilOverlay` is `mark={false}` on both
+            views, so top-right is the plan's tick here and this stays where the ribbon was. */}
+        {card.gameChanger === true &&
+          (gameChanger === "banner" ? <GameChangerBanner /> : <GameChangerMark />)}
         {/* The plan's tick, at the far end of the same strip the quantity tag opens.
             **In the strip rather than absolutely positioned beside it**, which is what makes it
             free: this band is already a scrim over the card's printed title bar, already 27px tall

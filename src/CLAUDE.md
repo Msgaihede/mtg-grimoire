@@ -131,6 +131,12 @@ Every one of these has its measurement and its story in
   views' `GC`, this), differing only in the room each has. One gold (`text-pie-gold`) everywhere,
   never the destructive colour, which belongs to a rule break. `FoilOverlay mark={false}` turns
   the whole chip off, crown included, for a frame that names these somewhere else.
+  **The crown is no longer only this chip's, and the count of drawings did not change with it**
+  (2026-09-08): the deck's Grid tile draws `GameChangerMark` in `DeckCardFace`'s marks strip, in
+  the place the stack's ribbon stands, because that tile draws no chip at all. So the third
+  drawing has two homes — a corner chip on every wall of `CardArt` tiles, and the deck tile's own
+  strip — and *the difference of room is the rule* rather than which component the mark is nested
+  in. `components/GameChangerMark`'s header carries the measurement that put it there.
   **Top-right is that chip's**, on every surface that draws a card as a face, and a surface's own
   marks go in the corners it leaves: top-left, bottom-left. The deck's Grid view put its copy count
   there too, in a full-width strip, and the two overlapped on any foil card in a deck — invisible

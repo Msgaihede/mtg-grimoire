@@ -871,6 +871,10 @@ function StackedCard({
         <DeckCardFace
           card={card}
           width={stackCardWidth(zoom)}
+          // A 210px card has the room to spell it out, and this is the surface the ribbon was
+          // drawn for. The Grid tile passes `"crown"`; see the prop for the measurement that
+          // separates them.
+          gameChanger="banner"
           ruleBreakText={ruleBreakText}
           theoryMark={theoryMark}
           landedKey={landedKey}
