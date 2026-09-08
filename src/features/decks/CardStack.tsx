@@ -1,9 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { motion, useReducedMotion, type Transition } from "motion/react";
 import { CardChin } from "@/components/CardChin";
-import { CardImage } from "@/components/CardImage";
-import { FoilOverlay } from "@/components/CardArt";
-import { ManaText } from "@/components/ManaText";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import {
   cardScaleVars,
@@ -16,17 +13,14 @@ import {
 import { playedFinish } from "@/lib/finish";
 import { finishTreatments } from "@/lib/treatment";
 import { FOCUS, FOCUS_INSET } from "@/lib/focus";
-import { cardArtSrc, cardImageUrl } from "@/lib/images";
 import type { DeckCard } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import type { Currency } from "@/lib/marketplace";
 import { stackCard } from "@/lib/motion";
 import { formatPrice } from "@/lib/prices";
-import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
-import { GameChangerBanner, QuantityTag, RuleBreakMark, TheoryMatchMark } from "./CardMarks";
+import { cardFaceHeight, DeckCardFace } from "./DeckCardFace";
 import {
-  DECK_CARD_VARIANT,
   deckCardBodyProps,
   deckCardName,
   deckCardMenuProps,
@@ -36,7 +30,6 @@ import {
   deckCardSelectedProps,
   deckCardShort,
   DeckCardControls,
-  LandedMark,
   revealedWhenOpen,
   SELECTED_CARD,
   useDeckCardDrag,
@@ -121,11 +114,6 @@ import type { ValidationIssue } from "./validation/types";
  */
 export const STACK_CARD_WIDTH = 210;
 /**
- * A Magic card's proportions, taken from the `grid` variant's own 488×680 — the image these
- * cards draw, so the frame cannot disagree with its contents about what shape a card is.
- */
-const CARD_ASPECT = 680 / 488;
-/**
  * The card's own hairline border, one edge.
  *
  * **It does not zoom, and that is why it is a named number rather than part of the sums.** The
@@ -134,8 +122,15 @@ const CARD_ASPECT = 680 / 488;
  * this twice rather than a rounding fudge.
  */
 export const STACK_CARD_BORDER = 1;
-/** The image's own height at {@link STACK_CARD_WIDTH}, which is the card face and nothing else. */
-export const STACK_IMAGE_HEIGHT = Math.round(STACK_CARD_WIDTH * CARD_ASPECT);
+/**
+ * The image's own height at {@link STACK_CARD_WIDTH}, which is the card face and nothing else.
+ *
+ * **A Magic card's proportions are `DeckCardFace`'s now** — `CARD_ASPECT` lived here until the
+ * face became one component drawn by both card-face views, and the aspect went with the element
+ * it describes. {@link cardFaceHeight} is the only spelling of it, so this file's arithmetic and
+ * the box it is arithmetic about cannot come to disagree about what shape a card is.
+ */
+export const STACK_IMAGE_HEIGHT = cardFaceHeight(STACK_CARD_WIDTH);
 /**
  * The chin's height at 100% zoom — **`lib/cardZoom.ts`'s `CHIN_HEIGHT`, kept under this name**
  * because every sum below and every geometry assertion in this file's tests is written in terms
@@ -195,9 +190,13 @@ export function stackCardWidth(zoom: number): number {
  * Off {@link stackCardWidth}'s **rounded** answer rather than off `210 × zoom`, because the
  * rounded width is the box the browser paints — deriving the height from the unrounded one would
  * put the frame a fraction out of shape at exactly the zooms where the rounding bit.
+ *
+ * **It is {@link cardFaceHeight} of that width and not a second multiplication**, so the number
+ * the stack's sums are built on and the number `DeckCardFace` writes into the element's `style`
+ * are one answer by construction rather than two that agree today.
  */
 export function stackImageHeight(zoom: number): number {
-  return Math.round(stackCardWidth(zoom) * CARD_ASPECT);
+  return cardFaceHeight(stackCardWidth(zoom));
 }
 
 /**
@@ -347,84 +346,21 @@ export function stackLiftRoom(zoom: number = DEFAULT_ZOOM): number {
 }
 
 /**
- * The one strip of a collapsed card the reader can see — its printed title bar — as the box the
- * app's own marks are laid over.
+ * **The card face itself is `DeckCardFace` and no longer this file's**, and four things went with
+ * it: `CARD_ASPECT`, `CARD_MARKS_STRIP`, `FRAME_NAME_INSET` and `FRAME_BAR`. The stack built the
+ * face inline and the Grid tile drew `components/CardArt` with corner marks of its own, so one
+ * deck said different things about one card in two drawings of it. Everything above this line is
+ * the pile's arithmetic, which is genuinely this view's; everything the card *is* is one component
+ * both views draw.
  *
- * ## The marks go left, and they used to go right
- *
- * The reversal is the point of keeping this a named constant. The old rule was "never the
- * left, because a printed name is left-aligned and a collapsed stack is read down this strip",
- * and it was right about a **grey chip**: a rectangle of app furniture over the first four
- * characters of a card's name buys nothing and costs the one thing the strip is for.
- *
- * What changed is what is in the corner. {@link QuantityTag} is not a chip — it is the card's
- * label, in the label's colour, with the copy count printed on it, cut to a banner rather than
- * a box. Down a fifteen-card stack that column of colour *is* the structure of the pile, and a
- * reader scans it before they read a single name. Putting it where the eye starts is what makes
- * the scan work; putting it on the right made it a footnote to fifteen names.
- *
- * The cost is real and is paid knowingly: roughly 34px of printed name, which is three or four
- * characters. Two things make it survivable — the name is on the **card pane, the table, the
- * text columns and the button's own accessible name**, none of which this covers; and the
- * no-picture frame under the art insets its own name band by exactly this width
- * ({@link FRAME_NAME_INSET}), so the one case where the app is drawing the name itself never
- * hides a character of it.
- */
-const CARD_MARKS_STRIP = cn(
-  // **Flush to both of the card's edges, and the right one stopped being an exception on
-  // 2026-08-21** (issue #158). It was inset `5px × --mark-scale` "to keep the strip off the card's
-  // own clipped corner" — a rule from when the strip's marks were drawn on the *right* and the
-  // corner they were tucked into was a `RULE BREAK` box with a hairline border, which a radius
-  // really would have clipped a side off. The marks went left in 2026-08-13 and the inset stayed,
-  // so the only thing left at that end was {@link TheoryMatchMark}: a filled banner, standing 5px
-  // short of an edge its opposite number sits flush against, with a square corner floating where
-  // the card's is round. The face is `overflow-hidden rounded-[7px]`, so `right-0` gets that mark
-  // the same clipped corner {@link QuantityTag} has always had at `left-0` — the two are bookends
-  // now in radius as well as in slant.
-  "absolute inset-x-0 top-0 flex items-start",
-  // 27px is the printed title bar's height **on a card at 100% zoom**. It scales with the card:
-  // the strip is a scrim over a band of the picture, so a fixed 27px is most of a halved card's
-  // art and a sliver of a doubled one's. `--mark-scale` is the card's own factor —
-  // `lib/cardZoom.ts`.
-  "h-[calc(27px*var(--mark-scale,1))]",
-);
-
-/**
- * How far the no-picture frame's name band is inset from the left, so {@link QuantityTag} never
- * covers a character of a name the **app itself** drew.
- *
- * A printed card's name is Wizards' to place and this component covers 34px of it knowingly
- * ({@link CARD_MARKS_STRIP}). A name this file writes is not, and there is no reason to repeat
- * the compromise where there was no constraint forcing it.
- *
- * **34px is what the tag covers at 100% zoom, and the tag scales**, so this is scaled at the use
- * site rather than used raw. Left fixed it would be the inset that is wrong at both ends: a band
- * indented 34px on a 105px card is most of the name gone for a tag drawn at 17, and 34px on a 420px
- * card leaves a gap the tag no longer reaches across.
- */
-const FRAME_NAME_INSET = 34;
-
-/**
- * The no-picture frame's two bars, tinted a step off the surface they sit on.
- *
- * The hairline colour at 35 % rather than a token of its own: the bars have to be *found*
- * against the card body without being read as content, which is a hairline's whole job at a
- * larger area. `color-mix` rather than an alpha, so the bar is opaque — the card behind it is
- * the same colour, but the marks strip's scrim is not.
- */
-const FRAME_BAR = "color-mix(in oklab, var(--color-border) 35%, var(--color-surface))";
-
-/**
- * **`identityTint` used to live here and is gone**, with its five-line copy of `DeckStats`'
+ * **`identityTint` used to live here too and is gone**, with its five-line copy of `DeckStats`'
  * `PIP_COLOR` table. It faded a card's colour identity into the app-drawn title bar, and it was
  * the one place this component spent colour — on Magic meaning, which is the direction's rule for
- * when colour is allowed at all.
- *
- * Drawing the whole card retires it rather than replacing it: a printed frame *is* that colour, in
- * the vocabulary a player already reads, so a collapsed stack still shows the shape of a deck's
- * colours — off the cards themselves instead of off a tint derived from them. Recorded here
- * because a reader looking for the tint should find out where it went, not just that it is
- * missing.
+ * when colour is allowed at all. Drawing the whole card retires it rather than replacing it: a
+ * printed frame *is* that colour, in the vocabulary a player already reads, so a collapsed stack
+ * still shows the shape of a deck's colours — off the cards themselves instead of off a tint
+ * derived from them. Recorded here because a reader looking for the tint should find out where it
+ * went, not just that it is missing.
  */
 
 /** A `setTimeout` handle, as this project's DOM-only lib types one. */
@@ -750,21 +686,19 @@ export function CardStack({
  * Two places, and the split is the whole shape of this component. **Over** the picture go the
  * facts about the *deck* — how many copies, which label, whether a rule is broken — because
  * they are answers to "what is this card doing in this pile" and belong on the pile's own reveal
- * strip ({@link CARD_MARKS_STRIP}). **Under** it goes the data line, which is facts about the
- * *printing* — the rarity, the set, the finish, the price, the shortage — because those are
- * answers about the object, and covering the card's printed text box to state them was a bad
- * trade this component used to make.
+ * strip. **Under** it goes the data line, which is facts about the *printing* — the rarity, the
+ * set, the finish, the price, the shortage — because those are answers about the object, and
+ * covering the card's printed text box to state them was a bad trade this component used to make.
  *
- * Not `CardArt`, which is the 5:7 box with its own no-art fallback and retry: the height here is
- * a constant the stack's arithmetic depends on, and the fallback has to fill exactly it. It
- * borrows `FoilOverlay`'s sheen, which is the same trade `CardModalArt`'s main art makes
- * and for the same reason — what the surfaces must agree on is the marking — and says the
- * *word* on the data line rather than in a chip, which is `FoilOverlay`'s own rule for a
- * surface with room for it.
+ * **The first of those two is `DeckCardFace` and is drawn by the Grid tile as well**, which is
+ * what the picture, the printed frame under it, the marks strip and the rule break all moved into.
+ * The second is still the caller's, because the two views join the chin to their card differently
+ * (`CardChin`'s `seam`) and only this one has the deck's shortage to put in it. Everything left
+ * here is the *stack's*: the margins, the flip-through, the chin and the controls column.
  *
- * **This is also what closes the artist-credit gap on this surface.** Scryfall's image policy
- * requires the illustrator to be named wherever the bare art crop is shown; a printed card
- * carries its own credit, so drawing the whole card satisfies the rule with nothing added.
+ * Not `CardArt`, which is the 5:7 box with its own no-art fallback and retry: the height is a
+ * computed pixel count the stack's arithmetic depends on, and the fallback has to fill exactly it.
+ * That reasoning, and the artist-credit arm it also satisfies, are `DeckCardFace`'s now.
  */
 function StackedCard({
   card,
@@ -817,21 +751,6 @@ function StackedCard({
 }) {
   const tip = useTooltip();
   const dragRef = useDeckCardDrag(card, actions?.drop !== undefined, actions?.groupDrag);
-  // The whole card (`grid`, 488×680), not the `art` crop. Fed `null` for an orphan, whose
-  // printing has left the card database — nothing tries to draw a picture of a card that is not
-  // there, and the hook's null story is "no state machine at all".
-  const face = useImageRetry(
-    // **`cardArtSrc`, unlike the three walls above, is called here rather than inside
-    // `CardArt`** — this view builds its own `<img>` (the height is the stack's, not 5:7), so
-    // it is the one deck surface that has to make the desktop/web choice itself. Both
-    // candidates go in and one URL comes out: the protocol on Tauri, the row's own URL on web,
-    // and `null` for an orphan or a printing with no picture, which is what the frame under it
-    // already draws for.
-    cardArtSrc(
-      card.needsReview === null ? cardImageUrl(card.cardId, 0, DECK_CARD_VARIANT) : null,
-      card.imageUris?.[DECK_CARD_VARIANT],
-    ),
-  );
   const finish = playedFinish(card.finish, card.finishes);
   // What that copy is *called*, if anything — the same reading the deck's other three views
   // make, so one card is not marked two ways on one screen.
@@ -841,9 +760,6 @@ function StackedCard({
   // empty shelf. The **switch**, never the kind: a Maybeboard switched *on* is short of copies
   // like any other pile.
   const short = deckCardShort(card);
-  // There is a URL and it has not failed. Not "the bytes have arrived" — nothing here can know
-  // that, and nothing needs to: the frame underneath is what shows while they are on their way.
-  const drawing = face.src !== null && !face.failed;
 
   return (
     // Collapsed, pulled up over its neighbour; open, standing 8px clear of it. The margin is
@@ -946,183 +862,23 @@ function StackedCard({
         // it is drawn over both and reads as a thicker card rather than as focus.
         className={cn("block w-full cursor-pointer text-left", FOCUS_INSET)}
       >
-        {/* The card. An explicit height rather than an `aspect-[488/680]`, because the stack's
-            arithmetic depends on this number being exactly {@link stackImageHeight} — and it is
-            set here, from that same function, so the frame and the file's own sums cannot drift.
+        {/* The card, which is one component with the Grid tile's — see `DeckCardFace`. The width
+            is the stack's own and the face's height falls out of it by `cardFaceHeight`, so this
+            file's arithmetic and the box it is arithmetic about are one answer rather than two.
 
-            `object-cover` against a 210:293 box where the card is 210:292.6, which crops **0.4px**
-            off it. Worth taking over `object-contain`: a fraction of a pixel of the card's border
-            is invisible, and a letterbox bar between the printed frame and an overlay strip would
-            not be. The rounding is at most half a pixel at any zoom, for the same reason.
-
-            An inline style rather than a height utility, and not merely by preference: Tailwind
-            scans source text for whole class names, so a computed one emits no rule at all and
-            the card would silently have no height. */}
-        <span
-          style={{ height: stackImageHeight(zoom) }}
-          className="relative block overflow-hidden rounded-[7px] bg-surface"
-        >
-          {/* **The frame under the picture, drawn whether or not there is one.**
-
-              It used to be the picture's `else` — a name and a reason, centred in an empty box —
-              and that made the commonest state of this component the ugliest: a hundred-card
-              category is a hundred lazy `<img>`s, and until each one's bytes land its card is a
-              grey rectangle. The card is *known* before its picture is; what was missing was
-              anywhere to put what is known.
-
-              So it is a printed card's own three bands, in the app's hand: name and cost in the
-              title bar, the reason in the middle where the art goes, the type line at the foot.
-              A stack scrolling into view now reads as cards resolving rather than as boxes
-              filling, and the three no-picture states inherit the frame instead of each being a
-              consolation. The reason band is empty when there is a picture on the way — the
-              frame is a backdrop then, and a backdrop should say nothing. */}
-          <span className="absolute inset-0 flex flex-col bg-surface">
-            {/* Every length in the three bands is a length on a card at 100% zoom. The frame
-                stands in for the printed card, so it scales with it exactly as the picture that
-                replaces it does — a fixed 11px name inside a 420px frame is the app announcing
-                that it gave up drawing a card. The two hairline borders do not scale, for
-                `STACK_CARD_BORDER`'s reason. */}
-            <span
-              style={{ background: FRAME_BAR, paddingLeft: scaled(FRAME_NAME_INSET, zoom) }}
-              className={cn(
-                "flex items-center border-b border-border",
-                "h-[calc(27px*var(--mark-scale,1))] gap-[calc(0.375rem*var(--mark-scale,1))]",
-                "pr-[calc(0.375rem*var(--mark-scale,1))]",
-              )}
-            >
-              <span
-                className={cn(
-                  "min-w-0 flex-1 truncate font-medium",
-                  "text-[calc(0.6875rem*var(--mark-scale,1))]",
-                )}
-              >
-                {card.name}
-              </span>
-              <ManaText
-                source={card.manaCost}
-                className="shrink-0 text-[calc(0.625rem*var(--mark-scale,1))] leading-none"
-              />
-            </span>
-            <span
-              className={cn(
-                "flex flex-1 items-center justify-center text-center text-dim",
-                "px-[calc(0.5rem*var(--mark-scale,1))] text-[calc(0.625rem*var(--mark-scale,1))]",
-              )}
-            >
-              {drawing
-                ? ""
-                : face.retrying
-                  ? "Retrying…"
-                  : card.needsReview !== null
-                    ? "No card"
-                    : "No image"}
-            </span>
-            <span
-              style={{ background: FRAME_BAR }}
-              className={cn(
-                "flex items-center truncate border-t border-border",
-                "h-[calc(1.25rem*var(--mark-scale,1))] px-[calc(0.375rem*var(--mark-scale,1))]",
-                "text-[calc(0.5625rem*var(--mark-scale,1))]",
-              )}
-            >
-              {card.typeLine}
-            </span>
-          </span>
-
-          {drawing && (
-            <CardImage
-              src={face.src as string}
-              // Decoration: the button already says the card's name, and an `alt` repeating it
-              // would have a screen reader read every card twice.
-              alt=""
-              // Lazy, because a deck's groups are plain scrollers rather than virtualised
-              // walls — a hundred-card category really is a hundred mounted cards, and the
-              // browser's gate is the only thing bounding what they ask for.
-              loading="lazy"
-              decoding="async"
-              onError={face.onError}
-              // `relative` and not `absolute`: it has to paint over the frame above it, and a
-              // positioned sibling later in the document does that with no z-index at all.
-              className="relative block size-full object-cover"
-            />
-          )}
-
-          {/* The sheen without the chip — the finish is said in words on the data line below,
-              where there is room for the word and no corner to compete for. */}
-          <FoilOverlay finish={finish} mark={false} />
-
-          {/* The reveal strip: what the app knows that the printed card cannot. Over the card's
-              own title bar and **left-aligned**, which is a reversal — {@link CARD_MARKS_STRIP}
-              has the whole of why. The scrim is what keeps a mark legible over art of any
-              brightness. */}
-          <span className={cn(CARD_MARKS_STRIP, "bg-gradient-to-b from-bg/70 to-transparent")}>
-            <QuantityTag quantity={card.quantity} name={card.labelName} color={card.labelColor} />
-            {/* Gold, spelled out, tucked under the tag's tail. The `RULE BREAK` mark is red,
-                boxed and in the card's opposite corner — see `CardMarks.tsx` for why the pair is
-                drawn once and what keeps the two from being confusable. */}
-            {card.gameChanger === true && <GameChangerBanner />}
-            {/* The plan's tick, at the far end of the same strip the quantity tag opens.
-                **In the strip rather than absolutely positioned beside it**, which is what makes
-                it free: this band is already a scrim over the card's printed title bar, already
-                27px tall at 100% zoom and already the full width of the face, so a mark pushed to
-                its right end needs no offsets of its own and is legible over art of any brightness
-                for the reason the tag beside it is.
-
-                `ml-auto` and not `justify-between`: the banner between them is a variable-width
-                optional sibling, and a `justify-between` strip holding two marks would centre
-                nothing and holding three would space them evenly — the tag has to stay flush left
-                whatever else is in the row.
-
-                Top-right is `FoilOverlay`'s chip on every other card face in this app, and the
-                stack is the one surface where that is not a collision: it draws the overlay with
-                `mark={false}` and says the finish in its foot instead, which is why this corner
-                was free for the `RULE BREAK` mark to have held until now. */}
-            {theoryMark !== null && (
-              <TheoryMatchMark tier={theoryMark.tier} delta={theoryMark.delta} className="ml-auto" />
-            )}
-          </span>
-
-          {/* **Bottom-left, moved out of the top-right corner on 2026-08-20**, and the move is
-              the condition of {@link TheoryMatchMark} existing rather than a tidy-up. That mark
-              is a *tick*, this one is the only mark on a card that says something is wrong, and
-              `CardMarks.tsx`'s founding rule is that the two must never be confusable — four
-              separations, of which **place** is the one a reader takes in before they have read
-              either. Adjacent in one corner they would have been a tick and a box arguing; in
-              opposite corners they are two unrelated facts about one card.
-
-              The offset is **the only sum on this card with a scaled term and a fixed one**, and
-              both are needed: `0.25rem × --mark-scale` is the inset `GridView` puts the same mark
-              at, and `+ 4px` is {@link STACK_DATA_RISE}, the distance the foot rides **up** over
-              the face to hide its square corners. The rise does not scale — it is derived from a
-              Tailwind corner radius that does not — so a wholly scaled offset would clear the bar
-              at 1× and put the mark behind it at 0.5×, which is exactly the zoom a reader picks
-              when they want to see more cards and fewer details. */}
-          {ruleBreakText !== null && (
-            <RuleBreakMark
-              text={ruleBreakText}
-              className={cn(
-                "absolute",
-                "bottom-[calc(0.25rem*var(--mark-scale,1)+4px)]",
-                "left-[calc(5px*var(--mark-scale,1))]",
-              )}
-            />
-          )}
-
-          {/* **Inside the face, which is what makes it findable in a fanned pile.** The face is
-              the one box here that a collapsed card still shows 34px of, so a mark laid over it
-              is a lit band and a bright hairline exactly where the reader is scanning. Laid
-              over the marks strip rather than under it — the strip's tag is 11px type on its own
-              scrim, and a wash tints it without touching the contrast between the glyphs and the
-              chip they are printed on, while a mark the tag could cover would be missing on
-              precisely the cards that have one. That trade got louder on 2026-08-15, when the
-              wash went gold at 40 % over this strip with a glow behind it, and it is the one
-              place to look first if the quantity tag ever stops reading during an add. See
-              {@link LandedMark}.
-
-              `rounded-[7px]` is the face's own corner, spelled again because the mark cannot
-              inherit it — {@link LandedMark} has why. */}
-          {landedKey !== undefined && <LandedMark key={landedKey} className="rounded-[7px]" />}
-        </span>
+            No zoom goes with it: everything drawn on the card reads `--mark-scale`, which the
+            `motion.li` above publishes. */}
+        <DeckCardFace
+          card={card}
+          width={stackCardWidth(zoom)}
+          // A 210px card has the room to spell it out, and this is the surface the ribbon was
+          // drawn for. The Grid tile passes `"crown"`; see the prop for the measurement that
+          // separates them.
+          gameChanger="banner"
+          ruleBreakText={ruleBreakText}
+          theoryMark={theoryMark}
+          landedKey={landedKey}
+        />
       </button>
 
       {/* **The card's foot, and a sibling of the button rather than a band inside the picture.**

@@ -32,10 +32,12 @@
  *   seeded as a supporter: connecting is two presses a story can make, so a world that arrived
  *   already connected would take the claim flow away from every story that wants to show it.
  * * **`combosMissing`** — `starter` with the combo tables never fetched. A **seed** and not a
- *   fault, where the two taxonomies each get a fault for the same state, because
- *   `combos::refresh_if_due` deliberately never fetches this file uninvited: it is not something
- *   that has gone wrong with a world, it is the world every install stays in until somebody
- *   presses Refresh. See {@link combosMissingSeed}.
+ *   fault, where the two taxonomies each get a fault for the same state, because it is not
+ *   something that has gone *wrong* with a world: it is where every database is before its first
+ *   launch fetch lands, where a machine that cannot reach Spellbook stays, and where
+ *   `combos_clear` puts one back. See {@link combosMissingSeed}. (The reason used to be that
+ *   `combos::refresh_if_due` never fetched the file uninvited. It does since 2026-09-08, and the
+ *   conclusion outlived the premise.)
  *
  * **Every seed builds its rows fresh on every call**, and that is load-bearing rather than
  * tidy: the writes in `db.ts` mutate row objects in place (`existing.quantity += …`), so a
@@ -1406,10 +1408,11 @@ function starterTaxonomy(cards: readonly FakeCard[]) {
 
 /**
  * The combo catalogue, already ingested — the **fourth** optional feed, seeded here for the
- * reason the price feeds and the two taxonomies are: it is the state a reader who has pressed
- * Refresh once is in, and the only one a story about a bracket *advisory* can be written
- * against. Without it every Commander deck's advisory reads three signals and says so, which is
- * honest and is what {@link combosMissingSeed} is for.
+ * reason the price feeds and the two taxonomies are: it is the state a database is in once a
+ * launch fetch has landed, which is every database that can reach Spellbook, and the only one a
+ * story about a bracket *advisory* can be written against. Without it every Commander deck's
+ * advisory reads three signals and says so, which is honest and is what
+ * {@link combosMissingSeed} is for.
  *
  * **`empty`, `large` and `needsReview` behave exactly as they do for the other three feeds.**
  * `empty` is a first launch with no cards to match against; `large`'s 5 243 synthetic printings
@@ -1930,17 +1933,18 @@ function bracketMismatchSeed(): FakeDb {
 /**
  * `starter`, with the combo file **never fetched**.
  *
- * A supported state and not a failure, which is why it is a seed rather than a fault: the two
- * taxonomies are pulled by a first launch and this one is not — `combos::refresh_if_due` refuses
- * to fetch a file nobody has asked for — so every install stays here until somebody presses
- * Refresh in Settings. That makes it the *opening* state of the feature rather than a state a
- * world falls into.
+ * A supported state and not a failure, which is why it is a seed rather than a fault — and the
+ * argument for that moved on 2026-09-08 while the conclusion did not. It used to be that a first
+ * launch pulled the two taxonomies and refused to pull this one; a launch fetches all three now.
+ * What still makes it a seed is that nothing in it has gone *wrong*: it is the *opening* state
+ * of the feature — where every database is before its first launch fetch lands, where a machine
+ * that cannot reach Spellbook stays, and where `combos_clear` deliberately puts one back —
+ * rather than a state a world falls into.
  *
  * `combos_status` answers `combos: 0`, `cards: 0`, every stamp `null` and `stale: true`, and
  * `combos_for_cards` answers `[]` for every deck — which is the same empty answer a deck with no
- * combos gives, and telling those apart is what the status call is for. The Settings panel and
- * the bracket advisory each have their own sentence for it, and this is the only world either
- * can be storied in on a full corpus.
+ * combos gives, and telling those apart is what the status call is for. The bracket advisory has
+ * its own sentence for it, and this is the only world it can be storied in on a full corpus.
  *
  * **The rows go rather than a handler branching**, `oracleTagsMissing`'s shape: it is what lets a
  * story open here, press Refresh, and watch the deck's advisory fill in — which a branch could
