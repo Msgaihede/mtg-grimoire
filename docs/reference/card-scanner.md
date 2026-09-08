@@ -2,11 +2,12 @@
 
 Identify a physical Magic card from a camera frame or a photograph, locally. This is the
 record of what exists on the `card-scanner-first-pass` branch — the standalone crate, its
-three tools, and every measurement behind the numbers baked into it. The design it was built
-against is
-[the 2026-09-01 spec](../superpowers/specs/2026-09-01-card-scanner-design.md); this document
-is what the code actually does and does not repeat the spec's reasoning where the code agrees
-with it.
+three tools, the app's Scanner view, and every measurement behind the numbers baked into
+them. The designs it was built against are
+[the 2026-09-01 spec](../superpowers/specs/2026-09-01-card-scanner-design.md) and, for §9,
+[the 2026-09-08 in-app spec](../superpowers/specs/2026-09-08-scanner-in-app-design.md); this
+document is what the code actually does and does not repeat either spec's reasoning where the
+code agrees with it.
 
 **Same contract as every other file here: a figure carries its date and its build.** Every
 measurement below was taken on Windows. The crate's own per-frame timings — the ~100 ms
@@ -936,24 +937,311 @@ cycle with the card never leaving the lens**.
    fixed rectangles recovered 12 → 15 resolves of 39; nothing measures which printings the third
    crop would need, and a card whose line falls outside all three reads as "no printing" with no
    way to tell that from a misread.
-7. **Two doc comments in `track.rs` are stale and contradict the code beside them.**
-   `Observation::from_collector` says it is "weighted above a clean title read" and that
-   "at 8.0 against appearance's 1.0 they do" — the shipped weights are **2.0** for the card and
-   **20.0** for the printing, and a clean title read is **6.0**. The same comment quotes
-   "12 of 39 rectifications and 11 of those are right", which is the pre-fallback figure; the
-   fallback crops took it to 15 of 39 with 14 right. Neither number is used by anything, which is
-   exactly why they rotted.
-8. **The art section is built into the bundle and never searched.** `v1` carries 50,963 artworks
+7. **The art section is built into the bundle and never searched.** `v1` carries 50,963 artworks
    and costs 2.4 MB of the file; the shipped `v3`–`v5` bundles drop it. Using it needs an
    art-window extractor, and even then it cannot identify a printing — half of all artworks
    appear on two or more, averaging 2.3.
-9. **The fourth AI tier is an interface and nothing else**, by design.
-10. **Nobody has run any of this on Linux, on a Mac, or in a release Android build.** The phone
-    path has been reasoned about (the dependency closure is native-free, and `adb reverse` is the
-    documented route) and not driven.
+8. **The fourth AI tier is an interface and nothing else**, by design.
+9. **Nobody has run any of this on Linux, on a Mac, or in a release Android build.** The phone
+   path has been reasoned about (the dependency closure is native-free, and `adb reverse` is the
+   documented route) and not driven.
+10. **Two doc comments still quote a title read at ~250 ms against a ~80 ms frame** —
+    `session::OCR_EVERY` and `ocr.rs:58` — where §4 and §7 measured **~340 ms** against a
+    **~350 ms** frame on 2026-09-08. The ratio the comments argue from survives, so the cadence
+    they justify is unaffected, but the figures are the same class as the two struck above:
+    numbers nothing reads, which is exactly why they rot.
+
+Struck 2026-09-08: `track.rs`'s two stale `Observation::from_collector` doc comments — the ones
+that claimed the collector tier was "weighted above a clean title read" at 8.0, and quoted the
+pre-fallback "12 of 39 … 11 of those are right". Both now say what the code says, **2.0** for
+the card and **20.0** for the printing against a clean read's **6.0**, and 15 of 39 with 14
+right. Neither figure was used by anything, which is exactly why they had rotted.
 
 ## 9. App integration
 
-Specified in
-[docs/superpowers/specs/2026-09-08-scanner-in-app-design.md](../superpowers/specs/2026-09-08-scanner-in-app-design.md),
-and lands next.
+Landed 2026-09-08, against
+[the in-app spec](../superpowers/specs/2026-09-08-scanner-in-app-design.md). The crate became a
+dependency of `src-tauri`, its per-frame handler moved into the crate so the debug server and
+the app share one, and the app gained a **Scanner** view that does what the debug page does, in
+the app's chrome. **The debug page and its server are unchanged and stay** — they are how the
+scanner is diagnosed when the camera is held by one page at a time, and the app is a second
+caller of the same session rather than a replacement. Nothing is written to the collection.
+
+### The dependency, and why it is not in the wasm block
+
+```toml
+card-scanner = { path = "../crates/card-scanner", features = ["corpus", "ocr"] }
+```
+
+A plain path dependency across two standalone packages, which is what §1 anticipated: no
+workspace is created, and the three tools keep building into `crates/card-scanner/target/`.
+`corpus` is the join back to `corpus.db` for labels and unifies with `src-tauri`'s own
+`rusqlite = "0.40"`; `ocr` is the two readers.
+
+**It sits in the non-wasm target block only.** The web build has no detector to compile —
+`web::route`'s command table is a `match` over JSON arguments with no camera-frame arm — so the
+crate never reaches the wasm clippy job, and the page says so where a reader would press Scan.
+
+**The `[profile.dev.package.*]` overrides are repeated in `src-tauri/Cargo.toml`.** §1 already
+says a profile override in a *dependency* is ignored; cargo reads `[profile.*]` from the build
+root and nowhere else, so the moment `src-tauri` took this crate the crate's own overrides
+stopped applying to it. The measured reason is §7's release/debug table read from the other
+side: rectify 2,022 ms against 48 ms, a 960 px JPEG decode 230 ms against 3–4, so a
+`tauri dev` scanner without them is a slideshow rather than a slow frame. `image` and
+`imageproc` are overridden; whether `rten` needs the same is decided by the live pass and not
+by a guess.
+
+**`npm run verify` runs the crate's suite** as a step beside the `src-tauri` one, at
+`--features cli` so the server's own tests are in it. Nothing ran it before.
+
+### `session::Session` — one frame in, one verdict out
+
+`crates/card-scanner/src/session.rs` holds what `serve.rs::handle_frame` and its surroundings
+held: the detector sweep, the quad lock, the rectification from the lock's quad, the descriptor
+and the search, both readers and their cadence, the tracker, and the panic guard. What stays
+with each caller is transport — a query string or an IPC header in, JSON out, plus the server's
+log line and its rolling dump directory. The server's two `Arc<Mutex<…>>` — a `Tracker` and a
+`QuadLock` — and the **file-static `AtomicU64`** that carried the OCR cadence collapsed into one
+`Arc<Mutex<Session>>`; the static is the one worth naming, because a per-*process* counter would
+have been shared by two sessions the moment there were two. The server's own `catch_unwind` went
+with them, so there is one guard.
+
+```rust
+Session::new(reference: Option<Reference>, reader: Option<session::Reader>, top: usize)
+```
+
+**Three arguments under every feature set, and that is deliberate.** `Reader` is
+`ocr::TitleReader` with the `ocr` feature and an **uninhabited enum** without it, so `None` is
+the only `Option<Reader>` that can be built and every branch that would use one is `#[cfg]`ed
+out. When the parameter itself was `#[cfg(feature = "ocr")]`, a plain `cargo test` with no
+features compiled the tests against a two-argument constructor and went red — and so did
+rust-analyzer, which reads the crate with default features. A signature that changes shape with
+a feature is a signature two readers of the same file disagree about.
+
+**The reader cadence counter counts _eligible_ frames, not all of them.** A committed card
+returns early without advancing it, so a freeze — which lasts as long as the card is held there
+— consumes no cadence slots, and when a swap ends the decision the reader fires on the **first**
+frame it is eligible for rather than up to three frames later. It is a free function rather than
+a `&mut self` method because inside `frame_inner` the reference is already borrowed out of
+`self`, where a disjoint field borrow compiles and a method call does not.
+
+**The verdict's keys are the debug page's, and a test is the fence.** `Verdict` is
+`serde(rename_all = "snake_case")` because `live.html` reads its keys by name and is not
+changing. `session::tests::every_key_the_debug_page_reads_is_in_the_verdict` scrapes the page
+for the keys it reads through **six anchored needles** — `j.`, `j?.`, `latest.`, `latest?.`,
+`lastOcr.`, `lastOcr?.` — each **anchored to a name boundary**, because a `j.` sitting at the
+tail of some longer name is somebody else's property and reading a key off it would invent one
+the verdict then has to carry for ever. `round_trip_ms` (the page measures that itself) and
+`saved` (the reply to `/capture`, which is not a frame at all) are excluded. **The optional-chaining spellings are not optional and
+leaving them out made the test vacuous**: `ocr` is read *only* as `j?.ocr` and `lastOcr?.ocr`,
+so a `j.`-only scrape yielded 20 keys without it and deleting `Verdict::ocr` would have stayed
+green while blanking the page's OCR panel. `ocr` is therefore asserted for **by name** as the
+canary for the whole scrape.
+
+### `src-tauri/src/scanner.rs` — four commands
+
+`ScannerState` is `app.manage`d beside `AppState` in `.setup()`, not a field on it: the scanner
+is optional, desktop/Android only, and the only thing it shares with the rest of the app is the
+data directory and one read of `corpus.db`.
+
+**Assets are files in `data/scanner/`, and nothing downloads them.** The bundle has no release
+asset yet and the models are not ours.
+
+| Path under `data/scanner/` | Missing means |
+| --- | --- |
+| `card-hashes.bin` | a session with **no reference** — it detects and rectifies and names nothing, exactly as the debug server does with no `--bundle` |
+| `models/text-detection.rten` | no reader — the name and collector tiers stand down |
+| `models/text-recognition.rten` | the same; the pair loads together or not at all |
+
+A missing file is a **state, never an error**, and `scanner_status` reports the exact path it
+looked at for each, so the page says "put `card-hashes.bin` at *this path*" rather than "no
+bundle".
+
+**Loading is lazy on the first command and never happens again.** `staleTime: Infinity` on the
+status query and no `Reload` button, because asking again in the same session cannot report a
+file that has since appeared — the load ran once and the answer is what it loaded. **A bundle
+or a model pair placed after the app started needs an app restart**, and that is the honest
+instruction: a `Reload assets` press would redraw the same three sentences and read as a repair
+that had happened.
+
+**The label load opens `corpus.db` directly**, `SQLITE_OPEN_READ_ONLY`, for the length of the
+load and dropped after — never `AppState.db_read`, the rule the mirror thread and `Rebuild now`
+already follow, because a 117 k-row read on the shared read connection queues every search
+behind it. It is *not* `db::open_read`'s attached pair: `Reference::load_labels` reads an
+unqualified `FROM cards`, so the corpus has to be `main` and there is nothing on the user side
+to attach.
+
+| Command | In | Out |
+| --- | --- | --- |
+| `scanner_status` | — | `ScannerStatus` — three `Asset { path, present, loaded, error }`, the label count, the scans directory |
+| `scanner_frame` | a frame and its `FrameOptions` | `Verdict` |
+| `scanner_reset` | — | `()` |
+| `scanner_capture` | a full-resolution frame and its `Sidecar` | `Captured { saved }` |
+
+Each is `async`, answered on `spawn_blocking`, and returns `Result<T, String>` with a sentence
+for an error. No schema rung: nothing is stored in either database. No capability entry: an
+app's own command is always callable. No `error_log` source: the page shows the sentence.
+
+**Two body shapes for one command, and Tauri's own doc is the reason.**
+`tauri::ipc::Request`'s documentation says raw bytes are accepted "on all platforms except
+Android", and Android's WebView hands a scheme handler no POST body either — so on the phone a
+frame can only travel as text.
+
+| Leg | `scanner_frame` | `scanner_capture` |
+| --- | --- | --- |
+| Desktop | the JPEG as `InvokeBody::Raw`, `FrameOptions` as JSON in an `x-scanner-options` header | the JPEG raw, the sidecar as JSON in an `x-scanner-capture` header |
+| Android | `{ jpeg: "<base64>", options }` as ordinary named arguments | `{ jpeg: "<base64>", sidecar }` |
+
+Both land in one payload function per command, which is the whole of the difference.
+
+**The two headers fail differently, and the asymmetry is the point.** A malformed or absent
+`x-scanner-options` falls back to `FrameOptions::default()` — a defaulted slider costs one frame
+out of thirty and the next one corrects it. An `x-scanner-capture` that is **present and
+unreadable** is refused with a sentence, because a defaulted sidecar writes a JPEG to disk with
+five empty fields and reports success: an *unlabelled* capture the reader believes they
+labelled, which is the one thing the dataset cannot recover from later. An **absent** capture
+header is still `Sidecar::default()`, because capturing without typing a name is a thing a
+reader chooses.
+
+**The page escapes every non-ASCII character in both header JSONs as `\uXXXX`, and nothing in
+either build checks that it does.** `ipc.ts`'s `asciiJson` is where it happens.
+`JSON.stringify` leaves non-ASCII as itself; a browser sends a header value's 0x80–0xFF as
+Latin-1 and throws outright above that; and Rust's `HeaderValue::to_str` refuses any byte
+outside visible ASCII. So `Æther Vial` in an `x-scanner-capture` either kills the call in the
+page or arrives as mojibake the far end rejects — a scanner refusing exactly the cards whose
+names are worth reading. `\uXXXX` is the one spelling that survives all three hops and is still
+the same JSON: `JSON.parse` on the far side yields the original character. **This contract is
+cross-checked by no test and no compiler**, which is why it is written as a rule in
+[`src/CLAUDE.md`](../../src/CLAUDE.md) and in
+[`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) — those two paragraphs are the only fence it
+has. The Android leg needs none of it: a JSON body is UTF-8.
+
+`scanner_capture` writes `live-<epoch>.jpg` and its `.json` sidecar into `data/scanner/scans/`,
+the same names and fields the debug server writes into `docs/scanner/scans/`, so a frame
+captured in the app can be copied into the repository's dataset unchanged.
+
+### The IPC seam
+
+`Core.call` widened to `call(command, args?: CallArgs, options?: CallOptions)`, where
+`CallArgs` is `Record<string, unknown> | Uint8Array` and `CallOptions` carries `headers`. The
+Tauri core passes both through to `invoke`; **the browser core rejects a `Uint8Array` with
+`RAW_CALL_UNAVAILABLE` before touching the Worker**, and that string is the same sentence the
+web build's Scanner view draws — the page imports the core's refusal rather than writing a
+second copy of it.
+
+`ipc.ts`'s scanner types keep the **Rust field names, snake case**, because the header JSON is
+deserialised straight into `FrameOptions` and the verdict is what the debug page already reads.
+That made a third mirror table in `ipc.test.ts`, `snakeMirrors`, alongside the two that
+camel-case the Rust side: a scanner row on `plainMirrors` would fail on every multi-word field
+for a spelling that is correct. Most of that list is one command's answer, because a `Verdict`
+is a tree of structs and parity on the outer one sees none of it — a renamed `best_distance`
+inside a standing leaves `Verdict` agreeing field for field while every row of the candidate
+table reads `NaN`. So each level is named.
+
+Two things the ordinary parser could not express, both the scanner's. A `#[serde(skip)]` field
+is dropped, and the attribute sits on the line *before* the field, so the walk reads its
+neighbour rather than its own line — `LockState::quad` is the live one, while
+`skip_serializing_if` is deliberately **not** matched, because `Verdict::error` *is* in the JSON
+whenever it has a value. And `r#match` is read as `match`: the one raw identifier in either
+tree, since `match` is a Rust keyword and is not a TypeScript one.
+
+**Both parsers split on `/\r?\n/` rather than on `"\n"`**, and it is not tidiness. A file's line
+endings are not a fact about the code in it, but `body.indexOf("}")` compares a whole line — so
+a source with CRLF endings ends every struct in `"}\r"`, the closing brace is never found, and
+the row fails with `has no closing brace` for a mirror that is perfectly correct. The
+`card-scanner` sources are not uniformly LF, and an editor or a generated write flips one file
+with nothing in either build noticing. A fence reporting a drift that does not exist is worse
+than the drift: it trains a reader to disbelieve the table.
+
+### The view
+
+`src/features/scanner/`. `ScannerPage` dispatches **above its hooks** on `isWebTarget()`, so on
+the web target no camera is asked for, no command is called and no `useQuery` is conditional —
+`BackupPanel`'s shape, for `BackupPanel`'s reason.
+
+| File | Owns |
+| --- | --- |
+| `ScannerPage.tsx` | The view: the web sentence, or the camera and the panel column |
+| `useCamera.ts` | `getUserMedia`, one stop function, the QR scanner's three sentences with "scan a card" for "scan a code" |
+| `useScanLoop.ts` | The pump: one request in flight, later frames dropped, the rate over twenty round trips, `grab` for the capture |
+| `Overlay.tsx` | The canvas over the video — the smoothed quad, the raw one behind it |
+| `ScannerPanels.tsx` | Pure. The whole column from `{ status, verdict, options, … }` |
+| `panels/Panel.tsx` | The section chrome, the fold, and the shared `Row` / `FIGURES` / `BUTTON` |
+| `panels/MatchPanel.tsx` | The verdict, the bar, the standings, reset and capture |
+| `panels/ControlsPanel.tsx` | The rule and method segments, the stages toggle, the sliders |
+| `panels/PipelinePanel.tsx` | The three stage images, only when stages are on |
+| `panels/BudgetPanel.tsx` | The per-stage milliseconds as a stacked bar |
+| `panels/RectifiedPanel.tsx` | The rectification and the detection numbers |
+| `panels/ReadoutsPanel.tsx` | Both OCR bands, and every collector pairing with what it resolved to |
+| `scannerOptions.ts` | `FrameOptions::default()` verbatim, the slider specs, `send px` |
+| `verdictText.ts` | The pure sentence functions the panels, the tests and the stories share |
+| `types.ts` | Re-exports of the `ipc.ts` mirror types, so a panel imports from its own feature |
+| `fixtures.ts` | The canned verdicts the tests and the stories are both driven from |
+
+**`send px` is not a `FrameOptions` field**, which is why it is a prop of its own beside the
+sliders: it is the long edge the page downscales to before sending, and the detector never sees
+the size it was not sent.
+
+**The fold state is in the app store, not in the view** — `scannerFolds` and `setScannerFold`,
+keyed by `ScannerPanelId` — so a reader who folded the pipeline away and jumped to Settings
+finds it still folded coming back, the same reason `openDeckId` is parked there. In memory
+only: no `app_meta` row and no persist middleware, exactly as `keyMapOpen`. **Match has no
+fold** — it is what the screen is for — and every developer panel starts closed, because each of
+them answers "why did it come to that" and a reader who is only scanning should pay for none of
+them.
+
+**`Panel` sets `aria-controls` only while the body is in the tree.** The body is unmounted
+rather than hidden, so a folded heading pointing at `scanner-controls-body` would name an
+element that is not in the document — a dangling IDREF, which a screen reader resolves to
+*nothing* rather than to an error. `aria-expanded="false"` on the button already says there is
+something to open. The region keeps its `aria-labelledby` either way, because that target is the
+always-mounted heading, so `getByRole("region", { name })` finds a folded panel too.
+
+**The overlay scales its strokes with the canvas**, as `live.html` does. The canvas is sized to
+the video's own pixels and the quad arrives in the *sent* frame's coordinates, so both a scale
+factor and a stroke derived from the canvas width are needed — a fixed `lineWidth` is a hairline
+on a 1080p stream and a slab on a 480 px one.
+
+**The two arms of the layout size the video box by opposite mechanisms, and the narrow one has
+to.** Wide, the row is the height and the video takes what the `w-80 shrink-0` panel column
+leaves. Narrow, the row is a *scrolling column*: a zero-basis `flex-1` under a scrolling parent
+yields all its free space to a `shrink-0` sibling, so one opened developer panel whose intrinsic
+height reached the container's would collapse the camera to ~0px. So on a phone the box is
+`w-full shrink-0` at the **camera's own `aspectRatio`**, falling back to 4:3 while the stream has
+no shape to report — an unset ratio there is the collapse again.
+
+**`useNarrowWindow` is read, not branched on.** A phone stacks the camera above the verdict
+where a desk stands them side by side, and what that asks is whether the app is in its phone
+shape — an answer the shell has already decided. `viewports.ts` demands a reason at the site of
+any branch on width; the reason here is that there is no new branch.
+
+### Navigation, and the web
+
+`ViewId` gained `"scanner"`; `NAV` gained it **between `wishlist` and `settings`** so Settings
+stays the last row; `switchView`'s chords are a run bound **by index** into `NAV`, so Scanner is
+`Ctrl+6` and Settings moved to `Ctrl+7`.
+[keyboard-shortcuts.md](keyboard-shortcuts.md) carries that row and what the move cost a reader
+whose hands knew the old chord.
+
+On the web target the whole view is one sentence — *The scanner needs the desktop or Android
+app — this build has no detector.* The four commands are `#[cfg(not(target_family = "wasm"))]`
+and unrouted, so they are absent from `web::route`'s census by construction; the browser core's
+refusal of a `Uint8Array` is the fence behind that, not the path a reader sees.
+
+### Storybook
+
+`scannerHandlers(db)` sits beside `pluginHandlers()` with **four handlers**, one per command, and
+**no store** — nothing here mirrors a table, and a workbench has no camera, so `scanner_frame`
+answers the decided fixture whatever bytes it is handed and the panel stories are driven from
+fixtures directly. The fault **`scannerMissing`** makes `scanner_status` answer every asset
+absent with its path.
+
+`Scanner/Panels` has **ten** stories and `Scanner/Page` **two** — `CameraRefused`, which stubs
+`navigator.mediaDevices` from a `useState` initializer (an effect runs after the first paint, and
+`useCamera`'s own effect has to see the stub before it fires) so the refusal is the *specific*
+`NotAllowedError` rather than whichever one an environment throws first, and `AssetsMissing`.
+**There is no `WebBuild` story**: `isWebTarget()` is `__CORE__ === "web"`, a define the
+workbench's Vite config folds to `"tauri"` exactly as `vite.config.ts` does for
+`stories.test.tsx`, so that view is compiled clean out of every bundle a story can run against,
+and reaching it needs `vi.mock`, which is `stories.test.tsx`'s tool and not the workbench's.
+`ScannerPage.test.tsx` is where that state is proven.

@@ -933,18 +933,49 @@ Every one of these has its measurement and its story in
 - Card images arrive over `mtgimg://`; `mtgimg:` is an `img-src` and nothing else — **read images
   with `<img>`, never with `fetch`** (a `fetch()` at it fails CORS by design).
 - **`src/lib/platform.ts` is the only place the page asks what platform it is on**, and it asks
-  the **user agent** — `src/lib/images.ts`'s `imageOrigin()` is the shipped precedent, and both
-  readers need the answer synchronously during their first render. It answers `false` for
+  the **user agent** — `src/lib/images.ts`'s `imageOrigin()` is the shipped precedent, and a
+  reader needs the answer synchronously during its first render. It answers `false` for
   anything it does not recognise, which is what keeps jsdom and Storybook on the desktop shape
   without either of them having to say so; the token is `Android` and not `Linux` or `Mobile`,
-  because an Android agent is a Linux one with one extra word. Two readers: `AppShell` (no
-  caption — three of `TitleBar`'s four verbs are `#[cfg(desktop)]` in tauri and
-  `capabilities/mobile.json` grants none of them) and `SettingsPage` (no Backup panel — the
-  mirror is desktop-only by decision). **A third reader is a reason to re-open whether this
-  belongs behind the core boundary instead**, where `ipc.ts` already knows which core it is
-  talking to. `UpdatePanel` is deliberately *not* one: it branches on the backend's own
-  `installKind`, because two independent answers to one question are free to disagree. See
-  [android-target.md](../docs/reference/android-target.md).
+  because an Android agent is a Linux one with one extra word. **Name a reader, never count
+  them** — a count is a fact about a tree and every branch has a different one;
+  `grep -n "isAndroid(" src/` is the census. `AppShell` reads it for the caption (three of
+  `TitleBar`'s four verbs are `#[cfg(desktop)]` in tauri and `capabilities/mobile.json` grants
+  none of them); `BackupPanel` reads it to fold the panel away (the mirror is desktop-only by
+  decision); and `ipc.ts`'s `scannerFrame` / `scannerCapture` read it to choose a body shape.
+  **That last one is the reader the note here used to ask to justify itself, and the answer is
+  that it does not belong behind the core boundary**: a core is a fact about the *build* and both
+  legs are the Tauri build, so a core split could not see the difference. The difference is
+  Tauri's own, per OS — raw IPC bytes "on all platforms except Android" — and it is met in the
+  one wrapper that meets it. `UpdatePanel` is deliberately *not* a reader: it branches on the
+  backend's own `installKind`, because two independent answers to one question are free to
+  disagree. See [android-target.md](../docs/reference/android-target.md).
+- **`useNarrowWindow` is the app's one viewport branch, and a new consumer is a _reader_ of it
+  rather than a second branch.** `viewports.ts` demands a reason at the site of any branch on
+  width; consuming an answer the shell has already decided needs no new one, and the test for a
+  genuinely *second* branch is unchanged — name the box the question is about, and if it is not
+  the window, this is not the mechanism. `ScannerPage` is the case that settled the wording: a
+  phone stacks the camera above the verdict where a desk stands them side by side, which is the
+  shell's own question. **The hook's doc names its readers rather than counting them**, for the
+  reason above, and `grep -n "useNarrowWindow()" src/` is that census too.
+- **`Core.call` takes `(command, args?: CallArgs, options?: CallOptions)`**, where `CallArgs` is
+  `Record<string, unknown> | Uint8Array`. It widened for exactly one caller — `ipc.scannerFrame`
+  and `ipc.scannerCapture`, the only wrappers that pass raw bytes and headers — and **the browser
+  core rejects a `Uint8Array` with `RAW_CALL_UNAVAILABLE` before it reaches the Worker**. That
+  constant is also the sentence the Scanner's web view draws, imported rather than respelled, so
+  a reader who somehow pressed Scan gets the message the page already showed them.
+- **A JSON header value must be written with `asciiJson`, and nothing checks that it was.** A
+  header value is bytes, and three layers disagree about which bytes are allowed: `JSON.stringify`
+  leaves non-ASCII as itself, a browser sends 0x80–0xFF as Latin-1 and throws outright above
+  that, and Rust's `HeaderValue::to_str` refuses anything outside visible ASCII. So `Æther Vial`
+  in an `x-scanner-capture` either kills the call here or arrives as mojibake the far end
+  rejects. `\uXXXX` is the one spelling that survives all three hops and parses back to the same
+  character. **No test and no compiler crosses this boundary** — this paragraph and
+  [card-scanner.md](../docs/reference/card-scanner.md) §9 are the whole fence — so any future
+  header carrying JSON goes through `asciiJson` too.
+- **The Scanner's fold state is in the app store, not in the view.** `scannerFolds` /
+  `setScannerFold`, in memory only, for `openDeckId`'s reason: a reader who folded a developer
+  panel away and jumped to Settings finds it still folded coming back.
 
 ## The context menu
 

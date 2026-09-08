@@ -246,7 +246,9 @@ no certificate, no tunnel, and this repo already drives the phone over `adb`.
 ## 13. Deliberately not in this pass
 
 * The fourth AI tier — interface only.
-* App integration: commands, a scanner page, the provisional mark on a collection row.
+* App integration landed 2026-09-08 —
+  [`2026-09-08-scanner-in-app-design.md`](2026-09-08-scanner-in-app-design.md). The provisional
+  mark on a collection row is still not in any pass.
 * The web/wasm target.
 * Any camera capture in Rust. `nokhwa` is not a dependency; frames come from the webview's
   `getUserMedia` or from files.

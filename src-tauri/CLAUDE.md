@@ -62,7 +62,11 @@ both plus the frontend.
   (`index::lifecycle::build_now`, `invalidate_owned`), the mirror thread's and the settings
   panel's. **Every one reads tables from both files**, so all six go through `db::open_write` /
   `db::open_read`, which attach the corpus. One that attached only half does not error: it
-  reports an empty collection, or a cold index.
+  reports an empty collection, or a cold index. **The scanner's label load is the one connection
+  outside that census and the exception is deliberate** — it opens `corpus.db` alone, because
+  `Reference::load_labels` reads an unqualified `FROM cards` and needs the corpus to be `main`.
+  It is the only read here that wants *half*, which is why it is the only one that may not use
+  the pair. See "Card scanner" below.
 - `db::configure` sets `PRAGMA auto_vacuum=INCREMENTAL` **before** `journal_mode=WAL` — after
   WAL has materialised the file the pragma is a silent no-op that only a `VACUUM` can apply —
   and it runs **once per schema**, because an attached file inherits neither
@@ -1810,6 +1814,50 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
   which is inside the work-area check either way, since both rungs are chosen against the work
   area rather than against the screen.
 
+## Card scanner
+
+The whole record, including the pipeline the crate implements:
+[docs/reference/card-scanner.md](../docs/reference/card-scanner.md) — §9 is this side.
+
+- **`card-scanner` is a `path` dependency in the non-wasm block and never in the wasm one.** The
+  web build has no detector, the page says so, and the wasm clippy job never sees the crate. It
+  is deliberately not a workspace member, so its three tools keep building into
+  `crates/card-scanner/target/`. Its features here are `corpus` (labels out of `corpus.db`, and
+  it unifies with this manifest's `rusqlite = "0.40"`) and `ocr`.
+- **The `[profile.dev.package.image]` / `.imageproc` overrides live in _this_ manifest, and
+  repeating them in the crate's is not enough.** Cargo reads `[profile.*]` from the **build root
+  only**, so the crate's own copies do nothing the moment `src-tauri` takes it as a dependency.
+  Measured 2026-09-08 on the debug server: rectify 2,022 ms against 48 ms in release, a 960 px
+  JPEG decode 230 ms against 3–4 — a `tauri dev` scanner without these is a slideshow.
+- **Assets are files in `data/scanner/` and a missing one is a _state_, never an error.** No
+  bundle is a session that detects and rectifies and names nothing (the debug server's own
+  behaviour); no `models/*.rten` pair is a session with no reader. `scanner_status` reports the
+  **exact path it looked at**, because "no bundle" is not an instruction and a path is.
+  **Loading is lazy on the first command and never runs again** — a file placed afterwards needs
+  an app restart, and the page must not offer a Reload that cannot mean anything.
+- **`scanner_frame` and `scanner_capture` are the only commands in this crate that take a raw
+  body**, and each takes two shapes: on desktop the JPEG is `InvokeBody::Raw` with its JSON in a
+  header — `x-scanner-options` for the frame, `x-scanner-capture` for the sidecar; on Android
+  Tauri carries no raw bytes at all (`tauri::ipc::Request`'s own doc: "on all platforms except
+  Android"), so the same commands also accept `{ jpeg: "<base64>", options | sidecar }`. **A
+  frame's absent or malformed header is a shrug and defaults; a capture's _present but
+  unreadable_ one is a refusal** — a defaulted slider costs one frame, a defaulted sidecar
+  writes an unlabelled capture the reader believes they labelled.
+  **A page putting JSON in either header must escape every non-ASCII character as `\uXXXX`** —
+  `HeaderValue::to_str` refuses anything outside visible ASCII and a browser sends 0x80–0xFF as
+  Latin-1 — and **nothing in either build checks that it did**, so `Æther Vial` in a sidecar is
+  a refusal or mojibake. `src/lib/ipc.ts`'s `asciiJson` is the only implementation.
+- **The label load is a further connection, and it is dropped as soon as the load returns.**
+  Never `AppState.db_read`, the rule the mirror thread and `Rebuild now` already follow: a
+  117 k-row read there queues every search behind it. It opens `corpus.db` **directly** rather
+  than through `db::open_read`, because `Reference::load_labels` reads an unqualified
+  `FROM cards` — the corpus has to be `main` and there is nothing on the user side to attach.
+- **The scanner's state is `app.manage`d beside `AppState`, not a field inside it.** It is
+  optional, desktop/Android only, and shares nothing with the rest of the app but the data
+  directory and that one read. Nothing it does touches either database, so there is **no schema
+  rung**; an app's own command is always callable, so there is **no capability entry**; and the
+  page shows the sentence, so there is **no `error_log` source**.
+
 ## The web target
 
 - **`src-tauri/src/lib.rs` is the module map, and the split in it is binding.** A module in the
@@ -1902,3 +1950,4 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
 | [sync.md](../docs/reference/sync.md) | `sync_pair/`, `sync_engine/` and the user-schema rungs sync owns, v29 to v31 — the pairing protocol step by step and the six digits; then the thirteen synced tables, how a row is named across devices, the three SQLite facts the capture triggers' shape follows from, §7.3's five rules against the test that proves each, the envelope measured, the relay's endpoints, and what is not built |
 | [web-target.md](../docs/reference/web-target.md) | The browser build — the module map, the OPFS pair, the measured browse and facet, and the first run's open memory failure |
 | [text-mirror.md](../docs/reference/text-mirror.md) | `mirror/` — the layout, the dirty map, why the pruner reads a manifest instead of guessing, what a pass costs measured, and the bugs still open |
+| [card-scanner.md](../docs/reference/card-scanner.md) | `scanner.rs` and the crate behind it — the pipeline and every measurement, the three evidence tiers and their weights, both tracker verdicts, the debug server, and §9's four commands, two body shapes and lazy asset load |
