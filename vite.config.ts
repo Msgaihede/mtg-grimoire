@@ -90,7 +90,19 @@ export default defineConfig({
     // does not drift the way that sentence did.
     // `relay/` is absent from `coverage.include` for the same reason `src-tauri/` is: it is not
     // app code and would move a number that is about the app.
-    include: ["src/**/*.test.{ts,tsx}", ".storybook/**/*.test.ts", "relay/src/**/*.test.ts"],
+    // The fourth glob is the *share* Worker — a second Cloudflare Worker beside the relay, for
+    // spec §5.1's blast-radius reason — and everything the third glob's paragraph says applies
+    // to it unchanged: no workerd, plain handlers over an injected `Env`, `fakeD1`'s SQL
+    // evaluator standing in for D1. It is absent from `coverage.include` beside `relay/`.
+    // ⚠️ A directory this list does not name is collected by **nothing**, and `vitest run
+    // share-worker/…` answers `No test files found` — which prints on stdout and is easy to read
+    // as a pass. That was the state of `share-worker/` for exactly one commit.
+    include: [
+      "src/**/*.test.{ts,tsx}",
+      ".storybook/**/*.test.ts",
+      "relay/src/**/*.test.ts",
+      "share-worker/src/**/*.test.ts",
+    ],
     // Vitest stubs CSS imports as empty strings by default, which would hand
     // `iconFont.test.ts` an empty `mana.css?raw` to assert against. No *component* imports
     // CSS; `.storybook/preview.tsx` imports three files of it and reaches the suite through

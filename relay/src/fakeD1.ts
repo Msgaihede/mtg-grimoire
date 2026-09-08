@@ -58,6 +58,21 @@ const PRIMARY_KEY: Record<string, string[]> = {
   // because SQLite enforces it, so an entry-less table here would let two "concurrent" writes to
   // one empty slot both insert and the "refuses a second write" test would pass for no reason.
   pairing_rendezvous: ["rv", "slot"],
+  /**
+   * ⚠️ **`shares` is not the relay's table.** It belongs to the *share* Worker
+   * (`share-worker/schema.sql`), which binds this same D1 database — spec §5.1's second Worker,
+   * separate for blast radius rather than because the data is separate. It is declared here
+   * because `share-worker/src/shares.test.ts` drives that Worker against this harness, and a
+   * table missing from this map is a table two rows can silently share an id in.
+   *
+   * **Only the primary key is modelled, and the share Worker's SQL is written not to need more.**
+   * The real table also carries `UNIQUE (group_id, coalesce(folder_uid, '')) WHERE state <>
+   * 'revoked'` — a partial index over an expression, which this harness's column-wise
+   * `UNIQUE_NOT_NULL` cannot express. `handleCreate` therefore decides one-share-per-folder by
+   * *reading* the folder's row rather than by catching a constraint failure, which is what it
+   * would have to do anyway: a live row keeps its id and a revoked one must not.
+   */
+  shares: ["id"],
 };
 
 /**

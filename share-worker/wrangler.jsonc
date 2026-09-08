@@ -1,0 +1,65 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "mtg-grimoire-share",
+  "main": "src/index.ts",
+  // The relay's date, deliberately rather than today's: this Worker runs beside it on the same
+  // account and there is no behaviour here that wants a newer runtime. One fewer variable
+  // between two deploys that have to agree about a token format.
+  "compatibility_date": "2026-08-27",
+
+  // **No `durable_objects` and no `migrations`.** Nothing here may reach a Durable Object: that
+  // is the line that meters (spec §8), and this Worker is the one that will carry anonymous
+  // traffic. Its state is D1 and R2, both of which bill per operation rather than per request.
+
+  // The entitlement store — **the same database `relay/wrangler.jsonc` binds**, and the same
+  // `database_id`. The two Workers are separate for blast radius (spec §5.1), not because the
+  // data is separate: the daily lapse pass reads `entitlements` to darken a link, and re-deciding
+  // a membership here would give one account two opinions about when it ended.
+  //
+  // `share-worker/schema.sql` adds the one table this Worker owns, applied with
+  // `npx wrangler d1 execute mtg-grimoire-relay --remote --file=./schema.sql`.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "mtg-grimoire-relay",
+      "database_id": "5e0381b0-d2aa-4861-a725-26ca18ae00ef",
+    },
+  ],
+
+  // The snapshots (spec §5.3). R2 and not D1, KV or a Durable Object: D1's free tier allows
+  // 100,000 row writes a day account-wide, which one 3,000-card share would spend thirty times
+  // over; KV allows 1,000, the limit `relay/wrangler.jsonc` already rejected KV for. R2 is 10 GB
+  // stored, 1 M writes and 10 M reads a month, egress free.
+  //
+  // ⚠️ **The bucket does not exist yet and enabling R2 is a dashboard action only Markus can
+  // take** — spec §14 open item 2, and *ask the host, never a document*. Creating it is
+  // `npx wrangler r2 bucket create mtg-grimoire-shares`, and the deploy fails naming this binding
+  // until it has been. The binding is declared here rather than in the task that first writes to
+  // it so that the deploy question is asked once.
+  "r2_buckets": [
+    {
+      "binding": "SHARES",
+      "bucket_name": "mtg-grimoire-shares",
+    },
+  ],
+
+  "vars": {
+    // ⚠️ **A placeholder, and deliberately one that cannot be mistaken for an address.** Only a
+    // deploy can produce the real host, and it must then be written here **and** into the Rust's
+    // `share::SHARE_BASE` byte for byte — the trap `relay/wrangler.jsonc` documents for
+    // `RELAY_BASE` and the OAuth redirect URI. A plausible invented URL is worse than an obvious
+    // hole: it gets copied into documentation and deployed against, which is exactly what
+    // `database_id`'s comment in the relay's config records happening.
+    //
+    // Every link the app shows is `{SHARE_BASE}/s/{id}` built by `env.ts`'s `shareUrl`, so until
+    // this is set the links say so in the loudest possible way.
+    "SHARE_BASE": "<set on first deploy>",
+  },
+
+  // The three secrets stay in `wrangler secret put` and are never committed (spec §9). This
+  // Worker needs exactly one of them — `RELAY_HMAC_KEY`, the relay's signing key — which is the
+  // whole of the coupling between the two: a token this Worker accepts is one the relay minted,
+  // verified with an HMAC over memory rather than a lookup, so the gate costs no storage read.
+  // It holds no key material of its own and cannot decrypt anything the relay stores.
+  "observability": { "enabled": true },
+}
