@@ -2,7 +2,7 @@
 
 [Issue #360](https://github.com/Msgaihede/mtg-grimoire/issues/360), raised from Discord by
 Giradeli, with a second comment proposing it as a Patreon-gated add-on. User schema **v41**,
-relay D1 **+2 tables**, and one **new Cloudflare Worker**. This is the design;
+relay D1 **+1 table**, and one **new Cloudflare Worker**. This is the design;
 `docs/reference/collection-sharing.md` is the page that will hold the record of what shipped.
 
 **The one sentence: a share is a snapshot the owner publishes, not a window onto their
@@ -198,9 +198,19 @@ leaves the **previous** snapshot serving, which is the same commit-last shape
 `sync_engine::client::post_rotation` uses and the same reason: a half-published share is a broken
 link in somebody's Discord, and the old one is never worse than that.
 
-**Refresh** runs on app launch and after a sync that touched a shared folder, debounced, plus a
-manual *Update now*. A failure keeps the old snapshot and says so on the folder — the same
-courtesy-versus-correctness split `sync.md` makes about leaving a group.
+**Refresh in v1 is the manual *Update now* and nothing else.** A failure keeps the old snapshot and
+says so on the folder — the same courtesy-versus-correctness split `sync.md` makes about leaving a
+group.
+
+⚠️ **This section promised more until 2026-09-08 and no task ever built it.** It read *"Refresh runs
+on app launch and after a sync that touched a shared folder, debounced, plus a manual Update now"*,
+the implementation plan assigned the trigger to nobody, and the gap was found by the task that
+built the Share control rather than by anyone reading either document. The narrowing is deliberate,
+and the argument is that the automatic half is a *convenience* rather than a correctness
+requirement: the viewer is told how stale a snapshot is — the page renders **as of …** — and the
+owner has an explicit press plus a stale mark on the folder. Against that, an on-launch
+re-publish of every share is real network on the account's shared 100 000 requests/day (§7.1),
+and there is nothing deployed to measure it against. §14 carries it as owed.
 
 ### 4.2 Schema — user v41, one table, not synced
 
@@ -300,7 +310,13 @@ later without re-cutting the format. What it costs is stated so that nobody has 
 * the privacy claim the app makes to a reader is therefore **"anyone with the link"**, and must
   be worded that way in the UI. Not "private", not "encrypted".
 
-### 5.2 D1 — two tables
+### 5.2 D1 — one table
+
+⚠️ **This heading and the header line both said *two* until 2026-09-08, and only one ever shipped.**
+The second was designed away while this section was being written and neither count was re-read —
+which is the failure `CLAUDE.md` warns about in exactly these words: a prose-only edit routes to
+neither CI job, so nothing goes red when a document rots. `share-worker/schema.sql` is the
+authority, and it defines one table and two indexes.
 
 ```sql
 CREATE TABLE shares (
@@ -625,6 +641,11 @@ take their number from the message, not from the binding.
    costs a Worker request.** §7.1's "a warm view costs zero" holds via the *browser's* `max-age`,
    not via `caches.default` — every distinct viewer inside the shell's 300 s still spends one
    Worker request against the account's shared daily budget.
+
+7. **The automatic refresh §4.1 used to promise** — on app launch, and after a sync that touched a
+   shared folder, debounced. Deliberately not built for v1, and §4.1 carries the argument. It wants
+   a deployed Worker and real usage to measure against, because what it implies is an on-launch
+   re-publish of every share on the account's shared daily budget.
 
 No agent may deploy any of it. `wrangler dev --local` is the only wrangler command an agent may
 run.
