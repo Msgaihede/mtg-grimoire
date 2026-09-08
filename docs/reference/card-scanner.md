@@ -945,11 +945,26 @@ cycle with the card never leaving the lens**.
 9. **Nobody has run any of this on Linux, on a Mac, or in a release Android build.** The phone
    path has been reasoned about (the dependency closure is native-free, and `adb reverse` is the
    documented route) and not driven.
-10. **Two doc comments still quote a title read at ~250 ms against a ~80 ms frame** —
-    `session::OCR_EVERY` and `ocr.rs:58` — where §4 and §7 measured **~340 ms** against a
-    **~350 ms** frame on 2026-09-08. The ratio the comments argue from survives, so the cadence
-    they justify is unaffected, but the figures are the same class as the two struck above:
-    numbers nothing reads, which is exactly why they rot.
+10. **The crate is not `cargo fmt`-clean and carries four clippy warnings**, which is why CI's
+    `rust` job runs its **tests only** — `cargo test --locked --features cli --manifest-path
+    crates/card-scanner/Cargo.toml`, on the Linux leg, added 2026-09-08 because until then
+    `session::tests` (the `live.html` key census, the panic guard, the reader cadence) was
+    fenced by `npm run verify` and by nothing in CI at all. Measured the same day:
+    `cargo fmt --check` reports diffs (`src/bin/build_hashes.rs` among them) and
+    `cargo clippy --all-targets --features cli` reports four, every one pre-existing —
+    `index.rs:188` (`Mask::len` with no `is_empty`), `cardness.rs:161` and `lock.rs:217`
+    (`needless_range_loop`), and `serve.rs:519` (`unnecessary_get_then_check`, in the server's
+    own tests). Adding either gate is a tidy-up commit rather than a CI change; both would go
+    red on day one for something the test step is not about.
+
+Struck 2026-09-08: the two doc comments that quoted a title read at ~250 ms against a ~80 ms
+frame — `session::OCR_EVERY` and `ocr.rs`'s `COLLECTOR_FALLBACKS` — where §4 and §7 measured
+**~340 ms** against a **~350 ms** frame the same day. Both now say the measured pair, and
+`OCR_EVERY`'s conclusion moved with it: running the readers every frame "would roughly halve
+the rate" rather than cut it by two thirds. **The cadence itself is unchanged** — one eligible
+frame in four — because the ratio the comments argue from survives; what was wrong was the
+arithmetic quoted for it, which is the same class as the two struck below: numbers nothing
+reads, which is exactly why they rot.
 
 Struck 2026-09-08: `track.rs`'s two stale `Observation::from_collector` doc comments — the ones
 that claimed the collector tier was "weighted above a clean title read" at 8.0, and quoted the
@@ -1060,12 +1075,30 @@ A missing file is a **state, never an error**, and `scanner_status` reports the 
 looked at for each, so the page says "put `card-hashes.bin` at *this path*" rather than "no
 bundle".
 
+**There are three states per asset, not two, and `loaded` alone cannot tell them apart.**
+`bundleSentence`/`modelsSentence` keyed on `loaded` until 2026-09-08, which meant a file that
+was **present and would not parse** drew the placement sentence — an instruction to put a file
+where that file already is — while `Asset::error`, the only thing that says what went wrong, was
+rendered nowhere in the app at all. Absent is the instruction; present-and-unreadable is
+`` `card-hashes.bin` at *path* did not load: *error*. ``; and a bundle that loaded may still
+carry an error from the **label** load, which is not a broken scanner — matching works and
+answers ids — so it reads *Bundle loaded, but its names did not: … Matches will show ids.* and
+`MatchPanel` draws it **under** the verdict rather than in place of one. `scanner.rs` writes
+that third one for a `corpus.db` that is not there as well as for a read that failed;
+`a_bundle_with_no_corpus_beside_it_says_where_it_looked` is the fence. **Every one of the
+sentences ends with** *Restart the app after placing or replacing a file — assets load once, at
+launch*, which is the clause that makes the rest of them actionable: see the next paragraph for
+why there is no button instead.
+
 **Loading is lazy on the first command and never happens again.** `staleTime: Infinity` on the
 status query and no `Reload` button, because asking again in the same session cannot report a
 file that has since appeared — the load ran once and the answer is what it loaded. **A bundle
 or a model pair placed after the app started needs an app restart**, and that is the honest
 instruction: a `Reload assets` press would redraw the same two sentences — `bundleSentence` and
-`modelsSentence`, the models' pair sharing one — and read as a repair that had happened.
+`modelsSentence`, the models' pair sharing one — and read as a repair that had happened. **The
+sentences say so themselves now**; before 2026-09-08 this paragraph was the only place the
+instruction existed, and a reader who dropped the bundle in and watched nothing change had every
+reason to conclude the path was wrong.
 
 **The label load opens `corpus.db` directly**, `SQLITE_OPEN_READ_ONLY`, for the length of the
 load and dropped after — never `AppState.db_read`, the rule the mirror thread and `Rebuild now`
@@ -1169,10 +1202,15 @@ tree, since `match` is a Rust keyword and is not a TypeScript one.
 **Both parsers split on `/\r?\n/` rather than on `"\n"`**, and it is not tidiness. A file's line
 endings are not a fact about the code in it, but `body.indexOf("}")` compares a whole line — so
 a source with CRLF endings ends every struct in `"}\r"`, the closing brace is never found, and
-the row fails with `has no closing brace` for a mirror that is perfectly correct. The
-`card-scanner` sources are not uniformly LF, and an editor or a generated write flips one file
-with nothing in either build noticing. A fence reporting a drift that does not exist is worse
-than the drift: it trains a reader to disbelieve the table.
+the row fails with `has no closing brace` for a mirror that is perfectly correct. An editor or a
+generated write flips one file with nothing in either build noticing, and a fence reporting a
+drift that does not exist is worse than the drift: it trains a reader to disbelieve the table.
+**Three sources really were CRLF against `.gitattributes`' `* text=auto eol=lf`** —
+`cardness.rs`, `lock.rs` and `debug.rs`, plus the crate's own `Cargo.toml` — and all four were
+rewritten to LF on 2026-09-08. **That changed no committed byte**: git had been normalising them
+on read the whole time, so the diff is empty and only the working tree moved, which is exactly
+why nothing could have gone red for it. The `\r?\n` split stays regardless — it is the fence, and
+the next generated write is one editor away.
 
 ### The view
 
@@ -1184,7 +1222,7 @@ the web target no camera is asked for, no command is called and no `useQuery` is
 | --- | --- |
 | `ScannerPage.tsx` | The view: the web sentence, or the camera and the panel column |
 | `useCamera.ts` | The stream: `getUserMedia` with the debug page's constraints, one `stopAll` every exit path goes through, a tolerated `play()` rejection, and the wait for `loadedmetadata` before reporting a size. Its error state is **keyed on `verdictText.ts`'s `cameraSentence`**, which is where the wording lives |
-| `useScanLoop.ts` | The pump: one request in flight, later frames dropped, the rate over twenty round trips, `grab` for the capture |
+| `useScanLoop.ts` | The pump: one request in flight, later frames dropped, the rate over twenty round trips, `grab` for the capture (**with a `catch` of its own** — a throwing `drawImage`/`toBlob` outside one rejects `pump()` and freezes the loop with `error` still `null`), and the two **kept reads** below |
 | `Overlay.tsx` | The canvas over the video — the smoothed quad, the raw one behind it |
 | `ScannerPanels.tsx` | Pure. The whole column from `{ status, verdict, options, … }` |
 | `panels/Panel.tsx` | The section chrome, the fold, and the shared `Row` / `FIGURES` / `BUTTON` |
@@ -1193,7 +1231,7 @@ the web target no camera is asked for, no command is called and no `useQuery` is
 | `panels/PipelinePanel.tsx` | The three stage images, only when stages are on |
 | `panels/BudgetPanel.tsx` | The per-stage milliseconds as a stacked bar |
 | `panels/RectifiedPanel.tsx` | The rectification and the detection numbers |
-| `panels/ReadoutsPanel.tsx` | Both OCR bands, and every collector pairing with what it resolved to |
+| `panels/ReadoutsPanel.tsx` | Both OCR bands, and every collector pairing with what it resolved to — drawn from `lastOcr`/`lastCollector` props, **never from `verdict.ocr`** |
 | `scannerOptions.ts` | `FrameOptions::default()` verbatim, the slider specs, `send px` |
 | `verdictText.ts` | The pure sentence functions the panels, the tests and the stories share |
 | `types.ts` | Re-exports of the `ipc.ts` mirror types, so a panel imports from its own feature |
@@ -1222,6 +1260,27 @@ always-mounted heading, so `getByRole("region", { name })` finds a folded panel 
 the video's own pixels and the quad arrives in the *sent* frame's coordinates, so both a scale
 factor and a stroke derived from the canvas width are needed — a fixed `lineWidth` is a hairline
 on a 1080p stream and a slab on a 480 px one.
+
+**And it carries `object-contain`, because the `<video>` under it does.** A `<canvas>` is a
+replaced element whose intrinsic size is its `width`/`height` attributes — the video's own
+pixels — so `object-fit` letterboxes it identically. Without it the bitmap is stretched to the
+element's box while the picture inside that box is not, and the quad sits off the card: a
+1920×1080 frame in the app's panel column drew it **25% too tall**, worse the narrower the
+column got. It is the one class the two elements have to agree on.
+Proven 2026-09-08 over the built stylesheet rather than in the window — the main checkout's
+debug app was running outside any lock, and under the single-instance guard a worktree launch
+exits with no window — with a harness carrying both elements' exact class strings over a
+1920×1080 stand-in, at the wide arm's box in a 1280- and a 900-wide window (444×560 and
+254×560): with the class the canvas's frame sits on the picture's edge in both, and with
+`object-fit: fill` forced beside it the same frame is stretched to the whole box.
+
+**Two things the panel column draws are the *last* read rather than this frame's**, and they are
+props of their own for that reason: `session::OCR_EVERY` runs the readers on one eligible frame
+in four and stops once the tracker has committed, so `verdict.ocr` and `verdict.collector` are
+`null` on most frames. `useScanLoop` keeps the last non-null of each — cleared when the camera
+starts or stops, and by the `clearReads()` the Reset press calls beside `scanner_reset` — which
+is `live.html`'s own `lastOcr`. Read straight off the verdict, the Readouts panel says
+`(nothing read)` three frames in four about a tier that read the card correctly.
 
 **The two arms of the layout size the video box by opposite mechanisms, and the narrow one has
 to.** Wide, the row is the height and the video takes what the `w-80 shrink-0` panel column
@@ -1279,7 +1338,7 @@ one it did not know it owed.
 | The same frame on the debug page over HTTP (§7) | release `serve` | transport 62.6 · round trip 208 ms |
 | One frame under `tauri dev`, with only `image`/`imageproc` overridden | debug | decode 117 · mask 14 · contour 31 · **rectify 1 829** · transport 5 012 · round trip **7 004 ms**, 0.1 frames/s |
 | … with `card-scanner`, `ocrs` and the eleven `rten*` crates overridden too | debug | decode 117 · rectify 48 · transport 257 · round trip 443 ms, 2.5 frames/s; a title read 361 ms |
-| … with `zune-jpeg`/`zune-core` overridden as well (the sixteen the manifest carries) | debug | decode **1.8** · resize 1.3 · mask 17.8 · contour 5.8 · rectify 58.3 · transport 203.4 · round trip **288 ms**, 3.6 frames/s |
+| … with `zune-jpeg`/`zune-core` overridden as well (the seventeen the manifest carries) | debug | decode **1.8** · resize 1.3 · mask 17.8 · contour 5.8 · rectify 58.3 · transport 203.4 · round trip **288 ms**, 3.6 frames/s |
 | The first `scanner_status` on a fresh process — bundle parse, 117 630 labels, both models | release / debug | **798 ms** / 929 ms; the second call 1 ms in both |
 | The phone | — | **not driven on a phone this pass** — no device was on `adb` |
 
@@ -1293,7 +1352,7 @@ The IPC path is not free, and it is not the slow part either.
 **What the debug rows say.** The plan named two crates to optimise in a debug build and the live
 pass found four more layers under them, each measured in: the warp is `imageproc`'s, but the
 cardness scoring, the trim and the descriptor are the crate's own loops; the readers are `rten`'s;
-and `image` 0.25 delegates JPEG decoding to `zune-jpeg`. Sixteen overrides is what it takes for a
+and `image` 0.25 delegates JPEG decoding to `zune-jpeg`. Seventeen overrides is what it takes for a
 `tauri dev` frame to read like a slow release frame rather than a slideshow, and each row above is
 one of those layers found.
 

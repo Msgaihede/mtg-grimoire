@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { cn } from "@/lib/utils";
-import type { ScannerLabel, ScannerStatus, ScannerVerdict } from "../types";
+import type { ScannerCollector, ScannerLabel, ScannerStatus, ScannerVerdict } from "../types";
 import {
   SURE_DISTANCE,
   barFill,
@@ -57,12 +57,19 @@ function thisFrame(verdict: ScannerVerdict | null): string {
 export function MatchPanel({
   status,
   verdict,
+  lastCollector,
   rate,
   onReset,
   onCapture,
 }: {
   status: ScannerStatus | null;
   verdict: ScannerVerdict | null;
+  /**
+   * The last collector-line read, not this frame's — `ScannerPanelsProps.lastOcr`'s reason.
+   * The readers run on one eligible frame in four, so `verdict.collector` is `null` three
+   * frames in four and a row fed it blinks `—` about a tier that read the card correctly.
+   */
+  lastCollector: ScannerCollector | null;
   /** Frames per second over the last twenty, or `null` before there have been twenty. */
   rate: number | null;
   onReset: () => void;
@@ -78,7 +85,13 @@ export function MatchPanel({
   const committed = tracked?.committed ?? false;
   const fill = barFill(tracked);
   const word = verdictWord(tracked);
-  const noBundle = bundleSentence(status);
+  const bundleNote = bundleSentence(status);
+  // **Where that sentence goes turns on whether anything can still be named.** A bundle that
+  // is absent or would not parse leaves nothing to be right about, so it stands where the
+  // card's name would. A bundle that loaded and lost only its *labels* still matches — by id,
+  // which is what `headLabel` falls back to — so its sentence belongs under the verdict rather
+  // than over it. Both come out of one function; only the placement is the panel's decision.
+  const named = status === null || status.bundle.loaded;
   const trim = verdict?.trim ?? null;
   const trimmed =
     trim !== null && [trim.left, trim.top, trim.right, trim.bottom].some((n) => n !== 0);
@@ -95,8 +108,8 @@ export function MatchPanel({
     <Panel id="match" title="Match">
       {/* A missing bundle is not a poor verdict, it is the absence of anything to be right
           about — so the sentence stands where the name would, rather than under it. */}
-      {noBundle !== null ? (
-        <p className="text-sm text-destructive">{noBundle}</p>
+      {!named && bundleNote !== null ? (
+        <p className="text-sm text-destructive">{bundleNote}</p>
       ) : (
         <div className="flex items-baseline justify-between gap-2">
           <span className="font-heading text-base leading-tight">{headLabel(verdict)}</span>
@@ -111,6 +124,11 @@ export function MatchPanel({
             </span>
           )}
         </div>
+      )}
+      {/* The labels failed and the bundle did not: the id above is a real answer, and this
+          says why it is not a name. */}
+      {named && bundleNote !== null && (
+        <p className="text-sm text-destructive">{bundleNote}</p>
       )}
 
       {/* The bar is the evidence, and the hairline is the line it has to cross: the right end
@@ -130,6 +148,14 @@ export function MatchPanel({
           )}
           style={{ width: `${fill * 100}%` }}
         />
+        {/* **`70%` is `TrackerOptions::commit_confidence` (`crates/card-scanner/src/track.rs`,
+            `0.70`) written a second time, with nothing keeping the two in step.** The crate
+            does not send the threshold on the verdict — `TrackedView` carries `decide_at` for
+            the vote rule and no equivalent for this one — so the only alternatives were a
+            field on the wire or a literal with its coupling named. If that constant moves,
+            move this: a hairline in the wrong place is a bar that commits visibly early or
+            late, and nothing in either suite can see it. The vote rule needs no literal — its
+            bar *is* `decide_at`, so the line is the right-hand end. */}
         <span
           aria-hidden="true"
           className="absolute inset-y-0 w-px bg-dim"
@@ -168,9 +194,9 @@ export function MatchPanel({
         <Row
           label="collector"
           value={
-            verdict?.collector == null
+            lastCollector === null
               ? "—"
-              : (verdict.collector.matched ?? `[${verdict.collector.raw}] no printing`)
+              : (lastCollector.matched ?? `[${lastCollector.raw}] no printing`)
           }
         />
         <Row

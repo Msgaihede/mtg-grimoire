@@ -72,12 +72,74 @@ export function cameraSentence(err: unknown): { name: string; message: string } 
   }
 }
 
-export function bundleSentence(status: ScannerStatus | null): string | null {
-  if (status === null || status.bundle.loaded) return null;
-  return `No reference bundle. Put \`card-hashes.bin\` at ${status.bundle.path}.`;
+/**
+ * The three file names, mirroring `src-tauri/src/scanner.rs`'s `BUNDLE_FILE`,
+ * `DETECTION_MODEL` and `RECOGNITION_MODEL` — the sentences below name what a reader has to
+ * put on disk, and they were three loose literals across two functions before this.
+ */
+const BUNDLE_FILE = "card-hashes.bin";
+const DETECTION_FILE = "text-detection.rten";
+const RECOGNITION_FILE = "text-recognition.rten";
+
+/**
+ * The clause every asset sentence ends with.
+ *
+ * **It is the only instruction that makes the rest of the sentence work.** `scanner_status`
+ * loads the bundle and the models on its first call and answers out of what it loaded for the
+ * rest of the session, so a file dropped into place while the app is running changes nothing a
+ * reader can see — they follow the instruction, the sentence does not move, and the reasonable
+ * conclusion is that the path was wrong. `ScannerPage` says the same thing about why there is
+ * no `Reload assets` button; this is the half a reader actually reads.
+ */
+const RESTART = "Restart the app after placing or replacing a file — assets load once, at launch.";
+
+/** A file that is *there* and did not parse. The path names it; the error says why. */
+function didNotLoad(file: string, path: string, error: string): string {
+  return `\`${file}\` at ${path} did not load: ${error}. ${RESTART}`;
 }
 
+/**
+ * What the Match panel says instead of, or under, a card's name.
+ *
+ * **Three states, not two, and `loaded` alone cannot tell them apart** — which is what the
+ * first draft of this got wrong. A bundle that is *absent* wants an instruction to place a
+ * file. A bundle that is **present and did not parse** wants its error: telling a reader to
+ * put a file where that file already is reads as the app not having looked. And a bundle that
+ * loaded may still carry an `error` from the *label* load — no `corpus.db`, or a read that
+ * failed — which is not a broken scanner at all: matching works and answers ids.
+ */
+export function bundleSentence(status: ScannerStatus | null): string | null {
+  if (status === null) return null;
+  const bundle = status.bundle;
+  if (!bundle.present) {
+    return `No reference bundle. Put \`${BUNDLE_FILE}\` at ${bundle.path}. ${RESTART}`;
+  }
+  if (!bundle.loaded) {
+    return didNotLoad(BUNDLE_FILE, bundle.path, bundle.error ?? "no reason given");
+  }
+  if (bundle.error !== null) {
+    return `Bundle loaded, but its names did not: ${bundle.error}. Matches will show ids. ${RESTART}`;
+  }
+  return null;
+}
+
+/**
+ * The same three states for the reader's two `.rten` files.
+ *
+ * **They load as a pair and fail as one**: `TitleReader::load` writes the identical sentence
+ * onto both assets, so this names whichever one is carrying it rather than printing it twice.
+ * Either file missing is the placement sentence, because a lone model reads nothing.
+ */
 export function modelsSentence(status: ScannerStatus | null): string | null {
-  if (status === null || (status.detection_model.loaded && status.recognition_model.loaded)) return null;
-  return `No OCR models. Put \`text-detection.rten\` and \`text-recognition.rten\` at ${status.detection_model.path}.`;
+  if (status === null) return null;
+  const det = status.detection_model;
+  const rec = status.recognition_model;
+  if (det.loaded && rec.loaded) return null;
+  if (!det.present || !rec.present) {
+    return `No OCR models. Put \`${DETECTION_FILE}\` and \`${RECOGNITION_FILE}\` at ${det.path}. ${RESTART}`;
+  }
+  if (det.error === null && rec.error !== null) {
+    return didNotLoad(RECOGNITION_FILE, rec.path, rec.error);
+  }
+  return didNotLoad(DETECTION_FILE, det.path, det.error ?? "no reason given");
 }

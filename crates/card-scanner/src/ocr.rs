@@ -55,7 +55,8 @@ const COLLECTOR_BAND: (f32, f32, f32, f32) = (0.018, 0.918, 0.285, 0.990);
 /// then a lower one recovers reads that the first band clips.
 ///
 /// Ordered, and taken in order, with an early exit as soon as a crop yields any candidate at
-/// all: a read costs roughly 250 ms, so the common case has to stay at one. Only a card the
+/// all: a read costs roughly **340 ms against a ~350 ms frame** (release, measured 2026-09-08),
+/// so the common case has to stay at one. Only a card the
 /// first band cannot see pays for the second.
 const COLLECTOR_FALLBACKS: [(f32, f32, f32, f32); 2] = [
     // Wider and taller — for a frame that sits the line lower or runs it longer.

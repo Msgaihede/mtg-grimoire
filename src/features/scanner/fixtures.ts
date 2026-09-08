@@ -1,6 +1,8 @@
 import type {
   ScannerCandidate,
+  ScannerCollector,
   ScannerLabel,
+  ScannerOcr,
   ScannerStanding,
   ScannerStatus,
   ScannerTracked,
@@ -249,6 +251,45 @@ const panicked: ScannerVerdict = {
 
 export const VERDICTS = { voting, decided, confidence, noMatch, noCard, panicked };
 
+/**
+ * The two OCR tiers' last reads, which are **not** a field of any verdict above.
+ *
+ * Every verdict here has `ocr: null` and `collector: null`, and that is the ordinary frame
+ * rather than an omission: the readers run on one eligible frame in four (`session::OCR_EVERY`)
+ * and stop once the tracker has decided. `useScanLoop` keeps the last of each across the frames
+ * that carried none, so they reach `ScannerPanels` as `lastOcr`/`lastCollector` props of their
+ * own — which is what these are for.
+ *
+ * Deliberately a *failed* pair: the two "could not resolve" fallbacks, the pairings list and
+ * its truncation line are the rows with somewhere to go wrong, and a clean read exercises none
+ * of them.
+ */
+const ocr: ScannerOcr = {
+  raw: "5torm of 5aruman!",
+  normalized: "5torm of 5aruman",
+  rotated: false,
+  elapsed_ms: 41.2,
+  band: "data:image/png;base64,iVBORw0KGgo=",
+  matched: null,
+  edits: null,
+};
+
+const collector: ScannerCollector = {
+  raw: "0072 LTR",
+  rotated: false,
+  elapsed_ms: 18.6,
+  pairings: 5,
+  tried: [
+    { set: "LTR", number: "72", matched: null },
+    { set: "72", number: "LTR", matched: null },
+  ],
+  more: 3,
+  band: "data:image/png;base64,iVBORw0KGgo=",
+  matched: null,
+};
+
+export const READS = { ocr, collector };
+
 const scannerDir = "D:\\app\\data\\scanner\\";
 
 const present: ScannerStatus = {
@@ -275,4 +316,45 @@ const noModels: ScannerStatus = {
   scans_dir: `${scannerDir}scans`,
 };
 
-export const STATUS = { present, missing, noModels };
+/**
+ * Every file on disk and not one of them readable — the state `loaded` alone cannot tell from
+ * `missing`, and the one that used to print an instruction to place a file that was already
+ * there. Each asset carries the sentence its loader wrote.
+ */
+const corrupt: ScannerStatus = {
+  bundle: {
+    path: `${scannerDir}card-hashes.bin`,
+    present: true,
+    loaded: false,
+    error: "bad magic: this is not a card-hashes bundle",
+  },
+  detection_model: {
+    path: `${scannerDir}text-detection.rten`,
+    present: true,
+    loaded: false,
+    error: "could not load model: unsupported operator",
+  },
+  recognition_model: {
+    path: `${scannerDir}text-recognition.rten`,
+    present: true,
+    loaded: false,
+    error: "could not load model: unsupported operator",
+  },
+  labels: 0,
+  scans_dir: `${scannerDir}scans`,
+};
+
+/**
+ * The bundle parsed and its labels did not — `loaded: true` with an `error` beside it.
+ *
+ * A working scanner rather than a broken one: every match still lands, and every match reads
+ * as an id. `scanner.rs` writes this for a `corpus.db` that is not there and for a read that
+ * failed, which is why the panel says it *under* the verdict instead of in place of one.
+ */
+const unlabelled: ScannerStatus = {
+  ...present,
+  bundle: { ...present.bundle, error: `labels: corpus.db not found at ${scannerDir}..\\corpus.db` },
+  labels: 0,
+};
+
+export const STATUS = { present, missing, noModels, corrupt, unlabelled };

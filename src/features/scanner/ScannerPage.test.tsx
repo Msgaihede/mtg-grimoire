@@ -14,7 +14,10 @@ vi.mock("@/lib/ipc", async (orig) => {
       ...real.ipc,
       scannerStatus: vi.fn(async () => STATUS.missing),
       scannerFrame: vi.fn(),
-      scannerReset: vi.fn(),
+      // `async` rather than a bare `vi.fn()`: the real command answers a promise and the page
+      // now attaches a rejection handler to it, so a mock returning `undefined` is a shape the
+      // app cannot produce — and one that would make every test here fail for the wrong reason.
+      scannerReset: vi.fn(async () => {}),
       scannerCapture: vi.fn(async () => ({ saved: "live-7.jpg" })),
     },
   };
@@ -260,6 +263,23 @@ describe("ScannerPage", () => {
     mount();
     await userEvent.click(await screen.findByRole("button", { name: "Reset evidence" }));
     expect(vi.mocked(ipc.scannerReset)).toHaveBeenCalled();
+  });
+
+  /**
+   * A press that fails has somewhere to say so. `void ipc.scannerReset()` discarded the
+   * rejection, so a poisoned scanner state or a thread that did not come back was a button
+   * that visibly did nothing — the evidence stayed on screen with no sentence anywhere.
+   */
+  it("puts a refused reset in the strip under the video", async () => {
+    refused();
+    vi.mocked(ipc.scannerReset).mockRejectedValueOnce("the scanner state is poisoned");
+    const { container } = mount();
+    await userEvent.click(await screen.findByRole("button", { name: "Reset evidence" }));
+    await waitFor(() =>
+      expect(container.querySelector("[aria-live='polite']")).toHaveTextContent(
+        "the scanner state is poisoned",
+      ),
+    );
   });
 
   it("files a capture under the five fields the sidecar has, read off the last verdict", async () => {

@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, within } from "storybook/test";
 import { useAppStore, type ScannerPanelId } from "@/lib/store";
-import { STATUS, VERDICTS } from "./fixtures";
+import { READS, STATUS, VERDICTS } from "./fixtures";
 import { DEFAULT_SCANNER_OPTIONS, DEFAULT_SEND_PX } from "./scannerOptions";
 import { ScannerPanels, type ScannerPanelsProps } from "./ScannerPanels";
 
@@ -47,7 +47,18 @@ const meta = {
   args: {
     status: STATUS.present,
     verdict: VERDICTS.voting,
-    roundTripMs: 180,
+    // Both `null`, which is the honest default: every shared verdict fixture has `ocr: null`,
+    // and these two are the loop's *latch* rather than a field of the frame. `ReadoutsWithReads`
+    // below is the story that fills them.
+    lastOcr: null,
+    lastCollector: null,
+    // A real `performance.now()` delta rather than a round number — the figure this row prints
+    // came off the clock and the panel is what rounds it. A `180` here cannot tell a `.toFixed(1)`
+    // from a bare interpolation, which is how `288.39999999999998 ms` reached the shipped window.
+    // **The digits have to be in the double, not just in the literal**: `288.39999999999998`
+    // parses to the same double as `288.4` and `String()`s back as `"288.4"`, so it would prove
+    // nothing here. This one round-trips long.
+    roundTripMs: 288.4000000000001,
     rate: 5.6,
     options: DEFAULT_SCANNER_OPTIONS,
     sendPx: DEFAULT_SEND_PX,
@@ -198,6 +209,28 @@ export const ModelsMissing: Story = {
   play: async ({ canvasElement }) => {
     const readouts = within(canvasElement).getByRole("region", { name: "Readouts" });
     await expect(within(readouts).getByText(/No OCR models\. Put/)).toBeInTheDocument();
+  },
+};
+
+/**
+ * Both tiers' last reads, on a frame that carried neither.
+ *
+ * **This is the ordinary case rather than an edge one**, and it is why the two reads are props
+ * instead of verdict fields: the readers run on one eligible frame in four, so `verdict.ocr` is
+ * `null` on three of them and a panel drawing the *frame's* reads blinks between them. The
+ * verdict here is `voting` — `ocr: null`, `collector: null` — and the readouts are full anyway.
+ *
+ * Both reads failed to resolve, which is the half with somewhere to go wrong: `no name`, `no
+ * printing`, the two attempted pairings and the line saying three more were dropped.
+ */
+export const ReadoutsWithReads: Story = {
+  args: { lastOcr: READS.ocr, lastCollector: READS.collector },
+  render: column("readouts"),
+  play: async ({ canvasElement }) => {
+    const readouts = within(canvasElement).getByRole("region", { name: "Readouts" });
+    await expect(within(readouts).getByText("5torm of 5aruman!")).toBeInTheDocument();
+    await expect(within(readouts).getByText("no printing")).toBeInTheDocument();
+    await expect(within(readouts).getByText("+3 more pairings not shown")).toBeInTheDocument();
   },
 };
 

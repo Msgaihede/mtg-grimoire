@@ -33,9 +33,10 @@ import syncCommandsRs from "../../src-tauri/src/sync_engine/commands.rs?raw";
 import syncLiveRs from "../../src-tauri/src/sync_engine/live.rs?raw";
 import wishlistRs from "../../src-tauri/src/wishlist.rs?raw";
 import wishlistOptimizeRs from "../../src-tauri/src/wishlist_optimize.rs?raw";
-// The scanner's six, all in the `card-scanner` crate rather than under `src-tauri/src` — the
-// detector is a library with a CLI of its own, and the shapes the page reads are declared
-// there. `src-tauri/src/scanner.rs` is the seventh and is read below rather than imported.
+// The scanner's seven. Six are in the `card-scanner` crate rather than under `src-tauri/src` —
+// the detector is a library with a CLI of its own, and the shapes the page reads are declared
+// there — and `src-tauri/src/scanner.rs` is the app's own four commands.
+import scannerRs from "../../src-tauri/src/scanner.rs?raw";
 import sessionRs from "../../crates/card-scanner/src/session.rs?raw";
 import referenceRs from "../../crates/card-scanner/src/reference.rs?raw";
 import lockRs from "../../crates/card-scanner/src/lock.rs?raw";
@@ -60,22 +61,6 @@ import {
   type SyncProgressEvent,
   type TheorySlot,
 } from "@/lib/ipc";
-
-/**
- * **`src-tauri/src/scanner.rs` is read through a glob rather than imported**, and the reason is
- * that a bare `?raw` import of a file that is not in the tree is a *build* error: the four rows
- * that read it would take this whole suite down while the Tauri half of the scanner is still
- * being written, rather than reporting themselves as unchecked. An `import.meta.glob` over a
- * single literal path answers `{}` for an absent file and one entry for a present one, so the
- * rows stay on the list either way and start running — unchanged — the moment the file lands.
- */
-const scannerRs = Object.values(
-  import.meta.glob("../../src-tauri/src/scanner.rs", {
-    query: "?raw",
-    import: "default",
-    eager: true,
-  }),
-)[0] as string | undefined;
 
 beforeEach(() => {
   invoke.mockReset();
@@ -3127,7 +3112,7 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
    * agreeing field for field while every standing in the list reads `undefined`, which draws a
    * candidate table of `NaN`s rather than an empty one. So each level is named.
    */
-  const snakeMirrors: [tsName: string, rustSource: string | undefined, rustName: string][] = [
+  const snakeMirrors: [tsName: string, rustSource: string, rustName: string][] = [
     ["ScannerAsset", scannerRs, "Asset"],
     ["ScannerStatus", scannerRs, "ScannerStatus"],
     ["ScannerSidecar", scannerRs, "Sidecar"],
@@ -3151,29 +3136,16 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     ["ScannerTrim", trimRs, "Margin"],
   ];
 
-  /**
-   * A loop rather than `it.each`, and the reason is the four rows whose source is not in the
-   * tree yet: `it.each` runs one body for every row and cannot choose `it.todo` per row, so a
-   * missing `src-tauri/src/scanner.rs` would either fail four rows for something that is not a
-   * drift or make them disappear from the list — and "is this struct checked?" is answered by
-   * whether a name appears on one of these tables and by nothing else. Reported as todo, they
-   * are visibly unchecked in the run's own output. The rows themselves need no edit when the
-   * file lands; they simply start running.
-   */
-  for (const [tsName, rustSource, rustName] of snakeMirrors) {
-    const title = `the ${tsName} mirror agrees with the Rust struct field for field, snake case kept`;
-    if (rustSource === undefined) {
-      it.todo(`${title} — src-tauri/src/scanner.rs is not in the tree yet`);
-      continue;
-    }
-    it(title, () => {
+  it.each(snakeMirrors)(
+    "the %s mirror agrees with the Rust struct field for field, snake case kept",
+    (tsName, rustSource, rustName) => {
       const rust = rustFields(rustSource, rustName);
       const ts = tsFields(ipcSource, tsName);
       expect(rust.length, `nothing parsed out of \`${rustName}\``).toBeGreaterThan(0);
       expect(ts.length, `nothing parsed out of \`${tsName}\``).toBeGreaterThan(0);
       expect([...ts].sort()).toEqual([...rust].sort());
-    });
-  }
+    },
+  );
 
   /**
    * `PullRow`'s picture, named on its own — the assertion `mirrors` makes for the four card

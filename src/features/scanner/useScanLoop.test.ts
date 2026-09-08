@@ -1,7 +1,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_SCANNER_OPTIONS, DEFAULT_SEND_PX } from "./scannerOptions";
-import { VERDICTS } from "./fixtures";
+import { READS, VERDICTS } from "./fixtures";
 import type { ScannerOptions, ScannerVerdict } from "./types";
 import { useScanLoop } from "./useScanLoop";
 
@@ -209,6 +209,93 @@ describe("useScanLoop", () => {
     });
     await tick();
     expect(scannerFrame).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * **The readers run on one eligible frame in four**, so `verdict.ocr` is `null` on most
+   * frames — a panel reading the current verdict says "nothing read" three frames in four on a
+   * card the tier read perfectly. The loop keeps the last of each; the frames that carried
+   * none must not overwrite it.
+   */
+  it("keeps the last read across the frames that carried none, and a reset drops it", async () => {
+    const first = deferred<ScannerVerdict>();
+    const second = deferred<ScannerVerdict>();
+    scannerFrame
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise)
+      .mockReturnValue(deferred<ScannerVerdict>().promise);
+    const { result } = mount();
+    await tick();
+    expect(result.current.lastOcr).toBeNull();
+    expect(result.current.lastCollector).toBeNull();
+
+    await act(async () => {
+      first.resolve({ ...VERDICTS.voting, ocr: READS.ocr, collector: READS.collector });
+    });
+    expect(result.current.lastOcr).toEqual(READS.ocr);
+    expect(result.current.lastCollector).toEqual(READS.collector);
+
+    // The ordinary next frame: the readers did not run on it, so both fields are `null`.
+    await act(async () => {
+      second.resolve(VERDICTS.voting);
+    });
+    expect(result.current.verdict?.ocr).toBeNull();
+    expect(result.current.verdict?.collector).toBeNull();
+    expect(result.current.lastOcr).toEqual(READS.ocr);
+    expect(result.current.lastCollector).toEqual(READS.collector);
+
+    // Reset's other half: the crate drops its evidence, the loop drops what it is holding.
+    act(() => {
+      result.current.clearReads();
+    });
+    expect(result.current.lastOcr).toBeNull();
+    expect(result.current.lastCollector).toBeNull();
+  });
+
+  it("drops both reads when the camera stops", async () => {
+    const first = deferred<ScannerVerdict>();
+    scannerFrame.mockReturnValueOnce(first.promise).mockReturnValue(deferred<ScannerVerdict>().promise);
+    const videoRef = { current: readyVideo() };
+    const grabFrame = vi.fn(async () => BYTES);
+    const { result, rerender } = renderHook(
+      ({ live }: { live: boolean }) =>
+        useScanLoop({ videoRef, live, options: DEFAULT_SCANNER_OPTIONS, sendPx: DEFAULT_SEND_PX, grabFrame }),
+      { initialProps: { live: true } },
+    );
+    await tick();
+    await act(async () => {
+      first.resolve({ ...VERDICTS.voting, ocr: READS.ocr, collector: READS.collector });
+    });
+    expect(result.current.lastOcr).toEqual(READS.ocr);
+
+    rerender({ live: false });
+    expect(result.current.lastOcr).toBeNull();
+    expect(result.current.lastCollector).toBeNull();
+    // …and a camera that opens again starts with nothing carried over from the last one.
+    rerender({ live: true });
+    expect(result.current.lastOcr).toBeNull();
+  });
+
+  /**
+   * **The grab used to sit outside the `try`, and a throw there took the whole loop down
+   * silently.** `drawImage` throws on a tainted canvas and `toBlob` can fail under memory
+   * pressure; unhandled, the rejection ended `pump()` with `error` still `null` — a picture
+   * that keeps moving, an overlay frozen on its last quad, and nothing anywhere saying why.
+   */
+  it("shows a failed frame grab's sentence and keeps pumping", async () => {
+    scannerFrame.mockReturnValue(deferred<ScannerVerdict>().promise);
+    const grabFrame = vi.fn(async (): Promise<Uint8Array | null> => {
+      throw new Error("the canvas is tainted");
+    });
+    const { result } = mount({ grabFrame });
+    await tick();
+    expect(result.current.error).toBe("the canvas is tainted");
+    // Nothing went on the wire — a frame that never became bytes was never in flight.
+    expect(scannerFrame).not.toHaveBeenCalled();
+
+    const tried = grabFrame.mock.calls.length;
+    for (let i = 0; i < 3; i++) await tick();
+    expect(grabFrame.mock.calls.length).toBeGreaterThan(tried);
   });
 
   it("waits rather than sending when the frame grab comes back empty", async () => {

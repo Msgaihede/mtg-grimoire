@@ -205,6 +205,26 @@ jobs:
                 frontend=true
                 ;;
 
+              # The `card-scanner` crate. It is a **separate cargo package** — deliberately not
+              # a workspace member — that `src-tauri` takes as a path dependency, and three jobs
+              # read it: `rust` compiles it into the app and now runs its own suite, `android`
+              # cross-compiles the same dependency, and `frontend` reads six of its `.rs` files
+              # as text (`ipc.test.ts`'s snake-case mirror rows) and lints
+              # `crates/*/scripts/**/*.mjs` under `eslint .`.
+              #
+              # **This arm changes nothing and declares what was already happening**: `crates/`
+              # matched no arm, so the `*)` fail-safe below sent it to all four. `wasm` is kept
+              # rather than narrowed away — nothing here reaches that build today, because
+              # `src-tauri/Cargo.toml` has the dependency in its `cfg(not(target_family =
+              # "wasm"))` block, but which block it sits in is that manifest's decision and this
+              # is not the commit to start skipping a job on the strength of it.
+              crates/*)
+                frontend=true
+                rust=true
+                wasm=true
+                android=true
+                ;;
+
               # Anything unrecognised runs everything. This is the fail-safe that makes the
               # lists above safe to be wrong in the cheap direction: a new root-level config
               # file, a new top-level directory, a path nobody thought about — all of it
@@ -332,6 +352,23 @@ jobs:
       - name: cargo test
         working-directory: src-tauri
         run: cargo test --locked
+
+      # **The `card-scanner` crate's own suite, which ran in no CI job until 2026-09-08.** It is
+      # a separate cargo package rather than a workspace member, so the `cargo test` above does
+      # not touch a line of it — and `session::tests` is where the `live.html` key census, the
+      # panic guard and the reader cadence live. `npm run verify` was the only fence.
+      # `--features cli` is what `verify` runs, so the debug server's tests are in it.
+      #
+      # **Test-only, on purpose.** The crate is not `cargo fmt`-clean and carries four
+      # pre-existing clippy warnings — both measured and listed in
+      # `docs/reference/card-scanner.md` §8 — so `fmt --check` and `clippy -D warnings` would go
+      # red on day one for something this step is not about. Tidying it is its own commit.
+      #
+      # Linux only, like `cargo fmt` above: the crate has no `cfg`-gated platform paths, so a
+      # second leg would compile `ocrs`/`rten` again to prove the same thing.
+      - name: cargo test (card-scanner)
+        if: matrix.os == 'ubuntu-22.04'
+        run: cargo test --locked --features cli --manifest-path crates/card-scanner/Cargo.toml
 
   wasm:
     name: wasm

@@ -1835,6 +1835,9 @@ The whole record, including the pipeline the crate implements:
   only**, so the crate's own copies do nothing the moment `src-tauri` takes it as a dependency.
   Measured 2026-09-08 on the debug server: rectify 2,022 ms against 48 ms in release, a 960 px
   JPEG decode 230 ms against 3–4 — a `tauri dev` scanner without these is a slideshow.
+  **The block is seventeen packages rather than the two this bullet names**: those two and
+  fifteen more the live pass measured in — the crate itself, `ocrs`, the eleven `rten*` crates
+  and `zune-jpeg`/`zune-core`; the manifest's own comment is the list and the reason.
 - **Assets are files in `data/scanner/` and a missing one is a _state_, never an error.** No
   bundle is a session that detects and rectifies and names nothing (the debug server's own
   behaviour); no `models/*.rten` pair is a session with no reader. `scanner_status` reports the

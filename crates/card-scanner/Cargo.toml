@@ -17,7 +17,12 @@ path = "src/lib.rs"
 
 [features]
 default = []
-# The developer tools. Neither ever enters the app's dependency graph.
+# **`corpus` and `ocr` are the app's two**, and have been since 2026-09-08:
+# `src-tauri/Cargo.toml` takes this crate as a path dependency with exactly those enabled.
+# `cli` and `builder` below are the developer tools, and *those* are the two that never enter
+# the app's dependency graph — the sentence that used to stand here said "neither" of the pair
+# under it, which stopped being true the day the app took the crate.
+#
 # `corpus` is the optional join back to the app's `corpus.db` — it turns a matched id into
 # a card name. Separate from `cli` because the library can match without it, and a bundle
 # with no corpus beside it still answers, just with ids.
@@ -26,6 +31,8 @@ corpus = ["dep:rusqlite"]
 # `cmake`, `bindgen` and `*-sys` and has none — so it cross-compiles for Android the way
 # the rest of this crate does.
 ocr = ["dep:ocrs", "dep:rten"]
+# The two developer tools — the debug server (`bin/serve.rs`) and the bundle builder. Each
+# turns the app's two on for its own use; neither is ever compiled into the app.
 cli = ["dep:clap", "dep:tiny_http", "corpus", "ocr"]
 builder = ["dep:clap", "dep:ureq", "dep:rayon", "corpus"]
 

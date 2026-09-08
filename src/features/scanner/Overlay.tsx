@@ -48,8 +48,10 @@ export function Overlay({
       const video = videoRef.current;
       if (canvas === null || video === null) return;
 
-      // Sized to the video's own pixels rather than to the element's CSS box: the canvas is
-      // stretched to fit by `h-full w-full`, so one coordinate system serves every layout.
+      // Sized to the video's own pixels rather than to the element's CSS box: these two
+      // attributes are also the canvas's *intrinsic* size, which is what `object-contain` on
+      // the element letterboxes — so one coordinate system serves every layout and lands on
+      // the picture rather than beside it.
       // Assigning either dimension clears the canvas, so only do it when it actually changed.
       if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
         canvas.width = video.videoWidth;
@@ -106,7 +108,18 @@ export function Overlay({
   return (
     // Decorative: the headline and the panels beside the video say everything a screen reader
     // needs, and a box drawn around a card has no description an `alt` could usefully carry.
-    <canvas ref={canvasRef} aria-hidden="true" className="absolute inset-0 h-full w-full" />
+    //
+    // **`object-contain` matches the `<video>` under it, and the box is wrong without it.** A
+    // `<canvas>` is a replaced element whose intrinsic size is its `width`/`height` *attributes*
+    // — the video's own pixels, assigned in `draw()` — so `object-fit` letterboxes it exactly
+    // as the video is letterboxed. Left at the default `fill`, the 1920×1080 bitmap is stretched
+    // to the element's box while the picture inside that box is not: a 16:9 frame in the app's
+    // 1280×800 column draws the quad 25% too tall, and further out the narrower the column gets.
+    <canvas
+      ref={canvasRef}
+      aria-hidden="true"
+      className="absolute inset-0 h-full w-full object-contain"
+    />
   );
 }
 

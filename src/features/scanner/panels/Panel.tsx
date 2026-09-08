@@ -47,7 +47,12 @@ export function Panel({
 
   return (
     <section aria-labelledby={headingId} className="space-y-3">
-      <h2 id={headingId} className="font-heading text-lg leading-none">
+      {/* **`h3`, one level under the view's own `h2`.** `ScannerPage` mounts an `sr-only`
+          `<h2>Scanner</h2>` and every panel here is *inside* that view, so an `h2` on a panel
+          would make "Scanner" and "Match" siblings — a screen reader's heading list would then
+          read six views where there is one. Nothing visual moves: the size is `text-lg` either
+          way. `ReadoutsPanel`'s tier headings sit under this one at `h4`. */}
+      <h3 id={headingId} className="font-heading text-lg leading-none">
         {id === "match" ? (
           title
         ) : (
@@ -68,7 +73,7 @@ export function Panel({
             {title}
           </button>
         )}
-      </h2>
+      </h3>
 
       {open && (
         <div id={bodyId} className="space-y-3 rounded-lg border border-border bg-surface p-4">

@@ -60,7 +60,13 @@ export function BudgetPanel({
         {parts.map((p) => (
           <Row key={p.name} label={p.name} value={`${p.ms.toFixed(1)} ms`} />
         ))}
-        <Row label="round trip" value={roundTripMs === null ? "—" : `${roundTripMs} ms`} />
+        {/* `toFixed(1)` like the six rows above it, and not decoration: this is a
+            `performance.now()` delta straight off the clock, so a bare interpolation drew
+            `288.39999999999998 ms` in the shipped window. */}
+        <Row
+          label="round trip"
+          value={roundTripMs === null ? "—" : `${roundTripMs.toFixed(1)} ms`}
+        />
       </dl>
     </Panel>
   );

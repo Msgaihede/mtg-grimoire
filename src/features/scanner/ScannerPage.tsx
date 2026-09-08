@@ -1,6 +1,6 @@
 import { useRef, useState, type JSX } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ipc } from "@/lib/ipc";
+import { ipc, ipcError } from "@/lib/ipc";
 import { useNarrowWindow } from "@/lib/useNarrowWindow";
 import { isWebTarget } from "@/pwa/target";
 import { Overlay } from "./Overlay";
@@ -61,8 +61,23 @@ function LiveScanner() {
   const loop = useScanLoop({ videoRef, live: camera.kind === "live", options, sendPx });
   const narrow = useNarrowWindow();
 
+  /**
+   * A refusal to reset has somewhere to go, which `void ipc.scannerReset()` did not give it.
+   *
+   * The command can fail — a poisoned mutex, a scanner thread that did not come back — and a
+   * discarded rejection is a press that visibly did nothing and said nothing. It goes in the
+   * strip under the video, behind the detector's own sentence: the same failure that stops a
+   * reset stops every frame, and the frame's line names it better. Cleared on the next press
+   * rather than on a timer, so a reader who tries again sees the second answer, not the first.
+   */
+  const [resetError, setResetError] = useState<string | null>(null);
+
   const onReset = () => {
-    void ipc.scannerReset();
+    setResetError(null);
+    // The two halves of Reset: the crate drops the tracker's evidence, and the page drops the
+    // reads it is holding on top of it. Local first — it cannot fail and must not wait.
+    loop.clearReads();
+    ipc.scannerReset().catch((e: unknown) => setResetError(ipcError(e)));
   };
 
   /**
@@ -144,7 +159,9 @@ function LiveScanner() {
               grew and shrank under the video with each one would be the loudest thing on the
               screen. Two lines of room, held whether or not there is anything to put in it. */}
           <p className="absolute bottom-2 left-3 min-h-[2.5em] text-xs text-dim" aria-live="polite">
-            {loop.verdict?.ok === false ? (loop.verdict.error ?? "") : (loop.error ?? "")}
+            {loop.verdict?.ok === false
+              ? (loop.verdict.error ?? "")
+              : (loop.error ?? resetError ?? "")}
           </p>
         </div>
 
@@ -155,6 +172,8 @@ function LiveScanner() {
           <ScannerPanels
             status={status.data ?? null}
             verdict={loop.verdict}
+            lastOcr={loop.lastOcr}
+            lastCollector={loop.lastCollector}
             roundTripMs={loop.roundTripMs}
             rate={loop.rate}
             options={options}

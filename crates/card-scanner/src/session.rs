@@ -25,8 +25,9 @@ use crate::track::{CommitRule, Observation, Tracker, TrackerOptions};
 use crate::trim::Margin;
 
 /// **The readers run only while the hash tier is still unsure, and never more than every few
-/// frames.** Reading a title costs ~250 ms against a ~80 ms frame (release), so running them
-/// on every frame would cut the rate by two thirds to answer a question that is usually
+/// frames.** Reading a title costs **~340 ms against a ~350 ms frame** (release, measured
+/// 2026-09-08 — `docs/reference/card-scanner.md` §4 and §7), so running them on every frame
+/// would roughly halve the rate to answer a question that is usually
 /// already answered. They are a tie-breaker: they earn their cost exactly when appearance has
 /// failed — a foil under a lamp, where the hash's top five do not contain the card at all and
 /// the title is still perfectly legible.

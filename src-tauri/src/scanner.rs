@@ -141,6 +141,12 @@ pub fn load(dir: &Path, corpus: &Path, top: usize) -> Loaded {
             Ok(b) => {
                 bundle.loaded = true;
                 let mut reference = Reference::new(b);
+                // **A bundle that loaded and labels that did not is its own state, and the
+                // page draws a different sentence for it** — matching still works and answers
+                // ids, so `Asset::error` beside `loaded: true` is what says so. An absent
+                // `corpus.db` used to leave that field `None`, which made a nameless scanner
+                // indistinguishable from a working one; the sentence names the path for the
+                // reason every other sentence here does.
                 if corpus.is_file() {
                     match rusqlite::Connection::open_with_flags(
                         corpus,
@@ -150,8 +156,13 @@ pub fn load(dir: &Path, corpus: &Path, top: usize) -> Loaded {
                     .and_then(|conn| reference.load_labels(&conn))
                     {
                         Ok(n) => labels = n,
-                        Err(e) => bundle.error = Some(format!("labels: {e} — matches will be ids")),
+                        Err(e) => bundle.error = Some(format!("labels: {e}")),
                     }
+                } else {
+                    bundle.error = Some(format!(
+                        "labels: corpus.db not found at {}",
+                        corpus.display()
+                    ));
                 }
                 Some(reference)
             }
@@ -394,6 +405,38 @@ mod tests {
         assert!(loaded.status.bundle.present);
         assert!(!loaded.status.bundle.loaded);
         assert!(loaded.status.bundle.error.is_some());
+    }
+
+    /// A bundle that parsed with no `corpus.db` beside it: **loaded, and carrying a sentence
+    /// about its names**. The two facts have to be separable — the scanner matches perfectly
+    /// well here and answers ids — which is why this is `Asset::error` on a loaded asset
+    /// rather than `loaded: false`, and why the page draws a different sentence for it.
+    #[test]
+    fn a_bundle_with_no_corpus_beside_it_says_where_it_looked() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let scanner = dir.path().join("scanner");
+        std::fs::create_dir_all(&scanner).expect("mkdir");
+        let empty = card_scanner::index::BundleBuilder::new(
+            card_scanner::hash::HashKind::DHashChroma32,
+            256,
+        )
+        .finish(0)
+        .to_bytes();
+        std::fs::write(scanner.join(BUNDLE_FILE), empty).expect("write");
+
+        let corpus = dir.path().join("corpus.db");
+        let loaded = load(&scanner, &corpus, 5);
+        assert!(loaded.status.bundle.present && loaded.status.bundle.loaded);
+        assert_eq!(loaded.status.labels, 0);
+        let err = loaded
+            .status
+            .bundle
+            .error
+            .expect("a bundle with no corpus owes a sentence about its names");
+        assert!(err.contains("corpus.db not found"), "{err}");
+        assert!(err.contains(&corpus.display().to_string()), "{err}");
+        // The session is fully built either way: nameless is a state, not a failure.
+        assert!(loaded.session.has_reference());
     }
 
     #[test]

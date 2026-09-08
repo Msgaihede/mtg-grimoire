@@ -4,11 +4,27 @@ import { MatchPanel } from "./panels/MatchPanel";
 import { PipelinePanel } from "./panels/PipelinePanel";
 import { ReadoutsPanel } from "./panels/ReadoutsPanel";
 import { RectifiedPanel } from "./panels/RectifiedPanel";
-import type { ScannerOptions, ScannerStatus, ScannerVerdict } from "./types";
+import type {
+  ScannerCollector,
+  ScannerOcr,
+  ScannerOptions,
+  ScannerStatus,
+  ScannerVerdict,
+} from "./types";
 
 export interface ScannerPanelsProps {
   status: ScannerStatus | null;
   verdict: ScannerVerdict | null;
+  /**
+   * The last title read, which is **not** `verdict.ocr` and must not be replaced by it.
+   *
+   * The readers run on one eligible frame in four, so the current verdict's own `ocr` is
+   * `null` most of the time and a Readouts panel fed it flashes "nothing read" between reads.
+   * `useScanLoop` keeps the last one; everything else on this column is still the frame's.
+   */
+  lastOcr: ScannerOcr | null;
+  /** The last collector-line read, for {@link ScannerPanelsProps.lastOcr}'s reason. */
+  lastCollector: ScannerCollector | null;
   /** The pump's last round trip; the budget's `transport` is this minus the crate's stages. */
   roundTripMs: number | null;
   /** Frames per second over the last twenty. */
@@ -45,6 +61,7 @@ export function ScannerPanels(p: ScannerPanelsProps) {
       <MatchPanel
         status={p.status}
         verdict={p.verdict}
+        lastCollector={p.lastCollector}
         rate={p.rate}
         onReset={p.onReset}
         onCapture={p.onCapture}
@@ -58,7 +75,13 @@ export function ScannerPanels(p: ScannerPanelsProps) {
       {p.options.stages && <PipelinePanel stages={p.verdict?.stages ?? null} />}
       <BudgetPanel verdict={p.verdict} roundTripMs={p.roundTripMs} />
       <RectifiedPanel verdict={p.verdict} />
-      <ReadoutsPanel status={p.status} verdict={p.verdict} rule={rule} />
+      <ReadoutsPanel
+        status={p.status}
+        verdict={p.verdict}
+        ocr={p.lastOcr}
+        collector={p.lastCollector}
+        rule={rule}
+      />
     </div>
   );
 }
