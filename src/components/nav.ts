@@ -1,4 +1,4 @@
-import { Handshake, Heart, ScanLine, Search, Settings, Tags, type LucideIcon } from "lucide-react";
+import { Camera, Handshake, Heart, Search, Settings, Tags, type LucideIcon } from "lucide-react";
 import { CabinetFiling, Cards } from "@/components/icons";
 import type { ViewId } from "@/lib/store";
 
@@ -48,7 +48,8 @@ export const NAV: readonly NavEntry[] = [
   // Publishing is the Collection's own control. The chord that moved is `Ctrl+6`; Scanner is
   // `Ctrl+7` and Settings `Ctrl+8`, and `docs/reference/keyboard-shortcuts.md` says so.
   { id: "shared", label: "Shared", Icon: Handshake },
-  // Before Settings so Settings stays the last row.
-  { id: "scanner", label: "Scanner", Icon: ScanLine },
+  // Before Settings so Settings stays the last row. **`Camera` and not `ScanLine`** (main,
+  // 985b872e): that glyph drew a barcode scanner, and this view is a camera pointed at a card.
+  { id: "scanner", label: "Scanner", Icon: Camera },
   { id: "settings", label: "Settings", Icon: Settings },
 ];
