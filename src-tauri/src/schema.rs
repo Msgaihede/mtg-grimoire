@@ -359,7 +359,7 @@ pub const LEGACY_SINGLE_FILE_VERSION: i64 = 26;
 /// for taking the next free number at the moment you land rather than at the moment you start.
 /// The
 /// user's ladder can never restart, because its rungs describe rows nothing else can produce.
-pub const USER_SCHEMA_VERSION: i64 = 40;
+pub const USER_SCHEMA_VERSION: i64 = 41;
 
 /// `corpus.db`'s version, on a number line of its own.
 ///
@@ -420,6 +420,13 @@ pub const TABLES: &[(&str, Side)] = &[
     ("card_migrations", Side::User),
     ("collection_entries", Side::User),
     ("collection_folders", Side::User),
+    // A cache of the relay's share list (user schema v41), and the one table on this list
+    // whose rows another machine *could* produce again — the relay's `GET /g/{group}/shares`
+    // is the roster and this is a copy of it. It is the reader's anyway, by the question one
+    // line up: what it holds is which of *their* folders they published, and the copy is what
+    // lets a folder wear its badge with no signal. It is emphatically not synced —
+    // `SYNCED_TABLES` answers that one, and stays at thirteen.
+    ("collection_shares", Side::User),
     ("deck_audit", Side::User),
     ("deck_cards", Side::User),
     ("deck_categories", Side::User),
@@ -3394,7 +3401,7 @@ const COMBO_INDEXES_SQL: &str = "
 /// Public because `VACUUM` needs it. Anything that renumbers `cards`' rowids leaves this
 /// index pointing at the wrong rows, and the failure is silent — see
 /// [`crate::maintenance::convert_to_incremental`], which calls this unconditionally.
-/// The twenty-four user tables and their thirty-nine indexes, at [`USER_SCHEMA_VERSION`]'s
+/// The twenty-five user tables and their forty-one indexes, at [`USER_SCHEMA_VERSION`]'s
 /// shape, with `{schema}` where the file goes.
 ///
 /// **Copied verbatim out of a migrated database's own `sqlite_master`, not retyped from the
@@ -3845,6 +3852,23 @@ CREATE TABLE {schema}.deck_tokens (
                  updated_at INTEGER NOT NULL
               , sync_uid TEXT);
 
+CREATE TABLE {schema}.collection_shares (
+                 id TEXT PRIMARY KEY,
+                 -- `collection_folders.sync_uid`, and NULL for a whole-collection share. Soft,
+                 -- like every other cross-table reference in a user table: a share outlives the
+                 -- device that made it and a row id is local.
+                 folder_uid TEXT,
+                 title TEXT NOT NULL,
+                 -- The wire form, verbatim — a JSON array of `condition`/`lang`/`value`.
+                 fields TEXT NOT NULL,
+                 state TEXT NOT NULL DEFAULT 'live'
+                     CHECK (state IN ('live','lapsed','revoked')),
+                 -- When THIS device last uploaded. NULL means it never has, which is what a
+                 -- second device in the group reads before it offers Update.
+                 published INTEGER,
+                 updated_at INTEGER NOT NULL
+             );
+
 CREATE UNIQUE INDEX {schema}.idx_collection_grain ON collection_entries (
                  card_id, finish, condition, lang, altered, signed, proxy, misprint,
                  coalesce(serial_number, ''), coalesce(grading, ''), coalesce(folder_id, 0)
@@ -3942,9 +3966,15 @@ CREATE UNIQUE INDEX {schema}.idx_device_names_uid ON device_names (sync_uid);
 CREATE UNIQUE INDEX {schema}.idx_deck_tokens_grain ON deck_tokens (deck_id, oracle_id);
 
 CREATE UNIQUE INDEX {schema}.idx_deck_tokens_uid ON deck_tokens (sync_uid);
+
+CREATE UNIQUE INDEX {schema}.idx_collection_shares_folder
+                 ON collection_shares (folder_uid) WHERE folder_uid IS NOT NULL;
+
+CREATE UNIQUE INDEX {schema}.idx_collection_shares_whole
+                 ON collection_shares (folder_uid IS NULL) WHERE folder_uid IS NULL;
 "#;
 
-/// Create the twenty-four user tables and their indexes in `schema`, at
+/// Create the twenty-five user tables and their indexes in `schema`, at
 /// [`USER_SCHEMA_VERSION`]'s shape.
 ///
 /// **One function, two callers, and that is deliberate**: [`crate::split::extract_user_file`]
@@ -5686,6 +5716,71 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
         tx.commit()?;
     }
 
+    // v41: the reader can publish a read-only page of a binder, and this is the cache of
+    // what the relay says they have published.
+    //
+    // **It is a cache, and it is deliberately not synced.** The relay's
+    // `GET /g/{group}/shares` is the roster, exactly as the rewrapped key set is the roster
+    // for group membership — a synced copy would be a second record of a fact the relay
+    // already holds, and the two would disagree the first time a device was offline during a
+    // revoke. So there is **no `sync_uid` column**, unlike every table that climbed v29, and
+    // [`SYNCED_TABLES`] stays at thirteen. What the table buys is a "shared" badge on a
+    // folder that survives being offline, and nothing more.
+    //
+    // **Two partial unique indexes, and one would not do.** SQLite treats NULLs in a UNIQUE
+    // index as distinct, so `idx_collection_shares_folder` — the one that says a folder may
+    // be shared once — is `WHERE folder_uid IS NOT NULL`, and without the second index the
+    // whole-collection share would be fenced by nothing at all: every one of them carries a
+    // NULL `folder_uid`, and NULLs collide with nothing, including each other.
+    //
+    // **And the second index is on an EXPRESSION rather than on the column, which is the
+    // whole of why it works.** `ON collection_shares (folder_uid) WHERE folder_uid IS NULL`
+    // reads like the fence and is not one: the rows it admits are exactly the rows whose
+    // indexed value is NULL, so the index holds nothing but keys that are distinct from one
+    // another and a second whole-collection share goes straight in. Measured on SQLite
+    // 3.53.0 before this was written down: the column form accepted the second row, and
+    // `(folder_uid IS NULL)` — which is `1` for every row the `WHERE` lets in, and so the
+    // same key every time — refused it. `the_share_cache_holds_one_whole_collection_share`
+    // is that measurement kept, and it is the one test here that would go green over a
+    // fence that had quietly stopped being one. It is the `coalesce(folder_id, 0)` trick
+    // [`COLLECTION_GRAIN`] plays, spelled as a partial index because only half this table's
+    // rows are the ones being counted.
+    //
+    // **The rung is a bare `CREATE TABLE`**, which is what makes [`tests::UNDO_V41`] owed:
+    // a fixture that leaves the table standing dies at `table collection_shares already
+    // exists` on the way back up, [`tests::UNDO_V13`]'s loud failure rather than v14's quiet
+    // one.
+    if v < 41 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(
+            "CREATE TABLE collection_shares (
+                 id TEXT PRIMARY KEY,
+                 -- `collection_folders.sync_uid`, and NULL for a whole-collection share. Soft,
+                 -- like every other cross-table reference in a user table: a share outlives the
+                 -- device that made it and a row id is local.
+                 folder_uid TEXT,
+                 title TEXT NOT NULL,
+                 -- The wire form, verbatim — a JSON array of `condition`/`lang`/`value`.
+                 fields TEXT NOT NULL,
+                 state TEXT NOT NULL DEFAULT 'live'
+                     CHECK (state IN ('live','lapsed','revoked')),
+                 -- When THIS device last uploaded. NULL means it never has, which is what a
+                 -- second device in the group reads before it offers Update.
+                 published INTEGER,
+                 updated_at INTEGER NOT NULL
+             );
+             CREATE UNIQUE INDEX idx_collection_shares_folder
+                 ON collection_shares (folder_uid) WHERE folder_uid IS NOT NULL;
+             CREATE UNIQUE INDEX idx_collection_shares_whole
+                 ON collection_shares (folder_uid IS NULL) WHERE folder_uid IS NULL;",
+        )?;
+        // Literal `41`, for the reason every step before it writes its own: this step is what
+        // *makes* a database version 41. `USER_SCHEMA_VERSION` would commit "fully migrated"
+        // before any step added after it had run.
+        tx.execute_batch("PRAGMA main.user_version = 41;")?;
+        tx.commit()?;
+    }
+
     // **The clock, repaired on every launch at every version — and this is not belt-and-braces.**
     //
     // Every capture trigger ends `FROM sync_clock c, sync_identity i, sync_group g`. That is a
@@ -6587,8 +6682,8 @@ pub(crate) mod tests {
             )
             .unwrap();
         assert_eq!(
-            stray, 24,
-            "the user file holds the twenty-four and nothing else"
+            stray, 25,
+            "the user file holds the twenty-five and nothing else"
         );
     }
 
@@ -6750,8 +6845,8 @@ pub(crate) mod tests {
 
         assert_eq!(
             want.len(),
-            65,
-            "twenty-four tables, thirty-nine indexes, and the two `sqlite_autoindex` rows a \n             TEXT PRIMARY KEY brings with it — `sync_devices`, `sync_state`, \n             `sync_peers` and `device_names` are `WITHOUT ROWID`, so each one's TEXT primary key IS the \n             table and brings no index of its own"
+            69,
+            "twenty-five tables, forty-one indexes, and the three `sqlite_autoindex` rows a \n             TEXT PRIMARY KEY brings with it — `sync_devices`, `sync_state`, \n             `sync_peers` and `device_names` are `WITHOUT ROWID`, so each one's TEXT primary key IS the \n             table and brings no index of its own, while `collection_shares` is a rowid table and \n             so brings one"
         );
         for (w, g) in want.iter().zip(got.iter()) {
             assert_eq!(w, g, "{} {} differs from the ladder's", g.0, g.1);
@@ -6825,7 +6920,7 @@ pub(crate) mod tests {
     /// The user side, spelled out. A table moving between the two files is a data migration,
     /// never a diff nobody noticed.
     #[test]
-    fn the_user_side_is_the_twenty_four_tables_no_feed_can_rebuild() {
+    fn the_user_side_is_the_twenty_five_tables_no_feed_can_rebuild() {
         let mut user: Vec<&str> = TABLES
             .iter()
             .filter(|(_, s)| *s == Side::User)
@@ -6839,6 +6934,7 @@ pub(crate) mod tests {
                 "card_migrations",
                 "collection_entries",
                 "collection_folders",
+                "collection_shares",
                 "deck_audit",
                 "deck_cards",
                 "deck_categories",
@@ -6970,7 +7066,26 @@ pub(crate) mod tests {
     /// `idx_device_names_uid` with it.
     const UNDO_V31: &str = "DROP TABLE IF EXISTS device_names;";
 
-    /// v40's deck kind, and the newest rewind on the user ladder.
+    /// v41's share cache — the newest rewind on the user ladder.
+    ///
+    /// Owed for [`UNDO_V13`]'s **loud** reason rather than [`UNDO_V14`]'s quiet one: the rung
+    /// is a plain `CREATE TABLE`, not `CREATE TABLE IF NOT EXISTS`, so a fixture that left
+    /// `collection_shares` standing dies at `table already exists` on the way back up — a
+    /// failure no real upgrade can produce, and one that takes every unrelated test in the
+    /// chain with it rather than only the ones about sharing.
+    ///
+    /// **It runs first, before [`UNDO_V40`]**, for that constant's stated reason: a rewind
+    /// walks the ladder backwards and this is now the top of it. The doc directly below said
+    /// the same of itself and told whoever wrote rung 41 to expect to collect the line; this
+    /// is that line, and the sentence goes on being a prediction rather than history for
+    /// exactly one rung at a time.
+    ///
+    /// **Neither index needs a line of its own**, [`UNDO_V20`]'s rule and [`UNDO_V31`]'s:
+    /// `DROP TABLE` takes `idx_collection_shares_folder` and `idx_collection_shares_whole`
+    /// with it.
+    const UNDO_V41: &str = "DROP TABLE IF EXISTS collection_shares;";
+
+    /// v40's deck kind — the rewind directly under [`UNDO_V41`].
     ///
     /// Owed for [`UNDO_V13`]'s **loud** reason rather than [`UNDO_V14`]'s quiet one:
     /// `ALTER TABLE decks ADD COLUMN` is not idempotent, so a fixture that kept the column
@@ -6978,11 +7093,10 @@ pub(crate) mod tests {
     /// produce, and one that takes every unrelated test in the chain with it rather than only
     /// the ones about the deck kind.
     ///
-    /// **It runs first, before [`UNDO_V39`]**, for that constant's stated reason: a rewind walks
-    /// the ladder backwards and this is now the top of it. The doc directly below said the same
-    /// of itself and told whoever wrote rung 40 to expect to collect the line; this is that
-    /// line, and the sentence is a prediction rather than history for exactly one rung at a
-    /// time.
+    /// **It runs after [`UNDO_V41`] and before [`UNDO_V39`]**, for that constant's stated
+    /// reason: a rewind walks the ladder backwards. It said "first" and "the top of it" while
+    /// v40 was head, which the share cache ended one rung later — the prediction the doc above
+    /// now carries, and the reason it is worth writing down each time.
     ///
     /// **One statement**, [`UNDO_V39`]'s shape: v40 appends a single column, so there is a
     /// single column to take back off and the stored table text lands back on exactly what v39
@@ -7254,7 +7368,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
+            "{UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
              PRAGMA main.user_version = 28;"
         ))
         .unwrap();
@@ -7286,7 +7400,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 31;"
+            "{UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 31;"
         ))
         .unwrap();
         conn
@@ -7313,7 +7427,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} PRAGMA main.user_version = 33;"
+            "{UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} PRAGMA main.user_version = 33;"
         ))
         .unwrap();
         conn
@@ -7340,7 +7454,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
+            "{UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
         ))
         .unwrap();
         conn
@@ -7364,7 +7478,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V40} {UNDO_V39} {UNDO_V38} PRAGMA main.user_version = 37;"
+            "{UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} PRAGMA main.user_version = 37;"
         ))
         .unwrap();
         conn
@@ -7385,7 +7499,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V40} {UNDO_V39} PRAGMA main.user_version = 38;"
+            "{UNDO_V41} {UNDO_V40} {UNDO_V39} PRAGMA main.user_version = 38;"
         ))
         .unwrap();
         conn
@@ -7405,8 +7519,10 @@ pub(crate) mod tests {
     fn user_file_at_39() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
-        conn.execute_batch(&format!("{UNDO_V40} PRAGMA main.user_version = 39;"))
-            .unwrap();
+        conn.execute_batch(&format!(
+            "{UNDO_V41} {UNDO_V40} PRAGMA main.user_version = 39;"
+        ))
+        .unwrap();
         conn
     }
 
@@ -7454,7 +7570,7 @@ pub(crate) mod tests {
         // without `{UNDO_V38}` v38 dies at `duplicate column name`; the third tier adds one
         // more, so without `{UNDO_V39}` v39 dies the same way. Newest first.
         conn.execute_batch(&format!(
-            "{UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} PRAGMA main.user_version = 35;"
+            "{UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} PRAGMA main.user_version = 35;"
         ))
         .unwrap();
         seed_v35_groups(&conn);
@@ -7611,7 +7727,7 @@ pub(crate) mod tests {
         .unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 32;"
+            "{UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 32;"
         ))
         .unwrap();
         conn
@@ -7668,7 +7784,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} \
+            "{UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} \
              PRAGMA main.user_version = 27;"
         ))
         .unwrap();
@@ -8046,7 +8162,7 @@ pub(crate) mod tests {
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, USER_SCHEMA_VERSION);
-        assert_eq!(USER_SCHEMA_VERSION, 40);
+        assert_eq!(USER_SCHEMA_VERSION, 41);
     }
 
     /// **It is synced, and `sync_devices` still is not.** The whole point is that a NAME
@@ -9026,7 +9142,7 @@ pub(crate) mod tests {
         .unwrap();
 
         conn.execute_batch(&format!(
-            "{UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
+            "{UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
         ))
         .unwrap();
 
@@ -9113,7 +9229,7 @@ pub(crate) mod tests {
         // The literal, for the reason the two tests below spell out. It is **head**, not this
         // rung's own number — `migrate_user` climbs the whole ladder — so every rung that lands
         // moves it.
-        assert_eq!(version, 40);
+        assert_eq!(version, 41);
         assert_eq!(
             in_group(&conn, DECK_A, "bolt-lea", "nonfoil"),
             2,
@@ -9407,8 +9523,9 @@ pub(crate) mod tests {
         // 38 → 39 for the mark's third tier — which landed with the rung and missed these three
         // lines on the first pass, exactly the way this sentence says a rung would — and
         // 39 → 40 for the deck kind, which missed them the same way and was told so by these
-        // three tests going red. **Five times**, and the count is the argument.
-        assert_eq!(version, 40);
+        // three tests going red, and 40 → 41 for the share cache. **Six times**, and the
+        // count is the argument.
+        assert_eq!(version, 41);
         assert_eq!(
             in_group(&conn, DECK_A, "bolt-m10", "nonfoil"),
             1,
@@ -9430,7 +9547,7 @@ pub(crate) mod tests {
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
         // The literal, for the reason the test above spells out — head, which every rung moves.
-        assert_eq!(version, 40);
+        assert_eq!(version, 41);
     }
 
     /// The fixture is a real v35 file and not head wearing a v35 label.
@@ -9855,6 +9972,107 @@ pub(crate) mod tests {
         assert_eq!(virtual_only, 0);
     }
 
+    /// **v41's table, and the two partial indexes that make "one share per folder" mean it.**
+    ///
+    /// The cache of the relay's share list — what buys a folder a "shared" badge that survives
+    /// being offline, and nothing more. It creates a table rather than appending a column, so
+    /// unlike v38, v39 and v40 there is no old row to check a default against: what there is to
+    /// check is the shape, and in particular that the *pair* of indexes refuses both duplicates.
+    #[test]
+    fn v41_gives_a_database_the_share_cache() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate_single_file(&conn).unwrap();
+        migrate_user(&conn).unwrap();
+        let v: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, 41);
+        conn.execute(
+            "INSERT INTO collection_shares (id, folder_uid, title, fields, state, updated_at)
+             VALUES ('abc', 'uid-1', 'Binder', '[\"value\"]', 'live', 0)",
+            [],
+        )
+        .unwrap();
+        // One share per folder — decision 7, enforced here as well as on the relay.
+        let second = conn.execute(
+            "INSERT INTO collection_shares (id, folder_uid, title, fields, state, updated_at)
+             VALUES ('def', 'uid-1', 'Binder again', '[]', 'live', 0)",
+            [],
+        );
+        assert!(second.is_err(), "a folder may be shared once");
+        // ...but a whole-collection share is NULL, and SQLite's unique index lets NULLs repeat,
+        // so the partial index on `folder_uid IS NULL` is what stops two of those.
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM collection_shares", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+    }
+
+    /// The second index earns its own test, because the first one cannot fail in its place.
+    ///
+    /// `idx_collection_shares_folder` is `WHERE folder_uid IS NOT NULL`, so a whole-collection
+    /// share is not in it at all — and even without the `WHERE`, SQLite holds NULLs in a
+    /// UNIQUE index distinct from each other, so one index would admit any number of them.
+    ///
+    /// **This test is why `idx_collection_shares_whole` indexes `(folder_uid IS NULL)` and not
+    /// `(folder_uid)`.** The obvious spelling — the column, with the partial `WHERE` doing the
+    /// selecting — was written first and measured second: it admitted the second
+    /// whole-collection share without complaint, because every key in it is NULL and no two
+    /// NULLs are equal. Indexing the expression puts the same non-null `1` in every row the
+    /// `WHERE` admits, so the second one collides. Nothing about the failing form looks wrong
+    /// in a diff, which is what this test is for.
+    #[test]
+    fn the_share_cache_holds_one_whole_collection_share() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate_single_file(&conn).unwrap();
+        migrate_user(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO collection_shares (id, folder_uid, title, fields, state, updated_at)
+             VALUES ('whole', NULL, 'Everything', '[]', 'live', 0)",
+            [],
+        )
+        .unwrap();
+        let second = conn.execute(
+            "INSERT INTO collection_shares (id, folder_uid, title, fields, state, updated_at)
+             VALUES ('whole-again', NULL, 'Everything again', '[]', 'live', 0)",
+            [],
+        );
+        assert!(
+            second.is_err(),
+            "the whole collection may be shared once, and SQLite's NULLs-are-distinct rule is \
+             why that needs an index of its own"
+        );
+        // A folder share alongside it is a different row and must still fit.
+        conn.execute(
+            "INSERT INTO collection_shares (id, folder_uid, title, fields, state, updated_at)
+             VALUES ('folder', 'uid-1', 'Binder', '[]', 'live', 0)",
+            [],
+        )
+        .unwrap();
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM collection_shares", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+    }
+
+    /// **It is a cache, and [`SYNCED_TABLES`] stays at thirteen.**
+    ///
+    /// The relay's `GET /g/{group}/shares` is the roster, exactly as the rewrapped key set is the
+    /// roster for group membership. A synced copy would be a second record of a fact the relay
+    /// already holds, and the two would disagree the first time a device was offline during a
+    /// revoke.
+    #[test]
+    fn the_share_cache_is_not_synced() {
+        assert!(
+            !crate::schema::SYNCED_TABLES.contains(&"collection_shares"),
+            "the relay's list is the roster; a synced copy would disagree during an offline revoke"
+        );
+    }
+
     /// A v28 file walks up keeping every row it had, and twice is the same as once.
     #[test]
     fn migrating_a_v28_user_file_keeps_its_rows_and_is_idempotent() {
@@ -9945,7 +10163,7 @@ pub(crate) mod tests {
             })
             .collect();
         conn.execute_batch(&format!(
-            "{UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
+            "{UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
              PRAGMA main.user_version = 28;"
         ))
         .unwrap();

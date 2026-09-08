@@ -38,7 +38,7 @@ both plus the frontend.
   columns does not (schema v2; `the_v2_backfill_leaves_the_search_index_answering` is the
   proof).
 - **The data folder holds two databases, and which one is `main` is the whole design**
-  (schema 27). `data/user.db` is the reader's — the twenty-two tables in `schema::TABLES` marked
+  (schema 27). `data/user.db` is the reader's — the twenty-five tables in `schema::TABLES` marked
   `Side::User`, which nothing outside this app can produce again — and it is what
   `Connection::open` names. `data/corpus.db` is everything a feed or this app's own ladder can
   rebuild, and it is **`ATTACH`ed as `corpus`**, because *you cannot `DETACH main`*: discarding
@@ -126,8 +126,9 @@ both plus the frontend.
   every upgraded one, and a fresh worktree is a fresh install, so nothing else here can see it.
   The single-file ladder is frozen at **v26** — `schema::migrate_single_file`
   climbs to `schema::LEGACY_SINGLE_FILE_VERSION` and stops, and the two files carry their own
-  numbers from there (`USER_SCHEMA_VERSION` **40** since decks learned a third *kind* —
-  one rung above the theory mark growing a third tier, which is one above it growing a second,
+  numbers from there (`USER_SCHEMA_VERSION` **41** since the reader could publish a folder —
+  one rung above decks learning a third *kind*, which is one above the theory mark growing a
+  third tier, which is one above it growing a second,
   which is one above decks learning which tokens they make,
   which is one above a deck's group
   holding only copies its live list claims at `(card_id, finish)`, itself one above a
@@ -214,6 +215,23 @@ both plus the frontend.
   neighbour of is `theory_enabled`, the *other half of the same pair*, so an index that landed
   there would hand a deck's kind to its own opposite with every field still holding a `0` or
   a `1`.
+  **v41** (2026-09-08) creates `collection_shares`, the cache of the relay's list of the
+  folders the reader has published read-only. **It is the first user table since the split
+  that is deliberately not synced** — no `sync_uid` column and no `SYNCED_TABLES` entry, which
+  stays at thirteen — because the relay's `GET /g/{group}/shares` is the roster exactly as the
+  rewrapped key set is the roster for group membership: a synced copy would be a second record
+  of a fact the relay already holds, and the two would disagree the first time a device was
+  offline during a revoke. What the table buys is a *shared* badge on a folder that survives
+  being offline, and nothing more. **Its two partial unique indexes are one lesson, not two.**
+  `idx_collection_shares_folder` is `(folder_uid) WHERE folder_uid IS NOT NULL` and says a
+  folder may be shared once; a whole-collection share carries a NULL `folder_uid` and so is in
+  no index at all, which is why there is a second. The trap is that the obvious second index —
+  `(folder_uid) WHERE folder_uid IS NULL` — **refuses nothing**: every key in it is NULL and
+  SQLite holds NULLs in a UNIQUE index distinct from each other, so it reads as a fence and is
+  not one. `idx_collection_shares_whole` indexes the *expression* `(folder_uid IS NULL)`, which
+  is the same `1` for every row the `WHERE` admits. It is `COLLECTION_GRAIN`'s
+  `coalesce(folder_id, 0)` argument reaching a second table, and it was measured rather than
+  reasoned about — the column form was written first, and let the second row straight in.
   **v35, v36, v37 and v38 all landed within days of each other from four branches; the token rung
   was renumbered twice on its way in and the theory rung three times** — written as 35, moved to
   36 when the sixth grade landed, to 37 when the deck-group sweep did, and to 38 when the token
