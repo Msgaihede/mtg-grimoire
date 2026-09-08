@@ -1734,3 +1734,64 @@ still drew the ribbon (`Game Changer` present, no bare crown) on the same four c
   factor. Read `--mark-scale` off the tile rather than assuming 1, or set the zoom deliberately
   at the top of the run — this pass did the first and then the second.
 
+
+
+## The token wall at the stacked card's size — 2026-09-08, `npm run tauri dev` (debug), 1920×1080, a copy of the real db
+
+The reader's ask was two things: draw the **Tokens & emblems** tiles at the size of the cards in
+the stacks and follow the deck's zoom, and move the band above the Deck stats. Driven on the
+`Azula` deck — 101 cards, Commander, three tokens (Bird, Fish, Treasure) — which arrived at
+`cardZoom.deck` **1.1**, so the first reading is at 110% rather than at 100% and every figure
+below names its stop.
+
+### The size, at three stops of the ladder
+
+The tile's width and the stacked card's are read in one pass, off the same frame, so "the same
+size" is a comparison rather than two numbers taken minutes apart.
+
+| `cardZoom.deck` | token tile | stack card | `--mark-scale` | tile name | icon button | gutters (x / y) |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0.5 | **105** | **105** | 0.5 | 6px | 9 | 10 / 16 |
+| 1.1 | **231** | **231** | 1.1 | 13.2px | — | — |
+| 2 | **420** | **420** | 2 | 24px | 34 | 20 / 32 |
+
+Every one of those is the arithmetic and not an approximation: 210 × 1.1 = 231, 210 × 2 = 420,
+210 × 0.5 = 105; the name is `0.75rem × --mark-scale` (12 → 13.2 → 24) and the icon button is
+`1.25rem × --control-scale`, which carries `CONTROL_SHRINK` — 20 × 2 × 0.85 = **34**. The stack
+card's own image measured **229** at 1.1 against the tile's 231, which is the card's two
+hairlines and is what `STACK_CARD_BORDER` says it should be.
+
+**The gutters hold at their base going down and grow going up** — 10/16 at 0.5× and 20/32 at 2× —
+which is `atLeast` doing exactly what it is for, and the one measurement here that is deliberately
+not proportional.
+
+### The band's place
+
+`Tokens & emblems` at `top: 2828`, `Deck stats` at `top: 3313`, in that order, under the price
+strip's *"TCGplayer prices as of the last card-data sync"* line. `compareDocumentPosition` agrees
+with the pixels. The pair that may not be split — the deck and the price strip — is untouched;
+both bands are still below it.
+
+### The art picker, which is why the dialog was resized
+
+At 2× the picker's tiles are 420 like the wall's, and the old `w-[52rem]` / `max-h-[26rem]` box
+could not hold them: 832px of panel less the list's padding and scrollbar is ~805, and two 420px
+tiles want 850. On `AllPrintingsDialog`'s size instead, measured with the Bird picker open at 2×
+on 1920×1080: panel **1440 × 972** (75vw, 90vh), seven printings, tiles **420**, **3 per row**,
+and the `<ul>` scrolling inside itself rather than the panel growing. Photographed.
+
+### The one case that could have overflowed, and does not
+
+A 420px tile is wider than some desks, and this band is **full width of the editor column** —
+unlike the deck views, it is a sibling of the desk row, so the docked search panel never narrows
+it. That leaves the window floor as the only squeeze. At **1024 × 700 with the zoom at 2×**:
+`document.scrollWidth` **1024** = `clientWidth`, `main.scrollWidth` **801** = `main.clientWidth`,
+the band's own `scrollWidth` **761** = its `clientWidth`, and the tile's right edge at **648**
+inside it. No horizontal scrollbar anywhere, so the band needs no `overflow-x` of its own.
+
+### What was left alone, and is visible in the photograph
+
+Tiles are not baseline-aligned: Treasure's subtitle wraps to two lines, so its stepper row sits
+~15px below Bird's and Fish's. That is the tile's own `flex-col` and was true at 150px too — it
+is simply easier to see at 231. Not a regression and not part of the ask; noted so the next
+reader does not measure it as one.
