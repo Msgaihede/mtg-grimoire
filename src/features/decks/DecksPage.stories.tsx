@@ -593,7 +593,7 @@ export const ResizableFolders: Story = {
     // The floor is counted off this tree's own markup and is deliberately not the card wall's
     // 206. The ceiling is the page's live measurement of the desk row and is therefore not
     // asserted — it is a different number in a browser from the one a layout-less runner sees.
-    await expect(handle).toHaveAttribute("aria-valuemin", "160");
+    await expect(handle).toHaveAttribute("aria-valuemin", "176");
     await expect(handle).toHaveAttribute("tabindex", "0");
     await expect(handle).toHaveAttribute("aria-controls", tree.id);
 

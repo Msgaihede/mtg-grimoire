@@ -112,26 +112,34 @@ export const DEFAULT_FOLDER_TREE_WIDTH_PX = 208;
 /**
  * The narrowest the tree may be dragged, in px.
  *
- * **Counted off the markup rather than chosen**, and off the two rows that have to survive it.
- * A top-level folder row is a 26px guide gutter (`GUIDE_STEP · 1 + GUIDE_TICK`), the button's own
- * `pl-2` (8), its 16px glyph, the `gap-2` either side of the name (8 + 8), a two-digit count
- * (~14 at `text-[0.7rem]` tabular mono) and the `pr-8` (32) the row's `+` control is absolutely
- * positioned inside — **112px that cannot shrink** — over the nav's own `pr-3` and its hairline,
- * which is **125**. The heading row above it is a second sum on the same width: a 28px chevron, a
- * 24px `New folder`, a `gap-2` either side of the word and the same `px-1`, `pr-3` and hairline,
- * which is **89**.
+ * **Measured in a browser rather than counted off the markup**, and off the two rows that have to
+ * survive it. Both are flex rows whose cost is fixed and whose text takes the remainder, so one
+ * reading of each at a known width gives the whole function — taken in headless Edge over
+ * `dist`'s real stylesheet on 2026-09-08, at 160 and again at 200 to confirm the two are linear:
  *
- * So 160 leaves a folder's truncating name **35px** and the word `Folders` **71**, which is the
- * narrowest either of them says anything at. Below it the name is the ellipsis alone and the
- * gutter, the glyph and the count are the whole of the row — a filing cabinet whose drawers have
- * no labels on them.
+ * * the **heading row** spends **89px** (the 28px chevron, the 24px `New folder`, a `gap-2` either
+ *   side, `px-1`, the nav's `pr-3` and its hairline) and gives the word `Folders` the rest, which
+ *   needs **76** in Cinzel at `text-lg`;
+ * * a **top-level folder row** spends **134px** (a 26px guide gutter, the button's `pl-2`, its
+ *   16px glyph, the `gap-2` either side of the name, the count, and the `pr-8` the row's `+` is
+ *   positioned inside) and gives the truncating name the rest.
+ *
+ * So 176 is the heading's 165 floor plus room for a name to be a name: the word fits with 11px
+ * of slack and a folder gets **42px**, which is four characters and an ellipsis. **It was 160 for
+ * one commit and that number was hand-counted and 9px optimistic** — live, 160 gives the heading
+ * 71 against the 76 it needs, so the one piece of chrome that says what this column *is* rendered
+ * as `FOLDE…`, and a name got 26px, which is `Co…`. A floor is the narrowest width still worth
+ * dragging to; a cabinet whose drawers and whose own label are both stubs is past it.
+ *
+ * **Neither number is a folder name fitting whole** — that is 213, wider than the tree's own
+ * default, and no floor's job. The rows truncate by design and always have.
  *
  * It is the floor a *drag* is clamped to and the width a page decides there is no room for the
  * tree at all by, exactly as `MIN_PANEL_WIDTH_PX` is for the docked search columns: below it the
  * tree rails rather than being squeezed, and the width the reader had dragged to is still here
  * when the room comes back.
  */
-export const MIN_FOLDER_TREE_WIDTH_PX = 160;
+export const MIN_FOLDER_TREE_WIDTH_PX = 176;
 
 /**
  * Why the disclosure will not open, said where it is refused.

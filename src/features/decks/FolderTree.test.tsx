@@ -553,9 +553,10 @@ describe("the column's width", () => {
 
     expect(tree()).toHaveStyle({ width: "260px" });
     expect(handle()).toHaveAttribute("aria-valuenow", "260");
-    // 160 written out: this floor is counted off the tree's own markup — a row's guides, glyph,
-    // count and the reserved `+` column — and is deliberately not the card wall's 206.
-    expect(handle()).toHaveAttribute("aria-valuemin", "160");
+    // 176 written out: this floor is measured off the tree's own two rows — the heading's 89px of
+    // chrome against the 76 the word `Folders` needs, and a row's 134 against its name — and is
+    // deliberately not the card wall's 206.
+    expect(handle()).toHaveAttribute("aria-valuemin", "176");
     expect(handle()).toHaveAttribute("aria-valuemax", "500");
     // It points at the column it sizes, which is how a screen reader ties the two together.
     expect(handle()).toHaveAttribute("aria-controls", tree().id);
@@ -606,10 +607,10 @@ describe("the column's width", () => {
 
     // 208 + (10 − 400) = −182 unclamped, which is not a width at all.
     drag(400, 10);
-    expect(onResize).toHaveBeenLastCalledWith(160);
-    expect(tree()).toHaveStyle({ width: "160px" });
+    expect(onResize).toHaveBeenLastCalledWith(176);
+    expect(tree()).toHaveStyle({ width: "176px" });
 
-    // 160 + (2000 − 400) = 1760 unclamped, against a page that has said 600.
+    // 176 + (2000 − 400) = 1776 unclamped, against a page that has said 600.
     drag(400, 2000);
     expect(onResize).toHaveBeenLastCalledWith(600);
     expect(tree()).toHaveStyle({ width: "600px" });
@@ -644,8 +645,8 @@ describe("the column's width", () => {
   it("draws no narrower than its floor whatever width it is handed", () => {
     liveTree({ width: 40 });
 
-    expect(tree()).toHaveStyle({ width: "160px" });
-    expect(handle()).toHaveAttribute("aria-valuenow", "160");
+    expect(tree()).toHaveStyle({ width: "176px" });
+    expect(handle()).toHaveAttribute("aria-valuenow", "176");
   });
 });
 

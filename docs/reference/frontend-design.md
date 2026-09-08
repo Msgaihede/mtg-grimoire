@@ -769,11 +769,18 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   (2026-09-08) — the same `ResizeHandle` as the search columns, `side="left"`, and the same
   three-state root the docked panels use. It was `w-52`/208px and fixed; 208 is now the width a
   database nobody has dragged opens at (`DEFAULT_FOLDER_TREE_WIDTH_PX`), and
-  `MIN_FOLDER_TREE_WIDTH_PX` is **160** — counted off the two rows that have to survive it rather
-  than chosen, leaving a folder's truncating name 35px and the word `Folders` 71. Below that the
-  name is the ellipsis alone: a cabinet whose drawers have no labels. **The two sums are spelled
-  once, on the constant itself** — repeating them here is how the figure and the markup drift
-  apart, which this file has watched happen before.
+  `MIN_FOLDER_TREE_WIDTH_PX` is **176**, and the way it was arrived at is the point: it shipped as
+  **160**, hand-counted off the markup, and the live pass caught the count 9px optimistic. Read in
+  headless Edge over the real stylesheet, the two rows' fixed costs are **89** (heading) and
+  **134** (a top-level folder row), so at 160 the word `Folders` had 71 against the **76** it needs
+  and the one piece of chrome naming the column rendered `FOLDE…`, while a name got 26px — `Co…`.
+  176 clears the heading by 11px and gives a name 42. **The sums live once, on the constant
+  itself**; repeating them here is how a figure and its markup drift apart, which this file has
+  watched happen before.
+  - **The lesson is the one this repo keeps relearning**: the arithmetic was reasonable, written
+    down carefully, and wrong, and neither suite could see it — jsdom lays out nothing, so every
+    test asserting `aria-valuemin` was green against a floor whose own heading was elided. A
+    width that is only ever *computed* is a width nobody has looked at.
   - **The cap is the desk's, through `useDeskWidth`**, which grew an options bag the same day so
     one hook serves both arrangements: `{ gap, min }`, defaulting to the search rows' `gap-4`/206
     so the collection and wishlist call sites are behaviourally untouched. The decks desk passes

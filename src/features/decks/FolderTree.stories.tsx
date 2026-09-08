@@ -133,11 +133,13 @@ const meta = {
           "`side=\"left\"` — the deck builder's card search column is the same control on the " +
           "opposite edge, so **Right widens here where Left widens there**, and Home and End go " +
           "to the two ends of the range on both.\n\n" +
-          "**The floor is 160px and it is counted off the markup rather than chosen**: a " +
-          "top-level row's guide gutter, glyph, gaps, two-digit count and the reserved column " +
-          "for its `+` control are 112px that cannot shrink, over the nav's own padding and " +
-          "hairline. At 160 a folder's name still has 35px and the word `Folders` has 71, which " +
-          "is the narrowest either of them says anything at. `maxWidth` is the page's " +
+          "**The floor is 176px and it is measured rather than chosen**: the heading row spends " +
+          "89px on its chevron, its `+`, the gaps and the nav's own padding and hairline, and a " +
+          "top-level folder row spends 134 on its guide gutter, glyph, gaps, count and the " +
+          "reserved column for its `+`. So 176 gives the word `Folders` the 76 it needs with " +
+          "11px to spare and a folder's name 42 — four characters and an ellipsis. It was 160 " +
+          "for one commit, hand-counted and 9px optimistic, which drew the heading itself as " +
+          "`FOLDE…`. `maxWidth` is the page's " +
           "measurement — `min(half the window, what the desk can spare over one deck tile at " +
           "the reader's zoom)` — and is hard-coded at 420 here, a story having neither a desk " +
           "nor a window to derive it from.\n\n" +
@@ -184,13 +186,13 @@ export const Open: Story = {
     await expect(canvas.getByRole("button", { name: "Ideas, 0 decks" })).toBeVisible();
 
     // The splitter reports the width in px — the unit the reader is actually choosing — and this
-    // column's own range. 160 and 420 are written out rather than read back off the constants
+    // column's own range. 176 and 420 are written out rather than read back off the constants
     // they came from: an assertion that reads its own constant passes for whatever that constant
     // becomes, the wrong value included.
     const handle = canvas.getByRole("separator", { name: "Resize folders" });
     await expect(handle).toHaveAttribute("aria-orientation", "vertical");
     await expect(handle).toHaveAttribute("aria-valuenow", "208");
-    await expect(handle).toHaveAttribute("aria-valuemin", "160");
+    await expect(handle).toHaveAttribute("aria-valuemin", "176");
     await expect(handle).toHaveAttribute("aria-valuemax", "420");
     // A caret can reach it, which is the half a pointer-only splitter loses outright: there is no
     // other control anywhere that sets this width.
@@ -227,7 +229,7 @@ export const Dragged: Story = {
     // Home is the floor, and it does not turn over with the side: the narrowest a column may be
     // is a fact about the range rather than about which way the reader is pushing.
     await userEvent.keyboard("{Home}");
-    await expect(tree).toHaveStyle({ width: "160px" });
+    await expect(tree).toHaveStyle({ width: "176px" });
   },
 };
 
