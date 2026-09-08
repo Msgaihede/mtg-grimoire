@@ -369,6 +369,14 @@ Discord.** The design is
 this section is the record of what shipped. `locked` is the first column this cabinet has gained
 that changes **nothing** about where a card sits — every other one of them files something.
 
+**And since 2026-09-08 the lock has a second reader that is neither offering nor reaching:
+publishing.** A share refuses a locked folder outright rather than publishing it empty, and drops
+every locked drawer *inside* whatever it does publish — through `LOCKED_FOLDER_IDS`, this page's
+own single copy of the inheritance rule, so a share and the wall's badge can never disagree about
+which drawers are set aside. That is the one place where getting the lock wrong puts a reader's
+cards on a public page, and
+[collection-sharing.md](collection-sharing.md) carries both ways of getting it wrong.
+
 **A locked folder is a drawer the reader has set aside, so the app stops *offering* what is in it
 without ever stopping them reaching it.** Every decision below is a consequence of that split:
 *offering* is what a search result, an availability figure and a shopping list do, and *reaching*
