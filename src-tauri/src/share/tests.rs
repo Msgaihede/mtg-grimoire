@@ -621,3 +621,43 @@ fn a_thousand_card_snapshot_is_measured() {
         "gzip must actually compress a snapshot"
     );
 }
+
+/// The fence. `src/features/transfer/__golden__/` is the precedent and the reason is the same,
+/// one degree harder: this format has **three** implementations, not two — one Rust writer here
+/// and two TypeScript readers over `src/lib/shareSnapshot.ts`, which parses this very file in
+/// its own suite.
+///
+/// **What it pins is a wire document, not a struct**, which is why the assertion is byte
+/// equality against a committed file rather than a walk over fields: a `#[serde(rename)]`, a
+/// reordered declaration and a key that silently stopped being emitted are all invisible to a
+/// field-by-field check and all break a viewer.
+///
+/// The fixture is deliberately a **full** snapshot — every card graded, priced and in the
+/// corpus — so the golden shows what every key looks like when it is there. The format's three
+/// absences (`c` on an ungraded copy, `p` on a finish the marketplace does not quote, and
+/// `parent: null` on a folder whose real parent is outside the share) each have a test of their
+/// own above, and are called out in the TypeScript mirror's doc comment because a viewer that
+/// reads `fields` as a promise about every card is the failure they add up to.
+#[test]
+fn the_golden_snapshot_is_what_the_writer_produces() {
+    let conn = test_db();
+    let (f, uid) = folder(&conn, None, "Trade binder", false);
+    let (child, _) = folder(&conn, Some(f), "Duals", false);
+    card(&conn, "0000579f-7b35-4ed3-b44c-db2a538066fe", "Fury Sliver");
+    card(&conn, "56ebc372-aabd-4174-a943-c7bf59e5028d", "Tundra");
+    entry(&conn, "0000579f-7b35-4ed3-b44c-db2a538066fe", Some(f), 2);
+    entry(
+        &conn,
+        "56ebc372-aabd-4174-a943-c7bf59e5028d",
+        Some(child),
+        1,
+    );
+
+    let got = serde_json::to_string_pretty(&snap(&conn, Some(&uid))).unwrap();
+    let want = include_str!("__golden__/snapshot.json");
+
+    // `\r\n` is what a Windows checkout can hand back — a subagent write has flipped a file to
+    // CRLF in this repo before, and the resulting diff is invisible in a terminal. The
+    // committed file is LF; this only stops a checkout setting from failing the build.
+    assert_eq!(got.trim_end(), want.replace("\r\n", "\n").trim_end());
+}
