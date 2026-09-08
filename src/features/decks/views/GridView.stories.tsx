@@ -89,8 +89,9 @@ export const NothingWrong: Story = { args: { violations: undefined } };
  *
  * **Two of the four marks are counts rather than ticks**, which is issue #212 and is why this
  * story is worth looking at rather than merely running: the fixture's plan asks for twice the
- * Island the deck holds and half the Boros Charm, so `-2` and `+1` are drawn in the same box, the
- * same azure and the same corner as the tick the other two wear. The tick is the card that
+ * Island the deck holds and half the Boros Charm, so `+2` and `-1` are drawn in the same box, the
+ * same azure and the same corner as the tick the other two wear. The number is the *action* the
+ * plan is asking for — two Islands to add, one Boros Charm to cut. The tick is the card that
  * matches; a number is the card that does not.
  *
  * `theoryPlan` is `undefined` in every other story in this file, which is what a deck with the
@@ -109,7 +110,7 @@ export const TheoryMatches: Story = {
     // text at all (it is an `<svg>`). The words are read off the button instead.
     const marks = [...canvasElement.querySelectorAll(`[${THEORY_MATCH_ATTR}]`)];
     expect(marks).toHaveLength(4);
-    expect(marks.map((mark) => mark.textContent).sort()).toEqual(["", "", "+1", "-2"]);
+    expect(marks.map((mark) => mark.textContent).sort()).toEqual(["", "", "+2", "-1"]);
 
     // The card carrying both marks: in the plan **and** breaking a rule. The two facts are in
     // one sentence because a button's `aria-label` replaces everything inside it.
@@ -137,15 +138,15 @@ export const TheoryMatches: Story = {
  *
  * | Row | What the plan says | The mark |
  * | --- | --- | --- |
- * | Lightning Bolt (`lea 161`) | 4 of **this** printing, 2 sleeved | `exact`, `-2` |
+ * | Lightning Bolt (`lea 161`) | 4 of **this** printing, 2 sleeved | `exact`, `+2` |
  * | Lightning Bolt (`2x2 117`) | the plan names the card, not this printing | `name`, tick |
  * | Sol Ring (`c21 263`) | 1 of this printing, 1 sleeved | `exact`, tick |
- * | Swords to Plowshares (`msc 143`) | 4 of `ema 32`, none of them sleeved | `name`, `-3` |
+ * | Swords to Plowshares (`msc 143`) | 4 of `ema 32`, none of them sleeved | `name`, `+3` |
  * | Dismember (`nph 57`) | nothing at all | none |
  *
  * **Both drawings in both colours, and an unmarked control**, which is the one arrangement that
  * shows what each half of the mark carries: the two ticks differ only in colour, the two numbers
- * differ in colour *and* in grain — `-2` is about a printing and `-3` is about a card — and the
+ * differ in colour *and* in grain — `+2` is about a printing and `+3` is about a card — and the
  * fifth row is what stops "every tile is marked" reading as a pass.
  *
  * The two Bolts are also the case the name grain exists for. Four copies of the card are sleeved
@@ -211,8 +212,8 @@ function tierPlan(marks: TheoryMarkSwitches): TheoryPlan {
  * reader can defeat, in Settings → Appearance.
  *
  * **The two numbers are at different grains, and that is deliberate**, which this wall is also
- * the place to see: `-2` on the green Bolt is about that *printing* (two sleeved of four planned)
- * while `-3` on the blue Swords is about the *card* (one sleeved of four planned). The tier
+ * the place to see: `+2` on the green Bolt is about that *printing* (two sleeved of four planned)
+ * while `+3` on the blue Swords is about the *card* (one sleeved of four planned). The tier
  * decides the colour and the number together — `theoryMatch.ts` carries the reasoning, and the
  * reader chose this over one name-grain number on both tiers having been shown the case it costs
  * the most in.
@@ -230,8 +231,8 @@ export const BothTiers: Story = {
     // is a custom property now, jsdom resolves no stylesheet, and a reader who has picked their
     // own green in Settings has moved the very value an assertion would be pinning. A tick's
     // element has no text at all — it is an `<svg>` — so `""` is the tick and a string is a count.
-    expect(drawn("exact")).toEqual(["", "-2"]);
-    expect(drawn("name")).toEqual(["", "-3"]);
+    expect(drawn("exact")).toEqual(["", "+2"]);
+    expect(drawn("name")).toEqual(["", "+3"]);
 
     // The clause blue adds, which is the whole of what a reader who cannot see the colour gets.
     // The mark is `aria-hidden` and bound `describes: false`, so the words are on the button.
@@ -257,7 +258,7 @@ export const BothTiers: Story = {
  * A row the plan names the exact printing of is re-resolved one tier down rather than silenced:
  * an exact match *is* a name match, so the fact survives the switch and what the switch turns off
  * is the finer statement. Both Bolts and the Sol Ring draw blue here, with blue's own
- * **name-grain** number — the green `-2` about a printing is gone, and the card-grain tick in its
+ * **name-grain** number — the green `+2` about a printing is gone, and the card-grain tick in its
  * place is the honest reading for a reader who has four Bolts and has stopped caring which art.
  *
  * This is the switch for somebody playing proxies on purpose, and it is per **deck**
@@ -278,16 +279,19 @@ export const ExactMarkOff: Story = {
       [...canvasElement.querySelectorAll(`[${THEORY_MATCH_ATTR}="name"]`)]
         .map((mark) => mark.textContent)
         .sort(),
-    ).toEqual(["", "", "", "-3"]);
+    ).toEqual(["", "", "", "+3"]);
 
-    // The card that was green with a `-2` on it now says blue's sentence with no count at all —
-    // the number followed the tier, because the two are one statement.
+    // The card that was green with a `+2` on it now says blue's sentence with no count at all —
+    // the number followed the tier, because the two are one statement. Both halves of the count
+    // clause are named, because `theoryMatchLabel` has one phrasing per sign and an assertion
+    // that checked only the one this row used to draw would go vacuous the moment it flipped.
     const bolt = canvas.getAllByRole("button", { name: /^Lightning Bolt/ });
     for (const tile of bolt) {
       expect(tile).toHaveAccessibleName(
         expect.stringContaining(THEORY_MATCH_NAME_LABEL.toLowerCase()),
       );
-      expect(tile).toHaveAccessibleName(expect.not.stringContaining("than planned"));
+      expect(tile).toHaveAccessibleName(expect.not.stringContaining("to add"));
+      expect(tile).toHaveAccessibleName(expect.not.stringContaining("to remove"));
     }
 
     // And the row that was never in the plan is still not in it: the fallback widens which

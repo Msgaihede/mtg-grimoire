@@ -65,7 +65,7 @@ export function TheoryMarksPanel(): JSX.Element {
         A deck that keeps a theory list marks the cards on its live list against it — one colour
         where the printing is the one the theory names, another where it is the same card in a
         printing the theory does not name. A card the theory asks a different number of wears the
-        difference instead of the tick.
+        number to add or remove instead of the tick.
       </p>
 
       {/* `space-y-4` over a hairline the first row does not wear — `HiddenTagsPanel`'s list,
@@ -220,8 +220,10 @@ export function TheoryMarksPanel(): JSX.Element {
  * The count difference the preview draws, so the reader sees the state that is *not* a tick.
  *
  * Positive and small: a `+2` is two characters in the same fixed-advance box the tick occupies,
- * which is what makes the two previews the same shape. The sign is ASCII for `theoryDeltaText`'s
- * reason — the typographic minus is not in that face's fixed-advance run.
+ * which is what makes the two previews the same shape. It is also the mark's commonest real state
+ * — since issue #400 the sign is the action, so `+2` is *two to add*, which is what a card on a
+ * list still being sleeved up against its plan mostly says. The sign is ASCII for
+ * `theoryDeltaText`'s reason — the typographic minus is not in that face's fixed-advance run.
  */
 const PREVIEW_DELTA = 2;
 

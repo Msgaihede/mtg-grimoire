@@ -927,11 +927,26 @@ reader to configure the deck they had just made; it now asks all of them.
   mark's own colour — which was *the* colour, one azure, until the tiers below split it in two —
   and the tick is what the **matching** card wears. The two are never drawn together —
   a tick beside a `-8` is two clauses of one sentence in a 25px box. Two rules carry it and both
-  live in `theoryMatch.ts`: the difference is `live − planned` at the **slot's** grain, with both
-  sides summed across their piles before they are subtracted (per-row arithmetic draws `-1` and
-  `-4` on a plan of 4-in-Main + 1-in-Sideboard the reader has got exactly right), and there is no
+  live in `theoryMatch.ts`: the difference is `planned − live` at the **slot's** grain, with both
+  sides summed across their piles before they are subtracted (per-row arithmetic draws `+1` and
+  `+4` on a plan of 4-in-Main + 1-in-Sideboard the reader has got exactly right), and there is no
   difference at all unless one side is above one, which is what keeps the number off every card of
   a singleton deck. `deckTheorySlots` grew a `quantity` for it and folds its rows in the SQL.
+  **Since 2026-09-08 the sign is the *action to take*, not the discrepancy**
+  ([issue #400](https://github.com/Msgaihede/mtg-grimoire/issues/400), reported by the reader who
+  asked for the number in the first place): **positive is copies to add, negative is copies to
+  remove** — `+2` means *put two more in*, `-8` means *take eight out*, and `0` is still the tick.
+  It was `live − planned` from 2026-08-26 (issue #212) until 2026-09-08, and the complaint against
+  that arrangement is that it described the disagreement without answering it: *"the displayed
+  number indicates what is missing as a minus and what is over the required quantity as a plus.
+  This does not directly tell the user what action to take."* **Only the direction moved.** The
+  grain still follows the tier, both sides are still summed across their piles, an inactive pile
+  is still excluded from both, `DIFFERENCE_FLOOR` still fences the whole thing, and
+  `theoryDeltaText` still writes `+N` / `-N` with ASCII signs. **The words moved with it**:
+  `theoryMatchLabel` now says `In the theory list · 2 to add` and
+  `In the theory list · 3 to remove` (and `… · a different printing · 3 to add` on the blue tier),
+  so *"more than planned"* and *"fewer than planned"* are gone from the tooltip, the badge and the
+  `sr-only` twin alike.
   **The box's width moved with it** and that is issue #212's other half: #182's `6/1` paddings left
   the mark visibly the smaller of the strip's two bookends, so `COUNT_TAG_BOX_MIRRORED` is `8/3`
   over a `min-w` of one digit's advance plus `COUNT_TAG_BOX`'s own paddings — the quantity tag's
@@ -942,14 +957,14 @@ reader to configure the deck they had just made; it now asks all of them.
 
   | The row | Tier | Colour | The number it carries |
   | --- | --- | --- | --- |
-  | Its `(cardId, finish)` is a slot in the plan | `exact` | green | `live − planned` at the `(cardId, finish)` grain — the number this mark always carried |
-  | Its **name** is in the plan, but this `(cardId, finish)` is not | `name` | blue | `live − planned` with **every** printing and finish of that name summed on both sides |
+  | Its `(cardId, finish)` is a slot in the plan | `exact` | green | `planned − live` at the `(cardId, finish)` grain — the grain this mark always used |
+  | Its **name** is in the plan, but this `(cardId, finish)` is not | `name` | blue | `planned − live` with **every** printing and finish of that name summed on both sides |
   | Neither | — | — | no mark |
 
   `0` draws the tick and anything else the signed number, exactly as before. A green mark is a
   statement about the *printing* the plan named; a blue one is a statement about the *card*. The
   reader was shown the case it costs the most in — a plan asking for 8 Forests of one printing
-  against 8 Forests over four printings, which reads **green −6** on two rows and **blue 0** on
+  against 8 Forests over four printings, which reads **green +6** on two rows and **blue 0** on
   the other six — and chose it over one name-grain number on both tiers. Both numbers are true at
   their own grain, and the two colours are what says which question is being answered. Green and
   blue are **defaults**: both are `--color-theory-*` custom properties and the reader's to change
