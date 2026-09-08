@@ -29,7 +29,6 @@
 export type PanelId =
   | "updates"
   | "prices"
-  | "combos"
   | "sync"
   | "review"
   | "hidden-tags"
@@ -95,11 +94,6 @@ export const PANELS: Record<PanelId, PanelMeta> = {
       "marketplace currency money value tcgplayer cardmarket card kingdom mana pool " +
       "cardtrader usd eur feed pricelist",
   },
-  combos: {
-    title: "Combos",
-    group: "carddata",
-    keywords: "spellbook commander bracket infinite interaction two-card download refresh",
-  },
   sync: {
     title: "Sync",
     group: "sync",
@@ -159,10 +153,28 @@ export const PANELS: Record<PanelId, PanelMeta> = {
     group: "storage",
     keywords: "mirror text files export archive zip rebuild dropbox onedrive copy",
   },
+  /**
+   * **The combo words are here because this is the only combo surface left, and only the words
+   * that still point at something are.**
+   *
+   * `Combos` was a panel under `Card data` with a Refresh button on it until the feed became an
+   * automatic download; a reader who types "combos" or "spellbook" is still owed an answer, and
+   * the answer is now the clear on this panel. So `combos`, `spellbook` and `commander` moved —
+   * the first because it is the word on the button, and the other two because the feed's name is
+   * *Commander Spellbook* and `matches` wants every word of a query to land, so half the name
+   * would answer nothing.
+   *
+   * **What did not move is the half that named a control nobody can press any more.** `refresh`
+   * describes nothing here — the download is the app's own decision now — and `bracket`,
+   * `infinite`, `interaction` and `two-card` describe what a combo *is*, which this panel says
+   * nothing about and which no press here changes. A keyword that lands on a panel with no
+   * answer on it is worse than no match at all: it costs the reader the trip. `download` is not
+   * a judgement either way — it was already in this line for the image cache's own sake.
+   */
   cache: {
     title: "Local cache",
     group: "storage",
-    keywords: "clear images downloads space disk temporary",
+    keywords: "clear images downloads space disk temporary combos spellbook commander",
   },
   "web-storage": {
     title: "This browser",
@@ -192,12 +204,22 @@ type GroupMeta = {
 /**
  * The rail, top to bottom.
  *
- * **Seven entries and not fourteen**, which is the whole point: a list as long as the page it
- * indexes is a second scroll rather than a way through the first. Where two panels answer one
- * question they share an entry — `Prices` and `Combos` are both optional bulk feeds of card
- * facts, `Needs review` is what sync asks of a reader, and `Appearance`'s two are the reader's
- * own marks recoloured — and where a panel is the only answer to its own question it gets an
- * entry to itself.
+ * **Seven entries, fewer than the panels they index**, which is the whole point: a list as long
+ * as the page it indexes is a second scroll rather than a way through the first. Where two
+ * panels answer one question they share an entry — `Needs review` is what sync asks of a reader,
+ * and `Appearance`'s two are the reader's own marks recoloured — and where a panel is the only
+ * answer to its own question it gets an entry to itself.
+ *
+ * **`Card data` holds one panel, and that is a group kept rather than a group forgotten.**
+ * `Prices` shared it with `Combos` — both optional bulk feeds of card facts the app works
+ * entirely without — until the combo feed became an automatic download and stopped having a
+ * panel at all. The entry survives it because an entry names the *question* and not the panel
+ * that happens to answer it: a reader asking where card facts come from is asking `Card data`,
+ * and a rail that renamed itself `Prices` the day a feed stopped needing attention would be a
+ * rail that reshuffles under them for reasons on this side of the screen. A group of one draws
+ * exactly as a group of two does, and a second card-data panel slots back under it with nothing
+ * else to change. Folding `Prices` into another entry is the alternative and it is a bigger
+ * change than this one: every entry it could join answers a different question.
  *
  * **`Appearance` sits after `Tags` and before `Storage and data`**, which is the last entry
  * about the app itself before the three about the folder on disk. It is emphatically not a

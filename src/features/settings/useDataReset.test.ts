@@ -8,12 +8,54 @@ const collectionClear = vi.hoisted(() => vi.fn());
 const wishlistClear = vi.hoisted(() => vi.fn());
 const decksClear = vi.hoisted(() => vi.fn());
 const cacheClear = vi.hoisted(() => vi.fn());
+const combosClear = vi.hoisted(() => vi.fn());
+const combosRefresh = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { collectionClear, wishlistClear, decksClear, cacheClear },
+  ipc: { collectionClear, wishlistClear, decksClear, cacheClear, combosClear, combosRefresh },
+}));
+
+/**
+ * The metered-link guard, standing in for the provider.
+ *
+ * Its default is the desktop one — `AskFirst`'s own `RUN_IT`, synchronous and a pass-through —
+ * so every other test here reads as though the wrapper were not there. Mocked rather than driven
+ * through `FeedDownloadProvider` because the real one branches on `isWebTarget()` and probes a
+ * size over `fetch`, and what this hook owes the guard is one call with one feed id.
+ */
+const askFirst = vi.hoisted(() => vi.fn((_feed: string, run: () => void) => run()));
+vi.mock("@/pwa/FeedDownloadProvider", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/pwa/FeedDownloadProvider")>()),
+  useFeedDownload: () => askFirst,
 }));
 
 import { useDangerZone, useLocalCache } from "./useDataReset";
+
+/** What a settled combo table answers back. Only the two figures the sentence reads matter. */
+const COMBOS = {
+  combos: 105_478,
+  cards: 7_310,
+  stamp: "2026-08-27T03:12:44Z",
+  fetchedAt: 1_756_000_000,
+  checkedAt: 1_756_000_000,
+  stale: false,
+};
+
+/**
+ * A promise held open, so a test can stand between the two halves of one press.
+ *
+ * The combo clear is `combosClear` and then `combosRefresh` inside a single `mutationFn`, and
+ * every interesting claim about it is about the gap: that the second call has not happened yet,
+ * and that `pending` is still true while it has not answered. Neither is observable against a
+ * mock that resolves immediately.
+ */
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
 
 let client: QueryClient;
 let invalidate: MockInstance<QueryClient["invalidateQueries"]>;
@@ -35,6 +77,11 @@ beforeEach(() => {
   wishlistClear.mockReset().mockResolvedValue(4);
   decksClear.mockReset().mockResolvedValue({ decks: 2, folders: 1 });
   cacheClear.mockReset().mockResolvedValue({ files: 20, bytes: 4_000, rows: 20, failed: 0 });
+  combosClear.mockReset().mockResolvedValue({ ...COMBOS, combos: 0, cards: 0, stale: true });
+  combosRefresh.mockReset().mockResolvedValue(COMBOS);
+  // `mockClear` and not `mockReset`: the default pass-through implementation is what every test
+  // but one relies on, and a reset would take it away.
+  askFirst.mockClear();
 });
 
 describe("useDangerZone", () => {
@@ -172,5 +219,134 @@ describe("useLocalCache", () => {
         text: "a card update is running — clear the cache once it has finished",
       }),
     );
+  });
+
+  /**
+   * **The order is the behaviour, not an implementation detail.** `combos_clear` downloads
+   * nothing, so a press that fetched first and deleted afterwards would end with an empty table —
+   * the exact state the reader pressed this to leave. Asserting only that both were called passes
+   * against that defect, so the clear is held open and the refresh is checked for *not* having
+   * happened yet.
+   */
+  it("clears the combos first, and only fetches once the clear has answered", async () => {
+    const held = deferred<typeof COMBOS>();
+    combosClear.mockReturnValueOnce(held.promise);
+    const { result } = renderHook(() => useLocalCache(), { wrapper });
+
+    act(() => result.current.combos.run());
+
+    await waitFor(() => expect(combosClear).toHaveBeenCalledOnce());
+    expect(combosRefresh).not.toHaveBeenCalled();
+
+    await act(async () => held.resolve({ ...COMBOS, combos: 0, cards: 0, stale: true }));
+
+    await waitFor(() => expect(combosRefresh).toHaveBeenCalledOnce());
+    // `force: true` and not the default: the schedule is weekly, so an honoured throttle would
+    // leave the table this press has just emptied empty until the next launch that is due.
+    expect(combosRefresh).toHaveBeenCalledWith(true);
+  });
+
+  /**
+   * **The guard wraps the press, not the mutation.** 27.5 MB gzipped: on the web target that is
+   * a question before it is a download, and a reader who answers Not now must be left with a
+   * button that has done nothing and a table still full — so nothing is cleared and `pending`
+   * never rises. On desktop the same call is a synchronous pass-through and costs a frame of
+   * nothing.
+   */
+  it("puts the metered-link question before the 27.5 MB", () => {
+    askFirst.mockImplementationOnce(() => {});
+    const { result } = renderHook(() => useLocalCache(), { wrapper });
+
+    act(() => result.current.combos.run());
+
+    expect(askFirst).toHaveBeenCalledWith("combos", expect.any(Function));
+    expect(combosClear).not.toHaveBeenCalled();
+    expect(result.current.combos.pending).toBe(false);
+  });
+
+  /**
+   * The download is 27.5 MB over 639 MB of JSON — tens of seconds — and the button is greyed off
+   * this flag. A `pending` that dropped when the *clear* returned would hand the reader an armed
+   * button over a table that is briefly empty, which is the one moment a second press is worst.
+   */
+  it("stays pending across the download and not just the clear", async () => {
+    const held = deferred<typeof COMBOS>();
+    combosRefresh.mockReturnValueOnce(held.promise);
+    const { result } = renderHook(() => useLocalCache(), { wrapper });
+
+    act(() => result.current.combos.run());
+
+    await waitFor(() => expect(combosRefresh).toHaveBeenCalledOnce());
+    expect(result.current.combos.pending).toBe(true);
+    expect(result.current.status).toBeNull();
+
+    await act(async () => held.resolve(COMBOS));
+
+    await waitFor(() => expect(result.current.combos.pending).toBe(false));
+  });
+
+  it("reports the table that came back", async () => {
+    const { result } = renderHook(() => useLocalCache(), { wrapper });
+
+    act(() => result.current.combos.run());
+
+    await waitFor(() =>
+      expect(result.current.status).toEqual({
+        tone: "plain",
+        text: "Cleared and downloaded again: 105,478 combos, naming 7,310 cards between them.",
+      }),
+    );
+  });
+
+  /**
+   * **`onSettled` rather than `onSuccess`, and this is the half that says why.** The clear lands
+   * first, so a refresh that then fails has still emptied the tables — every cached combo answer
+   * is describing rows that are gone, and `lib/query.ts` caches 30 s, which is exactly long
+   * enough for an open deck's bracket advisory to look deliberate rather than stale.
+   */
+  it("marks the combo root stale whichever way the press ended", async () => {
+    const { result } = renderHook(() => useLocalCache(), { wrapper });
+
+    act(() => result.current.combos.run());
+    await waitFor(() => expect(result.current.status).not.toBeNull());
+    expect(invalidatedRoots()).toEqual(["combos"]);
+
+    invalidate.mockClear();
+    combosRefresh.mockRejectedValueOnce("Commander Spellbook could not be reached.");
+    act(() => result.current.combos.run());
+
+    await waitFor(() => expect(result.current.status?.tone).toBe("problem"));
+    expect(invalidatedRoots()).toEqual(["combos"]);
+  });
+
+  /** A failed re-download is a refusal, not a table of zeroes — the reader is told which. */
+  it("surfaces a failed re-download instead of claiming a number", async () => {
+    combosRefresh.mockRejectedValueOnce("Commander Spellbook could not be reached.");
+    const { result } = renderHook(() => useLocalCache(), { wrapper });
+
+    act(() => result.current.combos.run());
+
+    await waitFor(() =>
+      expect(result.current.status).toEqual({
+        tone: "problem",
+        text: "Commander Spellbook could not be reached.",
+      }),
+    );
+  });
+
+  /**
+   * One banner for two buttons, `useDangerZone`'s rule on a smaller panel: the most recently
+   * *started* write owns the line, so the image sweep's sentence does not sit under a combo
+   * refusal, or the other way round.
+   */
+  it("lets the newer of the two presses own the one status line", async () => {
+    const { result } = renderHook(() => useLocalCache(), { wrapper });
+
+    act(() => result.current.clear.run());
+    await waitFor(() => expect(result.current.status?.text).toContain("Freed"));
+
+    act(() => result.current.combos.run());
+
+    await waitFor(() => expect(result.current.status?.text).toContain("105,478 combos"));
   });
 });

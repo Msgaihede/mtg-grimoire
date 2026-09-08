@@ -901,11 +901,22 @@ export function DeckCardControls({
    * How the controls are arranged, which is a question about the **space** they are given
    * rather than about how they should look.
    *
-   * `row` is a wide, short one — a table cell, a text line, the foot of a 150px grid tile —
-   * and wraps when it runs out. `card-column` is the deck stack's: a column standing in the
-   * right margin of a 210px card face, over the illustration, where the one dimension going
-   * spare is the vertical one. It is also the only layout drawn on art, so it is the only one
-   * whose buttons carry a backing.
+   * `row` is a wide, short one — a table cell, a text line — and wraps when it runs out.
+   * `card-column` is a column standing in the right margin of a card face, over the
+   * illustration, where the one dimension going spare is the vertical one. It is the only
+   * layout drawn on art, so it is the only one whose buttons carry a backing.
+   *
+   * **`card-column` has two callers since 2026-09-08 and they are two widths**, which is the
+   * thing to check before this column is ever made bigger: the deck stack's 210px card face,
+   * and the Grid tile's 150px one, both drawn by `DeckCardFace`. The column is `--control-scale`
+   * throughout — the zoom times `CONTROL_SHRINK` — so it scales with the card, but the `top-9`
+   * offset both call sites use does **not**, and neither does its distance from the right edge.
+   * On the narrower face the same column is a larger fraction of the card; that it clears the
+   * face at every stop of the ladder is arithmetic the stack's own site works out, and the tile
+   * inherits it with more room below and less beside. The Grid tile's foot said a rarity and a
+   * price under a bar of controls until this change and now says neither — its controls are this
+   * column, revealed on hover rather than on the card being open, because a tile has no open
+   * state to reveal them by.
    */
   layout?: "row" | "card-column";
   className?: string;
@@ -954,12 +965,23 @@ export function DeckCardControls({
 }
 
 /**
- * How the controls are revealed on the three views that draw a card as a *picture*.
+ * How the controls are revealed on the views that draw them *over* the thing they act on.
+ *
+ * **Two call sites, and only one of them is a picture** — the Grid tile's card face, and
+ * `TextView`'s line, where the bar covers the tail of a 22px row rather than any art. This said
+ * "the three views that draw a card as a picture" and was wrong on both halves: it has never had
+ * three callers, and the text view has never drawn a card. The stack is the surface it names and
+ * is not one of them — a stacked card reveals its controls when the card is *open*
+ * ({@link revealedWhenOpen}), because a collapsed card's only hittable part is its 34px strip and
+ * hovering that would reveal a bar hundreds of pixels below it, behind three other cards. A tile
+ * and a line have no open state, so hover is the whole of what they have.
  *
  * They sit over the card rather than in it, which is the whole reason `CardStack`'s geometry
  * survived them: an absolutely positioned bar takes no height, so a card is still 319px, a
  * stack is still `34n + 293`, and the no-reflow property stays a fact about arithmetic rather
- * than a thing to be careful about.
+ * than a thing to be careful about. **The Grid tile only inherited that property on 2026-09-08**:
+ * its controls used to be a bar offset off the chin's measured height, which meant a computed
+ * number and a wrapper element to carry it, and they are the stack's own `card-column` now.
  *
  * **`opacity`, never `hidden`.** `display: none` takes an element out of the tab order, so a
  * bar revealed by `group-focus-within` could never be focused into and would be unreachable by

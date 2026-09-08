@@ -964,21 +964,28 @@ describe("DeckEditor", () => {
    * against 7 635 of page — and every figure is in
    * [frontend-design.md](../../../docs/reference/frontend-design.md).
    *
-   * What a test *can* see is the four class decisions that produce it, each of which was the
-   * whole of a bug on its own:
+   * What a test *can* see is the class decisions that produce it, each of which was the whole of
+   * a bug on its own:
    *
    * * the view box carrying `overflow` or `min-h-0` is the letterbox — `min-h-0` more than the
    *   overflow, because it is the line that says "this box may be squeezed below its content";
-   * * the same `min-h-0` and `overflow-auto` are exactly what the table *must* keep, because a
-   *   virtualiser holds a spacer open for the rows it has not mounted and a scrollport is what it
-   *   is. Given no height it drew its own scrollbar **and** the page's;
    * * `min-h-96` on the **desk row** is a ceiling as well as a floor — a `min-height` number
-   *   replaces a flex item's `auto` automatic minimum size — which is why it sits on the view box
-   *   for the three walls and stays on the row only under the table;
-   * * and `tailwind-merge` has to resolve that pair the table's way, since `min-h-96` and
-   *   `min-h-0` are one group and a floor under a scrollport is a floor under a scrollbar.
+   *   replaces a flex item's `auto` automatic minimum size — so the floor belongs on the view box,
+   *   where it floors without capping, and the row must carry no `min-h-` at all.
+   *
+   * **The table stopped being the exception on 2026-09-08 and this case is where that is pinned.**
+   * It kept `min-h-0 overflow-auto` on the view box and `min-h-96` on the row for as long as
+   * `VirtualTable` was a scrollport by construction — a virtualiser holds a spacer open for the
+   * rows it has not mounted, so given no height it drew its own scrollbar **and** the page's, which
+   * is the two-scrollbar screen a reader reported. That is answered at the primitive instead:
+   * `VirtualTable` takes an opt-in `grow`, under which it renders every row in normal flow and is
+   * not a scroll container, and a deck is a list bounded at a few hundred rows. So all four views
+   * now say the same thing about height, and the assertion is a loop with no special case in it —
+   * which is the shape that makes a re-added exception fail here rather than in a screenshot.
+   * The 100k-row walls the search, the collection and the wishlist draw are untouched and still
+   * virtualise, which is what `grow` defaulting to `false` buys.
    */
-  it("gives the deck's walls no height and the virtualised table one", async () => {
+  it("gives all four of the deck's views no height of their own", async () => {
     const user = userEvent.setup();
     await open();
 
@@ -987,29 +994,15 @@ describe("DeckEditor", () => {
       return { row: dock.parentElement!, view: dock.parentElement!.firstElementChild! };
     };
 
-    // Stacks is where the editor opens, and the two boxes say opposite things about height.
-    const stacks = deskOf();
-    expect(stacks.view.className).toContain("min-h-96");
-    expect(stacks.view.className).not.toContain("min-h-0");
-    expect(stacks.view.className).not.toContain("overflow");
-    expect(stacks.row.className).not.toContain("min-h-");
-
-    for (const label of ["Text", "Grid"]) {
-      await pickOption(user, "View", label);
+    // Stacks is where the editor opens; the other three are picked in turn.
+    for (const label of ["Stacks", "Text", "Grid", "Table"]) {
+      if (label !== "Stacks") await pickOption(user, "View", label);
       const wall = deskOf();
       expect(wall.view.className, label).toContain("min-h-96");
+      expect(wall.view.className, label).not.toContain("min-h-0");
       expect(wall.view.className, label).not.toContain("overflow");
       expect(wall.row.className, label).not.toContain("min-h-");
     }
-
-    await pickOption(user, "View", "Table");
-    const table = deskOf();
-    // The squeezable box, back where it was — and `min-h-96` merged away rather than fighting it.
-    expect(table.view.className).toContain("min-h-0");
-    expect(table.view.className).toContain("overflow-auto");
-    expect(table.view.className).not.toContain("min-h-96");
-    // …and the row is what holds it to the page's leftover height.
-    expect(table.row.className).toContain("min-h-96");
   });
 
   /**
@@ -1484,9 +1477,13 @@ describe("DeckEditor", () => {
    * land at the end of the dropdown with nothing to notice it. The sequences are asserted whole
    * so the *property* fails, not one position.
    *
-   * **`VIEWS` is the one that does not read that way**, so this is the assertion that says the
-   * view switch became an option list like the other two rather than a segmented group wearing a
-   * select's clothes: `Stacks` is written first because it is the default, and it is drawn third.
+   * **`VIEWS` is the one that does not read that way, and since 2026-09-08 it is the one with a
+   * pinned row.** `Stacks` sits outside the sort and the other three are sorted under it, which
+   * is the shape `src/CLAUDE.md` already grants `Any card`, `Any format` and `Top level`: Stacks
+   * is what every deck opens on (`useState<DeckView>("stacks")`) and the three below it are its
+   * alternates. So the assertion is `Stacks` **first** and then an alphabet — a view appended to
+   * the array still has to land in that alphabet, which is the property this case is really for,
+   * and a second pinned row would fail it here rather than in a screenshot.
    */
   it("offers all three toolbar pickers alphabetically", async () => {
     const user = userEvent.setup();
@@ -1498,7 +1495,7 @@ describe("DeckEditor", () => {
     const optionLabels = () => screen.getAllByRole("option").map((o) => o.textContent);
 
     await openDropdown(user, "View");
-    expect(optionLabels()).toEqual(["Grid", "Stacks", "Table", "Text"]);
+    expect(optionLabels()).toEqual(["Stacks", "Grid", "Table", "Text"]);
 
     await openDropdown(user, "Group by");
     expect(optionLabels()).toEqual(["Categories", "Mana value", "Type"]);
@@ -6207,31 +6204,42 @@ describe("DeckEditor — a category's menu", () => {
   });
 
   /**
-   * **The table's band has to *declare* that it grew, or it paints over the card row below it.**
+   * **The table's band still declares that it grew — and since 2026-09-08 it declares a floor
+   * rather than a height, which is the safer half of the same statement.**
    *
-   * Its rows are absolutely positioned at a height the virtualiser was told, so a field that
-   * appears inside one without an `extraHeight` overlaps its neighbour by exactly its own
-   * height — which is the failure `TableView`'s own `Row` comment already warns about for the
-   * reconciler's band, arriving here by a different route. jsdom lays nothing out, so the
-   * overlap itself is invisible to this suite; the **declared** height is not, and it is the
-   * number the browser would use.
+   * The failure this was written for: the virtualiser positions rows absolutely at a height it
+   * was *told*, so a field appearing inside one without an `extraHeight` overlaps its neighbour
+   * by exactly its own height. `TableView` passes `VirtualTable`'s `grow` now — the deck's rows
+   * are in normal flow, nothing has to be told anything, and a band that outgrows its declared
+   * extra makes the row taller instead of painting over the row below. So the number is a
+   * `minHeight`, and `RENAME_HEIGHT` stopped being a contract and became a floor.
+   *
+   * **It is still asserted, and the reason is the reason it is a floor rather than nothing.** The
+   * band is drawn before the field's own layout settles, and 48px of declared room is what stops
+   * the row reflowing under the reader's hand as they start typing — so the pair still has to
+   * move together. jsdom lays nothing out, so the reflow itself is invisible to this suite; the
+   * declared floor is not.
    *
    * 44 is `TABLE_ROW_HEIGHT`, 92 is that plus `RENAME_HEIGHT` — asserted as the pair, because a
-   * band that was always tall would be as wrong as one that never grew.
+   * band that was always tall would be as wrong as one that never grew. `style.height` is
+   * asserted **empty** at both ends: a reinstated fixed height is the old contract coming back,
+   * and it is the one thing that would clip the field the floor exists to make room for.
    */
-  it("makes the table's band taller while its pile is being renamed", async () => {
+  it("floors the table's band taller while its pile is being renamed", async () => {
     const user = userEvent.setup();
     await open();
     await pickOption(user, "View", "Table");
 
     const band = () => screen.getByText("Main deck").closest("[role=row]") as HTMLElement;
-    expect(band().style.height).toBe("44px");
+    expect(band().style.minHeight).toBe("44px");
+    expect(band().style.height).toBe("");
 
     await rightClickGroup(MAIN);
     await userEvent.click(screen.getByRole("menuitem", { name: "Rename…" }));
     await screen.findByLabelText("Rename Main deck");
 
-    expect(band().style.height).toBe("92px");
+    expect(band().style.minHeight).toBe("92px");
+    expect(band().style.height).toBe("");
   });
 
   /**

@@ -106,7 +106,7 @@ const RAIL: GroupId[] = [
 /** Which panels each rail entry holds, in the order the pane draws them, on a **web** build. */
 const UNDER: Record<GroupId, PanelId[]> = {
   updates: ["updates"],
-  carddata: ["prices", "combos"],
+  carddata: ["prices"],
   sync: ["sync", "review"],
   tags: ["hidden-tags"],
   appearance: ["theory-marks", "labels"],
@@ -163,7 +163,6 @@ describe("panelsOn", () => {
     expect(panelsOn(false)).toEqual([
       "updates",
       "prices",
-      "combos",
       "sync",
       "review",
       "hidden-tags",
@@ -181,7 +180,6 @@ describe("panelsOn", () => {
     expect(panelsOn(true)).toEqual([
       "updates",
       "prices",
-      "combos",
       "sync",
       "review",
       "hidden-tags",
@@ -218,8 +216,11 @@ describe("matches", () => {
   it("matches a word as a prefix of one, and inside one", () => {
     // A prefix: "market" against "marketplace".
     expect(matches("prices", "market")).toBe(true);
-    // Inside: "book" against "spellbook", which is the half a `startsWith` would lose.
-    expect(matches("combos", "book")).toBe(true);
+    // Inside: "book" against "spellbook", which is the half a `startsWith` would lose. The
+    // keyword was `Combos`' until that panel was deleted and its still-answerable words moved
+    // to `Local cache`; the property this line guards has nothing to do with either panel, so
+    // it follows the word rather than going with the panel.
+    expect(matches("cache", "book")).toBe(true);
   });
 
   /**
@@ -266,7 +267,7 @@ describe("visiblePanels", () => {
   });
 
   it("still draws the group's panels when the box holds only spaces", () => {
-    expect(visiblePanels("carddata", "   ", true)).toEqual(["prices", "combos"]);
+    expect(visiblePanels("carddata", "   ", true)).toEqual(["prices"]);
   });
 
   /**

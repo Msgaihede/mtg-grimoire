@@ -1,5 +1,5 @@
 /**
- * The marks a card in a deck can carry, in one place because five surfaces draw them.
+ * The marks a card in a deck can carry, in one place because several surfaces draw them.
  *
  * The stack, the table, the text columns, the grid and the categories panel all say the same
  * three things about a card, and the spec is explicit that **a rule break and a game changer
@@ -9,8 +9,16 @@
  * Four things separate them and every surface keeps all four: the words (`RULE BREAK` spelled
  * out against two letters), the colour (destructive against the pie gold), the place (over
  * the card's art against its title bar) and the card's own edge, which only a rule break
- * changes. The place is the caller's — a 150px grid tile and a 224px stacked card put them in
- * different corners — so it rides in `className`; the other three are here.
+ * changes. The place is the caller's, so it rides in `className`; the other three are here.
+ *
+ * **That "the place is the caller's" used to be justified by the two card-face views putting the
+ * marks in different corners, and since 2026-09-08 they do not.** The stacked card and the Grid
+ * tile draw one `DeckCardFace`, so every mark on both is in the same corner of the same strip and
+ * `className` is carrying nothing about *place* on either of them. It stays a caller's argument
+ * because the surfaces that are **not** a card face still decide it — a table cell and a 22px text
+ * line have no corners at all — and because the one thing those two views do still differ about is
+ * which *drawing* of the game changer they have room for, which is `GameChangerMark`'s own rule
+ * and not a corner.
  *
  * **{@link TheoryMatchMark} joined them on 2026-08-20 and made that rule load-bearing rather
  * than merely observed**, because it is a *tick* — the one glyph a reader could take for "this
@@ -63,10 +71,16 @@ import type { TheoryTier } from "./theoryMatch";
  * A dot rather than a word: a label is a mark the reader put there and already knows, and a
  * 224px column has no room for a second word beside a card's name.
  *
- * **8px is its size on a card at 100% zoom.** The Grid view lays this on a card face the reader can
- * zoom, so it reads that card's `--mark-scale` (`lib/cardZoom.ts`); the table and text views take
- * the `, 1` fallback and are unchanged. The 1px ring around it does **not** scale — it is a hairline
- * separating the dot from whatever it sits on, which is a job one pixel does at every size.
+ * **8px is its size on a card at 100% zoom, and since 2026-09-08 no caller draws it on a card.**
+ * The Grid view laid this on a zoomable card face, which is why the size reads that card's
+ * `--mark-scale` (`lib/cardZoom.ts`) rather than being a flat 8; that view draws the shared
+ * `DeckCardFace` now, where the label and the copy count are folded into one {@link QuantityTag}
+ * exactly as they are on the stack. So the two call sites left — `TableView`'s Labels column and
+ * `TextView`'s line — both take the `, 1` fallback, and **the scaled expression is kept rather than
+ * flattened**: it costs nothing where the variable is unset, and a dot on a card face is what this
+ * mark is *for* wherever one comes back. The 1px ring around it does **not** scale — it is a
+ * hairline separating the dot from whatever it sits on, which is a job one pixel does at every
+ * size.
  */
 export function LabelDot({
   name,
@@ -320,21 +334,48 @@ const THEORY_PAINT: Readonly<Record<TheoryTier, { fill: string; fg: string }>> =
  * planned for", which on a live list is the difference between the real thing and the proxy
  * standing in until it arrives.
  *
- * ## It is the surface's own quantity badge, which is two drawings rather than one
+ * ## It is the surface's own quantity badge, and since 2026-09-08 there is one of those
  *
  * The quantity is the mark a reader's eye already goes to on a deck card, so a second fact drawn
- * in a *different* shape beside it reads as a second kind of object. The catch is that the two
- * card-face views do not draw the *same* quantity badge: the stack draws {@link CountTag}'s
- * 22px slanted banner, and the Grid tile draws a flat 9px chip of its own. So this echoes
- * whichever one it is standing next to — `"banner"` and `"chip"` — and `COUNT_TAG_BOX_MIRRORED`
- * and `COUNT_TAG_SLANT_MIRRORED` are exported for the first of them and nothing else.
+ * in a *different* shape beside it reads as a second kind of object. This is therefore
+ * {@link CountTag}'s 22px slanted banner rather than a shape of its own — the tag at one end of
+ * the strip and this at the other are one object drawn twice, which is what
+ * {@link COUNT_TAG_BOX_MIRRORED} and {@link COUNT_TAG_SLANT_MIRRORED} are exported for and the
+ * only thing they are exported for.
  *
- * **One drawing was tried first and the tile is why it did not survive.** The banner is 22px on a
- * 210px stacked card and the same 22px on a 150px tile — 7.5 % of the card against 15 % of it —
- * so a wall of tiles read as a wall of blue flags with cards behind them. Photographed
- * 2026-08-20; it is the same argument {@link GameChangerBadge} and {@link GameChangerBanner}
- * already settle the other way round, that one fact may be drawn twice when the two surfaces have
- * different room.
+ * **It echoed two shapes until 2026-09-08, and the retired one is on the record rather than gone
+ * from it.** The two card-face views did not draw the *same* quantity badge: the stack drew that
+ * banner and the Grid tile drew a flat 9px chip of its own, so this took a `variant` —
+ * `"banner"` or `"chip"` — and echoed whichever it was standing next to. The chip was not a
+ * smaller taste, it was the shape that had to **clear `FoilOverlay`'s corner chip**: top-right
+ * belongs to that chip on every surface that draws a card as a face, the tile drew one, so the
+ * tick **stacked under it**, offset by the chip's own measured box on the cards that had one. The
+ * stack's corner was free — it drew `FoilOverlay mark={false}` and said the finish in its foot —
+ * so one fact wore two shapes in two corners of one deck, and `variant` was the price of the
+ * tile's honesty about a corner it did not own.
+ *
+ * **The premise went with the tile.** Both card-face views draw one `DeckCardFace` now, which
+ * draws `mark={false}` as the stack always did and says the finish in the card's chin — so the
+ * corner is the tick's on both, there is nothing left to stack under, and the quantity beside it
+ * is the same {@link QuantityTag} banner on both. No second geometry is left to echo, and a prop
+ * offering one was drawing one fact a second way for no caller at all.
+ *
+ * **This is still one fact drawn twice app-wide, and the other drawing is
+ * {@link TheoryMatchBadge}** — the table's and the text columns', which have no art to lay a
+ * filled mark on. That is the same argument {@link GameChangerBadge} and
+ * {@link GameChangerBanner} settle the same way, that one fact may be drawn twice where the two
+ * surfaces have genuinely different room. What ended here is a second drawing for two surfaces
+ * that turned out to have the *same* room.
+ *
+ * **The measurement that bought the chip is still true and no longer decides anything.** The
+ * banner is 22px on a 210px stacked card and the same 22px on a 150px tile — 7.5 % of the card
+ * against 15 % of it — so a wall of tiles read as a wall of blue flags with cards behind them
+ * (photographed 2026-08-20). What that pass had in front of it was a banner laid on a bare art
+ * tile whose own quantity was the 9px chip. The tile draws the whole 27px marks strip now, with
+ * the quantity tag at 22px in the opposite corner, so the weight the chip refused has already
+ * been accepted at the other end of the same strip — and refusing it *here* would leave the two
+ * bookends mismatched again, which is exactly what issue #212 reported. **Nothing has been
+ * re-photographed**: read that as the argument's premise having moved, not as a new measurement.
  *
  * **Echoing the banner means reflecting it** (issue #182). Both are 22px tall and both are cut by
  * the same 10px slant, but the tag is widest along its **top** edge and so is this — a 180°
@@ -442,7 +483,6 @@ const THEORY_PAINT: Readonly<Record<TheoryTier, { fill: string; fg: string }>> =
  */
 export function TheoryMatchMark({
   tier,
-  variant = "banner",
   delta = 0,
   className,
 }: {
@@ -458,11 +498,6 @@ export function TheoryMatchMark({
    * would be a way of drawing a tick over a card the plan never asked for.
    */
   tier: TheoryTier;
-  /**
-   * Which surface's quantity badge to echo. `"banner"` is the stack's {@link CountTag} box;
-   * `"chip"` is the Grid tile's smaller flat chip — see the "two drawings" note above.
-   */
-  variant?: "banner" | "chip";
   /**
    * How many copies the reader has to **add** (positive) or **remove** (negative) for the live
    * list to meet the plan — `theoryMatch.ts`'s `TheoryMark.delta`, which is `0` for the row that
@@ -483,16 +518,10 @@ export function TheoryMatchMark({
   delta?: number;
   className?: string;
 }) {
-  const banner = variant === "banner";
   const paint = THEORY_PAINT[tier];
   // **The glyph is the tier's, decided before the delta is read** — an unplanned row draws the X
   // whatever number it was handed, because nothing is planned for there to be a difference from.
   const glyph = tier === "unplanned" || delta === 0;
-  // Written out as whole class names rather than interpolated: Tailwind scans source text, so a
-  // class built from a variable emits no rule at all. Both glyphs take the same one — see below.
-  const glyphSize = banner
-    ? "size-[calc(0.75rem*var(--mark-scale,1))]"
-    : "size-[calc(0.5625rem*var(--mark-scale,1))]";
   const tip = useTooltip();
   return (
     <span
@@ -507,34 +536,27 @@ export function TheoryMatchMark({
       style={{
         // Mirrored — **reflected** across the vertical axis, not rotated 180°, which is the whole
         // of issue #182 — because this sits in the card's **right**-hand corner; see the constant.
-        // The chip has no slant at all: it is echoing a square 9px chip, and a 10px bite out of a
-        // 14px box is most of the box.
-        ...(banner ? { clipPath: COUNT_TAG_SLANT_MIRRORED } : null),
+        // Unconditional since the chip went: the slant is what makes this the quantity tag's
+        // reflection rather than a box that happens to be the same height.
+        clipPath: COUNT_TAG_SLANT_MIRRORED,
         // One row of {@link THEORY_PAINT}, which is where the six property names are spelled out
-        // and where the rule against a `--color-theory-${tier}` template lives.
+        // and where the rule against a `--color-theory-${tier}` template lives — and why this is
+        // an inline style rather than a Tailwind arbitrary value: a mistyped `bg-[…]` emits no
+        // rule at all, silently, and neither suite nor Storybook can go red for a mark drawn in
+        // nothing.
         backgroundColor: paint.fill,
         // The fill is the reader's to change, so what is legible on it cannot be a fixed token:
         // `useMarkColors` recomputes each `-fg` from the fill's own luminance.
         color: paint.fg,
       }}
       className={cn(
-        banner
-          ? // **The mirrored box, and the pairing is not optional** (issues #158, #182 and #212).
-            // The slant above and the paddings that centre content inside it are one shape: worn
-            // with `COUNT_TAG_BOX`'s paddings, this tick sat 5.5px left of its own banner's
-            // visible centre and was reported as left-aligned. The pair is `8/3` now — the same
-            // `pl − pr = 5px` centring, over a `min-w` that holds this to the quantity tag's own
-            // width — and the constant carries the arithmetic all three issues are instances of.
-            COUNT_TAG_BOX_MIRRORED
-          : // The Grid tile's copy count, verbatim but for the fill: `rounded-sm`, the mono face
-            // and the same two scaled sizes. Written out rather than imported because that chip is
-            // `GridView`'s own inline markup and not a component — if it ever becomes one, both
-            // should take it.
-            cn(
-              "flex shrink-0 items-center rounded-sm font-mono tabular-nums",
-              "px-[calc(0.25rem*var(--mark-scale,1))]",
-              "text-[calc(0.5625rem*var(--mark-scale,1))]",
-            ),
+        // **The mirrored box, and the pairing is not optional** (issues #158, #182 and #212). The
+        // slant above and the paddings that centre content inside it are one shape: worn with
+        // `COUNT_TAG_BOX`'s paddings, this tick sat 5.5px left of its own banner's visible centre
+        // and was reported as left-aligned. The pair is `8/3` now — the same `pl − pr = 5px`
+        // centring, over a `min-w` that holds this to the quantity tag's own width — and the
+        // constant carries the arithmetic all three issues are instances of.
+        COUNT_TAG_BOX_MIRRORED,
         // No fill and no foreground here: both are the `style` above, per the tier. Nothing else
         // about the box changes with the tier.
         className,
@@ -551,20 +573,30 @@ export function TheoryMatchMark({
           quantity tag opposite draws its own in — which is the whole reason `min-w` upstream can
           be stated in `ch`. */}
       {glyph ? (
-        // 12px on the stack is the size {@link FinishMark} is drawn at, because the two are marks
-        // on one card face and a tick larger than the foil sparkle would read as the more
-        // important of the two. 9px on a tile, which is the cap height of the digit this chip is
-        // standing in for. `strokeWidth` above lucide's 2 default at both sizes: a tick is three
-        // strokes and no fill, so on art it needs the weight the crown gets from its body.
+        // 12px is the size {@link FinishMark} is drawn at, because the two are marks on one card
+        // face and a tick larger than the foil sparkle would read as the more important of the
+        // two. It was 12px on the stack against 9px on the Grid tile while the chip existed; both
+        // views draw one card face now, so one size is the whole answer. `strokeWidth` above
+        // lucide's 2 default: a tick is three strokes and no fill, so on art it needs the weight
+        // the crown gets from its body.
         //
-        // **The X is the tick at exactly those sizes and that weight**, deliberately — the two are
-        // one mark in two states, so a heavier or a larger X would read as a louder statement
-        // rather than as a different one. Two strokes against the tick's three, at the same
-        // weight, on the same box.
+        // **The X is the tick at exactly that size and weight**, deliberately — the two are one
+        // mark in two states, so a heavier or a larger X would read as a louder statement rather
+        // than as a different one. Two strokes against the tick's three, at the same weight, on
+        // the same box. The class is written out twice rather than interpolated, because Tailwind
+        // scans source text and a class built from a variable emits no rule at all.
         tier === "unplanned" ? (
-          <X className={cn("block shrink-0", glyphSize)} strokeWidth={3} aria-hidden="true" />
+          <X
+            className="block size-[calc(0.75rem*var(--mark-scale,1))] shrink-0"
+            strokeWidth={3}
+            aria-hidden="true"
+          />
         ) : (
-          <Check className={cn("block shrink-0", glyphSize)} strokeWidth={3} aria-hidden="true" />
+          <Check
+            className="block size-[calc(0.75rem*var(--mark-scale,1))] shrink-0"
+            strokeWidth={3}
+            aria-hidden="true"
+          />
         )
       ) : (
         theoryDeltaText(delta)
@@ -674,6 +706,12 @@ export function TheoryMatchBadge({
  * Gold and abbreviated on purpose: it is a fact about the card, not a problem with the deck,
  * and a deck may hold a dozen of them legally. `bracket.ts` counts them into an advisory;
  * nothing about one is a finding.
+ *
+ * **The deck's table and its text columns, and no card face.** A row of type has no art to lay a
+ * glyph on; a card face has, and takes one of the other two arms of `GameChangerMark`'s
+ * one-fact-three-drawings rule — {@link GameChangerBanner} where the card is 210px wide,
+ * `components/GameChangerMark`'s bare crown where it is 150. This is the arm a width argument
+ * never reaches, which is why nothing here has ever had to be measured.
  */
 export function GameChangerBadge({ className }: { className?: string }) {
   const tip = useTooltip();
@@ -695,16 +733,39 @@ export function GameChangerBadge({ className }: { className?: string }) {
 }
 
 /**
- * The same fact as a **stamped gold banner**, for the one surface with room to spell it out.
+ * The same fact as a **stamped gold banner**, for the one surface with room to spell it out —
+ * the deck's **stacked card**, and since 2026-09-08 that is a statement about a width rather
+ * than about a view.
  *
- * `GC` is what a 150px grid tile and a table row can afford; a 210px card face in the stack can
- * carry the words, and it should — two letters are a code the reader has to have learnt, and
- * this is the surface a new reader meets the concept on. The four separations
- * {@link RuleBreakMark} must keep are all still kept, which is the only thing that made
- * spelling it out safe: the **words** differ (`Game Changer` against `RULE BREAK`), the
- * **colour** differs (the gold stamp against destructive), the **place** differs (tucked into
- * the title strip on the left against the top-right corner), and only a rule break changes the
- * card's own **edge**.
+ * A table row and a text column can afford `GC`; a 210px card face in the stack can carry the
+ * words, and it should — two letters are a code the reader has to have learnt, and this is the
+ * surface a new reader meets the concept on. The four separations {@link RuleBreakMark} must
+ * keep are all still kept, which is the only thing that made spelling it out safe: the **words**
+ * differ (`Game Changer` against `RULE BREAK`), the **colour** differs (the gold stamp against
+ * destructive), the **place** differs (tucked into the title strip at the top against the card's
+ * bottom-left corner — that mark held the stack's top-right until 2026-08-20, when
+ * {@link TheoryMatchMark} took the corner, and the separation survived the move intact), and
+ * only a rule break changes the card's own **edge**.
+ *
+ * ## It is one of two arms of the card-face question, not the deck's answer to it
+ *
+ * The deck's Grid tile draws the same `DeckCardFace` as the stack, with the same 27px marks
+ * strip, and it takes `components/GameChangerMark`'s **crown** in the place this ribbon occupies
+ * — so `DeckCardFace` requires a `gameChanger: "banner" | "crown"` and the two callers answer it
+ * differently. This is `GameChangerMark`'s own rule reaching the two card-face views for the
+ * first time: one fact, three drawings, *a difference of room and never of meaning*.
+ *
+ * **The opening sentence of this block said `GC` was "what a 150px grid tile and a table row can
+ * afford", which was two claims and both have moved.** The tile has never drawn `GC` — it wore
+ * the crown in `FoilOverlay`'s corner chip while it was a `CardArt` frame — and for a few hours
+ * after it became this card it drew *this* mark, because the design decision was that the tile
+ * adopts the stack's marks and that was the reasonable reading of it. What no source and no
+ * suite could see is that the strip's three marks are each sized off `--mark-scale` and so do
+ * not narrow when the card does: driven in the shipped window 2026-09-08 (debug build,
+ * 1920×1080, a real Commander deck at `cardZoom` 1.1), a 28px tag, a **130px** ribbon and a 28px
+ * tick came to a 163px strip on a **165px** tile — 11px past an `overflow-hidden` face, clipping
+ * the plan's tick by nearly half, at every stop of the zoom ladder. `GameChangerMark`'s header
+ * carries the whole reading and the figures after the fix.
  *
  * ## The two details that are not decoration
  *

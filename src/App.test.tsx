@@ -114,11 +114,17 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     // a bare call inside a mount effect, so a `vi.fn()` that is not there is a synchronous
     // `TypeError` rather than a rejection anything can catch.
     onArtTagProgress: vi.fn().mockReturnValue(() => {}),
-    // Settings' combo panel, mocked for exactly the reasons its two neighbours above are.
-    // `combosStatus` answers the honest never-ingested row — `fetchedAt: null` is the state a
-    // fresh install is in, and it is the one this file wants, because the panel then draws its
-    // standing copy and no figures at all. `onCombosProgress` is a bare call inside a mount
-    // effect, so an absent mock is a synchronous `TypeError` that no `.catch` can reach.
+    // The combo feed's pair, mocked for exactly the reasons its two neighbours above are.
+    // **This used to say "Settings' combo panel"**, and neither half of that survives: the panel
+    // is gone and the feed downloads at launch now. `combosStatus`' one reader is `DeckBracket`,
+    // which `DeckEditor` mounts — so the tests here that open a deck reach it, and the row it
+    // answers is the honest never-ingested one. That is what a suite with no network should see
+    // and what makes the advisory read three signals and say so; the routing these tests are
+    // about is then what they measure.
+    // `onCombosProgress` stays because a listener registration is a bare call inside a mount
+    // effect, so an absent mock is a synchronous `TypeError` that no `.catch` can reach — the
+    // failure mode every event mock above it is here for, and one the launch fetch makes more
+    // likely rather than less.
     combosStatus: vi.fn().mockResolvedValue({
       combos: 0,
       cards: 0,

@@ -1,12 +1,16 @@
 /**
- * The three theory marks, and the four things about them a suite can honestly hold.
+ * The three theory marks, and the five things about them a suite can honestly hold.
  *
  * Everything else in `CardMarks.tsx` is geometry drawn on a card face, which jsdom lays out not at
  * all — the stack's marks are pinned through `CardStack.test.tsx`, where they are rendered on a
  * real row. What is checked here is the part that is pure: which **sentence** a tier and a count
  * come to, which **value** the tier writes into `data-theory-match`, which **custom property
- * names** each component paints with, and — since the third tier landed on 2026-09-08 — which
- * **glyph** a tier draws, which is the one of the four that is not a string comparison.
+ * names** each component paints with, that the mark's mirrored **clip** is written at all — a
+ * string in an inline style rather than a shape anything has to lay out, which is the one piece
+ * of this mark's geometry jsdom can read back — and, since the third tier landed on 2026-09-08,
+ * which **glyph** a tier draws, which is the one of the five that is not a string comparison. (It
+ * said "three" while the clip case was already here and "four" on two branches that each added a
+ * fifth; the count is re-taken in the commit that changes it.)
  *
  * ## Why the colour assertions name a property and never a colour
  *
@@ -135,20 +139,24 @@ describe("TheoryMatchMark", () => {
 
   it("paints with no Tailwind colour utility, so the reader's choice is the only fill", () => {
     for (const tier of ["exact", "name", "unplanned"] as const) {
-      for (const variant of ["banner", "chip"] as const) {
-        const el = drawMark(<TheoryMatchMark tier={tier} variant={variant} />);
-        expect(el.classList.contains("bg-pie-u")).toBe(false);
-        expect(el.classList.contains("bg-destructive")).toBe(false);
-        expect(el.classList.contains("text-text")).toBe(false);
-      }
+      const el = drawMark(<TheoryMatchMark tier={tier} />);
+      expect(el.classList.contains("bg-pie-u")).toBe(false);
+      expect(el.classList.contains("bg-destructive")).toBe(false);
+      expect(el.classList.contains("text-text")).toBe(false);
     }
   });
 
-  it("keeps the banner's mirrored slant and leaves the chip square", () => {
-    // The clip and the fill are one `style` object now, so a slant lost to the paint is exactly
-    // the regression that rewrite could have caused — and issue #182 is what it would re-open.
-    expect(drawMark(<TheoryMatchMark tier="exact" variant="banner" />).style.clipPath).not.toBe("");
-    expect(drawMark(<TheoryMatchMark tier="exact" variant="chip" />).style.clipPath).toBe("");
+  it("wears the mirrored slant whichever tier it is", () => {
+    // Two regressions, and the loop is what catches the second. The clip and the fill are one
+    // `style` object, so a slant lost to the paint is exactly what that rewrite could have cost —
+    // issue #182 is what it would re-open. And the slant is now **unconditional**: it was written
+    // only for the `"banner"` variant while the Grid tile drew a square 9px chip of its own, and
+    // that prop went on 2026-09-08 when both card-face views became one `DeckCardFace`. So the
+    // property worth pinning is that nothing branches here at all — a shape re-derived from the
+    // tier, or from anything else, is a second drawing coming back.
+    for (const tier of ["exact", "name", "unplanned"] as const) {
+      expect(drawMark(<TheoryMatchMark tier={tier} />).style.clipPath).not.toBe("");
+    }
   });
 
   /**
@@ -161,11 +169,9 @@ describe("TheoryMatchMark", () => {
    * mark drawing both would satisfy either assertion alone.
    */
   it("draws a glyph and no number on the unplanned tier, whatever delta it is handed", () => {
-    for (const variant of ["banner", "chip"] as const) {
-      const el = drawMark(<TheoryMatchMark tier="unplanned" delta={3} variant={variant} />);
-      expect(el.querySelector("svg")).not.toBeNull();
-      expect(el.textContent).toBe("");
-    }
+    const el = drawMark(<TheoryMatchMark tier="unplanned" delta={3} />);
+    expect(el.querySelector("svg")).not.toBeNull();
+    expect(el.textContent).toBe("");
   });
 
   /** And the other two tiers still turn on the number, which is what says the branch above is

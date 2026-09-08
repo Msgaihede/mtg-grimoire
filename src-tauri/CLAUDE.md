@@ -397,10 +397,31 @@ shared_cell` walks both into two databases and compares them column by column.
     staging table is created — `ingest`'s rule for a bulk card file that holds no cards. A swap
     there would promote an empty table *and* stamp the ETag in one transaction, and every weekly
     check from then on would be told 304.
-  - **Nothing may break a launch.** `refresh_if_due` returns immediately on a database whose
-    `fetched_at` is NULL — the deliberate difference from `tags::refresh_if_due` — so nothing is
-    fetched until a reader presses Refresh in Settings. `combos_status` is safe before the first
-    refresh has ever run: two zeros, three nulls and `stale: true`, never a rejection.
+  - **It is fetched uninvited (2026-09-08), which reverses the rule this bullet used to state.**
+    `refresh_if_due` returned immediately on a database whose `fetched_at` was NULL, so nothing
+    downloaded until a reader pressed Refresh in Settings. `due_at_startup` is plain staleness
+    now, and `is_stale` already reads a missing `checked_at` as stale, so a database that has
+    never asked is due by definition. Combos join `tags::{oracle,art}::refresh_if_due` rather
+    than `marketplace_feed::refresh_selected_if_due`: a bracket readout drawn from three signals
+    looks exactly like one drawn from four — no error, no empty state, just a number a little too
+    low — and a reader had no way to know a button was what they were missing, where a
+    marketplace nobody picked is a thing nobody asked to be shown. **Nothing may still break a
+    launch**: the task is spawned before there is a window, silent and best-effort, and
+    `combos_status` is safe before the first refresh has ever run — two zeros, three nulls and
+    `stale: true`, never a rejection. A first fetch that *fails* leaves no watermark at all,
+    because `mark_checked` writes nothing where there is no row, so it is retried at the next
+    launch rather than throttled out for a week.
+  - **`clear_combos` empties all three tables and _deletes_ the `combo_meta` row rather than
+    blanking it.** No row is the never-ingested state this module is already written against and
+    every reader of that table already handles (`read_status`, `due_at_startup`, `mark_checked`);
+    a row with its columns nulled would be a fourth state handled by none of them. The child goes
+    first, by its own statement even though `combo_id` CASCADEs, because `PRAGMA foreign_keys` is
+    per-connection and nothing in the signature says who set it. One transaction, for the swap's
+    reason. **What makes the clear honest is `conditional_etag`**, which asks whether there are
+    *rows* before replaying an ETag — so a cleared database really re-downloads instead of being
+    told 304 into staying empty. `combos_clear` is the wrapper, and it *routes* on the web target
+    where `combos_refresh` does not: the seam is the work — synchronous, connection-only, no
+    network — and never the neighbouring name.
   - **The rows are the feed's facts and the crate concludes nothing from them.** `bracket_tag` is
     Spellbook's editorial letter carried through verbatim and the column takes **no CHECK**,
     because the vocabulary is theirs and an eighth letter must be a skipped variant rather than a
@@ -1863,7 +1884,7 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
 | [search-faceting.md](../docs/reference/search-faceting.md) | `src/index/` — why the index is in memory, and the fail-open rule |
 | [in-app-updates.md](../docs/reference/in-app-updates.md) | `update.rs` — why the portable swap is hand-written |
 | [decks-storage.md](../docs/reference/decks-storage.md) | The deck tables, the card commands, how owned/missing is answered, the audit log, the decklist import, and the token resolver — the union keep rule, why there is no name test, and the v36 table |
-| [commander-brackets.md](../docs/reference/commander-brackets.md) | `combos.rs` and the v26 rung — the feed measured end to end, what is kept and what is skipped, the match query, and `decks.bracket` |
+| [commander-brackets.md](../docs/reference/commander-brackets.md) | `combos.rs` and the v26 rung — the feed measured end to end, what is kept and what is skipped, the match query, the launch gate and the clear, and `decks.bracket` |
 | [wishlist-folders.md](../docs/reference/wishlist-folders.md) | The wishlist's cabinet (v23) — the four-term grain, the merge rule, the root-add duplicate |
 | [collection-folders.md](../docs/reference/collection-folders.md) | The collection's cabinet (v24–v25) — the eleventh grain term, the deck groups and `Recently removed`, the conversion that made them, what a zero quantity now costs |
 | [sync.md](../docs/reference/sync.md) | `sync_pair/`, `sync_engine/` and the user-schema rungs sync owns, v29 to v31 — the pairing protocol step by step and the six digits; then the thirteen synced tables, how a row is named across devices, the three SQLite facts the capture triggers' shape follows from, §7.3's five rules against the test that proves each, the envelope measured, the relay's endpoints, and what is not built |

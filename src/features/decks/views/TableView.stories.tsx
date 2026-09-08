@@ -25,8 +25,16 @@ const meta = {
     onSelect: fn(),
   },
   decorators: [
+    // **The frame is a scroller because the *page* is, and it stopped being a height because the
+    // table stopped being one** (2026-09-08). It was `flex h-[36rem]` — a bounded box for a view
+    // that scrolled inside itself — and `TableView` passes `VirtualTable`'s `grow` now: it draws
+    // every row in normal flow and is not a scroll container, so a fixed frame would simply be
+    // spilled out of and the workbench would show a clipped deck rather than the shipped one. In
+    // the app the box this view is drawn in is given no height at all and `AppShell`'s `main`
+    // takes the scroll; `max-h` plus `overflow-y-auto` is that arrangement at a story's scale —
+    // the table is as tall as its own rows, and this stands in for the page.
     (Story) => (
-      <div className="flex h-[36rem]">
+      <div className="flex max-h-[36rem] overflow-y-auto">
         <Story />
       </div>
     ),

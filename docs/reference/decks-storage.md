@@ -1481,7 +1481,7 @@ manaCost | price | type`). All twelve combinations were driven live 2026-08-11; 
   sorting were correct in every one, and an **inactive category stays its own group in all three
   grouping modes** rather than being folded in by mana value or type. Only `Stacks` and `Grid`
   fetch a picture, and it is the **whole card** — `cardImageUrl(…, DECK_CARD_VARIANT)`, which is
-  `grid`; `Table` and `Text` are text and draw nothing —
+  **`display` (672×936)**, not `grid`; `Table` and `Text` are text and draw nothing —
   which is why the old single-row view's thumbnail, its `17rem` container query and
   `STACK_MAX_WIDTH` are gone rather than moved. **That pass predates the `Split X` toggle**
   (schema v13, 2026-08-14): the twelve stand as measured — the toggle is a modifier of one of the

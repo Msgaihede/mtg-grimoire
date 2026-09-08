@@ -356,25 +356,64 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   button and so is genuinely announced). This is the same rule the owned badge follows by being
   a _sibling_ of the button.
 - **`FoilOverlay mark={false}` draws the sheen without the chip**, for a frame that names the
-  finish somewhere else. The stack is its one caller: a `FinishMark` on the data line beside the
+  finish somewhere else. It has one caller and that caller is now **`features/decks/DeckCardFace`**,
+  which both of the deck's card-face views draw — the stack alone until 2026-09-08, and the grid
+  tile with it since. A `FinishMark` in the chin beside the
   price says the word better than a fourth badge in a corner the rule break and the quantity tag
   are already competing for. What must never happen is _neither_ — a sheen with nothing naming
-  it is decoration, which is the whole of why the chip existed. **It governs the crown too**,
-  since the chip is the only thing a crown can be drawn as and the stack has its banner instead.
-- **One game changer, three drawings, and the difference is room rather than meaning.** The deck
-  stack stamps `GameChangerBanner` — a gold seal, a 9px crown, `Game Changer` in Cinzel — where a
+  it is decoration, which is the whole of why the chip existed. **It governs the crown too**, in
+  the sense that turning the chip off takes whatever is in it with it — and the second clause of
+  this sentence, *since the chip is the only thing a crown can be drawn as and this face has its
+  banner instead*, was written on 2026-09-08 and stopped being true the same day. A crown is a
+  glyph and can be drawn anywhere there is room for one: the deck's Grid tile draws it in its marks
+  strip, with no chip anywhere on the tile. What each of the two card-face views puts in that
+  strip is its own answer — the stack's ribbon, the tile's bare crown — and the bullet below is
+  where that is settled and measured.
+- **One game changer, three drawings, and the difference is room rather than meaning.** The deck's
+  **stacked card** stamps `GameChangerBanner` — a gold seal, a 9px crown, `Game Changer` in
+  Cinzel — where a
   card is 295px tall; the deck's table and text views abbreviate to `GameChangerBadge`'s gold `GC`
-  where a cell has a column; and **anything that draws a card as a face** — the search wall, the
-  collection, the deck editor's docked search column and, since 2026-08-16, the deck's own Grid
-  view — gets `components/GameChangerMark`, **the banner's
-  crown and nothing else**, because a 170px tile is somebody else's artwork and a ribbon across it
-  is a sticker over the picture the reader came to look at. `text-pie-gold` in all three: the spec
+  where a cell has a column; and **every other surface that draws a card as a face** — the search
+  wall's tiles, the collection's, the wishlist's, the three docked search columns and the deck's
+  own **Grid tile** — gets `components/GameChangerMark`, **the banner's crown and nothing else**,
+  because a 150–170px tile is somebody else's artwork and a ribbon across it is a sticker over the
+  picture the reader came to look at.
+  `text-pie-gold` in all three: the spec
   is explicit that a game changer (a fact about a powerful card) and a rule break (a problem)
-  must never be confusable, and the destructive colour belongs to the second. It shares the finish
-  chip rather than taking a corner of its own — **a card fact and a printing fact in one box**,
-  since a card can be either, both or neither. Nothing derives it: the backend flattens
+  must never be confusable, and the destructive colour belongs to the second. On the walls it
+  shares the finish chip rather than taking a corner of its own — **a card fact and a printing
+  fact in one box**, since a card can be either, both or neither; on a deck tile there is no chip
+  at all (`FoilOverlay mark={false}`, the bullet above) and the crown stands in the card's own
+  marks strip. Nothing derives it: the backend flattens
   `cards.game_changer`'s NULL into `false` (the column is nullable; only `card_row.rs`'s parser
   struct is a `bool`).
+  **This list put the deck's Grid view on the *banner* arm for a few hours on 2026-09-08, and what
+  moved it back is a measurement rather than a second opinion.** The claim was reasonable and is
+  worth reading before the correction: that view had stopped being a `CardArt` tile with a corner
+  chip and had become `features/decks/DeckCardFace` — the stacked card, shared — so it draws the
+  stack's own 27px marks strip; the design decision was that the tile adopts the stack's marks,
+  and the ribbon is one of them. It had held the crown "since 2026-08-16" only because a `CardArt`
+  tile has nowhere else to put one. **What no source and no suite could see is that the strip does
+  not narrow with the card.** All three marks in it — `QuantityTag`, the game changer and
+  `TheoryMatchMark` — are sized off `--mark-scale`, which is the reader's *zoom* and not the
+  tile's width, so a 130px ribbon is 130px on a 210px stacked card and 130px on a 150px tile.
+  **Driven in the shipped window 2026-09-08** (`npm run tauri dev`, a **debug** build, 1920×1080,
+  against the real corpus, on a 101-card Commander deck at `cardZoom` 1.1), on a card that is both
+  a game changer and an exact plan match: a **28px** tag, a **130px** ribbon and a **28px** tick
+  went into a **163px** strip on a **165px** tile — **11px of overflow**, into a face that is
+  `overflow-hidden`, so the plan's tick was clipped by nearly half. Every term scales with the
+  zoom, so the ratio is constant and it was clipped at *every* stop of the ladder; photographed at
+  2× to confirm. Re-measured after the fix in the same session: tag at **x=1** (28 wide), crown at
+  **x=29** (13 wide), tick at **x=136** (28 wide), **overflow 0** — and the stack, checked in the
+  same pass, still draws the ribbon.
+  **The count of drawings is unchanged and so is the rule that decides them** — it is *room*, and
+  the room a mark has is a fact about the surface rather than about the component it borrows. What
+  is new is that the **two card-face views sit on different arms of it for the first time**,
+  because they are two widths: `DeckCardFace` takes a required `gameChanger: "banner" | "crown"`,
+  `CardStack` passes the first and `GridView` the second. It is **not** a return to the corner
+  chip — the mark is in the same strip in the same place on both views, `FoilOverlay` is
+  `mark={false}` on both, and top-right is `TheoryMatchMark`'s on both. jsdom lays nothing out, so
+  every figure above is a live claim and the suite can only pin which drawing each view asks for.
 - **The rule break's edge is the fourth separation, and on the stacked card it is drawn by _two_
   elements** (fixed 2026-08-14). `CardStack`'s data line is a sibling of the face, not a band
   inside it: `-mx-px` puts its own border exactly where the card's is, and being `relative` and
@@ -1067,8 +1106,18 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
     the top of the first column with the companion directly under it and the deck beginning below
     them. A box there would be a second mechanism for an arrangement the pack already produces, and
     the two would part company the first time one of them was adjusted.
-  - **`TableView` and `GridView` never called `splitRail`** — they draw `groups` in the order they
-    are handed — so for those two the whole of this change is that the command zones come first.
+  - **`TableView` and `GridView` never called `splitRail`** — they drew `groups` in the order they
+    were handed — so for those two the whole of this change was that the command zones come first.
+    **`GridView` calls it since 2026-09-08 and `TableView` is the one view left that does not.**
+    The wall renders `[...command, ...flow, ...rail]`, the same concatenation the two column views
+    and `deckWalk.ts` make, so the Sideboard, the Maybeboard and every switched-off pile are drawn
+    **last** there. It is **ordering only and deliberately not a rail**: a group on that wall is as
+    wide as the desk, so a 19-card Maybeboard in a one-tile rail column is ~4 500px of scroll
+    against the same nineteen cards in a stack, which `stackHeight` makes roughly a fifth of that
+    (arithmetic, not a reading) — the piles move to the end of the list and stay full-width
+    wrapping groups. What that closes as a side effect is a range: a Shift-click across the grid
+    now follows the tiles under the pointer even where it crosses the rail boundary, which it did
+    not before. The table still can disagree there.
   - **The stats band did not change, and it is the thing a reader will assume did.** `DeckStats`
     derives the curve, the average mana value and the type bars from the deck's rows itself and has
     never called `buildGroups`, so a four-drop commander still stands in the `4` bar beside a desk
@@ -1301,7 +1350,13 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   The part a number cannot fix: a popup inside a virtualised row is capped by that row's
   layer whatever it asks for, because the row is `absolute` _and_ `transform`ed and is
   therefore its own stacking context. That is why the row lift exists and why it sits
-  _below_ the header — a row has to scroll under one. Variant spellings
+  _below_ the header — a row has to scroll under one. **The word _virtualised_ started doing
+  real work in that sentence on 2026-09-08**, when `VirtualTable` gained an opt-in `grow` and the
+  deck's table took it: those rows are `relative` with a `minHeight`, so a bare one is no stacking
+  context and caps nothing. The three 100k-row walls still virtualise and the sentence is theirs
+  unchanged; `LAYER.raisedWhenPopupOpen` stays unconditional either way, because under `grow` it is
+  no longer *lifting a capped popup* but still *raising the row over the rows below it*, which
+  paint later simply for being later in the DOM. Variant spellings
   (`has-[[aria-expanded=true]]:z-10`) are their own entries, written out: Tailwind scans
   source text for whole class names, so a class built by interpolation emits no rule at all.
 - **The ladder is `raised 10 < header 20 < popup 30 < dragTray 40 < overlay 45 <
@@ -1683,22 +1738,38 @@ clientWidth` at 1024, 1280 and 1920, and the deck view's own scroller matched it
   a `flex-1` item of a `min-h-0` desk with `overflow-auto` on it, so the piles wrapped down
   inside a box exactly as tall as the desk, and the editor's own page scrollbar sat beside that
   box's. Two scrollbars an inch apart, moving different things, with nothing on screen saying
-  which a wheel was about to turn. **Three of the four views are given no height at all now** —
-  stacks, grid and text grow to hold their content, the desk row grows with them, and the page
-  scroller (which has been there since the stats became a band) is the one thing in the editor
-  that scrolls.
+  which a wheel was about to turn. **Three of the four views were given no height at all on
+  2026-08-14, and the fourth followed on 2026-09-08** — all four grow to hold their content, the
+  desk row grows with them, and the page scroller (which has been there since the stats became a
+  band, and which is `AppShell`'s `main` since 2026-08-24) is the one thing in the editor that
+  scrolls. The paragraph and the two readings below are the 2026-08-14 pass; read the third bullet
+  for what happened to its exception.
   - **Measured on a seeded 132-card, 17-pile Commander deck at 1280×800.** Stacks: the view
     box **7 123px** with `scrollHeight - clientHeight` of **0**, in a page of **702** visible
     against **7 635** of content. Grid **4 270**, text **1 765** (which packs to a fixed
     readable target and wraps, so it is the shortest of the three), all three with **0** internal
     scroll. `page.scrollWidth - clientWidth`, `main`'s and the document's were **0** at every
     reading — the sideways rule the entries above establish is untouched.
-  - **The table is the exception and it is a difference in kind.** `VirtualTable` mounts the rows
-    in view and holds a spacer open for the rest, so a scrollport is what it _is_; given no height
-    it was measured at **2 781px** with its own scroller _and_ the page's — the two-scrollbar
-    screen this change exists to remove, arriving by the opposite route. It keeps the bounded desk
-    row: **384** with **2 397** of scroll inside it and **194** of page, which is exactly what it
+  - **The table was the exception, and the arrangement these figures measure was removed on
+    2026-09-08.** They are kept because they are the whole case for the exception and the whole
+    case against it. As read on 2026-08-14: `VirtualTable` mounts the rows in view and holds a
+    spacer open for the rest, so a scrollport is what it _is_; given no height it was measured at
+    **2 781px** with its own scroller _and_ the page's — the two-scrollbar screen this change
+    exists to remove, arriving by the opposite route. So it kept the bounded desk
+    row: **384** with **2 397** of scroll inside it and **194** of page, which was exactly what it
     read before.
+    **What changed is the component rather than the view.** `VirtualTable` takes an opt-in
+    `grow?: boolean` (default `false`): under it the root is not a scroll container, every row is
+    rendered in document order in normal flow, the rowgroup holds no spacer height, and a row is
+    `relative` with a `minHeight` rather than `absolute` + `transform` + `height`. `TableView`
+    passes it; the search, the collection and the wishlist do not and still virtualise 100k rows.
+    So the desk row carries no height for any view, `DECK_HEIGHT_FLOOR` is unconditional on the
+    view box, and the reader's own complaint — a deck table in a 384px letterbox with a scrollbar
+    of its own an inch from the page's — is answered rather than excepted. **The figures above are
+    now history and nothing has replaced them**: this view has not been re-measured in the shipped
+    window, so no number for the grown table belongs on this page yet. What it should read is one
+    tall document with the page as the only scroller, exactly as the three bullets above the
+    exception read.
   - **`min-h-96` on the desk row was silently capping the whole thing, and only the live pass
     could show it.** A flex item's automatic minimum size is what stops it being squeezed below
     its content, and a `min-height` _number_ replaces that `auto`. With the class still on the
@@ -1914,6 +1985,15 @@ clientWidth` at 1024, 1280 and 1920, and the deck view's own scroller matched it
     `VIEW_PICKER` now — `DeckEditor`'s `VIEWS` through `sortOptions`, reading
     `Grid · Stacks · Table · Text` — and **no exemption**: the array is written default-first,
     which is a fact about how it was typed rather than information the reader is owed.
+    **Since 2026-09-08 it reads `Stacks · Grid · Table · Text`**, at the reader's ask: `VIEW_PICKER`
+    is `DEFAULT_VIEW`'s row **pinned** above `sortOptions` over the other three. Still no
+    exemption — a pinned row is the shape `Any card`, `Any format`, `Custom…`,
+    `Auto (by what it does)` and `Top level` already have, everything the pin does not name still
+    sorts, and the argument quoted above about the array's own order is untouched and is why the
+    pin is spelled as a *filter* over `VIEWS` rather than as a reordering of it. What the pin buys
+    is a position for the view every deck opens on. **The three controls are `components/Dropdown`
+    rather than `<select>`s since 2026-08-26**, so the live figures below are readings of the
+    selects they replaced.
     **Driven in the shipped window 2026-08-15** (`npm run tauri dev`, a debug build, 1280×800,
     on a 14-card Commander deck): the three selects computed `top: 182` and `height: 36` each —
     one line, no wrap — at **80px** (View), **105** (Group by) and **111** (Sort), with the
@@ -2017,11 +2097,21 @@ figure in it that came from a run of text is exposed and should be re-read befor
   as a mistake. Same idea `GameChangerBanner` already states about its forked tail. **What this
   pass could not see is that the polygon it settled on was a _rotation_ rather than a reflection**
   — both hide the notch, and only one keeps the taper; issue #182 two sections down.
-- **The Grid tile gets a second drawing, not the same one.** One `CountTag` banner for both card
+- **The Grid tile got a second drawing, not the same one — and that `variant` was deleted on
+  2026-09-08.** One `CountTag` banner for both card
   faces was the first cut: 22px on a 210px stacked card is 7.5 % of it and the same 22px on a
-  150px tile is **15 %**, so a wall of tiles read as a wall of blue flags with cards behind them.
-  `variant="chip"` echoes the tile's own 9px copy count instead — which is the honest reading of
-  "the same badge as the quantity" anyway, since the two views do not draw the same quantity badge.
+  150px tile is **15 %**, so a wall of tiles read as a wall of blue flags with cards behind them
+  (photographed 2026-08-20). `variant="chip"` echoed the tile's own 9px copy count instead — the
+  honest reading of "the same badge as the quantity" *while the two views did not draw the same
+  quantity badge*, and the shape that had room to stack under `FoilOverlay`'s corner chip, which
+  the tile drew and the stack did not.
+  **Both halves of that premise went with the tile.** The two card-face views draw one
+  `DeckCardFace` now: `FoilOverlay mark={false}` on both, so there is no corner chip to clear and
+  nothing to stack under; and one `QuantityTag` banner on both, so there is no 9px chip left to
+  echo. The measurement above is still true and no longer decides anything — the tile draws the
+  whole 27px marks strip with a 22px tag at the other end of it, so the weight the chip refused is
+  already accepted on the same card, and refusing it *here* would leave the strip's two bookends
+  in different shapes. `CardMarks.tsx` carries the full reading at its own site.
 - **The row views get no box.** `GameChangerBadge`'s outlined box around a **tick** is a
   **checkbox** — the one control every reader already knows — and a decklist of them reads as
   something to click. `GC` survives the box because it contains letters. So `TheoryMatchBadge` is
@@ -2506,8 +2596,11 @@ three escapees were probed in it that day (two filter labels and a view heading,
 `offsetParent` of `body`), harmless only because the views they sit in keep them near the top.
 
 **Scrollbars actually drawn, after, counted by `offsetWidth - clientWidth - borders` over every
-element**: Stacks **1**, Grid **1**, Text **1**, Table **2**. The table's second is
-`VirtualTable`'s and is the documented exception — a virtualiser is a scrollport by construction.
+element**: Stacks **1**, Grid **1**, Text **1**, Table **2**. The table's second was
+`VirtualTable`'s and was the documented exception — a virtualiser is a scrollport by construction.
+**That exception went on 2026-09-08** (`VirtualTable.grow`, the section above), so the table's
+count is **expected to be 1** and is **unverified** — this line has not been re-driven, and the
+figure stays as read until it is. Do not quote the 1 as a measurement.
 Opening the card detail pane over Stacks made it 2 as well, the pane being its own scroller for the
 printings preview; that was read in the editor only and not in the other views. Every other view
 was re-checked in the same pass: Search 1 (the wall), Settings
@@ -2560,9 +2653,13 @@ written in, and the foot of a column is the one edge that was never clipped.
 **It belongs on the box that carries the `overflow`, and one level in is not the same fix** —
 padding on a child moves the target off the edge, but the ring is then drawn outside _that_ child
 and lands back on the same clip. Same rule, and the same trap, as the `relative` in the section
-above. The other way out is `ring-inset`, which is what `TableView` has always drawn, its rows
-being absolutely positioned inside a virtualiser where an outset ring would paint over its
-neighbours.
+above. The other way out is `ring-inset`, which is what `TableView` reached first — recorded here
+as *its rows being absolutely positioned inside a virtualiser*, which was that view's reason on
+2026-08-17 and stopped being it on 2026-09-08, when the view took `VirtualTable`'s `grow` and its
+rows went into normal flow with a `minHeight`. **The conclusion survives on the half that never
+depended on the virtualiser**: table rows are stacked flush against each other, so an outset ring
+paints over a neighbour whether or not a scroller clips it as well. That view's root also carries
+no `overflow` at all now, so there is no padding box left for it to be clipped at.
 
 **Photographed rather than reasoned about**, and without either lock: a `file://` page against the
 built `dist/assets/index-*.css`, the two states of the root side by side, shot by headless Edge.
@@ -2642,8 +2739,11 @@ by another worktree, which is what the dist-CSS route is for.
 — it cannot be clipped — but `FOCUS` still stands 4px proud, and half a focus indicator is a WCAG
 2.4.7 failure rather than a cosmetic one. The 6px was always sized for `FOCUS` rather than for the
 ring, so the number is unchanged and only its justification narrowed. `TableView` had reached the
-inset answer on its own long before, for rows absolutely positioned inside a virtualiser; its
-local `ring-inset` is now a duplicate of what the token says and was removed.
+inset answer on its own long before — recorded here as *for rows absolutely positioned inside a
+virtualiser*, which was true of that view until 2026-09-08 and is true of the app's other three
+tables still; what holds for the deck's own now that its rows are in normal flow is the plainer
+half, that rows stacked flush against each other cannot afford an outset mark. Either way its
+local `ring-inset` is a duplicate of what the token says and was removed.
 
 **Three test holes the change opened, all of which would have gone green.** Worth recording
 because each is the same shape: an assertion written against a literal that no longer exists
@@ -3117,7 +3217,13 @@ this rule has to be stated rather than left to a linter: neither would go red.
 **One panel, `fixed`, mounted at the app root — because a virtualised row is both
 `position: absolute` and transformed, which caps every `z-index` inside it *and* makes that row
 the containing block for a `position: fixed` descendant.** A panel anchored inside a row inherits
-both traps at once; a panel whose DOM node lives outside the whole tree, at `LAYER.tooltip`
+both traps at once. (**Three of the app's four tables virtualise; the deck's stopped on
+2026-09-08**, when it took `VirtualTable`'s `grow` and its rows went into normal flow, `relative`
+with a `minHeight` — neither transformed nor a containing block for anything `fixed`. One
+virtualised wall is enough to settle where the panel mounts, and root-mounting is correct on a row
+that traps nothing as well as on one that traps both, so nothing here moves. What it is not is a
+licence to anchor a hint inside a deck table row: the placement is the hook's, not the caller's.)
+A panel whose DOM node lives outside the whole tree, at `LAYER.tooltip`
 (`z-47` since 2026-09-03, above every dialog rung because a hint can be shown over the deck
 editor's dialogs — and over a nested overlay, which is what moved it off 46 — below
 `gate`'s 50 because `SyncProgress` covers the window and a hint floating over it would describe
@@ -3594,14 +3700,28 @@ written against them — keep the names they were written under.
 `CAPTION_GAP`. There is deliberately **no `chinText` function** to go beside `chinHeight`: a height
 is a number the *host* has to budget for, and a type size is not.
 
+**The table above is the state on 2026-08-26 and the deck's grid row is history twice over.** That
+surface drew its own 20px/9px foot until this component landed, and from 2026-09-08 it is not
+drawing its own card at all — the tile is `DeckCardFace` in a `rounded-lg border` wrapper with
+`CardChin seam="card"` under it, which is the stacked card's arrangement rather than a third one.
+So the row's two numbers record what the drift *was*; what the wall pays today is the stack's,
+because it is the stack's.
+
 **What each host actually pays, because the spec's arithmetic was out.** The bar is 28px at 1× on
 every surface; what a host *adds to its tile* is `chinHeight(zoom) - CHIN_RISE`, **24px at 1×**,
 since the bar rides up into the face. So a `CardGrid` tile's foot went 25 → **24, one pixel
 _less_** — not the "+3px at 1×" the design doc claimed off `28 − 25`, because the old 25 was
 `ceil(24 × CONTROL_SHRINK) + CAPTION_GAP` with a 4px gap already inside it and the chin has no gap
 at all. The deck's grid used to add a 20px bar and now adds 24 of a 28px one; it **budgets
-nothing**, being a plain scroller rather than a virtualiser, and its `footHeight` local only
-positions the controls strip that sits on the chin's top edge. The stacks did not move at all: 28
+nothing**, being a plain scroller rather than a virtualiser. **The rest of that sentence named a
+`footHeight` local that positioned the controls strip on the chin's top edge, and there is no such
+local since 2026-09-08**: the tile draws the stack's controls column instead, `DeckCardControls
+layout="card-column"` at `absolute top-9 right-1.5`, which needs no computed offset at all —
+`top-9` clears the 27px printed title bar the quantity tag and the game changer's crown sit in
+(the crown and not the ribbon on this view — see the game-changer bullet near the top of this
+page for the width that decided it), and the column
+runs down the card's right margin from there. An absolutely positioned column takes no height, so
+the tile is still exactly as tall as its face plus its chin. The stacks did not move at all: 28
 is where the number came from, and `stackCardHeight` has always subtracted the rise.
 
 **`CHIN_RISE` is 4px at every zoom, and that is a derivation rather than an oversight.** The chin
@@ -3621,12 +3741,22 @@ are the tile's full width and are already collinear. **A `border-b` on the `"car
 border already *is* the bottom edge, so a second one sits 1px above it and draws a card with a 2px
 foot and a 1px everything-else. A defaulted prop would have served whichever host is in the
 minority, and a call site that simply forgot it would compile, pass, and ship that foot: jsdom
-cannot see it and a screenshot barely can. `CardChin.test.tsx` pins both seams and `views.test.tsx`
-pins the deck grid's own bottom edge, all through **`classList.contains("border-b")`** and never
+cannot see it and a screenshot barely can. `CardChin.test.tsx` pins both seams, through
+**`classList.contains("border-b")`** and never
 `className.toContain` — because the string `"border-border"` *contains* the substring `border-b`,
 so the obvious spelling passes on both seams and asserts nothing. That is this repo's recurring
 vacuous-assertion shape, and it is what makes the difference between a pinned prop and a pinned
 nothing.
+
+**The sentence above named `views.test.tsx` as pinning "the deck grid's own bottom edge", and
+there is no bottom edge there to pin since 2026-09-08.** That tile passes `seam="card"`, where it
+passed `"art"`: the face inside its button clips its own corners at `rounded-[7px]` and the tile
+itself carries the `rounded-lg border`, so the chin draws `border-x` only and rides onto the card's
+own border exactly as a stacked card's does. `"art"` is what a bare `CardArt` frame needs and there
+is no longer one on that wall. The lesson the sentence was carrying is untouched and is why it is
+corrected rather than cut: `classList.contains` over `className.toContain` is the difference
+between a pinned prop and a pinned nothing, and it matters *more* on the `"card"` seam, where the
+assertion is about a class that must be **absent**.
 
 **`CardArt` gained an edge of its own on 2026-08-26, and it costs the wall no height** (headless
 Chromium over the shipped `dist/` stylesheet, a 238px tile, the app's dark theme). The `"art"` seam
@@ -3645,28 +3775,46 @@ inside: `clientWidth`/`clientHeight` go 238 × 333 → **236 × 331**, one hairl
 exactly what the stack's card has always done to its own face. **Both rings survive it**, because a
 ring here is a spread-only outset `box-shadow` (`ring-2 ring-accent` measures
 `oklch(0.75 0.12 85) 0 0 0 2px`) and an outset shadow paints outside the border box: the gold hugs
-the new edge rather than replacing it, and the deck grid's `ring-2 ring-destructive` — which sits on
-the wrapper one level out — is unchanged in both colour and geometry. The one artifact is at the
+the new edge rather than replacing it, and the deck grid's `ring-2 ring-destructive` — which sat on
+the wrapper one level out — was unchanged in both colour and geometry. (**That ring is gone since
+2026-09-08**: a rule break on a deck tile is `border-destructive` on the wrapper, with
+`CardChin`'s `tone` carrying the colour through the foot — see the paragraph two below, which is
+where this reverses. Nothing about `CardArt`'s own edge or about `SELECTED_CARD` moved; that gold
+is still a ring on the `<li>`, still painted outside the border box, so a picked card that also
+breaks a rule still wears gold around red.) The one artifact is at the
 seam itself and is about a pixel: the frame's `rounded-lg` corner curves inward over the 4px the
 chin rides up, so the outline pinches ~1px before the bar's straight edge resumes. `CHIN_RISE` was
 derived from the stack's 7px face radius, where the same excursion is 0.68px; at the art's 10px it
 is 2px, of which the bar covers all but the top hairline.
 
-**`tone` is the other half of the same join, and the deck stack is its one caller.** The bar is
+**`tone` is the other half of the same join, and the deck stack was its one caller until the deck's
+grid became the same card on 2026-09-08 — two now, and they are two drawings of one object rather
+than two decisions.** The bar is
 `relative` and later in the document than the face, so its border paints *over* the card's along its
 whole height. A rule-breaking *stacked* card is outlined in destructive, and a chin that kept the
 default border would put the wrong colour back through the card's left and right edges — the one
-thing that outline exists to say.
+thing that outline exists to say. That sentence is now true of the tile word for word.
 
-**The deck's grid tile is the same argument run backwards, and it passes no `tone` at all** (the
-same day, once the frame above had an edge). That tile's outline is `CardArt`'s new
-`border border-border`, which is *neutral* whatever the card is doing, because a rule break there is
+**The deck's grid tile was the same argument run backwards and passed no `tone` at all** (the
+same day, once the frame above had an edge). That tile's outline was `CardArt`'s new
+`border border-border`, which is *neutral* whatever the card is doing, because a rule break there was
 the `ring-2 ring-destructive` on the face — an outset shadow, painted outside the border box, which
-is why the two do not compete. So a reddened chin under a grey frame ran the card's outline grey
+is why the two did not compete. So a reddened chin under a grey frame ran the card's outline grey
 down the art and red across its foot: the tile stopped reading as one object at exactly the join the
 frame was given an edge to close. Reddening `CardArt` instead was refused — it draws the same fact
 twice beside the ring, and that component's two callers mark a rule break differently, so the colour
 is not its decision to take.
+
+**Every clause of that was about a tile whose edge belonged to the picture, and the argument
+expired with its premise on 2026-09-08.** The tile is `rounded-lg border` around a
+`DeckCardFace` — the stacked card's arrangement — so the **wrapper** is the card's edge and it is
+what a rule break reddens (`border-destructive`, where it was `ring-2 ring-destructive` on the
+face). A neutral chin under that would put 28px of `border-border` back through the left and right
+edges of the very outline the reddening exists to draw, which is the failure the paragraph above
+names, arriving from the other side. So the tile passes `tone` now, exactly as `CardStack` does,
+and for the same reason. What did **not** change is the refusal at the end: reddening `CardArt`
+is still not that component's decision, and it is not asked to — the deck's two card views reach
+it for `FoilOverlay` alone.
 
 **The printing line is a union, not four loose optionals.** A caller either supplies `setCode` and
 `collectorNumber` — the default `SET · number` — or supplies a `printing` node of its own *and* the
@@ -4830,14 +4978,14 @@ is prose about something else.
 | `components/AppShell.tsx:822` — the same spread over a pinned deck or folder's name | Which deck or folder each pinned art crop is. | The same, and nothing else. |
 | `components/Ribbon.tsx:96` (`dataDir`) and `:97–98` (`imageStoreFailures`), bound at `:176` on the `role="status"` line | Which data folder is live, and how many card images could not be written to the cache. | **Nothing.** Each field reaches the UI at exactly one place, and it is this tooltip: `imageStoreFailures` is drawn in no other string and `dataDir` in no other expression. Settings names neither — `features/settings/SettingsPage.tsx:154` reads "Data folder and import. Coming in a later plan.", and `features/settings/DangerZonePanel.tsx:117` records that the folder is named nowhere on Settings. |
 | `features/collection/AddToCollection.tsx:41` — `REVEAL_ON_HOVER`. **No count is written here; `grep -rn REVEAL_ON_HOVER src` is the census** — this row said *11 sites* with line numbers and every one of them had moved by 2026-09-07. The files, which drift far more slowly: `collection/CollectionTable.tsx`, `collection/CollectionSearchPanel.tsx` **(new 2026-09-07)**, `decks/DeckTile.tsx`, `decks/FolderTree.tsx`, `search/CardGrid.tsx` (×2), `search/SearchPage.tsx` (×2), `tags/TagResults.tsx`, `wishlist/WishlistGrid.tsx`, `wishlist/WishlistSearchPanel.tsx` **(new 2026-09-07)**, `wishlist/WishlistTable.tsx` (×2). `card/CardDetailPane.tsx` was on this list until **that file was deleted 2026-09-03; the modal that replaced it draws no quick-add** | Where the quick-add `+` is, on every card surface in the app — **including the two docked search sidebars since 2026-09-07**, whose tiles are the newest place this `+` appears. | **The control is not gone; it is unaimable.** `opacity-0`, never `hidden` — deliberately, so it keeps its tab stop — and `CardGrid.tsx` states in as many words that an `opacity-0` element is still a hit target. A finger that lands on it presses it. Nothing on screen says it is there. |
-| `features/decks/cardControl.tsx:933–936` — `REVEALED_ON_CARD` | The deck card's control bar on the three views that draw a card as a picture. | The same `opacity-0` answer. The stack has a second door: `revealedWhenOpen` (`cardControl.tsx:955–963`) drives the same bar off **which card is open** rather than off the pointer — see the flip-through row. |
-| `components/CardArt.tsx:210–213` — `group-hover:scale-[1.02]`, given `hoverZoom` by `features/search/CardGrid.tsx:1374` and `features/decks/views/GridView.tsx:404`; `features/decks/DeckTile.tsx:531–534` for a deck tile | Which tile the pointer is over. | Nothing equivalent, and nothing is missing: the lift answers a question a finger does not ask. The caret's answer is `FOCUS`, which is a different thing. |
+| `features/decks/cardControl.tsx` — `REVEALED_ON_CARD`. **Two call sites, `views/GridView.tsx` and `views/TextView.tsx`** — grep the constant rather than trusting a count; both this row and the constant's own doc have said *three views that draw a card as a picture*, which is wrong twice over, since `TextView` draws no picture and `CardStack` uses the other door | The deck card's controls, on the views that reveal them by the pointer. | The same `opacity-0` answer. The stack has a second door: `revealedWhenOpen` drives the same controls off **which card is open** rather than off the pointer — see the flip-through row. **Since 2026-09-08 the grid tile draws the stack's own control _column_** (`DeckCardControls layout="card-column"`), still revealed by `REVEALED_ON_CARD`: nothing overlaps a tile on that wall, so the pointer is the honest question there where it is not in a pile. |
+| `components/CardArt.tsx:210–213` — `group-hover:scale-[1.02]`, given `hoverZoom` by `features/search/CardGrid.tsx`; `features/decks/DeckTile.tsx:531–534` for a deck tile. **`features/decks/views/GridView.tsx` was a third call site until 2026-09-08** and is not one now: that tile draws `DeckCardFace` rather than `CardArt` and has no lift at all — grep `hoverZoom` for the census rather than trusting these line numbers | Which tile the pointer is over. | Nothing equivalent, and nothing is missing: the lift answers a question a finger does not ask. The caret's answer is `FOCUS`, which is a different thing. **On a deck tile it is now missing for a mouse too**, deliberately: the deck's two card views are one card, and the stacked card has never lifted on hover. |
 | `features/search/CardSearchPanel.tsx:747` (`cursor-col-resize`) and `:755–762` (an `opacity-0 … group-hover:opacity-100` grip) — `DeckSearchPanel.tsx:1072`/`:1082–1086` until the shell was extracted on 2026-09-07, and **three** docked panels draw it now rather than one | That a docked search panel's left edge can be dragged at all. Both signals belong to a pointer: a cursor a touchscreen does not have, and a grip revealed by `group-hover`. | The drag itself is pointer-based and the strip already carries `touch-none` (`:747`); the keyboard reaches the same resize through arrows, Home and End (`:724–736`). Nothing **visible** reaches it without a pointer. |
 | `features/decks/CardStack.tsx:851` — `onPointerEnter={() => onArm(index)}`, `STACK_OPEN_DWELL_MS` 80 (`:271`); released at `:703` after `STACK_CLOSE_DELAY_MS` 180 (`:287`) | The deck builder's signature interaction: running a pointer down a pile to fan it. | **Yes, and by design.** The open card resolves to `openIndex ?? selectedIndex` (`CardStack.tsx:653–655`), so a card that was *pressed* stays lifted after the pointer has gone. A tap therefore fans one card. What a tap cannot do is fan the pile. |
 | ~~`features/card/PrintingPreview.tsx:182–183`~~ — `onMouseEnter`/`onMouseLeave`, `PREVIEW_DWELL_MS` 250 (`:25`). **Deleted 2026-09-03 with the docked card pane.** | One printing's art without swapping to that printing. | `onFocus` armed the same dwell when focus arrived in the row (`:185–187`), which was the keyboard's door. On touch, `onPointerDown: cancel` (`:201`) took down whatever the tap's compatibility `mouseenter` armed. **Nothing replaces it**, and nothing needs to: the printings list is `AllPrintingsDialog`'s wall of art tiles now, so the art is the tile and looking at one costs no hover. |
 | `components/menu/ContextMenu.tsx:730` — `onPointerOver`, `SUBMENU_HOVER_MS` 120 (`:48`) | Opening a submenu by resting on its row. | **Yes, at the site**: the submenu row's own `onClick` toggles it (`components/menu/Submenu.tsx:163`). Opening the parent menu is the gestures table's problem, not this one's. |
 | The other **98** `{...tip(…)}` spreads, across 53 shipped files | Everything this app says only in a hint. Two kinds, unequally lost: **11** pass `whenClipped: true`, where the words are the anchor's own truncated text — complete in the DOM and therefore in the accessibility tree, so only the *paint* is cut off; the rest are descriptions, and the ~57 lines passing `describes: false` are the ones whose words are the element's own name or already-visible text, drawn `aria-hidden`. | Nothing generic. Each of the 98 is its own question, and the two kinds have to be told apart before any of them is counted as lost. |
-| The marks on a card face — `components/CardArt.tsx:402`, `components/FinishMark.tsx:104`, `components/GameChangerMark.tsx:68`, `components/CountTag.tsx:212`, `components/OwnedBadge.tsx:55`, `components/RarityGem.tsx:54`, `features/decks/CardMarks.tsx:73`/`:319`/`:424`/`:458`/`:519`/`:578` | What a glyph means. Each binds `describes: false` because the panel carries the mark's *name* and the mark itself is `aria-hidden`. | Nothing on the card. The same facts are set in type in the card pane and in the three tables — a different surface, not the same one reached twice. |
+| The marks on a card face — `components/CardArt.tsx`, `components/FinishMark.tsx`, `components/GameChangerMark.tsx`, `components/CountTag.tsx`, `components/OwnedBadge.tsx`, `components/RarityGem.tsx` and every mark in `features/decks/CardMarks.tsx` (grep `useTooltip` there for the census — the line numbers this row carried moved twice on 2026-09-08 alone, and a stale line number reads as a claim about a site nobody can find) | What a glyph means. Each binds `describes: false` because the panel carries the mark's *name* and the mark itself is `aria-hidden`. | Nothing on the card. The same facts are set in type in the card pane and in the three tables — a different surface, not the same one reached twice. |
 | `components/AppShell.tsx:596` — the app's one native `title` | Nothing at all, and it is in this table so it is not mistaken for a lead. | **The phone answer is never "put the `title` back."** `src/CLAUDE.md` requires a hint to be `useTooltip()`'s spread, and the reason holds twice over here: a native tooltip does not appear on touch either, so restoring one would trade a hint nobody sees for a hint nobody sees. This site survives precisely *because* its sentence is never shown to anybody — Chromium freezes `:hover` at a drag's origin for the whole drag — and is read through the accname spec's description fallback instead. |
 
 ### Gestures with no touch equivalent
@@ -5608,10 +5756,18 @@ this; the classes are pinned and the numbers come from a browser.
 
 ### What was left alone, and why
 
-- **The deck's Grid view still draws `tone="panel"` over art**, so its two buttons are a 1px outline
-  with the illustration showing through — the exact failure `BUTTON_OVER_ART` exists for. It is a
-  real defect and it is in the deck builder, which is the *reference* this issue asked the walls to
-  be measured against, so fixing it belongs to its own change rather than to one about the walls.
+- **The deck's Grid view drew `tone="panel"` over art**, so its two buttons were a 1px outline
+  with the illustration showing through — the exact failure `BUTTON_OVER_ART` exists for. It was a
+  real defect and it was in the deck builder, which is the *reference* this issue asked the walls to
+  be measured against, so fixing it belonged to its own change rather than to one about the walls.
+  **It was closed on 2026-09-08 as a side effect of that change rather than by anyone aiming at
+  it**, which is the shape worth noticing: the tile draws the stacked card's controls now
+  (`DeckCardControls layout="card-column"`), and `card-column` is the layout that passes
+  `tone="art"` — so the buttons carry `BUTTON_OVER_ART`'s `bg-bg/88` backing because they are the
+  stack's buttons, not because a second decision agreed with the first. The entry stays as the
+  record of a defect that stood for a fortnight and of what it took to remove it. **Nothing has
+  been driven in the shipped window to confirm the backing paints**; the class comes from the
+  layout by construction, and the pixels are still owed.
 - **Issue #348's other three asks** — add/remove cards on the collection, changing a printing, and
   locking a folder that a deck's live list is linked to — are separate features. Stepping to zero
   already deletes a collection entry, so "remove" exists there without a named route on the wall.
