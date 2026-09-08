@@ -6066,15 +6066,15 @@ printed `mana-font` glyph.
   `DeckTile`'s own comment fences that: an element, a margin or a gap introduced on the button
   between the two would put a hairline of page between a picture and the band it belongs to.
 
-**`hasColorBar(pips)` is exported so the cover and the band cannot disagree about whether one is
-coming.** It is `true` exactly when `DeckColorBar` renders something, and `Cover` takes it as
-`fused` to draw the crop `rounded-t-lg` or `rounded-lg`. Writing the condition twice would put the
-symptom in a **radius** — which jsdom cannot see at all (no layout engine, no stylesheet) and
-which no test of either component alone could reach. The conditional matters most on the tiles
-that are hardest to explain: a deck with no pips draws no band, so squaring its crop
-unconditionally would leave two hard corners sitting on the page under a frame that is rounded
-everywhere else, and the reader cannot see the missing band — what they would see is a cover that
-had gone wrong.
+**The band draws on every deck, and the conditional it needed lasted one day** (corrected
+2026-09-08 — see *The three sizes the reader sent back*, below). It shipped returning `null` for
+both silences, with a `hasColorBar(pips)` predicate exported so that `Cover` could take it as
+`fused` and draw the crop `rounded-t-lg` or `rounded-lg` — the right shape for the rule as it then
+stood, and the reasoning against writing that condition twice still holds in general: the symptom
+of a disagreement is a **radius**, which jsdom cannot see at all. What was wrong was the rule, not
+the plumbing. The band always draws now, empty where the deck has nothing to say, so the crop is
+`rounded-t-lg` unconditionally, there is no question for a call site to answer, and both the
+predicate and the prop are gone.
 
 **The band stays `aria-hidden` and the printed symbols make that more true, not less.** A
 `mana-font` glyph is a `content` on an empty `<i>`'s `::before`: it reaches a screen reader as
@@ -6433,3 +6433,36 @@ stories — and it wants its own pass rather than riding in on a gallery redesig
   truncates to about eight (`Nested U…`), which is the 16px step and the 10px tick gutter spending
   width the 14px step did not. It is the design as approved and names have always truncated, but
   nobody has yet looked at a genuinely deep cabinet in it.
+
+### The three sizes the reader sent back — 2026-09-08, same build
+
+Two defects, reported with screenshots the same evening the redesign landed, and **both are one
+mistake seen twice: an object on the wall that is not the height of the objects beside it.** The
+grid stretches its cells, so nothing moves down to meet a short tile — what a reader sees is not a
+tile that is 20px short, it is a row whose type has come out of line.
+
+**The way out was as tall as the tallest thing in its row.** `ParentDeckFolderCard`'s button
+carried `h-full`, which was the whole of its geometry while it was words in a stretched grid item
+and became wrong the moment it grew a frame: beside a 186px folder card it stood at **232px**, a
+deck tile's height, because a deck tile is a crop plus a band plus two lines of type *under* both.
+Removing `h-full` gives it the height every other framed box on the wall gets from the same two
+things — the `ART_ASPECT` box and `BAND_PAD`. Measured after: the up-tile and the `New deck`
+placeholder both **186.5 × 227.3**, identical to the folder card's frame in the same row, and to a
+deck tile's crop-plus-band.
+
+**A deck with no coloured costs drew no band, and its caption sat 20px high.** The band's own
+`null` return — argued at length above, and about the band rather than about the wall. It now
+draws **empty**: the full 20px course of the tile's own `bg-surface`, no fields and no symbols.
+Measured after: every deck tile in the wall **232px**, the 0-card deck included, with its name and
+caption level with its neighbours'.
+
+**What the empty band may not be is a colourless one.** A full-width `--color-mana-c` field would
+be the band saying the deck *is* colourless, which is false for a deck whose pip read has not
+landed — `pips === null` and an all-zero record are indistinguishable from the tile, and the honest
+drawing of both is a course that says nothing. It carries no tooltip either, and that falls out
+rather than being arranged: `useTooltip` refuses falsy content and an empty list joins to `""`.
+
+**Neither defect was visible to a suite, and the reason is worth keeping.** jsdom has no layout
+engine, so a stretched cell, a short tile and a caption 20px out of line are all the same DOM; and
+each tile was individually *correct* — the fault only exists in the relation between them. A wall
+is the unit to look at when checking a wall.

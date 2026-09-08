@@ -5,7 +5,7 @@ import { cardScaleVars } from "@/lib/cardZoom";
 import { ART_ASPECT } from "@/lib/images";
 import type { PipCounts } from "@/lib/mana";
 import { cn } from "@/lib/utils";
-import { DECK_COLOR_SEGMENT_ATTR, DeckColorBar, hasColorBar } from "./DeckColorBar";
+import { DECK_COLOR_SEGMENT_ATTR, DeckColorBar } from "./DeckColorBar";
 
 /** A pip record with the named colours in it and zero everywhere else — `deckPips`' shape,
  *  written here by hand so a story is one deck's colours rather than a whole fake world. */
@@ -23,10 +23,11 @@ function pips(counts: Partial<PipCounts>): PipCounts {
  * and the 8px the name sits below whatever is above it. The band's own margin used to be the
  * third and is nothing at all now — it abuts the crop, which is the point.
  *
- * **It draws the crop's radius through `hasColorBar`, exactly as the real tile does**, because
- * that join is the thing these stories are for: the crop gives up its bottom two corners only
- * when a band is coming to take them, and a stand-in that hard-coded `rounded-t-lg` would draw a
- * square-cornered picture over nothing on the two silences below and show none of it.
+ * **The crop is `rounded-t-lg` unconditionally, exactly as the real tile is**, because the band
+ * is always under it — empty where the deck has nothing to say. That was a conditional for one
+ * day, off a `hasColorBar` predicate this file imported; the band stopped ever being absent and
+ * the question went with it. What these stories are for is the join itself: the crop gives up its
+ * bottom two corners and the band takes them, with nothing between.
  */
 function TileStandIn({ pips: counts, zoom = 1 }: { pips: PipCounts | null; zoom?: number }) {
   return (
@@ -39,7 +40,7 @@ function TileStandIn({ pips: counts, zoom = 1 }: { pips: PipCounts | null; zoom?
         data-story-crop=""
         className={cn(
           "grid w-full place-items-center overflow-hidden bg-surface",
-          hasColorBar(counts) ? "rounded-t-lg" : "rounded-lg",
+          "rounded-t-lg",
         )}
         style={{ aspectRatio: ART_ASPECT }}
       >
@@ -70,8 +71,9 @@ const meta = {
           "Issue #387.\n\n" +
           "**It is the tile's foot rather than a rule under a picture.** The crop is drawn " +
           "`rounded-t-lg` and the band `rounded-b-lg` with no air between them, so the two read " +
-          "as one object; `hasColorBar` is what tells the tile which radius to use, and it is " +
-          "`true` exactly when this component draws something. Each colour gets a field of its " +
+          "as one object, and the band is drawn on every deck — empty where there are no " +
+          "colours, so a tile with nothing to say still stands the same height as the tiles " +
+          "beside it in the wall's grid. Each colour gets a field of its " +
           "own with its **printed mana symbol** on it, in near-black, which is the arrangement " +
           "`index.css` states at the token and the filter row's mana chips already ship — so a " +
           "reader reads the band in the vocabulary they already have instead of learning six " +
@@ -172,11 +174,14 @@ export const Splash: Story = {
 
 /**
  * The two silences, side by side, and the point of the story is that they look identical: an
- * all-lands pile and a read still out both draw nothing, and **the crop keeps all four of its own
- * corners** — which is `hasColorBar` answering the tile rather than the tile guessing.
+ * all-lands pile and a read still out both draw the band **empty** — a bare 20px course of the
+ * tile's own surface, no fields and no symbols, claiming no colour.
  *
- * Worth seeing once, because "no band" is a state a reader meets and not an error — a wall mixing
- * tiles with bands and tiles without is the drawing working.
+ * Worth seeing once, and it reverses what this file showed until 2026-09-08. Both silences drew
+ * *nothing* then, on the argument that an empty strip says "no colours" in the same vocabulary a
+ * full band uses to say what they are. What that missed is the wall: a bandless tile is 20px
+ * shorter than its neighbours, and in a grid of stretched cells its name and caption sit out of
+ * line with the row — which reads as a layout fault rather than as a deck with no colours.
  */
 export const NothingToSay: Story = {
   args: { pips: null },
@@ -188,11 +193,25 @@ export const NothingToSay: Story = {
   ),
   play: async ({ canvasElement }) => {
     await expect(canvasElement.querySelectorAll("[role='img']")).toHaveLength(0);
+    // No fields and no symbols — the band is there and holds nothing. A `--color-mana-c` field
+    // spanning it would be the band claiming the deck *is* colourless, which is false for a read
+    // that has not landed.
     await expect(canvasElement.querySelectorAll(`[${DECK_COLOR_SEGMENT_ATTR}]`)).toHaveLength(0);
-    // Both crops are round on all four corners, because no band is coming to take two of them.
+    // **Both crops give up their bottom two corners even here**, and that is the assertion this
+    // story exists for: the band always draws, so the crop's radius has no case to distinguish.
+    // It read `rounded-lg` until 2026-09-08, which is the conditional this reversal deleted.
     const crops = [...canvasElement.querySelectorAll("[data-story-crop]")];
     await expect(crops).toHaveLength(2);
-    for (const crop of crops) await expect(crop.classList.contains("rounded-lg")).toBe(true);
+    for (const crop of crops) {
+      await expect(crop.classList.contains("rounded-t-lg")).toBe(true);
+      // The band is the crop's next sibling and stands its full height with nothing in it, which
+      // is what keeps a colourless deck level with the wall it sits in.
+      const band = crop.nextElementSibling;
+      await expect(band?.children ?? []).toHaveLength(0);
+      await expect(
+        band?.classList.contains("h-[calc(1.25rem*var(--mark-scale,1))]") ?? false,
+      ).toBe(true);
+    }
   },
 };
 
