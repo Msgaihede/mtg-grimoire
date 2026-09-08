@@ -170,8 +170,10 @@ export const Gallery: Story = {
     await expect(within(wall).getByText("Modern Goodstuff")).toBeInTheDocument();
     await expect(within(wall).getByText("Kenrith Two-Drops")).toBeInTheDocument();
     // The caption is the format's *display name* off the seeded `format_specs` row, then the
-    // count — 60 for a deck holding 77 cards over 18 rows, because a sideboard and a scratchpad
-    // are not what "a 60-card deck" means.
+    // count — 60 for a deck holding 77 cards over 20 rows, because a sideboard and a scratchpad
+    // are not what "a 60-card deck" means. (The row count said 18 from 2026-08-11 until it was
+    // re-counted on 2026-09-08; it was already wrong before then, which is what a figure nothing
+    // asserts costs. The 77 and the 60 are unchanged and are the ones this play pins.)
     await expect(within(wall).getByText(/Modern ·/)).toHaveTextContent("Modern · 60 cards");
 
     // **Scryfall's image policy, per tile — and since 2026-09-07 it is on the picture rather

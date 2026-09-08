@@ -93,6 +93,7 @@ import { NewDeckPreview } from "@/features/transfer/import/destinations/NewDeckP
 import { ImportDialog } from "@/features/transfer/import/ImportDialog";
 import { RenameField } from "./metaRows";
 import { AddLabelDialog } from "./AddLabelDialog";
+import { AddMissingToCollectionDialog } from "./AddMissingToCollectionDialog";
 import { PriceStrip } from "./PriceStrip";
 import { pullKey } from "./pullPlan";
 import { PullFromCollectionDialog } from "./PullFromCollectionDialog";
@@ -109,7 +110,13 @@ import { asSortBy, DEFAULT_SORT_BY, SORT_OPTIONS, type SortBy } from "./sorting"
 import { LabelsDialog } from "./LabelsDialog";
 import { TheoryDiffDialog } from "./TheoryDiffDialog";
 import { theoryMatchPlan } from "./theoryMatch";
-import { pullPlanQuery, quickAddWishesQuery, useDeck, usePullPlan } from "./useDeck";
+import {
+  pullPlanQuery,
+  quickAddWishesQuery,
+  useDeck,
+  useMissingPlan,
+  usePullPlan,
+} from "./useDeck";
 import { useDeckMeta } from "./useDeckMeta";
 import { useFormatSpecs } from "./useFormatSpecs";
 import { useRecentAdds } from "./useRecentAdds";
@@ -265,9 +272,23 @@ const DESK_GAP = 16;
  * On the view the number is a `min-height` on a stretched flex item, which floors it without
  * capping it — the row is then as tall as the view, and the row's own `auto` minimum is back.
  *
- * **`cn` puts it before the table branch's `min-h-0` on purpose**: they are one tailwind-merge
- * group, the later wins, and the virtualised table has to keep the squeezable box it has always
- * had. A floor under a scrollport would be a floor under a scrollbar.
+ * **All four views take it, unconditionally, since 2026-09-08 — the table was the last exception
+ * and it is gone.** `Table` was drawn as a scroller of exactly the desk's height for as long as
+ * `VirtualTable` could only *be* a scrollport: it mounts the rows in view and holds a spacer open
+ * for the rest, so a virtualiser given no height rendered every row of the deck. It opts into
+ * growing now (`VirtualTable`'s `grow`) and does render every row, which is the trade this list's
+ * size affords — a deck is a few hundred rows, and the 100k-row walls the virtualiser was built
+ * for are the search's, the collection's and the wishlist's, none of them touched by this. So the
+ * reader's own complaint is answered at the source: the table has no scrollbar of its own and
+ * draws at its full height, like the three walls beside it in the same picker.
+ *
+ * **What that ended is a merge order, and the rule behind it is worth keeping.** This class used
+ * to be written *before* the table branch's `min-h-0` in the same `cn` call, on purpose: the two
+ * are one tailwind-merge group, the later wins, and the virtualised table had to keep the
+ * squeezable box it had always had — a floor under a scrollport being a floor under a scrollbar.
+ * With the branch gone the floor is passed alone and merges against nothing, but the rule is the
+ * one any future conditional class here would have to obey: a `min-h-*` and a `min-h-0` in one
+ * `cn` are not two facts, they are one, and the last one written is the answer.
  *
  * Everything below is the measurement 384 came from and the reasoning for the page scroller,
  * both of which stand.
@@ -486,6 +507,14 @@ const VIEWS: readonly { id: DeckView; label: string }[] = [
 ];
 
 /**
+ * The view every deck opens on — and, *because* it is that, the row {@link VIEW_PICKER} pins
+ * above the alphabet. One constant serves both, so the pinned row cannot come to name a view a
+ * deck does not actually open on: change this and the picker's first row follows it, which is
+ * the whole argument for the pin stated as code rather than kept in two places.
+ */
+const DEFAULT_VIEW: DeckView = "stacks";
+
+/**
  * The view switch as the toolbar draws it — a `Dropdown`, like the two pickers beside it.
  * It was a four-button segmented group until 2026-08-15, then a `<select>` like its two
  * neighbours, then (2026-08-26) all three moved onto `components/Dropdown` — see
@@ -498,13 +527,33 @@ const VIEWS: readonly { id: DeckView; label: string }[] = [
  * three answers nobody had asked for. A dropdown costs one press to open and shows the picked
  * view when it is shut, which is what the pressed button was doing at four times the width.
  *
- * **Alphabetically, through `sortOptions`, because there is no order here that carries
- * information.** The array above is written in the order the views were built and reads as a
- * decision nobody made — the two exemptions this app grants (an order that *is* the information,
- * like a grade scale; an order the reader arranged themselves, like their own categories) fit
- * neither. Sorted at module level for {@link GROUP_BY_PICKER}'s reason.
+ * **`Stacks` is pinned above the alphabet and the other three are sorted under it**, so the list
+ * reads `Stacks · Grid · Table · Text` (2026-09-08, the reader's ask). That is the app's third
+ * option-list shape rather than a third exemption from the sort: `src/CLAUDE.md` names the rows
+ * that stay outside it — `Any card`, `Any format`, `Custom…`, `Auto (by what it does)`,
+ * `Top level` — and this is one of them. {@link DEFAULT_VIEW} is what every deck opens on, the
+ * other three are the alternates *to* it, and the stacked desk is the signature interaction of
+ * the whole builder, so it is the row a reader learns the **position** of rather than hunts for
+ * by word. Everything the pin does not name still goes through
+ * `sortOptions`, which is what keeps a fifth view alphabetical with nobody having to think about
+ * it — and the pin is spelled as a filter over {@link VIEWS} rather than as a reordering of that
+ * array, so the label is never written twice and `DeckView`'s own order is untouched.
+ *
+ * **What this replaces is a straight `sortOptions(VIEWS, …)`**, whose doc argued at length that
+ * the array is written in the order the views were built, reads as a decision nobody made, and
+ * fits neither exemption this app grants (an order that *is* the information, like a grade scale;
+ * an order the reader arranged themselves, like their own categories). Every word of that is
+ * still true and none of it was what settled this — a pinned row is not an exemption, so the
+ * alphabet still governs the rest of the list and there is no order here claiming to carry
+ * information. Computed at module level for {@link GROUP_BY_PICKER}'s reason.
  */
-const VIEW_PICKER = sortOptions(VIEWS, (v) => v.label);
+const VIEW_PICKER: readonly { id: DeckView; label: string }[] = [
+  ...VIEWS.filter((v) => v.id === DEFAULT_VIEW),
+  ...sortOptions(
+    VIEWS.filter((v) => v.id !== DEFAULT_VIEW),
+    (v) => v.label,
+  ),
+];
 
 /**
  * {@link VIEW_PICKER}, reshaped for `<Dropdown>`'s `options` prop — `id` renamed to `value`,
@@ -646,6 +695,29 @@ type Layer =
    * there is no question to ask there, rather than a question with an empty answer.
    */
   | { kind: "pull"; card?: DeckCard }
+  /**
+   * **Add missing to collection** — the copies the reader has just bought, recorded into this
+   * deck's own group.
+   *
+   * **It carries no payload and can never grow one, which is the whole of what separates it
+   * from `pull` directly above.** That arm grew a `card` on 2026-09-03 because the pull has two
+   * entrances — the stats band's deck-wide press and a deck card's `Collection ▸ Pull …` — so
+   * its *kind* stopped being enough to say which control is open, and {@link layerMatches}
+   * needed a clause to tell them apart. This one has exactly one opener and structurally cannot
+   * acquire a second: the per-card form of this press already exists as `Collection ▸ Quick add
+   * N copies`, a menu row that writes outright with no dialog at all, because one row's
+   * shortfall is a number the menu label already quotes. So `layerMatches` needs no clause for
+   * it, and a future `card` field here would mean the per-card menu had grown a preview — which
+   * is a different feature and would be a different arm.
+   *
+   * **A full-window overlay for the pull's reason**: it is *consulted* — a plan is read, some
+   * counts are set, it is shut — rather than worked out of, and the widest thing this editor
+   * asks about does not get to take width off the desk for the session.
+   *
+   * The band draws its opener only on the live list, and `null` there is absent rather than
+   * greyed: a plan holds no cards, so there is nothing for it to be short of.
+   */
+  | { kind: "addMissing" }
   /**
    * **Which wish these copies come off** — a deck card's `Collection ▸ Quick add N and remove
    * from wishlist`, on the one press where the answer is ambiguous (issue #350).
@@ -1010,7 +1082,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    */
   const theoryEnabled = row?.theoryEnabled === true;
 
-  const [view, setView] = useState<DeckView>("stacks");
+  const [view, setView] = useState<DeckView>(DEFAULT_VIEW);
   // The two the deck row remembers, seeded from the same constants a stored word this build
   // cannot draw falls back to — so "never chosen" and "chosen and since dropped" are one state
   // rather than two. The restore below overwrites both the moment the row lands.
@@ -1092,9 +1164,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const deskRef = useRef<HTMLDivElement>(null);
   /* There is no ref on the box the view draws into, and its absence is the 2026-08-14 change
      stated in one line: that box was the editor's scroller and the thing a drag auto-scrolled,
-     and it is neither now — three of the four views grow to hold their content, the page takes
-     the scroll, and the table's own scrollport is `VirtualTable`'s, one element further in than
-     any ref here could reach. */
+     and it is neither now — the views grow to hold their content and the page takes the scroll.
+     It said "three of the four" until 2026-09-08, the fourth being the table, whose own
+     scrollport was `VirtualTable`'s and one element further in than any ref here could reach;
+     that view grows too now and there is no scrollport left in here at all. */
   /** The box the docked search panel is pinned inside — see {@link DeckEditor}'s dock effect. */
   const dockRef = useRef<HTMLDivElement>(null);
   /**
@@ -2073,6 +2146,41 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     return rows.filter((planRow) => pullKey(planRow) === wanted);
   }, [pullPlan.data, pulledCard]);
 
+  /**
+   * **Add missing to collection** — the second layer opened from the stats band, and the third
+   * answer to the shortfall the two beside it already answer.
+   *
+   * **The hand-back is read off `document.activeElement`**, which is {@link openPull}'s answer
+   * for {@link openPull}'s reason: this button is `DeckStats`' own and hands no ref up, and a
+   * press focuses what it presses, so reading the caret at the press is exact rather than a
+   * guess. `null` if the reader has moved on by then, which is `handBackRef`'s documented floor.
+   *
+   * There is nothing else for this callback to carry — see the `addMissing` arm's own doc for
+   * why the layer has no payload and cannot grow one.
+   */
+  const openAddMissing = useCallback(() => {
+    const opener = document.activeElement;
+    openLayer({ kind: "addMissing" }, () => {
+      if (opener instanceof HTMLElement) opener.focus();
+    });
+  }, [openLayer]);
+
+  /**
+   * The plan behind that layer — **gated on the layer being up**, exactly as {@link pullPlan} is
+   * and for the same reason: `deck_missing_plan` walks every hole in the live list and asks the
+   * wishlist about each one, and nothing on the screen behind the dialog draws a word of it.
+   *
+   * **The kind is the whole gate here, and unlike the pull's line that needs no explaining**:
+   * this arm carries no payload, so there is one shape of it and {@link layerMatches} would be
+   * asking the same question with more words.
+   *
+   * The answer survives the dialog closing — the key is the deck's and TanStack keeps a disabled
+   * query's cache — and anything invalidating `["decks"]` refills it, which crucially includes
+   * this feature's own write: recording the copies closes the very holes this read answers. See
+   * {@link useMissingPlan} for why the key sits under that root.
+   */
+  const missingPlan = useMissingPlan(deckId, layer?.kind === "addMissing");
+
   /** The press {@link QuickUnwishDialog} is asking about — the card, the count and the wishes,
    *  all frozen at the press. See the arm's own doc for why none of the three is looked up. */
   const unwish = layer?.kind === "quickUnwish" ? layer : null;
@@ -2967,13 +3075,19 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // since 3a, walking real scrollable ancestors and scrolling within 20% of one's edge.
   //
   // What that replaces is a `pragmatic-drag-and-drop-auto-scroll` registration on **this page's
-  // own element** (`editorRef`), moved there on 2026-08-14 with the growing desk: three of the
-  // four views have no scroller of their own, so the box that has to move to bring a pile — or
-  // the remove tray under the deck — under the pointer is the editor's. The scroller the library
-  // now finds is `AppShell`'s `main`, which is the one scroller left in this view since
-  // 2026-08-24 and is the ancestor the old registration was reaching for through the page. The
-  // table's own `VirtualTable` scroller was never registered and now *is* a candidate, which is
-  // a behaviour change no jsdom test can see: it measures rectangles.
+  // own element** (`editorRef`), moved there on 2026-08-14 with the growing desk: no view here
+  // has a scroller of its own, so the box that has to move to bring a pile — or the remove tray
+  // under the deck — under the pointer is the editor's. The scroller the library now finds is
+  // `AppShell`'s `main`, which is the one scroller left in this view since 2026-08-24 and is the
+  // ancestor the old registration was reaching for through the page.
+  //
+  // That sentence read "three of the four" until 2026-09-08, and the paragraph after it said the
+  // table's own `VirtualTable` scroller — never registered, and a candidate once the library
+  // walked real ancestors — was a behaviour change no jsdom test could see. Both premises are
+  // gone with the table's scroller: it grows now, so there is one scroller for this whole view
+  // again and the library can only find `main`. Worth keeping as a note rather than a rule: a
+  // view that reintroduces a scrollport is a view that quietly changes what a drag scrolls, and
+  // jsdom cannot go red for it either way, because it measures rectangles.
 
   /** The deck's new name, once {@link DeckNameField} has decided there is one. The field holds
    *  the draft and refuses a blank or an unchanged name, so there is nothing to re-check here —
@@ -3504,8 +3618,11 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     landed,
     // No `className`, and the `min-h-0` that was here went with the desk's height (2026-08-14):
     // it said "this view may be squeezed below its content", which is the sentence that made the
-    // deck builder scroll inside itself. `TableView` — the one view that still wants it — carries
-    // it on its own root, where a virtualiser's scrollport belongs.
+    // deck builder scroll inside itself. `TableView` carried it on its own root for as long as
+    // that root was a scrollport — where a virtualiser's belongs — and since 2026-09-08 it does
+    // not: it passes `VirtualTable`'s `grow`, takes no height of its own and carries `min-w-0` in
+    // that class's place. So the sentence is now true of all four views rather than three, and
+    // none of them is handed a height by this object or asks for one.
   };
 
   return (
@@ -3532,9 +3649,15 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       // down and the box expands — so a deck of any size is one column of one page with one
       // scrollbar. The two things that had leaned on the old arrangement come with it: the
       // search panel is pinned rather than stretched (the dock effect) and the remove tray
-      // sticks to the foot of the window for the length of a drag (the price strip). The
-      // virtualised table is the one view still given a height, because a virtualiser is a
-      // scrollport by construction.
+      // sticks to the foot of the window for the length of a drag (the price strip).
+      //
+      // **All four views, since 2026-09-08.** The virtualised table was the one still given a
+      // height, because a virtualiser is a scrollport by construction — it draws the rows in
+      // view and holds a spacer open for the rest, so with no height it would draw its own
+      // scrollbar and the page's, which is the letterbox above in miniature. `VirtualTable.grow`
+      // is the opt-out and `TableView` takes it: every row of the deck is rendered, at the list
+      // size this surface has (a few hundred rows against the 100k-row walls the virtualiser was
+      // built for elsewhere). So there is nothing left in this editor that scrolls but the page.
       //
       // **`relative` is not decoration and it is the whole of a two-scrollbar bug** (2026-08-15).
       // `overflow` clips a descendant only when this box is between that descendant and its
@@ -4265,13 +4388,18 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         // window is too short for both, where {@link DECK_HEIGHT_FLOOR} says which gives way.
         <div
           ref={deskRef}
-          // `min-h-96` on **this** box is what holds a flex item to the page's leftover height
-          // rather than to its content — see {@link DECK_HEIGHT_FLOOR}, where that is written
-          // out — so it belongs to the one view that wants to be held: the virtualised table.
-          // For the three that grow it is one level in, on the view box, where it floors without
-          // capping. Measured with it left here: the table drew its own scrollbar *and* the page
-          // drew one, which is the two-scrollbar screen this whole change is about.
-          className={cn("flex flex-1 gap-4", view === "table" && DECK_HEIGHT_FLOOR)}
+          // **No height on this box, for any view** (2026-09-08). `min-h-96` *here* holds a flex
+          // item to the page's leftover height rather than to its content — see
+          // {@link DECK_HEIGHT_FLOOR}, where that is written out — so it is a ceiling as much as
+          // a floor, and the floor belongs one level in, on the view box, where it floors without
+          // capping. It was carried here under `Table` alone, because that was the one view
+          // asking to be held; the measurement that put it here is kept because it is what the
+          // branch was worth — measured with the class left here for all four, the table drew its
+          // own scrollbar *and* the page drew one, which is the two-scrollbar screen the whole
+          // 2026-08-14 change is about. The table grows now like the other three (see the view
+          // box below), so nothing is held, the branch is gone, and no class on this row is
+          // view-dependent again.
+          className="flex flex-1 gap-4"
         >
           {/**
            * The box the deck is drawn in, and **it is given no height** — which is the whole of
@@ -4286,19 +4414,18 @@ export function DeckEditor({ deckId }: { deckId: number }) {
            * as the deck, the page is as tall as the row, and the page scroller is the one thing
            * in this editor that scrolls. Piles overflow **down**, and the container grows.
            *
-           * **The table is the exception, and it is a difference in kind rather than a case to
-           * tidy away.** `VirtualTable` mounts the rows in view and holds the scrollbar open to
-           * the height of the rest; a scrollport is what it *is*, and a virtualiser given no
-           * height renders every row of the deck. So that one view keeps the arrangement this
-           * div used to carry for all four, and the three walls — stacks, grid, text — grow.
+           * **The table was the exception until 2026-09-08 and is not one now.** It kept the
+           * arrangement this div used to carry for all four — `min-h-0 … overflow-auto`, the
+           * squeezable box a scroller needs — because `VirtualTable` mounts the rows in view and
+           * holds a spacer open for the rest, so a virtualiser given no height renders every row
+           * of the deck. It opts into growing (`VirtualTable`'s `grow`) and does render every
+           * row, which is what this list can afford: a deck is a few hundred rows, and the
+           * 100k-row walls the virtualiser exists for are the search's, the collection's and the
+           * wishlist's, every one of them untouched by this. So the branch is gone, the floor
+           * below is unconditional, and all four views are drawn in one box with one rule — which
+           * is also what the reader asked for, a table at its full height with no scrollbar on it.
            */}
-          <div
-            className={cn(
-              "min-w-0 flex-1",
-              DECK_HEIGHT_FLOOR,
-              view === "table" && "flex min-h-0 flex-col overflow-auto",
-            )}
-          >
+          <div className={cn("min-w-0 flex-1", DECK_HEIGHT_FLOOR)}>
             {/* Neither `columnHeight` nor a measured height reaches a view any more. `StackView`
                 packs nothing — every pile is a flex item that wraps on width — and `TextView`
                 still packs, to a fixed readable target rather than to the desk, which is as tall
@@ -4423,10 +4550,23 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               `deck_missing_to_wishlist` does one command over. Absent rather than greyed, for the
               editor's own rule about a control that cannot act: a button that spends the whole
               Theory tab refusing teaches the reader to stop looking at the line it is in. */}
+          {/* **`onAddMissing` is `null` on the plan for `onPull`'s reason**, which is the list
+              rather than the feature: `deck_missing_plan` takes no variant and walks the live
+              list, because a plan holds no cards and is therefore short of nothing. Absent
+              rather than greyed, like its neighbour.
+
+              **It is not disabled by either sibling write being in flight**, deliberately: the
+              three presses in that row are three independent answers to one number, and a
+              record that had to wait for a wishlist write to land would be a control greyed by
+              something the reader did not press. And it has no `spent` state — the wishlist's
+              exists because pressing twice wishes for the same copies again, where a second
+              press here re-plans against a shortfall the first one closed and finds nothing to
+              offer. */}
           <DeckStats
             cards={deck.cards}
             send={deck.missingToWishlist}
             onPull={variant === "live" ? openPull : null}
+            onAddMissing={variant === "live" ? openAddMissing : null}
             separateXGroup={separateX}
           />
         </section>
@@ -4711,6 +4851,33 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         loading={pullPlan.isLoading}
         readError={pullPlan.isError ? ipcError(pullPlan.error) : null}
         pull={deck.pullFromCollection}
+        onClose={dismiss}
+      />
+
+      {/* **Add missing to collection**, beside the pull because they are two answers to one
+          number and the reader reaches them from two buttons an inch apart. Everything the
+          mount above says applies unchanged: the plan is **fed rather than fetched** (the read
+          is `missingPlan`, gated on this layer, so a closed dialog costs nothing and the
+          question is not about `AnimatePresence`'s teardown), the mutation goes down **whole**
+          and narrowed by the dialog's own `AddMissingWrite` so the write stays `useDeck`'s
+          single definition with its four invalidations, and the dialog owns the sentence it
+          words about the answer.
+
+          **No `cardName`, and that is the one prop the pull has that this cannot.** The pull is
+          reached from a card's right-click as well as from the band; this is not, so there is no
+          one card for a subtitle to name — the arm's own doc says why that is structural rather
+          than a gap.
+
+          **`dismiss` rather than `close`**, the pull's reason exactly: every way out of this
+          dialog is the reader saying "put me back", and the caret's destination is a button in
+          the stats band two screens down the page. */}
+      <AddMissingToCollectionDialog
+        open={layer?.kind === "addMissing"}
+        deckName={row?.name ?? ""}
+        rows={missingPlan.data ?? null}
+        loading={missingPlan.isLoading}
+        readError={missingPlan.isError ? ipcError(missingPlan.error) : null}
+        add={deck.addMissingToCollection}
         onClose={dismiss}
       />
 

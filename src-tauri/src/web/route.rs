@@ -135,9 +135,15 @@ pub const COMMANDS: &[&str] = &[
     "deck_pull_from_collection",
     // The fourth: the read that finds a card's matching wishes, and the write that records
     // copies straight into a deck's group. Here for the three above's reason — what they have in
-    // common is the boundary and not the table — and this is the one that *creates* a row.
+    // common is the boundary and not the table — and this is the first that *creates* a row.
     "deck_quick_add_wishes",
     "deck_quick_add_to_collection",
+    // The fifth: the pair above asked deck-wide — the preview of everything the live list is
+    // short of, and the all-or-nothing press that records the ticked copies. Routed together
+    // for `wishlist_optimize`'s reason: a browser that could ask for the plan and not commit it
+    // would draw a dialog with a dead button.
+    "deck_missing_plan",
+    "deck_missing_to_collection",
     // The Wishlist destination.
     "wishlist_list",
     "wishlist_add",
@@ -1368,6 +1374,37 @@ pub fn call(
                         quantity,
                         wish_id,
                     )
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        // The fifth crossing, and the split is the fourth's: **the read is `lock_db_read` and
+        // the write is `with_write_owned`**. This one owes the owned rebuild most plainly of all
+        // — the facet index's `owned` dimension counts `collection_entries` rows, the three
+        // movers can at most fold one away, the quick add makes one, and this makes several in a
+        // single press.
+        //
+        // `clearWishes` comes through `field` and not `optional`: unlike `finish` and `wishId`
+        // above it is a checkbox the dialog always has an answer for, so an absent key is a
+        // caller that has lost half its form rather than a reader who said nothing.
+        "deck_missing_plan" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::deck_missing::plan(&conn, deck_id).map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_missing_to_collection" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let picks: Vec<crate::deck_missing::MissingPick> = field(command, args, "picks")?;
+            let clear_wishes: bool = field(command, args, "clearWishes")?;
+            encode(
+                command,
+                crate::collection_source::with_write_owned(state, |c| {
+                    crate::deck_missing::to_collection(c, deck_id, &picks, clear_wishes)
                 })
                 .map_err(RouteError::Failed)?,
             )
@@ -2859,9 +2896,18 @@ mod tests {
         // theory-mark branch read **137** and the token branch **139** while both were open,
         // and this merge answers **141** — again a number neither side wrote and neither
         // side's delta added to the other's total would have reached.
+        //
+        // **And a fourth time, which is the one this paragraph predicted an hour before it
+        // happened.** The add-missing branch wrote **143** from arithmetic (141 plus its two
+        // routes) and then confirmed it by counting the array, and left a note saying the
+        // collision still ahead of it was with `main` rather than within the branch. It was:
+        // `main` had meanwhile gone to **142** with one route of its own, and this merge
+        // answers **144** — counted from the merged array, not reached by adding 2 and 1, which
+        // is the same discipline arriving at the same number for a reason that would still hold
+        // if it had not. If a later merge turns this red, take the number from `left`.
         assert_eq!(
             COMMANDS.len(),
-            142,
+            144,
             "update this number when a command is added"
         );
     }

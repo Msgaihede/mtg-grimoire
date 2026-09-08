@@ -20,11 +20,19 @@
  * would have been missed: the first two moved a pile between two runs this file already
  * concatenated, and that one added a run.
  *
- * **It is the two column views' order specifically**, and that is the honest claim rather than
- * "the drawn order" flat: `GridView` and `TableView` map `groups` straight through and never
- * split a rail, so a deck whose Sideboard is not already last in `sortOrder` reads in a slightly
- * different order in those two. The reader asked for "all cards from stack 1, then all cards
- * from stack 2", which is the stacks' order, and the stacks are what `splitRail` answers for.
+ * **Three of the four views draw this order and `TableView` is the one that does not** — which is
+ * a narrower caveat than the one this comment carried until 2026-09-08. It read: *it is the two
+ * column views' order specifically … `GridView` and `TableView` map `groups` straight through and
+ * never split a rail, so a deck whose Sideboard is not already last in `sortOrder` reads in a
+ * slightly different order in those two.* That was true and is now true of `TableView` alone:
+ * `GridView` calls `splitRail` and renders `[...command, ...flow, ...rail]`, the same
+ * concatenation the loop below makes, so **the walk and the wall are the same list** rather than
+ * two lists that agree on the common case. What that closes is worth saying plainly: a range or a
+ * step that *crosses* the rail boundary used to follow the stacks' order while the reader was
+ * looking at tiles in another one, and on that view it no longer can. It still can in the table.
+ *
+ * The reader asked for "all cards from stack 1, then all cards from stack 2", which is the
+ * stacks' order, and the stacks are what `splitRail` answers for.
  */
 import type { CardWalkStop, PaneDeckContext } from "@/lib/store";
 import { deckCardSlot } from "./dnd";
@@ -129,12 +137,15 @@ export function deckWalkStops(groups: readonly CardGroup[], deckId: number): Car
  *
  * ## What order this actually is
  *
- * `splitRail`'s — command, then flow, then rail — which is what `StackView` and `TextView` draw.
- * `GridView` and `TableView` map `groups` straight through and never split a rail, so in those
- * two a range that *crosses* the rail boundary follows the stacks' order rather than the order of
- * the tiles under the pointer. That is the same honest caveat {@link deckWalkStops} carries, and
- * it is bounded the same way: inside a pile, and between piles that are all in the flow, the two
- * orders are identical, which is every range a reader is likely to draw.
+ * `splitRail`'s — command, then flow, then rail — which is what `StackView`, `TextView` **and,
+ * since 2026-09-08, `GridView`** draw. That view named `splitRail`'s three runs and concatenates
+ * them in this order, so a Shift-click across its wall follows the tiles under the pointer
+ * exactly, rail crossings included. **`TableView` is the one view left mapping `groups` straight
+ * through**, so there a range that *crosses* the rail boundary follows the stacks' order rather
+ * than the rows on screen. That is the same honest caveat {@link deckWalkStops} carries, now with
+ * one view under it instead of two, and it is bounded the same way: inside a pile, and between
+ * piles that are all in the flow, the two orders are identical, which is every range a reader is
+ * likely to draw.
  */
 export function deckSlotOrder(groups: readonly CardGroup[]): string[] {
   const { command, flow, rail } = splitRail(groups);

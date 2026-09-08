@@ -14,6 +14,7 @@ import collectionFoldersRs from "../../src-tauri/src/collection_folders.rs?raw";
 import deckRs from "../../src-tauri/src/deck.rs?raw";
 import decksortRs from "../../src-tauri/src/decksort.rs?raw";
 import deckMetaRs from "../../src-tauri/src/deck_meta.rs?raw";
+import deckMissingRs from "../../src-tauri/src/deck_missing.rs?raw";
 import deckPullRs from "../../src-tauri/src/deck_pull.rs?raw";
 import deckQuickAddRs from "../../src-tauri/src/deck_quick_add.rs?raw";
 import deckTheoryRs from "../../src-tauri/src/deck_theory.rs?raw";
@@ -2872,6 +2873,30 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     // nothing red anywhere, because a press that *did* record nothing is a legitimate answer.
     ["DeckQuickAddWish", deckQuickAddRs, "QuickAddWish"],
     ["DeckQuickAddOutcome", deckQuickAddRs, "QuickAddOutcome"],
+    // **The deck-wide add's three, added with the feature** (2026-09-08) — one row per struct,
+    // which is two commands' worth: `deck_missing_plan` answers `MissingRow[]` and
+    // `deck_missing_to_collection` takes `MissingPick[]` and answers a `MissingOutcome`.
+    //
+    // `MissingRow` is on this list and not on `mirrors` above for `PullRow`'s reason exactly: it
+    // carries a picture, but it is nine fields against that table's floor of ten, and the floor
+    // is a property of a card *wall*'s row rather than of a mirror. The picture is asserted on
+    // its own below, beside the pull row's.
+    //
+    // `MissingPick` is the one the app **sends**, where a drift is loudest —
+    // `WishOptimizeApplyItem`'s lesson below and `deck_pull_from_collection`'s above: the write
+    // is all-or-nothing, so a renamed field deserialises to a serde default, matches nothing in
+    // the backend's re-plan, and every ticked row is refused whole. A press that always fails,
+    // with nothing red anywhere. It is also the one DTO in this pair carrying **no id at all** —
+    // the address is `(card_id, finish)` because the row being created does not exist yet — so
+    // both of its naming fields are load-bearing and neither can be inferred from the other side.
+    //
+    // `MissingOutcome`'s three numbers are all counts a sentence quotes, which is
+    // `QuickAddOutcome`'s note three rows up: a renamed one arrives `undefined`, prints as `0`,
+    // and reads as a press that recorded nothing — and a press that *did* record nothing is a
+    // legitimate answer, so nothing goes red.
+    ["DeckMissingRow", deckMissingRs, "MissingRow"],
+    ["DeckMissingPick", deckMissingRs, "MissingPick"],
+    ["DeckMissingOutcome", deckMissingRs, "MissingOutcome"],
     // **The cheapest-printing sweep's six, added with the feature** (2026-09-03, issue #352).
     // They are here rather than on `mirrors` above for `DecksCleared`'s reason and not for a new
     // one: none is a card wall's row, none carries a picture, and the smallest of them is two
@@ -2961,6 +2986,24 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     expect(
       tsFields(ipcSource, "DeckPullRow"),
       "`DeckPullRow` (ipc.ts) has no `imageUris`",
+    ).toContain("imageUris");
+  });
+
+  /**
+   * `MissingRow`'s picture, for the reason one test up and not a new one: the add dialog draws an
+   * art crop per row exactly as the pull's does, the row is nine fields and so sits on
+   * `plainMirrors`, and that table asserts parity alone. Two rows now share this shape, which is
+   * the sign that the argument belongs to the *dialog* rather than to either feature — a third
+   * deck-boundary read that draws art owes this assertion too.
+   */
+  it("names the front face's image URLs on both sides of the add row", () => {
+    expect(
+      rustFields(deckMissingRs, "MissingRow"),
+      "`MissingRow` (Rust) has no `image_uris`",
+    ).toContain("image_uris");
+    expect(
+      tsFields(ipcSource, "DeckMissingRow"),
+      "`DeckMissingRow` (ipc.ts) has no `imageUris`",
     ).toContain("imageUris");
   });
 });

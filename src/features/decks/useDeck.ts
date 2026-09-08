@@ -7,6 +7,7 @@ import {
   type DeckFinish,
   type DeckPatch,
   type DeckLabel,
+  type DeckMissingPick,
   type DeckPullPick,
   type DeckVariant,
   type DeckViewState,
@@ -1223,6 +1224,48 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
   });
 
   /**
+   * The deck-wide form of the line above: record **every** copy the reader ticked into this
+   * deck's group, and take the unambiguous wishlist lines down with them.
+   *
+   * **It takes `query.ts`'s {@link OWNED_WRITE_KEYS} and not the narrower
+   * {@link invalidateCollection} the three movers share, and the reason is the one that
+   * constant's own doc gives for the set existing: this write *creates* rows.** A move cannot
+   * change the total a reader owns, so `["collection"]` alone is honest for it; this makes
+   * `collection_entries` rows that were not there, so `CardSummary.ownedQuantity` goes from 0 to
+   * N on tiles the reader is looking at — and `query.ts` caches for 30 s, so a root left out is
+   * not a refetch that lands late but a number that goes on saying the old one for half a
+   * minute. {@link quickAddToCollection} is the same case one grain down.
+   *
+   * **`["wishlist"]` in that set is load-bearing here rather than incidental.** The other
+   * members take it because a recorded copy changes what a wish counts as *owned*; this press
+   * can go further and **delete a wish outright** — `take_lone_wish` removes a line it takes to
+   * nothing — so the shopping list's own rows move and not just their progress bars.
+   *
+   * **`["decks"]` is already in that set, so {@link invalidate} is not called beside this.** It
+   * would be a second spelling of a root the constant carries, and the root is owed here for
+   * exactly what it is owed for on the pull: no `deck_cards` row is written, but every deck's
+   * `ownedQuantity` is a sum over the rows this press just made.
+   *
+   * **No optimistic patch, and none to write** — {@link pullFromCollection}'s reason. Every
+   * number this moves (the shortfall, the owned count, the wish's progress) is a sum the backend
+   * computes over rows in another table, so there is nothing in the cached `DeckDetail` this
+   * file could correct without re-deriving the write in TypeScript.
+   *
+   * **The picks arrive whole from the dialog rather than being derived here.** `addMissingPlan`
+   * is the pure module that turns the plan plus the reader's departures from it into
+   * `DeckMissingPick[]`, and a mutation that re-derived them would answer for a plan a beat
+   * older than the footer count the reader pressed. The backend re-plans inside its own
+   * transaction anyway, which is the fence — nothing sent here is trusted.
+   */
+  const addMissingToCollection = useMutation({
+    mutationFn: ({ picks, clearWishes }: { picks: DeckMissingPick[]; clearWishes: boolean }) =>
+      ipc.deckMissingToCollection(opened(id), picks, clearWishes),
+    onSuccess: () => {
+      for (const queryKey of OWNED_WRITE_KEYS) void queryClient.invalidateQueries({ queryKey });
+    },
+  });
+
+  /**
    * Put the deck's one label on a card, or take it off with `labelId: null`.
    *
    * A **card** write, addressed by the same slot as the stepper and the move — which is why it
@@ -1283,6 +1326,10 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
      *  wish with them. **The one write here that creates a collection row**, so it takes all
      *  four of `OWNED_WRITE_KEYS` — see the mutation's own doc. */
     quickAddToCollection,
+    /** The same press over the whole list: every copy the reader ticked in the Add missing
+     *  dialog, recorded into this deck's group, with the unambiguous wishes taken down beside
+     *  them. It creates rows too, so it takes the same four roots — see its own doc. */
+    addMissingToCollection,
   };
 }
 
@@ -1350,6 +1397,63 @@ export function pullPlanQuery(deckId: number | null) {
   return {
     queryKey: ["decks", "pullPlan", deckId],
     queryFn: () => ipc.deckPullPlan(opened(deckId)),
+  };
+}
+
+/**
+ * What the deck is short of that the reader has **just bought** — the read half of
+ * `Add missing to collection`, and the whole of what that dialog draws.
+ *
+ * **The mirror of {@link usePullPlan} and not a second spelling of it.** The pull asks which
+ * copies already on the reader's desk could fill a hole; this asks only what the holes *are*,
+ * because the cardboard it is about exists nowhere the database can see it yet. So there is no
+ * candidate join here and the row carries `wishes` instead — the same answer
+ * `deck_quick_add_wishes` gives the per-card menu, so the two entrances cannot come to disagree
+ * about what fills a wish.
+ *
+ * **Its own hook rather than a member of {@link useDeck}, for `usePullPlan`'s reason**: that
+ * hook answers what the editor is drawing right now, and this is a walk of every hole in the
+ * live list, asked once, by one dialog, when a reader presses one button.
+ *
+ * **Keyed `["decks", "missingPlan", deckId]`** — the root, the question, the id, which is this
+ * folder's shape for a read that is about one deck and is not the deck itself. Under `["decks"]`
+ * on purpose: {@link useDeck}'s own `invalidate` reaches it, and so does this feature's own
+ * write, whose `OWNED_WRITE_KEYS` carries that root — **the press closes the very holes this
+ * answers**, so a plan left in the cache after a successful record offers copies the deck is no
+ * longer short of.
+ *
+ * **No `variant` and no `marketplace` in the key**, for the pull's reasons exactly: the command
+ * reads the live list only — a plan holds no cards, so there is nothing there to be short of —
+ * and nothing it answers is priced. Either in the key would be two cached answers to one
+ * question, refetched on a switch that cannot change it.
+ *
+ * **`enabled` is the caller's and means "the dialog is open".** A gate on a mounted query rather
+ * than a conditionally mounted hook, so the answer survives an open and a close and reopening
+ * costs nothing. `deckId` is nullable for {@link useDeck}'s reason, and a `null` id can never
+ * satisfy the gate.
+ */
+export function useMissingPlan(deckId: number | null, enabled: boolean) {
+  return useQuery({ ...missingPlanQuery(deckId), enabled: enabled && deckId !== null });
+}
+
+/**
+ * The missing plan's key and fetcher, as options.
+ *
+ * **This one has a single reader, where {@link pullPlanQuery} has two — and the factory is kept
+ * anyway, deliberately.** That one exists because the dialog mounts the plan and a deck card's
+ * `Collection ▸ Pull …` *fetches* it imperatively at the press, and two spellings of the key
+ * would be two caches for one question. Nothing presses this imperatively: the per-card form of
+ * this feature is `Collection ▸ Quick add N copies`, a menu row that writes outright and reads
+ * no plan at all. So what the factory buys here is not a shared cache but the *shape* — the key
+ * is written once, beside its neighbour, in the file this folder's rule already names as the
+ * home for these options ({@link quickAddWishesQuery} is the third), and a second reader added
+ * later is a caller rather than a second key. The alternative — folding it into the hook — is
+ * equally correct today and would cost one export; it was weighed and this is the tie-break.
+ */
+export function missingPlanQuery(deckId: number | null) {
+  return {
+    queryKey: ["decks", "missingPlan", deckId],
+    queryFn: () => ipc.deckMissingPlan(opened(deckId)),
   };
 }
 

@@ -410,10 +410,19 @@ export function FoilOverlay({
           pointer *hits*, and nothing here was ever hit. Re-enabling it on the chip alone
           leaves the full-bleed sheen untouchable, which is what the wrapper's `none` was for.
           Nothing is swallowed by giving one chip's worth of hit target back: it sits **inside**
-          the enclosing button on every surface that has one — `CardGrid` and the deck's
-          `GridView` both render `<CardArt>` inside theirs, and `CardStack` puts this overlay
-          inside its own — so a click on the chip bubbles and opens the card exactly as a click
-          on the art does.
+          the enclosing button on every surface that has one — `CardGrid` renders `<CardArt>`
+          inside its tile's button, and `CardStack` and the deck's `GridView` put this overlay
+          inside their own through `DeckCardFace` — so a click on the chip bubbles and opens the
+          card exactly as a click on the art does.
+
+          **`GridView` was named here as a `<CardArt>` caller until 2026-09-08** and is one no
+          longer: the deck's two card-face views draw one component now, and it reaches this file
+          for `FoilOverlay` alone. **The reason that costs the paragraph above nothing is that it
+          draws the overlay with `mark={false}`** — no chip, so there is no hit target on a deck
+          card for the inheritance trap to bite, and the finish is said in words in the chin
+          instead. The `pointer-events-auto` fix is still load-bearing for every wall that *does*
+          draw a chip, which is `CardGrid`'s, and it would be load-bearing again the moment any
+          deck surface passed `mark`.
           `data-card-marks` is the handle a test finds it by; a hit target is otherwise
           invisible to the DOM.
 

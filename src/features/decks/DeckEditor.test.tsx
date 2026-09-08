@@ -58,6 +58,12 @@ const deckAddCard = vi.hoisted(() => vi.fn());
 const deckMissingToWishlist = vi.hoisted(() => vi.fn());
 const deckPullPlan = vi.hoisted(() => vi.fn());
 const deckPullFromCollection = vi.hoisted(() => vi.fn());
+// The shortfall's third answer, deck-wide: the read behind `Add missing to collection` and the
+// write that records the ticked copies. Like the pull's pair, the read is a **mounted** query
+// gated on the dialog being open — so a test that never presses that button asserts it was
+// never called.
+const deckMissingPlan = vi.hoisted(() => vi.fn());
+const deckMissingToCollection = vi.hoisted(() => vi.fn());
 // The `Collection ▸` submenu's read and its write (issue #350). The read is the one command in
 // this file fired **imperatively at a press** rather than by a mounted query — a right-click has
 // to cost nothing — so a test that never presses that row asserts it was never called.
@@ -155,6 +161,8 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckMissingToWishlist,
     deckPullPlan,
     deckPullFromCollection,
+    deckMissingPlan,
+    deckMissingToCollection,
     deckQuickAddWishes,
     deckQuickAddToCollection,
     deckSwapPrinting,
@@ -759,6 +767,12 @@ beforeEach(() => {
   // the empty state still draws the ✕, Cancel and Pull that the Tab sweep walks.
   deckPullPlan.mockReset().mockResolvedValue([]);
   deckPullFromCollection.mockReset().mockResolvedValue({ copies: 0, cards: 0 });
+  // **The same empty plan, and the same reason it is not a failure**: a deck short only of
+  // printings that have left the card database. Every test here is about the layer rather than
+  // about the list inside it (`AddMissingToCollectionDialog.test.tsx` owns that), and the empty
+  // state still draws the ✕, Cancel and press the Tab sweep walks.
+  deckMissingPlan.mockReset().mockResolvedValue([]);
+  deckMissingToCollection.mockReset().mockResolvedValue({ copies: 0, cards: 0, wishCopies: 0 });
   // **No wish matches, which is the commonest answer and the one that draws nothing at all.**
   // `chooseWish` writes straight through on an empty list, so the default here is the state in
   // which `Quick add N and remove from wishlist` is exactly `Quick add N` — and every test about
@@ -961,21 +975,28 @@ describe("DeckEditor", () => {
    * against 7 635 of page — and every figure is in
    * [frontend-design.md](../../../docs/reference/frontend-design.md).
    *
-   * What a test *can* see is the four class decisions that produce it, each of which was the
-   * whole of a bug on its own:
+   * What a test *can* see is the class decisions that produce it, each of which was the whole of
+   * a bug on its own:
    *
    * * the view box carrying `overflow` or `min-h-0` is the letterbox — `min-h-0` more than the
    *   overflow, because it is the line that says "this box may be squeezed below its content";
-   * * the same `min-h-0` and `overflow-auto` are exactly what the table *must* keep, because a
-   *   virtualiser holds a spacer open for the rows it has not mounted and a scrollport is what it
-   *   is. Given no height it drew its own scrollbar **and** the page's;
    * * `min-h-96` on the **desk row** is a ceiling as well as a floor — a `min-height` number
-   *   replaces a flex item's `auto` automatic minimum size — which is why it sits on the view box
-   *   for the three walls and stays on the row only under the table;
-   * * and `tailwind-merge` has to resolve that pair the table's way, since `min-h-96` and
-   *   `min-h-0` are one group and a floor under a scrollport is a floor under a scrollbar.
+   *   replaces a flex item's `auto` automatic minimum size — so the floor belongs on the view box,
+   *   where it floors without capping, and the row must carry no `min-h-` at all.
+   *
+   * **The table stopped being the exception on 2026-09-08 and this case is where that is pinned.**
+   * It kept `min-h-0 overflow-auto` on the view box and `min-h-96` on the row for as long as
+   * `VirtualTable` was a scrollport by construction — a virtualiser holds a spacer open for the
+   * rows it has not mounted, so given no height it drew its own scrollbar **and** the page's, which
+   * is the two-scrollbar screen a reader reported. That is answered at the primitive instead:
+   * `VirtualTable` takes an opt-in `grow`, under which it renders every row in normal flow and is
+   * not a scroll container, and a deck is a list bounded at a few hundred rows. So all four views
+   * now say the same thing about height, and the assertion is a loop with no special case in it —
+   * which is the shape that makes a re-added exception fail here rather than in a screenshot.
+   * The 100k-row walls the search, the collection and the wishlist draw are untouched and still
+   * virtualise, which is what `grow` defaulting to `false` buys.
    */
-  it("gives the deck's walls no height and the virtualised table one", async () => {
+  it("gives all four of the deck's views no height of their own", async () => {
     const user = userEvent.setup();
     await open();
 
@@ -984,29 +1005,15 @@ describe("DeckEditor", () => {
       return { row: dock.parentElement!, view: dock.parentElement!.firstElementChild! };
     };
 
-    // Stacks is where the editor opens, and the two boxes say opposite things about height.
-    const stacks = deskOf();
-    expect(stacks.view.className).toContain("min-h-96");
-    expect(stacks.view.className).not.toContain("min-h-0");
-    expect(stacks.view.className).not.toContain("overflow");
-    expect(stacks.row.className).not.toContain("min-h-");
-
-    for (const label of ["Text", "Grid"]) {
-      await pickOption(user, "View", label);
+    // Stacks is where the editor opens; the other three are picked in turn.
+    for (const label of ["Stacks", "Text", "Grid", "Table"]) {
+      if (label !== "Stacks") await pickOption(user, "View", label);
       const wall = deskOf();
       expect(wall.view.className, label).toContain("min-h-96");
+      expect(wall.view.className, label).not.toContain("min-h-0");
       expect(wall.view.className, label).not.toContain("overflow");
       expect(wall.row.className, label).not.toContain("min-h-");
     }
-
-    await pickOption(user, "View", "Table");
-    const table = deskOf();
-    // The squeezable box, back where it was — and `min-h-96` merged away rather than fighting it.
-    expect(table.view.className).toContain("min-h-0");
-    expect(table.view.className).toContain("overflow-auto");
-    expect(table.view.className).not.toContain("min-h-96");
-    // …and the row is what holds it to the page's leftover height.
-    expect(table.row.className).toContain("min-h-96");
   });
 
   /**
@@ -1481,9 +1488,13 @@ describe("DeckEditor", () => {
    * land at the end of the dropdown with nothing to notice it. The sequences are asserted whole
    * so the *property* fails, not one position.
    *
-   * **`VIEWS` is the one that does not read that way**, so this is the assertion that says the
-   * view switch became an option list like the other two rather than a segmented group wearing a
-   * select's clothes: `Stacks` is written first because it is the default, and it is drawn third.
+   * **`VIEWS` is the one that does not read that way, and since 2026-09-08 it is the one with a
+   * pinned row.** `Stacks` sits outside the sort and the other three are sorted under it, which
+   * is the shape `src/CLAUDE.md` already grants `Any card`, `Any format` and `Top level`: Stacks
+   * is what every deck opens on (`useState<DeckView>("stacks")`) and the three below it are its
+   * alternates. So the assertion is `Stacks` **first** and then an alphabet — a view appended to
+   * the array still has to land in that alphabet, which is the property this case is really for,
+   * and a second pinned row would fail it here rather than in a screenshot.
    */
   it("offers all three toolbar pickers alphabetically", async () => {
     const user = userEvent.setup();
@@ -1495,7 +1506,7 @@ describe("DeckEditor", () => {
     const optionLabels = () => screen.getAllByRole("option").map((o) => o.textContent);
 
     await openDropdown(user, "View");
-    expect(optionLabels()).toEqual(["Grid", "Stacks", "Table", "Text"]);
+    expect(optionLabels()).toEqual(["Stacks", "Grid", "Table", "Text"]);
 
     await openDropdown(user, "Group by");
     expect(optionLabels()).toEqual(["Categories", "Mana value", "Type"]);
@@ -3018,6 +3029,145 @@ describe("DeckEditor", () => {
   });
 
   /**
+   * **Add missing to collection** — the shortfall's third answer, and the second layer in this
+   * editor opened from the stats band rather than from the header.
+   *
+   * **The whole thing in one case, because two of its three claims are only meaningful
+   * together.** "The dialog is not up" passes just as well against a button that opens nothing,
+   * and "the plan was not read" passes just as well against a gate that never opens — so the
+   * press has to follow both of them here. `deck_missing_plan` walks every hole in the live list
+   * and asks the wishlist about each one, and nothing on the screen behind the dialog draws a
+   * word of it, which is the whole of what the `enabled` gate is for.
+   */
+  it("reads no missing plan until the add press opens the dialog", async () => {
+    await open();
+    // Past the first paint and every query the editor makes for itself.
+    const trigger = await screen.findByRole("button", { name: "Add missing to collection" });
+    expect(deckMissingPlan).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("dialog", { name: "Add missing to collection" }),
+    ).not.toBeInTheDocument();
+
+    await userEvent.click(trigger);
+
+    expect(
+      await screen.findByRole("dialog", { name: "Add missing to collection" }),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(deckMissingPlan).toHaveBeenCalledWith(4));
+  });
+
+  /**
+   * **The caret goes back to the button that opened it**, which is the half worth its own case:
+   * `DeckStats` owns that button and hands no ref up, so `openAddMissing` reads
+   * `document.activeElement` at the press — `openPull`'s answer, made for its reason. A browser
+   * focuses what it presses, so the caret is on the button by the time the callback runs; if
+   * that ever stopped being true the layer would still open and only this would notice.
+   */
+  it("hands the caret back to the add press on Escape", async () => {
+    await open();
+    const trigger = await screen.findByRole("button", { name: "Add missing to collection" });
+
+    await userEvent.click(trigger);
+    await screen.findByRole("dialog", { name: "Add missing to collection" });
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(
+      screen.queryByRole("dialog", { name: "Add missing to collection" }),
+    ).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+    // One press, one layer: the deck is still open behind it, which is the floor Escape falls
+    // to once every dismissible rung above it has passed.
+    expect(useAppStore.getState().openDeckId).toBe(4);
+  });
+
+  /**
+   * **No add press on the plan, and it is the list rather than the feature** — `onPull`'s
+   * argument one button over. A theory row holds no cards, so the plan is short of nothing and
+   * `deck_missing_plan` takes no variant: it walks the live list, exactly as `deck_pull_plan`
+   * and `deck_missing_to_wishlist` do. Absent rather than greyed.
+   *
+   * The Live half is asserted in the same case, because a button absent on both tabs would pass
+   * a bare absence check while being broken everywhere.
+   */
+  it("offers the add press on the deck and not on the plan", async () => {
+    const over = { theoryEnabled: true };
+    const live = detail(over, [bolt({ quantity: 4 })]);
+    const theory = detail(over, [bolt({ quantity: 4, variant: "theory" })]);
+    deckGet.mockImplementation((_id: number, variant: string) =>
+      Promise.resolve(variant === "theory" ? theory : live),
+    );
+    await open();
+
+    expect(
+      await screen.findByRole("button", { name: "Add missing to collection" }),
+    ).toBeInTheDocument();
+
+    await userEvent.click(
+      within(screen.getByRole("group", { name: "Deck list" })).getByRole("button", {
+        name: "Theory",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: "Add missing to collection" }),
+      ).not.toBeInTheDocument(),
+    );
+    // The third answer is still there, so the absence above is this one prop rather than the
+    // whole band: a plan is exactly the list a reader wants a shopping list for.
+    expect(screen.getByRole("button", { name: "Send missing to wishlist" })).toBeInTheDocument();
+  });
+
+  /**
+   * **The press records, the editor re-reads the deck, and the dialog is still up.**
+   *
+   * Three claims, and the last is the one a reader would report. `addMissingToCollection` takes
+   * `query.ts`'s `OWNED_WRITE_KEYS`, whose fourth member is the `["decks"]` root, so a
+   * successful record refetches the deck it was made from — `ownedQuantity` is a sum over rows
+   * this write has just created, and the shortfall the dialog is about is derived from it.
+   * Closing is **not** part of the write: nothing here calls `dismiss` on success, so the reader
+   * reads the answer where they pressed it and shuts the dialog themselves, which is
+   * `PullFromCollectionDialog`'s arrangement.
+   *
+   * The footer press is matched on a pattern rather than on an exact string, because the count
+   * in its label is the dialog's own arithmetic over the ticked rows and this case is about the
+   * wiring behind it. `AddMissingToCollectionDialog.test.tsx` owns the number.
+   */
+  it("records the ticked copies and re-reads the deck, leaving the dialog up", async () => {
+    deckMissingPlan.mockResolvedValue([
+      {
+        cardId: "p1",
+        name: "Lightning Bolt",
+        setCode: "mh2",
+        collectorNumber: "12",
+        finish: null,
+        short: 1,
+        categories: ["Main deck"],
+        imageUris: null,
+        wishes: [],
+      },
+    ]);
+    deckMissingToCollection.mockResolvedValue({ copies: 1, cards: 1, wishCopies: 0 });
+    await open();
+    await userEvent.click(await screen.findByRole("button", { name: "Add missing to collection" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add missing to collection" });
+    const reads = deckGet.mock.calls.length;
+
+    await userEvent.click(await within(dialog).findByRole("button", { name: /to collection$/ }));
+
+    await waitFor(() =>
+      expect(deckMissingToCollection).toHaveBeenCalledWith(
+        4,
+        [{ cardId: "p1", finish: null, quantity: 1 }],
+        true,
+      ),
+    );
+    await waitFor(() => expect(deckGet.mock.calls.length).toBeGreaterThan(reads));
+    expect(screen.getByRole("dialog", { name: "Add missing to collection" })).toBeInTheDocument();
+  });
+
+  /**
    * **The full-window overlays are modal, and Tab cannot leave one.**
    *
    * Each paints a scrim over the whole app, which is a statement that what is behind it is not
@@ -3056,11 +3206,12 @@ describe("DeckEditor", () => {
     ["Labels", "Labels", null],
     ["History", "History", null],
     ["Deck settings", "Deck settings", null],
-    // The one row here whose control is not in the header: `Pull from collection` is drawn in
-    // the stats band at the foot of the page, beside the shortfall it acts on. It belongs in
-    // this sweep by the sweep's own rule — a full-window overlay with a control in the view —
-    // and the fixture deck is short of three copies, which is what draws that control at all.
+    // The two rows whose controls are not in the header: both are drawn in the stats band at
+    // the foot of the page, beside the shortfall they answer. They belong in this sweep by the
+    // sweep's own rule — a full-window overlay with a control in the view — and the fixture
+    // deck is short of three copies, which is what draws either control at all.
     ["Pull from collection", "Pull from collection", null],
+    ["Add missing to collection", "Add missing to collection", null],
     [
       "Compare",
       "Theory to Actual difference",
@@ -6132,31 +6283,42 @@ describe("DeckEditor — a category's menu", () => {
   });
 
   /**
-   * **The table's band has to *declare* that it grew, or it paints over the card row below it.**
+   * **The table's band still declares that it grew — and since 2026-09-08 it declares a floor
+   * rather than a height, which is the safer half of the same statement.**
    *
-   * Its rows are absolutely positioned at a height the virtualiser was told, so a field that
-   * appears inside one without an `extraHeight` overlaps its neighbour by exactly its own
-   * height — which is the failure `TableView`'s own `Row` comment already warns about for the
-   * reconciler's band, arriving here by a different route. jsdom lays nothing out, so the
-   * overlap itself is invisible to this suite; the **declared** height is not, and it is the
-   * number the browser would use.
+   * The failure this was written for: the virtualiser positions rows absolutely at a height it
+   * was *told*, so a field appearing inside one without an `extraHeight` overlaps its neighbour
+   * by exactly its own height. `TableView` passes `VirtualTable`'s `grow` now — the deck's rows
+   * are in normal flow, nothing has to be told anything, and a band that outgrows its declared
+   * extra makes the row taller instead of painting over the row below. So the number is a
+   * `minHeight`, and `RENAME_HEIGHT` stopped being a contract and became a floor.
+   *
+   * **It is still asserted, and the reason is the reason it is a floor rather than nothing.** The
+   * band is drawn before the field's own layout settles, and 48px of declared room is what stops
+   * the row reflowing under the reader's hand as they start typing — so the pair still has to
+   * move together. jsdom lays nothing out, so the reflow itself is invisible to this suite; the
+   * declared floor is not.
    *
    * 44 is `TABLE_ROW_HEIGHT`, 92 is that plus `RENAME_HEIGHT` — asserted as the pair, because a
-   * band that was always tall would be as wrong as one that never grew.
+   * band that was always tall would be as wrong as one that never grew. `style.height` is
+   * asserted **empty** at both ends: a reinstated fixed height is the old contract coming back,
+   * and it is the one thing that would clip the field the floor exists to make room for.
    */
-  it("makes the table's band taller while its pile is being renamed", async () => {
+  it("floors the table's band taller while its pile is being renamed", async () => {
     const user = userEvent.setup();
     await open();
     await pickOption(user, "View", "Table");
 
     const band = () => screen.getByText("Main deck").closest("[role=row]") as HTMLElement;
-    expect(band().style.height).toBe("44px");
+    expect(band().style.minHeight).toBe("44px");
+    expect(band().style.height).toBe("");
 
     await rightClickGroup(MAIN);
     await userEvent.click(screen.getByRole("menuitem", { name: "Rename…" }));
     await screen.findByLabelText("Rename Main deck");
 
-    expect(band().style.height).toBe("92px");
+    expect(band().style.minHeight).toBe("92px");
+    expect(band().style.height).toBe("");
   });
 
   /**

@@ -12,6 +12,17 @@
  * list two orders with no way to see which was in force. A press on a header would also have
  * to say what it meant to do to the grouping, which is a question the toolbar has already
  * answered.
+ *
+ * **It is drawn at its full height, and it stopped being the deck's scrollport exception to be
+ * so.** The other three views were given no height on 2026-08-14 because a view scrolling
+ * inside a page that also scrolls is two scrollbars an inch apart moving different things;
+ * this one was left out of that change on the ground that `VirtualTable` *is* a scroller, so
+ * with no height of its own it drew its own scrollbar **and** the page's. `VirtualTable.grow`
+ * is the other way out of that: the whole list in normal flow, no local scroller, and the page
+ * — `AppShell`'s `main` — taking the scroll like it does for Stacks, Grid and Text. Legal here
+ * because a deck is a few hundred rows at the very most, which is exactly what that prop asks a
+ * caller to be able to promise; the search, the collection and the wishlist draw this same
+ * table over 100k rows and pass nothing.
  */
 import { useCallback, useMemo } from "react";
 import { OwnedBadge } from "@/components/OwnedBadge";
@@ -58,9 +69,12 @@ import { GroupHeader } from "./GroupHeader";
 
 /**
  * What one row of the flat list is. A table with bands is a flat list of two kinds of thing,
- * because that is what a virtualiser can measure — a nested list would have to be flattened
- * at render time anyway, and then the row indices a screen reader is told would be a
- * different set from the ones the virtualiser is counting.
+ * because a nested list would have to be flattened at render time anyway, and then the row
+ * indices a screen reader is told would be a different set from the ones the table is
+ * counting — `aria-rowindex` runs down one sequence and a `<section>` per group cannot be in
+ * it. (It was also what a virtualiser can measure, which is no longer a reason here: this view
+ * passes `grow`, so no window is computed. The ARIA half is what the shape rests on now, and
+ * it was always the half that could not be worked around.)
  */
 type Row =
   | { kind: "group"; key: string; group: CardGroup }
@@ -78,21 +92,24 @@ type Row =
     };
 
 /**
- * How much taller a band gets while its pile is being renamed — **and this view is the one that
- * has to be told, because its rows are absolutely positioned.**
+ * How much taller a band gets while its pile is being renamed — **and under `grow` it is a
+ * floor rather than a contract, which is a weaker promise than this comment used to make.**
  *
- * The other three draw a pile as a `<section>` in normal flow, so a field appearing under the
- * heading pushes what is below it. Here `VirtualTable` gives every row `height: v.size` from
- * `estimateSize`, and this file's own `Row` comment already warns what happens to a row that
- * grows without saying so: *"a virtualiser told every row is 44px would overlap the one below it
- * by exactly that band."* Un-declared, the open field paints over the first card of the pile.
+ * The other three views draw a pile as a `<section>` in normal flow, so a field appearing under
+ * the heading pushes what is below it and nobody has to declare anything. This one used to be
+ * the opposite case: `VirtualTable` gave every row `height: v.size` off `estimateSize`, so a
+ * band that grew without saying so was painted over by the row below it — *"a virtualiser told
+ * every row is 44px would overlap the one below it by exactly that band"* — and an un-declared
+ * rename field covered the first card of the pile. With `grow` the row carries `minHeight`
+ * instead and nothing has to be told: a band that outgrows this number simply makes its row
+ * taller. So the number is still worth being right, because it is what the row is sized at
+ * before anything measures — and being wrong costs a little slack rather than a covered card.
  *
  * **48px**, and it is arithmetic rather than a guess: `RenameField`'s form is `mt-2 … pt-2`
  * (8 + 8) around a row whose tallest children are `META_FIELD` and `META_SUBMIT`, both `h-8`
- * (32) — 8 + 32 + 8 = 48. It is the one-line case; the form is `flex-wrap`, so a very narrow
- * table would wrap Save onto a second line and want 48 more. That is not corrected for here
- * because the band spans every column of a table whose own floor is nine of them: the row is
- * never narrow enough. If this ever draws two lines, this is the number that is wrong.
+ * (32) — 8 + 32 + 8 = 48. That is the one-line case. **The paragraph that used to follow —
+ * that a very narrow table would wrap Save onto a second line and want 48 more — is gone with
+ * the fixed height**: a wrapped form now grows the row it is in.
  */
 const RENAME_HEIGHT = 48;
 
@@ -332,19 +349,21 @@ export function TableView({
   // callback. `DeckTableRow` is where they live; the band gets one too, so letting a card go
   // on a group's heading files it under that group like letting it go on any of its rows.
   /**
-   * Which rows are taller than a row, for the virtualiser.
+   * Which rows want more room than a row.
    *
    * It asks the same question the band's own render asks — is there a rename field for this
    * pile — by calling the same factory, so the height and the markup cannot disagree about
    * whether a field is there. Building an element to answer a boolean is a little wasteful and
-   * is the price of one answer instead of two; `estimateSize` runs on a measure rather than per
-   * frame, and a card row short-circuits on its kind before the call.
+   * is the price of one answer instead of two; a card row short-circuits on its kind before the
+   * call.
    *
-   * **Its identity has to move when the answer does.** `VirtualTable` caches row heights and
-   * re-measures off a `heightKey` derived from `[rows, extraHeight]`, so a stable callback here
-   * would leave every band at 44px until the *list* changed — which a rename does not do. The
-   * `actions` bag is rebuilt when the editor's renaming pile changes, so depending on it is what
-   * makes the re-measure happen.
+   * **Its identity still has to move when the answer does, and the reason is now smaller than
+   * it was.** Under `grow` the row takes this as a `minHeight`, so a stale answer costs a band
+   * that is 44px until React re-renders it rather than a band a card is drawn over — and
+   * `VirtualTable`'s own height cache, which used to be the reason (`heightKey` is derived from
+   * `[rows, extraHeight]`, and a rename does not change the *list*), is not read here at all
+   * any more. Depending on `actions` is kept because that bag is rebuilt when the editor's
+   * renaming pile changes, which is exactly when this answer moves.
    */
   const extraHeight = useCallback(
     (row: Row) =>
@@ -372,12 +391,23 @@ export function TableView({
   );
 
   return (
-    <div className={cn("flex min-h-0 flex-1 flex-col", className)}>
+    // **`min-w-0` where this carried `min-h-0`, which is the whole of the change on this
+    // element.** `min-h-0` is the class that says *this box may be squeezed below its own
+    // content*, and squeezing it is precisely what made the table scroll inside a page that was
+    // already scrolling. The other three views' roots are `flex min-w-0 flex-1 flex-col`, and
+    // this one is now the same: nothing bounds its height, so it grows to hold the table and
+    // the page takes the scroll. `min-w-0` is the axis that does need saying — a grid of nine
+    // tracks has a min-content width, and a flex item that could not shrink below it would push
+    // a horizontal scrollbar across the whole deck builder, which the 1024px floor forbids.
+    <div className={cn("flex min-w-0 flex-1 flex-col", className)}>
       <VirtualTable<Row>
         rows={rows}
         columns={columns}
         label="This deck"
         total={rows.length}
+        // The deck is bounded and the page is the scroller — see this file's own header. This
+        // is the one caller of `VirtualTable` that passes it.
+        grow
         // A deck arrives whole — there is no next page, and the identity of the list is what
         // is in it, so a regrouping starts at the top.
         listKey={rows.map((row) => row.key).join("|")}
@@ -498,11 +528,13 @@ function DeckTableRow({
       // The shared pair, as in the other three views.
       //
       // **This view carried `ring-inset` of its own until 2026-09-03, and it was right first.**
-      // Its reason — a row here is absolutely positioned inside a scroller, and an outset ring is
-      // drawn over its neighbours — turned out to be the general case rather than this table's
-      // special one: a reader reported exactly that overlap across the whole app, and `DROP_RING`
-      // is inset for everybody now. So the extra class is gone as a duplicate of what the token
-      // already says, and nothing about what this row draws changed.
+      // Its reason at the time — a row here was absolutely positioned inside a scroller, and an
+      // outset ring is drawn over its neighbours — turned out to be the general case rather than
+      // this table's special one: a reader reported exactly that overlap across the whole app,
+      // and `DROP_RING` is inset for everybody now. So the extra class is gone as a duplicate of
+      // what the token already says, and nothing about what this row draws changed. (The rows
+      // are in normal flow since `grow`, which retires the premise and not the conclusion: rows
+      // stacked flush against each other overlap an outset ring however they are placed.)
       className={cn(props.className, eligible && DROP_RING, over && DROP_OVER)}
     >
       {props.children}
@@ -512,10 +544,12 @@ function DeckTableRow({
           band; that is what this view has instead of a column edge. */}
       {over && <DropIndicator />}
 
-      {/* The landed mark, over the row it belongs to. A row here is already absolutely
-          positioned by the virtualiser, so an `inset-0` overlay needs no `relative` adding — and
-          this view's rows are the one place the mark is over *text* rather than over art, which
-          is what the wash's low alpha is for. */}
+      {/* The landed mark, over the row it belongs to. An `inset-0` overlay needs no `relative`
+          adding here because the row is positioned already — `VirtualTable` gives it `relative`
+          under `grow`, exactly as it gave it `absolute` when the virtualiser was placing it, and
+          that class is there for this overlay and the `DropIndicator` above it. This view's rows
+          are also the one place the mark is over *text* rather than over art, which is what the
+          wash's low alpha is for. */}
       {landedKey !== undefined && <LandedMark key={landedKey} />}
     </div>
   );
@@ -532,8 +566,9 @@ const EMPTY_CARD = { cardId: "", name: "", categoryId: 0 } as DeckCard;
  * `tabIndex`, `onClick` and `onKeyDown` because a heading is not something Enter opens;
  * `style.gridTemplateColumns`, because a band has one track rather than nine; `className`,
  * for the surface colour; and `children`, which is the band itself. Everything it does not
- * touch — `role`, `aria-rowindex`, the absolute geometry, the focus ring — is exactly what a
- * row in this table is, and a band is still a row of it.
+ * touch — `role`, `aria-rowindex`, the row's own geometry (`position` and, under `grow`, the
+ * `minHeight` that carries {@link RENAME_HEIGHT}), the focus ring — is exactly what a row in
+ * this table is, and a band is still a row of it.
  *
  * **The band owns a real cell.** A `role="row"` with no `role="cell"` inside it is malformed
  * to assistive tech — a row that owns nothing — so the heading sits in one cell carrying
@@ -574,6 +609,9 @@ function bandRow(
       // under the cells. A band is not that shape: it is a single cell that wraps, so the two
       // tracks would pin it to the first 44px and the rename field would overflow the row this
       // fix just made tall enough. Cleared, the cell has the whole height to wrap inside.
+      // **`props.style`'s height term is kept in both modes** — under `grow` that is a
+      // `minHeight`, so a rename form that wraps to two lines grows the band instead of
+      // spilling out of it, which is why {@link RENAME_HEIGHT} no longer has to allow for one.
       style={{
         ...props.style,
         gridTemplateColumns: "minmax(0,1fr)",

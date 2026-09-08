@@ -99,9 +99,9 @@ export interface DeckCoverPickerProps {
  * gallery tile makes. Since a cover can only be a crop now, "no artist" and "no picture" are one
  * condition here rather than two that had to be kept in step across two kinds of cover.
  *
- * **The tiles do not, and the search tiles are a fifth instance of a gap recorded rather than
- * quietly inherited.** {@link ChoiceTile}'s doc has the whole argument for the four that came
- * before — `CardStack`, `views/GridView`, `TheoryDiffDialog` and the in-deck tiles here — and it
+ * **The tiles do not, and the search tiles are a third instance of a gap recorded rather than
+ * quietly inherited.** {@link ChoiceTile}'s doc has the whole argument for the two that are left —
+ * `TheoryDiffDialog` and the in-deck tiles here — and it
  * covers a search result for the same two reasons plus one of its own: `CardSummary` carries no
  * `artist` field (`src/lib/ipc.ts`, and `search.rs`'s SELECT does not select one), and widening
  * the search command for a picker's thumbnails would put a column on every result row in the app
@@ -422,15 +422,29 @@ function CoverPreview({
  * **`docs/reference/frontend-design.md`**, and on
  * {@link DeckRow.coverArtist}'s own doc, with the original statement in
  * `docs/superpowers/plans/2026-08-04-02-images-card-browsing.md`. These tiles do not credit
- * one. Nor do `CardStack` (the stacked card), `views/GridView` (the wall tile) or
- * `TheoryDiffDialog` (the diff row), which draw the same crop everywhere else in the editor;
- * this follows those three deliberately, because a picker that was stricter than the views it
- * picks *from* would be an inconsistency a reader could see, where this one is one only a
- * lawyer can. What holds it together is that each crop sits inside a control that **names the
+ * one. Nor does `TheoryDiffDialog` (the diff row), which draws the same crop.
+ * What holds it together is that each crop sits inside a control that **names the
  * card**, so the illustrator is one press away in the card pane, which does credit them.
  *
- * The way to close it for all four at once is a per-row `artist`, which neither `DeckCard` nor
- * `CardSummary` carries; the alternative here alone is the `grid` variant, whose printed frame
+ * **This paragraph named `CardStack` (the stacked card) and `views/GridView` (the wall tile) here
+ * too, and it should not have.** The rule has **two arms** — name the artist in the same
+ * interface, *or* show a full card image in it — and those two surfaces draw `DECK_CARD_VARIANT`,
+ * which is `display` (672×936): a whole printed card, carrying its own printed credit. They meet
+ * the second arm outright and owe nothing extra, and they have since every deck surface went to
+ * `display` on 2026-08-20; since 2026-09-08 they are literally one component (`DeckCardFace`), so
+ * there is one surface to be right about rather than two. `features/decks/CLAUDE.md` corrected the
+ * same sentence on 2026-09-07 and this copy of it was missed, which is what a claim written down
+ * in two places costs.
+ * **What that leaves is the sentence this comment used to close with, now pointing the other
+ * way**: a picker stricter than the views it picks *from* was the argument for the gap, and those
+ * views are compliant, so the inconsistency is real rather than lawyerly — which is an argument
+ * for the one column below, not against it.
+ *
+ * The way to close it for both at once is a per-row `artist`, which neither `DeckCard` nor
+ * `CardSummary` carries. (It said *all four* while the two deck card views were counted in; they
+ * met the rule's second arm all along, so the column now buys two surfaces rather than four —
+ * which makes it cheaper to justify, not harder.) The alternative here alone is a whole-card
+ * variant, whose printed frame
  * carries the credit, at the cost of the cover-shaped tile. The **cover preview** above is
  * strict either way: an unknown artist is not drawn at all, which is `DeckRow.coverArtist`'s own
  * ruling, and `DecksPage`'s gallery tile makes the same refusal.
