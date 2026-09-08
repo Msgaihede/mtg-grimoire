@@ -134,6 +134,24 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
       stale: true,
     }),
     onCombosProgress: vi.fn().mockReturnValue(() => {}),
+    // The card modal's fourth rail overlay (issue #359) reads this the moment it opens, so the
+    // pair above is a trio now. An **empty page rather than an absent mock**: this is a
+    // `useQuery`, so a missing method is caught and retried rather than thrown, which would leave
+    // the mount assertion below passing off an error state — a dialog that draws its heading and
+    // nothing else looks identical to one that is wired correctly and has no combos to show.
+    // Every field of `CardCombosPage` is spelled out because a partial object is the one shape a
+    // `vi.fn()` mock can hold that the compiler will never see: the body reads `byCardCount` and
+    // `combos` as arrays, and an absent key is a `.map` on `undefined` at runtime.
+    // Zeros throughout, which is the honest answer for a database whose `combosStatus` above says
+    // it has never fetched the feed — the two mocks have to agree or this file states an
+    // impossible database.
+    combosForCard: vi.fn().mockResolvedValue({
+      total: 0,
+      matching: 0,
+      ownedTotal: 0,
+      byCardCount: [],
+      combos: [],
+    }),
     // The search view is live now, so opening on it fires a real query; an unresolved
     // mock would surface here as a query error rather than as the routing this file tests.
     searchCards,
@@ -770,6 +788,40 @@ it("gives one Escape to each layer: overlay, card, view", async () => {
 
   await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   expect(screen.getByRole("group", { name: "Search results" })).toBeInTheDocument();
+});
+
+/**
+ * **`CombosDialog` is mounted, and this file is the only place that can say so** — issue #359.
+ *
+ * The rail writes `cardOverlay` and reads nothing back; the dialog reads that field and is
+ * mounted out here as a sibling of the shell. Neither component's own suite can see the join:
+ * `CardModalRail.test.tsx` renders the rail alone and asserts the store field, and the dialog's
+ * own file renders the dialog alone with the field already set. A missing `<CombosDialog />` in
+ * `App.tsx` is green in both of them and is a rail row that does nothing at all in the window —
+ * which is exactly the *tested but unwired* shape this repo has shipped before.
+ *
+ * Driven through the rail rather than by writing the store by hand, which is what the Legality
+ * test above does and what makes this an assertion about the whole path: press → store → a mount
+ * that is neither the rail's child nor the card panel's. **Not a child of the panel** is the half
+ * with no DOM tell — `CardDetailModal` asks `Dialog` for `container`, and a container box is the
+ * containing block for its `fixed` descendants, so a scrim rendered under it would stretch to the
+ * panel instead of the window with nothing here able to see the difference (jsdom lays nothing
+ * out). What this test can hold is that the dialog exists at all.
+ */
+it("mounts the combos overlay outside the card modal, for the rail to open", async () => {
+  render(<App />);
+  await userEvent.click(await screen.findByRole("button", { name: "Lightning Bolt" }));
+  await screen.findByRole("dialog", { name: /lightning bolt/i });
+
+  await userEvent.click(screen.getByRole("button", { name: "Combos" }));
+
+  // `/combo/i` rather than the exact heading: what this test is about is the *mount*, and the
+  // dialog's own file owns its wording — a title assertion here would be this file going red for
+  // a copy edit two files away.
+  expect(await screen.findByRole("dialog", { name: /combo/i })).toBeInTheDocument();
+  // The card stays under it, as it does under every other rail overlay: these are stacked
+  // surfaces rather than a navigation, so closing one has somewhere to put the reader back.
+  expect(screen.getByRole("dialog", { name: /lightning bolt/i })).toBeInTheDocument();
 });
 
 /**

@@ -99,6 +99,49 @@ export const combosForCardsKey = (sortedCardIds: readonly string[]): QueryKey =>
 ];
 
 /**
+ * Every combo that **names** one card, at one pair of filters — `ipc.combosForCard`.
+ *
+ * The third key under {@link COMBOS_KEY}, beside {@link COMBOS_STATUS_KEY} and
+ * {@link combosForCardsKey}, and it is under that root for the root's own reason: a download
+ * replaces the whole table, so everything read out of it goes stale at once and one
+ * invalidation of `["combos"]` reaches all three.
+ *
+ * **`forCard`, not `forCards`, and one character between two keys is worth saying out loud.**
+ * These are opposite questions over one table — that one asks which combos a *pile* of printings
+ * fully contains (the deck advisory), this one asks what a *single* card is part of and claims
+ * nothing about the other pieces. Spelling both `"forCards"` would not literally alias two cache
+ * entries, since the third segment differs; what it would do is put them under one prefix, and
+ * every prefix-scoped operation TanStack has — `invalidateQueries`, `cancelQueries`,
+ * `removeQueries`, `getQueriesData` — matches by prefix. So a targeted invalidation of the
+ * cheap read would silently throw away the expensive one, and the failure would look like a
+ * bracket advisory that refetches for no reason rather than like a naming mistake.
+ *
+ * **Keyed on the oracle id and never a printing id**, which is `oracleTagsKey`'s argument
+ * (`features/card/OracleTagsDialog.tsx`) arriving at the same place: a combo is a fact about a
+ * card, so all four Lightning Bolts share one answer and a printing-keyed read would miss the
+ * cache every time a reader stepped between two printings of the card they are already reading
+ * about.
+ *
+ * **Both filters are in the key rather than applied to a cached superset, because neither is a
+ * subset operation.** `cardCount` and `ownedOnly` narrow in SQL *before* the page is cut, so a
+ * filtered answer is a different question and not a slice of the unfiltered one. Filtering on
+ * this side instead would filter page 1 of a match set that can run to thousands of rows — and
+ * the answer it produces is confidently wrong rather than merely incomplete: a card whose first
+ * page happens to be all four- and five-card combos would read "no two-card combos" to a reader
+ * whose card has forty of them, with nothing on screen suggesting there was more to fetch.
+ *
+ * **`limit` and `offset` are deliberately absent**, which is a constraint on the caller and not
+ * an oversight: pages of one question belong under one key. Page with `useInfiniteQuery`, which
+ * carries its own page param — a plain `useQuery` per offset would write every page over the
+ * last one here.
+ */
+export const cardCombosKey = (
+  oracleId: string,
+  cardCount: number | null,
+  ownedOnly: boolean,
+): QueryKey => ["combos", "forCard", oracleId, cardCount, ownedOnly];
+
+/**
  * The relay's own state — `ipc.syncRelayStatus`.
  *
  * **Here rather than in `SyncPanel`, because two panels move it and only one reads it.** The

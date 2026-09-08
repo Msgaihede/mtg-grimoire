@@ -7,6 +7,7 @@ import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { AllPrintingsDialog } from "@/features/card/AllPrintingsDialog";
 import { CardDetailModal } from "@/features/card/CardDetailModal";
 import { CardTextDialog } from "@/features/card/CardTextDialog";
+import { CombosDialog } from "@/features/card/CombosDialog";
 import { LegalityDialog } from "@/features/card/LegalityDialog";
 import { OracleTagsDialog } from "@/features/card/OracleTagsDialog";
 import { CardToDeckProvider } from "@/features/card/cardMenu";
@@ -182,10 +183,10 @@ export default function App() {
               `deck_swap_printing`. */}
                 <AllPrintingsDialog />
 
-                {/* **The card itself, and the three overlays its rail opens — five siblings of the
+                {/* **The card itself, and the four overlays its rail opens — six siblings of the
               shell, and not one of them may be a child of another.**
 
-              `AllPrintingsDialog` above and these four are all `fixed` scrims, and a `fixed` box
+              `AllPrintingsDialog` above and these five are all `fixed` scrims, and a `fixed` box
               is laid out against the window only while nothing between it and the root is a
               containing block for it. `CardDetailModal` asks `Dialog` for `container`, which puts
               `@container/card` on its panel — and `container-type` implies **layout
@@ -196,21 +197,24 @@ export default function App() {
               DOM that anything was wrong. `src/CLAUDE.md` states the same rule from the other
               end — a modal may never be mounted inside a container box — and `FilterBar` had to
               become a fragment for it. Here the rule is met by placement: the modal draws no
-              overlay, it writes `cardOverlay` in the store, and each of these three reads that
-              field from out here.
+              overlay, it writes `cardOverlay` in the store, and each of these four reads that
+              field from out here. `CombosDialog` is the fourth (issue #359) and needed no new
+              argument: it is another reader of that one field, so the only thing its mount had to
+              get right is being *here* rather than under the panel that opens it.
 
               **`CardDetailModal` must be inside `CardToDeckProvider`**, which every mount in this
               block is: its action row's `Add to deck` picker calls `useOptionalAddCardToDeck()`, and
               that hook answers `null` outside the provider — so a mount above it would draw the
               control permanently disabled, with nothing going red.
 
-              Order among the five is not load-bearing: they are ranked by `LAYER.overlay` and
+              Order among the six is not load-bearing: they are ranked by `LAYER.overlay` and
               `LAYER.overlayStacked` rather than by document order, which is the whole reason that
               rung was split. */}
                 <CardDetailModal />
                 <LegalityDialog />
                 <OracleTagsDialog />
                 <CardTextDialog />
+                <CombosDialog />
               </ContextMenuProvider>
             </CardToDeckProvider>
           </TooltipProvider>

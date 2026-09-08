@@ -99,6 +99,11 @@ already stored, and an estimate with none reads three signals rather than refusi
 `combos::REFRESH_INTERVAL_SECS` is **the same week**, against a file Spellbook rebuilds through
 the day, and the reason is the tagger week's: a bracket readout that changed between two sessions
 on one afternoon, for a reason the reader cannot see, is the failure worth avoiding.
+**Since 2026-09-08 it has a second reader that is not a deck at all**: the card modal's `Combos`
+row, which asks _which combos name this card_ where the estimate asks _which combos does this
+pile hold_. Two questions, never one statement — and the card side is why `combos` grew four
+prose columns (**corpus schema 2**, the corpus ladder's first rung ever) and why "this card is in
+no combo" and "we have never downloaded the list" have to be two different sentences.
 [commander-brackets.md](docs/reference/commander-brackets.md) has every measurement.
 
 ## Commands
@@ -198,7 +203,7 @@ number to compare against.
 | [android-target.md](docs/reference/android-target.md) | The Android build — the toolchain and what it cost, what is gated and what merely never runs, the `content://` file seam, and every figure taken on the phone |
 | [pwa-shell.md](docs/reference/pwa-shell.md) | The installable web shell — the manifest, the two caches, the update flow driven end to end with both build ids, why the service worker attaches no isolation headers, and **why one missing `ignoreVary` made the offline shell a blank page** |
 | [decks-storage.md](docs/reference/decks-storage.md) | Deck tables, the card commands, how owned/missing is answered, the audit log, the decklist import, the token resolver and its union keep rule |
-| [commander-brackets.md](docs/reference/commander-brackets.md) | The bracket table as it stands, why the estimate is a floor and never 5, what the four signals can and cannot see, and Commander Spellbook's combo feed measured |
+| [commander-brackets.md](docs/reference/commander-brackets.md) | The bracket table as it stands, why the estimate is a floor and never 5, what the four signals can and cannot see, Commander Spellbook's combo feed measured, corpus schema 2 and its two traps, and the card side's three statements, its four empty states and the `CROSS JOIN` worth 65 ms |
 | [import-export.md](docs/reference/import-export.md) | The seven formats, the field registry, the fold rule, the four import destinations |
 | [text-mirror.md](docs/reference/text-mirror.md) | The plain-text mirror — the layout, the dirty map, why the pruner reads a manifest instead of guessing, the measured cost of a pass, and the bugs still open |
 | [wishlist-folders.md](docs/reference/wishlist-folders.md) | The two folder tables, the four-term grain, the merge rule, the root-add duplicate and the `elsewhere` mark |
