@@ -689,20 +689,31 @@ an Android trap in it.
 **The read-only guarantee is structural, and it has to be.** There is no read-only mode anywhere on
 this app's data path — `lock_db_read` returns the *write* connection on wasm, and `src/lib/writes.ts`
 is only about which mutation owns the error banner — so a flag would be a claim rather than a fence.
-What this view has instead is that it renders a **fetched document** and names no mutation.
+What this view has instead is that it renders a **fetched document**, and every command it names
+is enumerated in one file.
 
 `readOnly.test.ts` is that check: an `import.meta.glob` over the whole subtree, sweeping for
-`ipc.<name>` against a list of permitted **reads**, plus four **back doors** refused outright
+`ipc.<name>` against two enumerated lists, plus four **back doors** refused outright
 (`ipc["…"]`, a binding taken off `ipc`, `ipc` passed as an argument, a namespace import) because
 none of the four has a legitimate use here and *"absent"* is a complete answer. It carries its own
 anti-vacuity guard, because a moved directory would otherwise turn the guarantee into a green build
 over an empty set.
 
-**The roster of what the view may call is `READS` in that file, and the build answers it.** Spec
-decision 8's want list — tick rows, press *Add to wishlist*, choose a folder the reader already has
-— is a write, deliberately, by an explicit press, into the reader's **own** wishlist and never into
-the binder on screen. When it lands it adds its command to `READS` in the same commit: one reviewed
-line, which is exactly the friction the test exists to create.
+**The roster of what the view may call is `READS` and `WRITES` in that file, and the build answers
+both.** Spec decision 8's want list — tick rows, press *Add to wishlist*, choose a folder the
+reader already has — **is** a write, and it landed in `AddToWishlist.tsx`. It went onto a **second
+list** rather than as two more entries on the first, so `READS` stays only reads and a diff that
+touches `WRITES` is a diff about the view's promise: **every name there has to be a write to
+something else the reader owns.** A `shareRefresh` or a `collectionAdd` on that list would be the
+promise gone, whatever the sweep then said.
+
+The want list itself takes nothing new: no table, no synced column, no schema rung. It folds the
+picked copies onto one wish per printing and finish, offers the wishlist cabinet as it stands —
+**no folder is minted here**, because §8 defers binding a folder to a share — and says which
+copies are already on the reader's list, since `wishlist_add` folds onto the grain and a second
+add would otherwise be silent. **The tick is gated on the same answer the figure line is**: against
+the empty index every card reads *wanted 0*, so a want list built during the sweep would offer to
+add cards the reader already wants with nothing on screen saying so.
 
 **The cross-reference is the reason to open a share in the app at all** — *you own 2 · you want 3*,
 from two sweeps over the reader's own lists. Three things about it:
@@ -935,7 +946,7 @@ branch acquires an unrelated red.
 | `src-tauri/src/share/__golden__/` | The committed snapshot both TypeScript suites read |
 | `share-worker/` | The Worker — `index.ts` (router and gate), `shares.ts`, `blob.ts`, `page.ts`, `lapse.ts`, `env.ts`, `schema.sql`, `README.md` |
 | `share/` | The public viewer bundle; `vite.share.config.ts` builds it into `dist-share/` |
-| `src/features/share/` | The in-app view, the paste dialog, its hooks, the folder tree, the read-only sweep |
+| `src/features/share/` | The in-app view, the paste dialog, the want list, its hooks, the folder tree, the read-only sweep |
 | `src/features/collection/ShareFolderMenu.tsx` | The Share control and the entry point beside it |
 | `src/lib/shareSnapshot.ts` | The format, read — imports nothing, by requirement |
 | `src/lib/ipc.ts` | The five commands and `ShareRow`'s mirror |

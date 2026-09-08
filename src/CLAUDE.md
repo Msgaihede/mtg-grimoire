@@ -235,10 +235,11 @@ Every one of these has its measurement and its story in
   read-only mode on this app's data path.** `lock_db_read` returns the *write* connection on
   wasm, and `@/lib/writes` is only about which mutation owns the error banner — so a flag would
   be a claim. `src/features/share/readOnly.test.ts` is the shape to copy: an `import.meta.glob`
-  over the subtree, `ipc.<name>` matched against a list of permitted **reads**, four back doors
+  over the subtree, `ipc.<name>` matched against two enumerated lists, four back doors
   (`ipc["…"]`, a binding taken off `ipc`, `ipc` passed as an argument, a namespace import)
   refused outright, and an anti-vacuity guard so a moved directory cannot turn the guarantee into
-  a green build over an empty set. It stays total only while the calls are made **in** the swept
+  a green build over an empty set. **The permitted write goes on its own list** — `WRITES`, not
+  two more entries on `READS` — so a diff that touches it is a diff about the view's promise. It stays total only while the calls are made **in** the swept
   files, which is why that view writes its own paging loop rather than importing a helper that
   would take the callback elsewhere.
 - **`pointer-events` inherits, so a `title` or an SVG `<title>` inside anything
