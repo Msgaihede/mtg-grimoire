@@ -262,10 +262,10 @@ describe("buildCardMenu", () => {
     expect(vi.mocked(copyText)).not.toHaveBeenCalled();
   });
 
-  it("offers Scryfall and exactly one marketplace, named for the setting", () => {
+  it("offers Scryfall, EDHREC and exactly one marketplace, named for the setting", () => {
     const items = buildCardMenu(BOLT, deps({ marketplace: MARKETPLACES.cardkingdom }));
     const openOn = find(items, "Open on") as MenuSubmenu;
-    expect(labels(openOn.items)).toEqual(["Scryfall", "Card Kingdom"]);
+    expect(labels(openOn.items)).toEqual(["Scryfall", "EDHREC", "Card Kingdom"]);
   });
 
   it("opens nothing until the entry is pressed", async () => {
@@ -276,6 +276,23 @@ describe("buildCardMenu", () => {
     (openOn.items[0] as MenuAction).onSelect();
     await waitFor(() =>
       expect(vi.mocked(openExternal)).toHaveBeenCalledWith("https://scryfall.com/card/lea/161"),
+    );
+  });
+
+  /**
+   * The middle rung, added with issue #402's follow-up: the same router-by-name link the card
+   * modal's rail opens, so both surfaces send a reader to one EDHREC page for one card. The URL
+   * is `edhrecCardUrl`'s, unmocked, so a menu that slugged the name itself would fail here.
+   */
+  it("opens the card on EDHREC by name from the middle rung", async () => {
+    const items = buildCardMenu(BOLT, deps({ marketplace: MARKETPLACES.cardmarket }));
+    const openOn = find(items, "Open on") as MenuSubmenu;
+
+    (openOn.items[1] as MenuAction).onSelect();
+    await waitFor(() =>
+      expect(vi.mocked(openExternal)).toHaveBeenCalledExactlyOnceWith(
+        "https://edhrec.com/route/?cc=Lightning%20Bolt",
+      ),
     );
   });
 
