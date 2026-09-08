@@ -418,10 +418,15 @@ to the full shortfall with the row ticked. Everything ticked on open, one press 
 
 The wish line sits beside the row as a fact, never as a question:
 
-- one match → *"clears 2 copies off a wish in Buy soon"* (the folder's name, or `Wishlist` at the
+- one match → *"Clears 2 copies off a wish in Buy soon"* (the folder's name, or `Wishlist` at the
   root — the UI words that, not the backend, which is `QuickAddWish::folder_name`'s own rule)
 - two or more → *"2 wishlist lines match — left alone"*
 - none → nothing at all
+
+**Sentence-cased, corrected 2026-09-08 against what shipped.** This draft wrote it lowercase, as a
+fragment continuing the row; it is drawn as a standalone line under `M10 · 146` and
+`Short in Removal`, where a lowercase opening reads as a sentence that has lost its beginning.
+The words are otherwise unchanged.
 
 Footer: a checkbox **`Also take these off my wishlist`**, on by default, and the press
 `Add N copies to collection`. The checkbox is one control for the whole batch because the

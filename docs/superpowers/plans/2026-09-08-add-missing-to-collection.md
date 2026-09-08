@@ -561,7 +561,10 @@ recorded: {e}"`.
 - [ ] **Step 9: Tests in `deck_missing.rs`**
 
 Copy the fixture style from `deck_pull.rs`'s test module (a `memory_pair()` database, seeded
-`cards`, a deck with a group). Twelve tests:
+`cards`, a deck with a group). The bullets below name fourteen — this line said "twelve" while
+they did, which is the miscount this repo's own rule about re-counting in the same commit exists
+to catch. Eighteen were written: the four extra pin `NOTHING_PICKED`, `ZERO_ADD`, the
+wish-deleted-outright arm, and the exact-shortfall boundary the mutation check demanded.
 
 *Plan:* an inactive pile contributes nothing; one printing short in two active piles is one row
 whose `short` is the sum and whose `categories` names both; an orphaned printing (a `deck_cards`
@@ -864,7 +867,8 @@ to reset anything.
 The wish line sits beside the row as a **fact, not a question**, and the three shapes come
 straight off `PlannedMissingRow.wish`:
 
-- `{ kind: "one" }` → `clears N copies off a wish in <folderName ?? "Wishlist">`
+- `{ kind: "one" }` → `Clears N copies off a wish in <folderName ?? "Wishlist">` (sentence-cased:
+  it is a standalone line, not a fragment continuing the row)
 - `{ kind: "ambiguous" }` → `N wishlist lines match — left alone`
 - `null` → nothing at all
 
