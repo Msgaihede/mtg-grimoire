@@ -83,7 +83,7 @@ export const NothingWrong: Story = { args: { violations: undefined } };
 
 /**
  * The **Live** list of a deck that keeps a plan, where four of the ten cards are the plan and six
- * are not.
+ * are not — and since 2026-09-08 **all ten wear a mark**.
  *
  * This is the whole point of the mark: a live list is what the reader has actually sleeved up, and
  * the one thing it cannot say about itself is which of its cards are the deck they designed and
@@ -91,30 +91,53 @@ export const NothingWrong: Story = { args: { violations: undefined } };
  * opposite the `RULE BREAK` mark — see `CardMarks.tsx` for why those two are never allowed to
  * share one.
  *
- * **Two of the four marks are counts rather than ticks**, which is issue #212 and is why this
- * story is worth looking at rather than merely running: the fixture's plan asks for twice the
+ * **Two of the four planned marks are counts rather than ticks**, which is issue #212 and is why
+ * this story is worth looking at rather than merely running: the fixture's plan asks for twice the
  * Island the deck holds and half the Boros Charm, so `+2` and `-1` are drawn in the same box, the
  * same azure and the same corner as the tick the other two wear. The number is the *action* the
  * plan is asking for — two Islands to add, one Boros Charm to cut. The tick is the card that
  * matches; a number is the card that does not.
  *
+ * **The other six wear the red X**, the third tier's mark: the plan does not ask for that card at
+ * all. It is a glyph and never a number, because there is no arithmetic to do on a card the plan
+ * has no row for — nothing to add and nothing to cut, only *not this one*. A wall is where that
+ * reads: three chips in three colours over ten tiles, rather than four chips and six blank
+ * corners a reader has to interpret.
+ *
  * `theoryPlan` is `undefined` in every other story in this file, which is what a deck with the
  * theory list switched off looks like and what the **Theory** tab itself looks like: no plan to
- * compare against, so no marks.
+ * compare against, so no marks at all — which is a different picture from ten X's.
  */
 export const TheoryMatches: Story = {
   args: { theoryPlan: deckTheoryMatches() },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    // Four marked cards, and **two of the four are numbers rather than ticks** (issue #212): the
-    // fixture asks for twice the Island the deck holds and half the Boros Charm, so this is the
-    // one place both of the mark's drawings are seen side by side. The mark is `aria-hidden` and
-    // carries no `title` — it is bound `describes: false`, so `THEORY_MATCH_ATTR` is
-    // `CardMarks.tsx`'s own handle for finding it after the fact, and a tick's element has no
-    // text at all (it is an `<svg>`). The words are read off the button instead.
+    // Every card on the wall is marked, and six of the ten wear the third tier's X. The mark is
+    // `aria-hidden` and carries no `title` — it is bound `describes: false`, so
+    // `THEORY_MATCH_ATTR` is `CardMarks.tsx`'s own handle for finding it after the fact, and both
+    // the tick and the X have no text at all (each is an `<svg>`). The words are read off the
+    // button instead.
     const marks = [...canvasElement.querySelectorAll(`[${THEORY_MATCH_ATTR}]`)];
-    expect(marks).toHaveLength(4);
-    expect(marks.map((mark) => mark.textContent).sort()).toEqual(["", "", "+2", "-1"]);
+    expect(marks).toHaveLength(10);
+
+    const unplanned = [...canvasElement.querySelectorAll(`[${THEORY_MATCH_ATTR}="unplanned"]`)];
+    expect(unplanned).toHaveLength(6);
+    // An X and never a count: a card the plan has no row for has no difference to state.
+    for (const mark of unplanned) {
+      expect(mark.textContent).toBe("");
+      expect(mark.querySelector("svg")).not.toBeNull();
+    }
+
+    // The four that *are* the plan, read on their own — **two of them are numbers rather than
+    // ticks** (issue #212): the fixture asks for twice the Island the deck holds and half the
+    // Boros Charm, so this is the one place both of the mark's drawings are seen side by side.
+    // Scoped past the X's, whose six empty strings would otherwise drown the pair.
+    const planned = [
+      ...canvasElement.querySelectorAll(
+        `[${THEORY_MATCH_ATTR}]:not([${THEORY_MATCH_ATTR}="unplanned"])`,
+      ),
+    ];
+    expect(planned.map((mark) => mark.textContent).sort()).toEqual(["", "", "+2", "-1"]);
 
     // The card carrying both marks: in the plan **and** breaking a rule. The two facts are in
     // one sentence because a button's `aria-label` replaces everything inside it.
@@ -122,10 +145,14 @@ export const TheoryMatches: Story = {
     expect(both).toHaveAccessibleName(expect.stringContaining("in the theory list"));
     expect(both).toHaveAccessibleName(expect.stringContaining("rule break:"));
 
-    // And a card the plan does not ask for says neither.
-    expect(canvas.getByRole("button", { name: /^Dismember/ })).toHaveAccessibleName(
-      expect.not.stringContaining("theory"),
-    );
+    // And a card the plan does not ask for says so, in words — it is a *statement* now rather
+    // than a silence. The negatives are what keep it the third tier's sentence and not a planned
+    // one: green's own words are the prefix of blue's, and neither of them is this.
+    const missing = canvas.getByRole("button", { name: /^Dismember/ });
+    expect(missing).toHaveAccessibleName(expect.stringContaining("not in the theory list"));
+    expect(missing).toHaveAccessibleName(expect.not.stringContaining("in the theory list ·"));
+    expect(missing).toHaveAccessibleName(expect.not.stringContaining("to add"));
+    expect(missing).toHaveAccessibleName(expect.not.stringContaining("to remove"));
   },
 };
 
@@ -146,12 +173,15 @@ export const TheoryMatches: Story = {
  * | Lightning Bolt (`2x2 117`) | the plan names the card, not this printing | `name`, tick |
  * | Sol Ring (`c21 263`) | 1 of this printing, 1 sleeved | `exact`, tick |
  * | Swords to Plowshares (`msc 143`) | 4 of `ema 32`, none of them sleeved | `name`, `+3` |
- * | Dismember (`nph 57`) | nothing at all | none |
+ * | Dismember (`nph 57`) | nothing at all | `unplanned`, X |
  *
- * **Both drawings in both colours, and an unmarked control**, which is the one arrangement that
- * shows what each half of the mark carries: the two ticks differ only in colour, the two numbers
- * differ in colour *and* in grain — `+2` is about a printing and `+3` is about a card — and the
- * fifth row is what stops "every tile is marked" reading as a pass.
+ * **Both drawings in both colours, and a control wearing the third mark**, which is the one
+ * arrangement that shows what each half of the mark carries: the two ticks differ only in colour,
+ * the two numbers differ in colour *and* in grain — `+2` is about a printing and `+3` is about a
+ * card — and the fifth row is what stops "every tile is marked" reading as a pass. Since
+ * 2026-09-08 every tile really is marked, so the claim the control makes is about **which** mark:
+ * a fifth tile drawing green or blue is the failure it catches, and a red X on the one row the
+ * plan never named is the pass.
  *
  * The two Bolts are also the case the name grain exists for. Four copies of the card are sleeved
  * against four planned, so the loose tier reads `0`: the reader has the Bolts they asked for and
@@ -177,7 +207,7 @@ function tierGroups() {
 }
 
 /**
- * The plan behind {@link tierGroups}, with the deck's own two switches passed in.
+ * The plan behind {@link tierGroups}, with the deck's own three mark switches passed in.
  *
  * Built through `theoryMatchPlan` over the same rows the view is handed, for
  * {@link deckTheoryMatches}' reason: the numbers a story draws are then the ones the shipped
@@ -223,7 +253,10 @@ function tierPlan(marks: TheoryMarkSwitches): TheoryPlan {
  * the most in.
  */
 export const BothTiers: Story = {
-  args: { groups: tierGroups(), theoryPlan: tierPlan({ exact: true, name: true }) },
+  args: {
+    groups: tierGroups(),
+    theoryPlan: tierPlan({ exact: true, name: true, unplanned: true }),
+  },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const drawn = (tier: string) =>
@@ -237,6 +270,10 @@ export const BothTiers: Story = {
     // element has no text at all — it is an `<svg>` — so `""` is the tick and a string is a count.
     expect(drawn("exact")).toEqual(["", "+2"]);
     expect(drawn("name")).toEqual(["", "+3"]);
+    // And the fifth row, in the third tier: an X, which is an `<svg>` and so reads as `""` here
+    // too. It is the only one of the three marks that can never carry a number — there is no
+    // difference to state about a card the plan has no row for.
+    expect(drawn("unplanned")).toEqual([""]);
 
     // The clause blue adds, which is the whole of what a reader who cannot see the colour gets.
     // The mark is `aria-hidden` and bound `describes: false`, so the words are on the button.
@@ -249,10 +286,14 @@ export const BothTiers: Story = {
       expect.not.stringContaining("a different printing"),
     );
 
-    // The control: a card the plan does not ask for wears nothing and says nothing.
-    expect(canvas.getByRole("button", { name: /^Dismember/ })).toHaveAccessibleName(
-      expect.not.stringContaining("theory"),
-    );
+    // The control: a card the plan does not ask for wears the third mark and says so. The
+    // negatives are what keep it *this* sentence — green's words are the prefix of blue's, and
+    // neither of them is "not in the theory list", which carries no count either way.
+    const missing = canvas.getByRole("button", { name: /^Dismember/ });
+    expect(missing).toHaveAccessibleName(expect.stringContaining("not in the theory list"));
+    expect(missing).toHaveAccessibleName(expect.not.stringContaining("in the theory list ·"));
+    expect(missing).toHaveAccessibleName(expect.not.stringContaining("to add"));
+    expect(missing).toHaveAccessibleName(expect.not.stringContaining("to remove"));
   },
 };
 
@@ -270,15 +311,21 @@ export const BothTiers: Story = {
  * about one deck and the colour is about this screen.
  */
 export const ExactMarkOff: Story = {
-  args: { groups: tierGroups(), theoryPlan: tierPlan({ exact: false, name: true }) },
+  args: {
+    groups: tierGroups(),
+    theoryPlan: tierPlan({ exact: false, name: true, unplanned: true }),
+  },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
-    // **The same four rows are marked**, which is the assertion this story exists for: a switch
-    // that silenced them instead would leave three tiles bare and make the wall unreadable rather
-    // than less precise.
-    expect(canvasElement.querySelectorAll(`[${THEORY_MATCH_ATTR}]`)).toHaveLength(4);
+    // **The same four planned rows are marked**, which is the assertion this story exists for: a
+    // switch that silenced them instead would leave three tiles bare and make the wall unreadable
+    // rather than less precise. The fifth mark is the X on the row that was never in the plan —
+    // the `exact` switch moves which *tier* a planned card is drawn at and nothing else, so it
+    // cannot move a row across that line in either direction.
+    expect(canvasElement.querySelectorAll(`[${THEORY_MATCH_ATTR}]`)).toHaveLength(5);
     expect(canvasElement.querySelectorAll(`[${THEORY_MATCH_ATTR}="exact"]`)).toHaveLength(0);
+    expect(canvasElement.querySelectorAll(`[${THEORY_MATCH_ATTR}="unplanned"]`)).toHaveLength(1);
     expect(
       [...canvasElement.querySelectorAll(`[${THEORY_MATCH_ATTR}="name"]`)]
         .map((mark) => mark.textContent)
@@ -299,9 +346,13 @@ export const ExactMarkOff: Story = {
     }
 
     // And the row that was never in the plan is still not in it: the fallback widens which
-    // *tier* a planned card is drawn at, never which cards are planned.
-    expect(canvas.getByRole("button", { name: /^Dismember/ })).toHaveAccessibleName(
-      expect.not.stringContaining("theory"),
-    );
+    // *tier* a planned card is drawn at, never which cards are planned. It says so in the third
+    // tier's own words, and in neither of the other two — green's sentence is the prefix of
+    // blue's, and this one carries no count at all.
+    const missing = canvas.getByRole("button", { name: /^Dismember/ });
+    expect(missing).toHaveAccessibleName(expect.stringContaining("not in the theory list"));
+    expect(missing).toHaveAccessibleName(expect.not.stringContaining("in the theory list ·"));
+    expect(missing).toHaveAccessibleName(expect.not.stringContaining("to add"));
+    expect(missing).toHaveAccessibleName(expect.not.stringContaining("to remove"));
   },
 };

@@ -1372,16 +1372,22 @@ describe("CardStack marks", () => {
    * A plan whose only tier is the **exact** one, built from the wire keys the cases below spell
    * by hand.
    *
-   * Both switches on, which is what every deck is born with, and `byName` empty — so a row that
-   * is not in `exact` matches nothing at all and the cases here are about the green mark alone.
-   * The blue one is {@link theoryMatchMark}'s own suite's subject and the views' new stories'; a
-   * fixture here that quietly carried it would make every "one mark of two cards" count below
-   * depend on a tier this file is not testing.
+   * `byName` empty — so a row that is not in `exact` matches nothing at all and the cases here
+   * are about the green mark alone. The blue one is {@link theoryMatchMark}'s own suite's subject
+   * and the views' new stories'; a fixture here that quietly carried it would make every "one
+   * mark of two cards" count below depend on a tier this file is not testing.
+   *
+   * **`unplanned` off, and it has to be** (2026-09-08). Every count below is "one mark over two
+   * cards" or "two marks over two cards", and the claim each of them makes is that a mark on
+   * *every* row would say nothing — which is exactly what the third tier draws on the rows the
+   * first two do not. Left on, the first case's single tick would be joined by an X on the Sol
+   * Ring beside it and every one of these counts would become a claim about how many cards the
+   * fixture holds. One case below switches it on, against a plan built for it.
    */
   const exactPlan = (exact: ReadonlyMap<string, number>): TheoryPlan => ({
     exact,
     byName: new Map(),
-    marks: { exact: true, name: true },
+    marks: { exact: true, name: true, unplanned: false },
   });
 
   const banned: ValidationIssue = {
@@ -1563,6 +1569,58 @@ describe("CardStack marks", () => {
     expect(document.querySelectorAll(`[${THEORY_MATCH_ATTR}]`)).toHaveLength(0);
     expect(screen.getByRole("button", { name: /^Mana Crypt/ })).toHaveAccessibleName(
       expect.not.stringContaining("theory"),
+    );
+  });
+
+  /**
+   * **A card the plan does not ask for wears the third tier's X** (2026-09-08).
+   *
+   * The mark that carries no number, and the one whose drawing is the whole of what says it: the
+   * plan has no row for this card, so there is nothing to add and nothing to cut, and a signed
+   * count would be a subtraction against nothing. So the assertions are the glyph (an `<svg>`,
+   * exactly as the tick is) and the *absence of text*, which is what a digit sneaking in here
+   * would break.
+   *
+   * The plan carries one slot and the stack two cards, so this also says the third tier is about
+   * **the rows the other two miss** rather than about every row: Mana Crypt keeps its tick.
+   */
+  it("draws the X on a card the plan does not ask for", async () => {
+    const planned = card({ name: "Mana Crypt" });
+    render(
+      <TooltipProvider>
+        <CardStack
+          cards={[planned, card({ name: "Sol Ring" })]}
+          label="Ramp"
+          currency="usd"
+          theoryPlan={{
+            exact: new Map([[`${planned.cardId}|`, 0]]),
+            byName: new Map(),
+            marks: { exact: true, name: true, unplanned: true },
+          }}
+        />
+      </TooltipProvider>,
+    );
+
+    const marks = document.querySelectorAll(`[${THEORY_MATCH_ATTR}]`);
+    expect(marks).toHaveLength(2);
+    const [tick, cross] = marks;
+    expect(tick).toHaveAttribute(THEORY_MATCH_ATTR, "exact");
+    expect(cross).toHaveAttribute(THEORY_MATCH_ATTR, "unplanned");
+
+    // A glyph and no text at all — the same shape as the tick, and never a digit.
+    expect(cross.querySelector("svg")).not.toBeNull();
+    expect(cross.textContent).toBe("");
+
+    // …and its sentence, on the hover and on the button, exactly where the other two tiers put
+    // theirs. Lowercased in the button's name, because `deckCardName` folds it into a sentence.
+    expect(await openTooltip(cross)).toHaveTextContent("Not in the theory list");
+    expect(screen.getByRole("button", { name: /^Sol Ring/ })).toHaveAccessibleName(
+      expect.stringContaining("not in the theory list"),
+    );
+    // And the planned card is untouched: green's words are a *prefix* of nothing here, so the
+    // pair is told apart by the "not" rather than by which sentence is present.
+    expect(screen.getByRole("button", { name: /^Mana Crypt/ })).toHaveAccessibleName(
+      expect.not.stringContaining("not in the theory list"),
     );
   });
 

@@ -42,6 +42,7 @@ const ATRAXA: DeckRow = {
   theoryEnabled: false,
   theoryMarkExact: true,
   theoryMarkName: true,
+  theoryMarkUnplanned: true,
   lastVariant: "live",
   lastGroupBy: "category",
   lastSortBy: "alphabetical",

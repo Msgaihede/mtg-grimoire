@@ -115,16 +115,19 @@ const DECK_FIELDS: &[&str] = &[
     // an ordinary `deck_update` writes and an ordinary history row records, so a Ctrl+Z that
     // left it alone would put a deck's format back and leave the bracket the same press moved.
     "bracket",
-    // Schema v38, and on the list for the same reason `game_key` and `bracket` are: both are
+    // Schema v38's two and v39's third, on the list for the same reason `game_key` and
+    // `bracket` are: all three are
     // deck-level answers an ordinary `deck_update` writes and an ordinary history row records,
     // so a Ctrl+Z that left them alone would put a deck's format back and leave the theory marks
     // the same press moved.
     //
-    // **Both, never one.** They are two independent switches and one Save can move both, so a
-    // list carrying only the first would restore half of one press — which is worse than
+    // **All three, never a subset.** They are three independent switches and one Save can move
+    // every one of them, so a
+    // list carrying only some would restore part of one press — which is worse than
     // restoring none of it, because the drawer would still name the change it had not undone.
     "theory_mark_exact",
     "theory_mark_name",
+    "theory_mark_unplanned",
     "last_variant",
     "last_group_by",
     "last_sort_by",

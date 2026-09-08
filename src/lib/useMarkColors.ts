@@ -4,7 +4,7 @@ import { ipc } from "@/lib/ipc";
 import { labelFgCss, normalizeLabelColor } from "@/lib/hexColor";
 
 /**
- * What colour each card mark is drawn in — the reader's choice, and the four custom properties it
+ * What colour each card mark is drawn in — the reader's choice, and the six custom properties it
  * becomes.
  *
  * ## Why custom properties rather than a prop or a store read
@@ -60,7 +60,7 @@ export const MARK_COLORS_KEY: readonly string[] = ["markColors"];
  * dropped here rather than becoming a colour. The array's order is the order
  * {@link useMarkColors} answers in and the order the Appearance panel draws.
  */
-export const MARK_COLOR_KEYS = ["theoryExact", "theoryName"] as const;
+export const MARK_COLOR_KEYS = ["theoryExact", "theoryName", "theoryUnplanned"] as const;
 
 export type MarkColorKey = (typeof MARK_COLOR_KEYS)[number];
 
@@ -85,6 +85,7 @@ export type MarkColorKey = (typeof MARK_COLOR_KEYS)[number];
 export const MARK_COLOR_DEFAULTS: Readonly<Record<MarkColorKey, string>> = {
   theoryExact: "#56bd78",
   theoryName: "#0e68ab",
+  theoryUnplanned: "#e2484f",
 };
 
 /**
@@ -94,6 +95,7 @@ export const MARK_COLOR_DEFAULTS: Readonly<Record<MarkColorKey, string>> = {
 const MARK_COLOR_VARS: Readonly<Record<MarkColorKey, string>> = {
   theoryExact: "--color-theory-exact",
   theoryName: "--color-theory-name",
+  theoryUnplanned: "--color-theory-unplanned",
 };
 
 /** Is this one of the marks this build draws? `ipc.markColors` answers `Record<string, string>`
@@ -238,8 +240,9 @@ export function useMarkColorVars(): void {
         root.style.removeProperty(`${prop}-fg`);
       } else {
         root.style.setProperty(prop, chosen);
-        // The mark is a filled box with a tick or a signed number on it, so a pale custom green
-        // needs the near-black the label picker's own colours get — one formula, one answer.
+        // The mark is a filled box with a tick, an X or a signed number on it, so a pale custom
+        // green needs the near-black the label picker's own colours get — one formula, one
+        // answer, and the same one every mark this hook can colour goes through.
         root.style.setProperty(`${prop}-fg`, labelFgCss(chosen));
       }
     }

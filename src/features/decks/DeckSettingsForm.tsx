@@ -44,6 +44,15 @@ export interface DeckSettingsValue {
   /** Whether this deck draws the **blue** theory mark — the same card in a printing the plan did
    *  not name. */
   theoryMarkName: boolean;
+  /**
+   * Whether this deck draws the **red** theory mark — a live row the plan does not ask for at
+   * all, in any printing (2026-09-08).
+   *
+   * The tier *below* the other two rather than a third statement about a printing: green and
+   * blue both say *your plan asks for this card* and differ only on how precisely, where this
+   * one says the plan asks for it **not at all** — a stand-in, a spare, an experiment.
+   */
+  theoryMarkUnplanned: boolean;
   folderId: number | null;
   /**
    * Which pile an add that names none lands in — `AUTO_CATEGORY` (`0`) for "by what the card
@@ -135,20 +144,20 @@ export interface DeckSettingsFormProps {
    */
   categories?: readonly DeckCategory[];
   /**
-   * Whether an answer about the deck's two theory marks has anywhere to be **written** — absent
-   * (or `false`) for a host asking about a deck that does not exist yet, and then the two rows
-   * under the theory switch are not drawn at all.
+   * Whether an answer about the deck's three theory marks has anywhere to be **written** —
+   * absent (or `false`) for a host asking about a deck that does not exist yet, and then the
+   * three rows under the theory switch are not drawn at all.
    *
    * **This is {@link DeckSettingsFormProps.categories}' rule reaching a second field**, and the
    * argument is that one word for word: at create the question is *not answerable yet* rather
-   * than answerable and skipped. `DeckInput` carries neither `theoryMarkExact` nor
-   * `theoryMarkName` — the columns are `NOT NULL DEFAULT 1` and the schema owns a new deck's
-   * answer — so a reader who switched the plan on inside "New deck" and then switched a mark off
-   * would be answering a question nothing could write down: the deck would be born with both
-   * marks on, and nothing on screen would say the press was dropped. **A control that cannot take
-   * effect is worse than no control**, because it teaches the reader something false about their
-   * deck. Both marks are a *reading* preference, one press away in Deck settings on the deck that
-   * opens the moment Create is pressed.
+   * than answerable and skipped. `DeckInput` carries none of `theoryMarkExact`,
+   * `theoryMarkName` and `theoryMarkUnplanned` — the columns are `NOT NULL DEFAULT 1` and the
+   * schema owns a new deck's answer — so a reader who switched the plan on inside "New deck" and
+   * then switched a mark off would be answering a question nothing could write down: the deck
+   * would be born with all three marks on, and nothing on screen would say the press was
+   * dropped. **A control that cannot take effect is worse than no control**, because it teaches
+   * the reader something false about their deck. All three marks are a *reading* preference, one
+   * press away in Deck settings on the deck that opens the moment Create is pressed.
    *
    * **A prop of its own rather than `categories`' absence read a second time.** The two hosts
    * happen to answer both the same way today, and they are two questions — "has this deck any
@@ -156,9 +165,9 @@ export interface DeckSettingsFormProps {
    * standing for both would take the marks away the day a host has a deck and passes no piles.
    * `src/features/decks/CLAUDE.md`'s "three independent questions" rule, one field over.
    *
-   * **The two fields stay required on {@link DeckSettingsValue} whatever this says**, which is
+   * **The three fields stay required on {@link DeckSettingsValue} whatever this says**, which is
    * that value's own rule: a shape that changed with its host would be two shapes. The create
-   * draft holds `true` for both and sends neither.
+   * draft holds `true` for all three and sends none of them.
    */
   canSetTheoryMarks?: boolean;
   cover: DeckCoverPickerProps;
@@ -253,18 +262,22 @@ export function DeckSettingsForm({
             id={idPrefix}
           />
           {/* **Two gates, and they are two different questions.** `theoryEnabled` is *is there a
-              plan to compare against* — both marks are drawn by reading the live list against the
-              theory list, so with no plan a switch here would change what is on screen not at all
-              and nothing on screen would say why. {@link DeckSettingsFormProps.canSetTheoryMarks}
-              is *can this host write the answer down* — `false` at create, where `DeckInput`
-              carries neither column. Neither is a greyed pair: a control that changes nothing and
-              a control that cannot take effect are both worse than no control. */}
+              plan to compare against* — all three marks are drawn by reading the live list
+              against the theory list, so with no plan a switch here would change what is on
+              screen not at all and nothing on screen would say why. The red one is no exception:
+              *not in the theory list* is still a statement about a list, and with no plan every
+              row would wear it. {@link DeckSettingsFormProps.canSetTheoryMarks} is *can this host
+              write the answer down* — `false` at create, where `DeckInput` carries none of the
+              three columns. Neither is a greyed set: a control that changes nothing and a control
+              that cannot take effect are both worse than no control. */}
           {value.theoryEnabled && canSetTheoryMarks && (
             <TheoryMarkSwitches
               exact={value.theoryMarkExact}
               name={value.theoryMarkName}
+              unplanned={value.theoryMarkUnplanned}
               onExact={(theoryMarkExact) => onChange({ theoryMarkExact })}
               onName={(theoryMarkName) => onChange({ theoryMarkName })}
+              onUnplanned={(theoryMarkUnplanned) => onChange({ theoryMarkUnplanned })}
               id={idPrefix}
             />
           )}
@@ -555,37 +568,45 @@ function TheorySwitch({
 }
 
 /**
- * Which of the live list's two theory marks this deck draws.
+ * Which of the live list's three theory marks this deck draws.
  *
  * **Drawn only under a switched-on {@link TheorySwitch}**, and indented under it, because these
- * three are one subject: a mark is the live list read *against* the plan, so a deck with no plan
- * has nothing for either of them to compare against. The gate is at the call site rather than
- * here, beside the switch it depends on.
+ * four are one subject: a mark is the live list read *against* the plan, so a deck with no plan
+ * has nothing for any of them to compare against. The gate is at the call site rather than here,
+ * beside the switch it depends on.
  *
- * **Two switches and not one three-way picker**, which is `DeckRow.theoryMarkName`'s argument
- * carried up to the control: `none | exact | both` cannot spell blue *without* green, and blue
- * without green is a real answer — a reader who cares that the card is there and not which
- * printing it is. Both off is a real answer too, and is not a second spelling of the theory
- * switch above being off.
+ * **Three switches and not one picker**, which is `DeckRow.theoryMarkName`'s argument carried up
+ * to the control and widened by the red tier (2026-09-08): a single ordered choice cannot spell
+ * blue *without* green, and blue without green is a real answer — a reader who cares that the
+ * card is there and not which printing it is. The red one makes the same point from the far end,
+ * and it is the case that could not be spelled at all: **a reader may want the red alone**, a
+ * proxy player who has no interest in which of their cards are the plan and every interest in
+ * which are *not* it. All three off is a real answer too, and is not a second spelling of the
+ * theory switch above being off.
  *
- * **The swatch is the point of the row's first line.** "Green" and "blue" are the words, and the
- * colours are the reader's own — `useMarkColors` writes `--color-theory-exact` and
- * `--color-theory-name` at the app root once they have chosen in Settings — so a reader who has
- * recoloured a mark and then comes here would be reading two words about colours they no longer
- * have. The swatch is what makes the sentence true again, and it is drawn from the same property
- * the mark on the card is filled from rather than from a copy of the default.
+ * **The swatch is the point of the row's first line.** "Green", "blue" and "red" are the words,
+ * and the colours are the reader's own — `useMarkColors` writes `--color-theory-exact`,
+ * `--color-theory-name` and `--color-theory-unplanned` at the app root once they have chosen in
+ * Settings — so a reader who has recoloured a mark and then comes here would be reading three
+ * words about colours they no longer have. The swatch is what makes the sentence true again, and
+ * it is drawn from the same property the mark on the card is filled from rather than from a copy
+ * of the default.
  */
 function TheoryMarkSwitches({
   exact,
   name,
+  unplanned,
   onExact,
   onName,
+  onUnplanned,
   id,
 }: {
   exact: boolean;
   name: boolean;
+  unplanned: boolean;
   onExact: (on: boolean) => void;
   onName: (on: boolean) => void;
+  onUnplanned: (on: boolean) => void;
   id: string;
 }) {
   return (
@@ -610,6 +631,17 @@ function TheoryMarkSwitches({
         caption="A blue mark on a card your plan asks for in a different printing. Turning the green one off draws this one instead."
         on={name}
         onChange={onName}
+      />
+      <MarkSwitch
+        id={`${id}-theory-mark-unplanned`}
+        swatch="var(--color-theory-unplanned)"
+        heading="Not in the theory list"
+        // The last sentence is what keeps this row from reading as a third printing tier: the two
+        // above are statements about *which* printing, and this one is about the card not being
+        // asked for at all — so nothing it says can be undone by choosing a different printing.
+        caption="A red mark on a card your plan does not ask for at all — a stand-in, a spare or an experiment. It says nothing about the printing; the two marks above do."
+        on={unplanned}
+        onChange={onUnplanned}
       />
     </div>
   );
@@ -656,11 +688,11 @@ function MarkSwitch({
 }
 
 /**
- * The switch this panel draws three times — the theory list, and each of its two marks.
+ * The switch this panel draws four times — the theory list, and each of its three marks.
  *
- * One definition rather than three copies, because three controls that look alike today are
- * three independent decisions that agree today: the deck editor has already paid for that with
- * two scrim darknesses and three panel heights.
+ * One definition rather than four copies, because four controls that look alike today are four
+ * independent decisions that agree today: the deck editor has already paid for that with two
+ * scrim darknesses and three panel heights.
  *
  * **`aria-labelledby` naming the heading beside it *and* its own state word, in that order.**
  * Never `aria-label`, which would replace the visible "Enabled" with something that does not

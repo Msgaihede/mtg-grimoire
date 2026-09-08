@@ -915,11 +915,16 @@ shown.
 gap nobody had reached.** The theory mark shipped three things at once and they land on opposite
 sides of this census, which makes it the clearest statement of the rule the list embodies:
 
-- **The two per-deck switches travel.** `decks.theory_mark_exact` and `decks.theory_mark_name`
-  (user schema v38) are columns on `decks`, which is on the list above, and both were added to
-  its `capture::Spec` by hand — `bracket`'s precedent at v26. Which of the mark's two tiers a
+- **The three per-deck switches travel.** `decks.theory_mark_exact` and `decks.theory_mark_name`
+  (user schema v38), joined on 2026-09-08 by `decks.theory_mark_unplanned` (**v39**, the red X a
+  Live row wears when the plan does not ask for it at all), are columns on `decks`, which is on
+  the list above, and each was added to
+  its `capture::Spec` by hand — `bracket`'s precedent at v26. Which of the mark's three tiers a
   deck draws is an answer *about the deck*, made once by the reader, and two devices showing one
   deck's marks differently with nothing on screen explaining it is the failure that edit prevents.
+  **The third column proves the census is a decision each time rather than a habit**: that spec
+  spells its field list out by hand and nothing asserts a synced table's columns are all on it, so
+  a rung that adds a column and forgets the spec is captured by nothing and goes red nowhere.
 - **The labels travel.** `deck_labels` has been on the list since it was `deck_tags`, and the
   Appearance panel that now edits them app-wide changes nothing about that.
 - **The colours do not.** They are one `mark_colors` row in `app_meta`, and **`app_meta` is not
