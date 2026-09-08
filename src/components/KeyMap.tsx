@@ -69,26 +69,26 @@ function headingFor(scope: ShortcutScope): string {
  * spellings of one intent, so the word between them is `or`: `Ctrl+Y` and `Ctrl+Shift+Z` both
  * redo, and a reader presses whichever their hands know. An entry that declares
  * {@link Shortcut.range} is a contiguous run instead, so only its ends are drawn and the word is
- * `to` — `switchView` carries seven, one per `NAV` entry, and drawing all seven with `or` six
- * times over would fill the widest row in the panel with an arithmetic sequence.
+ * `to` — `switchView` carries one chord per `NAV` entry, and drawing every one of them with `or`
+ * between would fill the widest row in the panel with an arithmetic sequence.
  *
  * **The flag, never `chords.length`.** Counting was right for exactly as long as `switchView` was
- * the only multi-chord entry with more than two: a count cannot tell seven steps of a sequence
+ * the only multi-chord entry with more than two: a count cannot tell the steps of a sequence
  * from three genuine alternatives, so the first shortcut written with three spellings would have
  * drawn "`A` **to** `C`" — a promise about a chord nothing binds, in the one panel whose whole job
  * is to be true.
  *
- * Both ends are drawn **whole** — `Ctrl` `1` to `Ctrl` `7`, not `Ctrl` `1` to `7` — because
+ * Both ends are drawn **whole** — `Ctrl` `1` to `Ctrl` `8`, not `Ctrl` `1` to `8` — because
  * collapsing the second chord's modifiers assumes the run shares them, which is true of the one
  * range that exists today and is not a fact this component can check.
  *
  * A word rather than a glyph in both cases: an en dash between two caps is read out as nothing
- * at all by a screen reader, and `1 6` is a different shortcut from `1 to 6`.
+ * at all by a screen reader, and `1 8` is a different shortcut from `1 to 8`.
  *
  * **The whitespace between the caps is text, not the `gap`, and that is what the row is read out
  * with.** Adjacent inline elements with nothing between them concatenate when their text is
  * flattened — this repo has already paid for that once, with a label and its count in two spans
- * computing to `Missing2` — so caps separated only by `gap-1` say `Ctrl1toCtrl7` to a screen
+ * computing to `Missing2` — so caps separated only by `gap-1` say `Ctrl1toCtrl8` to a screen
  * reader while looking correct to everyone else. A text node fixes it at no visual cost: a
  * sequence of child text runs that is *only* white space is not rendered by a flex container and
  * becomes no flex item (CSS Flexbox §4), so the drawn row is unchanged to the pixel. An

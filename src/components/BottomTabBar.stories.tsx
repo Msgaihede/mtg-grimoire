@@ -105,7 +105,7 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 /**
- * Nothing in the air: six words under six glyphs, and gold on the one that is open.
+ * Nothing in the air: a word under each glyph, and gold on the one that is open.
  *
  * **The play presses a tab**, which is the whole of what this component does — and the assertion
  * is `aria-current`, because that is the answer the rail gives to the same question and two
@@ -133,8 +133,13 @@ export const Default: Story = {
 };
 
 /**
- * `Collection` is the longest of the six words, and this is the frame that shows what a 65px tab
- * does to it — 54.98px at `text-xs`, with ten to spare.
+ * `Collection` is the longest word in the list, and this is the frame that shows what a tab does
+ * to it.
+ *
+ * The 54.98px it inks at `text-xs` had ten to spare in the **65px** tab six destinations bought
+ * on a 390px window (2026-08-29). This story draws all eight, where the same window gives 48.75 —
+ * so what it now shows is the word against a tab too narrow for it. Whether that truncates or
+ * overflows is undriven; see `BottomTabBar.tsx`'s header.
  */
 export const CollectionOpen: Story = {
   args: { activeView: "collection" },
@@ -142,11 +147,12 @@ export const CollectionOpen: Story = {
 
 /**
  * A card is in the air and a deck is open: the two entries that would take it wear the shipped
- * `DROP_RING`, on a 65px tab rather than the rail's 183px row.
+ * `DROP_RING`, on a tab rather than on the rail's 183px row.
  *
  * Nothing on this page drags anything, so this is a control rather than a demonstration — the
- * ring is drawn from the `dragging` prop. Whether a 65px ring reads as an invitation is a
- * question for hardware, and the plan says so.
+ * ring is drawn from the `dragging` prop. Whether a ring that narrow reads as an invitation is a
+ * question for hardware, and the plan says so — narrower now than when that was written, since
+ * the 65px it names was six destinations' share of a 390px window.
  */
 export const CardInTheAir: Story = {
   args: { dragging: true },
