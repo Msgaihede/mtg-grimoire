@@ -1,7 +1,7 @@
 import {
+  Camera,
   Heart,
   Receipt,
-  ScanLine,
   Search,
   Settings,
   Swords,
@@ -47,7 +47,7 @@ export const NAV: readonly NavEntry[] = [
   { id: "wishlist", label: "Wishlist", Icon: Heart },
   // Before Settings so Settings stays the last row — the chord that moved is `Ctrl+7`, and
   // `docs/reference/keyboard-shortcuts.md` says so.
-  { id: "scanner", label: "Scanner", Icon: ScanLine },
+  { id: "scanner", label: "Scanner", Icon: Camera },
   // **Two destinations that are a rail entry and a sentence, and nothing else yet.** They are in
   // the column ahead of their pages on purpose: the rail is where a reader finds out what this app
   // intends to be, and `WorkInProgress` says so in one line rather than leaving a row that looks

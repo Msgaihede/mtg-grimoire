@@ -168,6 +168,27 @@ const cornerOf = (text: string): HTMLElement =>
   screen.getByText(text).closest("span[class*='absolute']") as HTMLElement;
 
 /**
+ * The tile's **bottom-right** corner box, or `null` where `CardGrid` drew none.
+ *
+ * Found by its two offsets rather than by anything in it, because the case that matters is the
+ * one with nothing in it. `CardGrid` gives every corner an `absolute` and a scaled pair, and
+ * `bottom` + `right` is that pair only here — the badge is `bottom` + `left` and the column is
+ * `top`.
+ *
+ * **Asked at all because `empty:hidden` cannot be**: jsdom applies no stylesheet, so a corner
+ * whose mark rendered nothing is still in the tree and still `getAllByText`-invisible. A test
+ * that only counted prices would pass over a bare 12×4px chip sitting on the artwork — which is
+ * exactly what the reader would see. So the claim is that the element is **absent**, which is a
+ * structural fact jsdom can hold.
+ */
+const bottomRightCorner = (tile: HTMLElement): HTMLElement | null =>
+  [...tile.querySelectorAll<HTMLElement>("span[class*='absolute']")].find(
+    (el) =>
+      el.classList.contains("bottom-[calc(0.25rem*var(--mark-scale,1))]") &&
+      el.classList.contains("right-[calc(0.25rem*var(--mark-scale,1))]"),
+  ) ?? null;
+
+/**
  * The nearest ancestor (or the element itself) that would be an absolutely positioned
  * descendant's containing block — read off the class list, because **jsdom loads no stylesheet
  * and computes no layout**, so `getComputedStyle().position` answers `"static"` for every
@@ -748,6 +769,70 @@ describe("what a wish tile says about money", () => {
     // Four copies at that unit price — the header's own arithmetic, and the one figure that must
     // not move into the bar.
     expect(screen.getByText("$49.28")).toBeInTheDocument();
+  });
+
+  /**
+   * **A wish for one copy draws the chin's price and nothing over the art** —
+   * [issue #334](https://github.com/Msgaihede/mtg-grimoire/issues/334), reported as "the price is
+   * displayed twice".
+   *
+   * It was. `unit × 1` is the unit price, so the corner and the chin printed the same figure, and
+   * a wishlist is mostly single-copy wishes — the common tile rather than an edge of one. The
+   * corner now says something only where it says something *different*.
+   *
+   * Asserted as a count of prices on the tile rather than as an absence of one string: querying
+   * for the absence of `$12.32` would pass if the chin lost its price too, which is the opposite
+   * bug and the one the issue's "the card should display only the bottom price" rules out. The
+   * chin is then named as the survivor, since `border-x` is the one thing only `CardChin` has.
+   */
+  it("draws one price on a wish for a single copy, and it is the chin's", () => {
+    wall([{ ...BOLT, unitPrice: 12.32, quantity: 1 }]);
+
+    const tile = screen.getByAltText("Lightning Bolt").closest("[data-grid-index]") as HTMLElement;
+    const prices = within(tile).getAllByText(/^\$/);
+    expect(prices).toHaveLength(1);
+    expect(prices[0]).toHaveTextContent("$12.32");
+    expect(prices[0].closest("span.border-x")).not.toBeNull();
+    // And the corner is **gone**, not merely empty — see {@link bottomRightCorner}. Returning an
+    // empty wrapper and leaving `empty:hidden` to collapse it passes every assertion above and
+    // draws a bare chip on the artwork in a browser.
+    expect(bottomRightCorner(tile)).toBeNull();
+  });
+
+  /**
+   * **The guard is the copy count, not whether the wish could be priced**, which is the spelling
+   * that looks equivalent and is not.
+   *
+   * An unpriced wish for one draws `—` in both places and is the same duplication the issue is
+   * about, so it collapses too. An unpriced wish for four keeps its corner: `—` there says the
+   * marketplace could not price *the wish*, where the chin's says it could not price *the
+   * printing*, and only the first is a fact about what the reader is buying.
+   */
+  it("collapses an unpriced single copy and keeps the corner on an unpriced stack", () => {
+    const { unmount } = wall([{ ...BOLT, unitPrice: null, quantity: 1 }]);
+    const one = screen.getByAltText("Lightning Bolt").closest("[data-grid-index]") as HTMLElement;
+    expect(within(one).getAllByText("—")).toHaveLength(1);
+    expect(bottomRightCorner(one)).toBeNull();
+    unmount();
+
+    wall([{ ...BOLT, unitPrice: null, quantity: 4 }]);
+    const four = screen.getByAltText("Lightning Bolt").closest("[data-grid-index]") as HTMLElement;
+    expect(within(four).getAllByText("—")).toHaveLength(2);
+    expect(bottomRightCorner(four)).not.toBeNull();
+  });
+
+  /**
+   * **The flag is not a price and does not collapse with one.** A single-copy wish the reconciler
+   * flagged still has to say so — "listed, counted, and asking to be looked at" is the rule
+   * `needs_review` is written under, and a layout that dropped the question along with the
+   * duplicate figure would be the one place in the app where a flagged wish looks fine.
+   */
+  it("keeps the corner on a flagged single-copy wish, with the flag alone in it", () => {
+    wall([{ ...BOLT, unitPrice: 12.32, quantity: 1, needsReview: "Check the printing." }]);
+
+    const corner = cornerOf("Needs review");
+    expect(corner).not.toBeNull();
+    expect(within(corner).queryByText(/^\$/)).toBeNull();
   });
 
   /**

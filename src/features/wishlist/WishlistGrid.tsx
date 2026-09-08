@@ -456,19 +456,38 @@ export function WishlistGrid({
       // this tile carries the sentence as text, so `aria-describedby` is a genuine gain over the
       // old `title` rather than a double-up.
       //
-      // **The cost is `unit × copies wanted`, and it is always drawn.** It was `unit × copies
-      // still missing` and was not drawn at all on a wish the collection covered; both halves went
-      // with the owned count. So there is no `null` arm here and `empty:hidden` never fires on
-      // this corner — which is worth saying, because the guard it replaced was load-bearing: a
-      // wrapper with two falsy children is still an element as far as that rule can tell, so the
-      // old code had to return `null` by hand rather than let two conditions collapse it.
+      // **The cost is `unit × copies wanted`, and it is drawn only where that is a different
+      // number from the chin's** — [issue #334](https://github.com/Msgaihede/mtg-grimoire/issues/334).
       //
-      // An unpriced wish is an em dash rather than another marketplace's rate wearing this one's
+      // The two figures answer two questions: the chin says what **one copy** of this printing
+      // costs, the same statement every other wall's chin makes, and this corner says what the
+      // **whole wish** costs. On a wish for one copy those are the same arithmetic — `unit × 1` —
+      // so the tile printed one price twice, which is what the issue reports and what a reader
+      // sees before they see the reasoning. A wishlist is mostly single-copy wishes, so it was
+      // the common tile rather than an edge of one.
+      //
+      // **`quantity > 1` and not `unitPrice !== null`**, which is the tempting spelling and the
+      // wrong one: an unpriced single-copy wish draws an em dash in *both* places and is the same
+      // duplication, so the guard has to be about how many copies there are rather than about
+      // whether they could be priced. An unpriced wish for four is still worth a corner — `—`
+      // there says the marketplace could not price the wish, where the chin's `—` says it could
+      // not price the printing, and only the first is a fact about what the reader is buying.
+      //
+      // Above 1 it is an em dash rather than another marketplace's rate wearing this one's
       // currency sign. Spec §5: a price is never shown without saying how old it is, and a corner
       // mark has no room for the sentence — so it rides as the tooltip, describing the
       // already-visible figure.
+      //
+      // **So this corner can now come back with nothing in it again, and `empty:hidden` is what
+      // collapses it** — an unflagged single-copy wish is the case, which is most of a list. The
+      // `null` return is by hand rather than left to that rule, for the reason the corner's own
+      // history records: a wrapper with two falsy children is still an element as far as
+      // `:empty` can tell, so a bare chip is what CSS alone would draw.
       bottomRight={(tile) => {
         const review = tile.wish.needsReview;
+        // The summed price of one copy is the unit price the chin is already printing.
+        const stack = tile.wish.quantity > 1;
+        if (review === null && !stack) return null;
         return (
           <span className="flex flex-col items-end leading-[calc(1rem*var(--mark-scale,1))]">
             {review && (
@@ -479,15 +498,17 @@ export function WishlistGrid({
                 Needs review
               </span>
             )}
-            <span
-              {...tip(`${wishLabel(tile.wish)} — ${asOf}`)}
-              className="font-mono text-[calc(0.75rem*var(--mark-scale,1))] tabular-nums text-text"
-            >
-              {formatPrice(
-                tile.wish.unitPrice === null ? null : tile.wish.unitPrice * tile.wish.quantity,
-                currency,
-              )}
-            </span>
+            {stack && (
+              <span
+                {...tip(`${wishLabel(tile.wish)} — ${asOf}`)}
+                className="font-mono text-[calc(0.75rem*var(--mark-scale,1))] tabular-nums text-text"
+              >
+                {formatPrice(
+                  tile.wish.unitPrice === null ? null : tile.wish.unitPrice * tile.wish.quantity,
+                  currency,
+                )}
+              </span>
+            )}
           </span>
         );
       }}
