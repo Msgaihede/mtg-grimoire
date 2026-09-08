@@ -60,6 +60,29 @@ Three repo files carry sync state. All three look incidental and none is:
   its esbuild loaders to `.js`/`.json`, and `.storybook/preview.tsx` reaches
   `keyrune/css/keyrune.css`, whose `url()`s name a `.eot`. `cfg.provider` replaces it, which the
   skill wants before upload anyway. Do not spend time re-enabling the decorator path.
+- **[GENERAL] `__CORE__` is a Vite `define`, and esbuild is handed no defines — so every module
+  that reads it needs an alias in `.design-sync/tsconfig.json`.** Storybook never sees this:
+  `@storybook/react-vite` loads the root `vite.config.ts`, so a story gets the define for free.
+  The converter's esbuild does not, and the failure has **two shapes** because the two readers
+  differ in scope, which is why one shim was not enough:
+  - `src/lib/core/index.ts` reads `__CORE__` at **module scope**, so it throws
+    `ReferenceError: __CORE__` while still evaluating — before any preview renders.
+    `.design-sync/core-shim.ts` re-exports `tauriCore`, which is the implementation storybook
+    itself lands on, so the compare loop is comparing like with like.
+  - `src/pwa/target.ts`'s `isWebTarget()` reads it from **function** scope, so it survives module
+    evaluation and throws on first render. That one reaches the *shipped* bundle: `AppShell`
+    calls it, so every design built on claude.ai/design would have died the same way.
+    `.design-sync/target-shim.ts` sets the global (`"tauri"`, matching storybook) and re-exports
+    the real function.
+  Both aliases must sit **above** the `@/*` wildcard, same first-match rule as the other three.
+  **The cover is exactly the modules aliased, and no more** — a future `__CORE__` reader that no
+  aliased module pulls in fails again, loudly, as a `[RENDER]` root-empty with that
+  `ReferenceError` in `.render-check.json`. Remedy is another `paths` line, not a code change.
+- **`@/lib/core` is a *directory*, and that is a second trap in the same line.** The converter's
+  `tsconfigPathsPlugin` tries the bare stem before `/index.ts`, and `existsSync` says yes to a
+  folder — esbuild is handed a directory to read and fails with a Windows `Incorrect function`.
+  Aliasing to `core-shim.ts` steps over it. Any other `@/`-aliased directory-with-`index.ts`
+  lands in the same hole; today this is the only one in `src/`.
 
 ## Config decisions worth knowing
 
@@ -109,6 +132,69 @@ Three repo files carry sync state. All three look incidental and none is:
 - **`[CSS_ASSETS]` 21 unresolvable `url()`s** — the fallback CSS is scraped from the storybook
   build, whose asset hashes do not exist post-upload. Fonts are copied separately by
   `extractFonts` and the rewrite log confirms all 21 are font URLs, which do resolve.
+- **`[TOKENS_MISSING]` `--dnd-transition`, `--dnd-translate`, `--dnd-scale`,
+  `--dnd-transform-origin`** — triaged 2026-09-08, not a defect and nothing to define.
+  `src/index.css:562–583` only ever *reads* them, and the guards there are
+  `[data-dnd-dragging][style*='--dnd-scale']`: dnd-kit writes them **inline on the dragged
+  element** at drag time. That is the "vars a component sets at runtime" case the warning text
+  itself calls expected. They are also unreachable in a static render — nothing on
+  claude.ai/design is mid-drag — so do **not** answer this with `cfg.tokensPkg`/`tokensGlob`;
+  defining them in a stylesheet would give a resting element drag transforms it should not have.
+- **`[TITLE_UNMAPPED]` 61 dropped titles** is the deliberate scope, not a discovery failure — see
+  the `titleMap` bullet under Config decisions. It is expected to grow as the app gains feature
+  pages; only investigate a name here that is a genuine reusable primitive.
+- **`[RENDER_THIN]` on `GrimoireMark`** ("mounts have no text and paint nothing") — triaged
+  2026-09-08, **false positive, do not author an owned preview for it.** The heuristic's
+  `allHollow` test counts *text nodes*, and `GrimoireMark` is a pure SVG logo that has none by
+  construction. The rest of its own row contradicts the sentence: `blank:false`, `rootEmpty:false`,
+  `bad:false`, `variantsIdentical:false`, 42 KB of PNG. The card was opened and shows seven gold
+  grimoire-book variants (`Large`, `TitleBarSize`, `TakesItsColourFromTheParent`, …) rendering
+  correctly. Any text-free icon component added later will trip this the same way.
+- **`[RENDER_THIN]` on `TitleBar`** ("variants render identically") — triaged 2026-09-08, true but
+  harmless. Its row is `thin:false`, `bad:false`, and all six variants read `MTG GRIMOIRE`: the
+  stories differ by window state and button behaviour, and the window controls sit **past the
+  right edge of the capture width**, so nothing that separates them paints. Confirmed while
+  grading — the `Default` and `Each Button Acts On The Window` raws are identical on the
+  *storybook* side too, so this is the stories' nature, not a preview defect.
+
+## `conventions.md` drift found on 2026-09-08 — fixed
+
+The header is human-owned and is re-validated against the fresh build on every sync. One claim
+had rotted; **Markus chose to correct it on 2026-09-08** and the header now simply says to use the
+`font-sans` utility:
+
+- **"Tailwind never compiles a `.font-sans` rule — verified absent from the shipped CSS on
+  2026-08-24" is no longer true.** `src/features/card/CardDetailModal.tsx:619` now writes
+  `className="… font-sans …"`, so the built CSS carries
+  `.font-sans{font-family:Geist Variable,sans-serif}`. The advice that follows it — return to body
+  type with `style={{ fontFamily: "var(--font-sans)" }}` because "the token ships, the utility does
+  not" — therefore recommends an inline-style workaround for something a class now does.
+  Everything else in the header re-verified clean: all 9 utility families, all 8 core tokens, the
+  three domain token families, the `--color-muted: var(--color-surface)` alias the trap warning
+  rests on, and all 6 bundle-only exports (`GrimoirePreviewProvider`, `GrimoireWorld`, `ManaChip`,
+  `ManaValueChips`, `LayoutToggle`, `ResetAll`).
+- **The lesson is the claim's shape, not its content.** "Verified absent" is a fact about a *tree*
+  — one `className` in one feature file flipped it, in a file nobody thought of as design-system
+  surface. Prefer "use `font-sans`" over asserting what Tailwind did not compile.
+
+## Playwright: set `DS_CHROMIUM_PATH`, the download does not work here
+
+**The driver's render check and `compare.mjs` both need a browser, and `npx playwright install`
+fails on this machine** — `cdn.playwright.dev` times out at 30 s per asset (measured twice on
+2026-09-08). `.ds-sync`'s playwright is **1.63.0, which wants chromium build 1243**; what is
+installed under `~/AppData/Local/ms-playwright/` is 1223 / 1228 / 1234. So a bare driver run dies
+at the validate stage with `[RENDER_SKIPPED] … Executable doesn't exist … chromium_headless_shell-1243`,
+which fails `ok` and skips capture entirely.
+
+Both scripts honour an override (`package-validate.mjs:440`, `compare.mjs:293`, `probe.mjs:86`).
+Export it before every driver or compare run:
+
+    export DS_CHROMIUM_PATH="C:/Users/Markus/AppData/Local/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-win64/chrome-headless-shell.exe"
+
+Build 1234 against playwright 1.63 was launch-tested both headless-shell and full-chromium on
+2026-09-08 — both fine, so the nine-build gap costs nothing. **`npx playwright install` reports
+success through a pipe**: it exits non-zero but `| tail` returns tail's 0, so check the log text,
+not `$?`.
 
 ## Re-sync risks — what to watch
 
@@ -120,8 +206,15 @@ Three repo files carry sync state. All three look incidental and none is:
 - **`cfg.storyImports.shim` and `preview-runtime.tsx`'s re-exports are one mechanism in two
   files.** Adding a shim pattern without adding the matching re-export produces the silent
   `undefined`-call failure described above. Keep them in step.
-- **The synced set is 14 of 34 storied components** — a deliberate scope, not a discovery
-  failure. Widening it means removing `titleMap` nulls *and* adding the modules to the barrel.
+- **The synced set is a deliberate scope, not a discovery failure** — the reusable primitives and
+  shell, with every feature-page title excluded by a `titleMap` null. Widening it means removing
+  those nulls *and* adding the modules to the barrel. **No count is written here on purpose**:
+  this bullet said "14 of 34" until 2026-09-08, when the build emitted 21 components against 104
+  storybook titles and both halves were wrong. `find ds-bundle/components -mindepth 2 -maxdepth 2
+  -type d | wc -l` answers the first; the reference storybook's `index.json` answers the second.
+- **`.design-sync/tsconfig.json`'s `paths` is the whole `__CORE__` fence.** Two of its five rules
+  point at shims that exist only for that define (see the trap above). Deleting one, or letting it
+  drift below the `@/*` wildcard, breaks previews *and* the shipped bundle.
 - **`AppShell.tsx`'s owned preview copies `compose` verbatim from the generated wrapper.** If the
   converter's story composition changes, diff the generated twin
   (`.design-sync/.cache/previews/AppShell.tsx`) against it.
