@@ -96,22 +96,41 @@ export const ByType: Story = { args: { groups: deckGroups("type", "type") } };
  * `TheoryMatchBadge` beside the name **and** an `sr-only` twin, exactly as it already does for
  * the `GC` badge. The other three views fold the same word into `deckCardName` instead, because
  * a label replaces everything inside the control it names. `CardMarks.tsx` has the rule.
+ *
+ * **Since 2026-09-08 every row carries a badge**: four are the plan and the other six wear the
+ * red X, which says the plan does not ask for that card at all. The twin follows it — a glyph
+ * that means "not this one" is exactly the mark a spoken list cannot infer from silence.
  */
 export const TheoryMatches: Story = {
   args: { theoryPlan: deckTheoryMatches() },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    // Four rows carry the badge, and each one says the words beside it — the pairing this view
+    // Every row carries the badge, and each one says the words beside it — the pairing this view
     // exists to keep. Virtualised, so these are the rows currently mounted. The badge itself is
     // `aria-hidden` and bound `describes: false` (no `title` any more); `THEORY_MATCH_ATTR` is
     // its own handle, and the `sr-only` twin beside it is what makes the words in `getAllByText`
     // honest — this view is the one place `TheoryMatchBadge` gets one at all.
-    expect(canvasElement.querySelectorAll(`[${THEORY_MATCH_ATTR}]`)).toHaveLength(4);
+    expect(canvasElement.querySelectorAll(`[${THEORY_MATCH_ATTR}]`)).toHaveLength(10);
 
-    // **Two of the four are counts rather than ticks** (issue #212), and the twin is where this
-    // view earns its keep: `+2` and `-1` are two characters that mean nothing spoken, so the
-    // sentence beside them has to carry the number too. Two rows match exactly and say the bare
-    // sentence; the other two say it with the press it is asking for on the end.
+    // Six of the ten are the third tier's X: a glyph and never a count, because a card the plan
+    // has no row for has no difference to state.
+    const unplanned = [...canvasElement.querySelectorAll(`[${THEORY_MATCH_ATTR}="unplanned"]`)];
+    expect(unplanned).toHaveLength(6);
+    for (const mark of unplanned) {
+      expect(mark.textContent).toBe("");
+      expect(mark.querySelector("svg")).not.toBeNull();
+    }
+    // …and the twin says it in words, once per row. This view's own arrangement: the other three
+    // fold the sentence into the control's name, so six of anything is a claim only here. Written
+    // out rather than taken off `THEORY_UNPLANNED_LABEL`, because a constant on both sides of an
+    // assertion agrees with a reword by construction, and this is the one place the third tier's
+    // sentence is in the tree as text rather than folded into a control's name.
+    expect(canvas.getAllByText("Not in the theory list")).toHaveLength(6);
+
+    // **Two of the four planned rows are counts rather than ticks** (issue #212), and the twin is
+    // where this view earns its keep: `+2` and `-1` are two characters that mean nothing spoken,
+    // so the sentence beside them has to carry the number too. Two rows match exactly and say the
+    // bare sentence; the other two say it with the press it is asking for on the end.
     expect(canvas.getAllByText(THEORY_MATCH_LABEL)).toHaveLength(2);
     expect(canvas.getByText(`${THEORY_MATCH_LABEL} · 2 to add`)).toBeInTheDocument();
     expect(canvas.getByText(`${THEORY_MATCH_LABEL} · 1 to remove`)).toBeInTheDocument();

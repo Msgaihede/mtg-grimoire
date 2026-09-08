@@ -59,15 +59,16 @@ describe("isMarkColorKey", () => {
   it("admits the marks this build draws and nothing else", () => {
     expect(isMarkColorKey("theoryExact")).toBe(true);
     expect(isMarkColorKey("theoryName")).toBe(true);
+    expect(isMarkColorKey("theoryUnplanned")).toBe(true);
     expect(isMarkColorKey("ruleBreak")).toBe(false);
     expect(isMarkColorKey("")).toBe(false);
   });
 });
 
 /**
- * **The two defaults against the stylesheet that actually paints them.**
+ * **The three defaults against the stylesheet that actually paints them.**
  *
- * `MARK_COLOR_DEFAULTS` is `index.css`' two hexes written a second time, and it has to be:
+ * `MARK_COLOR_DEFAULTS` is `index.css`' three hexes written a second time, and it has to be:
  * `var(--color-theory-exact)` cannot be an `<input type="color">`'s value, so the picker opens on
  * a literal. That is `LABEL_COLORS`' duplication one folder over, and this is
  * `labelColors.test.ts`' fence copied along with it — **the duplicate is deliberate and the cost
@@ -87,6 +88,7 @@ describe("the defaults against the palette", () => {
   const VARS: Readonly<Record<MarkColorKey, string>> = {
     theoryExact: "--color-theory-exact",
     theoryName: "--color-theory-name",
+    theoryUnplanned: "--color-theory-unplanned",
   };
 
   it.each(MARK_COLOR_KEYS.map((key) => [key, MARK_COLOR_DEFAULTS[key]] as const))(
@@ -102,7 +104,7 @@ describe("the defaults against the palette", () => {
 
   /** Lowercase `#rrggbb` on this side too, because a swatch reads as pressed by comparing the
    *  stored colour to this one as a string. */
-  it("spells both defaults in the one shape", () => {
+  it("spells every default in the one shape", () => {
     for (const key of MARK_COLOR_KEYS) {
       expect(MARK_COLOR_DEFAULTS[key]).toMatch(/^#[0-9a-f]{6}$/);
     }
@@ -128,6 +130,7 @@ describe("useMarkColors", () => {
     await waitFor(() => expect(markColors).toHaveBeenCalled());
     expect(result.current.colors.theoryExact).toBe("#56bd78");
     expect(result.current.colors.theoryName).toBe("#0e68ab");
+    expect(result.current.colors.theoryUnplanned).toBe("#e2484f");
     expect(result.current.colors).toEqual(MARK_COLOR_DEFAULTS);
   });
 
@@ -148,7 +151,11 @@ describe("useMarkColors", () => {
     const { result } = renderHook(() => useMarkColors(), { wrapper });
 
     await waitFor(() => expect(result.current.colors.theoryExact).toBe("#56bd78"));
-    expect(Object.keys(result.current.colors)).toEqual(["theoryExact", "theoryName"]);
+    expect(Object.keys(result.current.colors)).toEqual([
+      "theoryExact",
+      "theoryName",
+      "theoryUnplanned",
+    ]);
   });
 
   /**
@@ -251,15 +258,15 @@ describe("useMarkColors", () => {
 });
 
 /**
- * The four custom properties a chosen colour becomes.
+ * The six custom properties a chosen colour becomes.
  *
  * The mark is drawn on four surfaces and none of them decides its colour, so the colour lives on
  * `:root` — which is also what lets a story and a vitest render draw the real colours with no
  * provider and no seeding.
  */
 describe("useMarkColorVars", () => {
-  it("writes all four properties, foregrounds included", async () => {
-    stored({ theoryExact: "#f8e7b9", theoryName: "#0e68ab" });
+  it("writes all six properties, foregrounds included", async () => {
+    stored({ theoryExact: "#f8e7b9", theoryName: "#0e68ab", theoryUnplanned: "#e2484f" });
 
     renderHook(() => useMarkColorVars(), { wrapper });
 
@@ -270,6 +277,11 @@ describe("useMarkColorVars", () => {
     expect(root.style.getPropertyValue("--color-theory-exact-fg")).toBe("var(--color-accent-fg)");
     expect(root.style.getPropertyValue("--color-theory-name")).toBe("#0e68ab");
     expect(root.style.getPropertyValue("--color-theory-name-fg")).toBe("var(--color-text)");
+    // The third mark's default red, which is the case that says the `-fg` really is *computed*
+    // rather than tabulated: `#e2484f` is luma 0.41, under the 0.55 threshold, so the X on it is
+    // the app's text colour — the same answer the blue gets and not the pale bone's.
+    expect(root.style.getPropertyValue("--color-theory-unplanned")).toBe("#e2484f");
+    expect(root.style.getPropertyValue("--color-theory-unplanned-fg")).toBe("var(--color-text)");
   });
 
   /**
@@ -287,6 +299,8 @@ describe("useMarkColorVars", () => {
     expect(root.style.getPropertyValue("--color-theory-exact-fg")).toBe("");
     expect(root.style.getPropertyValue("--color-theory-name")).toBe("");
     expect(root.style.getPropertyValue("--color-theory-name-fg")).toBe("");
+    expect(root.style.getPropertyValue("--color-theory-unplanned")).toBe("");
+    expect(root.style.getPropertyValue("--color-theory-unplanned-fg")).toBe("");
   });
 
   /** A mark the reader resets is put back to the stylesheet's, so the property has to be

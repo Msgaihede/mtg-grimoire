@@ -608,12 +608,15 @@ mod tests {
             folder_id: None,
             notes: None,
             theory_enabled: false,
-            // Schema v38's pair, `true` because that is the columns' own `DEFAULT 1` and this
-            // builder's contract is "what a fresh deck would carry". The layout reads neither —
+            // Schema v38's pair and v39's third, `true` because that is the columns' own
+            // `DEFAULT 1` and this
+            // builder's contract is "what a fresh deck would carry". The layout reads none of
+            // them —
             // a theory mark is a colour in the editor and the mirror writes plain text — so
             // these are here for `bracket`'s reason: `DeckRow` has no `Default`.
             theory_mark_exact: true,
             theory_mark_name: true,
+            theory_mark_unplanned: true,
             separate_x_group: false,
             default_category_id: 0,
             last_variant: "live".to_owned(),

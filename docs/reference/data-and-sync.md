@@ -862,6 +862,27 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   with both marks on. A `NOT NULL` column with no default would have failed that INSERT instead,
   and `insert_row`'s caller answers a failed insert with `ROLLBACK TO savepoint` and
   `Outcome::Deferred` — the group would stall at that op for ever.
+  **v39 gives `decks` a third one, `theory_mark_unplanned`** (2026-09-08) — whether a Live row the
+  plan does not ask for *at all* wears the red X the tier landed with. `INTEGER NOT NULL DEFAULT 1`,
+  one rung after v38 and one day after it, and every sentence v38's paragraph above spends on the
+  shape of that column is true of this one word for word: the `DEFAULT 1` is the whole of the
+  upgrade, so there is no backfill because there is nothing for one to do; it is **appended at the
+  end**, which is what keeps `deck.rs`'s positional `r.get(n)` reads honest and moves `IMAGE_COL`
+  one further along; and it is on `capture.rs`'s hand-written `decks` field list, because which
+  marks a deck draws is an answer *about the deck* on all three tiers or on none.
+  **Three columns rather than one enumerated field, and the third is what settles the argument
+  the first two only started.** v38 justified two booleans on the ground that `none | exact |
+  both` cannot spell blue *without* green; the unplanned tier answers a different question
+  again — *is this card in the plan at all* rather than *which printing of it* — so no ordering of
+  a single field can turn it on while leaving the other two alone. The switches are genuinely
+  independent, which is a shape a ladder cannot hold.
+  **A separate rung rather than a third `ALTER` bolted onto v38**, which is this ladder's ordinary
+  rule and not a judgement call — v38 had already landed on `main`, and a database that has run a
+  rung never runs it again. Editing it would leave every install already at 38 with two columns
+  while a fresh one had three, and **the byte-for-byte comparison against `USER_SCHEMA_SQL` would
+  stay green throughout**, because that comparison is built by running the ladder end to end on an
+  empty file. The disagreement would exist only on the databases a suite never opens, and arrive
+  as a `no such column` in the shipped window.
   **v25 makes the collection's folders the physical ledger of where every card sits.** It inserts
   the single `Recently removed` folder and one `deck` folder per deck (**archived decks
   included** — archiving is a flag and an archived deck still holds its cards), converts every

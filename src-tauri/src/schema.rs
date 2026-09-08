@@ -328,7 +328,15 @@ pub const LEGACY_SINGLE_FILE_VERSION: i64 = 26;
 /// two tiers this deck draws, now that a live row can be the printing the plan named *or* the
 /// same card in one it did not. **`NOT NULL DEFAULT 1` both**, which is the opposite choice to
 /// 34's and made for the same reason read the other way: the default is what the reader gets,
-/// and the state a reader wants here is both marks on.
+/// and the state a reader wants here is both marks on. 39 is one more column beside those two,
+/// `theory_mark_unplanned` — the third tier, and the one worn by a live row the plan does *not*
+/// ask for at all: a stand-in, a spare or an experiment, marked in red and carrying no number
+/// because there is no planned count to compare it against. **`NOT NULL DEFAULT 1` for 38's own
+/// reason**, which one more rung has not changed: the default is what the reader gets, and the
+/// state a reader wants here is the mark on. One column and not a widening of either of 38's,
+/// for that rung's own "two rather than one three-valued" argument read a tier further — the
+/// three switches are independent, and a reader who wants only this one is asking a coherent
+/// question.
 ///
 /// **Both of the last two rungs were written as 35 and renumbered on the way in — the token
 /// rung twice, the theory rung three times.** The sixth grade took 35, the deck-group sweep
@@ -341,7 +349,7 @@ pub const LEGACY_SINGLE_FILE_VERSION: i64 = 26;
 /// for taking the next free number at the moment you land rather than at the moment you start.
 /// The
 /// user's ladder can never restart, because its rungs describe rows nothing else can produce.
-pub const USER_SCHEMA_VERSION: i64 = 38;
+pub const USER_SCHEMA_VERSION: i64 = 39;
 
 /// `corpus.db`'s version, on a number line of its own.
 ///
@@ -3519,7 +3527,7 @@ CREATE TABLE {schema}.decks (
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
              , folder_id INTEGER
-                REFERENCES deck_folders(id) ON DELETE SET NULL, notes TEXT, theory_enabled INTEGER NOT NULL DEFAULT 0, last_variant TEXT NOT NULL DEFAULT 'live', last_group_by TEXT NOT NULL DEFAULT 'category', last_sort_by TEXT NOT NULL DEFAULT 'alphabetical', separate_x_group INTEGER NOT NULL DEFAULT 0, default_category_id INTEGER NOT NULL DEFAULT 0, game_key TEXT NOT NULL DEFAULT 'any', bracket INTEGER NOT NULL DEFAULT 0, sync_uid TEXT, tokens_open INTEGER NOT NULL DEFAULT 0, theory_mark_exact INTEGER NOT NULL DEFAULT 1, theory_mark_name INTEGER NOT NULL DEFAULT 1);
+                REFERENCES deck_folders(id) ON DELETE SET NULL, notes TEXT, theory_enabled INTEGER NOT NULL DEFAULT 0, last_variant TEXT NOT NULL DEFAULT 'live', last_group_by TEXT NOT NULL DEFAULT 'category', last_sort_by TEXT NOT NULL DEFAULT 'alphabetical', separate_x_group INTEGER NOT NULL DEFAULT 0, default_category_id INTEGER NOT NULL DEFAULT 0, game_key TEXT NOT NULL DEFAULT 'any', bracket INTEGER NOT NULL DEFAULT 0, sync_uid TEXT, tokens_open INTEGER NOT NULL DEFAULT 0, theory_mark_exact INTEGER NOT NULL DEFAULT 1, theory_mark_name INTEGER NOT NULL DEFAULT 1, theory_mark_unplanned INTEGER NOT NULL DEFAULT 1);
 
 CREATE TABLE {schema}.app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
@@ -5462,6 +5470,51 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
         tx.commit()?;
     }
 
+    // v39: the theory mark grew a **third** tier, and it is the one about absence
+    // (2026-09-08). The rung above draws green where a live row is the printing the plan named
+    // and blue where it is the same card in one it did not; both are marks on a row the plan
+    // *asks for*. A live row the plan does not mention at all — a stand-in, a spare, an
+    // experiment — had no mark and no way to get one, and that is the state a reader building
+    // against a plan most wants to see. It wears a red X and no number, because "how many does
+    // the plan want" has no answer here, and the deck says whether it is drawn at all.
+    //
+    // **`NOT NULL DEFAULT 1`, for v38's reason unchanged one rung later**: every deck that
+    // already exists draws the third mark from the first launch on the new build, there is no
+    // backfill because there is nothing for one to do, and defaulting it off would hide the
+    // whole of this rung behind a switch nobody has a reason to look for.
+    //
+    // **A third column rather than a widening of either of v38's**, which is that rung's "two
+    // booleans and not one three-valued column" argument read a tier further: the three
+    // switches are independent, the eight states they spell are all reachable, and a reader who
+    // wants only the red X — show me what is *not* in the plan — is asking a coherent question
+    // that no ladder-shaped encoding can answer.
+    //
+    // **Appended at the end**, which is what keeps `deck.rs`'s positional reads honest: every
+    // `r.get(n)` over `DECK_SELECT` is an index into this column order, and an `INTEGER`
+    // inserted anywhere but last hands one column's value to another with nothing going red.
+    // `deck::IMAGE_COL` moves one further along with it.
+    //
+    // **`decks` is in [`SYNCED_TABLES`] and this column travels — but only because it was put
+    // on the capture spec by hand**, v38's note verbatim: `sync_engine::capture`'s `Spec` for
+    // this table spells its field list out literally and there is no fence in the other
+    // direction, so a column added here and nowhere else is captured by nothing and goes red
+    // nowhere. `DEFAULT 1` is what makes the old-peer direction safe — `apply::updates` walks
+    // the local spec and `continue`s past a field an incoming op lacks, `apply::creations`
+    // omits it from the INSERT and this DDL default fills it in, so a deck built from an op a
+    // device on v38 sent arrives with the third mark on.
+    if v < 39 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(
+            "ALTER TABLE decks ADD COLUMN theory_mark_unplanned INTEGER NOT NULL DEFAULT 1;",
+        )?;
+        // Literal `39`, for the reason every step before it writes its own: this step is what
+        // *makes* a database version 39. **After the `ALTER` and inside the same transaction** —
+        // the stamp and the column commit together or neither does, which is v38's rule with one
+        // statement instead of two rather than a rule it no longer needs.
+        tx.execute_batch("PRAGMA main.user_version = 39;")?;
+        tx.commit()?;
+    }
+
     // **The clock, repaired on every launch at every version — and this is not belt-and-braces.**
     //
     // Every capture trigger ends `FROM sync_clock c, sync_identity i, sync_group g`. That is a
@@ -6572,7 +6625,29 @@ pub(crate) mod tests {
     /// `idx_device_names_uid` with it.
     const UNDO_V31: &str = "DROP TABLE IF EXISTS device_names;";
 
-    /// v38's two theory-mark switches, and the newest rewind on the user ladder.
+    /// v39's third theory-mark switch, and the newest rewind on the user ladder.
+    ///
+    /// Owed for [`UNDO_V13`]'s **loud** reason rather than [`UNDO_V14`]'s quiet one:
+    /// `ALTER TABLE decks ADD COLUMN` is not idempotent, so a fixture that kept the column
+    /// dies at `duplicate column name` on the way back up — a failure no real upgrade can
+    /// produce, and one that takes every unrelated test in the chain with it rather than only
+    /// the ones about the theory mark.
+    ///
+    /// **It runs first, before [`UNDO_V38`]**, for that constant's stated reason: a rewind
+    /// walks the ladder backwards, and this is now the top of it. The sentence directly below
+    /// said the same about [`UNDO_V38`] for one rung, which is this file's own prose-rot note
+    /// read as a prediction rather than as history.
+    ///
+    /// **One statement where the rung below it needs two**, and for the same reason read one
+    /// grain finer: v39 appends a single column, so there is a single column to take back off,
+    /// and the stored table text lands back on exactly what v38 left.
+    ///
+    /// **No index needs a line of its own**, [`UNDO_V20`]'s rule: the rung creates none, and
+    /// `DROP COLUMN` would refuse a column an index named. The only table-level `CHECK` on
+    /// `decks` names `cover_kind`, which is the other thing `DROP COLUMN` refuses over.
+    const UNDO_V39: &str = "ALTER TABLE decks DROP COLUMN theory_mark_unplanned;";
+
+    /// v38's two theory-mark switches — the rewind directly under [`UNDO_V39`].
     ///
     /// Owed for [`UNDO_V13`]'s **loud** reason rather than [`UNDO_V14`]'s quiet one:
     /// `ALTER TABLE decks ADD COLUMN` is not idempotent, so a fixture that kept either column
@@ -6580,8 +6655,8 @@ pub(crate) mod tests {
     /// produce, and one that takes every unrelated test in the chain with it rather than only
     /// the ones about the theory mark.
     ///
-    /// **It runs first, before [`UNDO_V37`]**, for that constant's stated reason: a rewind
-    /// walks the ladder backwards, and this is now the top of it.
+    /// **It runs after [`UNDO_V39`] and before [`UNDO_V37`]**, for that constant's stated
+    /// reason: a rewind walks the ladder backwards. It was the top of it for one rung.
     ///
     /// **The two drops are in the opposite order to the rung's two `ADD COLUMN`s**, which is
     /// the same sentence read one grain finer: `theory_mark_name` was appended last, so it is
@@ -6604,8 +6679,8 @@ pub(crate) mod tests {
     /// `duplicate column name`. Neither is a failure a real upgrade can produce, and either
     /// takes every unrelated test in the chain with it.
     ///
-    /// **It runs after [`UNDO_V38`] and before [`UNDO_V35`]**, a rewind walking the ladder
-    /// backwards. It was the top of it for part of one day.
+    /// **It runs after [`UNDO_V39`] and [`UNDO_V38`], and before [`UNDO_V35`]**, a rewind
+    /// walking the ladder backwards. It was the top of it for part of one day.
     ///
     /// **Both indexes are spelled out where [`UNDO_V31`] needed none**, and the difference is
     /// the second statement rather than a change of mind: `DROP TABLE` would take
@@ -6636,9 +6711,10 @@ pub(crate) mod tests {
     /// pair — every caller rewinds a database [`create_user_schema`] built moments earlier, so
     /// there is nothing to map at all — and this note is the fence for the one that does.
     ///
-    /// **It runs after [`UNDO_V38`] and [`UNDO_V37`] and before [`UNDO_V34`]**, for that
+    /// **It runs after [`UNDO_V39`], [`UNDO_V38`] and [`UNDO_V37`] and before [`UNDO_V34`]**,
+    /// for that
     /// constant's stated reason: a rewind walks the ladder backwards. It read "runs first, and
-    /// this is now the top of it" for as long as v35 was head, and three rungs have landed above
+    /// this is now the top of it" for as long as v35 was head, and four rungs have landed above
     /// it since — v36 writes no shape and so owes no rewind, which is why the numbering has a gap
     /// there rather than a missing line. The order matters here rather
     /// than merely being tidy — [`UNDO_V29`] drops `collection_entries.sync_uid`, and a
@@ -6712,11 +6788,12 @@ pub(crate) mod tests {
     /// kept the column dies at `duplicate column name` on the way back up — a failure no real
     /// upgrade can produce, and one that takes every unrelated test in the chain with it.
     ///
-    /// **It runs after [`UNDO_V38`], [`UNDO_V37`] and [`UNDO_V35`], and before [`UNDO_V33`]**,
+    /// **It runs after [`UNDO_V39`], [`UNDO_V38`], [`UNDO_V37`] and [`UNDO_V35`], and before
+    /// [`UNDO_V33`]**,
     /// for that constant's stated reason: a rewind walks the ladder backwards. It was the top of
-    /// the ladder until those three landed above it — **within days, from three branches**,
+    /// the ladder until those four landed above it — **within days, from four branches**,
     /// which is the ladder's own numbering rule in action rather than an accident: every chain
-    /// below now starts three rungs higher. There is no `UNDO_V36`, because v36 writes no
+    /// below now starts four rungs higher. There is no `UNDO_V36`, because v36 writes no
     /// shape.
     ///
     /// **No index needs a line of its own**, [`UNDO_V20`]'s rule: the rung creates none, and
@@ -6731,8 +6808,10 @@ pub(crate) mod tests {
     /// **It runs before [`UNDO_V31`] and after [`UNDO_V34`]**, for that constant's stated
     /// reason: a rewind walks the ladder backwards. There is no `UNDO_V32` between it and v31 —
     /// v32 writes no shape at all, which [`user_file_at_31`] explains — so above it are
-    /// [`UNDO_V38`], [`UNDO_V35`] and [`UNDO_V34`], in that order, and every chain below spells
-    /// the four of them together.
+    /// [`UNDO_V39`], [`UNDO_V38`], [`UNDO_V37`], [`UNDO_V35`] and [`UNDO_V34`], in that order,
+    /// and every chain below spells the five of them together. **This enumeration had lost
+    /// `UNDO_V37` and miscounted itself as four**, which is the very hazard the paragraph below
+    /// it describes, caught only when v39 landed and the count was re-taken.
     ///
     /// **It said "the newest rewind on the user ladder, and every chain below starts with it"
     /// through two rungs that were above it**, which is this repo's prose-rot hazard on the one
@@ -6803,7 +6882,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
+            "{UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
              PRAGMA main.user_version = 28;"
         ))
         .unwrap();
@@ -6835,7 +6914,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 31;"
+            "{UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 31;"
         ))
         .unwrap();
         conn
@@ -6862,7 +6941,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} PRAGMA main.user_version = 33;"
+            "{UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} PRAGMA main.user_version = 33;"
         ))
         .unwrap();
         conn
@@ -6889,7 +6968,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
+            "{UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
         ))
         .unwrap();
         conn
@@ -6899,17 +6978,38 @@ pub(crate) mod tests {
     /// a second tier, and the only population the v38 rung is *for*.
     ///
     /// Rewound from head rather than written out a second time, [`user_file_at_34`]'s device
-    /// one rung up. One rewind does it, because v38 is the only rung above 37 — and that
-    /// sentence is the one every fixture here has had corrected **three times** now, so read it
-    /// as owing a line to whoever writes rung 39 rather than as a fact.
+    /// one rung up. It read "one rewind does it, because v38 is the only rung above 37" and
+    /// **collected the line it was told to expect the moment v39 landed** — [`UNDO_V39`] first,
+    /// then [`UNDO_V38`], newest first, which is what every chain on this ladder does. Read the
+    /// count as owing a line to whoever writes rung 40 rather than as a fact.
     ///
     /// **It takes no `foreign_keys` parameter**, for the same reason the two below it do not:
-    /// v38 is two `ADD COLUMN`s against `decks`, and no setting of that pragma can make an
+    /// v38 and v39 are `ADD COLUMN`s against `decks`, and no setting of that pragma can make an
     /// `ADD COLUMN` behave two ways.
     fn user_file_at_37() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
-        conn.execute_batch(&format!("{UNDO_V38} PRAGMA main.user_version = 37;"))
+        conn.execute_batch(&format!(
+            "{UNDO_V39} {UNDO_V38} PRAGMA main.user_version = 37;"
+        ))
+        .unwrap();
+        conn
+    }
+
+    /// A user file at 38 — the shape every machine carries the day before the theory mark grew
+    /// a *third* tier, and the only population the v39 rung is *for*.
+    ///
+    /// [`user_file_at_37`]'s construction one rung up, and one rewind does it because v39 is
+    /// the only rung above 38 — the sentence directly above records what that claim is worth,
+    /// so read this one as owing a line to rung 40 too.
+    ///
+    /// **It takes no `foreign_keys` parameter**, for [`user_file_at_37`]'s reason: v39 is a
+    /// single `ADD COLUMN` against `decks`, and no setting of that pragma can make one behave
+    /// two ways.
+    fn user_file_at_38() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        create_user_schema(&conn, "main").unwrap();
+        conn.execute_batch(&format!("{UNDO_V39} PRAGMA main.user_version = 38;"))
             .unwrap();
         conn
     }
@@ -6926,17 +7026,18 @@ pub(crate) mod tests {
     /// construction one number line up, plus the two rewinds head has grown since. v36 writes
     /// no shape at all; it *moves rows*, so a v35 database and a v36 one **are** the same schema
     /// and renumbering is the whole of the difference between those two. There is no
-    /// `UNDO_V36` for that reason — the same exemption v32 has, and one v33, v34, v35, v37 and
-    /// v38 do not.
+    /// `UNDO_V36` for that reason — the same exemption v32 has, and one v33, v34, v35, v37, v38
+    /// and v39 do not.
     ///
     /// **It was written as a v34 fixture and renumbered on the way in**, the same rule the rung
     /// it serves was renumbered under: `main`'s sixth-grade rebuild took 35 while this branch was
     /// open.
     ///
     /// **It read "head is a legitimate v35 shape — v36 writes none — so the construction did not
-    /// have to change, only the stamp", and v38 ended that.** Two `decks` columns above it mean
-    /// head is no longer a v35 shape, so this fixture rewinds [`UNDO_V38`] like every other one
-    /// on the ladder. Without it the climb meets its own `ALTER TABLE decks ADD COLUMN` over
+    /// have to change, only the stamp", and v38 ended that.** Three `decks` columns above it —
+    /// v38's two and v39's one — mean head is no longer a v35 shape, so this fixture rewinds
+    /// [`UNDO_V39`] and [`UNDO_V38`] like every other one
+    /// on the ladder. Without them the climb meets its own `ALTER TABLE decks ADD COLUMN` over
     /// columns `create_user_schema` had already built and dies at `duplicate column name` —
     /// [`UNDO_V13`]'s loud failure, reaching a fixture that had been allowed to skip the rewind
     /// only because the rung above it wrote nothing.
@@ -6949,13 +7050,15 @@ pub(crate) mod tests {
     fn user_file_at_36() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
-        // Both rewinds, because head is no longer a legitimate v35 shape twice over: the token
+        // All three rewinds, because head is no longer a legitimate v35 shape three times over:
+        // the token
         // rung adds `deck_tokens` and `decks.tokens_open`, so without `{UNDO_V37}` this fixture
         // hands `migrate_user` a table that already exists and v37 dies at
         // `table deck_tokens already exists`; the theory rung adds two `decks` columns, so
-        // without `{UNDO_V38}` v38 dies at `duplicate column name`. Newest first.
+        // without `{UNDO_V38}` v38 dies at `duplicate column name`; the third tier adds one
+        // more, so without `{UNDO_V39}` v39 dies the same way. Newest first.
         conn.execute_batch(&format!(
-            "{UNDO_V38} {UNDO_V37} PRAGMA main.user_version = 35;"
+            "{UNDO_V39} {UNDO_V38} {UNDO_V37} PRAGMA main.user_version = 35;"
         ))
         .unwrap();
         seed_v35_groups(&conn);
@@ -7112,7 +7215,7 @@ pub(crate) mod tests {
         .unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 32;"
+            "{UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 32;"
         ))
         .unwrap();
         conn
@@ -7169,7 +7272,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} \
+            "{UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} \
              PRAGMA main.user_version = 27;"
         ))
         .unwrap();
@@ -7547,7 +7650,7 @@ pub(crate) mod tests {
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, USER_SCHEMA_VERSION);
-        assert_eq!(USER_SCHEMA_VERSION, 38);
+        assert_eq!(USER_SCHEMA_VERSION, 39);
     }
 
     /// **It is synced, and `sync_devices` still is not.** The whole point is that a NAME
@@ -8527,7 +8630,7 @@ pub(crate) mod tests {
         .unwrap();
 
         conn.execute_batch(&format!(
-            "{UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
+            "{UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
         ))
         .unwrap();
 
@@ -8614,7 +8717,7 @@ pub(crate) mod tests {
         // The literal, for the reason the two tests below spell out. It is **head**, not this
         // rung's own number — `migrate_user` climbs the whole ladder — so every rung that lands
         // moves it.
-        assert_eq!(version, 38);
+        assert_eq!(version, 39);
         assert_eq!(
             in_group(&conn, DECK_A, "bolt-lea", "nonfoil"),
             2,
@@ -8903,9 +9006,11 @@ pub(crate) mod tests {
         // head, so it would go on passing over a rung that never ran. **The price of that choice
         // is this line**: it is head rather than this rung's own number, because `migrate_user`
         // climbs the whole ladder, so **every rung that lands owes these three assertions an
-        // edit** — which is a cost the sentence above accepts rather than a defect. Paid three
-        // times now: 35 → 36, 36 → 37 for the token rung, 37 → 38 for the theory-mark rung.
-        assert_eq!(version, 38);
+        // edit** — which is a cost the sentence above accepts rather than a defect. Paid four
+        // times now: 35 → 36, 36 → 37 for the token rung, 37 → 38 for the theory-mark rung, and
+        // 38 → 39 for the mark's third tier — which landed with the rung and missed these three
+        // lines on the first pass, exactly the way this sentence says a rung would.
+        assert_eq!(version, 39);
         assert_eq!(
             in_group(&conn, DECK_A, "bolt-m10", "nonfoil"),
             1,
@@ -8927,7 +9032,7 @@ pub(crate) mod tests {
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
         // The literal, for the reason the test above spells out — head, which every rung moves.
-        assert_eq!(version, 38);
+        assert_eq!(version, 39);
     }
 
     /// The fixture is a real v35 file and not head wearing a v35 label.
@@ -8944,8 +9049,9 @@ pub(crate) mod tests {
     /// `collection_folders.locked`.
     ///
     /// **This said "head plus a stamp is a legitimate v35 file only because v36 writes no
-    /// shape", and v38 ended that.** Two `decks` columns above v36 mean head is no longer a v35
-    /// shape at all, so [`user_file_at_35`] rewinds [`UNDO_V38`] like every other fixture here —
+    /// shape", and v38 ended that.** Three `decks` columns above v36 — v38's two and v39's one —
+    /// mean head is no longer a v35 shape at all, so [`user_file_at_36`] rewinds [`UNDO_V39`]
+    /// and [`UNDO_V38`] like every other fixture here —
     /// and the probes below are what still say the rewind stopped in the right place.
     #[test]
     fn the_v35_fixture_carries_none_of_v36() {
@@ -9099,6 +9205,116 @@ pub(crate) mod tests {
         );
     }
 
+    /// **v39's third column, and the deck that already existed when the rung ran.**
+    ///
+    /// `v38_gives_every_deck_both_theory_marks`'s job one rung up, and its argument unchanged:
+    /// `NOT NULL DEFAULT 1` *is* the migration, so every deck on a reader's disk draws the red
+    /// X from the first launch on the new build with no backfill and no group of older decks
+    /// behaving differently for ever for a reason nothing on screen explains.
+    ///
+    /// **The deck is seeded before the climb rather than after it**, which is the whole of what
+    /// this test is for. A row inserted at head takes the column default through the *frozen*
+    /// [`USER_SCHEMA_SQL`] and would pass while the rung wrote `DEFAULT 0` — the one population
+    /// a fresh worktree cannot be, because a fresh install never climbs a rung at all.
+    #[test]
+    fn v39_gives_every_deck_the_unplanned_mark() {
+        let conn = user_file_at_38();
+        conn.execute(
+            "INSERT INTO decks (id, name, format_key, created_at, updated_at)
+             VALUES (1, 'Burn', 'modern', 0, 0)",
+            [],
+        )
+        .unwrap();
+
+        migrate_user(&conn).unwrap();
+
+        assert_eq!(has_column(&conn, "decks", "theory_mark_unplanned"), 1);
+        let unplanned: i64 = conn
+            .query_row(
+                "SELECT theory_mark_unplanned FROM decks WHERE id = 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            unplanned, 1,
+            "a deck that existed before the rung wears the third mark after it"
+        );
+
+        // And a deck made *after* the climb reads the same, which is the half a fresh install
+        // gets — the two populations must not disagree, and the fence that makes them agree is
+        // `the_user_schema_is_byte_identical_to_what_the_ladder_builds` rather than this line.
+        conn.execute(
+            "INSERT INTO decks (id, name, format_key, created_at, updated_at)
+             VALUES (2, 'Storm', 'modern', 0, 0)",
+            [],
+        )
+        .unwrap();
+        let unplanned: i64 = conn
+            .query_row(
+                "SELECT theory_mark_unplanned FROM decks WHERE id = 2",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(unplanned, 1, "a deck is born with the third mark on");
+    }
+
+    /// The second pass has to be a no-op rather than `duplicate column name`.
+    ///
+    /// `the_v38_rung_is_idempotent_over_an_already_upgraded_database`'s job one rung up. SQLite
+    /// offers no `IF NOT EXISTS` on `ALTER TABLE … ADD COLUMN`, so the version stamp is the only
+    /// thing making a second launch survivable — and it is inside the rung's transaction with
+    /// the `ALTER`, so a launch that died mid-rung left neither.
+    #[test]
+    fn the_v39_rung_is_idempotent_over_an_already_upgraded_database() {
+        let conn = user_file_at_38();
+        migrate_user(&conn).unwrap();
+        migrate_user(&conn).unwrap();
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, USER_SCHEMA_VERSION);
+    }
+
+    /// The fixture is a real v38 file and not head wearing a v38 label.
+    ///
+    /// `the_v37_fixture_carries_none_of_v38`'s job one rung up. What it catches is the fixture
+    /// rewound in only one of its two halves: the column really gone but the version left at
+    /// head would leave `migrate_user` no rung to run, and every test above would pass while
+    /// watching nothing happen. The other order is loud on its own — a fixture that kept the
+    /// column dies at `duplicate column name`, which is [`UNDO_V39`]'s whole reason.
+    ///
+    /// **`theory_mark_name` is probed as *present*, and that is the half a version number
+    /// cannot give you.** The rewind above this one is two rungs of `decks` columns stacked, and
+    /// a chain that ran [`UNDO_V38`] as well would leave a file the stamp still calls 38 while
+    /// it is really a 37 — which would then climb v38 and v39 together and pass every assertion
+    /// about the third column while testing the wrong rung.
+    #[test]
+    fn the_v38_fixture_carries_none_of_v39() {
+        let conn = user_file_at_38();
+
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 38);
+        assert_eq!(
+            has_column(&conn, "decks", "theory_mark_unplanned"),
+            0,
+            "theory_mark_unplanned must not exist before the rung that adds it"
+        );
+        assert_eq!(
+            has_column(&conn, "decks", "theory_mark_name"),
+            1,
+            "a v38 file still has both of v38's own columns"
+        );
+        assert_eq!(
+            has_column(&conn, "decks", "theory_mark_exact"),
+            1,
+            "a v38 file still has both of v38's own columns"
+        );
+    }
+
     /// A v28 file walks up keeping every row it had, and twice is the same as once.
     #[test]
     fn migrating_a_v28_user_file_keeps_its_rows_and_is_idempotent() {
@@ -9149,7 +9365,8 @@ pub(crate) mod tests {
     /// Point `MTG_SPLIT_FIXTURE` at a **copy** of a real `mtg.db` — the escape hatch
     /// [`crate::split::tests::the_real_database_converts_with_every_row_intact`] already uses —
     /// and this converts it, winds the user file back to 28 with the whole rewind chain —
-    /// [`UNDO_V38`], [`UNDO_V37`], [`UNDO_V35`], [`UNDO_V34`], [`UNDO_V33`], [`UNDO_V31`],
+    /// [`UNDO_V39`], [`UNDO_V38`], [`UNDO_V37`], [`UNDO_V35`], [`UNDO_V34`], [`UNDO_V33`],
+    /// [`UNDO_V31`],
     /// [`UNDO_V30`] and [`UNDO_V29`], newest first, which is the chain the body spells and every
     /// rung above 28 with a shape to take back (v32 and v36 write none) —
     /// and climbs the rungs over the reader's own rows. **This list had lost its own top once
@@ -9188,7 +9405,7 @@ pub(crate) mod tests {
             })
             .collect();
         conn.execute_batch(&format!(
-            "{UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
+            "{UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
              PRAGMA main.user_version = 28;"
         ))
         .unwrap();

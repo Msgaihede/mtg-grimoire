@@ -2900,6 +2900,10 @@ export interface DeckPatch {
    *  not name. See {@link DeckRow.theoryMarkName}, and {@link DeckPatch.theoryMarkExact} above
    *  for why the two are separate fields here rather than one three-valued one. */
   theoryMarkName?: boolean;
+  /** Whether this deck draws the **red** theory mark — a live row the plan does not ask for at
+   *  all. See {@link DeckRow.theoryMarkUnplanned}, and {@link DeckPatch.theoryMarkExact} above
+   *  for the rules all three share. `decks.theory_mark_unplanned`, schema v39. */
+  theoryMarkUnplanned?: boolean;
   /**
    * Gather this deck's `{X}` spells under a heading of their own instead of counting each at
    * the mana value Scryfall gives it. See {@link DeckRow.separateXGroup} — a **reading**
@@ -3143,16 +3147,29 @@ export interface DeckRow {
    * Whether this deck draws the **blue** theory mark — the same card in a printing the plan did
    * not name. See {@link DeckRow.theoryMarkExact}, whose every rule this shares.
    *
-   * **Two booleans rather than one three-valued field**, which is the schema's own argument
-   * carried onto the wire: `none | exact | both` cannot spell blue *without* green, and blue
+   * **Three booleans rather than one many-valued field**, which is the schema's own argument
+   * carried onto the wire: a ladder cannot spell blue *without* green, and blue
    * without green is a real answer — a reader who cares that a card is present and not which
    * printing it is.
    *
-   * **Both off is a real answer too, and is not a spelling of {@link DeckRow.theoryEnabled}
+   * **All off is a real answer too, and is not a spelling of {@link DeckRow.theoryEnabled}
    * being off.** A deck with a plan and no marks at all is a reader who wants the two lists side
    * by side and no colour on either; a deck with no plan has no second list to compare against.
    */
   theoryMarkName: boolean;
+  /**
+   * Whether this deck draws the **red** mark on a Live card the plan does not ask for at all —
+   * a stand-in, a spare or an experiment. `decks.theory_mark_unplanned`, schema v39.
+   *
+   * **The third of three independent switches**; see {@link DeckRow.theoryMarkExact} for the
+   * rules all three share, and {@link DeckRow.theoryMarkName} for why they are three fields.
+   *
+   * **It is the one mark with no number.** Green and blue count a live row against what the
+   * plan asks for; here the plan asks for nothing, so there is no count to draw and the mark is
+   * an X. Which mark a row earns is still a *conclusion* and stays on this side —
+   * `features/decks/theoryMatch.ts` — and this boolean is only whether the deck draws it.
+   */
+  theoryMarkUnplanned: boolean;
   /**
    * Which of the deck's two lists the editor was last reading — the tab the reader left this
    * deck on, restored when they open it again.

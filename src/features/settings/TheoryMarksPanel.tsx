@@ -11,23 +11,26 @@ import { BUTTON } from "./controls";
 import { PanelAlert, SettingsSection } from "./panelChrome";
 
 /**
- * The two colours the theory marks are drawn in, and the reader's to change.
+ * The three colours the theory marks are drawn in, and the reader's to change.
  *
  * ## Why this is a settings panel rather than a preference nobody offers
  *
- * A deck that keeps a plan marks every card on its **live** list against it, in two tiers: one
+ * A deck that keeps a plan marks every card on its **live** list against it, in three tiers: one
  * colour for the printing the plan actually names, another for the same card in a printing it
- * does not. `CardMarks.tsx` sets out the four separations that keep a tick from reading as the
- * app's "there is a problem here" mark — the corner, the colour, the shape and the card's own
- * edge — and says out loud that **the colour is the one of the four a reader can defeat**. This
- * panel is where they defeat it, deliberately: the other three are structural and hold whatever
- * is picked here, which is exactly why there are four of them.
+ * does not, and a third for a card the plan does not ask for at all. `CardMarks.tsx` sets out the
+ * four separations that keep a tick from reading as the app's "there is a problem here" mark —
+ * the corner, the colour, the shape and the card's own edge — and says out loud that **the colour
+ * is the one of the four a reader can defeat**. This panel is where they defeat it, deliberately:
+ * the other three are structural and hold whatever is picked here, which is exactly why there are
+ * four of them.
  *
  * A green tick and an azure one are also the two marks a reader with a red-green or a blue-yellow
  * confusion has the hardest time telling apart, and no palette this app ships is the right answer
  * for every pair of eyes. The `data-theory-match` attribute and the marks' own words carry the
  * distinction for anybody reading them another way; this is for the reader who can see them and
- * wants them further apart than we chose.
+ * wants them further apart than we chose. **The third mark makes that argument twice over**: it
+ * ships red, and the app's rule-break mark is red, so a reader who finds those two too close on
+ * their own screen has a control for it here rather than a defect to report.
  *
  * ## Draft, then commit
  *
@@ -39,8 +42,8 @@ import { PanelAlert, SettingsSection } from "./panelChrome";
  *
  * ## What this panel does not touch
  *
- * Whether a deck draws these marks at all is the deck's own two switches, and this changes
- * neither. A reader who has turned the loose tier off sees no azure mark anywhere and can still
+ * Whether a deck draws these marks at all is the deck's own three switches, and this changes none
+ * of them. A reader who has turned the loose tier off sees no azure mark anywhere and can still
  * pick its colour here, which is the honest arrangement: the switch is about one deck and the
  * colour is about this device.
  */
@@ -64,8 +67,9 @@ export function TheoryMarksPanel(): JSX.Element {
       <p className="text-sm text-dim">
         A deck that keeps a theory list marks the cards on its live list against it — one colour
         where the printing is the one the theory names, another where it is the same card in a
-        printing the theory does not name. A card the theory asks a different number of wears the
-        number to add or remove instead of the tick.
+        printing the theory does not name, and a third where the theory does not ask for the card
+        at all. A card the theory asks a different number of wears the number to add or remove
+        instead of the tick.
       </p>
 
       {/* `space-y-4` over a hairline the first row does not wear — `HiddenTagsPanel`'s list,
@@ -101,10 +105,18 @@ export function TheoryMarksPanel(): JSX.Element {
                       on card art, and a fill judged against a pale surface is judged against a
                       surface it never meets. Both states, because the number *replaces* the tick
                       on a card the theory asks a different count of — a preview of the tick alone
-                      would be a preview of half of what this colour reaches. */}
+                      would be a preview of half of what this colour reaches.
+
+                      **One preview for the unplanned mark and two for the other two**, which is
+                      the tier's own rule drawn rather than restated: nothing is planned there, so
+                      there is no order to be short of and the mark is an X in every state it has.
+                      A second box beside it would have to hold either a duplicate X or a number
+                      that tier never draws — a preview of a state the app cannot reach. */}
                   <span className="flex items-center gap-2 rounded-md bg-bg px-2 py-1.5">
                     <TheoryMatchMark tier={mark.tier} delta={0} />
-                    <TheoryMatchMark tier={mark.tier} delta={PREVIEW_DELTA} />
+                    {mark.tier !== "unplanned" && (
+                      <TheoryMatchMark tier={mark.tier} delta={PREVIEW_DELTA} />
+                    )}
                   </span>
 
                   <div className="ml-auto flex items-center gap-2">
@@ -224,6 +236,11 @@ export function TheoryMarksPanel(): JSX.Element {
  * — since issue #400 the sign is the action, so `+2` is *two to add*, which is what a card on a
  * list still being sleeved up against its plan mostly says. The sign is ASCII for
  * `theoryDeltaText`'s reason — the typographic minus is not in that face's fixed-advance run.
+ *
+ * **The unplanned row draws no second preview at all**, so this number never reaches it: that
+ * tier has no order to be short of, and `theoryMatchLabel` and both mark components ignore a
+ * delta handed to it. The row is one X rather than an X beside a `+2` that would be a preview of
+ * a state the app cannot produce.
  */
 const PREVIEW_DELTA = 2;
 
@@ -231,7 +248,8 @@ const PREVIEW_DELTA = 2;
 interface MarkRow {
   /** The stored key, and what `set_mark_color` is called with. */
   key: MarkColorKey;
-  /** Which mark to draw — `CardMarks.tsx` takes this and decides the fill from it. */
+  /** Which mark to draw — `CardMarks.tsx` takes this and decides the fill *and the glyph* from
+   *  it, which is why the preview needs no second prop to show an X rather than a tick. */
   tier: TheoryTier;
   /** The stem of this row's heading id, so the group and its heading cannot come apart. Written
    *  rather than `useId()`, which is `panelChrome.tsx`'s call for its reason: a generated `:r7:`
@@ -255,8 +273,8 @@ interface MarkRow {
    *
    * **It is {@link title} plus the word "colour"**, so the group a reader lands in is named for
    * the row they opened it from, and the row is named for the switch they have already met in
-   * Deck settings (`DeckSettingsForm`'s `MarkSwitch` headings are these two words exactly). One
-   * thing, one name, in all three places.
+   * Deck settings (`DeckSettingsForm`'s `MarkSwitch` headings are these same words). One thing,
+   * one name, in all three places.
    */
   subject: string;
   /** The custom property the mark's fill is read from, and — with `-fg` — what a tick or a
@@ -265,7 +283,7 @@ interface MarkRow {
 }
 
 /**
- * The two marks, in `MARK_COLOR_KEYS`' own order, which is the order that array's doc says the
+ * The three marks, in `MARK_COLOR_KEYS`' own order, which is the order that array's doc says the
  * Appearance panel draws them in.
  *
  * **The property names are spelled out rather than built from the tier**, which is
@@ -274,6 +292,10 @@ interface MarkRow {
  * them. Three sites name them now — `index.css` defaults them, `useMarkColors` writes them on
  * `:root`, `CardMarks.tsx` draws from them — and this is the fourth, because the preview below
  * has to show a colour that has not been committed and so cannot be on `:root` yet.
+ *
+ * **The order runs from the strictest statement to the absence of one**, which is also
+ * `MARK_COLOR_KEYS`': this printing, then this card, then neither. A reader meets the three in
+ * the order the resolver tries them.
  */
 const MARKS: readonly MarkRow[] = [
   {
@@ -299,6 +321,23 @@ const MARKS: readonly MarkRow[] = [
     noun: "different-printing mark",
     subject: "Different printing colour",
     fill: "--color-theory-name",
+  },
+  {
+    key: "theoryUnplanned",
+    tier: "unplanned",
+    id: "theory-unplanned",
+    // The heading is the mark's own sentence — `CardMarks.tsx`'s `THEORY_UNPLANNED_LABEL`, which
+    // is what the mark's tooltip and `deckCardName`'s clause both say. The other two rows are
+    // named for the *distinction* they draw (a matching printing, a different one), which is a
+    // thing only the theory list can say; this one is named for what a reader sees on the card,
+    // because "no printing" and "no card" are not phrases anybody would recognise.
+    title: "Not in the theory list",
+    blurb:
+      "A card the theory list does not ask for at all — a stand-in, a spare or an experiment. " +
+      "Only on the actual list; nothing about which printing, which the other two marks say.",
+    noun: "unplanned-card mark",
+    subject: "Not in the theory list colour",
+    fill: "--color-theory-unplanned",
   },
 ];
 

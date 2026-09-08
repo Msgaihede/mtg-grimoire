@@ -466,20 +466,23 @@ export interface FakeDeck {
    *  can set and never see is a switch nothing can draw. */
   theoryEnabled: boolean;
   /**
-   * `decks.theory_mark_exact` and `decks.theory_mark_name` (schema v38): which of the theory
-   * mark's two tiers this deck draws — green for a live row that is the printing the plan
-   * named, blue for the same card in a printing it did not.
+   * `decks.theory_mark_exact` and `decks.theory_mark_name` (schema v38) and
+   * `decks.theory_mark_unplanned` (v39): which of the theory
+   * mark's three tiers this deck draws — green for a live row that is the printing the plan
+   * named, blue for the same card in a printing it did not, red for a live row the plan does
+   * not ask for at all.
    *
    * **Optional here and `NOT NULL DEFAULT 1` in the crate**, which is {@link separateXGroup}'s
-   * arrangement three fields down and made for its reason: a seed written before this column
+   * arrangement three fields down and made for its reason: a seed written before these columns
    * existed must go on behaving as it always did, so {@link toDeckRow} coalesces to `true`
    * rather than the type demanding every fixture be rewritten. **`true` and not `false`** —
-   * this is the one column pair on this record whose default is *on*, because the migration's
-   * whole argument is that every deck that already exists draws both marks from the first
+   * these are the only columns on this record whose default is *on*, because the migrations'
+   * whole argument is that every deck that already exists draws every mark from the first
    * launch, with no backfill and no group of older decks behaving differently for ever.
    */
   theoryMarkExact?: boolean;
   theoryMarkName?: boolean;
+  theoryMarkUnplanned?: boolean;
   /**
    * What the reader was last looking at in this deck's editor: which tab, grouped how, sorted
    * how. Written by {@link writeHandlers.deck_set_view_state} and by nothing else, so that
@@ -5114,13 +5117,16 @@ function toDeckRow(db: FakeDb, d: FakeDeck): DeckRow {
     folderId: d.folderId,
     notes: d.notes,
     theoryEnabled: d.theoryEnabled,
-    // v38's pair, and the **fifth and sixth** columns on the `?? default` footing — but the
-    // first whose default is `true`. `NOT NULL DEFAULT 1` is the whole of that migration: a
-    // deck that already existed draws both marks from the first launch on the new build, so a
-    // seed written before the column is a deck with both marks on rather than one with neither.
+    // v38's pair and v39's third, the **fifth, sixth and seventh** columns on the
+    // `?? default` footing — and the only ones whose default is `true`. `NOT NULL DEFAULT 1` is
+    // the whole of both migrations: a
+    // deck that already existed draws every mark from the first launch on the new build, so a
+    // seed written before the columns is a deck with all three marks on rather than one with
+    // none.
     // Appended, `bracket`'s note two comments down, and for the crate's own reason there.
     theoryMarkExact: d.theoryMarkExact ?? true,
     theoryMarkName: d.theoryMarkName ?? true,
+    theoryMarkUnplanned: d.theoryMarkUnplanned ?? true,
     // The three v12 ones that remember where the reader was. They ride the *gallery's* row
     // rather than a read of their own because the editor already has this row when it mounts —
     // a second command to ask "which tab was I on" would be a round trip between opening a deck
@@ -12440,6 +12446,32 @@ export function writeHandlers(db: FakeDb) {
       if (patch.tokensOpen !== undefined && patch.tokensOpen !== tokensOpenWas) {
         field("tokensOpen", tokensOpenWas, patch.tokensOpen);
       }
+      // v38's pair and v39's third, on `separateXGroup`'s footing with the default the other way
+      // round: an absent column is the DDL's `1`, so a deck that has never been asked and a deck
+      // switched *on* are one state, and switching off is one change from either.
+      //
+      // **The words are `deck.rs`'s and are not derived from the column names** — that file
+      // writes `"theoryMarkExact"`, `"theoryMarkName"` and `"theoryMarkUnplanned"`, the third,
+      // fourth and fifth multi-word names in the switch `auditText.ts` reads, and the `xGroup`
+      // arm above records what agreeing with it is worth: nothing enforces it, and a
+      // disagreement is a bland "Changed the deck" rather than anything that goes red.
+      //
+      // **Three arms rather than one**, the crate's own reason: one dialog can move all three in
+      // one Save, and a single row saying "changed the theory marks" could be worded into none
+      // of the three decisions.
+      const markExactWas = before.theoryMarkExact ?? true;
+      if (patch.theoryMarkExact !== undefined && patch.theoryMarkExact !== markExactWas) {
+        field("theoryMarkExact", markExactWas, patch.theoryMarkExact);
+      }
+      const markNameWas = before.theoryMarkName ?? true;
+      if (patch.theoryMarkName !== undefined && patch.theoryMarkName !== markNameWas) {
+        field("theoryMarkName", markNameWas, patch.theoryMarkName);
+      }
+      const markUnplannedWas = before.theoryMarkUnplanned ?? true;
+      const unplanned = patch.theoryMarkUnplanned;
+      if (unplanned !== undefined && unplanned !== markUnplannedWas) {
+        field("theoryMarkUnplanned", markUnplannedWas, unplanned);
+      }
       // v16's, and the second multi-word field name in that switch — `deck.rs` writes
       // `"defaultCategory"`, and the paragraph above applies word for word.
       //
@@ -12516,6 +12548,14 @@ export function writeHandlers(db: FakeDb) {
       // list the area draws is derived on every read, so opening or closing it writes one column
       // and changes no answer about the deck.
       deck.tokensOpen = patch.tokensOpen ?? deck.tokensOpen;
+      // `coalesce(?16, ?17, ?18, …)` — three reading preferences, and **nothing else happens**
+      // for `separateXGroup`'s reason: which of the three tiers a deck marks changes what is
+      // drawn over its live rows and moves not one `deck_cards` row. `??` against the *stored*
+      // value rather than against `true`, so an absent field means "leave it" here exactly as
+      // `coalesce(?n, column)` does in the crate.
+      deck.theoryMarkExact = patch.theoryMarkExact ?? deck.theoryMarkExact;
+      deck.theoryMarkName = patch.theoryMarkName ?? deck.theoryMarkName;
+      deck.theoryMarkUnplanned = patch.theoryMarkUnplanned ?? deck.theoryMarkUnplanned;
       // `coalesce(?n, default_category_id)` again — and **`0` is a value here rather than an
       // absence**, which is the whole reason `??` is right and a truthiness test would be wrong:
       // `patch.defaultCategoryId === 0` is a reader asking to go back to Auto, and `||` would

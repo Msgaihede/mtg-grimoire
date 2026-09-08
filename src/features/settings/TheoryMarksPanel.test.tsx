@@ -1,5 +1,5 @@
 /**
- * The panel a reader recolours the two theory marks from.
+ * The panel a reader recolours the three theory marks from.
  *
  * **No computed colour is asserted anywhere here, and that is not a shortcut.** jsdom resolves no
  * stylesheet, so `getComputedStyle` would answer the literal `var(…)` back — and even in a
@@ -66,23 +66,30 @@ beforeEach(() => {
 
 describe("TheoryMarksPanel", () => {
   /**
-   * Both states of both marks, so a reader picking a colour can see what they are picking it for.
+   * Both states of the two marks that have two, and the one state of the mark that has one.
    *
    * The tick and the signed number are the same box in the same fill — the number *replaces* the
    * tick on a card the plan asks a different number of — so a preview that drew only the tick
-   * would be showing half of what the colour reaches. The tier is read off
-   * `THEORY_MATCH_ATTR`, which is the one handle that tells the two marks apart without reading a
-   * colour.
+   * would be showing half of what the colour reaches. The tier is read off `THEORY_MATCH_ATTR`,
+   * which is the one handle that tells the marks apart without reading a colour.
+   *
+   * **The unplanned row is one preview and the count is the assertion** (2026-09-08). That tier
+   * has no order to be short of, so it has no second state: a `+2` beside its X would be a
+   * preview of something the app cannot draw, and a duplicate X would be a preview of the same
+   * thing twice. `2` and `1` written as literals rather than as `MARKS.length`-shaped arithmetic,
+   * because the point of the case is exactly that the three rows do not agree.
    */
-  it("previews both states of both marks", async () => {
+  it("previews both states of the two counted marks and one state of the third", async () => {
     stored({});
     const { container } = draw();
     await waitFor(() => expect(markColors).toHaveBeenCalled());
 
     expect(container.querySelectorAll('[data-theory-match="exact"]')).toHaveLength(2);
     expect(container.querySelectorAll('[data-theory-match="name"]')).toHaveLength(2);
-    // The number state, once per mark: a tick and a `+2` are the two things the fill has to work
-    // for, and a preview of one of them is a preview of half the decision.
+    expect(container.querySelectorAll('[data-theory-match="unplanned"]')).toHaveLength(1);
+    // The number state, once per counted mark: a tick and a `+2` are the two things those fills
+    // have to work for, and a preview of one of them is a preview of half the decision. Two and
+    // not three, which is the other half of the row above.
     expect(screen.getAllByText("+2")).toHaveLength(2);
   });
 
@@ -171,6 +178,43 @@ describe("TheoryMarksPanel", () => {
   });
 
   /**
+   * The third row end to end — pick, then put back — on the key it is actually wired to.
+   *
+   * **`theoryUnplanned` is the assertion and not the press**, which is what makes this more than
+   * a third copy of the two cases above: a row whose `MarkRow.key` had been left on one of the
+   * other two would draw, name and preview itself perfectly and recolour the wrong mark, and
+   * every other case in this file would still pass. `sent` is read for the key rather than the
+   * screen, because the screen is where that mistake is invisible.
+   *
+   * The reset is asserted after the set for the same reason `useMarkColors`' own case is: today's
+   * hex written back is an entry that pins this palette, so a reader who has reset and one who
+   * never chose must both end with no row at all.
+   */
+  it("sets and resets the unplanned mark's own colour", async () => {
+    stored({});
+    draw();
+    await waitFor(() => expect(markColors).toHaveBeenCalled());
+
+    await userEvent.click(screen.getByRole("button", { name: /change the unplanned-card mark/i }));
+
+    const hex = screen.getByRole("textbox", { name: "Not in the theory list colour hex" });
+    expect(hex).toHaveValue(MARK_COLOR_DEFAULTS.theoryUnplanned.slice(1).toUpperCase());
+    await userEvent.clear(hex);
+    await userEvent.type(hex, "00733e");
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+
+    expect(sent).toEqual([["set_mark_color", { mark: "theoryUnplanned", color: "#00733e" }]]);
+
+    const reset = screen.getByRole("button", { name: /reset the unplanned-card mark/i });
+    await waitFor(() => expect(reset).not.toHaveAttribute("aria-disabled", "true"));
+    await userEvent.click(reset);
+
+    expect(sent).toContainEqual(["set_mark_color", { mark: "theoryUnplanned", color: null }]);
+    // And nothing was written to either of the other two marks along the way.
+    for (const [, args] of sent) expect(args.mark).toBe("theoryUnplanned");
+  });
+
+  /**
    * There is nothing to reset a mark to that is already at the stylesheet's colour, and saying so
    * is the only thing on this panel that tells a reader whether they have customised anything at
    * all. `aria-disabled` rather than the attribute, which is the app's rule: a `disabled` button
@@ -240,7 +284,7 @@ describe("TheoryMarksPanel", () => {
     await waitFor(() => expect(markColors).toHaveBeenCalled());
 
     const names: string[] = [];
-    for (const noun of ["matching-printing", "different-printing"]) {
+    for (const noun of ["matching-printing", "different-printing", "unplanned-card"]) {
       const open = screen.getByRole("button", {
         name: new RegExp(`change the ${noun} mark`, "i"),
       });
@@ -255,14 +299,18 @@ describe("TheoryMarksPanel", () => {
       await userEvent.click(open);
     }
 
-    expect(names).toEqual(["Matching printing colour", "Different printing colour"]);
-    expect(new Set(names).size).toBe(2);
+    expect(names).toEqual([
+      "Matching printing colour",
+      "Different printing colour",
+      "Not in the theory list colour",
+    ]);
+    expect(new Set(names).size).toBe(3);
     for (const name of names) expect(name.toLowerCase()).not.toContain("label");
   });
 
-  /** Each mark's controls are addressed by that mark's own words, so neither the swatch nor the
-   *  reset can be found by position or reached on the wrong row. */
-  it("names both marks' controls apart", async () => {
+  /** Each mark's controls are addressed by that mark's own words, so no swatch and no reset can
+   *  be found by position or reached on the wrong row. */
+  it("names every mark's controls apart", async () => {
     stored({});
     draw();
     await waitFor(() => expect(markColors).toHaveBeenCalled());
@@ -270,6 +318,10 @@ describe("TheoryMarksPanel", () => {
     for (const [name, noun] of [
       ["Matching printing", "matching-printing"],
       ["Different printing", "different-printing"],
+      // The third row is named for the mark's own sentence rather than for a distinction it does
+      // not draw — `CardMarks.tsx`'s `THEORY_UNPLANNED_LABEL`, which is what the mark says on the
+      // card and what `deckCardName` says in words.
+      ["Not in the theory list", "unplanned-card"],
     ]) {
       const group = row(name);
       expect(

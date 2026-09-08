@@ -360,6 +360,26 @@ const TIER_GROUPS: CardGroup[] = buildGroups(
 );
 
 /**
+ * **A row the plan says nothing about at all** — the third tier's own fixture (2026-09-08).
+ *
+ * {@link TIER_GROUPS} has no such row by construction: all three of its cards are in one map or
+ * the other, which is what makes it the right deck for telling `exact` from `name` and the wrong
+ * one for telling either from `unplanned`. Naming a card neither {@link TIER_PLAN} map holds is
+ * the whole of what this adds, and it is a card in neither {@link CARDS} nor {@link TIER_GROUPS}
+ * so that no other count in this file is a claim about it.
+ */
+const UNPLANNED_ROW: DeckCard = card({ name: "Mind Stone" });
+
+/** {@link TIER_GROUPS} with {@link UNPLANNED_ROW} in it — three planned rows and one that is
+ *  not, which is the only shape that can tell all three tiers apart on one wall. */
+const UNPLANNED_GROUPS: CardGroup[] = buildGroups(
+  [PLANNED_COMMANDER, PLANNED_PRINTING, OTHER_PRINTING, UNPLANNED_ROW],
+  [COMMANDER, RAMP],
+  "category",
+  "alphabetical",
+);
+
+/**
  * A plan that puts one of those rows in each tier, **spelled rather than computed**.
  *
  * `theoryMatchPlan`'s arithmetic has a suite of its own; what the cases below are about is
@@ -389,7 +409,13 @@ const TIER_PLAN: TheoryPlan = {
     ["sol ring", 0],
     ["bruna, the fading light", 0],
   ]),
-  marks: { exact: true, name: true },
+  // **`unplanned` off, and that is the fixture doing its job rather than a default carried in.**
+  // These cases are about telling the two *planned* tiers apart, and the third mark would put one
+  // on every other row of whatever deck they are rendered against — turning an assertion about
+  // which tier a row is in into an assertion about how many rows a fixture happens to hold. The
+  // case below it is where the third tier is switched on, against a deck built to have a row
+  // outside the plan (2026-09-08).
+  marks: { exact: true, name: true, unplanned: false },
 };
 
 /** Where {@link DECK_CARD_ATTR} says a row is — the handle the tier cases scope by. */
@@ -511,6 +537,38 @@ describe.each(VIEWS)("$name", ({ render: renderView }) => {
       [slotOf(PLANNED_COMMANDER)]: "exact",
       [slotOf(PLANNED_PRINTING)]: "exact",
       [slotOf(OTHER_PRINTING)]: "name",
+    });
+  });
+
+  /**
+   * **The third tier, on every view that draws one** (2026-09-08) — a row the plan says nothing
+   * about wears `unplanned`, and no row the plan *does* name does.
+   *
+   * The wiring a domain suite cannot see. `theoryMatchMark` can answer `{ tier: "unplanned" }`
+   * perfectly and a view still never draw it: the mark used to be rendered only where the
+   * function returned non-`null` for a *planned* row, so a view that kept an early return on
+   * "this row is in neither map" would pass every case in `theoryMatch.test.ts` and put nothing
+   * on screen. Four views, one claim.
+   *
+   * Both halves in one `toEqual`, which is the point of {@link tiersBySlot} answering an object:
+   * a view that marked every row `unplanned` — the mirror failure, and the likelier one, since
+   * the third tier is the fallthrough — fails on the three rows that must not be.
+   *
+   * `violations: undefined` for the sweep above's reason: {@link VIOLATIONS} bans Sol Ring and
+   * two of these rows are one.
+   */
+  it("draws the third tier on the row the plan says nothing about", () => {
+    setup({
+      groups: UNPLANNED_GROUPS,
+      theoryPlan: { ...TIER_PLAN, marks: { exact: true, name: true, unplanned: true } },
+      violations: undefined,
+    });
+
+    expect(tiersBySlot()).toEqual({
+      [slotOf(PLANNED_COMMANDER)]: "exact",
+      [slotOf(PLANNED_PRINTING)]: "exact",
+      [slotOf(OTHER_PRINTING)]: "name",
+      [slotOf(UNPLANNED_ROW)]: "unplanned",
     });
   });
 

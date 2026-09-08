@@ -329,17 +329,21 @@ pub const TABLES: [Spec; 13] = [
             // about the deck rather than about the machine.
             "tokens_open",
             "bracket",
-            // **Schema v38's two theory marks, and they travel for `bracket`'s reason** — which
-            // of the mark's two tiers a deck draws is an answer *about the deck*, made once by
+            // **Schema v38's two theory marks and v39's third, and they travel for `bracket`'s
+            // reason** — which
+            // of the mark's three tiers a deck draws is an answer *about the deck*, made once by
             // the reader, exactly like the bracket and the X group above it. Two devices showing
             // one deck's marks differently, with nothing on screen saying why, is the failure
-            // this pair of lines exists to prevent.
+            // these three lines exist to prevent.
             //
             // **The mark's colours are deliberately not here, and could not have been.** They
             // are one `mark_colors` row in `app_meta`, which is in no `SYNCED_TABLES` entry at
             // all, so there is no field for this spec to leave off — the decision was made one
             // table over and it is the same decision: a rendering choice belongs to the device
-            // that draws it, and what a *deck is* is what these two columns say.
+            // that draws it, and what a *deck is* is what these three columns say. The fourth
+            // `mark_colors` key v39 adds, `theoryUnplanned`, is on exactly the same footing as
+            // the three that were already there — one more reason the colours never join this
+            // list.
             //
             // **The three `last_*` columns are not the analogy**, which this comment claimed
             // until 2026-09-07: all three are on this very list, just above `separate_x_group`,
@@ -355,6 +359,7 @@ pub const TABLES: [Spec; 13] = [
             // field is the direction with no rule written down; this is the other one.
             "theory_mark_exact",
             "theory_mark_name",
+            "theory_mark_unplanned",
         ],
         counters: &[],
         parents: &[
@@ -1038,20 +1043,21 @@ mod tests {
         );
     }
 
-    /// **Both of schema v38's theory marks travel, and independently.**
+    /// **All three theory marks travel — schema v38's two and v39's — and independently.**
     ///
-    /// The whole reason they are on the spec: which of the mark's two tiers a deck draws is an
+    /// The whole reason they are on the spec: which of the mark's three tiers a deck draws is an
     /// answer *about the deck*, made once by the reader, and two devices showing one deck's
     /// marks differently with nothing on screen saying why is the failure the lines exist to
     /// prevent. `every_column_a_spec_names_exists_on_its_table` says the names are real; this
     /// says a change to one is actually captured.
     ///
-    /// **One column moved and the other named nowhere**, which is the part a test writing both
+    /// **One column moved and the other two named nowhere**, which is the part a test writing
+    /// all three
     /// at once could not show: per-field last-writer-wins means an op naming a field it did not
-    /// touch clobbers the far device's newer answer, and these two are the pair most likely to
+    /// touch clobbers the far device's newer answer, and these three are the set most likely to
     /// be written as one because they are set from one dialog.
     #[test]
-    fn both_theory_marks_travel_and_only_the_one_that_moved() {
+    fn every_theory_mark_travels_and_only_the_one_that_moved() {
         let conn = db();
         conn.execute(
             "INSERT INTO decks (name, format_key, created_at, updated_at)
@@ -1059,32 +1065,36 @@ mod tests {
             [],
         )
         .unwrap();
-        conn.execute("DELETE FROM sync_ops", []).unwrap();
-        conn.execute("UPDATE decks SET theory_mark_exact = 0", [])
-            .unwrap();
 
-        let o = ops(&conn);
-        assert_eq!(o.len(), 1);
-        let fields: serde_json::Value = serde_json::from_str(&o[0].2).unwrap();
-        assert_eq!(fields["theory_mark_exact"], 0);
-        assert!(
-            fields.get("theory_mark_name").is_none(),
-            "the other mark did not change: {fields}"
-        );
+        // Each column on its own, so no line is carrying another's weight — a spec naming one
+        // column twice would pass any single round.
+        for moved in [
+            "theory_mark_exact",
+            "theory_mark_name",
+            "theory_mark_unplanned",
+        ] {
+            conn.execute("DELETE FROM sync_ops", []).unwrap();
+            conn.execute(&format!("UPDATE decks SET {moved} = 0"), [])
+                .unwrap();
 
-        // And the other one on its own, so neither line is carrying the other's weight — a spec
-        // naming one column twice would pass the half above.
-        conn.execute("DELETE FROM sync_ops", []).unwrap();
-        conn.execute("UPDATE decks SET theory_mark_name = 0", [])
-            .unwrap();
-        let o = ops(&conn);
-        assert_eq!(o.len(), 1);
-        let fields: serde_json::Value = serde_json::from_str(&o[0].2).unwrap();
-        assert_eq!(fields["theory_mark_name"], 0);
-        assert!(
-            fields.get("theory_mark_exact").is_none(),
-            "the other mark did not change: {fields}"
-        );
+            let o = ops(&conn);
+            assert_eq!(o.len(), 1);
+            let fields: serde_json::Value = serde_json::from_str(&o[0].2).unwrap();
+            assert_eq!(fields[moved], 0);
+            for other in [
+                "theory_mark_exact",
+                "theory_mark_name",
+                "theory_mark_unplanned",
+            ] {
+                if other == moved {
+                    continue;
+                }
+                assert!(
+                    fields.get(other).is_none(),
+                    "{other} did not change: {fields}"
+                );
+            }
+        }
     }
 
     /// **A field cleared to NULL is a change and must travel as one.** `json_patch` would have

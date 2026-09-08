@@ -48,6 +48,7 @@ const BURN: DeckRow = {
   theoryEnabled: false,
   theoryMarkExact: true,
   theoryMarkName: true,
+  theoryMarkUnplanned: true,
   // How the editor was last read — written by `deckSetViewState` and by nothing this hook
   // offers, since looking at a deck is not editing one.
   lastVariant: "live",
