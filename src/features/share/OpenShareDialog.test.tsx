@@ -17,6 +17,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 }));
 
 import golden from "../../../src-tauri/src/share/__golden__/snapshot.json?raw";
+import publishRs from "../../../src-tauri/src/share/publish.rs?raw";
 import { useAppStore } from "@/lib/store";
 import { NOT_A_SHARE_LINK, OpenShareDialog, shareLinkFrom } from "./OpenShareDialog";
 
@@ -128,5 +129,24 @@ describe("the link a reader pastes", () => {
 
     await userEvent.type(field(), "x");
     expect(screen.queryByText(NOT_A_SHARE_LINK)).not.toBeInTheDocument();
+  });
+
+  /**
+   * **The one user-visible sentence this feature spells twice, fenced.**
+   *
+   * The same paste can be refused on either side of the boundary — this dialog checks the shape
+   * before any round trip, `share::publish::open` checks the scheme again for callers that are
+   * not this dialog — and a reader who typed one wrong thing must not be told two different
+   * things depending on which half noticed. Everything else here is fenced by something: three
+   * implementations of the format meet at a committed golden, and `share::publish` `include_str!`s
+   * the Worker's own config to hold `SHARE_BASE` to it. This literal had nothing, in a feature
+   * whose stated shape is *one format, N implementations, fenced*.
+   *
+   * `ipc.test.ts`'s trick, over one constant: read the crate as text and compare.
+   */
+  it("says exactly what the crate says, word for word", () => {
+    const declared = /pub const NOT_A_LINK: &str = "([^"]*)";/.exec(publishRs);
+    expect(declared, "share::publish::NOT_A_LINK is no longer a plain string literal").not.toBeNull();
+    expect(declared?.[1]).toBe(NOT_A_SHARE_LINK);
   });
 });

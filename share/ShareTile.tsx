@@ -77,8 +77,10 @@ export function ShareTile({
   // app's rule everywhere and not this page's shortcut.
   const finish = wireFinish(card.f);
   const marked = finish === "nonfoil" ? null : finish;
-  const condition =
-    card.c === undefined ? NOTHING : (CONDITION_LABEL[card.c as Condition] ?? card.c);
+  // `== null` and not `=== undefined`, throughout both viewers: the writer emits neither — `c`
+  // carries `skip_serializing_if` — but nothing validates a document on the way in, and a
+  // `c: null` would take the label arm and render the blank cell this comment block forbids.
+  const condition = card.c == null ? NOTHING : (CONDITION_LABEL[card.c as Condition] ?? card.c);
 
   return (
     <li className="group flex flex-col" style={cardScaleVars(DEFAULT_ZOOM)}>

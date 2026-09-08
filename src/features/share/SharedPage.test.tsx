@@ -26,7 +26,7 @@ import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import type { CollectionRow, WishRow } from "@/lib/ipc";
 import type { ShareCard, ShareSnapshot } from "@/lib/shareSnapshot";
 import { useAppStore } from "@/lib/store";
-import { NOTHING, SharedPage } from "./SharedPage";
+import { NOTHING, SHARED_UNDRAWABLE, SharedPage } from "./SharedPage";
 
 const LINK = "https://share.example/s/testshareid00000";
 const OTHER = "https://share.example/s/secondbinder000";
@@ -462,5 +462,75 @@ describe("building a want list out of somebody else's binder", () => {
 
     expect(screen.queryByText(/picked/)).toBeNull();
     expect(wishlistAdd).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * **The floor under a document this view did not write, and the exposure is the opposite way
+ * round from the public page's.**
+ *
+ * `share/SharePage.tsx` only ever loads its own Worker's blob; this view opens whatever
+ * `shareLinkFrom` let through, which is any `https://…/s/{id}` on any host — the host is
+ * deliberately unchecked so a fork works. `parseSnapshotValue` promises three things and casts
+ * the rest, so every field below can be simply absent.
+ */
+describe("a snapshot missing everything the parser does not promise", () => {
+  /** `v`, `folders` and `cards` — all `parseSnapshotValue` guarantees, and all it is given. */
+  const bare = () => ({ v: 1, folders: [], cards: [card()] });
+
+  it("draws the binder minus the columns rather than throwing the app away", async () => {
+    shareOpen.mockResolvedValue(bare());
+    mount();
+
+    // The card is on the wall, which is the whole claim: `snapshot.currency.toLowerCase()` and
+    // `snapshot.fields.includes(…)` both threw here before, during render.
+    expect(await screen.findByRole("listitem", { name: /^Lightning Bolt/ })).toBeInTheDocument();
+    // A heading with no text announces nothing, so an absent title is a name and not "".
+    expect(screen.getByRole("heading", { level: 2 })).toHaveAccessibleName("Shared collection");
+    // No owner, no `as of` — an absent stamp drops the clause rather than dating the binder to
+    // `Invalid Date`.
+    expect(screen.queryByText(/as of/)).toBeNull();
+    expect(screen.getByText(/read-only snapshot/)).toHaveTextContent(
+      /until its owner publishes their collection again/,
+    );
+    // `fields` absent means the publisher answered no optional question, so no money slot and no
+    // Price sort — the same reading a snapshot with `fields: []` gets.
+    expect(screen.queryByRole("option", { name: "Price" })).toBeNull();
+  });
+
+  it("names the binder in the switcher by its id when it carries no owner or title", async () => {
+    shareOpen.mockResolvedValue(bare());
+    useAppStore.setState({ openedShares: [LINK, OTHER] });
+    mount();
+
+    expect(
+      await screen.findByRole("button", { name: "testshareid00000" }),
+    ).toBeInTheDocument();
+  });
+});
+
+/**
+ * ⚠️ **This app has one error boundary and this is it.**
+ *
+ * `grep -rn "componentDidCatch\|getDerivedStateFromError" src/` answered nothing before this
+ * landed: a throw out of any render unmounted the whole tree to a white window whose only
+ * recovery was restarting the program. The guards above are the better answer where they apply;
+ * this is the floor under everything else, and it is scoped to the one view whose document
+ * arrives from a pasted, unvalidated URL.
+ */
+describe("the boundary around the shared view", () => {
+  it("draws a sentence in the view's own chrome when a malformed document throws", async () => {
+    // A folder that is not an object: `drawers()` reads `f.uid` off it and throws **during
+    // render**, where the query's own `isError` arm cannot reach. Nothing the writer produces
+    // looks like this; a pasted link to a page nobody in this repo wrote can.
+    shareOpen.mockResolvedValue(snapshot({ folders: [null] as never }));
+    const noise = vi.spyOn(console, "error").mockImplementation(() => {});
+    mount();
+
+    expect(await screen.findByText(SHARED_UNDRAWABLE)).toBeInTheDocument();
+    // The chrome is the view's, so a reader can tell a broken document from a broken app.
+    expect(screen.getByText(/The link is good/)).toBeInTheDocument();
+    expect(noise).toHaveBeenCalled();
+    noise.mockRestore();
   });
 });

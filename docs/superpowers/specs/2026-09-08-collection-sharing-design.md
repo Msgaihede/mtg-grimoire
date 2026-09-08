@@ -106,9 +106,17 @@ exists because that scheme has moved before.
 `purchase_currency`, `acquired_at`, `acquisition_source`, `notes` and `tags`. Decision 3 made
 `notes` and the free-text `tags` optional-and-off; this spec makes them absent instead, because
 an optional field is a field a future switch can turn on by accident, and these are the ones a
-reader would be most upset to have published. `needs_review`, `tradelist_quantity`, `grading`,
+reader would be most upset to have published. `needs_review`, `condition_original`, `tradelist_quantity`, `grading`,
 `serial_number`, `altered`, `signed`, `proxy` and `misprint` are absent for the plainer reason
 that nothing in the viewer draws them.
+
+⚠️ **`condition_original` was on neither list until 2026-09-08 and belongs on this one.** It is
+arbitrary text out of the reader's **own import file** — what their spreadsheet said before the
+grade was normalised (`schema.rs`'s *"the normalisation is lossy … the user's own file is the only
+place the difference still exists"*) — so its content is whatever they happened to have in that
+column, and it sits one line below `condition` in the same table the publisher reads. The
+`needs_review` beside it is a **free-text sentence** rather than a flag, which is the same hazard
+in a column that was already listed.
 
 **`fields` is on the wire even though a reader could infer it from the keys present.** A folder
 of cards that all happen to be `NM` is indistinguishable from a snapshot that carries no

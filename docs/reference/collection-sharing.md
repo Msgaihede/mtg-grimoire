@@ -98,7 +98,7 @@ control. `image_uri::has_cache_buster` exists because that scheme has moved befo
 `purchase_currency`, `acquired_at`, `acquisition_source`, `notes` and the collection's free-text
 `tags`. Decision 3 first made `notes` and `tags` optional-and-off; the spec made them absent
 instead, **because an optional field is a field a future switch can turn on by accident** and
-these are the six a reader would most mind having published. `needs_review`,
+these are the six a reader would most mind having published. `needs_review`, `condition_original`,
 `tradelist_quantity`, `grading`, `serial_number`, `altered`, `signed`, `proxy` and `misprint` are
 absent for the plainer reason that nothing in either viewer draws them.
 
@@ -112,6 +112,23 @@ Swapping the select's `e.lang` for `e.acquisition_source` puts `"l":"private-sou
 on the wire **under an entirely legitimate key name** — and the key-only version of that sweep
 passes it. Only `altered`, `signed`, `proxy` and `misprint` are key-name-only, honestly documented
 as such, because a boolean has no distinctive value to carry.
+
+⚠️ **The fence had two holes and both were about the _fixture_ rather than the list** (found
+2026-09-08, in the whole-branch review). **`needs_review` was on both halves of the sweep and NULL
+on every row the fixture made** — it is a free-text *sentence* the reconciler writes, and a column
+the fixture never sets is a column fenced by its key name alone, so a leak under a short key would
+have serialised as `null` and passed both halves. **`condition_original` was on neither half nor in
+spec §3** — arbitrary text out of the reader's own import file, whatever their spreadsheet held
+before the grade was normalised, sitting one line below `condition` in the very table the publisher
+reads. Both carry a `private-…` marker now, both are on the list, and each was mutation-checked by
+pointing the select's `e.condition` at them in turn. The general form is worth more than the two
+columns: **a value sweep proves nothing about a column the fixture leaves unset.**
+
+**The TypeScript half swept five key names and no values while calling itself *"the assertion that
+the writer's absences are real"***, and it sweeps both now. The two fences are deliberately not one:
+Rust's runs over a snapshot built at test time and so holds for every input, while
+`shareSnapshot.test.ts`'s runs over the **committed** golden and is what goes red when a golden is
+regenerated with a leak in it — the case where the writer's own suite moved in the same commit.
 
 ### `fields` advertises a question, never an answer
 
@@ -138,6 +155,24 @@ ordinary rather than edge cases, and the writer emits every one deliberately:
 Both viewers render a missing `c` or `p` as an em dash. `shareSnapshot.ts`'s header states all
 three, because that is the file both readers see.
 
+⚠️ **Three implementations spelled that absence three ways, and one of them disagreed with the
+writer about arithmetic** (fixed 2026-09-08). `share::publish::meta_body` sends `totalValue: null`
+unless at least one card carried a price, on the stated grounds that *a `0.0` on a binder no feed
+quotes is the page claiming it is worth nothing* — and `share/SharePage.tsx` folded a missing `p`
+to zero, so a share published with `value` where the marketplace quotes nothing rendered **"Worth
+$0.00 at TCGplayer prices"** on the public page: the exact number the writer goes out of its way to
+refuse, mitigated by a `, with N unquoted` clause and still there. The page declines to state a
+total now — *"No TCGplayer price is quoted for anything here"* — so there are three states rather
+than two: prices were not shared, prices were shared and nothing is quoted, prices were shared and
+something is.
+
+**And the absence itself is now spelled `== null` everywhere, in both viewers.** It was
+`=== undefined` in three readers and `?? null` in two others. The writer emits neither — `c` and
+`p` both carry `skip_serializing_if` — but **nothing validates a document on the way in**, so a
+`p: null` counted as *quoted*: it contributed 0 to the total and was left out of the unquoted
+count, and a `c: null` would have rendered the blank cell both files' comments say must never
+happen.
+
 ### The golden is the fence, and there are three implementations
 
 `src-tauri/src/share/__golden__/snapshot.json` is committed, the Rust writer asserts byte equality
@@ -153,6 +188,15 @@ The golden is a **full** snapshot and exercises no absence. That is deliberate �
 covered by targeted Rust tests that assert on the *serialised JSON* plus a TypeScript
 delete-and-reparse case, so a second byte-exact artifact would duplicate coverage while adding a
 second file to keep in LF and in sync.
+
+**One user-visible sentence is spelled twice and is fenced the same way the rest is** (2026-09-08).
+`OpenShareDialog`'s `NOT_A_SHARE_LINK` claims to be `share::publish::NOT_A_LINK` word for word —
+the same paste can be refused on either side of the boundary, and a reader who typed one wrong
+thing must not be told two different things depending on which half noticed — and nothing held the
+two together. `OpenShareDialog.test.tsx` reads `publish.rs` through Vite's `?raw` and compares, the
+trick `ipc.test.ts` already uses on the crate and `share::publish` already uses on the Worker's
+`wrangler.jsonc`. Five lines, in a feature whose whole shape is *one format, N implementations,
+fenced*.
 
 ### Size, measured
 
@@ -635,8 +679,11 @@ service worker or a core reaches the bundle. Do not "fix" the sweep to match the
 without re-reading this paragraph.
 
 **Measured 2026-09-08** by `vite build --config vite.share.config.ts` on this branch:
-`dist-share/assets/share.js` is **486.47 kB, 141.43 kB gzipped**, one chunk, with the fonts as
-separate assets beside it. **The entry name is pinned rather than content-hashed**, because the
+`dist-share/assets/share.js` is **486.74 kB, 141.49 kB gzipped**, one chunk, with the fonts as
+separate assets beside it. (It read **486.47 / 141.43** earlier the same day; the whole-branch
+review's guards — the total that declines to state itself, the `== null` absences — are the 0.27 kB
+between them. Re-measured rather than left standing, because `npm run share:build` answers it in
+three seconds and this is one of the few numbers on this page a command re-derives.) **The entry name is pinned rather than content-hashed**, because the
 Worker's shell links `/assets/share.js` by a fixed name and cannot learn a Vite manifest without a
 second Worker request.
 
@@ -738,18 +785,64 @@ from two sweeps over the reader's own lists. Three things about it:
 snapshot does not change on its own, and every refusal the crate returns is a sentence and terminal.
 The view offers a *Check for an update* press, which is `refetch()`.
 
+⚠️ **The blob fetch asks for gzip and then sniffs for it, and both halves are insurance against a
+question no document can settle.** `src-tauri/Cargo.toml` builds reqwest `default-features = false`
+with **no `gzip` feature** — deliberately, because Scryfall's bulk data is a real `.gz` *file* and
+transparent decompression would corrupt it — so this client decodes nothing itself and, until
+2026-09-08, sent no `accept-encoding` either. The Worker stores a gzipped object and nails
+`content-encoding: gzip` on by hand (`share-worker/src/blob.ts`), and `parse_snapshot` ran
+`GzDecoder` unconditionally. **An edge that answered an `accept-encoding`-less client with the
+identity body would therefore have failed every in-app open with a corruption sentence on a
+perfectly healthy share** — and whether Cloudflare does that on this deploy is a fact about the
+deploy. So `open` sends `accept-encoding: gzip` explicitly and `parse_snapshot` branches on the
+`1f 8b` magic, reading anything else as the JSON it may well be; either answer opens.
+`share-worker/README.md`'s step 5 is the two `curl`s (`-sI --compressed` and bare `-sI`) that say
+which answer the deploy actually gives, and **nobody has run them, because nothing is deployed.**
+
+**The in-app viewer's field guards are the public page's, crossed** (2026-09-08). `parseSnapshotValue`
+guarantees three things — an object, a `v` that is not newer, and two arrays — and everything past
+that is `snapshot as ShareSnapshot`, a **cast rather than a strip**. `share/SharePage.tsx` built
+`asText`, a nullable `asOf` and an `Array.isArray(snapshot.fields)` check for exactly that and
+explains why in its own comment; none of it had crossed, so a body that parsed and omitted
+`currency` threw inside `snapshot.currency.toLowerCase()` **during render**. **The exposure is the
+opposite way round from the page the guards were written for**: the web viewer only ever loads its
+own Worker's blob, while this view opens whatever `shareLinkFrom` lets through — the scheme and a
+`/s/{id}` tail, with the **host deliberately unchecked so a fork works** — so any page anywhere
+serving a gzipped `{"folders":[],"cards":[]}` reaches this render. And `grep -rn
+"componentDidCatch\|getDerivedStateFromError" src/` answered **nothing**: a throw here unmounted the
+whole app to a white window whose only recovery was restarting the program. `SharedBoundary` is the
+app's one error boundary, scoped to the one view whose document arrives from a pasted URL.
+
 ### The entry point, which decision 6 left nowhere to put
 
 Spec decision 6 hides the *Shared* rail row until a reader has opened a share, and the collection's
 control is for **publishing** — so nothing in the app offered a reader their *first* share. Binding
-`switchView` against the whole of `NAV` rather than the filtered rail made the chord open the view
-either way, landing on an empty state with a paste button. **That fixes reachable and not
+`switchView` against the whole of `NAV` rather than the filtered rail made `Ctrl+6` open the view
+either way, landing on an empty state with a paste button. **That fixed reachable and not
 discoverable.**
 
 So *Open a shared collection* sits beside the Share control on the cabinet, mounting the same
 dialog. Both halves of the feature then live in one place — publish your binder, open somebody
 else's. Making the rail row unconditional would have fixed discovery by spending the slot decision
 6 exists to save, on a feature most readers will never use.
+
+⚠️ **The chord is gone, and this view is the destination that goes without one** (2026-09-08,
+after `origin/main` brought Trade and Playtesting into the rail). `NAV` holds **ten** destinations
+against `Ctrl+1…9`, and `Ctrl+0` is not a tenth step of that run — so one row has to have no
+chord, and which one is forced by what a chord is *for*: it does not move. Every other row is on
+the rail for every reader; `shared` appears only once a link has been opened, so a digit bound to
+it would either shift the digits after it — one press meaning two things to two readers — or point
+at a row half the readers do not have. `AppShell.tsx`'s `CHORD_NAV` is `NAV` minus that one entry,
+derived rather than written out, and `AppShell.test.tsx` pins the consequence by name: *"gives the
+Shared view no chord, and `Ctrl+6` reaches Scanner instead"*.
+
+**What it costs this view is nothing, and the paragraph above is why**: the route the chord had was
+a *fallback*, written when the app offered no first share at all, and the cabinet's control is the
+signpost it was standing in for. Once a share is open the rail row is the way back.
+`docs/reference/keyboard-shortcuts.md` carries the ruling; `src/App.tsx`'s dispatch comment claimed
+the chord still worked until this pass, which is the **third** site on this branch to ship a comment
+contradicting its own code — `nav.ts`, `shortcuts.ts` and `AppShell.tsx` were all updated when the
+chord went and that one was not.
 
 ### The Share control
 
@@ -773,6 +866,22 @@ it, withdraw it.
   and importing them from the panel is right by the one-prefix-one-spelling rule while dragging
   `QrScanner` and `jsqr` into the collection chunk behind them. **A query key imported from a
   panel carries that panel's whole module graph**, which is a bundling fact no lint sees.
+* ⚠️ **`useShares(connected)` takes its gate as an argument, and this is about the write
+  connection rather than about what the control draws** (2026-09-08). `share_list` is the only one
+  of the five commands that reconciles, and `share::commands` runs it inside
+  `on_the_write_connection` → `sync::with_write` — so it **holds the exclusive write lock across a
+  relay round trip**, and every other user write in the app answers `db::BUSY` after
+  `WRITE_LOCK_WAIT` (5 s), whose own doc says only something genuinely stuck should hold it that
+  long. The share client's read timeout is **60 s**. That shape is `sync_now`'s and was deferred as
+  matching it — but `sync_now` is a **press**, while this hook is called unconditionally by a
+  component that mounts with the whole Collection page, and `query.ts` leaves
+  `refetchOnWindowFocus` at TanStack's default **true**. So on a connected device every focus of
+  the app on that page could hold the write connection for a network trip, and it is invisible
+  today only because `endpoint()` short-circuits on the placeholder base. The query is now
+  `enabled: connected` — the control is hidden for everyone else anyway, and an unconnected device
+  would be taking that lock to be handed the local cache it already has — with
+  `refetchOnWindowFocus: false` beside it, because this list changes on a press and both presses
+  invalidate `SHARE_KEY` themselves.
 
 **`CollectionFolder` gained `sync_uid` for this**, and its absence was a plan defect found only
 when the control was built: `share_create` takes a `folderUid` and `ShareRow` answers one, but the
@@ -911,23 +1020,43 @@ Share control, both are fixed, and both are recorded here because neither suite 
 Confirmed clean in the same pass: the greyed row's accessible name reads *"Share this folder…
 unlock it first"* in Chromium's AX tree (a real space — not the `Missing2` failure); the
 `NOT_DEPLOYED` sentence matches `publish.rs` byte for byte with **no `error_log` row written**; the
-malformed-link refusal keeps the dialog open and the text; `Ctrl+6/7/8` all land correctly and the
-*Shared* row hides again on leaving. Zero console errors or warnings across the pass.
+malformed-link refusal keeps the dialog open and the text; and the *Shared* row hides again on
+leaving. Zero console errors or warnings across the pass.
 
-**`BottomTabBar` at eight destinations was driven, and it truncates rather than overflowing.** The
-row is `flex` with no wrap, so a 390px window divides by whatever it is given: the 65px-per-tab
-figure was measured at **six** tabs on 2026-08-29, and eight gives **48.75px**. Driven at 390×844
-(2026-09-08, WebView2): every tab draws at exactly **48.75 × 52**, `nav.scrollWidth ===
-clientWidth === 390`, and `documentElement`/`body` likewise — **nothing overflows**, and the 44px
-`--target-min` never binds. **Exactly one label truncates**: `Collection`, 55 against 49, drawn as
-`Collecti…`; every other span reports `scrollWidth === clientWidth`.
+⚠️ **This paragraph also said *"`Ctrl+6/7/8` all land correctly"*, and it was driven before the
+final `origin/main` merge.** The rail was eight destinations that day; it is **ten** now, `shared`
+has **no chord at all**, and `Ctrl+6` reaches Scanner — see [the chord
+ruling](#the-entry-point-which-decision-6-left-nowhere-to-put) above. The finding is not wrong so
+much as about a different tree, which is exactly the failure mode a dated measurement is supposed
+to prevent, so it is struck rather than renumbered: **nothing on the current bar has been driven by
+chord.**
+
+**`BottomTabBar` was driven at eight destinations and it truncates rather than overflowing** —
+**and eight is not what a reader has now.** The row is `flex` with no wrap, so a 390px window
+divides by whatever it is given: the 65px-per-tab figure was measured at **six** tabs on
+2026-08-29, and eight gives **48.75px**. Driven at 390×844 (2026-09-08, WebView2, **before the
+final `origin/main` merge**): every tab drew at exactly **48.75 × 52**, `nav.scrollWidth ===
+clientWidth === 390`, and `documentElement`/`body` likewise — **nothing overflowed**, and the 44px
+`--target-min` never bound. **Exactly one label truncated**: `Collection`, 55 against 49, drawn as
+`Collecti…`; every other span reported `scrollWidth === clientWidth`.
+
+⚠️ **The bar draws nine now, and ten with a share open, and neither has been driven.** Trade and
+Playtesting arrived from `main`, so the ordinary bar is **nine** tabs at 43.33px — `BottomTabBar.tsx`
+records four labels truncating there (`Collection` 55.23, `Playtesting` 61.97, `Scanner` 45.73,
+`Settings` 45.42, against a 44px content box) — and a reader who has opened somebody's binder gets
+the **tenth**, at 39px per box. That component's own header is honest about the tenth and this page
+was not, which is why the figures above keep their date and are described as the bar they were taken
+on rather than being arithmetically renumbered. The rule stands as `BottomTabBar` states it: the
+row was at its floor at nine already, and what to do about a phone with ten destinations is a
+question about what a phone's navigation *is*, not about what a tenth tab costs.
 
 The same pass settled the two figures the tree carried for that ink width. Re-measured at 12px
 Geist Variable: Search 38.67, Tagger 37.50, Decks 34.27, **Collection 55.23**, Wishlist 43.30,
 Shared 39.06, Scanner 45.73, Settings 45.42 — and `Search` reproduces the 2026-08-29 headless
 figure exactly, which is the cross-check that the face is the right one. So **`BottomTabBar.tsx`'s
 55.23 was correct and `BottomTabBar.stories.tsx`'s 54.98 was not**; the story is corrected and
-dated.
+dated. (Eight labels, so **Trade and Playtesting are not on that list** — the widths are per-label
+and do not move with the tab count, but the census is a tree's.)
 
 **The action row at 1280 with the search column docked does neither of the two things this page
 predicted.** The premise that the inner `flex-wrap` is inert was right — `FigureRow` used to size
@@ -936,16 +1065,24 @@ cost: the wrapper drew **421.67** flush to the row's right edge, the `<dl>` was 
 **571.33**, both children stayed on one line, and nothing overflowed at 1280 **or** at the 1024
 floor. It broke only below a row width of **445.67**, which is the phone defect above.
 
-**Automatic refresh is deliberately not built, and no plan task ever assigned it.** Spec §4.1
-promises *"on app launch and after a sync that touched a shared folder, debounced, plus a manual
-Update now"*; **only the manual press exists.** ⚠️ **§4.1 was ruled to be amended to say so and it
-was not** — as this page is written the spec still reads as though the trigger shipped, and §14
-carries no item for it. This page is the correction until somebody makes that edit. The reasoning: the
-viewer is *told* how stale a snapshot is (the page renders *as of …*), the owner has an explicit
-press and a stale mark — so this is a convenience rather than a correctness gap; and an on-launch
-re-publish for every share is real network on the account's shared budget, with nothing deployed to
-measure it against. **What it costs is that a snapshot can sit stale for as long as an owner does
-not press Update**, visible to them in the app and to viewers as an older *as of* date.
+**Automatic refresh is deliberately not built, and no plan task ever assigned it.** Spec §4.1 used
+to promise *"on app launch and after a sync that touched a shared folder, debounced, plus a manual
+Update now"*; **only the manual press exists.** The reasoning: the viewer is *told* how stale a
+snapshot is (the page renders *as of …*), the owner has an explicit press and a stale mark — so
+this is a convenience rather than a correctness gap; and an on-launch re-publish for every share is
+real network on the account's shared budget, with nothing deployed to measure it against. **What it
+costs is that a snapshot can sit stale for as long as an owner does not press Update**, visible to
+them in the app and to viewers as an older *as of* date.
+
+⚠️ **The spec was amended, and this paragraph went on saying it had not been.** It read *"§4.1 was
+ruled to be amended to say so and it was not — as this page is written the spec still reads as
+though the trigger shipped, and §14 carries no item for it. This page is the correction until
+somebody makes that edit."* Commit `6ff7a8ba` made exactly that edit: §4.1 now reads *"Refresh in
+v1 is the manual Update now and nothing else"* with the ⚠️ paragraph explaining the narrowing, and
+§14 carries **item 7** for the automatic half. So the correction outlived the thing it corrected
+and became the only wrong sentence of the pair — a **prose-only edit routes to neither CI job**,
+which is what lets a note like this rot in place while every build stays green. Read the spec, not
+this line, for what §4.1 says.
 
 **A pre-existing landmine in `relay/src/fakeD1.ts`, found here and deliberately not fixed.** Its
 tokenizer has **no rule for `'`**, so `WHERE status = 'dead'` resolves `dead` as a *column*, yields

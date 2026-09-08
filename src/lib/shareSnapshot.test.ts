@@ -60,10 +60,48 @@ describe("the share snapshot mirror", () => {
     expect(parsed.cards[1].p).toBeUndefined();
   });
 
-  /** Not a smoke test: this is the assertion that the writer's absences are real. */
-  it("carries no private field", () => {
-    for (const forbidden of ["purchase", "acquired", "notes", "tags", "tradelist"]) {
-      expect(golden).not.toContain(forbidden);
+  /**
+   * Not a smoke test: this is the assertion that the writer's absences are real.
+   *
+   * ⚠️ **It swept five key names and no values until 2026-09-08, while calling itself that** —
+   * which is exactly the half `share::tests::no_private_field_can_reach_the_wire` says a key-name
+   * sweep passes over: a private column reaching the wire under a short key, or renamed on the
+   * way out, carries none of these strings. The golden is written by that same Rust fixture, and
+   * every private column in it holds a distinctive `private-…` marker, so this side can sweep the
+   * **content** as well and does.
+   *
+   * The two fences are deliberately not one. Rust's runs over a snapshot built at test time and
+   * so holds for *every* input; this one runs over the **committed** file and is what goes red
+   * when a golden is regenerated with a leak in it — the case where the writer's own suite was
+   * updated in the same commit.
+   */
+  it("carries no private field, by key name or by value", () => {
+    for (const forbidden of [
+      // Spec §3's first list — absent from the format, never switched off in it.
+      "purchase",
+      "acquired",
+      "acquisition",
+      "notes",
+      "tags",
+      // Spec §3's second list — absent because nothing in either viewer draws them.
+      "needsReview",
+      "needs_review",
+      "conditionOriginal",
+      "condition_original",
+      "tradelist",
+      "grading",
+      "serial",
+      "altered",
+      "signed",
+      "proxy",
+      "misprint",
+      // The values. Every private column the Rust fixture can write a string into holds the
+      // same marker, so one substring sweeps the lot; the two that cannot are spelled out.
+      "private-",
+      "bought at a GP",
+      "9.99",
+    ]) {
+      expect(golden, forbidden).not.toContain(forbidden);
     }
   });
 

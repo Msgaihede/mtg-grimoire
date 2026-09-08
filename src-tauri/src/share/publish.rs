@@ -801,7 +801,18 @@ pub async fn open(conn: &Connection, url: &str) -> Result<serde_json::Value, Str
 
     // **Not [`send`], because the body is bytes rather than text.** A gzip read through
     // `response.text()` would be lossily decoded as UTF-8 before it ever reached the decoder.
-    let response = match http().get(&blob).send().await {
+    //
+    // ⚠️ **`accept-encoding` is sent by hand, because reqwest is built with no `gzip` feature
+    // and therefore sends none.** The Worker sets `content-encoding: gzip` on a body R2 already
+    // holds compressed, but an edge is entitled to answer an `accept-encoding`-less client with
+    // identity — and this client is one. Asking explicitly costs a header and removes the whole
+    // question; nothing auto-decodes it here either way, which is what [`parse_snapshot`] wants.
+    let response = match http()
+        .get(&blob)
+        .header("accept-encoding", "gzip")
+        .send()
+        .await
+    {
         Ok(r) => r,
         Err(e) => {
             note(conn, "share_open", kind_of(&e), &e.to_string(), Some(&blob));
@@ -827,17 +838,34 @@ pub async fn open(conn: &Connection, url: &str) -> Result<serde_json::Value, Str
     parse_snapshot(&bytes)
 }
 
-/// Gunzip and parse, with the one check this side is entitled to make.
+/// The two bytes a gzip member opens with. Sniffed rather than assumed — see [`parse_snapshot`].
+const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
+
+/// Gunzip **if it is gzip** and parse, with the one check this side is entitled to make.
 ///
 /// **An object, and nothing further.** Whether `v` is a version this app can draw is
 /// TypeScript's question (see [`open`]); whether the bytes are a JSON document at all is not,
 /// because the alternative is handing the page a number or a string where it expects a binder.
+///
+/// ⚠️ **The encoding is sniffed and never assumed, and this is insurance rather than tidiness.**
+/// The Worker stores a gzipped body and sets `content-encoding: gzip` by hand; reqwest is built
+/// here with no `gzip` feature, so nothing on this side decodes anything. Both halves of that are
+/// true *today* and neither is this app's to guarantee: an edge that answered identity — to a
+/// client that sends no `accept-encoding`, or that decodes on the way past — would make every
+/// in-app open fail with a corruption sentence on a perfectly healthy share, and no document can
+/// settle which it does. So a body opening `1f 8b` is gunzipped and anything else is read as the
+/// JSON it may well be. A body that is neither still lands on the same sentence it always did.
 fn parse_snapshot(bytes: &[u8]) -> Result<serde_json::Value, String> {
     use std::io::Read;
     let mut text = String::new();
-    flate2::read::GzDecoder::new(bytes)
-        .read_to_string(&mut text)
-        .map_err(|e| format!("that shared collection could not be read: {e}"))?;
+    if bytes.starts_with(&GZIP_MAGIC) {
+        flate2::read::GzDecoder::new(bytes)
+            .read_to_string(&mut text)
+            .map_err(|e| format!("that shared collection could not be read: {e}"))?;
+    } else {
+        text = String::from_utf8(bytes.to_vec())
+            .map_err(|e| format!("that shared collection could not be read: {e}"))?;
+    }
     let value: serde_json::Value = serde_json::from_str(&text)
         .map_err(|e| format!("that shared collection could not be read: {e}"))?;
     if !value.is_object() {
@@ -1074,9 +1102,28 @@ mod tests {
         assert!(parse_snapshot(&bytes).is_err());
     }
 
+    /// ⚠️ **A share served without its `content-encoding` still opens, and this is the one thing
+    /// about the blob fetch that cannot be settled from a document.**
+    ///
+    /// The Worker stores gzip and nails `content-encoding: gzip` on by hand; reqwest is built
+    /// with no `gzip` feature and so sends no `accept-encoding` of its own until [`open`] adds
+    /// one. An edge answering that client with identity is entirely allowed to, and the failure
+    /// it produced was the worst kind — a corruption sentence about a perfectly healthy share.
+    /// So the magic is sniffed, and plain JSON is read as plain JSON.
     #[test]
-    fn a_body_that_is_not_gzip_is_a_sentence_rather_than_a_panic() {
+    fn a_snapshot_served_as_plain_json_is_read_rather_than_called_corrupt() {
+        let value = parse_snapshot(br#"{"v":1,"cards":[]}"#).unwrap();
+        assert_eq!(value["v"], 1);
+    }
+
+    /// The sniff is on the **magic bytes** and not on a heuristic about the first character, so a
+    /// body that is neither gzip nor JSON still lands on the sentence it always did.
+    #[test]
+    fn a_body_that_is_neither_gzip_nor_json_is_a_sentence_rather_than_a_panic() {
         assert!(parse_snapshot(b"not gzip at all").is_err());
+        // Gzip magic over bytes that are not a gzip member: the decoder's own refusal, not the
+        // JSON parser's, which is what says the sniff selected the right arm.
+        assert!(parse_snapshot(&[0x1f, 0x8b, 0x00, 0x01]).is_err());
     }
 
     /// The base is the compiled-in placeholder until a `sync_state` row overrides it, and a

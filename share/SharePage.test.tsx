@@ -125,6 +125,40 @@ describe("SharePage", () => {
     expect(within(tiles()[0]).queryByText(NOTHING)).not.toBeInTheDocument();
   });
 
+  /**
+   * ⚠️ **The writer refuses this figure and this page used to state it anyway.**
+   *
+   * `share::publish::meta_body` sends `totalValue: null` unless something carried a price —
+   * *a `0.0` on a binder no feed quotes is the page claiming it is worth nothing* — while the
+   * header here folded a missing `p` to zero and rendered **"Worth $0.00 at TCGplayer prices"**
+   * for a share published *with* `value` where the marketplace quotes nothing. One format, three
+   * implementations: the arithmetic has to agree as much as the fields do.
+   */
+  it("declines to state a total when the marketplace quotes nothing at all", () => {
+    // `value` stays in `fields` — the publisher *did* answer the money question — and no card
+    // carries a price, which is the state the `, with N unquoted` clause could only mitigate.
+    mount(edited((s) => s.cards.forEach((c) => delete c.p)));
+    expect(screen.queryByText(/\$0\.00/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Worth /)).not.toBeInTheDocument();
+    expect(screen.getByText(/no tcgplayer price is quoted for anything here/i)).toBeInTheDocument();
+  });
+
+  /**
+   * The writer emits neither absence — `p` and `c` both carry `skip_serializing_if` — and
+   * nothing validates a document on the way in, so both viewers spell an absent card field
+   * `== null` rather than `=== undefined`. A `p: null` counted as *quoted* here: it contributed
+   * nothing to the total and was left out of the unquoted count, so the figure read low with
+   * nothing beside it saying why.
+   */
+  it("reads a null price as an absence rather than as a quote", () => {
+    mount(edited((s) => (s.cards[0].p = null as unknown as number)));
+    // The golden is two cards — Fury Sliver ×2 and Tundra ×1, both at 0.34 — so nulling the
+    // first leaves one quoted copy and two unquoted ones.
+    expect(screen.getByText(/Worth \$0\.34 at TCGplayer prices, with 2 unquoted/)).toBeInTheDocument();
+    const first = tiles().find((t) => within(t).queryByAltText("Fury Sliver") !== null);
+    expect(within(first as HTMLElement).getByText(NOTHING)).toBeInTheDocument();
+  });
+
   it("draws an em dash for a card the publisher answered nothing for", () => {
     // `fields` advertising a column does not promise every card carries it: an ungraded copy
     // emits no `c` and an unquoted finish emits no `p`, both with `condition` and `value`

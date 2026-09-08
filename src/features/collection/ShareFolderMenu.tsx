@@ -185,7 +185,6 @@ export function shareIsStale(share: ShareRow | null, target: ShareTarget): boole
 export function ShareFolderMenu({ target }: { target: ShareTarget | null }): JSX.Element {
   const client = useQueryClient();
   const { menuClick } = useContextMenu();
-  const shares = useShares();
   const setActiveView = useAppStore((s) => s.setActiveView);
   const tip = useTooltip();
 
@@ -235,6 +234,16 @@ export function ShareFolderMenu({ target }: { target: ShareTarget | null }): JSX
    * says must not see it.
    */
   const connected = membership !== "unknown" && membership !== "never";
+
+  /**
+   * The group's published shares, and **asked only once there is a membership to ask about**.
+   *
+   * `share_list` reconciles against the relay while holding the write connection, so an
+   * unconnected device asking would take the exclusive write lock for a round trip to learn
+   * something it already has locally — see {@link useShares}. It is read *after* `connected` for
+   * that reason and not by accident.
+   */
+  const shares = useShares(connected);
 
   const [publishing, setPublishing] = useState(false);
   const [withdrawing, setWithdrawing] = useState(false);

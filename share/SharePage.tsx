@@ -201,10 +201,25 @@ export function SharePage({ snapshot }: { snapshot: ShareSnapshot }) {
 
   const rail = useMemo(() => folderRail(snapshot), [snapshot]);
   const copies = useMemo(() => snapshot.cards.reduce((n, c) => n + c.q, 0), [snapshot]);
-  const worth = useMemo(
-    () => snapshot.cards.reduce((sum, c) => sum + (c.p ?? 0) * c.q, 0),
-    [snapshot],
-  );
+  /**
+   * What the binder comes to, or **`null` where nothing at all is quoted**.
+   *
+   * ⚠️ **The writer already refuses this figure and this page used to state it anyway.**
+   * `share::publish::meta_body` sends `totalValue: null` unless at least one card carried a
+   * price, on the stated grounds that *a `0.0` on a binder no feed quotes is the page claiming it
+   * is worth nothing* — and folding a missing `p` to zero here produced exactly that sentence,
+   * **"Worth $0.00 at TCGplayer prices"**, on the one page strangers open. One format, three
+   * implementations, and the arithmetic has to agree as much as the fields do.
+   *
+   * `== null` and not `=== undefined`: the writer emits neither absence — `p` carries
+   * `skip_serializing_if` — but nothing validates a document on the way in, so a `p: null` would
+   * count as *quoted*, contribute nothing to the sum and go undisclosed by {@link unquoted}.
+   */
+  const worth = useMemo(() => {
+    const priced = snapshot.cards.filter((c) => c.p != null);
+    if (priced.length === 0) return null;
+    return priced.reduce((sum, c) => sum + (c.p as number) * c.q, 0);
+  }, [snapshot]);
   /**
    * Copies the marketplace quoted nothing for.
    *
@@ -213,7 +228,7 @@ export function SharePage({ snapshot }: { snapshot: ShareSnapshot }) {
    * second marketplace to reach for — a `null` price is the answer.
    */
   const unquoted = useMemo(
-    () => snapshot.cards.reduce((n, c) => n + (c.p === undefined ? c.q : 0), 0),
+    () => snapshot.cards.reduce((n, c) => n + (c.p == null ? c.q : 0), 0),
     [snapshot],
   );
 
@@ -225,7 +240,7 @@ export function SharePage({ snapshot }: { snapshot: ShareSnapshot }) {
   /** Likewise for grades, plus the ungraded row when any copy carries no `c` at all. */
   const grades = useMemo(() => {
     const present = CONDITIONS.filter((c) => snapshot.cards.some((card) => card.c === c));
-    return snapshot.cards.some((c) => c.c === undefined) ? [...present, UNGRADED] : present;
+    return snapshot.cards.some((c) => c.c == null) ? [...present, UNGRADED] : present;
   }, [snapshot]);
 
   /**
@@ -260,7 +275,7 @@ export function SharePage({ snapshot }: { snapshot: ShareSnapshot }) {
         matches(card) &&
         (finish === "" || card.f === finish) &&
         (condition === "" ||
-          (condition === UNGRADED ? card.c === undefined : card.c === condition)),
+          (condition === UNGRADED ? card.c == null : card.c === condition)),
     );
 
     const by: Record<Sort, (a: ShareCard, b: ShareCard) => number> = {
@@ -321,10 +336,15 @@ export function SharePage({ snapshot }: { snapshot: ShareSnapshot }) {
             {stamp !== null && `, as of ${stamp}`}
           </p>
           <p className="mt-1 font-mono text-[0.8125rem] text-dim">
-            {showValue
-              ? `Worth ${formatPrice(worth, currency)} at ${market.label} prices` +
-                (unquoted > 0 ? `, with ${COUNT.format(unquoted)} unquoted` : "")
-              : "Prices were not shared"}
+            {!showValue
+              ? "Prices were not shared"
+              : worth === null
+                ? // Three states, not two: prices were not shared, prices were shared and
+                  // nothing is quoted, prices were shared and something is. The middle one is
+                  // what the writer declines to put a number on, so neither does this.
+                  `No ${market.label} price is quoted for anything here`
+                : `Worth ${formatPrice(worth, currency)} at ${market.label} prices` +
+                  (unquoted > 0 ? `, with ${COUNT.format(unquoted)} unquoted` : "")}
           </p>
           <p className="mt-5 max-w-[54ch] text-sm text-dim">{READ_ONLY_NOTICE}</p>
         </header>

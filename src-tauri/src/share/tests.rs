@@ -96,19 +96,29 @@ fn card(conn: &rusqlite::Connection, id: &str, name: &str) {
 /// grain adds and the free-text `tags` all hold a `private-…` marker here, and the string sweep
 /// looks for each. The four booleans (`altered`, `signed`, `proxy`, `misprint`) are set to 1 so
 /// the columns are non-default, but a `1` is not distinctive and only their key names are swept.
+///
+/// ⚠️ **Two text columns were unset here until 2026-09-08, and both are exactly the shape the
+/// paragraph above is about.** `needs_review` is a **free-text sentence** the reconciler writes —
+/// *"the printing vanished from Scryfall"*, and a reader's own row can carry any of them — and it
+/// was NULL on every row this fixture made, so a leak under a short key would have serialised as
+/// `null` and passed both halves of the sweep. `condition_original` is arbitrary text off the
+/// reader's own **import file**, so its content is whatever their spreadsheet held, and it was on
+/// neither spec §3 list nor either half of the sweep. Both carry a marker now.
 fn entry(conn: &rusqlite::Connection, card_id: &str, folder: Option<i64>, qty: i64) {
     conn.execute(
         "INSERT INTO collection_entries
-           (card_id, set_code, collector_number, lang, finish, condition, quantity,
-            tradelist_quantity, purchase_price, purchase_currency, acquired_at,
+           (card_id, set_code, collector_number, lang, finish, condition, condition_original,
+            quantity, tradelist_quantity, purchase_price, purchase_currency, acquired_at,
             acquisition_source, notes, tags, serial_number, grading,
-            altered, signed, proxy, misprint, folder_id, created_at, updated_at)
-         VALUES (?1, 'tsp', '157', 'en', 'nonfoil', 'NM', ?2, 7, 9.99,
+            altered, signed, proxy, misprint, needs_review, folder_id, created_at, updated_at)
+         VALUES (?1, 'tsp', '157', 'en', 'nonfoil', 'NM', 'private-graded-GD',
+                 ?2, 7, 9.99,
                  'private-currency-DKK', 'private-acquired-2019-08-02',
                  'private-source GP Copenhagen', 'private-notes bought at a GP',
                  '[\"private-tag\"]', 'private-serial-042/500',
                  '{\"company\":\"private-grader\",\"grade\":10}',
-                 1, 1, 1, 1, ?3, 0, 0)",
+                 1, 1, 1, 1, 'private-review this printing left Scryfall',
+                 ?3, 0, 0)",
         params![card_id, qty, folder],
     )
     .unwrap();
@@ -491,6 +501,11 @@ fn a_copy_whose_printing_left_the_corpus_travels_under_its_id() {
 /// distinctive **values** [`entry`] writes into every one of those columns that can hold a
 /// string: a key-name sweep alone passes over a field renamed on the way out, and over a short
 /// key like `p` that carries a private number under a public name.
+///
+/// ⚠️ **A column the fixture never sets is fenced by its key name alone, whatever this list
+/// says** — see [`entry`]. `needs_review` sat on both halves of the list and was NULL on every
+/// row until 2026-09-08, so the value half of it proved nothing; `condition_original` was on
+/// neither half nor in spec §3.
 #[test]
 fn no_private_field_can_reach_the_wire() {
     let conn = test_db();
@@ -517,6 +532,10 @@ fn no_private_field_can_reach_the_wire() {
         "signed",
         "proxy",
         "misprint",
+        // Arbitrary text out of the reader's own import file — what their spreadsheet said
+        // before the grade was normalised. On neither list until 2026-09-08.
+        "conditionOriginal",
+        "condition_original",
         // The values themselves, one per column `entry` can write a string into.
         "private-currency-DKK",
         "private-acquired-2019-08-02",
@@ -525,6 +544,8 @@ fn no_private_field_can_reach_the_wire() {
         "private-tag",
         "private-serial-042/500",
         "private-grader",
+        "private-graded-GD",
+        "private-review this printing left Scryfall",
         "bought at a GP",
         "9.99",
     ] {

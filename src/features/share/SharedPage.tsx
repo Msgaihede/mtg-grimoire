@@ -30,7 +30,7 @@
  *   besides. `AddToWishlist.tsx` is the whole of the write and `readOnly.test.ts` is where the
  *   exception is written down; every other command this directory names is still a read.
  */
-import { useMemo, useState, type ReactNode } from "react";
+import { Component, useMemo, useState, type ErrorInfo, type ReactNode } from "react";
 import { useQueries } from "@tanstack/react-query";
 import { Handshake, Heart, Link2, RefreshCw, X } from "lucide-react";
 import { CardArt } from "@/components/CardArt";
@@ -66,8 +66,35 @@ export const NOTHING = "—";
 /** `1,204` — the grouping every count here gets. Prices go through `formatPrice`. */
 const COUNT = new Intl.NumberFormat("en-US");
 
-/** `8 September 2025`, in the reader's own locale. `updatedAt` is **seconds**. */
-function asOf(updatedAt: number): string {
+/**
+ * **`parseSnapshotValue` guarantees `v`, `folders` and `cards` and nothing else — by design.**
+ *
+ * Its own header says why: a per-field validator there would be a fourth implementation of the
+ * format, free to disagree with the writer and both readers. Everything past those three is
+ * `snapshot as ShareSnapshot`, which is a **cast and not a strip** — so every *other* field this
+ * view reads is checked here, at the one place that reads it, and the answer for a missing one is
+ * the binder minus that column rather than a refusal.
+ *
+ * ⚠️ **The exposure here is the opposite way round from the web viewer's**, which is why the
+ * guards had to cross rather than being the public page's own care. `share/SharePage.tsx` only
+ * ever loads its own Worker's blob; this view takes an **arbitrary pasted URL** —
+ * `shareLinkFrom` checks the scheme and a `/s/{id}` tail and deliberately leaves the host
+ * unchecked so a fork works — so any page anywhere serving a gzipped `{"folders":[],"cards":[]}`
+ * reaches this render. Without these, `snapshot.currency.toLowerCase()` threw **during render**,
+ * and this app has one error boundary ({@link SharedBoundary}) and no others.
+ */
+function asText(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+/**
+ * `8 September 2025`, in the reader's own locale. `updatedAt` is **seconds**.
+ *
+ * `null` for a snapshot that carries no stamp this build can read: a header line without the
+ * *as of* clause beats `Invalid Date` beside somebody's binder.
+ */
+function asOf(updatedAt: number): string | null {
+  if (typeof updatedAt !== "number" || !Number.isFinite(updatedAt)) return null;
   return new Intl.DateTimeFormat(undefined, { dateStyle: "long" }).format(
     new Date(updatedAt * 1000),
   );
@@ -75,7 +102,7 @@ function asOf(updatedAt: number): string {
 
 /** Which currency the prices on the wire are in. The snapshot's own answer wins. */
 function shareCurrency(snapshot: ShareSnapshot): Currency {
-  const named = snapshot.currency.toLowerCase();
+  const named = asText(snapshot.currency).toLowerCase();
   if (named === "usd" || named === "eur") return named;
   // A currency this build does not know is a snapshot from a future one; the marketplace it was
   // priced at is a better guess than a hard-coded dollar.
@@ -93,13 +120,73 @@ const MATCHES: readonly { id: Match; label: string }[] = [
 
 type Sort = "name" | "set" | "quantity" | "price";
 
+/** What a reader is told when this view threw where nothing else could catch it. */
+export const SHARED_UNDRAWABLE = "This shared collection could not be drawn.";
+
+/**
+ * **The floor under every field this view reads, and the only error boundary in this app.**
+ *
+ * `grep componentDidCatch src/` found nothing before this landed, which is the whole reason it
+ * is here rather than being somebody else's problem: a throw out of any render unmounts the
+ * entire tree to a white window, and the only recovery is restarting the program. The named
+ * fields are guarded at their own sites ({@link asText}, {@link asOf}, the `fields` check) and
+ * that is the better answer where it applies — a binder minus one column beats a sentence. This
+ * catches the rest, and it is scoped to this view rather than to the app because this is the one
+ * view whose document came from a **pasted, unvalidated URL**.
+ *
+ * `share/SharePage.tsx`'s `ShareBoundary` is the same class for the same reason, one bundle over.
+ */
+export class SharedBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    // `error_log` is Rust's and every row in it is a *request* this app made; a render that threw
+    // is not one, and the console is what a bug report can carry.
+    console.error(error, info.componentStack);
+  }
+
+  render() {
+    if (!this.state.failed) return this.props.children;
+    return (
+      <Frame>
+        <div className="max-w-[46ch] py-14">
+          <p className="font-heading text-[1.375rem] leading-snug">{SHARED_UNDRAWABLE}</p>
+          <p className="mt-3 text-sm text-dim">
+            The link is good; this view could not read what it points at. Close the collection and
+            open it again, or ask for the link a second time.
+          </p>
+        </div>
+      </Frame>
+    );
+  }
+}
+
+/**
+ * The view, with the boundary above it.
+ *
+ * **A wrapper rather than a boundary in `App.tsx`**, so the guarantee travels with the view: a
+ * boundary cannot catch what its own render throws, and this is the component every caller —
+ * the dispatch chain, the stories, the suite — already names.
+ */
+export function SharedPage() {
+  return (
+    <SharedBoundary>
+      <SharedView />
+    </SharedBoundary>
+  );
+}
+
 /**
  * The view.
  *
  * Reads the open links out of the store and draws the head of that list, because the head **is**
  * the current binder — see `AppState.openedShares` for why that is one field rather than two.
  */
-export function SharedPage() {
+function SharedView() {
   const openedShares = useAppStore((s) => s.openedShares);
   const openShare = useAppStore((s) => s.openShare);
   const closeShare = useAppStore((s) => s.closeShare);
@@ -258,7 +345,12 @@ function Switcher({
   });
   const nameOf = (url: string, at: number) => {
     const snapshot = titles[at]?.data;
-    return snapshot === undefined ? shareIdOf(url) : `${snapshot.owner}’s ${snapshot.title}`;
+    if (snapshot === undefined) return shareIdOf(url);
+    // Guarded for {@link asText}'s reason, and a tab is the one place the fallback has to be a
+    // name rather than an empty string: a button with no text is a button nothing announces.
+    const owner = asText(snapshot.owner);
+    const title = asText(snapshot.title) || shareIdOf(url);
+    return owner === "" ? title : `${owner}’s ${title}`;
   };
 
   return (
@@ -378,9 +470,18 @@ function Binder({
 
   const currency = shareCurrency(snapshot);
   const market = resolveMarketplace(snapshot.marketplace);
-  const showValue = snapshot.fields.includes("value");
-  const showCondition = snapshot.fields.includes("condition");
-  const showLang = snapshot.fields.includes("lang");
+  // Guarded for {@link asText}'s reason: `fields` is not one of the three keys the parser
+  // promises, and an absent one means "the publisher answered no optional question" rather than
+  // a document nobody can open.
+  const fields = Array.isArray(snapshot.fields) ? snapshot.fields : [];
+  const showValue = fields.includes("value");
+  const showCondition = fields.includes("condition");
+  const showLang = fields.includes("lang");
+  const owner = asText(snapshot.owner);
+  // A heading with no text is a heading nothing announces, so the fallback is a name rather than
+  // an empty string.
+  const title = asText(snapshot.title) || "Shared collection";
+  const stamp = asOf(snapshot.updatedAt);
 
   const tree = useMemo(() => drawers(snapshot), [snapshot]);
   const copies = useMemo(() => snapshot.cards.reduce((n, c) => n + c.q, 0), [snapshot]);
@@ -466,10 +567,8 @@ function Binder({
               otherwise be `Giradeli’sTrade binder` — the same defect a `gap` between a label and
               its count produced elsewhere in this app. */}
           <h2 className="max-w-[34rem]">
-            <span className="block text-sm text-dim">{snapshot.owner}’s</span>{" "}
-            <span className="block font-heading text-[1.75rem] leading-tight">
-              {snapshot.title}
-            </span>
+            {owner !== "" && <span className="block text-sm text-dim">{owner}’s</span>}{" "}
+            <span className="block font-heading text-[1.75rem] leading-tight">{title}</span>
           </h2>
           <div className="flex gap-2">
             <button
@@ -501,7 +600,7 @@ function Binder({
           {COUNT.format(copies)} {copies === 1 ? "card" : "cards"}
           {tree.length > 0 &&
             ` in ${COUNT.format(tree.length)} ${tree.length === 1 ? "drawer" : "drawers"}`}
-          {`, as of ${asOf(snapshot.updatedAt)}`}
+          {stamp !== null && `, as of ${stamp}`}
         </p>
         {showValue && (
           <p className="mt-1 font-mono text-[0.8125rem] text-dim">
@@ -509,8 +608,9 @@ function Binder({
           </p>
         )}
         <p className="mt-4 max-w-[54ch] text-sm text-dim">
-          This is a read-only snapshot. It shows these cards until {snapshot.owner} publishes their
-          collection again, and nothing you do here changes it.
+          This is a read-only snapshot. It shows these cards until{" "}
+          {owner === "" ? "its owner" : owner} publishes their collection again, and nothing you do
+          here changes it.
         </p>
       </header>
 
@@ -730,8 +830,12 @@ function SharedTile({
   // A published copy *is* the finish it was stored as. `nonfoil` goes unmarked, which is the
   // app's rule everywhere.
   const marked = finish === "nonfoil" ? null : finish;
-  const condition =
-    card.c === undefined ? NOTHING : (CONDITION_LABEL[card.c as Condition] ?? card.c);
+  // ⚠️ **`== null` and not `=== undefined`, and the loose equality is the point.** The writer
+  // never emits `null` — both optional card fields carry `skip_serializing_if` — but *nothing*
+  // validates that on the way in, and a `c: null` from a hand-made document would take the
+  // `CONDITION_LABEL` arm and render the blank cell this file's own comments say must never
+  // happen. Every reader of an absent card field in both viewers is spelled this way.
+  const condition = card.c == null ? NOTHING : (CONDITION_LABEL[card.c as Condition] ?? card.c);
 
   return (
     <li

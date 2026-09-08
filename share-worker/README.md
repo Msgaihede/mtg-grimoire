@@ -154,6 +154,26 @@ because it has no address yet.**
    absent** — the binding is declared ahead of the build for the same reason the R2 bucket is, so
    the deploy question is asked once.
 5. `npx wrangler deploy`, and read the address it prints.
+
+   ⚠️ **Then ask the edge what it actually does to the blob, with two `curl`s and not one.** The
+   object is stored gzipped and `blob.ts` nails `content-encoding: gzip` on by hand; the app's
+   reqwest is built with no `gzip` feature, so it decodes nothing itself and — until it began
+   sending the header explicitly — asked for nothing either. Whether Cloudflare hands an
+   `accept-encoding`-less client the identity body is a fact about the deploy, not about this
+   repository, and getting it wrong makes **every in-app open** fail with a corruption sentence on
+   a perfectly healthy share. Both requests, against a real published snapshot URL:
+
+   ```
+   curl -sI --compressed https://<address>/s/<id>/<hash>.json.gz   # asks for gzip
+   curl -sI              https://<address>/s/<id>/<hash>.json.gz   # asks for nothing
+   ```
+
+   Read `content-encoding` on each. `gzip` on both is the case the app was written for; its
+   absence on the bare one is the case the app now survives anyway — `share::publish::open` sends
+   `accept-encoding: gzip` and `parse_snapshot` sniffs the `1f 8b` magic rather than assuming it,
+   so either answer opens. Record which one this deploy gives in
+   [collection-sharing.md](../docs/reference/collection-sharing.md); it is the only way anyone
+   ever finds out.
 6. **Write that address into two places, byte for byte**: `wrangler.jsonc`'s `SHARE_BASE` var
    (currently the placeholder `<set on first deploy>`) and `share::SHARE_BASE` in the Rust. Then
    deploy again, because a `var` is baked at deploy time. The same trap `RELAY_BASE` documents

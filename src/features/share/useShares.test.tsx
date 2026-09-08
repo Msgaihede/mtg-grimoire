@@ -7,7 +7,7 @@
  * you* mark) and neither owns it.
  */
 import { renderHook, waitFor } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 
@@ -45,10 +45,49 @@ beforeEach(() => {
 describe("the published shares", () => {
   it("reads the list and files it under the share root", async () => {
     shareList.mockResolvedValue([row]);
-    const { result } = renderHook(() => useShares(), { wrapper });
+    const { result } = renderHook(() => useShares(true), { wrapper });
 
     await waitFor(() => expect(result.current.data).toEqual([row]));
     expect(client.getQueryData(SHARE_LIST_KEY)).toEqual([row]);
+  });
+
+  /**
+   * ⚠️ **The command behind this holds the write connection across a relay round trip**, so who
+   * asks and how often is not a question about what the control draws.
+   *
+   * `share::commands::share_list` runs inside `on_the_write_connection` → `sync::with_write`,
+   * which takes the exclusive write lock; every other user write then answers `BUSY` after
+   * `WRITE_LOCK_WAIT` (5 s), against a share client whose read timeout is 60. That is `sync_now`'s
+   * shape and `sync_now` is a **press** — this is a query mounted with the whole Collection page.
+   */
+  it("asks nothing at all on a device that has connected nothing", async () => {
+    shareList.mockResolvedValue([row]);
+    const { result } = renderHook(() => useShares(false), { wrapper });
+
+    // Given a tick to be wrong in: a query that was going to fetch would have by now.
+    await waitFor(() => expect(result.current.isPending).toBe(true));
+    expect(shareList).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The other half of the same trip. TanStack refetches on window focus by **default**, so on a
+   * connected device every alt-tab back to the Collection page held the write connection for a
+   * relay round trip. The list changes on a press — publish, revoke — and both of those
+   * invalidate {@link SHARE_KEY} themselves.
+   */
+  it("does not ask again when the window regains focus", async () => {
+    shareList.mockResolvedValue([row]);
+    const { result } = renderHook(() => useShares(true), { wrapper });
+    await waitFor(() => expect(result.current.data).toEqual([row]));
+    expect(shareList).toHaveBeenCalledTimes(1);
+
+    // The query is stale the moment it lands — this client sets no `staleTime` — so a refetch on
+    // focus is exactly what the default would do here.
+    focusManager.setFocused(false);
+    focusManager.setFocused(true);
+    await waitFor(() => expect(result.current.isFetching).toBe(false));
+
+    expect(shareList).toHaveBeenCalledTimes(1);
   });
 
   /**
