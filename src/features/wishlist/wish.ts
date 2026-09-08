@@ -1,9 +1,16 @@
 /**
- * How a wish is read out — the three answers both the page and its table need.
+ * How a wish is read out — the two answers every surface that draws one needs.
  *
- * `missingOf` is the reason this is a file rather than three helpers in the table: the header's
- * "Still to buy" is summed over what is missing, and the row that says so is drawn by the table.
- * One definition, so the figure and the rows it is summed from cannot disagree on screen.
+ * A file rather than two helpers in the table because the wall, the table and the panel behind a
+ * tile's pencil all name the same wish, and a wish is named by *which printing* it is for: two
+ * wishes for one card differ only by that and by the finish. One definition, so no two surfaces
+ * can spell one wish two ways.
+ *
+ * **Nothing here asks what the reader already owns, and that is the rule rather than an
+ * omission.** A wishlist is the reader's own list: they take a card off it when they acquire
+ * one, so no figure on this page is a subtraction against `collection_entries`. `missingOf`
+ * lived here until then, and the whole of what it computed — copies wanted minus copies owned —
+ * is now simply copies wanted.
  */
 import { finishLabel } from "@/lib/finish";
 import type { WishRow } from "@/lib/ipc";
@@ -38,9 +45,4 @@ export function wishLabel(row: WishRow): string {
     : "any printing";
   const finish = row.preferredFinish ? `, ${finishLabel(row.preferredFinish)}` : "";
   return `${row.name} (${printing}${finish})`;
-}
-
-/** Copies still to find. Never negative: a wish over-covered is covered, not owed. */
-export function missingOf(row: WishRow): number {
-  return Math.max(0, row.quantity - row.ownedQuantity);
 }

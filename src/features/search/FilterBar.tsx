@@ -108,7 +108,8 @@ export type TrayCell =
   | "printings"
   | "finish"
   | "condition"
-  | "fulfilled"
+  // `"fulfilled"` sat here until 2026-09-08. It was the wishlist's alone — the Fulfilled / Still
+  // missing pair — and it went with every other comparison that list made against the collection.
   | "needsReview";
 
 /** What the card search offers, which is every cell there is. The default, so the two surfaces
@@ -253,10 +254,6 @@ export interface FilterSurface<SortKey extends string = string> extends TagQuery
    *  has no condition, only a piece of cardboard does. */
   conditions?: readonly Condition[];
   toggleCondition?: (condition: Condition) => void;
-  /** Whether the collection already covers a wish — the wishlist's own axis, and the one filter
-   *  in this interface that is about *two* lists at once. */
-  fulfilled?: boolean | undefined;
-  setFulfilled?: (next: boolean | undefined) => void;
   /**
    * Rows the reconciler flagged, the rows it did not, or neither question.
    *
@@ -334,10 +331,10 @@ function sentence(word: string): string {
  * row nobody has seen before. It draws {@link CONDITION_LABEL}'s word and has nothing left to
  * expand, so it carries no hint rather than a hint repeating itself.
  *
- * **One function for the tray chip and the summary chip**, which is the rule the Owned and
- * Fulfilled chips already keep two cells apart: the statement and the control that made it use
- * one vocabulary, or `Condition: NONE` reads as a different filter from the `Not set` that is
- * pressed in the tray.
+ * **One function for the tray chip and the summary chip**, which is the rule the Owned pair
+ * already keeps two cells apart: the statement and the control that made it use one vocabulary,
+ * or `Condition: NONE` reads as a different filter from the `Not set` that is pressed in the
+ * tray.
  */
 function conditionChip(condition: Condition): { label: string; hint?: string } {
   return condition === CONDITION_NOT_SET
@@ -465,19 +462,9 @@ function activeChips<SortKey extends string>(
   }
 
   // The **setter** and not the value, `owned`'s rule above and for its reason: `undefined` is a
-  // real third state on both of these, so a surface that cannot ask the question is told apart
-  // from one that is not currently asking it by which of the two fields is here at all. It is also
-  // what lets the × clear the kind in one press where the chip in the tray walks the cycle.
-  const { setFulfilled } = search;
-  if (setFulfilled && search.fulfilled !== undefined) {
-    chips.push({
-      // The word the tray's chip carries, so the statement and the control that made it use one
-      // vocabulary.
-      label: search.fulfilled ? "Fulfilled" : "Still missing",
-      remove: () => setFulfilled(undefined),
-    });
-  }
-
+  // real third state here, so a surface that cannot ask the question is told apart from one that
+  // is not currently asking it by which of the two fields is here at all. It is also what lets the
+  // × clear the kind in one press where the chip in the tray walks the cycle.
   const { setNeedsReview } = search;
   if (setNeedsReview && search.needsReview !== undefined) {
     chips.push({
@@ -1874,21 +1861,6 @@ function FilterTray<SortKey extends string>({
             );
           })}
         </div>
-      </TrayField>
-    ) : null,
-
-    /* The one question a shopping list is for, and the reason it is one chip with a changing word
-       rather than the Owned pair above: `Still missing` and `Fulfilled` are the two ends of one
-       axis, where Owned and Missing are two questions a card search can ask independently. The
-       label opens on `Still missing` because that is what the list is usually open for. */
-    fulfilled: search.setFulfilled ? (
-      <TrayField key="fulfilled" label="Fulfilled">
-        <ToggleChip
-          label={search.fulfilled === true ? "Fulfilled" : "Still missing"}
-          pressed={search.fulfilled !== undefined}
-          onClick={() => search.setFulfilled?.(cycleTriState(search.fulfilled, false))}
-          className="w-full"
-        />
       </TrayField>
     ) : null,
 

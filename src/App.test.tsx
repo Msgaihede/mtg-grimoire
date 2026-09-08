@@ -480,7 +480,6 @@ const BOLT_WISH: WishRow = {
   quantity: 2,
   preferredFinish: null,
   unitPrice: 400.5,
-  ownedQuantity: 0,
   notes: null,
   needsReview: null,
   updatedAt: 1_800_000_000,

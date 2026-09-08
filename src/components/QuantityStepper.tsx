@@ -28,7 +28,24 @@ const BUTTON =
  * among panel controls, and there is no rank to express when the thing beside the control is a
  * painting.
  */
-const BUTTON_OVER_ART = "bg-bg/88 text-text disabled:hover:text-text";
+export const BUTTON_OVER_ART = "bg-bg/88 text-text disabled:hover:text-text";
+
+/**
+ * The `size="card"` button box and its glyph, named so a control drawn *beside* this one can be
+ * the same object rather than a number somebody copied.
+ *
+ * The wishlist tile stands an `EditWishButton` directly under a vertical `card` stepper, in one
+ * column up the card's right-hand edge, and a 24px button below a 36px one reads as two controls
+ * that happen to be adjacent. Exported rather than duplicated because both halves scale on
+ * `--control-scale`, so a copy would have to be right at *every* stop of the zoom ladder and
+ * would only ever be checked at one.
+ *
+ * The glyph is 7/12 of the box, which is the fraction the doc on {@link size} argues for and
+ * the reason neither number is a round one.
+ */
+export const QUANTITY_STEPPER_CARD_BOX =
+  "size-[calc(2.25rem*var(--control-scale,1))] rounded-lg";
+export const QUANTITY_STEPPER_CARD_ICON = "size-[calc(1.3125rem*var(--control-scale,1))]";
 
 /**
  * The field's own **native** spin buttons, suppressed — so the two steps this control offers
@@ -172,7 +189,7 @@ export function QuantityStepper({
     size === "xs"
       ? "size-[calc(1.25rem*var(--control-scale,1))]"
       : size === "card"
-        ? "size-[calc(2.25rem*var(--control-scale,1))] rounded-lg"
+        ? QUANTITY_STEPPER_CARD_BOX
         : size === "sm"
           ? "size-7"
           : "size-9";
@@ -202,7 +219,7 @@ export function QuantityStepper({
     size === "xs"
       ? "size-[calc(0.75rem*var(--control-scale,1))]"
       : size === "card"
-        ? "size-[calc(1.3125rem*var(--control-scale,1))]"
+        ? QUANTITY_STEPPER_CARD_ICON
         : "size-3.5";
   const ring = focus === "inset" ? FOCUS_INSET : FOCUS;
   const button = cn(BUTTON, tone === "art" && BUTTON_OVER_ART, ring, box);

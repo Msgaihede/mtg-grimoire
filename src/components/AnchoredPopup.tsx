@@ -49,6 +49,7 @@ export function AnchoredPopup({
   icon,
   align = "end",
   className,
+  triggerClassName,
   panelClassName,
   children,
 }: {
@@ -73,6 +74,22 @@ export function AnchoredPopup({
   align?: "start" | "end";
   /** On the root, so a caller can hand it the wall's reveal-on-hover recipe. */
   className?: string;
+  /**
+   * On the **trigger**, so a caller drawing this control inside a column of same-sized controls
+   * can match that column.
+   *
+   * It exists for one caller and is deliberately not a general escape hatch: the wishlist tile's
+   * pencil stands under a `QuantityStepper` at `size="card"`, and a 24px button below a 36px one
+   * reads as two controls that happen to be adjacent rather than as one column. What is passed is
+   * therefore that stepper's own box, glyph and over-art tone, read off `QuantityStepper` rather
+   * than retyped — see `EditWishButton`'s `size` prop, which is where that recipe is written once.
+   *
+   * Merged through the same `cn` as everything else on the button, so `tailwind-merge` keeps the
+   * later of two conflicting sizes, radii and colours. **A caller may not use it to make the
+   * trigger smaller than 24px**: that is WCAG 2.5.8's floor and the strip's own comment in
+   * `CardGrid` records what an under-sized invisible target already costs a touch screen.
+   */
+  triggerClassName?: string;
   /** On the panel — its width, and the layout of whatever the caller puts in it. */
   panelClassName?: string;
   children: ReactNode;
@@ -133,6 +150,10 @@ export function AnchoredPopup({
           "rounded-md border border-border text-dim",
           "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
           FOCUS,
+          // Last, so `tailwind-merge` resolves every conflict in the caller's favour — which is
+          // the whole of what {@link triggerClassName} is for and the reason it is not spread
+          // somewhere earlier in this list.
+          triggerClassName,
         )}
       >
         {icon}

@@ -138,7 +138,7 @@ const meta = {
   tags: ["autodocs"],
   args: {
     node: node(EXPENSIVE),
-    summary: { wishes: 6, missing: 6, cost: 312, unpriced: 0 },
+    summary: { wishes: 6, copies: 6, cost: 312, unpriced: 0 },
     currency: "usd",
     onOpen: fn(),
     rename: RESTING,
@@ -224,14 +224,19 @@ export const Default: Story = {
  * minute ago is simply absent from it. The page falls back to a zeroed total and the card has to
  * draw that without complaint: an empty drawer is not an error, it is where the next wish goes.
  *
- * **It shows its count and no money at all.** `$0.00` on a folder with nothing left to buy is a
- * price nobody quoted, which is `formatPrice`'s own rule, and the unpriced note goes with it —
- * that note exists to qualify a subtotal and there is no subtotal here to qualify.
+ * **It shows its count and no money at all.** `$0.00` on a folder wanting no copies is a price
+ * nobody quoted, which is `formatPrice`'s own rule, and the unpriced note goes with it — that
+ * note exists to qualify a subtotal and there is no subtotal here to qualify.
+ *
+ * The guard reads `copies`, and until 2026-09-08 that was the copies still to *find* — so this
+ * arm was also what a folder the reader had finished buying reached. There is no such folder now:
+ * a wish stays on the list until the reader takes it off, so an empty drawer is the only thing
+ * left that gets here.
  */
 export const Empty: Story = {
   args: {
     node: node(folder({ id: 8, name: "Someday" })),
-    summary: { wishes: 0, missing: 0, cost: 0, unpriced: 0 },
+    summary: { wishes: 0, copies: 0, cost: 0, unpriced: 0 },
   },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
@@ -284,7 +289,7 @@ export const Counting: Story = {
  * feeds have the same holes, so the two figures here are both this marketplace's or neither is.
  */
 export const Unpriced: Story = {
-  args: { summary: { wishes: 4, missing: 5, cost: 88, unpriced: 2 } },
+  args: { summary: { wishes: 4, copies: 5, cost: 88, unpriced: 2 } },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(canvas.getByRole("button", { name: /^Expensive folder/ })).toHaveTextContent(
@@ -323,8 +328,8 @@ export const Renaming: Story = {
   args: {
     rename: { active: true, pending: false, onSubmit: fn(), onCancel: fn() },
     beside: [
-      { node: node(SOMEDAY), summary: { wishes: 2, missing: 2, cost: 41, unpriced: 0 } },
-      { node: node(TRADES), summary: { wishes: 9, missing: 4, cost: 118, unpriced: 1 } },
+      { node: node(SOMEDAY), summary: { wishes: 2, copies: 2, cost: 41, unpriced: 0 } },
+      { node: node(TRADES), summary: { wishes: 9, copies: 4, cost: 118, unpriced: 1 } },
     ],
   },
   play: async ({ canvasElement }) => {

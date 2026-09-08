@@ -437,13 +437,19 @@ describe("CollectionSearchTab", () => {
   }
 
   /**
-   * The gold ring, which `CardArt` draws for a selected tile.
+   * The gold ring, which `CardGrid` draws on a selected tile's **root** — around the art and the
+   * chin together, since 2026-09-08. It was `CardArt`'s, around the picture alone, which is why
+   * this used to search *inside* the tile and now asks the tile itself.
    *
    * **Read on the tile rather than counted over the document**, because the ring means two things
    * at once on this wall — the card the pane is open on, and a member of a Ctrl-clicked set — and
    * the tests below are each about one of them.
+   *
+   * `classList.contains` rather than a `querySelector`, so a ring that crept back onto a
+   * descendant would go red here rather than passing as if nothing had moved.
    */
-  const ringed = (tile: HTMLElement) => tile.querySelector(".ring-accent") !== null;
+  const ringed = (tile: HTMLElement) =>
+    tile.classList.contains("ring-accent") && tile.querySelector(".ring-accent") === null;
 
   /**
    * **The half of the split that nothing in the type system protects.** A tile is a printing *and*

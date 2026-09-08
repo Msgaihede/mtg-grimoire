@@ -468,11 +468,15 @@ describe("AddToCollectionButton", () => {
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Add to collection" })).toBeEnabled();
 
-    // Everything that counts cards: this list, the wishlist — whose `ownedQuantity` is
-    // summed from `collection_entries` — and the search results, whose owned badge is now
+    // Everything that counts cards: this list, and the search results, whose owned badge is now
     // one copy out of date.
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["collection"] });
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] });
+    // **And deliberately not the wishlist**, which is the assertion that would go red if the
+    // root came back. It was here because a wish's `ownedQuantity` was summed from
+    // `collection_entries`, so a copy landing in a binder moved a figure on rows nobody had
+    // touched. The wishlist reads no collection figure since 2026-09-08, so refetching it would
+    // be work for a number that cannot have moved.
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["wishlist"] });
     // And every deck: this popup files into user folders and the root, never into a deck's
     // group — but the theory list's spare column counts exactly the copies that are in no
     // group, so a copy added here is a copy some plan may now read as spare.

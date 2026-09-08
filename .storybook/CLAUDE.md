@@ -26,7 +26,9 @@ deliberately**: no screenshots are stored.
   beside the store reset. A story that maximized the window must not leave the next one maximized.
 - **The fake stores table rows and derives DTOs** (`fake/db.ts`), because `ownedQuantity` means
   three different things on three DTOs. A fake that stored DTOs would make all three agree, and
-  teach a reader a model the app does not have.
+  teach a reader a model the app does not have. (It was **four** until 2026-09-08: `WishRow`
+  carried a finish-aware count of the copies filling each wish, and it went with every other
+  comparison the wishlist made against the collection.)
 - **Seeds and faults are state, not response stubs**: `parameters: { fake: { seed, fault } }`.
   **Eight** seeds
   (`empty`/`starter`/`needsReview`/`large`/`bracketMismatch`/`combosMissing`/`paired`/

@@ -48,7 +48,7 @@
 //!
 //! # The wishlist half narrows on the *printing*, not on the wish
 //!
-//! [`wishes`] is [`crate::wishlist::OWNED_SQL`]'s own first arm with the any-printing arm
+//! [`wishes`] is the wishlist's own printing-and-finish match with the any-printing arm
 //! dropped — `w.card_id = :cardId AND (w.preferred_finish IS NULL OR w.preferred_finish =
 //! :finish)` — rather than a second opinion about what fills a wish. A wish for *any* printing of
 //! the card is left standing, exactly as [`crate::deck_pull`] leaves an Alpha Bolt out of an M10
@@ -142,7 +142,7 @@ pub struct QuickAddOutcome {
 
 /// Every wish these copies could take down, best first.
 ///
-/// **The predicate is [`crate::wishlist::OWNED_SQL`]'s first arm with the any-printing arm
+/// **The predicate is the wishlist's own printing-and-finish match with the any-printing arm
 /// dropped**, and the module header argues the narrowing. What is worth repeating at the SQL is
 /// the shape: `preferred_finish IS NULL` comes **first** in the disjunction because that is the
 /// commonest wish there is and the one an equality alone would silently drop — `NULL = 'nonfoil'`
@@ -999,7 +999,7 @@ mod tests {
 
     #[test]
     fn an_any_printing_wish_is_not_offered() {
-        // `w.card_id = ?1` is `OWNED_SQL`'s first arm with the any-printing arm dropped, and
+        // `w.card_id = ?1` is that match with the any-printing arm dropped, and
         // the drop is the decision: nothing comes off a shopping list that is not the piece of
         // cardboard the reader just recorded.
         let conn = open();

@@ -42,14 +42,14 @@ const STAPLES: WishlistFolder = { id: 2, parentId: 1, name: "Staples", sortOrder
 const WANTS_SUMMARY: WishlistFolderSummary = {
   folderId: 1,
   wishes: 3,
-  missing: 2,
+  copies: 2,
   cost: 45.5,
   unpriced: 0,
 };
 const STAPLES_SUMMARY: WishlistFolderSummary = {
   folderId: 2,
   wishes: 1,
-  missing: 1,
+  copies: 1,
   cost: 12,
   unpriced: 1,
 };
