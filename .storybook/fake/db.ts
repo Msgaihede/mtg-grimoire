@@ -911,12 +911,22 @@ export interface FakeUpdate {
  * show with the screen behind it unchanged.
  *
  * **There is deliberately no `combosMissing` fault beside it**, where the two taxonomies each
- * have one, and the asymmetry is the feature's rather than an omission: a never-fetched combo
- * table is not something that has gone *wrong* with a world, it is the state every install stays
- * in until somebody presses Refresh, because `combos::refresh_if_due` will not fetch the file
- * uninvited. So it is a **seed** — `combosMissing` in `seeds.ts` — which is also what lets a
- * story press Refresh in that state and watch the advisory fill in, exactly as
- * `oracleTagsMissing` lets one watch the piles regroup.
+ * have one — and **the reason changed on 2026-09-08 while the conclusion did not**, which is
+ * worth writing out because the old reason was quoted in half a dozen places in this repo. It
+ * used to be that `combos::refresh_if_due` would not fetch the file uninvited, so a never-fetched
+ * combo table was the state every install *stayed* in. A launch fetches it now, exactly as it
+ * fetches the two tag files, and that premise is simply gone.
+ *
+ * What the conclusion stands on instead is the distinction the fault axis is actually for: **a
+ * fault is a world something is going wrong in; a seed is a world a story starts in.** A
+ * never-fetched combo table is the second of those. It is where every database is before its
+ * first launch fetch lands, where a machine that cannot reach Spellbook stays, and — since
+ * {@link writeHandlers.combos_clear} — where a reader can deliberately put one back. Nothing in
+ * it has refused anything, so there is nothing for the fault axis to make storyable, and
+ * `combosFetchError` above stays the *only* combo entry on that axis because it is the only one
+ * of the two that is a refusal. So this is a **seed** — `combosMissing` in `seeds.ts` — which is
+ * also what lets a story open in that state, press Refresh and watch the advisory fill in,
+ * exactly as `oracleTagsMissing` lets one watch the piles regroup.
  *
  * **`imageUrisMissing`** is `oracleTagsMissing`'s shape one column over, and it is not a failure
  * either: every `cards.image_uris` is NULL, so {@link readHandlers.card_image_uri} answers `null`
@@ -1730,9 +1740,11 @@ export interface FakeTagMeta {
  * to what the bracket estimate reads.
  *
  * **The fourth optional bulk feed**, after the two price feeds and the two tagger datasets, and
- * optional in exactly their way: nothing downloads until a reader presses Refresh, a failed
- * fetch leaves these rows standing, and a database that has never fetched the file is a
- * *supported* state whose bracket estimate reads three signals instead of four.
+ * optional the way the *tagger* pair is: a launch fetches it uninvited and keeps it current, a
+ * failed fetch leaves these rows standing, and a database that never got the file is a
+ * *supported* state whose bracket estimate reads three signals instead of four. (Until
+ * 2026-09-08 nothing downloaded until a reader pressed Refresh in Settings, which is the
+ * sentence most of this file's combo prose was written against.)
  *
  * **{@link bracketTag} is the whole reason the feed is worth 27.5 MB.** Wizards' bracket table
  * restricts "intentional early-game two-card infinite combos", which is a fact about an
@@ -2108,10 +2120,12 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // story pressed the control, so a Settings list showing one is about that press.
     mutedTags: [],
     // The fourth optional feed, empty for the reason the two taxonomies above it are: a database
-    // that has never fetched Commander Spellbook's file is what every install is on its first
-    // launch, and `combos::refresh_if_due` deliberately **never** fetches it uninvited — unlike
-    // the tag files, which a first run pulls because deck adds are filed by them. So this stays
-    // empty until a story presses Refresh or asks for `starter`, which seeds it.
+    // that has never fetched Commander Spellbook's file is what every install is until its first
+    // launch fetch lands, and it is what a machine that cannot reach Spellbook stays in. There
+    // is no thread here to land one, so this stays empty until a story presses Refresh or asks
+    // for `starter`, which seeds it — and it is where `combos_clear` puts a world back.
+    // (This comment said `combos::refresh_if_due` "never fetches it uninvited" until 2026-09-08.
+    // It does now, exactly as the tag files' does.)
     combos: [],
     comboCards: [],
     comboMeta: null,
@@ -3306,12 +3320,14 @@ export function comboFeedMeta(at: number): FakeComboMeta {
  *
  * That is the crate's own choice and it matters here: a watermark can outlive the rows it
  * describes, so a status that read the meta row would report a full catalogue over two empty
- * tables — which is exactly the world the `combosMissing` seed is, and exactly the sentence a
- * Settings panel would then get wrong.
+ * tables — which is the world the `combosMissing` seed is, and the world
+ * {@link writeHandlers.combos_clear} makes on purpose. Both counts coming off the tables is what
+ * keeps the answer honest in either.
  *
  * **`cards` is `count(DISTINCT oracle_id)`**, not a count of rows: a card in two combos is one
- * card. (`ipc.ts`'s comment on that field says "card *slots* … not distinct cards", which is the
- * opposite of what `combos.rs` counts. The crate is the behaviour and this mirrors the crate.)
+ * card, which is what makes the figure legible beside the combo count. (This used to note that
+ * `ipc.ts` called the field "card *slots*" and contradicted the crate; the mirror says
+ * "**Distinct cards**" now and the three agree.)
  *
  * **Total and unfailing**, {@link toTagStatus}'s contract: a store with no meta row answers zero
  * counts and null stamps with `stale: true` rather than refusing, which is what lets the bracket
@@ -14419,9 +14435,10 @@ export function writeHandlers(db: FakeDb) {
      * call, and only its ingest reaches for the write connection, through `db::lock_blocking`.
      * So a running sync **delays** a combo refresh rather than refusing it at the door, and
      * `db.test.ts`'s busy sweep has to list it beside `oracle_tags_refresh` and `art_tags_refresh`
-     * rather than counting it. (`ipc.ts`'s comment on `combosRefresh` says it "answers
-     * `collection::BUSY` under a running sync like every other write"; `combos.rs` does not, and
-     * the crate is the behaviour.)
+     * rather than counting it. (This used to note that `ipc.ts` claimed the opposite; that
+     * comment says "**It does not answer `collection::BUSY` under a running sync**" now, so the
+     * mirror and the crate agree. Its neighbour {@link writeHandlers.combos_clear} is where the
+     * refusal really does live, and the difference between them is the network half.)
      *
      * **`force` skips the weekly throttle and nothing else** — not the ETag check, which is where
      * the real command's cheapness comes from. A run that is not due answers the status it
@@ -14436,6 +14453,8 @@ export function writeHandlers(db: FakeDb) {
      * **This is the one command that can move a world out of the never-fetched state**, which is
      * the whole reason the `combosMissing` seed empties rows rather than branching in a handler:
      * a story can open on "no combo data", press Refresh, and watch the deck's advisory fill in.
+     * {@link writeHandlers.combos_clear} is the only way back, and the pair is a round trip a
+     * story can drive in either direction.
      */
     combos_refresh: (args: { force: boolean }): ComboStatus => {
       if (!args.force && !isComboStale(db.comboMeta?.checkedAt ?? null, CLOCK_BASE)) {
@@ -14492,6 +14511,42 @@ export function writeHandlers(db: FakeDb) {
       db.comboCards = comboCardRows(db.cards);
       db.comboMeta = comboFeedMeta(CLOCK_BASE);
       emitFake("combos:progress", { phase: "done", done: 0, total: 0 });
+      return toComboStatus(db);
+    },
+
+    /**
+     * `combos::combos_clear` — throw the combo table away and answer what is left.
+     *
+     * **It honours `busy` where its neighbour above does not, and that difference is the whole
+     * of what separates the two.** `combos_refresh` opens on the read connection and a network
+     * call, and only its ingest reaches for the write one, so a sync delays it; this is a write
+     * from its first statement to its last, with nothing to download and nothing to stand aside
+     * for. So it goes in `db.test.ts`'s busy loop rather than on that file's `unlocked` list —
+     * which is the question a new write here has to answer, and the answer for a delete of three
+     * tables is never "unlocked".
+     *
+     * **All three go together, watermark included**, which is the same atomicity
+     * {@link writeHandlers.combos_refresh} writes them with and matters for the same reason one
+     * function up: a `combo_meta` row surviving an empty `combos` is a watermark with nothing
+     * behind it, and on the real backend that is what makes the next check replay an ETag and be
+     * told 304 past a database with no rows in it. `combos::conditional_etag` is the fence there;
+     * clearing the meta is the fence here, and a fake that kept the row would story a clear the
+     * app could never recover from.
+     *
+     * **No progress event and no phases.** There is no fetch, so there is nothing for
+     * `combos:progress` to describe — a story that emitted one here would be drawing a bar over
+     * a delete.
+     *
+     * The answer is {@link toComboStatus} over the emptied store, which is the never-ingested
+     * shape by construction rather than by a literal written out beside it: two zeros, three
+     * `null`s and `stale: true`. A fixture spelled out here could disagree with what
+     * `combos_status` answers a line later, and the two being the same call is the point.
+     */
+    combos_clear: (): ComboStatus => {
+      refuseIfBusy(db);
+      db.combos = [];
+      db.comboCards = [];
+      db.comboMeta = null;
       return toComboStatus(db);
     },
 

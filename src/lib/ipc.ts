@@ -4597,9 +4597,14 @@ export interface DeckCombo {
  * The combo table's own freshness — `combo_meta`, plus the shape of a database that has never
  * fetched the file.
  *
- * The **fourth** optional bulk feed, after the two price feeds and the two tagger datasets, and
- * optional in exactly their way: nothing downloads until a reader asks, a failed fetch leaves the
- * previous rows standing, and the app works without it. It is not Scryfall — Commander
+ * The **fourth** optional bulk feed, after the two price feeds and the two tagger datasets — and
+ * optional the way the *tagger* pair is rather than the way the price feeds are: a launch fetches
+ * it uninvited and keeps it current, a failed fetch leaves the previous rows standing, and a
+ * database that never got it works, on three bracket signals instead of four. **That changed on
+ * 2026-09-08**, and the sentence it replaces is worth carrying because so much prose was written
+ * on it: until then nothing downloaded until a reader pressed Refresh in a Settings panel, which
+ * made "never fetched" the state every install *stayed* in rather than one it passes through.
+ * The panel is gone and so is the wait. It is not Scryfall — Commander
  * Spellbook's `variants.json.gz`, 27.5 MB compressed, measured 2026-08-27 — so it takes no share
  * of the Scryfall rate-limit budget and has no place in the 429 penalty state.
  */
@@ -4627,10 +4632,11 @@ export interface ComboStatus {
    * ingested the file**.
    *
    * That distinction is the whole reason this is nullable rather than `0`: never ingested is a
-   * **supported state**, not a failure. It is what every install is on its first launch and what
-   * a machine that cannot reach Spellbook stays in, and what it costs is one signal — the bracket
-   * estimate then reads three (Game Changers, mass land denial, extra turns) instead of four.
-   * Nothing about it may empty a deck's advisory or fail a check.
+   * **supported state**, not a failure. It is what an install is until its first launch fetch
+   * lands, what a machine that cannot reach Spellbook stays in, and what
+   * {@link ipc.combosClear} puts a database back into on purpose — and what it costs is one
+   * signal: the bracket estimate then reads three (Game Changers, mass land denial, extra turns)
+   * instead of four. Nothing about it may empty a deck's advisory or fail a check.
    *
    * It is the pair {@link TagStatus} already draws, for its reason: a 304 moves
    * {@link ComboStatus.checkedAt} and not this, so collapsing the two would make an up-to-date
@@ -6952,6 +6958,30 @@ export const ipc = {
    * the estimate reads the three signals it has and says so.
    */
   combosRefresh: (force: boolean) => invoke<ComboStatus>("combos_refresh", { force }),
+  /**
+   * Throw the combo table away — every row of `combos` and `combo_cards`, and the `combo_meta`
+   * watermark behind them. It answers the {@link ComboStatus} a database that has never ingested
+   * the feed already gives: two zeros, three `null`s and `stale: true`.
+   *
+   * **A debugging affordance, and not something the ordinary reader needs.** The list arrives on
+   * its own at launch and refreshes itself on the week, so there is no ordinary press this
+   * stands behind — what it is for is putting a machine back in the never-fetched state, which
+   * is a state worth being able to look at and one no reader can otherwise produce.
+   *
+   * **The caller is expected to follow it with `combosRefresh(true)`**, and the two really do
+   * fetch the body rather than earning a 304 — which is the half worth stating here, because
+   * nothing about this call makes it true. The stored ETag describes a *file* and not the state
+   * of this database, so `combos::conditional_etag` replays it **only when there are rows behind
+   * it**: a cleared table sends no `If-None-Match` and gets 27.5 MB. Without that rule the pair
+   * would empty the tables, be told nothing had changed, and leave a database that no amount of
+   * refreshing could ever fill again.
+   *
+   * **It makes no network call at all**, which is the whole difference from
+   * {@link ipc.combosRefresh} above it: that one opens on the read connection and only its
+   * ingest takes the write one, so a sync delays it, where this is a write from its first
+   * statement to its last.
+   */
+  combosClear: () => invoke<ComboStatus>("combos_clear"),
   /**
    * Which combos a set of cards fully contains — the deck bracket advisory's one read.
    *

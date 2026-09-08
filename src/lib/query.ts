@@ -37,16 +37,43 @@ export const OWNED_WRITE_KEYS: readonly QueryKey[] = [
 /**
  * The combo feed's query roots, spelled once.
  *
- * **Two features read this data and neither owns it.** Settings' `CombosPanel` refreshes the feed
- * and invalidates it; the deck editor's `DeckBracket` reads the status *and* one entry per deck
- * it draws. They arrived in one branch from two hands, which is exactly how two files come to
- * agree on a string literal by accident — and the agreement is load-bearing, because
- * `invalidateQueries` matches by **prefix**: a refresh in Settings refills the open deck's
- * advisory only while both files spell the root the same way. Renaming one side would break that
- * link with nothing going red, because a stale advisory is a correct-looking one that is merely
- * out of date — and the 30 s `staleTime` above is exactly long enough to make it look deliberate.
+ * **Three files touch this data and none of them owns it.** `lib/useComboProgress.ts` invalidates
+ * the root when a download reaches a terminal phase, `features/settings/useDataReset.ts`
+ * invalidates it again after *Clear combos* has cleared and re-fetched, and the deck
+ * editor's `DeckBracket` reads the status *and* one entry per deck it draws. None of the three
+ * imports anything from the others, which is exactly how files come to agree on a string literal
+ * by accident — and the agreement is load-bearing, because `invalidateQueries` matches by
+ * **prefix**: a download that lands refills the open deck's advisory only while all three spell
+ * the root the same way. Renaming one side would break that link with nothing going red, because
+ * a stale advisory is a correct-looking one that is merely out of date — and the 30 s `staleTime`
+ * above is exactly long enough to make it look deliberate.
  *
- * `COMBOS_KEY` is the bare root rather than a list of leaves: a refresh replaces the whole table,
+ * **The root still has writers after the feed stopped needing a reader, and checking that was the
+ * point of the change rather than a formality.** What used to be here was Settings' `CombosPanel`
+ * and its Refresh button, deleted when the download moved to launch. Both of the presses that
+ * replaced it are indirect: the Local cache panel *clears*, and the launch refresh is a Rust task
+ * nobody presses at all. That task writes SQLite and has never heard of TanStack, so
+ * `useComboProgress`'s terminal event is the **whole** of how a finished download reaches an open
+ * deck — without it the advisory would go on saying the list has never been downloaded for the
+ * rest of the session after it arrived, which is the failure the never-ingested arm exists to
+ * prevent, produced by the fix for it.
+ *
+ * **The deck gallery reads the same data and does not read this root at all.**
+ * `useDeckBrackets` takes its combos off `deck_bracket_reads`, under `["decks", "brackets", …]`,
+ * where they arrive alongside the cards they are estimated against — so an invalidation here
+ * reaches no tile. Two surfaces answering one question through two roots is the thing to know
+ * before assuming a fix to one has reached the other, and it is why `useComboProgress` invalidates
+ * **both** on its terminal event rather than this one alone. With only this root, a download
+ * landing while the gallery was on screen would refill an open deck's advisory and leave every
+ * tile reading three signals until the next deck write fired `["decks"]`, or the wall was
+ * remounted — a download half-applied to the screen, which is the shape a reader reports as a bug
+ * even though `estimateBracket` answers a *floor* and such a tile is low rather than wrong.
+ *
+ * The fix is a second root on that event and was never a change to the keys here, which is the
+ * part worth keeping: these three are what the data is filed under, and who invalidates them is
+ * a fact about the hooks that watch the feed.
+ *
+ * `COMBOS_KEY` is the bare root rather than a list of leaves: a download replaces the whole table,
  * so everything read out of it goes stale at once.
  */
 export const COMBOS_KEY: QueryKey = ["combos"];
