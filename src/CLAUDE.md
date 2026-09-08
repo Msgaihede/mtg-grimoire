@@ -761,9 +761,10 @@ Every one of these has its measurement and its story in
   list — and the list is deliberately not written down here**, because it said "exactly two" for
   months and was wrong within a day of the context menus landing. A list is exempt when **its
   order _is_ the information** (a grade scale, Near Mint → Damaged; a printing's finishes, plain
-  before the premium treatments; a two-row ladder like `Open on`'s Scryfall and the marketplace,
-  where sorting would move the row a reader has learnt the position of whenever they changed
-  marketplace) or when **the reader arranged it themselves** (deck categories, the folder tree).
+  before the premium treatments; the `Open on` ladder — Scryfall, EDHREC, then the marketplace,
+  in the context menu and the card modal's rail alike — where sorting would move the rows a
+  reader has learnt the position of whenever they changed marketplace) or when **the reader
+  arranged it themselves** (deck categories, the folder tree).
   Everything else sorts. Every exemption carries a comment at its own site saying which of the two
   it is — that comment is the record, and grepping `sortOptions` is how you count them.
 - **The card search box reads Scryfall's tagger syntax, and the parse is TypeScript's while the

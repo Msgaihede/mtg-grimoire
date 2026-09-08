@@ -35,10 +35,9 @@ invent parallel names or hard-code hex values.
 | Border | every rule and edge | `border-border` |
 | Type | display, data | `font-heading` · `font-mono` |
 
-Body type needs no class: `body` is `font-sans` already, and because nothing in the app writes
-that utility Tailwind never compiles a `.font-sans` rule — verified absent from the shipped CSS
-on 2026-08-24. Inside a `font-heading` or `font-mono` subtree, return to body type with
-`style={{ fontFamily: "var(--font-sans)" }}`; the token ships, the utility does not.
+Body type needs no class: `body` is `font-sans` already. Inside a `font-heading` or `font-mono`
+subtree, return to body type with the `font-sans` utility — `<p className="font-sans text-dim">`.
+The `--font-sans` token ships too, if you need it in a `var()`.
 
 Two traps that silently produce near-invisible UI:
 

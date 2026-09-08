@@ -15,6 +15,11 @@
  * **A marketplace link is a search, not a product page.** None of the four priced sites
  * publishes a per-card URL derivable from what this app stores, so the honest thing to offer
  * is that site's search for the card's name.
+ *
+ * **The EDHREC link is a question put to EDHREC's own router, not a slug this app computes.**
+ * `edhrec.com/route/?cc=<name>` is the shape Scryfall itself publishes as every card's
+ * `related_uris.edhrec`, and the router decides whether a name is a card page or a commander
+ * page and how it slugs — all of which are EDHREC's rules to change.
  */
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { MarketplaceId } from "./marketplace";
@@ -23,6 +28,23 @@ export function scryfallCardUrl(setCode: string, collectorNumber: string): strin
   // Collector numbers are TEXT in Scryfall's data, not integers -- "1556★", "123a" and "S-1"
   // are all real, and a raw ★ in a path is not a URL.
   return `https://scryfall.com/card/${setCode.toLowerCase()}/${encodeURIComponent(collectorNumber)}`;
+}
+
+/**
+ * The card on EDHREC, by name (issue #402).
+ *
+ * **Verified live, 2026-09-08.** Four names through the router, each landing on a real page with
+ * the card's own heading: `Lightning Bolt` → `/cards/lightning-bolt`; `Jinnie Fay, Jetmir's
+ * Second` → its **commander** page, which no `/cards/<slug>` guess would have found; `Fire // Ice`
+ * → the split card's page; `Delver of Secrets // Insectile Aberration` → the front face's. The
+ * whole `name` field goes as it is stored, slashes and all — Scryfall sends only the front face
+ * for a two-faced card, but the router accepts both, and trimming here would be a second slugging
+ * rule beside EDHREC's. `encodeURIComponent` rather than Scryfall's `+` for a space: the router
+ * answered the same page for either, and one encoder per file is what keeps these five URLs
+ * comparable.
+ */
+export function edhrecCardUrl(cardName: string): string {
+  return `https://edhrec.com/route/?cc=${encodeURIComponent(cardName)}`;
 }
 
 /**

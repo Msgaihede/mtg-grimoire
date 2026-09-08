@@ -510,6 +510,7 @@ pub fn run() {
             combos::combos_status,
             combos::combos_refresh,
             combos::combos_for_cards,
+            combos::combos_clear,
             tags::oracle::oracle_tags_refresh,
             tags::oracle::oracle_tags_status,
             tags::oracle::oracle_tags_for_cards,
@@ -745,13 +746,29 @@ pub fn run() {
                 tags::art::refresh_if_due(&art_state, &art_app).await;
             });
 
-            // Commander Spellbook's combo database, on a sixth task — and, unlike the two
-            // above it, **only if this database has ever fetched it**. That is
-            // `refresh_if_due`'s own rule and it belongs there rather than here: the tag files
-            // are what a deck add is categorised by, so a first run goes and gets them, while
-            // combos are the fourth bracket signal and a database without them simply reads
-            // three. Nothing downloads until a reader presses Refresh in Settings. Silent and
-            // best-effort, like every one of its siblings.
+            // Commander Spellbook's combo database, on a sixth task — a sixth service on a
+            // sixth schedule, and none of them may be the reason another stops running. **It
+            // is fetched uninvited, exactly like the two tagger files above it**, which
+            // reverses what this comment argued: that a database which had never seen the file
+            // should wait to be asked, because a bracket estimate can read three signals
+            // instead of four and that is a supported state rather than an error. Supported is
+            // not the same as visible. What the old rule actually bought was a readout quietly
+            // drawn from three signals — no error, no empty state, just a number a little too
+            // low — until the reader found a Refresh button they had no reason to go looking
+            // for. An answer that is wrong in a way nobody can see the cause of is the worse
+            // failure, so the gate is plain staleness now and a first run goes and gets the
+            // file.
+            //
+            // Its own task rather than chained onto either tag refresh above, and that is the
+            // argument those two already make against each other, now covering three files
+            // rather than two: they are the same shape of job, which is exactly why they must
+            // not share a task. Whichever went first would be the reason the others were late
+            // — 27.5 MB gzipped here against the art file's 12.5 MB and the oracle file's
+            // 5.85 MB — and "late" is a deck add still filing by card type, or a bracket still
+            // reading three signals, minutes after launch. They contend for the write
+            // connection a batch at a time, which is the engine's job and not the launch's.
+            // Silent and best-effort, like every one of its siblings: a failure is already in
+            // `error_log` and the honest fallback is the combos already on disk.
             let combo_state = state.clone();
             let combo_app = app.handle().clone();
             tauri::async_runtime::spawn(async move {

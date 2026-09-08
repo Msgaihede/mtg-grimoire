@@ -8,6 +8,7 @@
  */
 import { createStore } from "zustand/vanilla";
 import type {
+  ComboProgress,
   FeedProgressEvent,
   OracleTagProgressEvent,
   SyncPhase,
@@ -16,6 +17,7 @@ import type {
 } from "@/lib/ipc";
 import { count } from "@/lib/counts";
 import type { ManaLineSync } from "@/lib/mana";
+import { COMBO_PHASE_LABEL } from "@/lib/useComboProgress";
 import { ORACLE_TAG_PHASE_LABEL } from "@/lib/useOracleTagProgress";
 import { PHASE_LABEL } from "@/lib/useSyncProgress";
 
@@ -69,6 +71,23 @@ export const RANK = {
    * ladder keeps its ten-apart spacing past `update` for whatever comes next.
    */
   oracleTags: 15,
+  /**
+   * Commander Spellbook's combo feed being refreshed — **the rung the paragraph above was
+   * holding open**, and the quietest job of the five.
+   *
+   * Two readings put it below the tag refresh and they agree. What its failure costs is the
+   * *fourth* signal of one advisory on one screen: the bracket estimate reads Game Changers,
+   * mass land denial and extra turns instead of four things, on Commander decks alone. The tag
+   * refresh below it changes where every card a reader adds to any deck is filed, which is a
+   * thing that happens all day. And it is the longest job in the app — 27.5 MB over 639 MB of
+   * JSON — so a rank above the tags would have this one job hold the row for the whole of a
+   * launch and the two short refreshes running beside it would never get a sentence at all. A
+   * long job yielding to a short one is what makes the row describe more than one thing.
+   *
+   * Deliberately **not** between `oracleTags` and `update`: a five-gap is for a job that belongs
+   * between two rungs, and nothing about this one belongs above the taxonomy.
+   */
+  combos: 20,
 } as const;
 
 /** How long a job must run before the ribbon puts a sentence on screen. See `Ribbon`. */
@@ -258,6 +277,50 @@ export function oracleTagActivity(
     // `refreshing` with no event yet, and the two terminal phases whose event can outlive the
     // run by a status read. None of the three is a phase, and none may read as finished.
     label: phase ? ORACLE_TAG_PHASE_LABEL[phase.phase] : "Updating card tags",
+    detail:
+      phase?.phase === "downloading" && phase.total > 0 ? megabytes(phase.done, phase.total) : null,
+    value:
+      phase?.phase === "downloading" && phase.total > 0
+        ? Math.min(1, phase.done / phase.total)
+        : null,
+  };
+}
+
+/**
+ * Fold a combo-feed refresh into the job the ribbon describes.
+ *
+ * `refreshing` decides whether anything is running and the event never does — `syncActivity`'s
+ * rule, kept here in the shape all four siblings have even though this is the one feed whose
+ * flag is *derived* from the event. `useComboProgress` explains why it has to be: `ComboStatus`
+ * carries no `refreshing` field, `combos::is_refreshing` is `#[cfg(test)]`, and the event is the
+ * only thing in production that can say a run is in flight. Stating the rule in the argument
+ * anyway costs one boolean and buys two things — the terminal phases still cannot read as
+ * finished from here, and the day `ComboStatus` grows a flag this builder needs no edit.
+ *
+ * **`ingesting` counts nothing, and that is `combos.rs` rather than a choice made here.**
+ * `refresh` emits `("checking", 0, 0)`, then real bytes throughout the 27.5 MB whenever the host
+ * declares a content length, then `("ingesting", 0, 0)` **exactly once** — the inner callback
+ * handed to `ingest_gz` is `&mut |_, _| {}` and is discarded — and that single event covers a
+ * 639 MB parse and several hundred thousand row writes, which is the longest phase of the
+ * longest job in the app. So it gets a sentence and an indeterminate bar. A bar parked at a
+ * number for minutes is worse than one that admits it is only working: it reads as a job that
+ * has stalled, where the honest version reads as a job that is running. `syncActivity` refuses
+ * to print the card ingest's estimated total for the same reason, one job over.
+ */
+export function comboActivity(
+  refreshing: boolean,
+  progress: ComboProgress | null,
+): Activity | null {
+  if (!refreshing) return null;
+  const phase =
+    progress && progress.phase !== "done" && progress.phase !== "error" ? progress : null;
+  return {
+    key: "combos",
+    rank: RANK.combos,
+    // The generic sentence for a run this window has only heard *about* — no event yet, and the
+    // two terminal phases whose event can outlive the run. None of the three is a phase, and
+    // none may read as finished.
+    label: phase ? COMBO_PHASE_LABEL[phase.phase] : "Updating combos",
     detail:
       phase?.phase === "downloading" && phase.total > 0 ? megabytes(phase.done, phase.total) : null,
     value:

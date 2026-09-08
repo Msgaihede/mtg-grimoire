@@ -2951,9 +2951,9 @@ describe("DeckEditor", () => {
    * The hand-back is the interesting half and it is why this is not folded into the sweeps
    * above. Those triggers are named elements this file holds a ref to; `DeckStats` owns this
    * one and hands no ref up, so `openPull` reads `document.activeElement` at the press —
-   * `openAddTag`'s answer, made for `openAddTag`'s reason. A browser focuses what it presses, so
-   * the caret is on the button by the time the callback runs; if that ever stopped being true
-   * the layer would still open and only this assertion would notice.
+   * `openAddLabel`'s answer, made for `openAddLabel`'s reason. A browser focuses what it
+   * presses, so the caret is on the button by the time the callback runs; if that ever stopped
+   * being true the layer would still open and only this assertion would notice.
    */
   it("opens the pull from the stats band and hands the caret back on Escape", async () => {
     await open();
@@ -3744,9 +3744,10 @@ describe("DeckEditor", () => {
    * is that wiring — `deckTheorySlots`' `quantity` against `deck.cards`' own — and it is the half
    * that can be fully correct and reach nothing.
    *
-   * `withPlan` sleeves up four Bolts and this plan asks for two, so the mark says `+2` rather than
-   * the tick: the live list is two copies **over** the plan, which is a cut the reader has not
-   * made yet.
+   * `withPlan` sleeves up four Bolts and this plan asks for two, so the mark says `-2` rather than
+   * the tick: the live list is two copies **over** the plan, and since issue #400 the number is
+   * the press rather than the gap — two copies to take back out, which is a cut the reader has
+   * not made yet.
    */
   it("says how far the live count is from the plan on the card itself", async () => {
     withPlan();
@@ -3758,14 +3759,14 @@ describe("DeckEditor", () => {
       expect(document.querySelectorAll(`[${THEORY_MATCH_ATTR}]`).length).toBeGreaterThan(0),
     );
     for (const mark of document.querySelectorAll(`[${THEORY_MATCH_ATTR}]`)) {
-      expect(mark).toHaveTextContent("+2");
+      expect(mark).toHaveTextContent("-2");
       // The tier as the attribute's own value, which is what the case below turns on: this deck
       // is born with both switches on, so the printing the plan named draws the **exact** mark.
       expect(mark.getAttribute(THEORY_MATCH_ATTR)).toBe("exact");
     }
     // …and in words, on the one thing a keyboard reader gets from the card.
     expect(screen.getByRole("button", { name: /^Lightning Bolt/ })).toHaveAccessibleName(
-      expect.stringContaining("in the theory list · 2 more than planned"),
+      expect.stringContaining("in the theory list · 2 to remove"),
     );
   });
 

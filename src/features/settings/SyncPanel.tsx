@@ -306,7 +306,13 @@ function DeviceRow({
 /**
  * What the relay half of this panel is describing, in the seven words it has.
  *
- * `CombosPanel`'s `comboState` one feature over, and the ordering is again the whole content:
+ * **A ladder of `if`s whose *order* is the whole content**, which is the shape every state
+ * function in this app that describes a background job has. Each test below is written down with
+ * the precedence it claims and the reason for it, because nothing about a ladder says out loud
+ * which case it decided to let win — and a reordering that read as tidying would silently change
+ * every sentence the panel draws. `feedState` in `lib/useMarketplace.ts` is the live sibling to
+ * read beside this one; it was `CombosPanel`'s `comboState` too until the combo feed stopped
+ * needing a Settings panel and that file was deleted.
  *
  * * **`off` first among the settled states** — no membership means nothing can run, so a failed
  *   press from before it lapsed must not out-shout it.
@@ -314,7 +320,7 @@ function DeviceRow({
  *   a previous failure is not "failed".
  * * **`failed` before `never`** — "we tried and it did not work" is a different sentence from
  *   "nobody has tried", and only one of them is worth a retry. This is the ordering the plan
- *   named and it is `comboState`'s and `feedState`'s before it.
+ *   named and it is `feedState`'s before it.
  * * **`unpaired` after `failed`, before `never`** — a membership with no group is a real state a
  *   reader can sit in for a whole session, and it has its own fix (pair a device) rather than
  *   being a sync that has not happened yet.
@@ -360,10 +366,12 @@ export function relayState(
 /**
  * The one sentence beside the button, per state.
  *
- * Seven states and one sentence each rather than one sentence with a date in it — `comboNote`'s
- * shape and its reason: these are not degrees of the same thing. Two of the seven say nothing at
- * all, deliberately: a read in flight has the panel's own line and a sync in flight has the
- * button's, so a second sentence under either would be the panel talking over itself.
+ * **Seven states and one sentence each, rather than one sentence with a date in it**, because
+ * these are not degrees of the same thing: a lapsed membership, a refused round trip and a device
+ * that has never synced are three different pieces of news, and a template with a slot in it
+ * could only ever say the one they have in common. Two of the seven say nothing at all,
+ * deliberately: a read in flight has the panel's own line and a sync in flight has the button's,
+ * so a second sentence under either would be the panel talking over itself.
  *
  * **`off` is the sentence this whole half exists for.** An empty address field is not a form
  * waiting to be filled in — it is sync being *off*, which is the state every installation is in
@@ -799,9 +807,12 @@ function SupporterSection({ live }: { live: LiveState }): JSX.Element {
 
   const syncing = sync.isPending;
   const state = relayState(status, membership, syncing, sync.isError);
-  // One clock for the whole render — `CombosPanel`'s rule and its reason: a settings panel that
-  // repainted on a timer to keep a relative date current would be motion without information,
-  // and `react-hooks/purity` refuses a bare `Date.now()` in a render body.
+  // **One clock for the whole render, read once and passed down.** A settings panel that
+  // repainted on a timer to keep a relative date current would be motion without information —
+  // nobody watches "3 minutes ago" tick over — and `react-hooks/purity` refuses a bare
+  // `Date.now()` in a render body, so the read is `nowSeconds()` here and an argument everywhere
+  // below. Two reads in one render is also two answers: a panel drawing "just now" beside
+  // "1 minute ago" for one timestamp.
   const note = relayNote(state, status, nowSeconds());
   const liveText = liveNote(live);
   /** Connected enough for the relay to answer: `grace` counts, which is §7.2's whole point. */

@@ -213,9 +213,14 @@ pub const COMMANDS: &[&str] = &[
     "error_log_clear",
     "get_marketplace",
     "set_marketplace",
-    // Commander Spellbook. `combos_refresh` downloads and is not here.
+    // **Commander Spellbook, three of four.** `combos_status` reports what the tables hold,
+    // `combos_for_cards` is the deck bracket's fourth signal, and `combos_clear` throws the
+    // stored feed away — a connection-only write with no network in it, which is what this
+    // table answers. `combos_refresh` is the fourth and is the one that downloads, so it is
+    // not here. See the arms.
     "combos_status",
     "combos_for_cards",
+    "combos_clear",
     // The last two gaps, closed. See the arms.
     "marketplace_feed_status",
     "import_resolve",
@@ -1964,15 +1969,25 @@ pub fn call(
 
         // ── Commander Spellbook's combos ────────────────────────────────────────────
         //
-        // **Two of three, and `combos.rs` was ungated all along** — it is on `lib.rs`'s
+        // **Three of four, and `combos.rs` was ungated all along** — it is on `lib.rs`'s
         // every-target list because its ingest streams through `crate::feed`. Only
-        // `combos_refresh` is missing, for `oracle_tags_refresh`'s reason: it downloads.
+        // `combos_refresh` is missing, for `oracle_tags_refresh`'s reason: it downloads, and a
+        // download is a `#[wasm_bindgen]` export rather than a routed command — `web::glue`'s
+        // `ingest_combos`, which `src/lib/core/browser.ts` diverts that one name onto.
         //
-        // `combos_status` is on the Settings panel and `combos_for_cards` is the deck
-        // bracket's fourth signal. **A database that never fetched the feed answers three
-        // signals instead of four**, which the crate documents as supported rather than an
-        // error — and `combos_status` is explicitly safe before the first refresh: two zeros,
-        // three nulls and `stale: true`.
+        // `combos_status` reports what the tables hold, `combos_for_cards` is the deck
+        // bracket's fourth signal, and `combos_clear` throws the stored feed away. **The third
+        // one routes because of what it does rather than what it is named**: it deletes rows
+        // and reads the status back on the connection it already holds, which is exactly the
+        // shape this table answers — synchronous, connection-only, no network. Its name sitting
+        // one line from `combos_refresh`'s is the trap that seam warns about, and the answer is
+        // always the work and never the spelling.
+        //
+        // **A database that never fetched the feed answers three signals instead of four**,
+        // which the crate documents as supported rather than an error — and `combos_status` is
+        // explicitly safe before the first refresh: two zeros, three nulls and `stale: true`.
+        // A cleared database is that same state, reached deliberately, which is why the clear
+        // can answer an ordinary `ComboStatus` and needs no shape of its own.
         "combos_status" => encode(command, crate::combos::status_of(state)),
 
         "combos_for_cards" => {
@@ -1983,6 +1998,16 @@ pub fn call(
                 crate::combos::match_combos(&conn, &card_ids).map_err(RouteError::Failed)?,
             )
         }
+
+        // `with_write` and the pure half, matching the three clears below: the desktop wrapper
+        // is that same function on the blocking pool, so neither target holds a second copy of
+        // what "clear the combos" means. It takes no argument — a clear names a table rather
+        // than a row, `reset.rs`'s rule — and answers the post-clear status, which is why
+        // nothing here has to re-read it.
+        "combos_clear" => encode(
+            command,
+            crate::sync::with_write(state, crate::combos::clear).map_err(RouteError::Failed)?,
+        ),
 
         // ── The last two gaps ───────────────────────────────────────────────────────
         //
@@ -2872,16 +2897,17 @@ mod tests {
         // and this merge answers **141** — again a number neither side wrote and neither
         // side's delta added to the other's total would have reached.
         //
-        // **143 was written from arithmetic and then confirmed by counting the array**, which is
-        // the only reason it stands: the add-missing branch could not run the suite (it was one
-        // of several agents sharing a tree), so it added its two routes to the 141 it found, and
-        // the count at fan-in agreed because nothing else on this branch touched the list. That
-        // is luck holding rather than the rule changing — **the collision this paragraph warns
-        // about is with `main`, not within a branch**, and it is still ahead of this one. If a
-        // merge turns this assertion red, take the number from `left` in the message.
+        // **And a fourth time, which is the one this paragraph predicted an hour before it
+        // happened.** The add-missing branch wrote **143** from arithmetic (141 plus its two
+        // routes) and then confirmed it by counting the array, and left a note saying the
+        // collision still ahead of it was with `main` rather than within the branch. It was:
+        // `main` had meanwhile gone to **142** with one route of its own, and this merge
+        // answers **144** — counted from the merged array, not reached by adding 2 and 1, which
+        // is the same discipline arriving at the same number for a reason that would still hold
+        // if it had not. If a later merge turns this red, take the number from `left`.
         assert_eq!(
             COMMANDS.len(),
-            143,
+            144,
             "update this number when a command is added"
         );
     }

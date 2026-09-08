@@ -93,11 +93,19 @@ deliberately**: no screenshots are stored.
   **Re-count this list when you add one** — it said "four" for three faults' worth of drift, and
   then "eight" while `errorLog` had been in the union for a whole feature, because a prose-only
   edit routes to neither CI job and nothing goes red.
-- **The combo feed is a *seed* where the two taxonomies are a fault, and the asymmetry is the
-  feature's.** `oracleTagsMissing`/`artTagsMissing` are worlds a taxonomy has gone missing from;
-  a never-fetched combo table is the world **every install stays in** until somebody presses
-  Refresh, because `combos::refresh_if_due` will not pull that file uninvited. So `combosMissing`
-  is a seed, `combosFetchError` is the fault beside `feedFetchError` and the two tag ones, and
+- **The combo feed is a *seed* where the two taxonomies are a fault, and on 2026-09-08 the reason
+  changed while the conclusion did not.** It used to rest on `combos::refresh_if_due` not pulling
+  that file uninvited, which made a never-fetched combo table the world **every install stayed
+  in**; a launch fetches it now, exactly as it fetches the two tag files, and that premise is
+  simply gone. What the split turns on instead is the axis itself — **a fault is a world
+  something is going wrong in, a seed is a world a story starts in.**
+  `oracleTagsMissing`/`artTagsMissing` are worlds a taxonomy has gone *missing* from; a
+  never-fetched combo table is where every database is before its first launch fetch lands, where
+  a machine that cannot reach Spellbook stays, and — since `combos_clear` — where a reader can
+  deliberately put one back. Nothing in it has refused anything, so there is nothing for the fault
+  axis to make storyable. `db.ts`'s comment on `combosFetchError` is the long form and this must
+  not drift from it. So `combosMissing` is a seed, `combosFetchError` is the fault beside
+  `feedFetchError` and the two tag ones, and
   `bracketMismatch` is `starter` plus a fifth deck the reader has told `Bracket 2` whose cards
   force the estimate's floor to 4. `starter` seeds the combo catalogue itself, exactly as it
   seeds the price feeds and both taxonomies — **seven combos, two of them live-verified against
@@ -218,8 +226,9 @@ deliberately**: no screenshots are stored.
   plainly in it, and a session acted on that once, adding handlers the file already had until
   `tsc -p .storybook` caught it with `TS1117`. **The cause was never the size**: it was a single
   NUL byte, from `deck_tag_suggestions` building a group key as `` `${t.name}\0${t.color}` ``.
-  Schema v21 replaced that function with `deck_tag_all` and the byte went with it on 2026-08-22.
-  Verified 2026-09-03 — zero NULs in the file (717 KB) and Grep returns real counts.
+  Schema v21 replaced that function with `deck_label_all` (`deck_tag_all` until v33 renamed the
+  deck card's mark) and the byte went with it on 2026-08-22.
+  Verified 2026-09-03 — zero NULs in the file (733 KB) and Grep returns real counts.
   **The rule that outlives the fix**: a NUL is invisible in every editor, eslint and `tsc` stay
   green over one, and a `\0` separator in a template literal is the plausible way one gets in.
   So if Grep ever calls a file here binary again, suspect that rather than the length —

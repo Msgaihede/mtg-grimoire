@@ -1,22 +1,28 @@
 /**
  * A folder as it is drawn on the gallery wall, beside the deck tiles rather than in the tree.
  *
- * Lifted out of `DecksPage.tsx` on 2026-08-16, whole — the card, the strip of member art it is
- * made of, and the one query the page needs to fill that strip. `FolderTree.tsx` draws the same
- * folders as *rows* in the sidebar; this is the other drawing of them, and the two share only
- * the drop target and the tree itself.
+ * Lifted out of `DecksPage.tsx` on 2026-08-16, whole — the card, the member art it is made of,
+ * and the one query the page needs to fill it. `FolderTree.tsx` draws the same folders as *rows*
+ * in the sidebar; this is the other drawing of them, and the two share only the drop target and
+ * the tree itself.
+ *
+ * **Two cards live here and they are opposites**: {@link FolderCard}, a drawer drawn in a deck
+ * tile's own frame so that a wall of both is one wall, and {@link ParentDeckFolderCard}, the way
+ * back up, drawn in the same frame with a dashed accent edge so that the one tile that is not a
+ * place cannot be mistaken for one.
  */
 import { useRef } from "react";
+import { Folder, FolderUp } from "lucide-react";
 import { CardImage } from "@/components/CardImage";
 import { FolderDropLine } from "@/components/FolderDropLine";
-import { ParentFolderCard } from "@/components/ParentFolderCard";
+import { UP_ONE_LEVEL, upCardName } from "@/components/ParentFolderCard";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { cardScaleVars } from "@/lib/cardZoom";
 import { plural } from "@/lib/counts";
 import { DROP_EDGE, DROP_OVER } from "@/lib/dropMarks";
 import { useFolderDropTarget, type FolderDrag, type FolderEdge } from "@/lib/folderDrag";
 import { FOCUS } from "@/lib/focus";
-import { cardArtSrc, cardImageUrl } from "@/lib/images";
+import { ART_ASPECT, cardArtSrc, cardImageUrl } from "@/lib/images";
 import type { DeckRow } from "@/lib/ipc";
 import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
@@ -29,12 +35,50 @@ import {
   type FolderRowMenu,
 } from "./FolderTree";
 
-/** How many member covers a folder card shows. Three, because the strip is 96px tall and a
- *  fourth crop at that width is a smear rather than a picture. */
+/** How many member covers a folder card shows. Three, because they are laid side by side across
+ *  one card's width and a fourth crop at that width is a smear rather than a picture.
+ *
+ *  It said "the strip is 96px tall" until the card became a deck tile's frame on 2026-09-08. The
+ *  number did not move with the geometry, because what bounds it was always the **width** each
+ *  crop is left with rather than the height they were drawn at. */
 const FOLDER_ARTS = 3;
 
+/**
+ * The 20px a deck tile spends on the colour band fused to the foot of its cover, spent here as
+ * padding under the crops — which is the whole of what makes a folder card and a deck tile the
+ * same height in one grid track.
+ *
+ * **So this number is the band's, and a change to one is a change to the other.** It is written
+ * here rather than imported because `DeckTile` spends it on a drawn thing and this card spends it
+ * on empty box, so there is no one constant that would be honest in both places; what there is
+ * instead is this sentence, and a `1.25rem` that has to be read beside the band's own before
+ * either moves. `--mark-scale` because the whole card scales with the wall's zoom, and the two
+ * would come apart at every stop but 100% if one of them held still.
+ *
+ * {@link ParentDeckFolderCard} carries it too: the way out of a drawer stands in the same track
+ * as the drawers.
+ */
+const BAND_PAD = "pb-[calc(1.25rem*var(--mark-scale,1))]";
+
+/**
+ * `decks`, or `deck` where there is one — the unit alone, with the figure taken off the front.
+ *
+ * The caption draws the count in `font-mono tabular-nums`, so that a wall of drawers keeps its
+ * figures in one column and a two-digit folder does not shove its own word sideways; that makes
+ * the number and its unit two elements, where {@link plural} answers with them joined.
+ *
+ * **Slicing that answer rather than writing `n === 1 ? "deck" : "decks"` here is the deliberate
+ * half.** `src/lib/counts.ts` exists because four surfaces had four spellings of that ternary
+ * with three incompatible signatures, and a fifth spelled for the sake of one word is the same
+ * mistake made small. The coupling is to that function's documented shape — `${n} ${unit}` — and
+ * to nothing else, which is why the slice is measured off the number rather than off a space.
+ */
+function deckUnit(n: number): string {
+  return plural(n, "deck").slice(`${n} `.length);
+}
+
 /** Every live deck filed in a folder **or in anything under it** — what a folder card draws
- *  its strip of art from, in `deck_list`'s own order (most recently touched first).
+ *  its member art from, in `deck_list`'s own order (most recently touched first).
  *
  *  Exported beside the card it feeds rather than left on the page: the two are one answer, and
  *  a caller drawing a `FolderCard` with some other list of members is drawing something else. */
@@ -53,10 +97,35 @@ export function decksUnder(
 /**
  * A folder on the wall: what is in it, drawn from the art of the decks it holds.
  *
- * Dashed, where a deck tile is not — and that dash is the screen's one visual rule: **dashed
- * means provisional**. A folder is a container rather than a thing you can play, and a deck
- * that exists only as a theory list is a plan rather than a deck. Both wear it; nothing else
- * does.
+ * **It is drawn in a deck tile's own format, and that is 2026-09-08's change.** What stood until
+ * then was a dashed box holding a 96px strip of up to three crops, then the folder's name with a
+ * bare figure beside it, then the word `Folder` on a line of its own — an entirely different
+ * silhouette from the tile it shares a grid track with, so a wall holding both read as two kinds
+ * of object rather than as one wall. The card is one framed box now: the art's proportions plus
+ * {@link BAND_PAD}, the crops filling the whole of it, and the name and the count in a caption
+ * laid **on** the pictures.
+ *
+ * **The count moved out of a right-aligned column of its own and into that caption's sentence**,
+ * which is the one change here that is not about shape. A bare `4` at the end of a folder's name
+ * meant nothing without the word beside it — it was a quantity of nothing in particular, the
+ * mistake `src/CLAUDE.md` records the search wall making with `132` — and the sentence now says
+ * what the `aria-label` has always said.
+ *
+ * **So the border is solid, and the dash it gave up was prose rather than decoration.** This
+ * comment used to name the dash as the screen's one visual rule — *dashed means provisional* —
+ * and it cannot go on saying so here: a folder is not provisional beside a deck, it is the same
+ * object with decks inside it, which is exactly what drawing the two the same way claims. The
+ * vocabulary survives on this wall where it still says something, which is
+ * {@link ParentDeckFolderCard}: the way *out* of a drawer is the dashed tile here now, in accent
+ * rather than in the border colour, and it is the only thing on the wall that is not a place.
+ *
+ * **The wishlist's and the collection's folder cards keep the dash and are untouched**, and the
+ * divergence is honest rather than drift: those walls draw a folder as a 62px line of type
+ * beside 62px lines of type, where an edge is the only thing separating a container from a
+ * control, and this one draws it as a picture the size of a deck's picture with the word
+ * `Folder` set in the caption. (`lib/dropMarks.ts` still describes all four folder cards as
+ * dashed. It is a page about the marks, its argument is unaffected — {@link DROP_EDGE} recolours
+ * whatever edge a card already owns — and it is one wall behind.)
  */
 export function FolderCard({
   node,
@@ -76,10 +145,15 @@ export function FolderCard({
    * How large the reader draws the wall — `cardZoom.deckGallery`, the same number the deck tiles
    * beside this one are handed and the same number the page sized the grid track with.
    *
-   * A folder card scales for a reason a deck tile does not have: its picture is a **strip** of
-   * three crops at a fixed height, so without this the tiles around it would grow and the strip
-   * would stay a 96px band — the one thing on the wall that ignored the gesture, which is how a
-   * zoom starts looking broken.
+   * Every size on the card is a `calc` off `--mark-scale`, which this publishes on the `<li>`:
+   * the caption's two lines, the glyph beside them, the seams between the crops and
+   * {@link BAND_PAD} at the foot. The pictures themselves need no help — the frame takes its
+   * height from the art's aspect ratio, so the crops follow the track's width for free.
+   *
+   * **That is what the strip could not do**, and it is why this prop was here before the card was
+   * a frame: three crops at a fixed 96px had no aspect to follow, so without a number of their
+   * own the tiles around them grew and the pictures stayed a 96px band — the one thing on the
+   * wall that ignored the gesture, which is how a zoom starts looking broken.
    */
   zoom: number;
   drag: DeckDrag | null;
@@ -136,7 +210,7 @@ export function FolderCard({
   });
   const eligible = drag !== null && canDrop(drag);
 
-  // Scryfall's image policy, applied to a strip exactly as it is to a cover: an `art` crop has
+  // Scryfall's image policy, applied to these crops exactly as it is to a cover: an `art` crop has
   // no printed frame, so a cover this app cannot name an illustrator for is not drawn. The rule
   // is on `https://scryfall.com/docs/api` under the image guidelines — see `DeckTile`'s
   // {@link Cover}, which quotes it in full and is where this card's credit went.
@@ -166,7 +240,7 @@ export function FolderCard({
               artist: deck.coverArtist,
               // The web build's only picture of this cover — see {@link MemberArt}. Carried
               // beside the id rather than looked up again, because it is the *row's* answer
-              // about that card and the strip is already holding the row.
+              // about that card and this list is already holding the row.
               artUrl: deck.imageUris?.art ?? null,
             },
           ]
@@ -178,10 +252,10 @@ export function FolderCard({
     <li
       ref={ref}
       // The wall's two scale variables, set here for the reason `DeckTile` sets them: everything
-      // inside the card inherits them, so the strip, the name and the count follow one number and
-      // nothing has to be threaded down.
+      // inside the card inherits them, so the caption, the seams between the crops and the band
+      // of padding at the foot follow one number and nothing has to be threaded down.
       style={cardScaleVars(zoom)}
-      className="group relative rounded-xl"
+      className="group relative rounded-lg"
     >
       {/* **Two boxes for two drags, and it is the drag library that insists.**
           `dropTargetForElements` keeps one registration per element — a second one replaces the
@@ -198,16 +272,23 @@ export function FolderCard({
           was the worst case in the app, and it is what the reader's report about affordances
           being bulky, overlapping their neighbours and not lining up with the dotted outline was
           made against. Both marks moved onto the `<button>` below — the element that already
-          carries the card's own edge — so the dash a folder card draws all day is the thing that
-          changes colour, and there is no second outline left to fail to line up with. The
+          carries the card's own edge — so the border a folder card draws all day is the thing
+          that changes colour, and there is no second outline left to fail to line up with. The
           registrations stayed exactly where they are and had to: they are the boxes the two drags
           are read and measured against, and only the `className` moved.
+          **That arrangement is also what decided where the frame's edge goes when this card
+          became a deck tile's box on 2026-09-08.** The border could have gone on a face inside
+          the button, which is how a deck tile's cover is built — and it would have re-made the
+          three concentric outlines this paragraph is the record of, at the one place the app has
+          already been reported for. So the frame *is* the button: the border, the radius, the
+          clip and both marks are one element's. The edge is solid now where it was dashed, and
+          the marks do not care — {@link DROP_EDGE} recolours whatever edge the element owns.
           **`eligible` and `armed` collapse onto that one mark**, which is sound rather than a
           shortcut and is already the arrangement the sibling folder cards use: only one drag is
           ever in the air, so the two are the same claim — *this card could take what you are
           holding* — about different payloads, and no card can be answering both at once. The
           third landing is what a deck has no equivalent of, and it is the line below. */}
-      <div ref={folderRef} className="relative rounded-xl">
+      <div ref={folderRef} className="relative rounded-lg">
         <button
           type="button"
           // Starts with the visible label, then says the two things the card's marks say — WCAG
@@ -217,10 +298,18 @@ export function FolderCard({
           onContextMenu={menu.onContextMenu}
           onKeyDown={menu.onKeyDown}
           className={cn(
-            "block w-full rounded-xl border border-dashed border-border text-left",
-            "p-[calc(0.625rem*var(--mark-scale,1))]",
+            // The frame, and it is a deck tile's: the same border, the same radius, the same
+            // surface under it. `relative` is load-bearing rather than tidy — the crops and the
+            // caption are laid over this box with `absolute`, and an `overflow` clips an
+            // absolutely positioned descendant only where the clipping box is in its
+            // containing-block chain. Without it they would resolve against the `<div>` above,
+            // whose whole job is to be a drop target's rectangle, and the pictures would hang
+            // square-cornered over a rounded frame.
+            "relative block w-full overflow-hidden rounded-lg border border-border bg-surface",
+            "text-left",
+            BAND_PAD,
             "transition-colors duration-150 hover:border-accent motion-reduce:transition-none",
-            // Both drags' *eligible* mark, on the card's own dash rather than around it — and it
+            // Both drags' *eligible* mark, on the card's own edge rather than around it — and it
             // has to be written **before** the line below, because `tailwind-merge` resolves the
             // border colour by argument order: the card the pointer is actually over would
             // otherwise have its full-strength edge pulled back down to 45% by the wider claim.
@@ -229,17 +318,21 @@ export function FolderCard({
             FOCUS,
           )}
         >
-          {/* The strip's height is the one measurement on this card that a deck tile has no
-              equivalent of: a tile's cover is a full-width box on a fixed aspect and follows the
-              grid track for free, and three crops side by side have no aspect to follow. 6rem is
-              the 96px the strip has always been. The 3px seams between them scale with it, so
-              three pictures stay three pictures rather than becoming one at 2×. */}
-          <span
-            className={cn(
-              "flex overflow-hidden rounded-md bg-surface",
-              "h-[calc(6rem*var(--mark-scale,1))] gap-[calc(3px*var(--mark-scale,1))]",
-            )}
-          >
+          {/* The shape, and it draws nothing at all. A deck tile's cover is a full-width box on
+              `ART_ASPECT` and takes its height from the grid track for free; three crops side by
+              side have no aspect of their own to follow, so the card borrows the cover's by
+              holding an empty box of exactly it and letting {@link BAND_PAD} add the band's 20px
+              underneath. The same constant as the cover uses, imported rather than respelled —
+              two spellings of one ratio is how the deck's Grid view came to disagree with the
+              wall docked beside it. */}
+          <span className="block w-full" style={{ aspectRatio: ART_ASPECT }} />
+          {/* The pictures **are** the card, so they are laid over the whole frame — the band's
+              20px included, which is what makes the crop reach the bottom edge rather than
+              stopping short of a strip of surface nothing is drawn on. They were a fixed 96px
+              band above the name until 2026-09-08.
+              The 2px seams scale, so three pictures stay three pictures rather than becoming one
+              at 2×. */}
+          <span className="absolute inset-0 flex gap-[calc(2px*var(--mark-scale,1))]">
             {arts.length === 0 ? (
               <span
                 aria-hidden="true"
@@ -258,45 +351,59 @@ export function FolderCard({
               ))
             )}
           </span>
-          {/* The same four sizes a deck tile scales, in the same order and off the same variable —
-              the two cards sit in one grid track and a name that disagreed about its own size
-              would be the first thing a reader saw. */}
+          {/* The caption, on the art rather than under it — `bg-bg/72` over the pictures, which
+              is `color-mix(in oklab, var(--color-bg) 72%, transparent)` written the way this app
+              spells an opacity on a token. It is what buys the card its height back: the name and
+              the count used to be two lines of layout below the strip, and printing them over the
+              crops is how a folder comes to be exactly a deck tile tall.
+              The name is at the deck tile's own name size and the row under it at the caption
+              size, off the same variable and in the same order — the two cards sit in one grid
+              track, and a name that disagreed about its own size would be the first thing a
+              reader saw. */}
           <span
             className={cn(
-              "flex items-baseline",
-              "mt-[calc(0.5rem*var(--mark-scale,1))] gap-[calc(0.5rem*var(--mark-scale,1))]",
+              "absolute inset-x-0 bottom-0 bg-bg/72",
+              "px-[calc(0.5rem*var(--mark-scale,1))] py-[calc(0.375rem*var(--mark-scale,1))]",
             )}
           >
             <span
               className={cn(
-                "min-w-0 flex-1 truncate",
+                "block truncate",
                 "text-[calc(0.875rem*var(--mark-scale,1))] leading-[calc(1.25rem*var(--mark-scale,1))]",
               )}
             >
               {node.folder.name}
             </span>
-            <span className="flex-none font-mono text-[calc(0.7rem*var(--mark-scale,1))] tabular-nums text-dim">
-              {node.count}
+            <span
+              className={cn(
+                "flex items-center gap-[calc(0.25rem*var(--mark-scale,1))] text-dim",
+                "text-[calc(0.75rem*var(--mark-scale,1))] leading-[calc(1rem*var(--mark-scale,1))]",
+              )}
+            >
+              {/* The one accent thing on the card, and it is the word's own glyph rather than an
+                  ornament: a caption that says `Folder` beside a folder is what tells a drawer
+                  from the deck tiles it is now shaped exactly like. */}
+              <Folder
+                aria-hidden="true"
+                className="size-[calc(0.75rem*var(--mark-scale,1))] flex-none text-accent"
+              />
+              <span className="truncate">
+                Folder · <span className="font-mono tabular-nums">{node.count}</span>{" "}
+                {deckUnit(node.count)}
+              </span>
             </span>
-          </span>
-          <span
-            className={cn(
-              "mt-[calc(0.125rem*var(--mark-scale,1))] block text-dim",
-              "text-[calc(0.75rem*var(--mark-scale,1))] leading-[calc(1rem*var(--mark-scale,1))]",
-            )}
-          >
-            Folder
           </span>
         </button>
 
         {/* Drawn straight off `edge`, which is `null` both when the pointer is elsewhere and when
             it is over a part of this card that would refuse — so no line means no drop, rather than
             a mark leading to a write that never happens. It is `absolute` against the box above,
-            which is why that box is `relative`; it spans the whole card rather than the strip of
-            art, because what it marks is the *slot* the folder would take rather than the
+            which is why that box is `relative`; it spans the whole card rather than one of the
+            crops in it, because what it marks is the *slot* the folder would take rather than the
             picture. (It used to span a credit line under the card as well — that line was
-            deleted on 2026-09-07 and the artists moved onto the crops themselves, which changes
-            the box's height and nothing about what this line is for.) */}
+            deleted on 2026-09-07 and the artists moved onto the crops themselves — and the card
+            became a framed box on 2026-09-08, which moved the name and the count onto the art.
+            Both changed the box's height and neither changed what this line is for.) */}
         <FolderDropLine edge={edge} axis="horizontal" />
       </div>
     </li>
@@ -308,10 +415,26 @@ export function FolderCard({
  * among the drawers so a deck can be dragged back out of a folder without leaving the wall.
  * Issue #283.
  *
- * `ParentFolderCard` is the whole of what it looks like; what is here is the pair of drop targets.
- * Both register on the **same `<li>`**, where a folder card needs two boxes: this tile has one
- * landing, so there is no geometry for `folderEdge` to divide, and `readDeckDrag` and
- * `readFolderDrag` are disjoint, so `accepts()` keeps the two apart.
+ * **It draws itself, and until 2026-09-08 it was `components/ParentFolderCard` with two drop
+ * targets wrapped round it.** That component is still the wishlist's tile and the collection's,
+ * unchanged, and it is still where the *words* come from — {@link UP_ONE_LEVEL} and
+ * {@link upCardName} are imported rather than respelled, so a wall that says "Up one level" on
+ * one page cannot say "Back" on another and the accessible name is the same string on all three.
+ * What could not be shared any longer is the **drawing**: those two walls lay a folder out as a
+ * 62px line of type among 62px lines of type, and this one lays it out as a picture the size of a
+ * deck's picture, so one tile cannot be both without one of the three walls getting a shape
+ * nobody asked for. A change to the phrasing is still one edit; a change to the shape is now two,
+ * and that is the honest cost of the two walls having stopped being the same wall.
+ *
+ * **It is the same box as a folder card and deliberately not the same edge.** Same frame, same
+ * radius, same {@link BAND_PAD}, so it stands in the track at exactly a deck tile's height — and
+ * a **dashed accent** border where a drawer is now solid, because this is the one tile on the
+ * wall that is not a place. That is where the dash a folder card gave up went: it still means
+ * *not a thing you own*, and here it is the only thing wearing it.
+ *
+ * Both drop targets register on the **same `<li>`**, where a folder card needs two boxes: this
+ * tile has one landing, so there is no geometry for `folderEdge` to divide, and `readDeckDrag`
+ * and `readFolderDrag` are disjoint, so `accepts()` keeps the two apart.
  *
  * **The ring is raised from the page's `drag`, not from the target** — `useDeckDropTarget` returns
  * only `over` for the reason `deckDrag.ts` gives: every folder-shaped target answers the same
@@ -319,13 +442,23 @@ export function FolderCard({
  * a `drag` where the wishlist's and the collection's tiles do not; the folder half still arms
  * itself, because two folders never answer the same about the folder in the air.
  *
- * **No strip of art, where a folder card carries three crops.** The strip is what a folder is
+ * **No member art, where a folder card is made of it.** The pictures are what a folder is
  * recognised by, and this tile is not a folder to recognise — it is the way out. Drawing the
  * parent's members in it would make the wall's most-recently-touched art appear twice, once as a
- * destination and once as a place.
+ * destination and once as a place. What fills the frame instead is the destination's own name,
+ * set in the display face over a `FolderUp` glyph, which is the one thing a reader has to read
+ * before letting go.
+ *
+ * **Every size here reads `--mark-scale`'s fallback**, because the wall hands this tile no
+ * `zoom` — `DecksPage` scales the folder cards and the deck tiles and has never scaled this one.
+ * The `calc`s are written anyway, so that a `zoom` prop later is one line at the call site rather
+ * than five re-spellings here; what keeps the tile the height of its neighbours in the meantime
+ * is `h-full` on a stretched grid item, which is the mechanism `components/ParentFolderCard` uses
+ * and the reason its own comment gives.
  */
 export function ParentDeckFolderCard({
   label,
+  zoom,
   drag,
   onOpen,
   canDrop,
@@ -336,6 +469,19 @@ export function ParentDeckFolderCard({
   /** The parent folder's name, or `All decks` at the root — the sidebar tree's own word for the
    *  same row, so the wall and the tree cannot name one destination two ways. */
   label: string;
+  /**
+   * How large the reader draws a deck — the same number every other object in the track is given.
+   *
+   * **It arrived when this tile stopped being a two-line box and became a framed one** (this
+   * change). Before, the card was words in a stretched grid item and `h-full` was the whole of
+   * its geometry, so it kept pace with its neighbours without knowing the zoom existed. Now it
+   * draws a glyph, a heading-face label and a caption at sizes written as `calc(… *
+   * var(--mark-scale, 1))` — and a tile that never sets that variable reads the fallback of 1,
+   * so at 2× the wall's decks and folders doubled and the way *out* of the folder stayed at its
+   * shipped size, in a box that had grown around it. The prop is what sets the variable, through
+   * {@link cardScaleVars}, exactly as {@link FolderCard} and `DeckTile` set it.
+   */
+  zoom: number;
   drag: DeckDrag | null;
   onOpen: () => void;
   canDrop: (drag: DeckDrag) => boolean;
@@ -357,29 +503,105 @@ export function ParentDeckFolderCard({
   const eligible = drag !== null && canDrop(drag);
 
   return (
-    <ParentFolderCard
-      cardRef={ref}
-      label={label}
-      armed={eligible || armed}
-      over={over || edge !== null}
-      onOpen={onOpen}
-    />
+    <li ref={ref} style={cardScaleVars(zoom)} className="relative rounded-lg">
+      <button
+        type="button"
+        // Unchanged, and the one thing on this tile that must not move: the destination is said
+        // in the visible label and the accessible name is built around it, which is WCAG 2.5.3
+        // met by containment. A name that was only the folder's own would make this tile
+        // indistinguishable from the card for that same folder one level up.
+        aria-label={upCardName(label)}
+        onClick={onOpen}
+        className={cn(
+          // `h-full` on a stretched grid item, so the tile is as tall as the drawers beside it
+          // whatever the reader's zoom has done to them — the aspect box below sets the shape and
+          // this sets the height. `justify-center` is what keeps the three lines in the middle of
+          // a cell that has grown past them; pinned to the top they read as a card whose picture
+          // failed to load, which is `components/ParentFolderCard`'s own finding.
+          // Centred rather than `text-left`, which is the one thing about this tile's contents
+          // that is not a folder card's: a folder card's caption is a line of type under three
+          // pictures and reads from the left like every other caption on the wall, and this box
+          // holds nothing but the destination, so anything but the middle of it reads as a
+          // picture that failed to arrive beside the words.
+          "flex h-full w-full flex-col justify-center overflow-hidden rounded-lg bg-surface",
+          // Dashed, and accented rather than the border colour: the drawers on this wall are
+          // solid framed boxes now, so the dash is free to mean the one thing left that is not a
+          // place. 55% is the canvas's `color-mix(in oklab, var(--color-accent) 55%, transparent)`
+          // — present enough to read as the way out, quiet enough not to outshout a wall of art.
+          "border border-dashed border-accent/55",
+          BAND_PAD,
+          "transition-colors duration-150 hover:border-accent motion-reduce:transition-none",
+          // Both drags' *eligible* mark, and it has to be written **before** the line below for
+          // the reason `FolderCard` states above: `tailwind-merge` resolves a border colour by
+          // argument order, so the tile the pointer is actually on would otherwise have its
+          // full-strength edge pulled back to 45% by the wider claim.
+          (eligible || armed) && DROP_EDGE,
+          (over || edge !== null) && cn("border-accent", DROP_OVER),
+          FOCUS,
+        )}
+      >
+        <span
+          className={cn(
+            "flex w-full flex-col items-center justify-center",
+            "gap-[calc(0.25rem*var(--mark-scale,1))] px-[calc(0.75rem*var(--mark-scale,1))]",
+          )}
+          // The same ratio a folder card and a deck cover are drawn at, so the way out stands in
+          // the track at the shape of the things it stands among rather than at the height of
+          // whatever type happens to be in it.
+          style={{ aspectRatio: ART_ASPECT }}
+        >
+          {/* The folder silhouette with the direction drawn inside it, rather than a bare arrow —
+              which would read as a control among containers. */}
+          <FolderUp
+            aria-hidden="true"
+            className="size-[calc(1.25rem*var(--mark-scale,1))] flex-none text-accent"
+          />
+          {/* The destination in the display face, because it is the *name* a reader is aiming at
+              and this tile has the room a folder card's caption does not. */}
+          <span
+            className={cn(
+              "max-w-full truncate font-heading",
+              "text-[calc(1.125rem*var(--mark-scale,1))]",
+            )}
+          >
+            {label}
+          </span>
+          {/* And what pressing it does, at the caption size the folder cards' second line is set
+              at — the one line that tells this tile from the card for the same folder one level
+              up. */}
+          <span
+            className={cn(
+              "max-w-full truncate text-dim",
+              "text-[calc(0.75rem*var(--mark-scale,1))] leading-[calc(1rem*var(--mark-scale,1))]",
+            )}
+          >
+            {UP_ONE_LEVEL}
+          </span>
+        </span>
+      </button>
+    </li>
   );
 }
 
 /**
- * One member cover in a folder card's strip. Its own component because {@link useImageRetry}
- * is a hook and a strip is a loop.
+ * One member cover in a folder card. Its own component because {@link useImageRetry} is a hook
+ * and a row of crops is a loop.
+ *
+ * **Only its box changed on 2026-09-08**, and it changed by not being one: the crops fill the
+ * whole frame now instead of sitting in a 96px band above the name, so this cell is a `flex-1`
+ * column of a box that is the card. Everything below — the two source candidates, the artist's
+ * tooltip, the empty cell, the retry — is exactly what it was.
  *
  * **Both candidates go to `cardArtSrc`, which is the whole of the desktop/web branch and is
  * written nowhere else.** `mtgimg://` is a Tauri custom protocol and wasm cannot register a URL
  * scheme with a browser, so on web the picture is whatever `deck_list` put on that member's own
  * row — and `null` when it put none. A `null` draws the empty `bg-surface` cell below, which is
- * the same thing this frame shows while the bytes are on their way: the strip keeps its
- * geometry either way, and no broken `<img>` is ever left in it.
+ * the same thing this frame shows while the bytes are on their way: the card keeps its geometry
+ * either way — it comes from the aspect box rather than from any picture — and no broken `<img>`
+ * is ever left in it.
  *
- * **The illustrator's name is this frame's since 2026-09-07, and it is the reason the strip's
- * credit could leave the card.** Scryfall's image guidelines require an `art` crop's artist to be
+ * **The illustrator's name is this frame's since 2026-09-07, and it is the reason the card's
+ * credit line could go.** Scryfall's image guidelines require an `art` crop's artist to be
  * identifiable in the interface presenting it — `https://scryfall.com/docs/api`, quoted in full
  * over `DeckTile`'s `Cover`, and *not* `docs/api/images`, which carries no artist rule any more —
  * and a tooltip per picture satisfies that better than the line it replaced: `Art by A, B, C`
@@ -387,7 +609,7 @@ export function ParentDeckFolderCard({
  * picture now answers for itself.
  *
  * Its own `useTooltip` rather than a binder threaded down from the card, because a hook is what a
- * hook is: the strip is a loop and each crop is a separate anchor, which is the same reason this
+ * hook is: the crops are a loop and each one is a separate anchor, which is the same reason this
  * component exists at all.
  */
 function MemberArt({
@@ -398,7 +620,7 @@ function MemberArt({
   cardId: string;
   artUrl: string | null;
   /** Never `null`: the `arts` builder above requires both `coverCardId` and `coverArtist`, so a
-   *  crop with nobody to credit is not in the strip to begin with. */
+   *  crop with nobody to credit is not on the card to begin with. */
   artist: string;
 }) {
   const tip = useTooltip();

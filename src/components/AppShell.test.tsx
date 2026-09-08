@@ -33,6 +33,10 @@ const onMarketplaceProgress = vi.hoisted(() => vi.fn());
  *  refresh is spawned at launch, so the ribbon learns about it from `oracle_tags_status`
  *  rather than from an event this window was too late to hear. */
 const onOracleTagProgress = vi.hoisted(() => vi.fn());
+/** The fifth, and the tag refresh's twin in every respect that matters here: Commander
+ *  Spellbook's combo feed is fetched by a launch nobody pressed, so the ribbon learns about it
+ *  the same way — an event this window is usually too late to hear, backed by a status read. */
+const onCombosProgress = vi.hoisted(() => vi.fn());
 /**
  * Task 10's and Task 11's four, for the shell's two "exactly one of these in the app" reasons:
  * `useDeviceSyncInvalidation` refreshes the screen when a device sync lands from anywhere, and
@@ -72,6 +76,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     onCollectionReconciled,
     onMarketplaceProgress,
     onOracleTagProgress,
+    onCombosProgress,
     onSyncApplied,
     onSyncLive,
     syncLiveState,
@@ -86,6 +91,25 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
       taggingCount: null,
       stale: true,
       refreshing: false,
+    }),
+    // A database that has never fetched Commander Spellbook's list, which since 2026-09-08 is a
+    // state a launch walks out of rather than one a reader has to press their way out of: two
+    // zeros, three nulls and `stale: true` is what `combos_status` really answers there.
+    //
+    // **Unlike its neighbours this row is not what makes the file pass, and saying so is the
+    // point.** `onCombosProgress` above is — a listener registered in a mount effect is a bare
+    // call, so a missing mock is a synchronous `TypeError` — while this one is behind a query and
+    // would merely reject. Removed, the suite still goes green. It is here so the ribbon is
+    // reading an honest resting row rather than an error, which is the state every case in this
+    // file is written against; `useComboProgress` derives "a run is in flight" from the *event*,
+    // so a resting row puts no fifth job on the activity line by itself.
+    combosStatus: vi.fn().mockResolvedValue({
+      combos: 0,
+      cards: 0,
+      stamp: null,
+      fetchedAt: null,
+      checkedAt: null,
+      stale: true,
     }),
     // The shell reads the feeds' state to describe a running fetch. Empty is "nothing known
     // yet", which is what every test in this file is standing in.
@@ -275,6 +299,7 @@ beforeEach(() => {
   onCollectionReconciled.mockReset().mockReturnValue(() => {});
   onMarketplaceProgress.mockReset().mockReturnValue(() => {});
   onOracleTagProgress.mockReset().mockReturnValue(() => {});
+  onCombosProgress.mockReset().mockReturnValue(() => {});
   onSyncApplied.mockReset().mockReturnValue(() => {});
   onSyncLive.mockReset().mockReturnValue(() => {});
   // "off" — the resting state every installation that has paired nothing is in, and the state
