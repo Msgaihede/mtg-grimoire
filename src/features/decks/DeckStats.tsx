@@ -533,15 +533,16 @@ export interface MissingWrite {
  * value and price were drawn under two screens of deck, which is the wrong end of the page for
  * the numbers a reader edits *against*; `DeckLedger` draws them from a `deckStats` call of its
  * own over the same rows, so there is still one definition of each. What stays here is what
- * needs the room: the pips, the shortfall and the **two** presses that act on it, and the
- * charts. The second of those arrived with the pull (2026-09-03) and is `onPull` below — the
- * shortfall's other answer, and the argument for it living here rather than in the header is
- * made on {@link Missing}.
+ * needs the room: the pips, the shortfall and the **three** presses that act on it, and the
+ * charts. The second of those arrived with the pull (2026-09-03) and the third with the add
+ * (2026-09-08) — they are `onPull` and `onAddMissing` below, the shortfall's other two answers,
+ * and the argument for them living here rather than in the header is made on {@link Missing}.
  */
 export function DeckStats({
   cards,
   send,
   onPull,
+  onAddMissing,
   separateXGroup = false,
 }: {
   cards: readonly DeckCard[];
@@ -559,6 +560,23 @@ export function DeckStats({
    * get the absent case: `DeckEditor` draws the strip over both lists and has to answer for each.
    */
   onPull: (() => void) | null;
+  /**
+   * Opens the add-missing dialog — the press for copies the reader has **just bought**, which is
+   * the one answer to a shortfall that *creates* cardboard rather than moving it or listing it.
+   *
+   * `null` where there is nothing to open, and it is `onPull`'s absence for `onPull`'s reason,
+   * said in the same words: a plan holds no cards, so the theory list is short of nothing.
+   * **Absent, never greyed** — a control that spends a whole tab refusing teaches the reader to
+   * stop looking at the line it is in.
+   *
+   * **A callback and not a write**, like the pull beside it: the reader reads a preview and picks
+   * from it, and every part of that is the dialog's. What this strip owns is the *place the press
+   * belongs* — beside the number it is about.
+   *
+   * **Nullable rather than optional**, for the reason above it: `DeckEditor` draws the strip over
+   * both lists and has to answer for each.
+   */
+  onAddMissing: (() => void) | null;
   /**
    * The deck's own `separateXGroup`, and it has to be **the same value the grouping beside this
    * strip was built with**.
@@ -640,6 +658,7 @@ export function DeckStats({
             send.mutate();
           }}
           onPull={onPull}
+          onAddMissing={onAddMissing}
           sendRef={sendRef}
           added={added}
           failure={failure}
@@ -704,20 +723,28 @@ function Pips({ pips }: { pips: Record<PipKey, number> }) {
 }
 
 /**
- * What the deck is short of, and the two presses that do something about it.
+ * What the deck is short of, and the three presses that do something about it.
  *
  * The buttons are absent when there is nothing missing — a control that spends its life offering
  * to do nothing teaches the reader to stop looking at the line it is in — and the sentence
  * that replaces it is still a fact worth having: a deck you own every card of is the answer to
  * the question this line asks.
  *
- * **Two presses because the shortfall has two answers, and they are one idea read in two
- * directions**: what you have *not* got goes on a shopping list, what you *have* got is sitting
- * in a binder and can be moved. That symmetry is the whole argument for the second control being
- * here rather than in the editor's header — that row already gives up its longest word at
- * `SETTINGS_ICON_PX` and measured 825px against the ~729 the ribbon can spare with five buttons
- * on it, and a control belongs beside the number it acts on rather than beside the other things
- * a reader presses once a session.
+ * **Three presses because the shortfall has three answers, and the row's order is the
+ * recommendation.** What you have *already* got is sitting in a binder and can be moved; what you
+ * have *just* got is cardboard the database has never heard of and is recorded; what you have
+ * *not* got goes on a shopping list. Own it → just bought it → have not bought it, and every
+ * reordering of that puts a later state in front of an earlier one — "buy these" ahead of "you
+ * already own these", or a shopping list ahead of "record what you bought".
+ *
+ * That symmetry is the whole argument for these controls being here rather than in the editor's
+ * header — that row already gives up its longest word at `SETTINGS_ICON_PX` and measured 825px
+ * against the ~729 the ribbon can spare with five buttons on it, and a control belongs beside the
+ * number it acts on rather than beside the other things a reader presses once a session.
+ *
+ * **The third one costs this row nothing to hold**, which is why width was never the question:
+ * the line is `flex-wrap`, so it wraps rather than overflowing, and that is the same property
+ * that let the pull in rather than sending it to the header.
  */
 function Missing({
   stats,
@@ -725,6 +752,7 @@ function Missing({
   spent,
   onSend,
   onPull,
+  onAddMissing,
   sendRef,
   added,
   failure,
@@ -738,6 +766,9 @@ function Missing({
   /** Opens the pull dialog, or `null` where there is nothing to open — see the prop on
    *  {@link DeckStats}, which is where the theory list's absence is argued. */
   onPull: (() => void) | null;
+  /** Opens the add-missing dialog, or `null` for the same absence its neighbour has — see the
+   *  prop on {@link DeckStats}. */
+  onAddMissing: (() => void) | null;
   sendRef: RefObject<HTMLButtonElement | null>;
   added: number | null;
   failure: string | null;
@@ -753,15 +784,15 @@ function Missing({
           <p className="font-mono tabular-nums text-destructive">
             {count(stats.missing)} of {count(stats.copies)} missing
           </p>
-          {/* **First of the two, because it is the cheaper answer.** A hole a reader can fill
+          {/* **First of the three, because it is the cheapest answer.** A hole a reader can fill
               out of their own binder is one they should be offered before they are offered a
               shopping list for it — the order of the row is the recommendation, and reversing it
               would put "buy these" in front of "you already own these".
 
-              **Drawn only inside the `missing > 0` arm, like its neighbour**: a deck short of
-              nothing has no hole for a pull to fill, and `deck_pull_plan` would answer zero rows
-              by construction. So the two controls appear and disappear together, and the line
-              never draws one of them alone.
+              **Drawn only inside the `missing > 0` arm, like both its neighbours**: a deck short
+              of nothing has no hole for a pull to fill, and `deck_pull_plan` would answer zero
+              rows by construction. So the three controls appear and disappear together, and the
+              line never draws one of them alone.
 
               `null` is the second, separate absence — a list with no cards in it at all — and it
               is argued at {@link DeckStats}' own prop.
@@ -777,16 +808,16 @@ function Missing({
               aria-haspopup="dialog"
               onClick={onPull}
               // **Not disabled while the wishlist write is in flight**, which is the one thing a
-              // reader of these two lines has to get right: they are independent writes about
+              // reader of these three lines has to get right: they are independent writes about
               // the same number, and the half-second `send` spends disabling itself is no reason
               // this control cannot be pressed. It has no pending state of its own either — the
               // press opens a dialog, and the write it leads to is made in there.
               //
-              // The class list is its neighbour's, character for character, including the two
+              // The class list is its neighbours', character for character, including the two
               // state variants nothing here can currently reach. They are copied rather than
-              // trimmed so that the pair cannot drift into looking like a primary and a
-              // secondary: these are peers, and the day one of them grows a "no" it will grey
-              // exactly as the other already does.
+              // trimmed so that the row cannot drift into looking like a primary and two
+              // secondaries: these are peers, and the day one of them grows a "no" it will grey
+              // exactly as the third already does.
               className={cn(
                 "rounded-md border border-border px-2 py-1 text-dim",
                 "transition-colors duration-150 hover:text-text disabled:opacity-50",
@@ -796,6 +827,53 @@ function Missing({
               )}
             >
               Pull from collection
+            </button>
+          )}
+          {/* **The middle of the three, and the position is the argument.** The row reads own it
+              → just acquired → not yet owned, so this press sits between the binder a hole can be
+              filled out of and the shopping list it would otherwise go on. Moved after its right
+              neighbour it would put "buy these" in front of "record what you bought", which is
+              two states of one purchase in the wrong order.
+
+              **Drawn only inside the `missing > 0` arm, like both its neighbours**, and `null` is
+              the same second absence the pull's prop argues at {@link DeckStats} — the theory
+              list, whose rows hold no cards at all, so there is nothing to be short of.
+
+              **`aria-haspopup` without `aria-expanded`, for the pull's reason**: the layer it
+              opens is a full-window overlay, so while it is up this button is behind a scrim and
+              off the tab order, and saying "expanded" about a control nobody can reach would be a
+              claim with no observer.
+
+              **Two things it deliberately lacks, and they are the whole of what makes it not its
+              right-hand neighbour.** It has **no `spent` state**: `missing_to_wishlist` folds
+              quantities rather than replacing them, so a second wishlist press wishes for the
+              same copies twice and the button has to be spent until the deck says something new —
+              where this press re-plans inside its own transaction against a shortfall the first
+              one just closed, and a second press finds nothing left to offer. And it takes **no
+              `disabled` from the wishlist write being in flight**: these are three independent
+              writes about one number, and the half-second `send` spends disabling itself is no
+              reason this control cannot be pressed. It has no pending state of its own either —
+              the press opens a dialog, and the write it leads to is made in there.
+
+              The class list is its two neighbours', character for character, including the two
+              state variants nothing here can currently reach. Copied rather than trimmed so the
+              three cannot drift into looking like a primary and two secondaries: they are peers,
+              and the day one of them grows a "no" it will grey exactly as the third already
+              does. */}
+          {onAddMissing !== null && (
+            <button
+              type="button"
+              aria-haspopup="dialog"
+              onClick={onAddMissing}
+              className={cn(
+                "rounded-md border border-border px-2 py-1 text-dim",
+                "transition-colors duration-150 hover:text-text disabled:opacity-50",
+                "aria-disabled:opacity-50 aria-disabled:hover:text-dim",
+                "motion-reduce:transition-none",
+                FOCUS,
+              )}
+            >
+              Add missing to collection
             </button>
           )}
           {/* **No `<span>` wrapper — bound on the button itself.** A wrapper earns its keep only
