@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Shared collection — MTG Grimoire</title>
+    <!--
+      **A development shell, and the production one is a Worker.**
+
+      `GET /s/{id}` is rendered by `share-worker/src/page.ts`, not served as a file: the HTML has
+      to carry OpenGraph tags built from the D1 row (*"Giradeli's Trade binder · 412 cards ·
+      updated 2 days ago"*), which is the whole payoff of storing a snapshot in the clear. This
+      file exists so `vite --config vite.share.config.ts` has an entry and a page to open; the
+      built `dist-share/index.html` is served by nothing.
+
+      Two things it mirrors from the Worker's shell, and both are load-bearing:
+
+      * `<div id="root">` and no `class="dark"` on `<html>` — `main.tsx` adds the class, so this
+        page exercises the same path production does.
+      * `<link id="snapshot">` is how the bundle learns where the blob is. Here it points at the
+        committed golden — the same document `src-tauri/src/share/__golden__/snapshot.json` that
+        both suites assert against — so the dev server draws a real binder rather than the
+        "not ready yet" state.
+    -->
+    <link
+      id="snapshot"
+      rel="preload"
+      as="fetch"
+      crossorigin
+      href="/src-tauri/src/share/__golden__/snapshot.json"
+    />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/share/main.tsx"></script>
+  </body>
+</html>

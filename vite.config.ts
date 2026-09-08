@@ -102,6 +102,13 @@ export default defineConfig({
       ".storybook/**/*.test.ts",
       "relay/src/**/*.test.ts",
       "share-worker/src/**/*.test.ts",
+      // The fifth glob is the **public web viewer** — `share/`, built by
+      // `vite.share.config.ts` into `dist-share/` and served by the share Worker's `assets`
+      // binding. It is a React page like `src/`, so unlike the two Worker globs above it needs
+      // `.tsx`, and unlike `src/` it has no core: no `ipc`, no store, no Tauri boundary
+      // anywhere in it. `share/SharePage.test.tsx` holds a sweep of its own import graph that
+      // keeps it that way.
+      "share/**/*.test.{ts,tsx}",
     ],
     // Vitest stubs CSS imports as empty strings by default, which would hand
     // `iconFont.test.ts` an empty `mana.css?raw` to assert against. No *component* imports
