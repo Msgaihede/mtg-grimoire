@@ -237,10 +237,14 @@ export function ShareFolderMenu({ target }: { target: ShareTarget | null }): JSX
   });
   const revoke = useMutation({
     mutationFn: (id: string) => ipc.shareRevoke(id),
-    // **`back()` on both arms, because a confirmed press is still a layer closing.**
-    // `ConfirmDialog` names `onDismiss` as the focus-return hook and *confirming* does not go
-    // through it, so without this the caret lands on `<body>` and the reader's next Tab starts
-    // at the top of the page. The publish path already did this; these two now agree with it.
+    // **`back()` on both arms, and it is belt-and-braces rather than the thing that returns the
+    // caret.** `ConfirmDialog.confirm()` calls `onDismiss()` **before** `onConfirm()` — dismiss
+    // first, then run it, which that file states as its own rule — and this host's `onDismiss`
+    // is `setWithdrawing(false); back();`. So the caret is already on the Share button by the
+    // time the mutation is even started, on the one path that goes through the dialog. These
+    // calls are for any path that does not: an id revoked from somewhere else, or a future
+    // caller that skips the question. They are idempotent, `back()` being a `focus()` on an
+    // element that already has it.
     onSuccess: () => {
       setWithdrawing(false);
       back();

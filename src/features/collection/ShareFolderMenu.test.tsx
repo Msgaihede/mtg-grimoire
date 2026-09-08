@@ -558,11 +558,16 @@ describe("withdrawing", () => {
   });
 
   /**
-   * **The caret comes back to the control the layer was raised from.**
-   * `ConfirmDialog` names `onDismiss` as its focus-return hook and *confirming* does not go
-   * through it, so a press that succeeds would otherwise drop the caret on `<body>` and start
-   * the reader's next Tab at the top of the page. A dialog that Escape closed already hands
-   * focus back; a dialog the reader answered must not be the one that does not.
+   * **The caret comes back to the control the layer was raised from** — a dialog that Escape
+   * closed already hands focus back, and a dialog the reader *answered* must not be the one that
+   * does not.
+   *
+   * **It asserts the outcome rather than the route, and the two routes are not the same code.**
+   * `ConfirmDialog.confirm()` calls `onDismiss()` before `onConfirm()` — that file's own stated
+   * rule — so on this path the host's `onDismiss` has already run `back()` before the mutation
+   * starts, and the `back()` calls in `revoke`'s own arms are belt-and-braces for a revocation
+   * that never went through the dialog. Written against `document.activeElement`, this case
+   * stays true whichever of the two returns the caret and goes red if neither does.
    */
   it("hands the caret back to the Share button after a withdrawal", async () => {
     shareList.mockResolvedValue([share()]);
