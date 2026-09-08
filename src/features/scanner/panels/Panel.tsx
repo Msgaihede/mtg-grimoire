@@ -8,10 +8,20 @@ import { cn } from "@/lib/utils";
  * One section of the Scanner's column: the Settings panel chrome — heading, then a bordered
  * `bg-surface` body — with a fold on every panel but `match`.
  *
- * **The heading is the disclosure button**, `aria-expanded` on it and `aria-controls` to the
- * body, so a screen reader hears "Controls, collapsed, button" rather than a heading and an
- * unrelated toggle. The region keeps its `aria-labelledby` either way, so `getByRole("region",
- * { name })` finds a folded panel too — its body is simply not in the tree.
+ * **The heading is the disclosure button**, `aria-expanded` on it and — *while it is open* —
+ * `aria-controls` to the body, so a screen reader hears "Controls, collapsed, button" rather
+ * than a heading and an unrelated toggle.
+ *
+ * **The `aria-controls` comes and goes with the body, and that is the whole of why it is
+ * conditional.** This panel unmounts its body rather than hiding it, so a folded heading
+ * pointing at `scanner-controls-body` names an element that is not in the document — a dangling
+ * IDREF, which is an ARIA conformance error and is the kind a screen reader resolves to
+ * *nothing* rather than to an error. The attribute is dropped while folded instead. Everything
+ * a reader needs in that state is already on the button: `aria-expanded="false"` says there is
+ * something to open, and the fold is the next element in the tree once it exists.
+ *
+ * The region keeps its `aria-labelledby` either way — that target is the heading, which is
+ * always mounted — so `getByRole("region", { name })` finds a folded panel too.
  *
  * **`SettingsSection`'s classes, copied rather than imported.** That component is the Settings
  * page's chrome and has no fold; a `foldable` prop on it would put this screen's one requirement
@@ -44,7 +54,7 @@ export function Panel({
           <button
             type="button"
             aria-expanded={open}
-            aria-controls={bodyId}
+            aria-controls={open ? bodyId : undefined}
             onClick={() => setFold(id, !open)}
             className="flex w-full items-center gap-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
           >

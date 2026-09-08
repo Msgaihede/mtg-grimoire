@@ -137,10 +137,17 @@ describe("the folded panels", () => {
     render(<ScannerPanels {...props()} />);
     const heading = screen.getByRole("button", { name: "Controls" });
     expect(heading).toHaveAttribute("aria-expanded", "false");
+    // The body is unmounted while folded, so pointing at its id would be a dangling IDREF.
+    expect(heading).not.toHaveAttribute("aria-controls");
     expect(screen.queryByRole("slider", { name: "decide at" })).not.toBeInTheDocument();
     await userEvent.click(heading);
     expect(heading).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByRole("slider", { name: "decide at" })).toBeInTheDocument();
+    // Open, it points at the body — and the IDREF is checked by *resolving* it rather than by
+    // comparing it to the id this test would have had to write down itself.
+    const target = heading.getAttribute("aria-controls") ?? "";
+    expect(document.getElementById(target)).toContainElement(
+      screen.getByRole("slider", { name: "decide at" }),
+    );
     expect(useAppStore.getState().scannerFolds.controls).toBe(true);
   });
 
