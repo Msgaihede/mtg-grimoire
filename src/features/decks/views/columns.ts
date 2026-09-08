@@ -1,7 +1,15 @@
 /**
  * How the deck's column views arrange a deck's groups — which ones flow, and which share a column.
  *
- * **`splitRail` is shared by both column views; `packColumns` has one caller left.** `TextView`
+ * **`splitRail` is shared by three views now; `packColumns` has one caller left.** This said *both
+ * column views* until 2026-09-08, and the third caller is the one that is **not** a column view:
+ * `GridView` uses the split for **order alone**, rendering `[...command, ...flow, ...rail]` as
+ * full-width wrapping groups with no rail column at all. That is a legitimate use of this function
+ * rather than a stretch of it — what it answers is which of three runs a pile is in, and a caller
+ * is free to spend that as placement or as sequence. The wall spends it as sequence because a
+ * group there is as wide as the desk: a 19-card Maybeboard in a one-tile rail is ~4 500px of
+ * column — arithmetic, against the same nineteen cards in a stack, which `stackHeight` makes
+ * roughly a fifth of that. `TextView`
  * still packs: a decklist line is 21px and a column of them holds thirty, so filling a column to
  * the desk's height and opening the next is what makes that view readable. `StackView` stopped on
  * 2026-08-14 — a card is 300px tall, so a column there held two or three piles, and packing to a
@@ -87,6 +95,14 @@ export function packColumns<T>(
  * box to make it about. **A switched-off command zone is in _this_ box**, which is the one case
  * where a pile whose `kind` names a command zone is not in the command run at all — see the
  * `isActive` half of the first test below.
+ *
+ * **"Both views" is `StackView` and `TextView`, and a third view calls the split without drawing
+ * any of the three boxes** (2026-09-08). `GridView` spends the split as *order* rather than as
+ * placement — full-width wrapping groups, the rail's piles simply last — so a sweep or a CDP probe
+ * looking for `[data-deck-rail]` finds **nothing** on that wall even though the Sideboard and the
+ * Maybeboard are on it. That is the attributes meaning what they say: they name a *box a pile is
+ * drawn in*, and on the wall there is only one kind of box. Address a grid group by its heading or
+ * by `deckGroupProps`, never by a rail marker it deliberately does not carry.
  */
 export const RAIL_ATTR = "data-deck-rail";
 
@@ -195,9 +211,11 @@ export const RAIL_ATTR = "data-deck-rail";
  * Order is preserved inside every run — `command`, `flow`, and both of the rail's — and every
  * caller depends on it: `TextView` hands `flow` to `packColumns`, whose whole constraint is the
  * reader's own order; `StackView` maps it straight into the items of a masonry grid, where
- * placement follows document order and never walks back up the page; and the command run is drawn
+ * placement follows document order and never walks back up the page; `GridView` concatenates all
+ * three runs into one wall, where the order *is* the whole of what it took from this function;
+ * and the command run is drawn
  * stacked top to bottom, so its order is the only thing on screen saying which of the two zones is
- * the commander. A split that reordered would break all three from outside them, where nothing
+ * the commander. A split that reordered would break all four from outside them, where nothing
  * would be looking.
  */
 export function splitRail<T extends { kind: CategoryKind | null; isActive: boolean }>(

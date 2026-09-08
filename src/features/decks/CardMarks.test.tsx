@@ -1,11 +1,14 @@
 /**
- * The two theory marks, and the three things about them a suite can honestly hold.
+ * The two theory marks, and the four things about them a suite can honestly hold.
  *
  * Everything else in `CardMarks.tsx` is geometry drawn on a card face, which jsdom lays out not at
  * all — the stack's marks are pinned through `CardStack.test.tsx`, where they are rendered on a
  * real row. What is checked here is the part that is pure: which **sentence** a tier and a count
- * come to, which **value** the tier writes into `data-theory-match`, and which **custom property
- * names** each component paints with.
+ * come to, which **value** the tier writes into `data-theory-match`, which **custom property
+ * names** each component paints with, and that the mark's mirrored **clip** is written at all —
+ * a string in an inline style rather than a shape anything has to lay out, which is the one
+ * piece of this mark's geometry jsdom can read back. (It said "three" while that fourth case was
+ * already here; the count is re-taken in the commit that rewrote the case.)
  *
  * ## Why the colour assertions name a property and never a colour
  *
@@ -89,19 +92,23 @@ describe("TheoryMatchMark", () => {
 
   it("paints with no Tailwind colour utility, so the reader's choice is the only fill", () => {
     for (const tier of ["exact", "name"] as const) {
-      for (const variant of ["banner", "chip"] as const) {
-        const el = drawMark(<TheoryMatchMark tier={tier} variant={variant} />);
-        expect(el.classList.contains("bg-pie-u")).toBe(false);
-        expect(el.classList.contains("text-text")).toBe(false);
-      }
+      const el = drawMark(<TheoryMatchMark tier={tier} />);
+      expect(el.classList.contains("bg-pie-u")).toBe(false);
+      expect(el.classList.contains("text-text")).toBe(false);
     }
   });
 
-  it("keeps the banner's mirrored slant and leaves the chip square", () => {
-    // The clip and the fill are one `style` object now, so a slant lost to the paint is exactly
-    // the regression that rewrite could have caused — and issue #182 is what it would re-open.
-    expect(drawMark(<TheoryMatchMark tier="exact" variant="banner" />).style.clipPath).not.toBe("");
-    expect(drawMark(<TheoryMatchMark tier="exact" variant="chip" />).style.clipPath).toBe("");
+  it("wears the mirrored slant whichever tier it is", () => {
+    // Two regressions, and the loop is what catches the second. The clip and the fill are one
+    // `style` object, so a slant lost to the paint is exactly what that rewrite could have cost —
+    // issue #182 is what it would re-open. And the slant is now **unconditional**: it was written
+    // only for the `"banner"` variant while the Grid tile drew a square 9px chip of its own, and
+    // that prop went on 2026-09-08 when both card-face views became one `DeckCardFace`. So the
+    // property worth pinning is that nothing branches here at all — a shape re-derived from the
+    // tier, or from anything else, is a second drawing coming back.
+    for (const tier of ["exact", "name"] as const) {
+      expect(drawMark(<TheoryMatchMark tier={tier} />).style.clipPath).not.toBe("");
+    }
   });
 });
 

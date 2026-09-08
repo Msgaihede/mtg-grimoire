@@ -1174,9 +1174,13 @@ describe("the views that are not the table", () => {
   const empty = buildGroups([], [SIDEBOARD], "category", "alphabetical");
 
   /**
-   * A `VirtualTable` has one scroller and one band per group, so an empty group is a band and
-   * nothing else — there is no column for it to be a place *in*. The other three draw a
+   * A `VirtualTable` is one flat list of rows with a band per group, so an empty group is a band
+   * and nothing else — there is no column for it to be a place *in*. The other three draw a
    * sentence, because an empty Sideboard is where the next sideboard card goes.
+   *
+   * (This said "one scroller and one band per group". The band half is what the argument rests on
+   * and is untouched; the scroller half stopped being true of the deck's table when it took
+   * `VirtualTable`'s `grow`, and it was never the reason anyway.)
    *
    * **The empty group is the Sideboard rather than `Ramp`**, and it is a fixed zone on purpose:
    * a seeded pile is the fixture that keeps reaching a view empty however `drawsWhenEmpty` is
@@ -1209,8 +1213,16 @@ describe("the views that are not the table", () => {
    * `overflow-x-auto` would be a different change entirely (the overhang would reach the page and
    * put an X scrollbar across the whole app, which the 1024px floor forbids).
    *
-   * The `TableView` is deliberately not one of these: its rows are absolutely positioned inside a
-   * virtualiser, so it draws `ring-inset` and wants no room at all.
+   * **The `TableView` is deliberately not one of these, and the reason written here was stale
+   * twice over.** It read that its rows are absolutely positioned inside a virtualiser, so it
+   * draws `ring-inset` and wants no room at all. `ring-inset` stopped telling it apart on
+   * 2026-09-03, when `DROP_RING` became inset app-wide and these three began drawing the mark
+   * inside their border boxes too; and the deck's table stopped being a virtualised scrollport
+   * when it took `VirtualTable`'s `grow` — every row is in normal flow, `relative` with no
+   * transform, and the box around them carries no `overflow` at all. What is left is the honest
+   * reason and it is the one the paragraph above already gives: this room is `FOCUS`'s 4px, not
+   * the ring's 2, and a table row's focus outline is `FOCUS_INSET`. Nothing there is drawn
+   * outside a box, and there is no clip for it to be drawn outside of.
    */
   it.each([
     ["StackView", <StackView key="s" groups={GROUPS} marketplace={TCG} />],
@@ -2022,6 +2034,48 @@ describe("StackView group chrome", () => {
 });
 
 /**
+ * **The grid says a switched-off pile is switched off the same two ways the stacks do** — added
+ * 2026-09-08 with the ordering change above, and the ordering is what made the absence cost
+ * something.
+ *
+ * This view drew `GroupHeader`'s dimmed name and `INACTIVE` chip and nothing else, which was
+ * survivable while a switched-off pile sat wherever the reader's `sortOrder` put it among the
+ * deck's own columns — a heading is right there above the tiles it names. `GridView` calls
+ * `splitRail` now and puts every railed pile **last**, so a nineteen-card Maybeboard is the whole
+ * bottom of the wall; undimmed, the deck reads as carrying on past its own end, and the one thing
+ * saying otherwise has scrolled off the top.
+ *
+ * It is the *same two classes* the block above pins rather than a second vocabulary, because
+ * "these cards are not in the deck" is one statement and a reader who has learnt it on the stacks
+ * must not have to learn it again on the wall. The two are asserted separately for the stacks'
+ * own reason: they are drawn by two different elements, and a card image is opaque, so the
+ * section's wash paints behind the tiles and only the list's `opacity` reaches the cards.
+ */
+describe("GridView group chrome", () => {
+  /** Whole class names, never a substring — the block above has why. */
+  const classesOf = (el: Element) => el.className.split(" ");
+  const draw = () => render(<GridView groups={GROUPS} marketplace={TCG} />);
+
+  it("washes a switched-off pile and leaves a resting one alone", () => {
+    draw();
+
+    expect(classesOf(screen.getByRole("region", { name: "Maybeboard" }))).toContain(
+      "bg-surface/60",
+    );
+    expect(classesOf(screen.getByRole("region", { name: "Ramp" }))).not.toContain("bg-surface/60");
+  });
+
+  /** Asserted as a pair — dimmed here, not dimmed there — because `opacity-60` on every wall
+   *  would be no signal at all, only a quieter view. */
+  it("dims the tiles of a switched-off pile, and no others", () => {
+    draw();
+
+    expect(classesOf(screen.getByRole("list", { name: "Maybeboard" }))).toContain("opacity-60");
+    expect(classesOf(screen.getByRole("list", { name: "Ramp" }))).not.toContain("opacity-60");
+  });
+});
+
+/**
  * The two views that lay a deck out in fixed-width boxes, and the one number they disagree about.
  *
  * Everything in the block below is true of both — which half of the scroller a group is drawn in,
@@ -2491,15 +2545,29 @@ describe("GridView tiles", () => {
    * button would find the card's face and report its classes as the foot's.
    */
   const foot = () => within(tile()).getByText("LEA · 161").parentElement as HTMLElement;
-  /** The controls' wrapper, which is what carries their offset off the foot. */
-  const controls = () => tile().lastElementChild as HTMLElement;
+  /**
+   * The controls' wrapper, found by `data-no-drag` — the mark it carries so that a press on a
+   * stepper is a press and not the start of a card drag, and the one handle on it that is about
+   * what it *is* rather than where it happens to sit.
+   *
+   * **It used to be `tile().lastElementChild`, and that spelling could not survive the wrapper
+   * going away.** The controls hung inside a positioned `<span>` of this view's own while the bar
+   * sat on the chin's top edge; there is no such box now — `DeckCardControls` is the tile's last
+   * child directly, and it renders `null` when the host offers no `setQuantity`, so the old
+   * spelling would quietly return the chin and report its classes as the controls'.
+   */
+  const controls = () => tile().querySelector("[data-no-drag]") as HTMLElement;
 
-  const draw = (zoom: number) => {
+  /** A wall of one card. `actions` only where a case is about a control — `DeckCardControls`
+   *  renders nothing at all without a `setQuantity`, so a case that does not need the column
+   *  should not have one in its tree. */
+  const draw = (zoom: number, actions?: DeckCardActions) => {
     setDeckZoom(zoom);
     render(
       <GridView
         groups={buildGroups([card({ name: "Sol Ring" })], [RAMP], "category", "alphabetical")}
         marketplace={TCG}
+        actions={actions}
       />,
     );
   };
@@ -2545,10 +2613,23 @@ describe("GridView tiles", () => {
   });
 
   /**
-   * The foot moves with the card in **both** directions now and the gutter still holds at its own
-   * size going down, and the controls sit **on** the foot at either end — which is the derivation
-   * worth pinning, because the bar's offset was a fixed utility for as long as the foot was a fixed
-   * height, and the two would have parted company at exactly the zoom nobody looks at.
+   * The foot moves with the card in **both** directions and the gutter still holds at its own size
+   * going down — and the controls take **no number from either**, which is the half of this case
+   * that reverses.
+   *
+   * It used to read that the controls sit *on* the foot at either end, and the argument was that
+   * the bar's offset had been a fixed utility for as long as the foot was a fixed height, so the
+   * two would have parted company at exactly the zoom nobody looks at. That is a claim about a bar
+   * this view no longer draws: the controls were a full-width row inside a wrapper at
+   * `bottom: chinHeight(zoom)`, and they are the stacked card's column now — `DeckCardControls
+   * layout="card-column"` at `absolute top-9 right-1.5`, character for character what `CardStack`
+   * passes. **Measured from the card's top, so there is nothing left to keep in step with.**
+   * `top-9` clears the 27px title bar the quantity tag and the Game Changer ribbon stand in, and
+   * the column runs down the card's right margin from there; a fixed utility is the right answer
+   * for it rather than a drift waiting for a zoom step. So what is asserted is the class and the
+   * **absence** of a computed offset, at both ends of the ladder — the computed one going away is
+   * the change, and an offset creeping back would be a second answer to a question the shared
+   * face already settles.
    *
    * **The numbers are `CHIN_HEIGHT`'s since this view's foot became `components/CardChin`** — 28
    * at 1×, so 56 and 14 at the two ends — where they were a 20px strip this file held on its own.
@@ -2559,7 +2640,9 @@ describe("GridView tiles", () => {
    * states, and the reason Task 14's live pass exists.
    */
   it("moves the foot with the tiles both ways, and floors only the gutter", () => {
-    draw(2);
+    // `setQuantity` is what makes `DeckCardControls` render at all, so the column is only in the
+    // tree because this case asked for it — see `draw`.
+    draw(2, { setQuantity: vi.fn() });
     expect(wall().style.gap).toBe("20px");
     expect(foot().style.height).toBe("56px");
     expect(foot().style.fontSize).toBe("");
@@ -2567,7 +2650,14 @@ describe("GridView tiles", () => {
     // substring trap that spelling walks into, and there is no reason to keep two spellings of
     // one idea in one file.
     expect(foot().classList.contains("text-[calc(0.625rem*var(--mark-scale,1))]")).toBe(true);
-    expect(controls().style.bottom).toBe("56px");
+    // The stack's column, and nothing computed. `flex-col` is `layout="card-column"`'s own
+    // arrangement — the prop is invisible to the DOM, and this is the class that tells a column
+    // standing in a card's margin from the wrapping row a table cell gets.
+    expect(controls().classList.contains("flex-col")).toBe(true);
+    for (const placement of ["absolute", "top-9", "right-1.5"]) {
+      expect(controls().classList.contains(placement)).toBe(true);
+    }
+    expect(controls().style.bottom).toBe("");
     cleanup();
 
     // Half size: the card halves and **the foot halves with it**, because everything standing in
@@ -2578,7 +2668,7 @@ describe("GridView tiles", () => {
     // The gutter is the one thing here that still floors, and the difference is what it measures:
     // it is the space *between* two cards rather than anything drawn *on* one, so there is nothing
     // for it to stay in step with, and 5px of gap is a wall that reads as a single sheet.
-    draw(0.5);
+    draw(0.5, { setQuantity: vi.fn() });
     expect(tile().style.width).toBe("75px");
     expect(wall().style.gap).toBe("10px");
     expect(foot().style.height).toBe("14px");
@@ -2590,23 +2680,49 @@ describe("GridView tiles", () => {
     // the half somebody looked at.
     expect(foot().style.fontSize).toBe("");
     expect(foot().classList.contains("text-[calc(0.625rem*var(--mark-scale,1))]")).toBe(true);
-    expect(controls().style.bottom).toBe("14px");
+    // The same placement at the other end, which is the whole point of asserting it twice: the
+    // card has halved and the chin under it has halved, and the controls have not moved — a
+    // reinstated `bottom: chinHeight(zoom)` would read `14px` here and `56px` above.
+    expect(controls().classList.contains("flex-col")).toBe(true);
+    for (const placement of ["absolute", "top-9", "right-1.5"]) {
+      expect(controls().classList.contains(placement)).toBe(true);
+    }
+    expect(controls().style.bottom).toBe("");
   });
 
   /**
-   * **The face is `components/CardArt`, the same object the search wall draws** — which is what
-   * this asserts through the two things only that component puts in the tree: the picture's
-   * `alt` is the card's name (the hand-rolled copy this replaced passed `alt=""` and printed the
-   * name itself), and the marks chip carries `data-card-marks`.
+   * **The tile and the stacked card draw one face, and this is where that is asserted from the
+   * grid's side** — `DeckCardFace`, the same component `CardStack` puts inside its own button.
    *
-   * **And the deck's own count is clear of that chip.** `FoilOverlay` owns a tile's top-**right**
-   * corner on every card surface in this app; this view drew its copy count there too, in a
-   * full-width strip, so a foil card in a deck laid the two on top of one another. Nothing went
-   * red — a hit target and an overlap are both invisible to jsdom — and the fixtures had no foil
-   * card in a deck, which is why this case builds one. The count is top-left now, which is the
-   * corner the wall keeps for exactly this kind of mark.
+   * It read "the face is `components/CardArt`, the same object the search wall draws" and checked
+   * that component's two fingerprints: an `alt` carrying the card's name, and a `data-card-marks`
+   * chip. Both are gone, and the change is not a regression against the wall — it is the same
+   * argument aimed at the surface a reader actually switches between. `Stacks | Grid` are one
+   * toolbar press apart and were two drawings of one deck; the docked search column is a different
+   * question on the same screen. So the fingerprints to look for are the **stack's**, and
+   * `CardStack.test.tsx` spells all three of them the same way this does.
+   *
+   * * **The printed frame**, drawn under the picture whether or not one arrives — the name, the
+   *   cost as `mana-font` pills and the type line, in the app's own hand. `CardArt` had a smaller
+   *   fallback of its own and no frame at all while an `<img>` was on its way.
+   * * **The picture is decoration**: `alt=""`, because the button around it already names the
+   *   card, and an `alt` repeating that name has a screen reader read every tile twice.
+   * * **`QuantityTag`**, which is the label and the copy count folded into one mark on the marks
+   *   strip — where this tile drew a `bg-accent` chip with a separate `LabelDot` beside it.
+   *
+   * **And there is no marks chip on a deck tile at all**, which is the assertion the old overlap
+   * case turns into. `FoilOverlay` owns a card's top-right corner everywhere in this app, and this
+   * view used to draw its copy count in a full-width strip that ran into it — invisible to jsdom,
+   * and invisible to every fixture with no foil card in a deck. That collision is **structurally
+   * impossible** now rather than merely avoided: the count is `QuantityTag` at the head of the
+   * marks strip, the strip is the only thing in that band, and the face draws
+   * `FoilOverlay mark={false}` so the chip is never built. The fixture is still a **foil** card,
+   * and it has to be — on a plain card `FoilOverlay` draws nothing whatever `mark` says, so the
+   * absence would pass for the wrong reason. What the finish gets instead is a `FinishMark` in the
+   * chin, which is checked here so that `mark={false}` reads as the relocation it is rather than
+   * as a deleted fact.
    */
-  it("draws the search wall's card frame, with the deck's count clear of its chip", () => {
+  it("draws the stacked card's own face, and no marks chip with it", () => {
     render(
       <GridView
         groups={buildGroups(
@@ -2619,19 +2735,28 @@ describe("GridView tiles", () => {
       />,
     );
 
-    // The picture itself, by tag: the tile also holds the chip's `role="img"` glyphs, and this
-    // case deliberately draws one of them.
+    // The frame under the art: the name, the cost as pills, the type line. The card is known
+    // before its bytes are, which is what this frame exists to say.
+    expect(within(tile()).getByText("Sol Ring")).toBeInTheDocument();
+    expect(tile().querySelectorAll("i.ms-cost")).toHaveLength(1);
+    expect(within(tile()).getByText("Instant")).toBeInTheDocument();
+
+    // The picture itself, by tag — `CardStack.test.tsx`'s own spelling, and the only one that
+    // still works now that the frame is decoration and has no `alt` to be found by.
     const art = tile().querySelector("img")!;
-    expect(art).toHaveAttribute("alt", "Sol Ring");
+    expect(art).toHaveAttribute("alt", "");
     // The plain scroller's gate — this view mounts every card in the deck at once, unlike the
-    // virtualised wall the same frame is drawn on.
+    // virtualised wall the same picture is drawn on.
     expect(art).toHaveAttribute("loading", "lazy");
 
-    const chip = tile().querySelector("[data-card-marks]");
-    expect(chip).not.toBeNull();
+    // The count is `QuantityTag`'s, on the marks strip, and `aria-hidden` like every other mark
+    // over the art: `deckCardName` is the only text inside this button anybody hears.
     const count = within(tile()).getByText("3");
-    expect(chip!.contains(count)).toBe(false);
-    expect(count.closest("[data-card-marks]")).toBeNull();
+    expect(count).toHaveAttribute("aria-hidden", "true");
+
+    // No chip, on a card that really is foil — so the finish is said in the chin instead.
+    expect(tile().querySelector("[data-card-marks]")).toBeNull();
+    expect(within(tile()).getByRole("img", { name: "Foil" })).toBeInTheDocument();
   });
 
   /**
@@ -2656,28 +2781,43 @@ describe("GridView tiles", () => {
   });
 
   /**
-   * **The chin supplies its own bottom edge here, and that is the whole job of the `seam` prop.**
+   * **The card's own border is the chin's bottom edge, and the chin draws none of its own** —
+   * `seam="card"`, where this view passed `"art"`.
    *
-   * This tile's face is `CardArt`, whose own edge stops where the chin begins rather than
-   * enclosing it — a rule break on it is a `ring-2` rather than an edge — so the chin draws all
-   * three of its own and the two read as one outline. The stacked card is the exact
-   * opposite, and the mirror of this assertion already lives there (`CardStack.test.tsx`, "carries
-   * the rule break's edge through the data line as well", which pins `border-x` and no bottom
-   * edge): under a bordered card the chin must **not** draw one, or the card's own border and the
-   * chin's stack into a 2px foot under a 1px everything-else.
+   * The old case asserted the opposite and was right about the tile it was written for: the face
+   * was `components/CardArt`, whose edge stops where the chin begins rather than enclosing it, so
+   * the chin had to supply all three of its own for the two to read as one outline. The premise is
+   * gone rather than overruled — the tile is `rounded-lg border` around a `DeckCardFace` inset at
+   * `rounded-[7px]`, which is the stacked card exactly, so this is a bordered card now and
+   * `CardChin`'s `seam` doc says what that costs: **no `border-b`**, because the card's border
+   * already is the bottom edge and a second one sits 1px *above* it — a card with a 2px foot under
+   * a 1px everything-else. What replaces it is the other half of the same join: `-mx-px`, which
+   * rides the bar's side edges onto the card's own so the two are one line rather than two, and
+   * `rounded-b-[7px]`, the face's own corner rather than the art frame's `lg`.
+   *
+   * **The `"art"` spellings are asserted absent rather than left unsaid**, because a `seam` flipped
+   * back would put `rounded-b-lg border-b` here and every positive assertion above it would still
+   * pass — `-mx-px` and `rounded-b-[7px]` would simply be missing, and only one of the two answers
+   * can be checked by looking for what is there.
    *
    * **`classList.contains`, never `className.toContain`.** `"border-border"` contains the
    * substring `border-b`, so the obvious spelling passes on *both* seams and asserts nothing at
-   * all — which is a shape this repo has been bitten by before.
+   * all — which is exactly the trap this case now walks the other way through, and a shape this
+   * repo has been bitten by before.
    *
    * This pins a class string rather than a painted pixel, because jsdom has no Tailwind, so it
    * retires nothing the live pass does about the seam itself. What it retires is the **silence**:
-   * `seam` had no test on this surface at all, and flipping it to the stack's answer left the
-   * whole file green.
+   * `seam` had no test on this surface at all, and flipping it left the whole file green.
    */
-  it("gives the chin its own bottom edge, which the bare art frame has not got", () => {
+  it("gives the chin the card's own bottom edge rather than one of its own", () => {
     draw(DEFAULT_ZOOM);
-    expect(foot().classList.contains("border-b")).toBe(true);
+    expect(foot().classList.contains("border-b")).toBe(false);
+    expect(foot().classList.contains("rounded-b-lg")).toBe(false);
+    expect(foot().classList.contains("-mx-px")).toBe(true);
+    expect(foot().classList.contains("rounded-b-[7px]")).toBe(true);
+    // The sides are still the chin's own — `seam` decides which edges it draws, never whether it
+    // is edged at all.
+    expect(foot().classList.contains("border-x")).toBe(true);
   });
 
   /**
@@ -2723,27 +2863,34 @@ describe("GridView tiles", () => {
   });
 
   /**
-   * **A rule break is the ring on the face here, and the card's outline stays one colour** —
-   * which is `CardStack`'s foot argument applied in reverse, on a surface where the premise is
-   * the other way round.
+   * **A rule break is the tile's own border and the chin's `tone` together, and the two have to
+   * move together** — one outline, in one colour, all the way down the card.
    *
-   * The stack's card really is bordered in destructive, so its chin **must** take `tone` or the
-   * bar puts 28px of `border-border` back through the left and right edges of that outline. This
-   * tile has no such border: `CardArt` grew an edge on 2026-08-26 so the picture and the chin read
-   * as one outlined object, and that edge is neutral whatever the card is doing — the rule break
-   * is a `ring-2`, painted outside the border box. So a `tone="destructive"` chin here ran the
-   * outline grey down the art and red across the foot, and the card stopped reading as one object
-   * at exactly the join the border was added to close.
+   * The old case asserted the reverse — a `ring-2 ring-destructive` on the face and a deliberately
+   * neutral chin — and every clause of its argument was about a tile whose edge belonged to the
+   * picture: `CardArt` grew a border on 2026-08-26 so the frame and the chin read as one outlined
+   * object, that border is neutral whatever the card is doing, so the break had to be a ring
+   * painted outside it and a reddened chin would have run the outline grey down the art and red
+   * across the foot. There is no `CardArt` here now. The `<li>` is `rounded-lg border` around a
+   * `DeckCardFace`, exactly as a stacked card is, so **the wrapper is the card's edge** and it is
+   * the border that reddens — which makes the chin's `tone` mandatory rather than wrong, for
+   * precisely the reason `CardChin` states: the bar is `relative` and later in the document, so
+   * its border paints *over* the card's for every pixel of its height, and a `border-border` chin
+   * would put 28px of the wrong colour back through both sides of the outline.
    *
-   * **The pair is asserted together on purpose.** Dropping the tone is only right because the
-   * ring still says it; a change that took the ring away as well would leave this tile with no
-   * rule-break edge at all and would pass an assertion about the chin alone.
+   * **The pair is asserted together on purpose, and now in both directions.** A red card with a
+   * grey foot is the defect `tone` exists to prevent, and a grey card with a red foot is the same
+   * defect upside down; either one passes an assertion about a single element. The face's ring is
+   * asserted **absent** with them, because the ring going away is only right while the border says
+   * it — a change that dropped the border and kept nothing would leave the tile with no rule-break
+   * edge at all.
    *
-   * **`classList.contains`, never `className.toContain`.** `"border-border"` contains the
-   * substring `border-b`, and `"border-destructive"` is a substring of nothing here but is the
-   * same trap read the other way — the seam case above walks through it.
+   * **`classList.contains`, never `className.toContain`.** Every negative here is about a class
+   * in the `border-*` family, where the substring spelling reads one class out of another —
+   * `"border-border"` answers a `toContain("border-b")` — so a whole-name test is the only one
+   * that means anything. The seam case above walks through it.
    */
-  it("keeps the tile's outline one colour, with the rule break on the face's ring", () => {
+  it("outlines a broken card in one colour, from its border through its chin", () => {
     render(
       <GridView
         groups={buildGroups([card({ name: "Sol Ring" })], [RAMP], "category", "alphabetical")}
@@ -2758,15 +2905,25 @@ describe("GridView tiles", () => {
       "rule break: Sol Ring is banned here.",
     );
 
-    // The face, which is the button's only element child — the box `CardArt` is wrapped in so the
-    // deck's own marks have something positioned to hang off.
-    const face = tile().querySelector("button")!.firstElementChild as HTMLElement;
-    expect(face.classList.contains("ring-2")).toBe(true);
-    expect(face.classList.contains("ring-destructive")).toBe(true);
+    // The card's edge, which is the tile's own since the two card-face views became one card.
+    expect(tile().classList.contains("border-destructive")).toBe(true);
+    expect(tile().classList.contains("border-border")).toBe(false);
 
-    // And the chin is the neutral edge the art's own is, so the two are one outline.
-    expect(foot().classList.contains("border-destructive")).toBe(false);
-    expect(foot().classList.contains("border-border")).toBe(true);
+    // And the chin carries the same colour, so the outline does not change halfway down.
+    expect(foot().classList.contains("border-destructive")).toBe(true);
+    expect(foot().classList.contains("border-border")).toBe(false);
+
+    // The face — the button's only element child, and `DeckCardFace`'s root — draws no ring of
+    // its own. Read as whole class names: a `ring-*` left on it would be a second edge inside
+    // the first, which is what the border replaced.
+    //
+    // **The face is identified before it is asserted about**, because an absence read off the
+    // wrong element passes for free: a wrapper slipped between the button and the face would
+    // carry no classes at all and this would go green over a ring that was still there.
+    // `rounded-[7px]` is the face's own clipped corner and nothing else here has it.
+    const face = tile().querySelector("button")!.firstElementChild as HTMLElement;
+    expect(face.classList.contains("rounded-[7px]")).toBe(true);
+    expect(face.className.split(" ").filter((c) => c.startsWith("ring-"))).toEqual([]);
   });
 });
 
@@ -3837,10 +3994,23 @@ describe("StackView arrow keys", () => {
  * **The deck editor's Grid view in a browser.** `deck_get` is routed on web and `mtgimg://` is
  * not reachable there, so a deck opened in a browser was a wall of named, artless frames.
  *
- * This tile draws `components/CardArt`, so all it has to do is hand the URL down — which is the
- * whole of what these two cases check. Its sibling, `CardStack`, builds its own `<img>` and
- * therefore has to call `cardArtSrc` itself; that is tested in `CardStack.test.tsx`, and the two
- * being different shapes is exactly why neither test covers the other.
+ * **The two views are one implementation of that now, and this block's old reason has reversed.**
+ * It said the tile draws `components/CardArt` and only has to hand the URL down, while its sibling
+ * `CardStack` builds its own `<img>` and therefore calls `cardArtSrc` itself — "the two being
+ * different shapes is exactly why neither test covers the other". Both halves are false: there is
+ * one `DeckCardFace`, both views put it inside their own button, and the `cardArtSrc` call is
+ * inside it. So the branch these two cases exercise is literally the same line
+ * `CardStack.test.tsx`'s pair exercises, and **for the desktop/web choice itself this coverage is
+ * now a duplicate** — that is written down rather than acted on, because deleting a case is a
+ * decision for whoever owns the pair and not something to infer from a refactor.
+ *
+ * What it still earns its keep for is the **wiring**, which is a different claim from the branch:
+ * `GridView` is a second caller of that face, at a different width, and nothing in the type system
+ * says a tile has to hold one — a tile that went back to drawing a frame of its own, or that
+ * narrowed the row before passing it and dropped `imageUris`, would draw a broken image in a
+ * browser with `CardStack.test.tsx` still green. These two cases are what would go red for it,
+ * addressed the way that file addresses the same picture (`container.querySelector("img")`) since
+ * the face's `<img>` is decoration and has no `alt` to be found by.
  */
 describe("the deck grid's art", () => {
   const SCRYFALL = { display: "https://cards.scryfall.io/display/front/s/o/sol.webp?1706230661" };
@@ -3864,15 +4034,15 @@ describe("the deck grid's art", () => {
 
   it("draws the row's own picture in a browser", () => {
     vi.mocked(isWebTarget).mockReturnValue(true);
-    draw();
+    const { container } = draw();
 
-    expect(screen.getByAltText("Sol Ring")).toHaveAttribute("src", SCRYFALL.display);
+    expect(container.querySelector("img")).toHaveAttribute("src", SCRYFALL.display);
   });
 
   it("keeps drawing the cached protocol picture on desktop", () => {
-    draw();
+    const { container } = draw();
 
-    const src = screen.getByAltText("Sol Ring").getAttribute("src");
+    const src = container.querySelector("img")?.getAttribute("src");
     expect(src).toContain("mtgimg");
     expect(src).not.toContain("scryfall.io");
   });

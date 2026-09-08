@@ -12,12 +12,20 @@
  * ## The part that is not the number
  *
  * **A z-index only competes inside its own stacking context.** The quick-add popup opened
- * inside a table row is capped by that row's {@link LAYER.raised} whatever it asks for,
- * because the row is `position: absolute` *and* `transform`ed and is therefore a stacking
- * context of its own. That is why {@link LAYER.raisedWhenPopupOpen} exists at all, and why
- * `raised` must stay **below** `header`: a row scrolling past the header has to go under
+ * inside a **virtualised** table row is capped by that row's {@link LAYER.raised} whatever it
+ * asks for, because the row is `position: absolute` *and* `transform`ed and is therefore a
+ * stacking context of its own. That is why {@link LAYER.raisedWhenPopupOpen} exists at all, and
+ * why `raised` must stay **below** `header`: a row scrolling past the header has to go under
  * it. Raising a clipped popup's number is the fix that will not work; moving it out of the
  * transformed ancestor, or lifting that ancestor, is the fix that does.
+ *
+ * **"A table row" was three words too broad from 2026-09-08**, when `VirtualTable` gained an
+ * opt-in `grow` and the deck's table took it: those rows are in normal flow, `relative` with a
+ * `minHeight`, so a bare one is no stacking context and a popup inside it is not capped in the
+ * first place. The three 100k-row walls — search, collection, wishlist — still virtualise and
+ * the paragraph above is theirs unchanged. What the narrowing must not be read as is a licence
+ * to drop the entry: see {@link LAYER.raisedWhenPopupOpen}, which is unconditional in both
+ * modes and is doing different work in each.
  *
  * ## Why the values are whole strings
  *
@@ -66,6 +74,14 @@ export const LAYER = {
   /**
    * The row lift, as the tables spell it — a row comes forward only while something inside
    * it is expanded. Written out whole; see the note above.
+   *
+   * **Unconditional across both of `VirtualTable`'s modes, and it earns its place differently in
+   * each** (the `grow` mode is 2026-09-08's, and the deck's table is its one caller). Off `grow` a
+   * row is `absolute` *and* transformed, so it is a stacking context and this is what stops an
+   * open popup being painted under the next row, which comes later in the DOM. Under `grow` a
+   * bare `relative` row is **no** stacking context and nothing caps the popup — but the row it is
+   * open in still has to paint over the rows below it, and a `relative` box lifted to `z-10` is
+   * exactly that. Same class, same rung, one fewer reason to need it; do not gate it on the mode.
    */
   raisedWhenPopupOpen: "has-[[aria-expanded=true]]:z-10",
   /** A table's sticky header row, over the rows scrolling under it. */

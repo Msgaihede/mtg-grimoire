@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, type CSSProperties, type ReactNode } from "react";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import { useVirtualizer, type VirtualItem } from "@tanstack/react-virtual";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { needsNextPage } from "@/features/search/useCardSearch";
 import { FOCUS_INSET } from "@/lib/focus";
@@ -14,6 +14,11 @@ export const TABLE_ROW_HEIGHT = 44;
 
 /** Height of the sticky header row, which the virtualiser has to account for. */
 export const TABLE_HEADER_HEIGHT = 36;
+
+/** What the virtualiser's window is under `grow`, where nothing reads it. A module constant
+ *  rather than a literal `[]`, which would be a new array on every render and a new dependency
+ *  for the paging effect that reads its last item. */
+const NO_VIRTUAL_ROWS: VirtualItem[] = [];
 
 export interface TableColumn<Row> {
   /** Stable id. Also the sort key sent to the backend when `sortable`. */
@@ -47,6 +52,20 @@ export interface TableColumn<Row> {
   interactive?: boolean;
 }
 
+/**
+ * One row about to be drawn: where it sits in `rows`, the key React sees, and the
+ * virtualiser's geometry for it — `null` under `grow`, which is the whole of how the two modes
+ * differ once the list has been laid out.
+ *
+ * The key is the row's index either way: `defaultKeyExtractor` is the index, so nothing about
+ * what React reconciles moves when a caller opts in.
+ */
+interface LaidOutRow {
+  index: number;
+  key: VirtualItem["key"];
+  item: VirtualItem | null;
+}
+
 /** Everything a row needs to be a row. `renderRow` receives it and must spread it. */
 export interface RowRenderProps {
   role: "row";
@@ -72,6 +91,9 @@ export interface RowRenderProps {
  * three wrap their row in a drag source, and `extraHeight`, because two of the three grow a
  * row by the reconciler's flagged band.
  *
+ * **{@link VirtualTable.grow} is the fourth caller's opt-out of the scroller**, and it is opt-in
+ * precisely because the other three are 100k-row lists whose virtualisation must not move.
+ *
  * The column template is an inline style rather than a Tailwind arbitrary value on purpose:
  * Tailwind scans source text for whole class names, so a template joined at runtime would
  * emit no rule at all.
@@ -86,6 +108,7 @@ export function VirtualTable<Row>({
   sort,
   onSort,
   extraHeight,
+  grow = false,
   onActivate,
   isSelected,
   rowClassName,
@@ -105,8 +128,34 @@ export function VirtualTable<Row>({
   onNeedNextPage: () => void;
   sort: SortSpec;
   onSort: (key: string, additive: boolean) => void;
-  /** Extra px this row needs beyond {@link TABLE_ROW_HEIGHT}. */
+  /**
+   * Extra px this row needs beyond {@link TABLE_ROW_HEIGHT}.
+   *
+   * A **contract** in the ordinary mode — the virtualiser is told the row is that tall and
+   * positions its neighbour accordingly, so a band that outgrows the number is painted over.
+   * Under `grow` it is only a **floor**: nothing has to be told, so a row that outgrows it
+   * simply gets taller. See the geometry note at the row's own `style`.
+   */
   extraHeight?: (row: Row) => number;
+  /**
+   * Draw every row in normal flow and let the page be the scroller.
+   *
+   * **Opt-in, defaulting to today's behaviour exactly**, because the caller has to be able to
+   * say *the list is bounded and the page is the scroller* — which is true of a deck, at most a
+   * few hundred rows, and false of the search, the collection and the wishlist, which draw this
+   * same table over 100k rows and need every bit of the virtualiser.
+   *
+   * What it buys is the absence of a second scrollbar: a table that scrolls inside a page that
+   * also scrolls is two scrollbars an inch apart moving different things, which is the screen
+   * this repo has twice gone looking for — once when the deck's other three views were given no
+   * height (`features/decks/CLAUDE.md`) and again when the editor stopped being a scroller
+   * nested in `AppShell`'s `main`.
+   *
+   * The virtualiser's hook still runs — a hook may not be conditional — and nothing reads its
+   * answer: no `getVirtualItems`, no `getTotalSize`, no scroll reset and no paging, because
+   * there is no scroller to reset and the whole list is already present.
+   */
+  grow?: boolean;
   /**
    * Click, Enter and Space on a row. Omitted makes rows inert.
    *
@@ -158,22 +207,40 @@ export function VirtualTable<Row>({
     virtualizer.measure();
   }, [heightKey, virtualizer]);
 
-  const virtualRows = virtualizer.getVirtualItems();
+  // Under `grow` the virtualiser's window is not read at all — the rows are mapped directly,
+  // below — so neither of these is asked for. `NO_VIRTUAL_ROWS` is a module constant rather
+  // than a fresh `[]` so the paging effect's deps do not change every render.
+  const virtualRows = grow ? NO_VIRTUAL_ROWS : virtualizer.getVirtualItems();
   const lastRendered = virtualRows.length ? virtualRows[virtualRows.length - 1].index : -1;
 
   // A new list reuses this scroll container, and a browser does not reset scrollTop for new
   // content — it clamps the old offset into the new, usually far shorter, list. Changing the
   // sort changes `listKey`, so a re-sorted list starts at the top for free.
+  //
+  // Skipped under `grow`: this element is not a scroll container there, so there is no offset
+  // to reset — whatever scrolls is an ancestor, and a re-sorted deck must not yank the page.
   useEffect(() => {
+    if (grow) return;
     virtualizer.scrollToOffset(0);
-  }, [listKey, virtualizer]);
+  }, [grow, listKey, virtualizer]);
 
   // Paging is driven by the virtualiser's window rather than a scroll handler: it already
   // knows which row is at the bottom, and it recomputes on resize too, which a scroll event
   // never fires for. The guards live with the query, in the page above.
+  //
+  // Skipped under `grow` for a stronger reason than "there is nothing to fetch": every row is
+  // rendered, so the last rendered row is always the last row and `needsNextPage` would answer
+  // true on every list, on every render.
   useEffect(() => {
+    if (grow) return;
     if (needsNextPage(lastRendered, rows.length)) onNeedNextPage();
-  }, [lastRendered, rows.length, onNeedNextPage]);
+  }, [grow, lastRendered, rows.length, onNeedNextPage]);
+
+  // The one place the two modes part: `grow` draws every row, in document order, in normal
+  // flow, and reads nothing off the virtualiser; otherwise it is the window as before.
+  const laidOut: LaidOutRow[] = grow
+    ? rows.map((_row, index) => ({ index, key: index, item: null }))
+    : virtualRows.map((v) => ({ index: v.index, key: v.key, item: v }));
 
   return (
     <div
@@ -184,11 +251,22 @@ export function VirtualTable<Row>({
       // otherwise a virtualised list tells assistive tech the database holds 20 cards.
       aria-rowcount={total === null ? -1 : total + 1}
       tabIndex={0}
-      className="min-h-0 flex-1 overflow-auto rounded-md border border-border"
+      // Under `grow` this element stops being a scroll container: no height of its own, no
+      // `overflow`, and the page scrolls it instead. The border and the radius stay — they are
+      // what makes the table a table — and `role`, `aria-label`, `aria-rowcount` and the
+      // `tabIndex` are untouched, because none of them is a statement about scrolling.
+      className={cn("rounded-md border border-border", !grow && "min-h-0 flex-1 overflow-auto")}
     >
       {/* Sticky inside the scroll container rather than sitting above it: a header outside
           the scroller is wider than the rows by exactly the scrollbar, and the columns drift
-          apart by that much as soon as the list overflows. */}
+          apart by that much as soon as the list overflows.
+
+          **Under `grow` there is no scroll container here and the class is still wanted.**
+          `sticky` resolves against the nearest scrolling ancestor, which is then `AppShell`'s
+          `main` — so the column names stay readable while a hundred-row deck scrolls past,
+          which is exactly what a reader comparing rows down a long list needs. The scrollbar
+          argument above simply does not arise: with no local scroller the header and the rows
+          are the same width by construction. */}
       <div
         role="row"
         aria-rowindex={1}
@@ -233,15 +311,20 @@ export function VirtualTable<Row>({
       </div>
 
       {/* Holds the scrollbar open to the full list height while the rows inside it are
-          positioned absolutely. */}
-      <div role="rowgroup" style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
-        {virtualRows.map((v) => {
-          const row = rows[v.index];
+          positioned absolutely — and wants neither number under `grow`, where the rows are in
+          normal flow: there is no scrollbar to hold open, and nothing absolute for this box to
+          be the containing block of. A fixed height there would be the letterbox again. */}
+      <div
+        role="rowgroup"
+        style={grow ? undefined : { height: virtualizer.getTotalSize(), position: "relative" }}
+      >
+        {laidOut.map(({ index, key, item }) => {
+          const row = rows[index];
           if (!row) return null;
           const extra = extraHeight?.(row) ?? 0;
           const props: RowRenderProps = {
             role: "row",
-            "aria-rowindex": v.index + 2,
+            "aria-rowindex": index + 2,
             tabIndex: onActivate ? 0 : undefined,
             onClick: onActivate ? (e) => onActivate(row, e) : undefined,
             onKeyDown: onActivate
@@ -257,16 +340,33 @@ export function VirtualTable<Row>({
               "grid items-center gap-3",
               // `group`: a row's controls show themselves on hover, and on the row taking
               // focus — which is the keyboard's version of hover.
-              "group absolute inset-x-0 top-0 border-b border-border/50 px-3",
-              // A row is positioned *and* transformed, which makes it a stacking context —
-              // so an open popup's own layer cannot lift it over the next row, which paints
-              // later simply for being later in the DOM. The row it is open in has to come
-              // forward instead, as far as the rows and no further: the sticky header above
-              // is a layer up, because a row lifted to its level would scroll over it.
+              "group border-b border-border/50 px-3",
+              // **Positioned in both modes, and that is a requirement rather than a leftover**:
+              // `TableView` lays a `DropIndicator` and a `LandedMark` over the row with
+              // `inset-0`, and off `grow` those rely on the virtualiser's own `absolute` being
+              // the containing block. Under `grow` the row is in normal flow, so `relative` is
+              // what keeps the two overlays addressed to the row instead of to the page.
+              item === null ? "relative" : "absolute inset-x-0 top-0",
+              // Off `grow` a row is positioned *and* transformed, which makes it a stacking
+              // context — so an open popup's own layer cannot lift it over the next row, which
+              // paints later simply for being later in the DOM. The row it is open in has to
+              // come forward instead, as far as the rows and no further: the sticky header
+              // above is a layer up, because a row lifted to its level would scroll over it.
+              //
+              // **Under `grow` that premise is gone and the class is kept anyway**, because it
+              // is still what does the work: a bare `relative` row is no stacking context, so a
+              // popup inside it is not capped in the first place — but the row it is open in
+              // must still paint over the rows below it, and a positioned box raised to
+              // `LAYER.raised` is exactly that. Same class, same rung, one fewer reason to need
+              // it. (Spelled as the token and never as the number: `layers.test.ts` sweeps `src/`
+              // for a bare z-index class and reads a *comment* as one — it is source text, and a
+              // rule that could be evaded by writing the class in prose would not be a rule.)
               LAYER.raisedWhenPopupOpen,
               "text-sm transition-colors duration-150 motion-reduce:transition-none",
-              // Inset: rows are stacked flush inside a scroller, so an outline standing 2px
-              // off one would be drawn over its neighbours and clipped at the ends of the list.
+              // Inset: rows are stacked flush against each other, so an outline standing 2px
+              // off one would be drawn over its neighbours — and off `grow`, where the list is
+              // in a scroller, clipped at the ends of it as well. The first half is the one
+              // that holds in both modes and it is enough on its own.
               FOCUS_INSET,
               onActivate && "cursor-pointer",
               // Which row the open pane is about. A quiet surface rather than gold: forty
@@ -275,14 +375,27 @@ export function VirtualTable<Row>({
               // Last, so a caller's own state colour wins over the selection colour.
               rowClassName?.(row),
             ),
-            // `start` is measured from the scroll container, which the header shares; this
-            // div begins below it, so the header's height comes back off. The row tracks are
-            // pinned rather than left to `auto` because a flagged band is positioned over
-            // the second one — an auto track would collapse it and re-centre the cells
-            // across a height they do not occupy.
+            // Off `grow`: `start` is measured from the scroll container, which the header
+            // shares; this div begins below it, so the header's height comes back off.
+            //
+            // Under `grow` the row is placed by the flow and carries a `minHeight` instead —
+            // **`minHeight` rather than `height`, deliberately.** With the virtualiser gone
+            // nothing has to be *told* a row is taller, so a band that outgrows its declared
+            // `extraHeight` grows the row rather than being painted over the row below it.
+            // That makes `extraHeight` a floor in this mode where it is a contract in the
+            // other; the prop's own note says so.
+            //
+            // The two grid templates are the same in both modes. The row tracks are pinned
+            // rather than left to `auto` because a flagged band is positioned over the second
+            // one — an auto track would collapse it and re-centre the cells across a height
+            // they do not occupy.
             style: {
-              height: v.size,
-              transform: `translateY(${v.start - TABLE_HEADER_HEIGHT}px)`,
+              ...(item === null
+                ? { minHeight: TABLE_ROW_HEIGHT + extra }
+                : {
+                    height: item.size,
+                    transform: `translateY(${item.start - TABLE_HEADER_HEIGHT}px)`,
+                  }),
               gridTemplateColumns: template,
               gridTemplateRows: extra > 0 ? `${TABLE_ROW_HEIGHT}px ${extra}px` : undefined,
             },
@@ -308,9 +421,9 @@ export function VirtualTable<Row>({
           // row. The key rides on whatever the caller renders, so a wrapper element — which
           // would break the `rowgroup`'s children — is never needed.
           return renderRow ? (
-            <RowSlot key={v.key}>{renderRow(props, row)}</RowSlot>
+            <RowSlot key={key}>{renderRow(props, row)}</RowSlot>
           ) : (
-            <div key={v.key} {...props} />
+            <div key={key} {...props} />
           );
         })}
       </div>

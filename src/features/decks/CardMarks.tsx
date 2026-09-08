@@ -248,21 +248,48 @@ export const THEORY_MATCH_ATTR = "data-theory-match";
  * planned for", which on a live list is the difference between the real thing and the proxy
  * standing in until it arrives.
  *
- * ## It is the surface's own quantity badge, which is two drawings rather than one
+ * ## It is the surface's own quantity badge, and since 2026-09-08 there is one of those
  *
  * The quantity is the mark a reader's eye already goes to on a deck card, so a second fact drawn
- * in a *different* shape beside it reads as a second kind of object. The catch is that the two
- * card-face views do not draw the *same* quantity badge: the stack draws {@link CountTag}'s
- * 22px slanted banner, and the Grid tile draws a flat 9px chip of its own. So this echoes
- * whichever one it is standing next to — `"banner"` and `"chip"` — and `COUNT_TAG_BOX_MIRRORED`
- * and `COUNT_TAG_SLANT_MIRRORED` are exported for the first of them and nothing else.
+ * in a *different* shape beside it reads as a second kind of object. This is therefore
+ * {@link CountTag}'s 22px slanted banner rather than a shape of its own — the tag at one end of
+ * the strip and this at the other are one object drawn twice, which is what
+ * {@link COUNT_TAG_BOX_MIRRORED} and {@link COUNT_TAG_SLANT_MIRRORED} are exported for and the
+ * only thing they are exported for.
  *
- * **One drawing was tried first and the tile is why it did not survive.** The banner is 22px on a
- * 210px stacked card and the same 22px on a 150px tile — 7.5 % of the card against 15 % of it —
- * so a wall of tiles read as a wall of blue flags with cards behind them. Photographed
- * 2026-08-20; it is the same argument {@link GameChangerBadge} and {@link GameChangerBanner}
- * already settle the other way round, that one fact may be drawn twice when the two surfaces have
- * different room.
+ * **It echoed two shapes until 2026-09-08, and the retired one is on the record rather than gone
+ * from it.** The two card-face views did not draw the *same* quantity badge: the stack drew that
+ * banner and the Grid tile drew a flat 9px chip of its own, so this took a `variant` —
+ * `"banner"` or `"chip"` — and echoed whichever it was standing next to. The chip was not a
+ * smaller taste, it was the shape that had to **clear `FoilOverlay`'s corner chip**: top-right
+ * belongs to that chip on every surface that draws a card as a face, the tile drew one, so the
+ * tick **stacked under it**, offset by the chip's own measured box on the cards that had one. The
+ * stack's corner was free — it drew `FoilOverlay mark={false}` and said the finish in its foot —
+ * so one fact wore two shapes in two corners of one deck, and `variant` was the price of the
+ * tile's honesty about a corner it did not own.
+ *
+ * **The premise went with the tile.** Both card-face views draw one `DeckCardFace` now, which
+ * draws `mark={false}` as the stack always did and says the finish in the card's chin — so the
+ * corner is the tick's on both, there is nothing left to stack under, and the quantity beside it
+ * is the same {@link QuantityTag} banner on both. No second geometry is left to echo, and a prop
+ * offering one was drawing one fact a second way for no caller at all.
+ *
+ * **This is still one fact drawn twice app-wide, and the other drawing is
+ * {@link TheoryMatchBadge}** — the table's and the text columns', which have no art to lay a
+ * filled mark on. That is the same argument {@link GameChangerBadge} and
+ * {@link GameChangerBanner} settle the same way, that one fact may be drawn twice where the two
+ * surfaces have genuinely different room. What ended here is a second drawing for two surfaces
+ * that turned out to have the *same* room.
+ *
+ * **The measurement that bought the chip is still true and no longer decides anything.** The
+ * banner is 22px on a 210px stacked card and the same 22px on a 150px tile — 7.5 % of the card
+ * against 15 % of it — so a wall of tiles read as a wall of blue flags with cards behind them
+ * (photographed 2026-08-20). What that pass had in front of it was a banner laid on a bare art
+ * tile whose own quantity was the 9px chip. The tile draws the whole 27px marks strip now, with
+ * the quantity tag at 22px in the opposite corner, so the weight the chip refused has already
+ * been accepted at the other end of the same strip — and refusing it *here* would leave the two
+ * bookends mismatched again, which is exactly what issue #212 reported. **Nothing has been
+ * re-photographed**: read that as the argument's premise having moved, not as a new measurement.
  *
  * **Echoing the banner means reflecting it** (issue #182). Both are 22px tall and both are cut by
  * the same 10px slant, but the tag is widest along its **top** edge and so is this — a 180°
@@ -344,7 +371,6 @@ export const THEORY_MATCH_ATTR = "data-theory-match";
  */
 export function TheoryMatchMark({
   tier,
-  variant = "banner",
   delta = 0,
   className,
 }: {
@@ -358,11 +384,6 @@ export function TheoryMatchMark({
    * silently, on a mark whose whole job is to be believed at a glance.
    */
   tier: TheoryTier;
-  /**
-   * Which surface's quantity badge to echo. `"banner"` is the stack's {@link CountTag} box;
-   * `"chip"` is the Grid tile's smaller flat chip — see the "two drawings" note above.
-   */
-  variant?: "banner" | "chip";
   /**
    * How many copies the live list holds **over** (positive) or **short** (negative) of what the
    * plan asks for — `theoryMatch.ts`'s `TheoryMark.delta`, which is `0` for the row that matches,
@@ -378,7 +399,6 @@ export function TheoryMatchMark({
   delta?: number;
   className?: string;
 }) {
-  const banner = variant === "banner";
   const exact = tier === "exact";
   const tip = useTooltip();
   return (
@@ -394,9 +414,9 @@ export function TheoryMatchMark({
       style={{
         // Mirrored — **reflected** across the vertical axis, not rotated 180°, which is the whole
         // of issue #182 — because this sits in the card's **right**-hand corner; see the constant.
-        // The chip has no slant at all: it is echoing a square 9px chip, and a 10px bite out of a
-        // 14px box is most of the box.
-        ...(banner ? { clipPath: COUNT_TAG_SLANT_MIRRORED } : null),
+        // Unconditional since the chip went: the slant is what makes this the quantity tag's
+        // reflection rather than a box that happens to be the same height.
+        clipPath: COUNT_TAG_SLANT_MIRRORED,
         // **Two explicit branches rather than one `--color-theory-${tier}` template**, and the
         // reason is a grep: the four property names have to be findable from this file, which is
         // the only place they are read. It is also why this is an inline style and not a Tailwind
@@ -410,23 +430,13 @@ export function TheoryMatchMark({
         color: exact ? "var(--color-theory-exact-fg)" : "var(--color-theory-name-fg)",
       }}
       className={cn(
-        banner
-          ? // **The mirrored box, and the pairing is not optional** (issues #158, #182 and #212).
-            // The slant above and the paddings that centre content inside it are one shape: worn
-            // with `COUNT_TAG_BOX`'s paddings, this tick sat 5.5px left of its own banner's
-            // visible centre and was reported as left-aligned. The pair is `8/3` now — the same
-            // `pl − pr = 5px` centring, over a `min-w` that holds this to the quantity tag's own
-            // width — and the constant carries the arithmetic all three issues are instances of.
-            COUNT_TAG_BOX_MIRRORED
-          : // The Grid tile's copy count, verbatim but for the fill: `rounded-sm`, the mono face
-            // and the same two scaled sizes. Written out rather than imported because that chip is
-            // `GridView`'s own inline markup and not a component — if it ever becomes one, both
-            // should take it.
-            cn(
-              "flex shrink-0 items-center rounded-sm font-mono tabular-nums",
-              "px-[calc(0.25rem*var(--mark-scale,1))]",
-              "text-[calc(0.5625rem*var(--mark-scale,1))]",
-            ),
+        // **The mirrored box, and the pairing is not optional** (issues #158, #182 and #212). The
+        // slant above and the paddings that centre content inside it are one shape: worn with
+        // `COUNT_TAG_BOX`'s paddings, this tick sat 5.5px left of its own banner's visible centre
+        // and was reported as left-aligned. The pair is `8/3` now — the same `pl − pr = 5px`
+        // centring, over a `min-w` that holds this to the quantity tag's own width — and the
+        // constant carries the arithmetic all three issues are instances of.
+        COUNT_TAG_BOX_MIRRORED,
         // No fill and no foreground here: both are the `style` above, per the tier. Nothing else
         // about the box changes with the tier.
         className,
@@ -443,18 +453,14 @@ export function TheoryMatchMark({
           quantity tag opposite draws its own in — which is the whole reason `min-w` upstream can
           be stated in `ch`. */}
       {delta === 0 ? (
-        // 12px on the stack is the size {@link FinishMark} is drawn at, because the two are marks
-        // on one card face and a tick larger than the foil sparkle would read as the more
-        // important of the two. 9px on a tile, which is the cap height of the digit this chip is
-        // standing in for. `strokeWidth` above lucide's 2 default at both sizes: a tick is three
-        // strokes and no fill, so on art it needs the weight the crown gets from its body.
+        // 12px is the size {@link FinishMark} is drawn at, because the two are marks on one card
+        // face and a tick larger than the foil sparkle would read as the more important of the
+        // two. It was 12px on the stack against 9px on the Grid tile while the chip existed; both
+        // views draw one card face now, so one size is the whole answer. `strokeWidth` above
+        // lucide's 2 default: a tick is three strokes and no fill, so on art it needs the weight
+        // the crown gets from its body.
         <Check
-          className={cn(
-            "block shrink-0",
-            banner
-              ? "size-[calc(0.75rem*var(--mark-scale,1))]"
-              : "size-[calc(0.5625rem*var(--mark-scale,1))]",
-          )}
+          className="block size-[calc(0.75rem*var(--mark-scale,1))] shrink-0"
           strokeWidth={3}
           aria-hidden="true"
         />

@@ -1,6 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, within } from "storybook/test";
-import { GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
 import { MARKETPLACES } from "@/lib/marketplace";
 import {
   deckCard,
@@ -44,9 +43,10 @@ type Story = StoryObj<typeof meta>;
  * The stack's opposite: every card drawn, none of them covering another.
  *
  * A stack is for reading *down* a category; this is for seeing a whole deck at once — which is
- * what you want the moment before you cut something. A tile is the search wall's tile — the same
- * `CardArt` frame, the same corner marks — so a reader looking at the docked search column and
- * the deck laid out beside it is looking at one object rather than two.
+ * what you want the moment before you cut something. A tile is the **stacked card's** face —
+ * `DeckCardFace`, the same printed frame under the picture and the same marks over it — so a
+ * reader who presses `Stacks | Grid` is looking at one deck drawn two ways rather than at two
+ * decks.
  */
 export const Default: Story = {
   play: async ({ canvasElement }) => {
@@ -56,16 +56,14 @@ export const Default: Story = {
     expect(canvas.getByText("INACTIVE")).toBeInTheDocument();
     // The two marks, in the two corners they never share.
     expect(canvas.getByText("RULE BREAK")).toBeInTheDocument();
-    // **The crown, not `GC`** (changed 2026-08-16). This wall draws whole card faces and has the
-    // room for the glyph, so it says the fact the way `CardArt` says it everywhere else — which
-    // is what the deck editor's own search column beside it has always drawn. `GameChangerBadge`'s
+    // **The ribbon, not `GC` and no longer `CardArt`'s crown chip.** This wall drew the chip from
+    // 2026-08-16 until the two card-face views became one card; the marks strip has the room to
+    // spell the words out, and the corner the chip owned is the plan's tick. `GameChangerBadge`'s
     // two letters are still the table's and the text columns', where there is no art to lay a
-    // chip on. `hidden: true` because the whole overlay is `aria-hidden`; the words are in the
-    // button's own label.
+    // ribbon on. The mark is `aria-hidden`, so `getByText` is what reaches it and the words a
+    // screen reader gets are in the button's own label.
     const crowned = canvas.getByRole("button", { name: /^Lightning Bolt/ });
-    expect(
-      within(crowned).getByRole("img", { name: GAME_CHANGER_LABEL, hidden: true }),
-    ).toBeInTheDocument();
+    expect(within(crowned).getByText("Game Changer")).toBeInTheDocument();
     expect(crowned).toHaveAccessibleName(expect.stringContaining("game changer"));
   },
 };
