@@ -152,6 +152,27 @@ describe("CardModalArt", () => {
     expect(screen.getByRole("button", { name: "Set as foil" })).toBeInTheDocument();
   });
 
+  it("reports the press with no deck row behind it, and reports the way back too", async () => {
+    // **`onToggleFoil` fires on every press, and the words above are about what the press *does*
+    // rather than about whether the host hears it.** The host reads this callback for two
+    // different things — the deck write, which only a row can take, and the finish the reader is
+    // *looking at*, which the rail's `Open on …` row shops for — so a column that reported only
+    // where there was a row to write would leave that link opening the listing the card was
+    // opened with while the picture beside it said otherwise — reported 2026-09-10. That was the
+    // host's half of it; this pins the half the host's fix rests on.
+    //
+    // **Both presses, because the way back is the one that carries `null`** — the value that
+    // would be indistinguishable from silence if it were never sent.
+    const onToggleFoil = vi.fn();
+    render(<CardModalArt card={card({})} {...rest} deckRow={null} onToggleFoil={onToggleFoil} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "View as foil" }));
+    expect(onToggleFoil).toHaveBeenCalledExactlyOnceWith("foil");
+
+    await userEvent.click(screen.getByRole("button", { name: "View as nonfoil" }));
+    expect(onToggleFoil).toHaveBeenLastCalledWith(null);
+  });
+
   it("says `No foil` on a printing with none, rather than dropping the control", () => {
     // **Issue #167.** A row that simply loses a button cannot be told from an app that forgot to
     // draw one — the reader's question is "is there a foil of this?" and a missing control is

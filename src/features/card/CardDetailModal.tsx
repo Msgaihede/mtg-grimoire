@@ -39,6 +39,13 @@
  *   rather than in the column that draws the picture, because the panel's artist credit names the
  *   illustrator whose art is on screen and that credit is drawn down in the action row. See
  *   {@link artistOf}.
+ *
+ * **The seam runs the other way once**, and it is the same argument as the credit's: the column
+ * owns the foil *view*, and the finish on screen is a fact the rail's `Open on …` row needs and
+ * cannot see from where it is drawn. So `onToggleFoil` is heard here on **every** press rather
+ * than only where there is a deck row to write — {@link Body}'s `viewedFinish`. A host that heard
+ * only the write half cost the collection and the wishlist their link's finish entirely, which is
+ * what was reported on 2026-09-10.
  */
 import {
   useCallback,
@@ -67,7 +74,7 @@ import { sameDeckSlot } from "@/features/decks/deckWalk";
 import { LabelSwatch } from "@/features/decks/LabelColorPicker";
 import type { DropdownOption } from "@/components/Dropdown/types";
 import { MENU_CONDITION } from "@/lib/conditions";
-import { parseFinishes, soleFinish } from "@/lib/finish";
+import { parseFinishes, soleFinish, type Finish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
 import {
   ipc,
@@ -702,11 +709,40 @@ function Body({
    */
   const paneFinish = useAppStore((s) => s.paneFinish);
   /**
-   * Which copy the rail's last row goes shopping for — the modal's two answers to "what finish is
+   * The finish the reader asked to **look at**, or `null` while they have asked for nothing.
+   *
+   * `View as foil` is `CardModalArt`'s own state and the picture changes there; this is the host
+   * hearing the same press, because the finish on screen is a fact about the open card that two
+   * other things in this panel need and neither of them is in that column. It arrives through
+   * `onToggleFoil`, which is called on **every** press — the write half is gated on a deck row and
+   * the view half never was — so nothing new is wired to produce it.
+   *
+   * **`Finish` rather than the `DeckFinish` the press carries, and the conversion at the boundary
+   * is the whole point.** That callback's `null` means *the regular copy*, which is a statement;
+   * this field's `null` means *the reader has not made one*, which is the absence of one. Spelling
+   * the press's `null` as `"nonfoil"` here is what keeps the two apart, and it is what lets the
+   * fold below be a `??` — see the third paragraph there for what a fold over the raw `DeckFinish`
+   * would have done to a foil tile viewed as regular.
+   *
+   * **Reset with the face and the meld view**, in the same during-render block: `CardModalArt` is
+   * keyed on the card and reseeds its own toggle from the new printing, so a host that carried this
+   * across a step would answer for a press made about a different piece of cardboard.
+   */
+  const [viewedFinish, setViewedFinish] = useState<Finish | null>(null);
+  /**
+   * Which copy the rail's last row goes shopping for — the modal's three answers to "what finish is
    * this" folded into the one field `CardModalRail` takes.
    *
-   * **They cannot both be set, and that is structural rather than lucky, so this `??` is a fold
-   * and not a precedence.** Every opener in the store writes both fields in its own `set`:
+   * **The reader's own press outranks both stored answers, and that is the one rung of this fold
+   * that is a precedence rather than a structural exclusion.** `viewedFinish` is what they are
+   * *looking at*; the two below it are what the surface that opened the card said before they
+   * touched anything. A link exists to land on the version in front of the reader, so a card
+   * opened plain and viewed as foil shops for the foil listing. That is the 2026-09-10 report:
+   * the press changed the picture and the row underneath went on opening `?Printing=Normal`.
+   *
+   * **The two below it cannot both be set, and that is structural rather than lucky, so the rest
+   * of this `??` is a fold and not a precedence.** Every opener in the store writes both fields in
+   * its own `set`:
    * `openCardFromDeck` clears `paneFinish` explicitly — *the row carries its own finish and the
    * pane reads it off the context* — while `openCardAsFinish` and `openCardFromDeckSearch` each
    * clear `paneDeckContext`, and `viewPrinting` touches neither. So no press this app can make
@@ -729,8 +765,12 @@ function Body({
    * deck row plays the plain one — where TCGplayer's own default row stands. Upgrading it here
    * would put a second reading of `DeckFinish`'s `null` in a file that is not where that word is
    * defined.
+   *
+   * **A reader who presses the toggle *back* is answered by the top rung rather than by this
+   * one**, which is the same distinction stated from the other end: the press converts to
+   * `"nonfoil"` above, so it beats a foil tile's `paneFinish` instead of falling through to it.
    */
-  const railFinish = paneFinish ?? scope.deck?.finish ?? null;
+  const railFinish = viewedFinish ?? paneFinish ?? scope.deck?.finish ?? null;
   const { deps, error: menuFailure } = useCardMenuDeps();
   const addToDeck = useOptionalAddCardToDeck();
 
@@ -762,6 +802,10 @@ function Body({
     setShownFace(cardId);
     setFace(0);
     setMelded(null);
+    // The foil view goes with them: `CardModalArt` is keyed on the card and reseeds its own
+    // toggle from the printing that arrived, so a finish carried across the step would be this
+    // host answering for a press made about a different piece of cardboard.
+    setViewedFinish(null);
   }
 
   /** What a write this file makes was refused with, or `null`. Superseded by the next press,
@@ -1453,7 +1497,17 @@ function Body({
                 // collection tile that *is* a foil, or the deck editor's search panel, writes
                 // `paneFinish` when it opens the card. Without it a foil tile opened plain.
                 openedAs={paneFinish}
+                // **The press is a view change everywhere and a write only where there is a row**,
+                // which is exactly what the column's own `onToggleFoil` doc says it hands over —
+                // and this handler used to act on the second half alone. So on the collection and
+                // the wishlist the press reached nothing here, and the rail's last row kept
+                // shopping for the finish the card was *opened* with while the picture beside it
+                // said otherwise. The view half is recorded first and unconditionally,
+                // because it is true of a deck row too.
                 onToggleFoil={(next: DeckFinish) => {
+                  // `null` here is the *regular* copy — see `viewedFinish` for why that word is
+                  // spelled out rather than passed along as an absence.
+                  setViewedFinish(next ?? "nonfoil");
                   if (scope.deck === null) return;
                   deck.setCardFinish.mutate({
                     cardId: scope.deck.cardId,
@@ -1634,8 +1688,9 @@ function Body({
                 actions={railActions}
                 counts={counts}
                 marketplace={marketplace}
-                // The finish the rail's last row shops for — see `railFinish` for why the two
-                // sources fold rather than rank, and why a deck row's plain copy arrives as `null`.
+                // The finish the rail's last row shops for — see `railFinish` for why the reader's
+                // own `View as …` press outranks the two stored answers while those two fold
+                // rather than rank, and why a deck row's plain copy arrives as `null`.
                 finish={railFinish}
               />
             </div>

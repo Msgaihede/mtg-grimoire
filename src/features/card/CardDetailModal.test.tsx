@@ -558,6 +558,59 @@ it("sends it to the etched product for a deck row that plays the etched copy", a
   );
 });
 
+/**
+ * **The finish a reader is *looking at* is the one they are shopping for, and the press that
+ * changes it is under the art rather than in the store.** `View as foil` is `CardModalArt`'s own
+ * state; the host hears it through `onToggleFoil` and used to hear it *only* to write a deck row,
+ * so on the collection and the wishlist — where there is no row to write — the picture went shiny
+ * and the rail's last row went on pointing at the listing the card was **opened** with.
+ *
+ * The fixture is sold in both finishes, so the failure is a *different URL* rather than an absent
+ * one: a host that ignores the press leaves the helper with nothing named, the printing answers
+ * `nonfoil` for itself, and `?Printing=Normal` looks entirely correct while being the wrong
+ * listing for the copy on screen.
+ */
+it("sends the rail's marketplace row to the foil listing once the reader views the card as foil", async () => {
+  cardDetail.mockResolvedValue({ ...detail, finishes: '["nonfoil","foil"]' });
+  renderModal("c1");
+
+  await userEvent.click(await screen.findByRole("button", { name: "View as foil" }));
+  await userEvent.click(screen.getByRole("button", { name: "Open on TCGplayer" }));
+
+  await waitFor(() =>
+    expect(vi.mocked(openExternal)).toHaveBeenCalledExactlyOnceWith(
+      "https://www.tcgplayer.com/product/1174?Printing=Foil",
+    ),
+  );
+});
+
+/**
+ * **The same rule read backwards, and the half a fold would quietly drop.** A foil tile opens the
+ * card with `paneFinish` set, so the press this test makes turns the view *off* — and the column
+ * reports that as `null`, which is the same value as "nobody named a finish". A host folding the
+ * press in with `??` would let the tile's foil outrank the reader's own newer statement and keep
+ * opening the foil listing under a plain photograph.
+ */
+it("sends it back to the plain listing when the reader views a foil copy as nonfoil", async () => {
+  cardDetail.mockResolvedValue({ ...detail, finishes: '["nonfoil","foil"]' });
+  useAppStore.getState().openCardAsFinish("c1", "foil");
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={qc}>
+      <CardDetailModal />
+    </QueryClientProvider>,
+  );
+
+  await userEvent.click(await screen.findByRole("button", { name: "View as nonfoil" }));
+  await userEvent.click(screen.getByRole("button", { name: "Open on TCGplayer" }));
+
+  await waitFor(() =>
+    expect(vi.mocked(openExternal)).toHaveBeenCalledExactlyOnceWith(
+      "https://www.tcgplayer.com/product/1174?Printing=Normal",
+    ),
+  );
+});
+
 it("asks for meld relations only for a meld card", async () => {
   // The gate is a saved round trip rather than a correctness guard — `card_meld_parts` answers
   // `[]` for every other layout and never rejects — but it is 116 518 cards a reader can open
