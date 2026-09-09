@@ -88,8 +88,17 @@ pub const LEFT_THE_DATABASE: &str =
     "That printing has left the card database and cannot be recorded.";
 
 /// What is actually sleeved up — `DECK_VARIANTS[0]`, and the only list this press answers about.
-/// A plan holds no cards ([`crate::collection_alloc::THEORY_HOLDS_NOTHING`]), so it is short of
-/// none and [`crate::deck::live_shortfall`] never offers one.
+/// [`crate::deck::live_shortfall`] never offers a `theory` row, so this module needs no fence of
+/// its own.
+///
+/// **The reason is the shopping list's, not "a plan is short of nothing"** — that reading was
+/// retired on 2026-09-09 ([#435](https://github.com/Msgaihede/mtg-grimoire/issues/435)), the day
+/// a plan's rows started counting the copies the reader could put behind them and a Theory tab
+/// started reporting a shortfall of its own. What a plan is short of is
+/// [`crate::deck_theory::theory_diff`]'s question and it is already answered there, against the
+/// *live list* rather than against custody: `short = wanted − held`. This press fills holes in
+/// what is sleeved up. Pointing it at a plan would be a second shopping list computed a
+/// different way, and the two would disagree the first time a reader read both.
 const LIVE: &str = crate::schema::DECK_VARIANTS[0];
 
 /// `FINISHES[0]` — the word [`crate::deck::normalise_finish`] maps *away* on a deck row and the

@@ -302,6 +302,13 @@ describe("useCollectionFolders", () => {
    * filing a copy is how one enters or leaves a deck's group since schema v25 — would be copying
    * the largest set in the file onto the one write that moves no `collection_entries.folder_id`
    * at all.
+   *
+   * ⚠️ **What this test does _not_ say is that a reorder can never reach a deck**, and the hook's
+   * own comment on `settleOrder` carries the gap in full: a reorder writes `parent_id` as well as
+   * `sort_order`, so a level placed under a **locked** parent moves the effective lock — which
+   * both `["cards", "search"]` (issue #349) and, since 2026-09-09, `["decks"]` (issue #435) read.
+   * Neither root has ever been settled here. The assertion is left naming one key because that is
+   * what the hook does today; whoever closes the re-parent arm changes both together.
    */
   it("re-reads the folder list after a reorder, and nothing else", async () => {
     const { result } = renderHook(() => useCollectionFolders(), { wrapper });
@@ -351,19 +358,32 @@ describe("useCollectionFolders", () => {
    *
    * A reorder settles on `["collection", "folders"]` alone, and rightly: it moves no
    * `collection_entries.folder_id`, so every number counted from entries is still true. A lock
-   * moves none either, and yet it is the opposite case — the collection page asks its list with
-   * `excludeLocked`, so setting a folder aside changes **which rows come back**, and with them
-   * the header's totals and the count. A `settleOrder` here would leave the table drawing the
-   * copies the reader has just put away, and `lib/query.ts`'s `staleTime: 30_000` means a
-   * mounted observer that is merely stale never refetches on its own.
+   * moves none either, and yet it is the opposite case — setting a folder aside changes what the
+   * page **says** about rows that have not moved: since
+   * [#436](https://github.com/Msgaihede/mtg-grimoire/issues/436) those copies stay in the list
+   * and in the header's totals, and gain a lock on their tile's caption and in their Folder
+   * cell. A `settleOrder` here would leave the table drawing them unmarked, and
+   * `lib/query.ts`'s `staleTime: 30_000` means a mounted observer that is merely stale never
+   * refetches on its own. (Before #436 the same settle was owed for a stronger reason: the list
+   * asked with `excludeLocked`, so those rows left it outright.)
    *
-   * **`["cards", "search"]` is the second root and joined on 2026-09-03** (issue #349). The deck
-   * builder's card search counts *what a deck can use* and reads the **effective** lock, so this
-   * is the one folder write that moves an `×N` without moving a quantity. The exact call list
-   * still is the assertion, now naming both — a third root appearing here would mean a folder
-   * write had quietly started claiming to change something else.
+   * **Two more roots, and both are here because something outside the collection reads the
+   * _effective_ lock.** `["cards", "search"]` joined on 2026-09-03 (issue #349): the deck
+   * builder's card search counts *what a deck can use*, so a lock moves an `×N` without moving a
+   * quantity. `["decks"]` joined on 2026-09-09
+   * ([issue #435](https://github.com/Msgaihede/mtg-grimoire/issues/435)): a **theory** row's
+   * `ownedQuantity` is that same `Availability::ForDeck` pool now, so locking a drawer changes
+   * what a plan the reader is not looking at says it owns — `DeckLedger`'s `Owned` term and
+   * `DeckStats`' `N of M missing` band, both off `["decks", "detail", id]`. Neither failure is an
+   * error; both are a **stale number** under a 30 s `staleTime`, which is the kind nobody
+   * reports.
+   *
+   * The exact call list still is the assertion, now naming all three — a fourth root appearing
+   * here would mean a folder write had quietly started claiming to change something else, and a
+   * *missing* one is what this shape catches: an `expect(...).toHaveBeenCalledWith` per root
+   * passes over a settle set that has lost one.
    */
-  it("refreshes every collection query and the card search after a lock", async () => {
+  it("refreshes every collection query, the card search and the decks after a lock", async () => {
     const { result } = renderHook(() => useCollectionFolders(), { wrapper });
     await waitFor(() => expect(result.current.folders).toHaveLength(2));
     const invalidate = vi.spyOn(client, "invalidateQueries");
@@ -373,6 +393,33 @@ describe("useCollectionFolders", () => {
     expect(invalidate.mock.calls).toEqual([
       [{ queryKey: ["collection"] }],
       [{ queryKey: ["cards", "search"] }],
+      [{ queryKey: ["decks"] }],
+    ]);
+  });
+
+  /**
+   * **A move under a locked parent is the second write that reaches a plan's owned count**, and
+   * it is asserted separately from the lock above because the two reach it by different routes:
+   * `setLocked` writes the flag, a `move` carries a subtree under one that is already set. Both
+   * change the *effective* lock, which is the only thing `Availability::ForDeck` reads — so this
+   * is the case that says the third root belongs on the shared `invalidate` helper rather than on
+   * the lock alone.
+   *
+   * The exact call list again, for the reason above it: a settle set that has quietly lost a root
+   * passes every per-root `toHaveBeenCalledWith` written about the roots it kept.
+   */
+  it("refreshes the decks after a folder move, so a plan's owned count cannot go stale", async () => {
+    const { result } = renderHook(() => useCollectionFolders(), { wrapper });
+    await waitFor(() => expect(result.current.folders).toHaveLength(2));
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    await result.current.move.mutateAsync({ id: 1, parentId: 2 });
+
+    expect(collectionFolderMove).toHaveBeenCalledWith(1, 2);
+    expect(invalidate.mock.calls).toEqual([
+      [{ queryKey: ["collection"] }],
+      [{ queryKey: ["cards", "search"] }],
+      [{ queryKey: ["decks"] }],
     ]);
   });
 

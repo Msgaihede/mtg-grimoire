@@ -1,11 +1,11 @@
 //! Where "what does the reader own" is read from.
 //!
 //! One rule — **a card the reader owns is a row in `collection_entries`** — presented as the
-//! four correlated fragments the crate's readers actually ask for, plus the one write wrapper
-//! that rebuilds the facet index after a write that can move ownership.
+//! five builders the crate's readers actually ask for, plus the one write wrapper that rebuilds
+//! the facet index after a write that can move ownership.
 //!
-//! **What it owns is those five things, not every mention of the table.** Three statements
-//! elsewhere name `collection_entries` themselves, each because it asks a question no fragment
+//! **What it owns is those six things, not every mention of the table.** Three statements
+//! elsewhere name `collection_entries` themselves, each because it asks a question no builder
 //! here answers — so a change to the table's *shape* has to reach this file **and** all three
 //! of them:
 //!
@@ -16,6 +16,12 @@
 //!   narrows by finish *and* by where each row is filed, neither of which any fragment here
 //!   does. (It subtracted a claim ledger until schema v25 dropped one; the question is now a
 //!   `collection_folders.kind` lookup, and it is still its own statement.)
+//! - [`crate::deck`]'s `owned_by_printing` — copies **this deck's own group holds**, which is
+//!   the narrowest of the three and the one no [`Availability`] arm spells: a live deck row is
+//!   answered by the cardboard filed in that deck's folder and by nothing else on the shelf.
+//!   (Its sibling went the other way on 2026-09-09 — a *theory* row's wider pool is
+//!   [`copies_by_printing_and_finish`] here rather than a fourth statement there, because that
+//!   one **is** a scope this module already had a word for.)
 //!
 //! Each of the three binds its own aliases and does not go through the paragraph below.
 //! `src-tauri/CLAUDE.md` carries the short form of this rule.
@@ -152,6 +158,42 @@ pub fn copies_of_oracle(_conn: &Connection, oracle_col: &str, scope: Availabilit
         "coalesce((SELECT sum(e.quantity) FROM collection_entries e
                      JOIN cards k ON k.id = e.card_id
                     WHERE k.oracle_id = {oracle_col}{arm}), 0)",
+        arm = scope.and_arm()
+    )
+}
+
+/// Every copy the scope counts, rolled up per `(card_id, finish)` — the whole statement a deck
+/// read attributes its rows from.
+///
+/// **A whole statement and not a correlated fragment**, which is [`owned_rowids`]' exemption for
+/// [`owned_rowids`]' reason: the caller has no card column to hang a subquery off. It is walking
+/// a deck's rows and wants the map *once*, so a per-row `SELECT` would be a hundred statements
+/// where one `GROUP BY` answers in a pass.
+///
+/// **Two columns and a sum, because `(card_id, finish)` is the grain the deck side matches at.**
+/// A foil deck row wants a foil copy specifically (2026-09-07), and `collection_entries.finish`
+/// is `NOT NULL` and spells the regular copy `nonfoil` — so the caller translates its own `NULL`
+/// on the way in rather than this statement coalescing on the way out.
+///
+/// **It exists so that a plan's pool is spelled once** (2026-09-09,
+/// [#435](https://github.com/Msgaihede/mtg-grimoire/issues/435)). A `theory` deck row counts the
+/// copies the reader could actually put behind it, which is [`Availability::ForDeck`] — the same
+/// answer the deck builder's card search already draws its badge from. Written out a second time
+/// in [`crate::deck`] it would be two spellings of "what this deck can use", and the two would
+/// part company the first time either the lock rule or the folder kinds moved. The *live* list's
+/// pool is a narrower question that no scope here answers — the copies filed in this deck's own
+/// group and nothing else — so `deck::owned_by_printing` stays its own statement.
+///
+/// **`WHERE 1` is load-bearing punctuation**, not a leftover: [`Availability::and_arm`] answers
+/// an ` AND (…)` clause or the empty string, so it needs a term to be `AND`ed on to, and the
+/// empty case has to leave a statement that still says *every copy*. Nothing is filtered here
+/// that the scope does not filter.
+pub fn copies_by_printing_and_finish(_conn: &Connection, scope: Availability) -> String {
+    format!(
+        "SELECT e.card_id, e.finish, sum(e.quantity)
+           FROM collection_entries e
+          WHERE 1{arm}
+          GROUP BY e.card_id, e.finish",
         arm = scope.and_arm()
     )
 }

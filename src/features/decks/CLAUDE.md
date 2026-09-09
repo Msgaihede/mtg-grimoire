@@ -692,9 +692,11 @@ layer.
   It read that owned/missing "matches on oracle id and has always ignored finish, condition and
   language, so a foil row is answered by whatever copies of that card the deck's group holds" —
   true for as long as `owned_by_oracle` was the read, and false now. It is `owned_by_printing`:
-  `attribute_owned` matches a deck row against the group at exactly **`(card_id, finish)`**, so a
-  foil row is answered only by foil copies of *that* printing and an Alpha Bolt in the group no
-  longer counts toward an M10 line. **Condition and language are still ignored**, so that half of
+  `attribute_owned` matches a deck row against the pool at exactly **`(card_id, finish)`**, so a
+  foil row is answered only by foil copies of *that* printing and an Alpha Bolt in the pool no
+  longer counts toward an M10 line. (**The _grain_ is what this paragraph is about and it did not
+  move on 2026-09-09**; what moved is which copies are in the pool at all, and only for a theory
+  row — issue #435, and the shortage bullet further down carries it.) **Condition and language are still ignored**, so that half of
   the old sentence survives intact. What the narrowing closed is a disagreement inside one screen:
   `deck_pull::CANDIDATE_SQL` already matched at this grain, so a deck could read *N missing* with
   nothing its own pull dialog could fill. **What it costs is in
@@ -3153,22 +3155,40 @@ price | type`). An **inactive category stays its own group in all three grouping
   (2026-09-03, [issue #354](https://github.com/Msgaihede/mtg-grimoire/issues/354)). The red `3/4`
   in a stacked card's chin, and the `you own 3 of 4` clause `deckCardName` says on all four views,
   are one predicate in `cardControl.tsx` — because a figure and the words it is announced by must
-  never disagree about whether there is a shortage at all. It guards on **two** ways
-  `ownedQuantity` reads `0` without the shelf being empty, and the second is new: an inactive
-  category (`attribute_owned` passes a switched-off pile over rather than letting it draw on the
-  pool — there has been no allocator to claim anything since schema v25) and **the theory list**, where
-  `deck.rs`'s rule 2 is that _a plan holds nothing_ — the copies in the deck's group belong to what
-  is sleeved up, so a theory row reads 0 owned however full the collection is. That drew `0/1` on
-  **every card of a plan**: a hundred red marks all saying the same untrue thing, which is what was
-  reported. **The comparison a plan can honestly make is the shopping list's** —
-  `deck_theory_diff` subtracts _quantities_ and is one press away on `Compare` — and the
-  **deck-level figure is untouched**: `DeckLedger`'s `Owned` term is a fact about the whole list
-  and was explicitly kept.
-  **The other three views needed no change, and it is worth knowing why rather than assuming they
-  were missed.** `GridView` and `TextView` drew `card.quantity` alone, which is the deck's own
-  count and no comparison; `TableView`'s `Owned` column hands `OwnedBadge` a theory row's `0`, and
-  that component's own guard (`owned <= 0 && !wishlisted`) already returned `null`. So the column
-  was blank on a plan before this and is blank after it, for a reason of its own.
+  never disagree about whether there is a shortage at all. It guards on an inactive category
+  (`attribute_owned` passes a switched-off pile over rather than letting it draw on the pool at
+  all — there has been no allocator to claim anything since schema v25), on a **virtual** deck,
+  and on **the theory list** — and that third guard has been a _product_ call rather than an
+  arithmetic one since 2026-09-09.
+  **When it was written it was arithmetic**: `deck.rs`'s rule 2 was that _a plan holds nothing_,
+  so a theory row read 0 owned however full the collection was, and without the guard the mark
+  drew `0/1` on **every card of a plan** — a hundred red marks all saying the same untrue thing,
+  which is what was reported.
+  ⚠️ **[Issue #435](https://github.com/Msgaihede/mtg-grimoire/issues/435) took that zero away
+  (2026-09-09) and the guard stayed.** A theory row's `ownedQuantity` is
+  `collection_source::Availability::ForDeck` now — every copy the reader owns that this deck could
+  use, which is the same pool the docked card search has counted by since issue #349 — so those
+  marks would be **accurate**. The repo owner chose to leave them off anyway: a hundred accurate
+  red `N/M`s down a plan is still a hundred marks nobody asked for, and the per-card comparison a
+  plan is *for* is the shopping list's (`deck_theory_diff` subtracts _quantities_, one press away
+  on `Compare`). **So the clause's reasoning must never be restated as "a theory row reads 0 owned
+  by construction"** — that sentence is history and naming it as history is the point.
+  **The deck-level figures are the half that moved**, and they were explicitly kept out of this
+  predicate when it was written: `DeckLedger`'s `Owned` term and `DeckStats`' `N of M missing`
+  band are facts about the whole list, and on the Theory tab they are truthful now — a 100-card
+  plan with 62 of its cards in the deck's box reads *38 of 100 missing* where it read *100 of 100*.
+  **Counting changed and writing did not**: `deck_pull_plan`, `deck_missing_plan` and
+  `deck_missing_to_wishlist` still read `live` only, `DeckStats`' `onPull`/`onAddMissing` are still
+  `null` on the plan, and `quickCollection.ts` still blocks the three `Collection ▸` rows there.
+  **The other three views needed no change when the guard landed, and it is worth knowing why
+  rather than assuming they were missed.** `GridView` and `TextView` drew `card.quantity` alone,
+  which is the deck's own count and no comparison; `TableView`'s `Owned` column hands `OwnedBadge`
+  a theory row's number, and while that number was always `0` the component's own guard
+  (`owned <= 0 && !wishlisted`) returned `null`, so the column was blank on a plan. ⚠️ **That last
+  sentence stopped being true on 2026-09-09**: the number is truthful now, so the `Owned` column
+  draws on the Theory tab like any other. It is a *count* and not a shortage — no red, no `N/M` —
+  so it is the ledger's change one grain down rather than the mark this bullet is about, and it
+  was left to happen rather than suppressed.
   **`GridView` draws the figure since 2026-09-08 and is therefore no longer one of the three, which
   is the predicate paying for itself rather than a second rule.** Its chin takes the deck's own
   `deckCardShort(card)` — the same call the stacked card's chin makes, drawn only where it says

@@ -121,13 +121,19 @@ describe("quickAddBlock", () => {
   });
 
   /**
-   * **A plan holds no cards** (`deck.rs`'s rule 2), so a theory row's `ownedQuantity` is zeroed
-   * explicitly however full the shelf is — which means the shortfall arithmetic would answer the
-   * row's whole quantity and offer to record cardboard for a list that holds none. The backend
-   * refuses it too; this is the surface saying so in advance, where a reader can read the reason.
+   * **A plan holds no cardboard** (`deck.rs`'s rule 2), so there is nowhere for a quick add to
+   * file copies and nothing for a pull to move. The backend refuses all three; this is the
+   * surface saying so in advance, where a reader can read the reason.
+   *
+   * **The argument changed on 2026-09-09 and the arm did not**
+   * ([issue #435](https://github.com/Msgaihede/mtg-grimoire/issues/435)). It used to be that a
+   * theory row's `ownedQuantity` was *zeroed explicitly*, so the shortfall arithmetic would have
+   * answered the row's whole quantity; a plan's rows carry a truthful count now, so
+   * `quickAddShort` would answer a real number here. It is still blocked, because a count of what
+   * a plan *could* use is not a place to put cardboard.
    *
    * Asserted on a row that is short **and** on one that is not, because `theory` has to win: a
-   * theory row's own numbers can say anything.
+   * theory row's own numbers can say anything, and since #435 they usually say something.
    */
   it("blocks a theory row whatever its numbers say", () => {
     expect(quickAddBlock(card({ variant: "theory", quantity: 4, ownedQuantity: 0 }), TRACKS)).toBe(

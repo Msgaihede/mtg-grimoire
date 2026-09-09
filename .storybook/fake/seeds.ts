@@ -532,9 +532,16 @@ function starterEntries(): FakeEntry[] {
     // **Last in the array on purpose.** Every id above it is one a story or a test may have
     // written down (`collection_to_deck({ entryId: 5 })`, a drag payload, a `PickCopies` row),
     // and inserting beside its twin would have shifted eight of them by one — a rename with no
-    // compiler behind it. `sta 105` is also the one printing here no deck lists and no wish
-    // pins, and this copy is at the root rather than in a group, so no editor badge and no
-    // shortage mark moves: a deck's `ownedQuantity` is what its **own group** physically holds.
+    // compiler behind it. `sta 105` is also the one printing here **no deck lists** and no wish
+    // pins, so no editor badge and no shortage mark moves: a deck row is what carries either,
+    // and there is no row of this printing in any of the five decks to carry one.
+    //
+    // **That reason used to be "this copy is at the root rather than in a group", and being at
+    // the root stopped being the safe half on 2026-09-09** (issue #435). A `live` row still reads
+    // only what its deck's own group holds, but a `theory` row now counts every copy the reader
+    // could put behind it — the root included — so a loose copy of a printing some plan *did*
+    // name would move that plan's owned figure and its `N of M missing` band. Naming no deck is
+    // what makes this row inert; sitting at the root no longer is.
     // What does move is `entries` 11 → 12 and `totalCards` 20 → 21, plus this printing's owned
     // pip 1 → 2 and the Lightning Bolt oracle's `card_holdings.owned`; `uniqueCards` stays 11.
     entry(next(), printing("sta", "105"), "etched", "NONE", 1),

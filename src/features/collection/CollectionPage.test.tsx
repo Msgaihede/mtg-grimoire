@@ -4606,9 +4606,9 @@ describe("locking a folder", () => {
 
   /**
    * **Greyed with its reason inside a locked parent**, because unlocking a child of a locked
-   * parent changes nothing a reader can see — the badge stays and the copies stay out of the
-   * flattened list — and a row that reported success over an unmoved badge is worse than a greyed
-   * one.
+   * parent changes nothing a reader can see — the badge stays, and so does the lock on every
+   * copy filed in it — and a row that reported success over an unmoved badge is worse than a
+   * greyed one.
    *
    * `aria-disabled` and never the attribute: a greyed row exists to be *read*. The name is
    * matched with two regexes rather than one string, because this repo's convention is that a
@@ -4689,6 +4689,144 @@ describe("locking a folder", () => {
    * it is found by its `role="group"` name and read for its text, which is the note
    * `CollectionSearchTab`'s cross-deck question already carries.
    */
+  /**
+   * **A set-aside card is still a card the reader owns** —
+   * [issue #436](https://github.com/Msgaihede/mtg-grimoire/issues/436), which narrowed what the
+   * lock is for and is the reason this block exists at all.
+   *
+   * #365 shipped the collection page asking its list and its header with `excludeLocked: true`,
+   * so locking a drawer took its copies off the flattened wall **and** out of the reader's card
+   * count, unique count and total value. The report was the header — *"38 cards 12 unique value
+   * $120" should include locked cards because they are still owned* — and the answer is that the
+   * lock was never a statement about what the reader *has*. It is a statement about what the app
+   * offers a **deck**, and that half is untouched: `useCollectionSearch` still sends the flag
+   * unconditionally, `OWNED_SPARE_SQL` still drops those copies from what a plan can count on,
+   * and a share still refuses to publish them.
+   *
+   * **So absence stopped saying "set aside", and a mark had to start.** Every case here is about
+   * that swap, and they come in pairs: the copy is *there*, and it is *marked*. A test that
+   * asserted only the mark would go green over a wall that had lost the row it was marking, and
+   * one that asserted only the row would go green over the #365 behaviour with the mark bolted
+   * on.
+   *
+   * `collectionFlattened: true` — the store's own default, put back after this describe's
+   * `beforeEach` turns it off for the cabinet blocks. It is the state the whole issue is about:
+   * flattened is where a locked copy sits beside an unlocked one with nothing above the wall to
+   * tell them apart.
+   */
+  describe("a locked drawer's copies, counted and marked", () => {
+    /** A copy of the same printing filed in the locked binder, beside {@link BOLT} at the root.
+     *  Two rows and two folders, which is what makes every "and the unlocked one is not marked"
+     *  half of these cases mean something. */
+    const IN_BINDER: CollectionRow = {
+      ...BOLT,
+      id: 8,
+      folderId: 3,
+      folderName: "Trade binder",
+      // A different grade, so the two are two rows of `collection_entries` rather than one the
+      // backend would have folded — `folder_id` is the eleventh term of the grain and would do
+      // it alone, but a fixture that leans on that and nothing else reads as an accident.
+      condition: "LP",
+      quantity: 3,
+    };
+
+    beforeEach(() => {
+      useAppStore.setState({ collectionFlattened: true });
+      collectionFolderList.mockResolvedValue([LOCKED_BINDER]);
+      collectionList.mockResolvedValue(page([BOLT, IN_BINDER]));
+    });
+
+    /**
+     * **The issue's own sentence, read off the wire.** Neither the list nor the header may ask
+     * the backend to leave a locked drawer out — that flag is what #365 sent and #436 took away.
+     *
+     * Asserted on **both** calls because widening one alone is the plausible mistake and the
+     * worse outcome: `collection::scope` is one predicate list, so a header that asked a
+     * different question than the list would count 38 over a wall drawing 26. `useCollection`
+     * has the same fence at the hook; this is it at the page, where the reader's figures are.
+     */
+    it("asks the backend for its list and its header without excluding the lock", async () => {
+      wrap(<CollectionPage />);
+      await screen.findAllByText("Lightning Bolt");
+
+      await waitFor(() => expect(collectionSummary).toHaveBeenCalled());
+      expect(lastQuery().excludeLocked).toBeUndefined();
+      const header = collectionSummary.mock.calls[collectionSummary.mock.calls.length - 1][0];
+      expect(header.excludeLocked).toBeUndefined();
+    });
+
+    /**
+     * **The table**: the copy is in the list, and its Folder cell wears the lock.
+     *
+     * A row is one entry and therefore one drawer, so there is nothing to reconcile here — the
+     * mark is the row's own `folderId` against the page's `lockedIds`. The root copy beside it is
+     * the control: an unconditional glyph would mark that one too, and a `folderId`-blind one
+     * would mark neither.
+     *
+     * `role="img"` with `Locked` as its name, `ElsewhereMark`'s arrangement — so the fact
+     * survives being read rather than seen, which a bare `.lucide-lock` query would not prove.
+     */
+    it("keeps a locked drawer's copy in the table, and marks its folder", async () => {
+      wrap(<CollectionPage />);
+      const cells = await screen.findAllByText("Lightning Bolt");
+      expect(cells).toHaveLength(2);
+
+      const filed = screen.getByText("Trade binder").closest("[role=row]") as HTMLElement;
+      expect(within(filed).getByRole("img", { name: "Locked" })).toBeInTheDocument();
+
+      // The root copy is the control: an em dash for its folder, and no lock anywhere on the row.
+      const loose = screen.getByText("—").closest("[role=row]") as HTMLElement;
+      expect(within(loose).queryByRole("img", { name: "Locked" })).toBeNull();
+    });
+
+    /**
+     * **The wall**: the tile is drawn, and its caption's `Folder` glyph is a `Lock`.
+     *
+     * The caption is `WishFolderCaption` with `locked` passed — the glyph swaps rather than
+     * doubling, because `CardGrid` budgets one line for this strip and positions its virtual rows
+     * from that budget. The word travels with the glyph (`Locked, filed in …`), because a glyph
+     * is not an accessible name.
+     *
+     * **Both copies are behind one tile here, and that is the sharper half of the case.** The
+     * wall merges every copy of one printing in one finish across drawers, so this tile stands
+     * for the root copy *and* the locked one — `tileLocked` answers on **any**, which is the
+     * reading that cannot leave a set-aside copy quietly unmarked. Its caption says `2 folders`
+     * for `filedIn`'s own reason, and the lock says the rest.
+     */
+    it("keeps a locked drawer's copy on the flattened wall, and marks its caption", async () => {
+      useAppStore.setState({ collectionView: "grid" });
+      wrap(<CollectionPage />);
+      await screen.findByAltText("Lightning Bolt");
+
+      // Five copies behind one piece of art — two loose, three set aside — which is the badge
+      // saying the locked ones are counted rather than merely present.
+      expect(screen.getByText("5 in your collection")).toBeInTheDocument();
+      const caption = screen.getByText("2 folders").parentElement as HTMLElement;
+      expect(caption).toHaveTextContent("Locked, filed in");
+      expect(caption.querySelector(".lucide-lock")).toBeInTheDocument();
+      expect(caption.querySelector(".lucide-folder")).toBeNull();
+    });
+
+    /**
+     * The other half of the swap, and the one that would rot silently: a tile whose copies are
+     * **all** at the root, or in a drawer nobody has locked, draws the plain `Folder` it always
+     * drew. Without this, an unconditional lock would pass every case above.
+     */
+    it("leaves an unlocked drawer's caption exactly as it was", async () => {
+      collectionFolderList.mockResolvedValue([BINDER]);
+      collectionList.mockResolvedValue(page([IN_BINDER]));
+      useAppStore.setState({ collectionView: "grid" });
+      wrap(<CollectionPage />);
+      await screen.findByAltText("Lightning Bolt");
+
+      const caption = screen.getByText("Trade binder").parentElement as HTMLElement;
+      expect(caption).toHaveTextContent("Filed in");
+      expect(caption).not.toHaveTextContent("Locked");
+      expect(caption.querySelector(".lucide-folder")).toBeInTheDocument();
+      expect(caption.querySelector(".lucide-lock")).toBeNull();
+    });
+  });
+
   describe("dragging a copy across the edge", () => {
     it("asks before filing a copy into a locked drawer, and files it when told to", async () => {
       collectionFolderList.mockResolvedValue([LOCKED_BINDER]);

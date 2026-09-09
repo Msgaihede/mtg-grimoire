@@ -357,18 +357,22 @@ export function useCollection() {
     queryFn: ({ pageParam }) =>
       ipc.collectionList({
         ...filters,
-        // **Here and on the summary below, and deliberately NOT on `filters`.** A drawer the
-        // reader has locked is one they have set aside, so the wall stops offering it — but
-        // `useExportScope` reads `filters` and hands that same object to `ipc.collectionList`
-        // on the **filtered** export arm (`export/scope.ts`), and a flag riding along there
-        // would drop those copies out of a CSV the reader asked for. That is the failure the
-        // design is shaped around: a backup or an export that is quietly short, with nothing
-        // raised. `everythingFilters` strips the folder fields but would not strip this one,
-        // because it strips by name and this is not one of the two it knows.
+        // **No `excludeLocked` here, and none on the summary below** — issue #436, which
+        // narrowed what the lock is for. This list sent `excludeLocked: true` from #365 until
+        // 2026-09-09, so a locked drawer's copies left the flattened wall and left the header's
+        // totals with them; the report was that a set-aside card is still a card the reader
+        // owns, and a collection page that will not count it is the app disagreeing with the
+        // cardboard on their shelf. The lock is about **what the app offers a deck**, not about
+        // what the reader has: `useCollectionSearch` still sends the flag unconditionally,
+        // `deck_theory::OWNED_SPARE_SQL` and `collection_source::Availability::ForDeck` still
+        // drop those copies, and a share still refuses to publish them.
         //
-        // Rust ignores it whenever `folderId` names a folder, so standing in a locked drawer
-        // still lists it and no second condition is needed on this side.
-        excludeLocked: true,
+        // **The mark is what replaced the exclusion, not nothing.** A locked copy is drawn on
+        // this wall and in the table wearing a `Lock` — `CollectionPage`'s `captionFor` and
+        // `CollectionTable`'s Folder cell — so "set aside" is legible on the copy rather than
+        // enforced by its absence. `CollectionQuery.exclude_locked` keeps its `false` default
+        // for the reason it always had: the mirror and the export sweep must never ask.
+        //
         // Absent rather than `[]` when nothing is sorted, so an untouched table produces
         // exactly the payload it always did.
         sort: sort.length > 0 ? sort : undefined,
@@ -382,12 +386,13 @@ export function useCollection() {
 
   const summary = useQuery({
     queryKey: ["collection", "summary", filterKey],
-    // `excludeLocked` matches the list above it, and matching is the point rather than a
-    // tidiness: `collection::scope` is one predicate list and the header is the count of the
-    // rows underneath it, so a summary that asked a wider question would price a wall the
-    // reader is not looking at.
-    queryFn: () =>
-      ipc.collectionSummary({ ...filters, excludeLocked: true, limit: 0, offset: 0 }),
+    // **It asks exactly what the list above it asks, and matching is the point rather than a
+    // tidiness**: `collection::scope` is one predicate list and the header is the count of the
+    // rows underneath it, so a summary that asked a different question would price a wall the
+    // reader is not looking at. That is why widening this one could not be done on its own —
+    // issue #436 asked for the header, and a header counting 38 over a wall drawing 26 is a
+    // worse sentence than the one it replaced. Both widened together, in the same commit.
+    queryFn: () => ipc.collectionSummary({ ...filters, limit: 0, offset: 0 }),
     placeholderData: keepPreviousData,
   });
 

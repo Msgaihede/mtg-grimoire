@@ -86,9 +86,19 @@ use serde_json::json;
 
 /// What a theory row says when asked to give its copies back.
 ///
-/// A theory list is a plan. A plan holds no cards, so there is nothing in any folder to move
-/// and a refusal is the only honest answer — the alternative is a press that reports success
-/// and moves nothing, which reads to the user as a card that vanished.
+/// A theory list is a plan, and **nothing is filed into a plan**: no `collection_entries` row
+/// ever sits in a folder behind a theory row, so there is nothing to move and a refusal is the
+/// only honest answer — the alternative is a press that reports success and moves nothing, which
+/// reads to the user as a card that vanished.
+///
+/// **A plan's rows can nonetheless *count* copies, and this constant deliberately says nothing
+/// about that** (2026-09-09, [#435](https://github.com/Msgaihede/mtg-grimoire/issues/435)).
+/// [`crate::deck::get_deck`] attributes a theory row from every copy the reader could *put*
+/// behind it, so a plan reads *N of M missing* against cardboard it does not hold. Its sentence
+/// is about custody and stays exact: what a theory row cannot do is hand anything over, because
+/// it was never given anything. `deck::attribute_owned` used to draw the same conclusion one
+/// level up by zeroing every theory row; it no longer does, and this is now the only place the
+/// variant is a refusal.
 pub const THEORY_HOLDS_NOTHING: &str = "A theory list is a plan, and a plan holds no cards.";
 
 /// What either write says when asked to move more copies than are there.
@@ -643,9 +653,11 @@ pub fn collection_to_deck(
 /// Cut `quantity` copies from a deck card and file whatever the deck's group holds for that
 /// printing into `Recently removed`.
 ///
-/// **A theory row is refused.** A theory list is a plan and a plan holds no cards, so there is
-/// nothing in any folder for it to give back — a press that reported success and moved nothing
-/// would read as a card that vanished.
+/// **A theory row is refused.** A theory list is a plan and nothing is filed into a plan, so
+/// there is nothing in any folder for it to give back — a press that reported success and moved
+/// nothing would read as a card that vanished. That a plan's rows now *count* copies
+/// ([`crate::deck::get_deck`], 2026-09-09) changes none of it: counting what could fill a slot is
+/// not custody of what fills it.
 ///
 /// **A virtual deck is refused ahead of it** ([`crate::deck::VIRTUAL_HOLDS_NOTHING`], issue
 /// #401), and the order is the rule rather than an accident: the deck's own kind is asked before
