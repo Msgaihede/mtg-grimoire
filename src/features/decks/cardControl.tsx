@@ -316,22 +316,30 @@ export function keepsSelection(target: EventTarget | null): boolean {
  * Whether this row is short of the copies the deck wants — the one fact the red `3/4` figure in a
  * stacked card's chin draws, and the one clause {@link deckCardName} says in words.
  *
- * Three guards, and each is about an `ownedQuantity` that reads `0` for a reason other than an
- * empty shelf:
+ * Three guards. Two are about an `ownedQuantity` that reads `0` for a reason other than an empty
+ * shelf; the middle one stopped being that on 2026-09-09 and is now a deliberate product call:
  *
- * - **An inactive category.** The allocator claims no copy for a switched-off pile, so every row
- *   in one reads 0 owned by construction — a shortage there is one the reader does not have.
- * - **The theory list.** `deck.rs`'s rule 2 is that *a plan holds nothing*: the copies in the
- *   deck's group belong to what is sleeved up, so a theory row reads 0 owned however full the
- *   shelf is. That drew `0/1` on **every card of a plan** — a hundred red marks all saying the
- *   same untrue thing, which is
- *   [issue #354](https://github.com/Msgaihede/mtg-grimoire/issues/354). The comparison a plan
- *   *can* honestly make is the shopping list's (`TheoryDiffDialog`), which subtracts quantities
- *   and is one press away on `Compare`; the deck-level figure in `DeckLedger` is untouched.
+ * - **An inactive category.** A switched-off pile is handed nothing out of the pool its list
+ *   draws on, so every row in one reads 0 owned by construction — a shortage there is one the
+ *   reader does not have. Unchanged, and still true on both lists.
+ * - **The theory list — and this clause is now a _choice_ rather than an arithmetic.** It used
+ *   to be an arithmetic: `deck.rs`'s rule 2 was that *a plan holds nothing*, so `attribute_owned`
+ *   zeroed every theory row however full the shelf was, and without this guard the mark drew
+ *   `0/1` on **every card of a plan** — a hundred red marks all saying the same untrue thing,
+ *   which is [issue #354](https://github.com/Msgaihede/mtg-grimoire/issues/354).
+ *   [Issue #435](https://github.com/Msgaihede/mtg-grimoire/issues/435) took that zero away: a
+ *   theory row now counts every copy the reader owns that this deck *could* use, so those marks
+ *   would be **accurate** rather than untrue. **The guard stays anyway**, decided by the repo
+ *   owner on 2026-09-09 — a hundred accurate red `N/M`s down a plan is still a hundred marks the
+ *   reader did not ask for, and the per-card comparison a plan is *for* is the shopping list's
+ *   (`TheoryDiffDialog`), one press away on `Compare`. What did move is the **deck-level**
+ *   figures, which never went through this predicate: `DeckLedger`'s `Owned` term and
+ *   `DeckStats`' `N of M missing` band are truthful on the Theory tab now.
  * - **A virtual deck** — the third deck kind, issue #401. A deck the reader tracks without owning
- *   the cardboard has no `collection_folders` group at all, so `owned_by_printing` joins nothing
- *   and every row reads 0 owned: the theory list's failure reached by a different route, over the
- *   whole list rather than over one pile. **`variant` cannot answer this one**, which is why it
+ *   the cardboard has no `collection_folders` group at all, so it can draw on no pool at all and
+ *   every row reads 0 owned: issue #354's failure reached by a different route, over the whole
+ *   deck rather than over one list — and **this one is still an arithmetic**, where the bullet
+ *   above it has stopped being one. **`variant` cannot answer this one**, which is why it
  *   is a second argument and not a third clause: a virtual deck's rows are ordinary `live` rows,
  *   deliberately, because `DeckRow.cardCount` and the gallery's colour bar both count
  *   `variant = 'live'` and rows parked in `theory` would report `0 cards` under an empty bar on

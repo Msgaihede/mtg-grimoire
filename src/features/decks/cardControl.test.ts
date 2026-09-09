@@ -108,20 +108,35 @@ describe("deckCardShort", () => {
     expect(deckCardShort(card({ quantity: 2, ownedQuantity: 5 }), TRACKS)).toBe(false);
   });
 
-  /** The two guards this predicate had before the third deck kind existed, kept as regressions:
-   *  `attribute_owned` hands a switched-off pile nothing out of the group, and `deck.rs`'s rule 2
-   *  is that a plan holds nothing — so `0` owned in either is a fact about the pile or the list
-   *  rather than about the reader's shelves. */
-  it("still refuses an inactive pile and the theory list", () => {
+  /**
+   * The two guards this predicate had before the third deck kind existed, kept as regressions —
+   * and the two are no longer the same kind of statement.
+   *
+   * **The inactive pile is still arithmetic**: `attribute_owned` hands a switched-off pile nothing
+   * out of either variant's pool, so its `0` is a fact about the pile rather than about the
+   * reader's shelves.
+   *
+   * **The theory row is a product call since 2026-09-09**
+   * ([issue #435](https://github.com/Msgaihede/mtg-grimoire/issues/435)). It used to be arithmetic
+   * too — a plan held nothing and `attribute_owned` zeroed every theory row — and now a plan's row
+   * counts every copy the reader owns that this deck could use, so the mark would be *accurate*
+   * and is still refused. **The fixture says so**: `ownedQuantity: 1` against `quantity: 2` is a
+   * real, truthful shortage, so this case cannot pass for want of one — take the `variant` clause
+   * out of `deckCardShort` and it goes red.
+   */
+  it("still refuses an inactive pile, and refuses a theory row that really is short", () => {
     expect(deckCardShort(card({ categoryActive: false }), TRACKS)).toBe(false);
-    expect(deckCardShort(card({ variant: "theory", ownedQuantity: 0 }), TRACKS)).toBe(false);
+    expect(
+      deckCardShort(card({ variant: "theory", quantity: 2, ownedQuantity: 1 }), TRACKS),
+    ).toBe(false);
   });
 
   /**
    * **The third deck kind — issue #401.** A virtual deck has no `collection_folders` group, so
-   * `owned_by_printing` joins nothing and *every* row reads `0` owned: a hundred red marks all
-   * saying the same untrue thing, which is the theory list's own failure (issue #354) reached by
-   * a different route and over the whole deck rather than one list.
+   * it can draw on no pool at all and *every* row reads `0` owned: a hundred red marks all
+   * saying the same untrue thing, which is the failure issue #354 reported on a plan, reached by
+   * a different route and over the whole deck rather than one list. (That plan's half has since
+   * stopped being an arithmetic — see the case above — while this one has not.)
    *
    * **Asserted on rows that are `live` and in an active pile**, because that is the whole point:
    * the two guards above pass, `card.variant` says `live` — deliberately, since `DeckRow.cardCount`

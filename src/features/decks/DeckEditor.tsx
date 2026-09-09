@@ -683,8 +683,8 @@ type Layer =
    *
    * **The card, or absent for the whole deck — and the payload arrived on 2026-09-03.** It used
    * to carry nothing, on the argument that `deck_pull_plan` takes the deck and no variant (it
-   * reads the live list, because a plan holds no cards to be short of), so there was nothing for
-   * an arm to hold that the editor did not already know. That is still true of the *read*: a
+   * reads the live list, because a plan holds no cardboard for a pull to move copies into), so
+   * there was nothing for an arm to hold that the editor did not already know. That is still true of the *read*: a
    * deck card's `Collection ▸ Pull …` (issue #350) fetches the same plan under the same key and
    * this arm narrows only what the dialog is handed — the rows whose {@link pullKey} matches
    * this card, and that card's name for the subtitle.
@@ -718,7 +718,10 @@ type Layer =
    * asks about does not get to take width off the desk for the session.
    *
    * The band draws its opener only on the live list, and `null` there is absent rather than
-   * greyed: a plan holds no cards, so there is nothing for it to be short of.
+   * greyed: a plan holds no cardboard, so there is nowhere on that list to record copies into.
+   * Not because there is nothing to be short of — since 2026-09-09 the band's own count is
+   * truthful on the plan (issue #435) — but because `deck_missing_plan` walks the live list and
+   * a record files cardboard into the deck's group.
    */
   | { kind: "addMissing" }
   /**
@@ -2906,12 +2909,15 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           // "which write does this row make" is a question with no single answer.
           //
           // **Passed on both lists, and the theory one is greyed rather than absent.** That is
-          // `quickAddBlock`'s call and not this file's: a plan holds no cards, so a theory row
-          // can neither record copies nor pull any — but every card of this surface can be
+          // `quickAddBlock`'s call and not this file's: a plan holds no cardboard, so a theory
+          // row can neither record copies nor pull any — but every card of this surface can be
           // short, so a submenu that simply vanished on one tab would read as a bug rather than
-          // as a refusal. The row says `a plan holds no cards` instead. The stats band's
-          // deck-wide `onPull` is `null` there for a different reason and stays so: that button
-          // has a *question* to lose, where these rows have an answer to give.
+          // as a refusal. The row says `a plan holds no cards` instead. **Its shortfall is real
+          // on that tab since 2026-09-09** (issue #435): a theory row counts every copy the deck
+          // could use, so the block is about where the cardboard would go and no longer about a
+          // number that was zero by construction. The stats band's deck-wide `onPull` is `null`
+          // there for a different reason and stays so: that button has a *question* to lose,
+          // where these rows have an answer to give.
           //
           // **A virtual deck passes all three as `undefined`, and the whole submenu goes with
           // them** — `collectionItems`' own all-three-or-none rule (`deckCardMenu.tsx`), which
@@ -4756,12 +4762,20 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               at their categories. */}
           {/* **`onPull` is `null` on the plan, and that is the list rather than the feature.**
               A theory list is what the deck is being built *toward*, and since schema v25 a deck
-              holds a card because a collection row sits in its group — so a theory row holds no
-              cards at all and there is nothing on that tab to pull into. The backend agrees at
-              the same seam: `deck_pull_plan` takes no variant and reads the live list, exactly as
-              `deck_missing_to_wishlist` does one command over. Absent rather than greyed, for the
-              editor's own rule about a control that cannot act: a button that spends the whole
-              Theory tab refusing teaches the reader to stop looking at the line it is in.
+              holds a card because a collection row sits in its group — so a plan holds no
+              cardboard and there is nothing on that tab to pull copies into. The backend agrees
+              at the same seam: `deck_pull_plan` takes no variant and reads the live list, exactly
+              as `deck_missing_to_wishlist` does one command over. Absent rather than greyed, for
+              the editor's own rule about a control that cannot act: a button that spends the
+              whole Theory tab refusing teaches the reader to stop looking at the line it is in.
+
+              **The line it is in now says something true there, and that is 2026-09-09's whole
+              visible change** ([issue #435](https://github.com/Msgaihede/mtg-grimoire/issues/435)):
+              a theory row counts every copy the reader owns that this deck could use, so the band
+              reads `38 of 100 missing` on a plan whose 62 other cards are in the deck's box,
+              where it read `100 of 100`. Counting moved and writing did not — which is why this
+              absence and the one below it are argued about the *write* rather than about the
+              number beside them.
 
               **{@link tracks} is a second term on both, and it is a different sentence rather
               than a stronger one.** `variant === "live"` is about which of a deck's two *lists*
@@ -4774,8 +4788,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               act on it is the same lesson written as a number. */}
           {/* **`onAddMissing` is `null` on the plan for `onPull`'s reason**, which is the list
               rather than the feature: `deck_missing_plan` takes no variant and walks the live
-              list, because a plan holds no cards and is therefore short of nothing. Absent
-              rather than greyed, like its neighbour.
+              list, because a plan holds no cardboard for a record to file copies into. Absent
+              rather than greyed, like its neighbour. **Not because the plan is short of
+              nothing** — it says what it is short of on that tab since 2026-09-09 (issue #435),
+              and the sentence this one used to carry was written when it could not.
 
               **It is not disabled by either sibling write being in flight**, deliberately: the
               three presses in that row are three independent answers to one number, and a
