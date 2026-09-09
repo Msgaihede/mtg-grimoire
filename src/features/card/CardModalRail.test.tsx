@@ -1,7 +1,8 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { openExternal } from "@/lib/externalLinks";
+import type { Finish } from "@/lib/finish";
 import type { CardDetail } from "@/lib/ipc";
 import { MARKETPLACES, type Marketplace } from "@/lib/marketplace";
 import { useAppStore, type PaneDeckContext } from "@/lib/store";
@@ -13,11 +14,36 @@ import type { CardModalScope } from "./cardModalScope";
  * shape `cardMenu.test.tsx` already uses. `scryfallCardUrl` is deliberately *not* faked, so the
  * assertion below reads the real permalink builder and would notice a rail that started
  * assembling its own URL.
+ *
+ * **`tcgplayerProductUrl` and `marketplaceSearchUrl` are unfaked for the same reason**, and it
+ * matters more here than it did: the last row's URL is now assembled two modules away
+ * (`openMarketplaceForCard` → `externalLinks`), so every literal below is the string a reader's
+ * browser would actually be handed rather than one this file agreed with itself about.
  */
 vi.mock("@/lib/externalLinks", async (original) => ({
   ...(await original<typeof import("@/lib/externalLinks")>()),
   openExternal: vi.fn(() => Promise.resolve()),
 }));
+
+/**
+ * The one command the rail can reach, and it is reachable only through the last row.
+ *
+ * **Mocked at the exact shape the real command answers — `{ productId, etchedProductId }`, both
+ * nullable — because `ipc.ts` is a hand-written mirror the compiler checks against nothing.** A
+ * `vi.fn()` answering something friendlier (an id rather than an object, a missing
+ * `etchedProductId`) would let every assertion below pass over a rail wired to a command that
+ * cannot answer that way. `null` in both fields is the *normal* fallback rather than an error —
+ * 1.62 % of paper English non-token printings and every digital-only card — which is why it
+ * gets a case of its own.
+ */
+const cardTcgplayerIds = vi.fn();
+vi.mock("@/lib/ipc", async (original) => ({
+  ...(await original<typeof import("@/lib/ipc")>()),
+  ipc: { cardTcgplayerIds: (id: string) => cardTcgplayerIds(id) },
+}));
+
+/** Lightning Bolt (LEA)'s real `tcgplayer_id`, as measured on Scryfall's own row for it. */
+const BOLT_PRODUCT_ID = 1174;
 
 /**
  * The store is module-level state, so a test that writes it leaves it written for whatever runs
@@ -28,6 +54,11 @@ vi.mock("@/lib/externalLinks", async (original) => ({
 beforeEach(() => {
   useAppStore.setState(useAppStore.getInitialState());
   vi.mocked(openExternal).mockClear();
+  // The ordinary printing: sold on TCGplayer, no etched product beside it. `mockReset` and not
+  // `mockClear`, so a case that armed a different answer cannot leave it armed for the next.
+  cardTcgplayerIds
+    .mockReset()
+    .mockResolvedValue({ productId: BOLT_PRODUCT_ID, etchedProductId: null });
 });
 
 const BOLT: CardDetail = {
@@ -88,6 +119,7 @@ function renderRail(
     counts?: RailCounts;
     card?: CardDetail;
     marketplace?: Marketplace;
+    finish?: Finish | null;
   } = {},
 ) {
   return render(
@@ -97,6 +129,10 @@ function renderRail(
       actions={over.actions ?? []}
       counts={over.counts ?? counts}
       marketplace={over.marketplace ?? MARKETPLACES.tcgplayer}
+      // `null` is the default because it is what every wall that names no finish passes — the
+      // search page, the tags page, a walk. `?? null` rather than `??` on the prop itself: a test
+      // that means "no finish named" must be able to say so without reading as an omission.
+      finish={over.finish ?? null}
     />,
   );
 }
@@ -269,12 +305,17 @@ describe("the card modal's options rail", () => {
 
   /**
    * Issue #402's second row, and it is **the selected marketplace, not TCGplayer**: the row is
-   * named after the marketplace Settings quotes prices from and opens that site's search for the
+   * named after the marketplace Settings quotes prices from and opens that site's link for the
    * card, which is what the context menu's `Open on` ladder already does. A non-default
    * marketplace here is what proves the label and the URL both follow the prop rather than the
    * default — with TCGplayer both would pass against a rail that ignored it.
+   *
+   * **The other four are a name search and nothing else, and this is where that is pinned.** None
+   * of them publishes a per-card URL derivable from what `cards` holds, so a rail that started
+   * asking `card_tcgplayer_ids` for a Card Kingdom press would be spending a command on an answer
+   * no builder here could use — which is why the ipc spy is asserted silent beside the URL.
    */
-  it("names the selected marketplace and opens that site's search for the card", async () => {
+  it("names the selected marketplace, opens its search, and asks Rust nothing for it", async () => {
     const user = userEvent.setup();
     renderRail({ marketplace: MARKETPLACES.cardkingdom });
 
@@ -284,6 +325,95 @@ describe("the card modal's options rail", () => {
     expect(vi.mocked(openExternal)).toHaveBeenCalledExactlyOnceWith(
       "https://www.cardkingdom.com/catalog/search?search=header&filter%5Bname%5D=Lightning%20Bolt",
     );
+    expect(cardTcgplayerIds).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The TCGplayer row's whole point since 2026-09-09: **the printing's own product page, at the
+   * finish the surface named** — not a search for a name that answers with every printing of the
+   * card and both finishes of each.
+   *
+   * **The `finish` prop is what this case is really about, and the fixture is chosen so that
+   * dropping it fails rather than passes differently.** The printing is sold in both finishes, so
+   * a rail that stopped passing the prop would fall through to `linkFinish`'s "the printing names
+   * none either" arm and open the bare product page — a URL that looks entirely reasonable and is
+   * the wrong listing for the copy the reader pressed.
+   *
+   * The id is asked for **the printing**, never the oracle card: `tcgplayer_id` is a fact about one
+   * piece of cardboard, and Alpha's Bolt and the Commander reprint are two products.
+   */
+  it("opens the printing's own TCGplayer product page, at the finish the surface named", async () => {
+    const user = userEvent.setup();
+    renderRail({
+      card: { ...BOLT, finishes: '["nonfoil","foil"]' },
+      finish: "foil",
+    });
+
+    await user.click(screen.getByRole("button", { name: "Open on TCGplayer" }));
+
+    expect(cardTcgplayerIds).toHaveBeenCalledExactlyOnceWith("p1");
+    // `waitFor`, unlike the two rows above it: the id is resolved through a command, so the press
+    // reaches `openExternal` a microtask later rather than inside the click.
+    await waitFor(() =>
+      expect(vi.mocked(openExternal)).toHaveBeenCalledExactlyOnceWith(
+        "https://www.tcgplayer.com/product/1174?Printing=Foil",
+      ),
+    );
+  });
+
+  /**
+   * The half the prop cannot answer: **a surface that names no finish still gets the right
+   * listing, because the printing answers for itself.** `BOLT` is sold in nonfoil alone, so
+   * `Normal` is a fact about the cardboard rather than a guess — and this is the assertion that
+   * would go red if the rail stopped handing `card.finishes` over, since the bare product page is
+   * what a helper with neither fact opens.
+   */
+  it("lets the printing name the finish when the surface names none", async () => {
+    const user = userEvent.setup();
+    renderRail({ finish: null });
+
+    await user.click(screen.getByRole("button", { name: "Open on TCGplayer" }));
+
+    await waitFor(() =>
+      expect(vi.mocked(openExternal)).toHaveBeenCalledExactlyOnceWith(
+        "https://www.tcgplayer.com/product/1174?Printing=Normal",
+      ),
+    );
+  });
+
+  /**
+   * **The fallback, and it is a normal path rather than an error path** — 1.62 % of paper English
+   * non-token printings carry neither id, and every digital-only card carries neither because
+   * TCGplayer does not sell them. What the reader gets is exactly the search this row opened for
+   * everything before the ids existed, so a press can never do nothing.
+   */
+  it("falls back to the marketplace's name search for a printing TCGplayer has no id for", async () => {
+    cardTcgplayerIds.mockResolvedValue({ productId: null, etchedProductId: null });
+    const user = userEvent.setup();
+    renderRail();
+
+    await user.click(screen.getByRole("button", { name: "Open on TCGplayer" }));
+
+    await waitFor(() =>
+      expect(vi.mocked(openExternal)).toHaveBeenCalledExactlyOnceWith(
+        "https://www.tcgplayer.com/search/magic/product?q=Lightning%20Bolt",
+      ),
+    );
+  });
+
+  /**
+   * `externalLinks`' first doctrine, one layer in: a rail that merely *offers* to open a
+   * marketplace must not have visited one — and now that the row resolves an id, it must not have
+   * asked Rust for one either. Drawing the rail is not a press, so the command is spent only by a
+   * reader choosing the row.
+   */
+  it("resolves the product ids on the press and never on the draw", async () => {
+    const user = userEvent.setup();
+    renderRail();
+    expect(cardTcgplayerIds).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Open on TCGplayer" }));
+    expect(cardTcgplayerIds).toHaveBeenCalledOnce();
   });
 
   /**

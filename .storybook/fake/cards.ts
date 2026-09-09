@@ -100,6 +100,50 @@ export interface FakeCard {
    * `"[]"`, which is what the command answers for one.
    */
   meldParts: string | null;
+  /**
+   * Scryfall's `tcgplayer_id` — the **ordinary** TCGplayer product for this printing, the one
+   * sold as `Normal` and as `Foil`. `null` for a printing TCGplayer does not list.
+   *
+   * **The second field here that is not a column, and it is one for {@link FakeCard.meldParts}'
+   * reason**: `cards` has no `tcgplayer_id` either. Rust inflates the gzipped `raw` blob on the
+   * press and reads the field out of it, and this fixture carries no `raw` to inflate — so the
+   * generator reads it once, at generation time, and `db.ts` hands the number over rather than
+   * parsing anything.
+   *
+   * **Every value below is the real one out of the corpus, which is what makes it checkable
+   * against the catalogue**: Lightning Bolt `lea` is `1174`, the same integer TCGplayer uses as
+   * that product's id (verified 2026-09-09). **47** of these 59 printings carry one, **1** carries
+   * only the etched id below and **11** carry neither — the corpus's own shape rather than a
+   * choice. Coverage of `tcgplayer_id ?? tcgplayer_etched_id` measured the same day: 98.38 % of
+   * paper English non-token printings, and **0.04 %** of digital-only cards, which are not sold
+   * there at all. So the two digital rows here are empty, as are six of the seven tokens (`tafr`
+   * Treasure is the exception and really does have a product), the meld **result** `emn 15b`,
+   * which is a face rather than something anybody sells, the art-series `amh2 5s` and `sld 913`.
+   *
+   * **Required rather than optional, and being required costs nothing here**: this file is
+   * generated whole, so `scripts/gen-storybook-cards.mjs` writes all 59 row literals in one pass
+   * and none of them by hand. What optional would cost is the fence. A regeneration whose
+   * derivation went missing would leave every card in the workbench answering both-`null` with
+   * nothing red anywhere — where a missing **required** field is a `tsc -p .storybook` error that
+   * names every row it is missing from.
+   */
+  tcgplayerId: number | null;
+  /**
+   * Scryfall's `tcgplayer_etched_id` — the **second, separate product** for the etched-foil
+   * treatment, which is sold as `Foil` and nothing else.
+   *
+   * Etched is a product on TCGplayer's side rather than a finish of one: the catalogue lists
+   * `484936 The Ur-Dragon (Foil Etched)` as its own entry. That is why one printing has two ids,
+   * and why neither field can be derived from the other — measured 2026-09-09, **892** printings
+   * carry only this one and **333** carry both.
+   *
+   * Three rows of this fixture carry one, and between them they are the states a caller choosing
+   * a product has to tell apart: `sta 105` and `mh2 267` carry **both**, and `acr 211` carries
+   * **only** this one. That last is the 892-row state and the reason it is worth a fixture — the
+   * press has to open the etched product and assert `Printing=Foil` about a card whose ordinary
+   * product does not exist to fall back to.
+   */
+  tcgplayerEtchedId: number | null;
   artist: string | null;
   illustrationId: string | null;
   releasedAt: string;
@@ -190,6 +234,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["nonfoil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: 1174,
+    tcgplayerEtchedId: null,
     artist: "Christopher Rush",
     illustrationId: "2cb6200c-d05b-419c-bd10-8b9c146e2339",
     releasedAt: "1993-08-05",
@@ -237,6 +283,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["nonfoil","foil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: 276484,
+    tcgplayerEtchedId: null,
     artist: "Christopher Moeller",
     illustrationId: "013e7eda-ef8e-44cd-9832-4033d9de1c34",
     releasedAt: "2022-07-08",
@@ -284,6 +332,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["nonfoil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: 542176,
+    tcgplayerEtchedId: null,
     artist: "Desmuncubic",
     illustrationId: "c43c490f-ef7e-4d06-ae86-fa186f6cc902",
     releasedAt: "2024-04-08",
@@ -331,6 +381,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["nonfoil","foil","etched"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: 235146,
+    tcgplayerEtchedId: 235145,
     artist: "Ezoi",
     illustrationId: "b1698749-41b9-41fc-80f4-f54a7038b454",
     releasedAt: "2021-04-23",
@@ -380,6 +432,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["nonfoil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: 1042,
+    tcgplayerEtchedId: null,
     artist: "Christopher Rush",
     illustrationId: "54436824-977b-4dc7-8de1-8498e73e5ef2",
     releasedAt: "1993-08-05",
@@ -428,6 +482,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["nonfoil","foil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: null,
+    tcgplayerEtchedId: null,
     artist: "Chris Rahn",
     illustrationId: "da62ded1-bedd-44c6-8950-ca56e691a899",
     releasedAt: "2014-06-16",
@@ -475,6 +531,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["nonfoil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: 1026,
+    tcgplayerEtchedId: null,
     artist: "Mark Poole",
     illustrationId: "d20eda7b-a902-4c00-bdab-601059e417b5",
     releasedAt: "1993-08-05",
@@ -523,6 +581,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["nonfoil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: 8973,
+    tcgplayerEtchedId: null,
     artist: "Mark Poole",
     illustrationId: "d20eda7b-a902-4c00-bdab-601059e417b5",
     releasedAt: "1993-12-01",
@@ -569,6 +629,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["nonfoil","foil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: 256997,
+    tcgplayerEtchedId: null,
     artist: "Adam Paquette",
     illustrationId: "77d2dcc5-054b-42d9-8e43-d96fe0d773ad",
     releasedAt: "2022-10-07",
@@ -615,6 +677,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["nonfoil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: 91381,
+    tcgplayerEtchedId: null,
     artist: "Mark Poole",
     illustrationId: "2c1e9dcd-a55e-40b7-80e4-6741e3f16ae0",
     releasedAt: "1993-08-05",
@@ -663,6 +727,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["nonfoil","foil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: 238619,
+    tcgplayerEtchedId: null,
     artist: "Titus Lunter",
     illustrationId: "ef72bbb2-d10c-45a2-a3b8-3ba591379aa5",
     releasedAt: "2021-06-18",
@@ -709,6 +775,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["nonfoil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: 5457,
+    tcgplayerEtchedId: null,
     artist: "Colin MacNeil",
     illustrationId: "25b63436-d094-4014-9bda-d97e902da980",
     releasedAt: "1997-10-14",
@@ -757,6 +825,8 @@ export const CARDS: FakeCard[] = [
     faces:
       '[{"name":"Delver of Secrets","mana_cost":"{U}","type_line":"Creature — Human Wizard","oracle_text":"At the beginning of your upkeep, look at the top card of your library. You may reveal that card. If an instant or sorcery card is revealed this way, transform this creature.","colors":["U"],"power":"1","toughness":"1","artist":"Nils Hamm","illustration_id":"1c2fee9b-89ea-4ab1-a751-451c3cd65a88"},{"name":"Insectile Aberration","mana_cost":"","type_line":"Creature — Human Insect","oracle_text":"Flying","colors":["U"],"color_indicator":["U"],"power":"3","toughness":"2","artist":"Nils Hamm","illustration_id":"c2b5f731-771b-4949-90f3-0ad40d676100"}]',
     meldParts: null,
+    tcgplayerId: 56246,
+    tcgplayerEtchedId: null,
     artist: "Nils Hamm",
     illustrationId: null,
     releasedAt: "2011-09-30",
@@ -805,6 +875,8 @@ export const CARDS: FakeCard[] = [
     faces:
       '[{"name":"Fire","mana_cost":"{1}{R}","type_line":"Instant","oracle_text":"Fire deals 2 damage divided as you choose among one or two targets.","artist":"David Martin","illustration_id":"c890cb20-7e04-4ad0-96a6-8854cd409c14"},{"name":"Ice","mana_cost":"{1}{U}","type_line":"Instant","oracle_text":"Tap target permanent.\\nDraw a card.","artist":"Franz Vohwinkel"}]',
     meldParts: null,
+    tcgplayerId: 7951,
+    tcgplayerEtchedId: null,
     artist: "David Martin & Franz Vohwinkel",
     illustrationId: "c890cb20-7e04-4ad0-96a6-8854cd409c14",
     releasedAt: "2001-06-04",
@@ -856,6 +928,8 @@ export const CARDS: FakeCard[] = [
     faces:
       '[{"name":"Dusk","mana_cost":"{2}{W}{W}","type_line":"Sorcery","oracle_text":"Destroy all creatures with power 3 or greater.","artist":"Noah Bradley","illustration_id":"f3d63aed-2784-4ef5-9676-846b1e65e040"},{"name":"Dawn","mana_cost":"{3}{W}{W}","type_line":"Sorcery","oracle_text":"Aftermath (Cast this spell only from your graveyard. Then exile it.)\\nReturn all creature cards with power 2 or less from your graveyard to your hand.","artist":"Noah Bradley"}]',
     meldParts: null,
+    tcgplayerId: 129823,
+    tcgplayerEtchedId: null,
     artist: "Noah Bradley",
     illustrationId: "f3d63aed-2784-4ef5-9676-846b1e65e040",
     releasedAt: "2017-04-28",
@@ -905,6 +979,8 @@ export const CARDS: FakeCard[] = [
     faces:
       '[{"name":"Akki Lavarunner","mana_cost":"{3}{R}","type_line":"Creature — Goblin Warrior","oracle_text":"Haste\\nWhenever this creature deals damage to an opponent, flip it.","power":"1","toughness":"1","artist":"Matt Cavotta","illustration_id":"54705304-6aeb-4722-9a17-9006db12b939"},{"name":"Tok-Tok, Volcano Born","mana_cost":"","type_line":"Legendary Creature — Goblin Shaman","oracle_text":"Protection from red\\nIf a red source would deal damage to a player, it deals that much damage plus 1 to that player instead.","power":"2","toughness":"2","artist":"Matt Cavotta"}]',
     meldParts: null,
+    tcgplayerId: 11938,
+    tcgplayerEtchedId: null,
     artist: "Matt Cavotta",
     illustrationId: "54705304-6aeb-4722-9a17-9006db12b939",
     releasedAt: "2004-10-01",
@@ -953,6 +1029,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["nonfoil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: 37287,
+    tcgplayerEtchedId: null,
     artist: "Kev Walker",
     illustrationId: "8a0194dc-01f8-4a30-ba6e-741c7d4bcecf",
     releasedAt: "2009-09-04",
@@ -1001,6 +1079,8 @@ export const CARDS: FakeCard[] = [
     faces:
       '[{"name":"Bonecrusher Giant","mana_cost":"{2}{R}","type_line":"Creature — Giant","oracle_text":"Whenever this creature becomes the target of a spell, this creature deals 2 damage to that spell\'s controller.","power":"4","toughness":"3","artist":"Victor Adame Minguez","illustration_id":"c7f49422-def6-4502-bc02-38aee9924371"},{"name":"Stomp","mana_cost":"{1}{R}","type_line":"Instant — Adventure","oracle_text":"Damage can\'t be prevented this turn. Stomp deals 2 damage to any target.","artist":"Victor Adame Minguez"}]',
     meldParts: null,
+    tcgplayerId: 199035,
+    tcgplayerEtchedId: null,
     artist: "Victor Adame Minguez",
     illustrationId: "c7f49422-def6-4502-bc02-38aee9924371",
     releasedAt: "2019-10-04",
@@ -1049,6 +1129,8 @@ export const CARDS: FakeCard[] = [
     faces:
       '[{"name":"Agadeem\'s Awakening","mana_cost":"{X}{B}{B}{B}","type_line":"Sorcery","oracle_text":"Return from your graveyard to the battlefield any number of target creature cards that each have a different mana value X or less.","colors":["B"],"artist":"Dmitry Burmak","illustration_id":"9c4fd66b-b125-4e63-a0ee-d49ec58fc381"},{"name":"Agadeem, the Undercrypt","mana_cost":"","type_line":"Land","oracle_text":"As this land enters, you may pay 3 life. If you don\'t, it enters tapped.\\n{T}: Add {B}.","colors":[],"artist":"Dmitry Burmak","illustration_id":"259cbafd-c75a-45b1-9b1e-a428796aa977"}]',
     meldParts: null,
+    tcgplayerId: 222163,
+    tcgplayerEtchedId: null,
     artist: "Dmitry Burmak",
     illustrationId: null,
     releasedAt: "2020-09-25",
@@ -1098,6 +1180,8 @@ export const CARDS: FakeCard[] = [
     faces: "[]",
     meldParts:
       '[{"id":"5a7a212e-e0b6-4f12-a95c-173cae023f93","name":"Brisela, Voice of Nightmares","component":"meld_result","artist":"Clint Cearley"},{"id":"c75c035a-7da9-4b36-982d-fca8220b1797","name":"Gisela, the Broken Blade","component":"meld_part","artist":"Clint Cearley"}]',
+    tcgplayerId: 119686,
+    tcgplayerEtchedId: null,
     artist: "Clint Cearley",
     illustrationId: "4c8cee4a-a9a4-42eb-9cbf-fcc6c6344d00",
     releasedAt: "2016-07-22",
@@ -1147,6 +1231,8 @@ export const CARDS: FakeCard[] = [
     faces: "[]",
     meldParts:
       '[{"id":"27907985-b5f6-4098-ab43-15a0c2bf94d5","name":"Bruna, the Fading Light","component":"meld_part","artist":"Clint Cearley"},{"id":"c75c035a-7da9-4b36-982d-fca8220b1797","name":"Gisela, the Broken Blade","component":"meld_part","artist":"Clint Cearley"}]',
+    tcgplayerId: null,
+    tcgplayerEtchedId: null,
     artist: "Clint Cearley",
     illustrationId: "9528e065-5297-4d91-bf75-3c175b54f0d4",
     releasedAt: "2016-07-22",
@@ -1196,6 +1282,8 @@ export const CARDS: FakeCard[] = [
     faces: "[]",
     meldParts:
       '[{"id":"5a7a212e-e0b6-4f12-a95c-173cae023f93","name":"Brisela, Voice of Nightmares","component":"meld_result","artist":"Clint Cearley"},{"id":"27907985-b5f6-4098-ab43-15a0c2bf94d5","name":"Bruna, the Fading Light","component":"meld_part","artist":"Clint Cearley"}]',
+    tcgplayerId: 119687,
+    tcgplayerEtchedId: null,
     artist: "Clint Cearley",
     illustrationId: "db5289ab-8aa4-412d-afd4-f7b7fef475fb",
     releasedAt: "2016-07-22",
@@ -1243,6 +1331,8 @@ export const CARDS: FakeCard[] = [
     faces:
       '[{"name":"Prismatic Ending","mana_cost":"","type_line":"Card","oracle_text":"","colors":[],"artist":"John Stanko","illustration_id":"78feeb10-4d5b-49f3-9fda-17da6bee148b"},{"name":"Prismatic Ending","mana_cost":"","type_line":"Card","oracle_text":"","colors":[],"artist":"John Stanko"}]',
     meldParts: null,
+    tcgplayerId: null,
+    tcgplayerEtchedId: null,
     artist: "John Stanko",
     illustrationId: null,
     releasedAt: "2021-06-18",
@@ -1289,6 +1379,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["nonfoil","foil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: 122743,
+    tcgplayerEtchedId: null,
     artist: "Florian de Gesincourt",
     illustrationId: "d7a7b98f-125c-41bc-bded-eae1ed4e57b4",
     releasedAt: "2016-09-30",
@@ -1337,6 +1429,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["nonfoil","foil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: 199510,
+    tcgplayerEtchedId: null,
     artist: "Kieran Yanner",
     illustrationId: "9db4d447-9074-430f-a7af-d416bc369c63",
     releasedAt: "2019-10-04",
@@ -1384,6 +1478,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["nonfoil","foil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: 632197,
+    tcgplayerEtchedId: null,
     artist: "Yoshitaka Amano",
     illustrationId: "9fecddfe-8932-4cad-a2aa-080e6cdae288",
     releasedAt: "2025-06-13",
@@ -1431,6 +1527,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["nonfoil","foil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: 632702,
+    tcgplayerEtchedId: null,
     artist: "Square Enix",
     illustrationId: "87f54fff-2b17-4190-b2f5-6a0647f83dfc",
     releasedAt: "2025-06-13",
@@ -1479,6 +1577,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["nonfoil","foil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: 212282,
+    tcgplayerEtchedId: null,
     artist: "Slawomir Maniak",
     illustrationId: "f715763e-13f5-4f16-87b6-466bf5dbffba",
     releasedAt: "2020-04-24",
@@ -1527,6 +1627,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["nonfoil","foil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: 7357,
+    tcgplayerEtchedId: null,
     artist: "Terese Nielsen",
     illustrationId: "3129ebcd-58ab-4d7f-886d-a4cbbe30e1f6",
     releasedAt: "2000-06-05",
@@ -1574,6 +1676,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["nonfoil","foil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: 15004,
+    tcgplayerEtchedId: null,
     artist: "Justin Murray",
     illustrationId: "abf5b6d9-61e7-47f0-b187-a6bdfec68f58",
     releasedAt: "2007-05-04",
@@ -1622,6 +1726,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["nonfoil","foil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: 39509,
+    tcgplayerEtchedId: null,
     artist: "Terese Nielsen",
     illustrationId: "e16dc6cf-82ef-4073-98bd-4d3f1f461c96",
     releasedAt: "2011-05-13",
@@ -1670,6 +1776,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["nonfoil","foil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: 67481,
+    tcgplayerEtchedId: null,
     artist: "Howard Lyon",
     illustrationId: "5204a467-e10e-4d30-8a2e-db6c7f8f4ddf",
     releasedAt: "2013-02-01",
@@ -1719,6 +1827,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["nonfoil","foil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: 67424,
+    tcgplayerEtchedId: null,
     artist: "Zoltan Boros",
     illustrationId: "a31e2d3d-dd7c-4b92-95c4-92cbf512a962",
     releasedAt: "2013-02-01",
@@ -1768,6 +1878,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["nonfoil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: 563960,
+    tcgplayerEtchedId: null,
     artist: "Will Liu",
     illustrationId: "ad890b05-cd44-4eb0-94e5-2aac5f3d260a",
     releasedAt: "2024-08-02",
@@ -1815,6 +1927,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["nonfoil","foil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: 37883,
+    tcgplayerEtchedId: null,
     artist: "Rebecca Guay",
     illustrationId: "fa376327-cd38-4f28-a8ab-7f61cf35a455",
     releasedAt: "2004-11-19",
@@ -1862,6 +1976,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["nonfoil","foil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: 34698,
+    tcgplayerEtchedId: null,
     artist: "Mark Tedin",
     illustrationId: "77d49e83-98fd-440e-a4ee-ecf8c5535899",
     releasedAt: "2010-04-23",
@@ -1910,6 +2026,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["nonfoil","foil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: 58167,
+    tcgplayerEtchedId: null,
     artist: "Jason Chan",
     illustrationId: "e4cb9f8d-fdf1-47ef-a393-a5b3f76d9e00",
     releasedAt: "2012-05-04",
@@ -1957,6 +2075,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["nonfoil","foil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: 39414,
+    tcgplayerEtchedId: null,
     artist: "Igor Kieryluk",
     illustrationId: "7618066e-d3fe-4ee5-aeea-f4e73a256ec0",
     releasedAt: "2011-05-13",
@@ -2003,6 +2123,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["foil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: 129539,
+    tcgplayerEtchedId: null,
     artist: "Lius Lasahido",
     illustrationId: "bbfd0fde-3e25-457d-a359-638a13805371",
     releasedAt: "2017-04-28",
@@ -2050,6 +2172,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["nonfoil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: 236137,
+    tcgplayerEtchedId: null,
     artist: "Mike Bierek",
     illustrationId: "146aaae4-93f4-409a-be32-010e86d137da",
     releasedAt: "2021-04-23",
@@ -2096,6 +2220,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["foil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: null,
+    tcgplayerEtchedId: null,
     artist: "Lē Yamamura",
     illustrationId: "2bd486cb-845b-4269-9771-05e7d21c4b52",
     releasedAt: "2025-12-01",
@@ -2142,6 +2268,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["nonfoil","foil","etched"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: 238617,
+    tcgplayerEtchedId: 240803,
     artist: "Zack Stella",
     illustrationId: "1044055e-a362-4edb-8101-96655e15da95",
     releasedAt: "2021-06-18",
@@ -2190,6 +2318,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["etched"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: null,
+    tcgplayerEtchedId: 556344,
     artist: "Lie Setiawan",
     illustrationId: "f1b51fc5-2fd3-45a1-9d98-d1337247ab40",
     releasedAt: "2024-07-05",
@@ -2236,6 +2366,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["nonfoil","foil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: 118607,
+    tcgplayerEtchedId: null,
     artist: "Terese Nielsen",
     illustrationId: "d591934a-c68a-47e6-b207-d24c65af9440",
     releasedAt: "2016-06-10",
@@ -2282,6 +2414,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["nonfoil","foil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: 162231,
+    tcgplayerEtchedId: null,
     artist: "Chris Rahn",
     illustrationId: "82c0ea68-cf37-41ec-aec7-123e8e9f05d3",
     releasedAt: "2018-04-27",
@@ -2330,6 +2464,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["nonfoil","foil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: 34384,
+    tcgplayerEtchedId: null,
     artist: "Jason Chan",
     illustrationId: "b0ab416a-c7a8-4531-8e6a-00a167db4f76",
     releasedAt: "2010-02-05",
@@ -2378,6 +2514,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["nonfoil","foil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: 239857,
+    tcgplayerEtchedId: null,
     artist: "Simon Dominic",
     illustrationId: "a1c86e0c-da57-4905-b29a-940c73de37a6",
     releasedAt: "2021-06-18",
@@ -2427,6 +2565,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["foil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: 491846,
+    tcgplayerEtchedId: null,
     artist: "Flavio Girón",
     illustrationId: "022b4431-5079-4de1-8862-5aaebdd8852d",
     releasedAt: "2023-04-21",
@@ -2476,6 +2616,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["foil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: 491969,
+    tcgplayerEtchedId: null,
     artist: "Flavio Girón",
     illustrationId: "022b4431-5079-4de1-8862-5aaebdd8852d",
     releasedAt: "2023-04-21",
@@ -2526,6 +2668,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["nonfoil","foil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: 697109,
+    tcgplayerEtchedId: null,
     artist: "Greg Smallwood",
     illustrationId: "00fcf4ff-adca-48a0-9b3b-290e5523ab0e",
     releasedAt: "2026-06-26",
@@ -2574,6 +2718,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["nonfoil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: 517552,
+    tcgplayerEtchedId: null,
     artist: "Justin Hernandez & Alexis Hernandez",
     illustrationId: "82290415-0c8a-441a-b4dc-88639cf33f50",
     releasedAt: "2023-11-03",
@@ -2622,6 +2768,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["nonfoil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: null,
+    tcgplayerEtchedId: null,
     artist: "Toni Infante",
     illustrationId: "0c6fb581-2a08-4e71-8b6f-cce243d92eef",
     releasedAt: "2025-10-28",
@@ -2670,6 +2818,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["nonfoil","foil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: null,
+    tcgplayerEtchedId: null,
     artist: "Kamila Szutenberg",
     illustrationId: "1cdd9f03-1e5b-4461-ae71-d637d0307220",
     releasedAt: "2026-08-14",
@@ -2719,6 +2869,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["nonfoil","foil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: null,
+    tcgplayerEtchedId: null,
     artist: "Raymond Swanland",
     illustrationId: "b99f46a0-659f-4e0c-aad1-091e5fed64a2",
     releasedAt: "2020-08-07",
@@ -2768,6 +2920,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["nonfoil","foil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: null,
+    tcgplayerEtchedId: null,
     artist: "Raymond Swanland",
     illustrationId: "066e78a3-b6cf-44c6-bf5d-d2533d11731d",
     releasedAt: "2020-08-07",
@@ -2816,6 +2970,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["nonfoil","foil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: null,
+    tcgplayerEtchedId: null,
     artist: "Gabriel Rubio",
     illustrationId: "ee64a2c6-0090-4d8e-91b7-ed0b0ec55b37",
     releasedAt: "2026-06-26",
@@ -2866,6 +3022,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["nonfoil","foil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: null,
+    tcgplayerEtchedId: null,
     artist: "Kai Carpenter",
     illustrationId: "8d3d7044-d07f-49f0-b2af-932696e93ddb",
     releasedAt: "2026-01-23",
@@ -2917,6 +3075,8 @@ export const CARDS: FakeCard[] = [
     faces:
       '[{"name":"Start Your Engines!","mana_cost":"","type_line":"Card","oracle_text":"Whenever an opponent loses life during your turn, if your speed is 1 or greater, increase your speed by 1. Max speed is 4. This ability triggers only once each turn.","colors":[],"artist":"Josiah \\"Jo\\" Cameron","illustration_id":"df4ff9c1-eccd-47fe-b284-17db8f7014bc"},{"name":"Max Speed","mana_cost":"","type_line":"Card","oracle_text":"","colors":[],"artist":"Josiah \\"Jo\\" Cameron","illustration_id":"bf7d3263-dddd-4c60-a92f-77c57d99fec1"}]',
     meldParts: null,
+    tcgplayerId: null,
+    tcgplayerEtchedId: null,
     artist: 'Josiah "Jo" Cameron',
     illustrationId: null,
     releasedAt: "2026-05-18",
@@ -2970,6 +3130,8 @@ export const CARDS: FakeCard[] = [
     finishes: '["nonfoil","foil"]',
     faces: "[]",
     meldParts: null,
+    tcgplayerId: 244139,
+    tcgplayerEtchedId: null,
     artist: "Dan Murayama Scott",
     illustrationId: "078962d9-5717-4547-bc11-5c47011828df",
     releasedAt: "2021-07-23",

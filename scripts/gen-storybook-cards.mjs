@@ -251,6 +251,15 @@ function toFakeCard(r, label) {
     finishes: r.finishes,
     faces: trimFaces(r.faces),
     meldParts: meldParts(r, raw),
+    // The two TCGplayer product ids, straight off the blob and unread — `cards` has no column
+    // for either, exactly as it has none for `all_parts`, so this is the same once-at-generation
+    // derivation `meldParts` above is. `?? null` rather than the bare read because
+    // `JSON.stringify` **drops** a key whose value is `undefined`, which would emit rows missing
+    // a required field: a `tsc -p .storybook` error rather than a silent hole, but a confusing
+    // one. Absent in the blob and null in the row mean the same thing — TCGplayer does not sell
+    // this printing — and 86.44 % of the corpus is the other case.
+    tcgplayerId: raw.tcgplayer_id ?? null,
+    tcgplayerEtchedId: raw.tcgplayer_etched_id ?? null,
     artist: r.artist,
     illustrationId: r.illustration_id,
     releasedAt: r.released_at,
@@ -413,6 +422,50 @@ export interface FakeCard {
    * \`"[]"\`, which is what the command answers for one.
    */
   meldParts: string | null;
+  /**
+   * Scryfall's \`tcgplayer_id\` — the **ordinary** TCGplayer product for this printing, the one
+   * sold as \`Normal\` and as \`Foil\`. \`null\` for a printing TCGplayer does not list.
+   *
+   * **The second field here that is not a column, and it is one for {@link FakeCard.meldParts}'
+   * reason**: \`cards\` has no \`tcgplayer_id\` either. Rust inflates the gzipped \`raw\` blob on the
+   * press and reads the field out of it, and this fixture carries no \`raw\` to inflate — so the
+   * generator reads it once, at generation time, and \`db.ts\` hands the number over rather than
+   * parsing anything.
+   *
+   * **Every value below is the real one out of the corpus, which is what makes it checkable
+   * against the catalogue**: Lightning Bolt \`lea\` is \`1174\`, the same integer TCGplayer uses as
+   * that product's id (verified 2026-09-09). **47** of these 59 printings carry one, **1** carries
+   * only the etched id below and **11** carry neither — the corpus's own shape rather than a
+   * choice. Coverage of \`tcgplayer_id ?? tcgplayer_etched_id\` measured the same day: 98.38 % of
+   * paper English non-token printings, and **0.04 %** of digital-only cards, which are not sold
+   * there at all. So the two digital rows here are empty, as are six of the seven tokens (\`tafr\`
+   * Treasure is the exception and really does have a product), the meld **result** \`emn 15b\`,
+   * which is a face rather than something anybody sells, the art-series \`amh2 5s\` and \`sld 913\`.
+   *
+   * **Required rather than optional, and being required costs nothing here**: this file is
+   * generated whole, so \`scripts/gen-storybook-cards.mjs\` writes all 59 row literals in one pass
+   * and none of them by hand. What optional would cost is the fence. A regeneration whose
+   * derivation went missing would leave every card in the workbench answering both-\`null\` with
+   * nothing red anywhere — where a missing **required** field is a \`tsc -p .storybook\` error that
+   * names every row it is missing from.
+   */
+  tcgplayerId: number | null;
+  /**
+   * Scryfall's \`tcgplayer_etched_id\` — the **second, separate product** for the etched-foil
+   * treatment, which is sold as \`Foil\` and nothing else.
+   *
+   * Etched is a product on TCGplayer's side rather than a finish of one: the catalogue lists
+   * \`484936 The Ur-Dragon (Foil Etched)\` as its own entry. That is why one printing has two ids,
+   * and why neither field can be derived from the other — measured 2026-09-09, **892** printings
+   * carry only this one and **333** carry both.
+   *
+   * Three rows of this fixture carry one, and between them they are the states a caller choosing
+   * a product has to tell apart: \`sta 105\` and \`mh2 267\` carry **both**, and \`acr 211\` carries
+   * **only** this one. That last is the 892-row state and the reason it is worth a fixture — the
+   * press has to open the etched product and assert \`Printing=Foil\` about a card whose ordinary
+   * product does not exist to fall back to.
+   */
+  tcgplayerEtchedId: number | null;
   artist: string | null;
   illustrationId: string | null;
   releasedAt: string;
@@ -507,6 +560,10 @@ for (const { card } of rows) {
       `pt=${card.power ?? "-"}/${card.toughness ?? "-"} fin=${card.finishes} ` +
       `gc=${card.gameChanger} eu=${card.everUncommon} dig=${card.digital} ` +
       `img=${card.imageStatus} art=${card.artCropUrl === null ? "none" : "yes"} ` +
+      // Both ids on one segment, `-` for absent: the digest is how a human checks a regeneration,
+      // and a run that printed `tcg=-/-` down all 59 rows is a derivation that has stopped
+      // working rather than a corpus TCGplayer has stopped listing.
+      `tcg=${card.tcgplayerId ?? "-"}/${card.tcgplayerEtchedId ?? "-"} ` +
       `meld=${card.meldParts === null ? "-" : JSON.parse(card.meldParts).map((p) => `${p.component}:${p.name}`).join(",")}`,
   );
 }
