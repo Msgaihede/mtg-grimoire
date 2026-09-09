@@ -1399,11 +1399,22 @@ pub struct CollectionQuery {
     /// about. That is the worst failure available in this feature, and the default is what
     /// forecloses it.
     ///
-    /// Who asks: the collection page, and the deck builder's Collection Search tab — the
-    /// surface whose question is "what can I build with today", which is the one thing a set
-    /// aside drawer is not part of. Who does not: the mirror, the export sweep and the web
-    /// route's passthrough, and `a_query_that_never_asks_still_sees_a_locked_folders_copies` is
-    /// the fence around that silence.
+    /// **Who asks: the deck builder's Collection Search tab, and nothing else** — the surface
+    /// whose question is "what can I build with today", which is the one thing a set-aside
+    /// drawer is not part of. Who does not: the mirror, the export sweep, the web route's
+    /// passthrough, and `a_query_that_never_asks_still_sees_a_locked_folders_copies` is the
+    /// fence around that silence.
+    ///
+    /// **The collection page was on that first list until 2026-09-09 and is on the second now**
+    /// ([#436](https://github.com/Msgaihede/mtg-grimoire/issues/436)). Its list and its header
+    /// both asked, so a locked drawer's copies left the flattened wall and left the reader's
+    /// card count, unique count and total value with them — and a card set aside is still a
+    /// card they own. The lock is about what the app *offers a deck*; it was never about what
+    /// the reader *has*, and the page had been reading it as both. Nothing in this module
+    /// changed: the field, its default and the term in [`scope`] are what they were, and one
+    /// caller stopped sending it. The page marks those copies with a lock instead
+    /// (`CollectionTable`'s Folder cell, and the wall's caption), which is a statement rather
+    /// than a filter and therefore not this struct's business.
     pub exclude_locked: bool,
     /// Whether to leave out the copies a deck holds. Absent is [`Allocation::All`], which is
     /// what every caller written before folders existed asked for without saying so.
@@ -2809,16 +2820,21 @@ mod tests {
         .unwrap()
     }
 
-    /// **A locked folder's copies leave the flattened list, and the folder inside it goes with
+    /// **A locked folder's copies leave a list that asks, and the folder inside it goes with
     /// them.** The flag is stored on the folder the reader pressed Lock on and the *answer* is
     /// computed over ancestry, so a subfolder is locked while carrying no flag of its own —
     /// which is the whole reason the term is a recursive CTE rather than an
     /// `IN (SELECT id FROM collection_folders WHERE locked <> 0)`.
     ///
+    /// **The one caller that asks is the deck builder's Collection Search tab**, since #436 took
+    /// the collection page off that list — see [`CollectionQuery::exclude_locked`]. So this is a
+    /// test about the *mechanism* and not about any wall a reader looks at, and the paragraph
+    /// below is why it still asserts the summary beside the page.
+    ///
     /// **The summary is asserted beside the page**, which is [`scope`]'s reason for existing:
-    /// the term is pushed there so the page, the count beside it and the header narrow together,
+    /// the term is pushed there so a list, the count beside it and the header narrow together,
     /// and a predicate written into [`list_entries`] instead would pass here on the items alone
-    /// while leaving a header counting rows the wall does not draw.
+    /// while leaving a header counting rows the list does not draw.
     ///
     /// Every row is the same printing at the same finish, condition and language, so they are
     /// four rows only because `coalesce(folder_id, 0)` is `COLLECTION_GRAIN`'s eleventh term.

@@ -351,11 +351,14 @@ describe("useCollectionFolders", () => {
    *
    * A reorder settles on `["collection", "folders"]` alone, and rightly: it moves no
    * `collection_entries.folder_id`, so every number counted from entries is still true. A lock
-   * moves none either, and yet it is the opposite case — the collection page asks its list with
-   * `excludeLocked`, so setting a folder aside changes **which rows come back**, and with them
-   * the header's totals and the count. A `settleOrder` here would leave the table drawing the
-   * copies the reader has just put away, and `lib/query.ts`'s `staleTime: 30_000` means a
-   * mounted observer that is merely stale never refetches on its own.
+   * moves none either, and yet it is the opposite case — setting a folder aside changes what the
+   * page **says** about rows that have not moved: since
+   * [#436](https://github.com/Msgaihede/mtg-grimoire/issues/436) those copies stay in the list
+   * and in the header's totals, and gain a lock on their tile's caption and in their Folder
+   * cell. A `settleOrder` here would leave the table drawing them unmarked, and
+   * `lib/query.ts`'s `staleTime: 30_000` means a mounted observer that is merely stale never
+   * refetches on its own. (Before #436 the same settle was owed for a stronger reason: the list
+   * asked with `excludeLocked`, so those rows left it outright.)
    *
    * **`["cards", "search"]` is the second root and joined on 2026-09-03** (issue #349). The deck
    * builder's card search counts *what a deck can use* and reads the **effective** lock, so this

@@ -89,12 +89,38 @@ const IN_A_DECK_REASON = `In ${IN_A_DECK.folderName}. Cut the card from the deck
 const blockDeckGroup = (row: CollectionRow) =>
   row.folderId === DECK_FOLDER_ID ? IN_A_DECK_REASON : null;
 
+/**
+ * The same entry filed in a drawer the reader has **set aside** — issue #365 for the lock,
+ * [#436](https://github.com/Msgaihede/mtg-grimoire/issues/436) for why this table has a row for
+ * it at all.
+ *
+ * A locked drawer is a `kind: "user"` folder like any other, so nothing about this row is fenced:
+ * its quantity steps, it drags, and it is counted in the header above the table. What it gets is
+ * a **mark** — which is the whole of the swap #436 made, since until then a locked drawer's
+ * copies were simply absent from this list.
+ */
+const LOCKED_FOLDER_ID = 9;
+const SET_ASIDE: CollectionRow = {
+  ...ROW,
+  id: 44,
+  cardId: "c3",
+  name: "Black Lotus",
+  folderId: LOCKED_FOLDER_ID,
+  folderName: "Display case",
+  quantity: 1,
+};
+
+/** Locked exactly where the page locks — the *effective* answer is the page's to compute, and
+ *  this table's contract is that it draws whatever the caller returned. */
+const lockDisplayCase = (row: CollectionRow) => row.folderId === LOCKED_FOLDER_ID;
+
 function renderTable(
   rows: CollectionRow[],
   handlers: {
     onSetQuantity?: () => void;
     onRemove?: () => void;
     quantityBlocked?: (row: CollectionRow) => string | null;
+    folderLocked?: (row: CollectionRow) => boolean;
     /** Mounted only where a test is about the hover panel; everything else takes the no-op API. */
     tooltip?: TooltipApi;
   } = {},
@@ -110,6 +136,7 @@ function renderTable(
       onSetQuantity={handlers.onSetQuantity ?? vi.fn()}
       onRemove={handlers.onRemove ?? vi.fn()}
       quantityBlocked={handlers.quantityBlocked}
+      folderLocked={handlers.folderLocked}
       marketplace={MARKETPLACES.tcgplayer}
     />
   );
@@ -352,6 +379,50 @@ describe("CollectionTable", () => {
         name: "Remove Lightning Bolt (Nonfoil) from your collection",
       }),
     ).toBeInTheDocument();
+  });
+
+  /**
+   * **A copy the reader has set aside is still in this table, and its drawer says so** —
+   * [issue #436](https://github.com/Msgaihede/mtg-grimoire/issues/436).
+   *
+   * The lock shipped in #365 as an *absence*: the collection page asked its list with
+   * `excludeLocked: true`, so those rows were not here to mark. #436 put them back — a set-aside
+   * card is still owned, still worth what it is worth, and still counted in the header above this
+   * table — so the fact had to move from the absence onto the row.
+   *
+   * **All three rows are asserted, and the two unmarked ones are what make the case mean
+   * something.** A row at the root and a row in a deck's group are both unlocked, so a glyph
+   * drawn unconditionally, or one keyed on "this row has a folder at all", would fail here rather
+   * than passing over a table that marked everything.
+   *
+   * Found by its accessible name rather than by `.lucide-lock`: the glyph carries `role="img"`
+   * with `Locked` as its name (`ElsewhereMark`'s arrangement), so what is asserted is the fact a
+   * screen reader gets, not the class a stylesheet happens to emit.
+   */
+  it("marks the folder of a copy filed in a locked drawer", () => {
+    renderTable([ROW, IN_A_DECK, SET_ASIDE], { folderLocked: lockDisplayCase });
+
+    const marks = screen.getAllByRole("img", { name: "Locked" });
+    expect(marks).toHaveLength(1);
+    expect(marks[0].closest("[role=row]")).toHaveTextContent("Display case");
+
+    // And the copy itself is here to be marked, which is the half of #436 that is not the glyph.
+    expect(screen.getByText("Black Lotus")).toBeInTheDocument();
+  });
+
+  /**
+   * **The prop is optional in `quantityBlocked`'s way**: absent, every row draws the plain Folder
+   * cell it drew before the lock existed. That is what every story and every read-only mount of
+   * this table wants, and it is what stops a caller that has no cabinet to reason about from
+   * having to say so.
+   *
+   * The same rows as the case above, so the only difference between the two is the prop.
+   */
+  it("draws no lock at all when the caller does not answer for one", () => {
+    renderTable([ROW, IN_A_DECK, SET_ASIDE]);
+
+    expect(screen.queryByRole("img", { name: "Locked" })).toBeNull();
+    expect(screen.getByText("Display case")).toBeInTheDocument();
   });
 
   /**
