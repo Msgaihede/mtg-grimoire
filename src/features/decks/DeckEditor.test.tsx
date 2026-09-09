@@ -35,7 +35,6 @@ import {
   CARD_BODY_ATTR,
   DECK_CARD_VARIANT,
   DECK_GROUP_ATTR,
-  GC_SPOTLIGHT_ATTR,
   LANDED_ATTR,
   SELECTED_ATTR,
 } from "./cardControl";
@@ -376,8 +375,8 @@ function bolt(overrides: Partial<DeckCard> = {}): DeckCard {
   });
 }
 
-/** The second row every deck in this file has — spelled out here because the game-changer
- *  spotlight needs a deck with a card in it that is **not** one, which is the card it fades. */
+/** The second row every deck in this file has — spelled out here because the `Game Changers`
+ *  filter needs a deck with a card in it that is **not** one, which is the card it narrows away. */
 function bear(overrides: Partial<DeckCard> = {}): DeckCard {
   return card({ name: "Bear", typeLine: "Creature — Bear", quantity: 2, ...overrides });
 }
@@ -617,25 +616,19 @@ async function openAddTo(user: UserEvent) {
 const group = (name: string) => screen.getByRole("region", { name });
 
 /**
- * The box the deck's four views are drawn in, **while the game-changer spotlight is on** — and
- * `null` while it is off, because the mark is present-or-absent rather than `"true"`/`"false"`
- * and the stylesheet's `[data-gc-spotlight]` needs no value.
+ * The toolbar's `Game Changers` filter chip.
  *
- * `document` rather than `screen`, since this is an attribute on a `div` and not a role.
+ * Matched on the **exact** name rather than on `/game changer/`, and that is not fussiness: a
+ * card that *is* one says so in its own accessible name (`Lightning Bolt, 2 copies, game
+ * changer`), so a loose pattern finds a wall of buttons the moment a deck under test has one —
+ * which is every test in this block. The chip's own name never changes with its state; the state
+ * is `aria-pressed`.
  */
-const spotlit = () => document.querySelector(`[${GC_SPOTLIGHT_ATTR}]`);
+const gcChip = () => screen.findByRole("button", { name: "Game Changers" });
 
-/**
- * The ledger's game-changer chip, which is a readout *and* the press that spotlights them.
- *
- * Matched on the **action** half of its name rather than on the count's words, and that is not
- * fussiness: a card that *is* a game changer says so in its own accessible name
- * (`Lightning Bolt, 2 copies, game changer`), so `/game changer/` alone finds two buttons the
- * moment a deck under test has one — which is every test here. The `(stop )?` arm is what keeps
- * one locator working in both states, since the name says which way the press would go.
- */
-const spotlightChip = () =>
-  screen.findByRole("button", { name: /press to (stop spotlighting|spotlight) them in the deck$/ });
+/** The row those chips live in — named for both of its arms, because it is drawn for a deck with
+ *  labels, for a deck with a game changer, or for one with both. */
+const CHIP_ROW = "Filter by label or game changer";
 
 /**
  * Wait until `format_specs` has answered, for the deck under test.
@@ -1680,12 +1673,14 @@ describe("DeckEditor", () => {
     expect(within(main).getByText("4 cards")).toBeInTheDocument();
   });
 
-  /** The deck's own labels, as filters. Nothing at all for a deck with no labels — an empty group
-   *  with a name is a control that says there is something to press. */
-  it("offers no label filter to a deck with no labels", async () => {
+  /** The deck's own labels, as filters. **Nothing at all for a deck with neither a label nor a
+   *  game changer** — an empty group with a name is a control that says there is something to
+   *  press. The default fixture is that deck: no labels, and no row carrying `gameChanger`. The
+   *  other arm of the gate has its own case in the game-changer block below. */
+  it("offers no chip row to a deck with no labels and no game changer", async () => {
     await open();
 
-    expect(screen.queryByRole("group", { name: "Filter by label" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: CHIP_ROW })).not.toBeInTheDocument();
   });
 
   it("filters by label", async () => {
@@ -2950,131 +2945,169 @@ describe("DeckEditor", () => {
   });
 
   /**
-   * ## The game-changer spotlight (2026-09-08)
+   * ## The `Game Changers` filter chip (2026-09-09)
    *
-   * The count above is a press as well as a readout, and **the composition is this file's to
-   * cover**: `DeckLedger.test.tsx` proves the chip reports two gestures and decides nothing, and
-   * what no test of the chip can reach is the pair of flags the editor composes them into
-   * (`gcLatched || gcHovered`, gated on the deck still having a game changer) or the box that
-   * ends up wearing the answer.
+   * The ledger's count above says *how many*; **this chip is what answers _which ones_**, and it
+   * replaces the spotlight that fell to a quarter opacity every card in the deck that was not one
+   * — on a hundred-card deck a wall of stacked quarter-opacity cards is an unusable blur, so the
+   * reader asked for it gone.
    *
-   * **None of these can see the fade.** jsdom applies no stylesheet, so `opacity: 0.25` is
-   * unreachable in principle rather than for want of a query — the rule is one line of
-   * `src/index.css` over the attribute asserted here and the class `views/views.test.tsx`
-   * asserts. What is checkable is the wiring: which gesture arms the box, which one is allowed
-   * to disarm it, and which elements are under it.
+   * It is a chip in the toolbar's label-filter row and it obeys that row's grain: chips **OR**
+   * among themselves and **AND** with the text box. A card that survives it looks exactly as it
+   * looks unfiltered, which is the whole of what the fade cost.
    */
 
-  /** The pointer arriving arms it and the pointer leaving puts it out — the whole of the
-   *  unlatched gesture, and the reason a reader can sweep the chip to answer "which ones" without
-   *  committing to anything. */
-  it("arms the deck's box while the pointer rests on the game-changer chip", async () => {
-    deckGet.mockResolvedValue(detail({}, [bolt({ gameChanger: true, quantity: 2 }), bear()]));
+  /** The gate, both ways. A deck that draws no game changer has no chip to press; one that does
+   *  gets it, in front of whatever labels the deck's cards wear. */
+  it("draws the Game Changers chip only for a deck that draws a game changer", async () => {
     await open();
-    const chip = await spotlightChip();
-    expect(spotlit()).toBeNull();
+    expect(screen.queryByRole("button", { name: "Game Changers" })).not.toBeInTheDocument();
 
-    await userEvent.hover(chip);
-    expect(spotlit()).not.toBeNull();
+    deckGet.mockResolvedValue(detail({}, [bolt({ gameChanger: true, quantity: 2 }), bear()]));
+    wrap(<DeckEditor deckId={4} />);
 
-    await userEvent.unhover(chip);
-    expect(spotlit()).toBeNull();
+    expect(await gcChip()).toHaveAttribute("aria-pressed", "false");
   });
 
   /**
-   * **The latch is what the press buys**, and it is worth its own state precisely because of the
-   * assertion in the middle: the reader clicks, takes their hand off the mouse, and the deck is
-   * still lit when they go and look at it.
-   *
-   * A second press lets go — and the pointer is on the chip at that moment, so nothing is proved
-   * until it leaves again, which is why the release is checked after a second `unhover` rather
-   * than at the click.
+   * **The arm that is easy to get wrong**, because the row's gate now has two of them: a deck
+   * with a game changer and **no labels at all** still draws the row, for the chip alone. Written
+   * against a deck whose `labels` is empty, which is what a gate left at `deck.labels.length > 0`
+   * would answer `false` for.
    */
-  it("latches the spotlight on a press, and only a second press lets go", async () => {
+  it("draws the chip row for a deck with a game changer and no labels at all", async () => {
     deckGet.mockResolvedValue(detail({}, [bolt({ gameChanger: true, quantity: 2 }), bear()]));
     await open();
-    const chip = await spotlightChip();
+
+    const row = screen.getByRole("group", { name: CHIP_ROW });
+    expect(within(row).getByRole("button", { name: "Game Changers" })).toBeInTheDocument();
+    // The chip is the only thing in it — nothing invented a label to keep it company.
+    expect(within(row).getAllByRole("button")).toHaveLength(1);
+  });
+
+  /** The press itself: the deck narrows to the game changers, and a second press gives the rest
+   *  back. A toggle, not a mode. */
+  it("narrows the deck to the game changers, and a second press gives them back", async () => {
+    deckGet.mockResolvedValue(detail({}, [bolt({ gameChanger: true, quantity: 2 }), bear()]));
+    await open();
+    const chip = await gcChip();
 
     await userEvent.click(chip);
     expect(chip).toHaveAttribute("aria-pressed", "true");
-    await userEvent.unhover(chip);
-    expect(spotlit()).not.toBeNull();
+    const main = group("Main deck");
+    expect(within(main).getByRole("button", { name: /^Lightning Bolt/ })).toBeInTheDocument();
+    expect(within(main).queryByRole("button", { name: /^Bear/ })).not.toBeInTheDocument();
 
     await userEvent.click(chip);
     expect(chip).toHaveAttribute("aria-pressed", "false");
-    await userEvent.unhover(chip);
-    expect(spotlit()).toBeNull();
+    expect(
+      within(group("Main deck")).getByRole("button", { name: /^Bear/ }),
+    ).toBeInTheDocument();
   });
 
   /**
-   * **The box that takes the attribute holds the four views and nothing else**, which is the one
-   * structural claim the spotlight makes about this editor's layout.
+   * **The union and never the intersection**, which is the reader's own call and the one thing
+   * about this chip a later tidy is most likely to reverse. A game changer rarely wears a label,
+   * so an `AND` would empty the wall on the commonest pair of presses there is and read as the
+   * filter having broken.
    *
-   * The stylesheet's rule is "fade every dimmed card under me", so an ancestor that also held the
-   * docked search panel would fade the wall the reader is shopping in — tiles that are not in the
-   * deck, most of them not game changers of anything. The desk row would have been exactly that
-   * wrong ancestor, and the editor's own root worse again.
+   * Three cards, one of each kind: a game changer with no label, a labelled card that is not one,
+   * and a card that is neither. Both chips pressed, the first two survive and the third does not.
    */
-  it("arms the box holding the four views, and never the docked panel's tiles", async () => {
-    searchCards.mockResolvedValue({
-      items: [found("Goblin Guide")],
-      total: 1,
-      totalIsCapped: false,
-    });
-    deckGet.mockResolvedValue(detail({}, [bolt({ gameChanger: true, quantity: 2 }), bear()]));
-    await open();
-    await openSearchPanel();
-    const panel = screen.getByRole("region", { name: "Add cards" });
-    const tile = await within(panel).findByRole("button", { name: /^Goblin Guide/ });
-
-    await userEvent.hover(await spotlightChip());
-    const box = spotlit()!;
-
-    expect(box.contains(within(group("Main deck")).getByRole("button", { name: /^Bear/ }))).toBe(
-      true,
+  it("shows the union of a ticked label and the chip, never the intersection", async () => {
+    deckGet.mockResolvedValue(
+      detail(
+        {},
+        [
+          bolt({ gameChanger: true, quantity: 2 }),
+          card({ name: "Bear", labelId: 7, labelName: "Wincon", labelColor: "gold" }),
+          card({ name: "Ornithopter" }),
+        ],
+        CATEGORIES,
+        [{ id: 7, name: "Wincon", color: "gold", cardCount: 1 }],
+      ),
     );
-    expect(box.contains(tile)).toBe(false);
+    await open();
+
+    await userEvent.click(await gcChip());
+    await userEvent.click(screen.getByRole("button", { name: "Wincon" }));
+
+    const main = group("Main deck");
+    expect(within(main).getByRole("button", { name: /^Lightning Bolt/ })).toBeInTheDocument();
+    expect(within(main).getByRole("button", { name: /^Bear/ })).toBeInTheDocument();
+    expect(within(main).queryByRole("button", { name: /^Ornithopter/ })).not.toBeInTheDocument();
   });
 
   /**
-   * **The zero case is gated on the *derivation*, not by clearing the latch**, and both halves of
-   * that sentence are here.
+   * **A game changer parked in a switched-off pile is matched**, and that is the gate reading
+   * `card.gameChanger` rather than the ledger's count beside it.
    *
-   * The chip is drawn only for a deck that has a game changer, so it cannot be *pressed* on a
-   * deck with none — but the latch is the editor's state and the count is a memo over the deck's
+   * The count sums copies over `categoryActive` piles, because it is a rules readout — the number
+   * the format will judge — so this deck's ledger says nothing at all. What the chip answers is
+   * *where are the powerful cards on this desk*, and a card the reader has parked in their
+   * Maybeboard is still in front of them. Same split `validateForMarks` and `validateDeck`
+   * already make (issue #134).
+   */
+  it("draws the chip for a game changer parked in a switched-off pile, and matches it", async () => {
+    deckGet.mockResolvedValue(
+      detail({}, [
+        bear(),
+        card({
+          name: "Deadly Rollick",
+          gameChanger: true,
+          categoryKind: "maybe",
+          categoryActive: false,
+          quantity: 1,
+        }),
+      ]),
+    );
+    await open();
+
+    // The rules readout counts nothing, because the pile counts toward nothing.
+    expect(screen.queryByText(/game changer/)).not.toBeInTheDocument();
+
+    await userEvent.click(await gcChip());
+    expect(
+      within(group("Maybeboard")).getByRole("button", { name: /^Deadly Rollick/ }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Bear/ })).not.toBeInTheDocument();
+  });
+
+  /**
+   * **The fence: `gcFilter` is `gcOnly && hasGameChangers`, derived at render and never stored.**
+   * This is the spotlight's own hazard, unchanged by the control that replaced it.
+   *
+   * The chip is drawn only for a deck that draws a game changer, so it cannot be *pressed* on a
+   * deck with none — but the flag is the editor's state and the answer is a memo over the deck's
    * rows, so an edit that removes the last one takes the control away and would leave the flag
-   * standing: a whole deck at a quarter with nothing on screen to press to get it back. Gating
+   * standing: a deck narrowed to nothing, with no chip on screen to press to get it back. Gating
    * the read rather than clearing the flag keeps that reversible, which is the second half — a
-   * reader who steps a card to zero and undoes it finds the spotlight exactly where they left it,
+   * reader who steps a card to zero and undoes it finds their filter exactly where they left it,
    * `aria-pressed` and all.
    */
-  it("puts the spotlight out with the last game changer, and gives it back with the next", async () => {
+  it("keeps the deck on screen when the last game changer leaves it, and remembers the press", async () => {
     deckGet.mockResolvedValue(detail({}, [bolt({ gameChanger: true, quantity: 2 }), bear()]));
     await open();
-    await userEvent.click(await spotlightChip());
-    expect(spotlit()).not.toBeNull();
+    await userEvent.click(await gcChip());
+    expect(screen.queryByRole("button", { name: /^Bear/ })).not.toBeInTheDocument();
 
     // The last game changer leaves the deck. The name field is the cheapest write in this header
     // and every write re-reads the deck, which is what brings the new rows in.
     deckGet.mockResolvedValue(detail({}, [bear()]));
     await writeToDeck("Burn without it");
-    await waitFor(() => expect(screen.queryByText(/game changer/)).not.toBeInTheDocument());
-    expect(spotlit()).toBeNull();
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Game Changers" })).not.toBeInTheDocument(),
+    );
+    // The wall is not empty: the chip went, and the filter it was driving went with it.
+    expect(
+      within(group("Main deck")).getByRole("button", { name: /^Bear/ }),
+    ).toBeInTheDocument();
 
-    // …and comes back. Nothing cleared the latch, so this is the state the reader left.
+    // …and comes back. Nothing cleared the flag, so this is the state the reader left.
     deckGet.mockResolvedValue(detail({}, [bolt({ gameChanger: true, quantity: 2 }), bear()]));
     await writeToDeck("Burn again");
-    expect(await spotlightChip()).toHaveAttribute("aria-pressed", "true");
-    expect(spotlit()).not.toBeNull();
-  });
-
-  /** And a deck that has never had one arms nothing at all: no chip to press, and no attribute on
-   *  the box for a stylesheet to act on. */
-  it("arms nothing for a deck that plays no game changers", async () => {
-    await open();
-
-    expect(screen.queryByText(/game changer/)).not.toBeInTheDocument();
-    expect(spotlit()).toBeNull();
+    expect(await gcChip()).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByRole("button", { name: /^Bear/ })).not.toBeInTheDocument();
   });
 
   /**

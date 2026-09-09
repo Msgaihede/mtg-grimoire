@@ -1520,85 +1520,46 @@ price | type`). An **inactive category stays its own group in all three grouping
     scope. Read-only — changing it is a Deck settings trip — and it is the first thing to go at
     `TIGHT_HEADER_PX`, where the check button's own name still carries it. With no spec in hand it
     falls back to the deck row's `formatName`.
-- **The game-changer count on that line is a readout that is also a press — the _spotlight_**
-  (2026-09-08). The chip says how many; the deck laid out under it says nothing about **where**,
-  and on a hundred-card desk that is a hunt through four views' worth of crowns. Hovering the chip,
-  or the caret landing on it, fades every card in the deck that is **not** a game changer to
-  **25 %**; a click latches the same state so the reader can take their hand off the mouse and go
-  and look. It is the odd control on that line — the check and the bracket are slotted in whole
-  because each opens a layer `DeckLedger` owns nothing about, and this one opens nothing at all, so
-  it is drawn there. Everything below is a decision:
-  - **Two facts and a derivation, never a third `useState`.** `DeckEditor` holds `gcLatched` (the
-    press) and `gcHovered` (the pointer or the caret), and `gcSpotlight` is
-    `(gcLatched || gcHovered) && gameChangers > 0`, computed at render. A synced third state is the
-    derived-state pattern this repo's lint refuses — and refuses only at `npm run verify` — and it
-    would also make hover-while-latched a write that could release the latch when the pointer left.
-  - **`aria-pressed` carries the _latch_ and never the composite.** A latch is a toggle, which is
-    what that attribute describes and what a second press releases; a pointer resting on a control
-    is not a state the control is in, so the chip draws that for itself with a `hover:` /
-    `focus-visible:` variant. Three appearances and only one of them is a state: **off** is
-    `border-border text-dim`, **touched** paints the words gold and leaves the edge alone,
-    **latched** takes the edge too and adds a crown — the same mark the cards it lights up wear. So
-    hovering while latched changes nothing on screen, exactly as it changes nothing in the editor.
-  - **The reveal is on focus as well as hover, and that is not a courtesy** — `onFocus`/`onBlur`
-    are the same callback as `onMouseEnter`/`onMouseLeave`, because an affordance only a pointer
-    can arm is one a keyboard reader never gets. **Two named callbacks rather than one
-    `onSpotlight({ latched?, hovered? })`**: the object shape can spell `{}` and
-    `{ latched: true, hovered: false }`, neither of which is a gesture anybody made.
-  - **The accessible name carries the action, because a readout is not an affordance.**
-    `spotlightName` is `<count> — press to spotlight them in the deck` (and `… to stop …` when
-    latched), with the count first so the visible words stay a prefix of the name (WCAG 2.5.3) at
-    both widths — `tight` deletes the word from the *drawing* and never from the name. Same string
-    as the tooltip, `describes: false`, so the two readers cannot be told different things.
-  - **The fade is one CSS rule and never a re-render of the deck.** `src/index.css` carries
-    `[data-gc-spotlight] .deck-gc-dimmed:not([data-dnd-dragging]) { opacity: 0.25 }` plus a 150ms
-    `ease` transition on the class, with a `prefers-reduced-motion` arm setting `transition: none`
-    — reduced, the cards still dim, they simply arrive there. That arm is not optional: opacity is
-    a **non-positional** property, and `motion`'s `reducedMotion` only reduces positional keys.
-    **0.25 is a fade and never a hide** — the dimmed cards keep their layout, their legibility and
-    every hit target they had, because the question is *which of these* and the reader is still
-    building a deck out of the rest of them.
-  - **The card wears a class and the container wears an attribute, and both spellings are
-    deliberate.** `cardControl.tsx`'s `deckCardDimmed(gameChanger)` answers `GC_DIMMED`
-    (`deck-gc-dimmed`) for anything but `true` — **`null` dims**, as an orphan is not a game
-    changer — and `undefined` for a game changer, so a lit card's class list is byte-for-byte what
-    it was. It is a **class** rather than a `SELECTED_ATTR`-style attribute because every other
-    mark here is an attribute so that something can *find* a card after the fact (a test, a CDP
-    probe, the caret hand-back) and nothing ever asks this one; what settles it in practice is
-    `TableView`, which does not own its row element and reaches this through `VirtualTable`'s
-    existing `rowClassName` hook rather than making that shared primitive grow a prop for one
-    caller. And it marks the **dimmed** state rather than the lit one so the selector stays one
-    flat descendant compound: the inverse is `[data-gc-spotlight] *:not(.deck-gc-lit)`, a `:not()`
-    over a broad subject, which this repo has measured taking one jsdom play from 3.5 s to 15 s.
-  - **A card in the air is exempt, and it is the one collision worth guarding.** The drag rule
-    above it in `index.css` puts a dragged card at 0.75 so the reader can see what they are aiming
-    at, and dnd-kit stamps `data-dnd-dragging` on the source element **in place** — it becomes a
-    popover, and the top layer is a painting order rather than a change of ancestry — so a dimmed
-    card dragged under a latched spotlight still matches, and at (0,2,0) against the drag rule's
-    (0,1,0) it would win. `:not([data-dnd-dragging])` hands the card back for the length of the
-    gesture, and costs nothing because it qualifies a class rather than the broad subject above.
-  - **`deckSpotlightProps` goes on the box holding the four views and on nothing wider.** That box
-    is the `min-w-0 flex-1` + `DECK_HEIGHT_FLOOR` child; the docked search column is its **sibling**
-    in the desk row, so the tiles a reader is shopping through — most of which are game changers of
-    nothing — are outside the attribute by construction. The desk row would have been the wrong
-    ancestor for exactly that reason and the editor's root worse again. The attribute is absent
-    entirely when the spotlight is off, so a deck nobody is spotlighting grows nothing.
-  - **The `gameChangers > 0` gate is a fence against a latch outliving its own control.** The chip
-    is drawn only for a deck that has one, so it cannot be *pressed* on a deck with none — but the
-    latch is the editor's state and the count is a `useMemo` over the rows, so an edit that removes
-    the last game changer would take the chip away and leave a whole deck at a quarter with nothing
-    on screen to press. Gating the **derivation** rather than clearing the flag keeps that a read:
-    a reader who steps a card to zero and undoes it finds the spotlight where they left it.
-  - **The chip counts copies over the piles that count and the fade asks only about the card, so
-    the two can disagree by a switched-off pile.** `gameChangers` sums `quantity` where
-    `gameChanger === true && categoryActive` — the same "counts toward nothing" rule the rest of
-    this file keeps — while `deckCardDimmed` reads `card.gameChanger` alone, so a game changer
-    parked in a switched-off Maybeboard stays **lit** without being in the number above it. That is
-    the honest pair rather than a gap to close: the count is a claim about the deck the format will
-    judge, and the fade answers *is the card in front of me one of the powerful ones*, which is
-    true of a parked one — the same split `validateDeck` and `validateForMarks` already make. It
-    only ever shows up as a lit card the chip did not count; a deck whose game changers are **all**
-    parked reads `0`, draws no chip, and has no spotlight to be inconsistent with.
+- **The game-changer count on that line is a plain readout, and for one day it was a press** — the
+  _spotlight_, shipped 2026-09-08 and **deleted 2026-09-09**. The chip beside the bracket says how
+  many; the deck laid out under it says nothing about **where**, and on a hundred-card desk that is
+  a hunt through four views' worth of crowns — so hovering the count, or landing the caret on it,
+  or clicking to latch it, faded every card in the deck that was **not** a game changer to **25 %**
+  through one flat CSS rule (`[data-gc-spotlight] .deck-gc-dimmed`), with the class spread by all
+  four views out of `cardControl.tsx`.
+  **What withdrew it is what a real deck looks like under it, and the number was not the mistake.**
+  The fade landed on the **great majority** of the cards rather than on a few — six game changers in
+  a hundred-card Commander deck means ninety-odd faded cards, so what dimmed was the ground rather
+  than a mark on it. The deck's views **overlap** cards, so most of what a reader sees of a card is
+  other cards showing _through_ it, and every fade compounded with the ones drawn over it. And the
+  result at that scale was a single blur rather than a deck with a few cards standing out of it —
+  the reader's own words, _"the current preview is almost impossible to use, as the stacked
+  transparent cards give a blur effect."_ The 0.25 was chosen as **a fade and never a hide**, so
+  the dimmed cards would keep their legibility and every hit target they had; at deck scale they
+  kept neither, which is why no other opacity would have been the fix.
+  **The question moved to the toolbar's filter row, and that is the rule this leaves behind: in
+  this editor "which of these cards are X" is answered by _narrowing_ the deck, never by dimming
+  the rest of it.** A `Game Changers` chip sits in the label-filter row beside the deck's own
+  labels and behaves exactly as they do — press it and the deck is narrowed to the cards that
+  match, press it again and the deck comes back. Four things carry it:
+  - **It joins the label chips' OR and does not intersect them.** That row is **one question** —
+    _show me the cards that are any of these_ — so a reader with `Ramp` and `Game Changers` both
+    pressed gets their ramp **and** their game changers rather than the overlap. A chip that
+    narrowed what the chips beside it had already narrowed would be two kinds of question in one
+    group, with nothing on the row to say which chip is which.
+  - **It is drawn only for a deck that actually draws a game changer.** A chip that can only ever
+    narrow a deck to nothing is a control that reads as broken, and a deck with none has no
+    question for it to answer — the same argument that gates the count it stands in for.
+  - **On is `pie-gold` with a crown glyph, and never the accent.** Every other chip in that row is
+    the accent, which is what a label chip's pressed state means here; this one wears the gold the
+    crowns on the cards themselves wear, so the chip and the cards it leaves on screen are one fact
+    in one colour. `GameChangerMark`'s rule one layer down — gold survives where the mark is
+    unfilled — reached from the filter's end.
+  - **There is no hover preview and nothing is dimmed.** A card that survives the filter looks
+    exactly as it looks unfiltered: no class on any card, no attribute on any container, and
+    nothing for a drag to have to be exempted from. That absence is what the spotlight cost and is
+    the half worth keeping — a mark spread by four views to say _this card is not the one you asked
+    about_ is a mark all four have to get right, and a filter needs none of it.
 - **What is left in the band is what needs the room**: the pips, the shortfall and the press that
   acts on it, and the four charts. **The deck stats are a band at the foot of the editor, and there
   is no control that hides them** (changed 2026-08-14). They were a 280px aside on the desk row with a `Stats` toggle in
@@ -3227,12 +3188,13 @@ price | type`). An **inactive category stays its own group in all three grouping
   `VirtualTable`'s own quiet row colour, which all three of the app's tables share; what all four
   agree on is the **attribute**, `SELECTED_ATTR`/`LANDED_ATTR`, which is what `views.test.tsx`
   sweeps and what a CDP probe can ask. A class is a recipe and would go red for a change of taste.
-  **A third joined them on 2026-09-08 and is deliberately the exception to that last sentence** —
-  the game-changer spotlight's `GC_DIMMED`, spread by all four views out of the same module. It is
-  a **class** rather than an attribute because nothing ever asks the DOM which cards are dimmed:
-  the only reader is one rule in `src/index.css`, and `TableView` reaches it through
-  `VirtualTable`'s `rowClassName` rather than making a shared primitive grow a prop. The full rule,
-  the drag exemption and where the container is armed are in the ledger's spotlight bullet above.
+  **A third joined them on 2026-09-08 and was gone on 2026-09-09, so the sentence above stands
+  with no exception again** — the game-changer spotlight's `GC_DIMMED`, spread by all four views
+  out of the same module and deleted with the spotlight itself (the ledger bullet above has why).
+  It was a **class** rather than an attribute because nothing ever asked the DOM which cards were
+  dimmed: the only reader was one rule in `src/index.css`. So it is still **two**, and the rule to
+  keep is the one the exception was carved out of — a mark a view spreads on a card is an
+  attribute, because the reason to mark a card at all is that something will come looking for it.
 - **Picked is keyed by the _slot_, and that reversed the rule this file used to state**
   (2026-08-17). It was `cardId` alone, argued as "a pane is open on a _printing_, so a card filed
   in two piles is marked in both — which is the honest answer to which card the pane is about".

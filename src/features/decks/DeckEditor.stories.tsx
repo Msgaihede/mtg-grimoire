@@ -5,7 +5,6 @@ import { AllPrintingsDialog } from "@/features/card/AllPrintingsDialog";
 import { CardDetailModal } from "@/features/card/CardDetailModal";
 import { ipc } from "@/lib/ipc";
 import { openDropdown, pickOption } from "@/test-dropdown";
-import { GC_DIMMED, GC_SPOTLIGHT_ATTR } from "./cardControl";
 import { DeckEditor } from "./DeckEditor";
 
 /**
@@ -1284,58 +1283,60 @@ export const SwapFolds: Story = {
 };
 
 /**
- * **The game-changer spotlight, composed** — the one thing about that chip no story of
- * `DeckLedger` can show, because the chip reports two gestures and the deck it lights up is drawn
- * out here.
+ * **The `Game Changers` filter chip** — which is what answers *where are they* now that the
+ * ledger's count beside it is a plain readout again.
  *
- * `DeckEditor` holds `gcLatched` and `gcHovered`, derives
- * `(gcLatched || gcHovered) && gameChangers > 0`, and spreads `deckSpotlightProps` onto the box
- * that holds the four views — onto nothing wider, because the docked search column is that box's
- * **sibling** and its tiles are cards the reader is shopping for rather than cards in the deck.
- * Hover the chip, or Tab onto it, and every card that is not a game changer fades to a quarter; a
- * click latches the same state so the reader can take their hand off the mouse and go and look.
- * Deck 2's one game changer is Ancient Tomb, which is the fixture's own argument for the mark
- * existing at all — a land, with no mana cost to read it off.
+ * It replaced a **spotlight** on 2026-09-09: hovering or latching that count faded every card in
+ * the deck that was not a game changer to a quarter, and on a hundred-card deck the stacked
+ * quarter-opacity cards read as an unusable blur. This says the same thing by taking the other
+ * cards away, so a card that survives looks **exactly** as it looks unfiltered.
  *
- * **The play asserts the attribute and the class and never the opacity**, because
- * `src/stories.test.tsx` runs it under jsdom, which applies no stylesheet. The fade itself is the
- * live pass's; what is checkable here is that the right box is armed and that the cards under it
- * carry the mark the one rule in `src/index.css` looks for.
+ * The chip sits in the toolbar's label-filter row, drawn **first** and always in the same place:
+ * every other chip in that row is one of the reader's own label strings, so the row's contents
+ * move as labels come and go and the app's own chip must not move with them. It carries a crown
+ * whether or not it is pressed — the glyph is the chip's identity, and `aria-pressed` is what
+ * says whether the filter is on — in `text-pie-gold`, the gold the crowns on the cards themselves
+ * are drawn in.
+ *
+ * **Deck 2 is the "no labels at all" arm**, which is the half of the row's two-armed gate easiest
+ * to lose in a tidy: no card here wears a label, so the row exists for this chip alone. Its one
+ * game changer is Ancient Tomb, which is the fixture's own argument for the mark existing — a
+ * land, with no mana cost to read it off.
+ *
+ * **When both kinds of chip are pressed they `OR`**, which is the reader's own call: a game
+ * changer rarely wears a label, so an `AND` would empty the wall on the commonest pair of presses
+ * there is and read as the filter having broken. That pairing is `DeckEditor.test.tsx`'s to pin,
+ * because it needs a deck holding a labelled card, a game changer and a card that is neither —
+ * three rows arranged for the assertion rather than a deck anybody would build.
  */
-export const GameChangerSpotlight: Story = {
+export const GameChangerFilter: Story = {
   args: { deckId: 2 },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
+    const main = () => canvas.getByRole("region", { name: "Main deck" });
     await canvas.findByRole("region", { name: "Main deck" });
 
-    // Matched on the **action** half of the name: a card that is a game changer says so in its
-    // own accessible name, so `/game changer/` alone finds two buttons on this deck.
-    const chip = await canvas.findByRole("button", {
-      name: /press to (stop spotlighting|spotlight) them in the deck$/,
-    });
-    const armed = () => canvasElement.querySelector(`[${GC_SPOTLIGHT_ATTR}]`);
-
-    await expect(armed()).toBeNull();
-
-    await userEvent.hover(chip);
-    const box = armed();
-    await expect(box).not.toBeNull();
-    // The other half of the pair: the container is armed *and* the cards that are not game
-    // changers carry the class the rule reads. Ancient Tomb is the one card here that does not,
-    // so a wall of marked cards with one unmarked is the whole picture.
-    await expect((box as HTMLElement).querySelectorAll(`.${GC_DIMMED}`).length).toBeGreaterThan(0);
-    // Touched is not pressed — the chip paints the hover for itself with a `hover:` variant.
+    // Exact, never `/game changer/`: a card that *is* one says so in its own accessible name, so
+    // a loose pattern matches the cards as well as the control.
+    const chip = await canvas.findByRole("button", { name: "Game Changers" });
+    const row = chip.closest('[role="group"]') as HTMLElement;
+    await expect(row).toHaveAccessibleName("Filter by label or game changer");
+    // The chip alone: this deck wears no labels, so nothing else is in the row.
+    await expect(within(row).getAllByRole("button")).toHaveLength(1);
     await expect(chip).toHaveAttribute("aria-pressed", "false");
 
     await userEvent.click(chip);
     await expect(chip).toHaveAttribute("aria-pressed", "true");
-    await userEvent.unhover(chip);
-    // The latch outliving the pointer is the whole reason the press exists.
-    await expect(armed()).not.toBeNull();
+    await expect(
+      await within(main()).findByRole("button", { name: /^Ancient Tomb/ }),
+    ).toBeInTheDocument();
+    // Everything else is gone rather than faded, which is the whole of what changed.
+    await expect(within(main()).queryByRole("button", { name: /^Sol Ring/ })).toBeNull();
 
     await userEvent.click(chip);
     await expect(chip).toHaveAttribute("aria-pressed", "false");
-    await userEvent.unhover(chip);
-    await expect(armed()).toBeNull();
+    await expect(
+      await within(main()).findByRole("button", { name: /^Sol Ring/ }),
+    ).toBeInTheDocument();
   },
 };
