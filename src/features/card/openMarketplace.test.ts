@@ -66,32 +66,34 @@ describe("linkFinish", () => {
     expect(linkFinish("nonfoil", '["etched"]')).toBe("nonfoil");
   });
 
-  it("falls back to the printing's sole finish when the surface says nothing", () => {
+  it("takes a single-finish printing's own finish when the surface says nothing", () => {
     expect(linkFinish(null, '["foil"]')).toBe("foil");
     expect(linkFinish(undefined, '["etched"]')).toBe("etched");
-  });
-
-  it("answers `nonfoil` for a nonfoil-only printing, where `soleFinish` deliberately answers null", () => {
-    // The one row where this function and `@/lib/finish`'s `soleFinish` differ, and the divergence
-    // is the point: `soleFinish` says "draw no foil mark" about a plain card, which is honest for
-    // card art. Here the printing is sold in exactly one finish and TCGplayer has a word for it,
-    // so `Normal` is the right thing to assert rather than nothing.
     expect(linkFinish(null, '["nonfoil"]')).toBe("nonfoil");
   });
 
-  it("answers null for a printing sold in more than one finish with nothing said about it", () => {
-    // Which one the reader wants is genuinely unknown; the unfiltered page beats a guess.
-    expect(linkFinish(null, '["nonfoil","foil"]')).toBe(null);
-    expect(linkFinish(undefined, '["nonfoil","foil","etched"]')).toBe(null);
+  it("takes the most ordinary finish a multi-finish printing is sold in", () => {
+    // **The rule is never a flat `nonfoil` default**, and this is the assertion that says so: the
+    // floor is the plainest finish the printing *actually lists*, so a printing that is not sold
+    // plain never asks TCGplayer for a `Normal` listing it has none of.
+    expect(linkFinish(null, '["nonfoil","foil"]')).toBe("nonfoil");
+    expect(linkFinish(undefined, '["nonfoil","foil","etched"]')).toBe("nonfoil");
+    // Not sold plain at all — 12 366 paper printings are foil-only and 892 etched-only.
+    expect(linkFinish(null, '["foil","etched"]')).toBe("foil");
+    expect(linkFinish(null, '["etched"]')).toBe("etched");
+    // Order in the column must not decide it: the preference is nonfoil → foil → etched whatever
+    // order Scryfall wrote them in, so a reversed list answers the same.
+    expect(linkFinish(null, '["etched","foil","nonfoil"]')).toBe("nonfoil");
   });
 
-  it("answers null for a finishes column that says nothing at all", () => {
+  it("answers `nonfoil` for a finishes column that says nothing at all", () => {
     // `parseFinishes` drops what it cannot read rather than guessing, so a null column, a broken
-    // blob and an empty list all arrive here as "no printing statement".
-    expect(linkFinish(null, null)).toBe(null);
-    expect(linkFinish(null, "not json")).toBe(null);
-    expect(linkFinish(null, "[]")).toBe(null);
-    // An unknown word is dropped too, which leaves one recognised finish and therefore an answer.
+    // blob and an empty list all arrive with nothing listed — and the plain card is the ordinary
+    // case to assume. There is no longer an "assert nothing" answer to fall to.
+    expect(linkFinish(null, null)).toBe("nonfoil");
+    expect(linkFinish(null, "not json")).toBe("nonfoil");
+    expect(linkFinish(null, "[]")).toBe("nonfoil");
+    // An unknown word is dropped, leaving the one recognised finish to answer.
     expect(linkFinish(null, '["glossy","foil"]')).toBe("foil");
   });
 });
@@ -106,12 +108,13 @@ describe("chooseTcgplayerLink", () => {
     });
   });
 
-  it("opens the ordinary product with no printing for etched when there is no etched id", () => {
-    // The closest page for the card, but the etched copy is not sold under it, so naming a
-    // printing would be a guess about a row that is not the one asked for.
+  it("opens the ordinary product at Foil for etched when there is no etched id", () => {
+    // The closest page for the card, and `Foil` is the closer of the two words: an etched card is
+    // a premium foil treatment and never a plain one. This answered `printing: null` until
+    // 2026-09-09, when the rule became that a link always names the version being looked at.
     expect(chooseTcgplayerLink(ids(1174, null), "etched")).toEqual({
       productId: 1174,
-      printing: null,
+      printing: "Foil",
     });
   });
 
@@ -135,25 +138,30 @@ describe("chooseTcgplayerLink", () => {
     });
   });
 
-  it("opens the etched product with no printing for a nonfoil that has only that id", () => {
-    // An etched product has no `Normal` row, so this appends nothing rather than asking for one.
+  it("follows the product rather than the finish for a nonfoil that has only an etched id", () => {
+    // **The printing follows the id, and this is the row that proves it.** An etched product has
+    // no `Normal` listing, so asking for one would filter the page down to nothing — worse than
+    // either alternative. `linkFinish` makes this nearly unreachable in the app anyway, since such
+    // a printing lists `etched` and would never default to `nonfoil`.
     expect(chooseTcgplayerLink(ids(null, 484936), "nonfoil")).toEqual({
       productId: 484936,
-      printing: null,
+      printing: "Foil",
     });
   });
 
-  it("asserts no printing at all when the finish is unknown", () => {
-    // Neither the reader nor the printing named one, so the page opens unfiltered — which the
-    // bare URL was measured to be: neither checkbox checked, every listing shown.
-    expect(chooseTcgplayerLink(ids(1174, 484936), null)).toEqual({
-      productId: 1174,
-      printing: null,
-    });
-    expect(chooseTcgplayerLink(ids(null, 484936), null)).toEqual({
-      productId: 484936,
-      printing: null,
-    });
+  it("never answers a link without a printing, for any finish or id shape", () => {
+    // The rule from 2026-09-09 in one assertion: a link always names the version being looked at,
+    // so there is no shape of input that produces an unfiltered product page. A `null` printing
+    // here would be the state the type no longer admits — swept rather than spot-checked, so a
+    // future row cannot quietly reintroduce one.
+    const shapes = [ids(1174, 484936), ids(1174, null), ids(null, 484936)];
+    for (const shape of shapes) {
+      for (const finish of ["nonfoil", "foil", "etched"] as const) {
+        const link = chooseTcgplayerLink(shape, finish);
+        expect(link).not.toBeNull();
+        expect(["Normal", "Foil"]).toContain(link?.printing);
+      }
+    }
   });
 
   it("answers null when there is no id to open, for every finish", () => {
@@ -162,7 +170,6 @@ describe("chooseTcgplayerLink", () => {
     expect(chooseTcgplayerLink(ids(null, null), "nonfoil")).toBe(null);
     expect(chooseTcgplayerLink(ids(null, null), "foil")).toBe(null);
     expect(chooseTcgplayerLink(ids(null, null), "etched")).toBe(null);
-    expect(chooseTcgplayerLink(ids(null, null), null)).toBe(null);
   });
 });
 
@@ -192,7 +199,7 @@ describe("openMarketplaceForCard", () => {
     );
   });
 
-  it("opens the printing's sole finish when the surface named none", async () => {
+  it("opens the finish the printing itself names when the surface named none", async () => {
     cardTcgplayerIds.mockResolvedValue(ids(1174, null));
     await openMarketplaceForCard({ ...BOLT, finish: null, finishes: '["nonfoil"]' });
     expect(vi.mocked(openExternal)).toHaveBeenCalledExactlyOnceWith(
@@ -214,13 +221,31 @@ describe("openMarketplaceForCard", () => {
     );
   });
 
-  it("appends nothing when the id chosen cannot be sold in the finish asked for", async () => {
+  it("names the nearer printing when the id chosen is not the finish's own product", async () => {
     // The governing rule, end to end: an etched copy on a printing with no etched id lands on the
-    // ordinary product, unfiltered.
+    // ordinary product and still asks for `Foil`, the closer of the two words. This asserted an
+    // unfiltered URL until 2026-09-09.
     cardTcgplayerIds.mockResolvedValue(ids(1174, null));
     await openMarketplaceForCard({ ...BOLT, finish: "etched", finishes: '["nonfoil","etched"]' });
     expect(vi.mocked(openExternal)).toHaveBeenCalledExactlyOnceWith(
-      "https://www.tcgplayer.com/product/1174",
+      "https://www.tcgplayer.com/product/1174?Printing=Foil",
+    );
+  });
+
+  it("names a printing even when neither the surface nor a single finish decides it", async () => {
+    // **The case the reader actually reported** (2026-09-09): a card opened from the search wall,
+    // which names no finish, on a printing sold in three. It used to open unfiltered — 8 listings
+    // across both finishes — and now opens the plain card, which is the version on screen.
+    cardTcgplayerIds.mockResolvedValue(ids(235270, 235269));
+    await openMarketplaceForCard({
+      marketplace: MARKETPLACES.tcgplayer,
+      cardId: "weather-sta-58",
+      cardName: "Weather the Storm",
+      finish: null,
+      finishes: '["nonfoil","foil","etched"]',
+    });
+    expect(vi.mocked(openExternal)).toHaveBeenCalledExactlyOnceWith(
+      "https://www.tcgplayer.com/product/235270?Printing=Normal",
     );
   });
 

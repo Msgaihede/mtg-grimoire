@@ -51,9 +51,13 @@ describe("scryfallCardUrl", () => {
 });
 
 describe("tcgplayerProductUrl", () => {
-  it("builds the product page for an id", () => {
+  it("builds the product page for an id, always naming a printing", () => {
     // Lightning Bolt (LEA) is `tcgplayer_id: 1174` and this URL answered 200 live on 2026-09-09.
-    expect(tcgplayerProductUrl(1174, null)).toBe("https://www.tcgplayer.com/product/1174");
+    // **There is no unfiltered form**: `printing` is required as of 2026-09-09, because a link
+    // exists to land on the version the reader is looking at and the bare page mixes both finishes.
+    expect(tcgplayerProductUrl(1174, "Normal")).toBe(
+      "https://www.tcgplayer.com/product/1174?Printing=Normal",
+    );
   });
 
   it("appends TCGplayer's own `Printing` parameter when a printing is given", () => {
@@ -72,14 +76,14 @@ describe("tcgplayerProductUrl", () => {
     );
   });
 
-  it("appends nothing at all for a null printing, rather than an empty parameter", () => {
-    // `null` is a third state and not a missing default: it means "let TCGplayer's own default row
-    // stand", which is what `chooseTcgplayerLink` asks for whenever the product it picked cannot
-    // honestly be claimed to be sold in a finish. A `?Printing=` with nothing after it would be a
-    // parameter naming no row.
-    const url = tcgplayerProductUrl(484936, null);
-    expect(url).toBe("https://www.tcgplayer.com/product/484936");
-    expect(url).not.toContain("?");
+  it("sends exactly one parameter, leaving TCGplayer's own to TCGplayer", () => {
+    // Every URL driven in a browser on 2026-09-09 came back normalised to
+    // `?Printing=…&Language=English` — the site appends `Language` itself — so this builder must
+    // not send a second parameter of its own, and the `?` must be the only one in the string.
+    const url = tcgplayerProductUrl(484936, "Foil");
+    expect(url).toBe("https://www.tcgplayer.com/product/484936?Printing=Foil");
+    expect(url.split("?")).toHaveLength(2);
+    expect(url).not.toContain("&");
   });
 });
 
