@@ -171,17 +171,25 @@ preferred_finish`'s nullability one table over.
   version, not the smaller one: an _active_ Maybeboard was then inside the format's card pool
   and inside the binder's reservations but outside the size, so a second Sol Ring in it raised
   a singleton error under a figure that still read 100.
-- **A plan holds nothing, so `attribute_owned` zeroes every `theory` row** — and the test
-  `variant != LIVE` is now true *by construction* rather than because a table lacked a column,
-  which is worth saying plainly because it reads like a leftover. It used to be a fence around
-  `deck_allocations` carrying no variant: a `theory` read walked the *live* deck's stored claims,
-  and without the filter a plan was handed the copies the sleeved deck had reserved. A **group is
-  not scoped to a variant either**, so `owned_by_printing` still answers the whole deck's copies;
-  what changed is that the map is a fact about where cards *are* rather than a ledger of what was
-  reserved. The conclusion is the same one, still drawn explicitly here rather than left to a
-  table's shape, and still pinned by `the_allocator_claims_nothing_for_the_theory_variant`. The
-  same fact is why `collection_alloc::deck_to_collection` refuses a theory row outright
-  (`THEORY_HOLDS_NOTHING`) instead of moving zero copies and reporting success.
+- **A plan holds no _cardboard_, and since 2026-09-09 that is the whole of what it means.**
+  Nothing is filed into a theory list and nothing can be moved out of one: no
+  `collection_entries` row ever sits behind a theory row, `collection_alloc::deck_to_collection`
+  refuses one outright (`THEORY_HOLDS_NOTHING`) instead of moving zero copies and reporting
+  success, and the theory list's write presses are refused or absent. What a plan's rows may now
+  do is **count** — the copies the reader could put behind them, out of a pool of their own. The
+  *Owned is where the copies sit* bullet below carries the two pools and the measurement;
+  `deck::get_deck` is the one line that picks between them, and `attribute_owned` no longer
+  mentions the variant at all.
+  - **Through 2026-09-08 `attribute_owned` zeroed every `theory` row**, and the test
+    `variant != LIVE` was true *by construction* rather than because a table lacked a column.
+    It began as a fence around `deck_allocations` carrying no variant: a `theory` read walked the
+    *live* deck's stored claims, and without the filter a plan was handed the copies the sleeved
+    deck had reserved. Schema v25 deleted the ledger and the fence outlived it, because a **group
+    is not scoped to a variant either** — `owned_by_printing` answers the whole deck's copies
+    whichever list is open, so a plan would have read as covered by the cardboard it is not the
+    plan for. That reason was real and is answered rather than dropped: the plan gets a
+    *different map*, not the live one. `the_allocator_claims_nothing_for_the_theory_variant` was
+    the test that pinned the old rule.
 - **Switching the theory list on _moves_ the live deck into it. It does not copy it.** The deck
   the reader has built **is the plan**, so it becomes the theory list — and `live`, what is
   actually sleeved up, **starts empty** and fills as they acquire the cards. The guard is the one
@@ -410,22 +418,80 @@ preferred_finish`'s nullability one table over.
   stating on its own rather than filing as an optimisation: an orphaned `collection_entries`
   row — one whose `card_id` is no longer in `cards` — used to have no oracle id to group by and
   read owned `0`; at the printing grain there is nothing to look up, the deck row and the
-  collection row name the same `card_id`, and the copy counts. Two kinds of row are passed over
-  rather than served last, unchanged in shape from the allocator's day even though the reason for
-  each has now moved twice — a row in an **inactive** category (a switched-off pile counts toward
-  nothing anywhere, so letting it take from the pool would move copies onto a scratchpad) and a
-  row in the **theory** list (a plan reserves nothing).
+  collection row name the same `card_id`, and the copy counts. **One kind of row is passed over
+  rather than served last** — a row in an **inactive** category, because a switched-off pile
+  counts toward nothing anywhere and letting it take from the pool would move copies onto a
+  scratchpad. There were two until 2026-09-09; the second was the whole theory list, and the next
+  paragraph is what replaced it.
 
-  **The cost is honest and worth stating: owned/missing is now exactly as accurate as the
-  reader's filing.** The allocator guessed for them — it swept every collection row a deck's
-  oracle ids matched and reserved greedily, so a card in the binder counted as "in the deck"
-  whether or not the reader had ever sleeved it up. Now a copy counts for a deck when it is
-  *in that deck's group*, and a reader who has not filed their cards sees a deck full of red.
+  **Since 2026-09-09 there are two pools, and `variant` picks between them**
+  ([issue #435](https://github.com/Msgaihede/mtg-grimoire/issues/435)). The reporter's deck was a
+  theory-and-actual one with a 100-card plan and 62 of that plan's cards sitting in the deck's own
+  box; the Theory tab read **100 of 100 missing**. It now reads **38 of 100 missing**. The old
+  answer was not a rounding error — the plan was told the reader owned *nothing*, on a deck most
+  of which was already bought and filed.
+
+  - **A `live` row is attributed from `deck::owned_by_printing`** — the statement above, the
+    deck's own group and nothing else. Unchanged. What is sleeved up is answered by the cardboard
+    in the box with the deck's name on it, and a copy in the binder is not in the deck.
+  - **A `theory` row is attributed from `deck::available_by_printing`** — every copy the reader
+    owns that this deck *could* use: `e.folder_id IS NULL` (the root), **or** filed in this deck's
+    own group, **or** anywhere else that is neither another deck's group (`kind <> 'deck'`) nor
+    effectively locked (`collection_folders::LOCKED_FOLDER_IDS`). `Recently removed` is a `kind`
+    of its own and therefore still counts, exactly as it does in `Allocation::Unallocated`.
+
+  That second pool is not a new statement. It is
+  `collection_source::Availability::ForDeck(deck_id)` — the scope the deck builder's card search
+  has counted by since [issue #349](https://github.com/Msgaihede/mtg-grimoire/issues/349) — spelled
+  once and given a second reader, through a new whole-statement builder
+  `collection_source::copies_by_printing_and_finish` grouped by `(card_id, finish)`. **Reused
+  rather than restated on purpose**: a plan's owned figure and the `×N` badge in the search panel
+  beside it are two numbers about one card, and a second copy of the arms is how they would come
+  to disagree.
+
+  **Both maps are keyed `(card_id, finish)` and `attribute_owned` hands either one out the same
+  way** — the read's order, `min(remaining, quantity)`, a scarce pool. The function no longer
+  mentions the variant at all; `get_deck` chose the map before it was called.
+
+  **The ruling, 2026-09-09:** a plan counts from **available copies AND the deck's own cards**; an
+  actual deck goes on counting only its own box. The asymmetry is the point rather than an
+  inconsistency — *what am I still short of* and *what is in this box* are two questions, and the
+  Theory tab is only ever asking the first.
+
+  ⚠️ **`deck_theory::OWNED_SPARE_SQL` deliberately did not follow, and "fixing" it to match is
+  the trap this paragraph exists for.** The shopping list is a *different* question and already
+  nets the live list out: `theory_diff` computes `short = wanted − held`, where `held` is what the
+  live list holds. Fold this deck's own group into `owned_spare` on top of that and the live list
+  is counted twice — the exact double count `deck_theory.rs`'s module header and
+  `missing_to_wishlist`'s doc both warn about at length, and the reason `missing_to_wishlist`
+  subtracts nothing. Two surfaces, two questions: **the diff compares the plan against the _list_
+  that is sleeved; the owned figure compares it against the _cardboard_ the reader can reach.** A
+  reader looking at both sees a row that is short 2 on the shopping list and owned 2 of 4 in the
+  editor, and neither number is wrong.
+
+  **Nothing on the write side moved with it**, and each absence is deliberate:
+  `deck_pull`, `deck_missing` and `deck::missing_to_wishlist` all still read `live` only;
+  `collection_alloc::THEORY_HOLDS_NOTHING` still refuses to give a plan's copies back, because
+  there are none to give; every write press that would file cardboard against a theory row is
+  still refused or absent. Counting changed; writing did not. On the near side, `deckCardShort` still excludes `theory`,
+  so a plan draws **no** per-card red `N/M` mark — which since 2026-09-09 is a decision of the
+  repo owner's rather than a consequence of the zeroing it used to be
+  ([issue #354](https://github.com/Msgaihede/mtg-grimoire/issues/354) is that history).
+
+  **The cost is honest and worth stating: a `live` list's owned/missing is now exactly as
+  accurate as the reader's filing.** The allocator guessed for them — it swept every collection
+  row a deck's oracle ids matched and reserved greedily, so a card in the binder counted as "in
+  the deck" whether or not the reader had ever sleeved it up. Now a copy counts for a deck when it
+  is *in that deck's group*, and a reader who has not filed their cards sees a deck full of red.
   That is the trade the release makes: a number that is wrong in a way nobody can see, exchanged
   for a number that is exactly the reader's own filing and can be corrected by dragging. **And
   since 2026-09-07 "the reader's own filing" is read down to the exact printing and finish
   too**: a deck listing the Alpha Bolt with only an M10 copy on the shelf reads as missing until
-  the reader drags the right printing in or presses *Use this printing*.
+  the reader drags the right printing in or presses *Use this printing*. **The theory list pays
+  that cost and its filing consequence is different, which is the pool split's whole point**: a
+  plan is not something the reader has filed anywhere, so demanding they file it before it could
+  count was demanding a thing the app never asked them to do. Its rows are still read down to the
+  exact printing and finish, so an M10 copy still does not answer an Alpha line there either.
 
   Three failure modes went with the allocator, and each was real:
 
@@ -506,8 +572,10 @@ preferred_finish`'s nullability one table over.
   all*, never which copies count toward it, and until 2026-09-07 it was `release_group_copies`'s
   own oracle-grain fallback rule reused rather than re-spelled. That rule left
   `release_group_copies` the day the exact-grain change made it a bug there (above), so
-  PLAYED_KEY is the rule's only home now. **Live only**: a plan holds no cards, so a theory-only
-  listing refuses. **And a *virtual* deck is refused ahead of the card question entirely**
+  PLAYED_KEY is the rule's only home now. **Live only**: a plan holds no *cardboard* — nothing is
+  filed into it and nothing can come out of it — so a theory-only listing refuses. That much is
+  untouched by 2026-09-09's pool split, which changed what a plan may **count** and not what it
+  may hold. **And a *virtual* deck is refused ahead of the card question entirely**
   (`deck::VIRTUAL_HOLDS_NOTHING`, schema v40) — there is no binder these copies could come out of
   and no shelf for them to go on to, so every fence below would be answering a question that
   cannot arise. See [the deck-kind section](#the-third-deck-kind-a-deck-with-no-cardboard-behind-it).
@@ -575,10 +643,18 @@ preferred_finish`'s nullability one table over.
 
   - **The asking deck's own group is the whole difference from `deck_theory::OWNED_SPARE_SQL`**,
     which drops every deck group including its own. Both statements mean *what can be counted on*
-    and they disagree about one arm because they are asked from different chairs: a plan cannot
-    count on the sleeved deck's cards, and the deck builder's search can, because they are that
-    deck's. Folding the two into one helper would take a flag saying which — the same two
-    functions with the difference hidden.
+    and they disagree about one arm because they are asked from different chairs: the shopping
+    list has already netted the sleeved deck out (`short = wanted − held`) and would count it
+    twice if it counted the group as spare on top, while the deck builder's search has netted
+    nothing out and those copies are that deck's. Folding the two into one helper would take a
+    flag saying which — the same two functions with the difference hidden.
+  - **`Availability::ForDeck` grew a second reader on 2026-09-09 and the wire field did not**
+    ([issue #435](https://github.com/Msgaihede/mtg-grimoire/issues/435)). `available_for_deck` is
+    still `DeckSearchPanel`'s alone; the scope it resolves to is now also what a `theory` row's
+    owned figure is attributed from, through
+    `collection_source::copies_by_printing_and_finish` and `deck::available_by_printing`. Two
+    surfaces, one pool, deliberately — the `2/4` in the row and the `×2` on the tile beside it
+    are two numbers about one card, and a second copy of the three arms is how they would drift.
   - **The `owned` filter takes the same scope, and had to.** Narrowing the count while leaving the
     Owned/Missing chip alone would put a card under Owned wearing `×0`, which is the one refusal a
     reader cannot act on. `the_owned_filter_follows_the_same_scope_as_the_badge` is the pin.
@@ -1230,8 +1306,8 @@ variant)`; `deck_missing_to_wishlist(deckId, folderId?)`, which reads `live` and
   replaced it may name none of them, so the choice was between copies sitting in a holding area
   the reader can see and copies filed under a deck that has no row for them, which since v25 means
   invisible on the Collection page and unavailable to every other deck. **`theory` releases
-  nothing**, because a plan holds no cards; the fence is inside the helper, so the `replace` arm
-  does not ask. **A _virtual_ deck's `live` list releases nothing either, and that fence is
+  nothing**, because a plan holds no cardboard to release; the fence is inside the helper, so the
+  `replace` arm does not ask. **A _virtual_ deck's `live` list releases nothing either, and that fence is
   inside the helper too** (schema v40) — one layer further down, in `release_group_copies`, whose
   first rule is that a deck with no group holds nothing. So an import over a virtual deck's list
   walks an empty set and needs no arm here; it is the same absence that lets `deck_clear` and
@@ -1834,6 +1910,16 @@ owned figure is `0` with no new arm anywhere** — not in `attribute_owned`, not
 `live_shortfall`, not in any of the four views. The alternative was an empty group nothing may
 write to, and it lost for the reason a sentinel row always loses: it is a thing every future
 reader has to be told is special, where an absence is a thing they cannot use by accident.
+
+**2026-09-09's pool split does not reach a virtual deck, and the reason is the kinds being a
+pair rather than an enum.** `deck::available_by_printing` — the wider pool a `theory` row is now
+attributed from — does not join the deck's group at all, so it would answer a real number for a
+deck that has none. It never gets the chance: `1/1` names no kind, so a virtual deck's
+`theory_enabled` is `0`, and `deck_kind` clears it in the same patch that sets `virtual_only`.
+Rows already in `theory` survive that patch and `last_variant` may still say `theory`, but the
+editor asks for `live` on a deck that keeps no plan, so `deck_get(id, "theory")` is never sent
+for one. **A virtual deck's rows are `live` rows** — the same sentence that keeps `card_count`
+and the colour bar honest — and `live` rows are attributed from the group that is not there.
 
 **The same absence is what makes the bulk removals work unchanged.**
 `deck::release_group_copies`' first rule is that a deck with no group holds nothing and answers

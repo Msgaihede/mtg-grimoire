@@ -47,10 +47,17 @@ use std::sync::Arc;
 
 /// The variant this module means when it says "the deck": what is actually sleeved up.
 ///
-/// [`DeckRow::card_count`], [`attribute_owned`] and [`missing_to_wishlist`] all read it and
-/// nothing else. A theory list is a plan — it is counted on no tile, it is handed none of the
-/// copies the deck holds, and it puts nothing on a shopping list, because a plan is not a deck
-/// the user has.
+/// [`DeckRow::card_count`], [`get_deck`] and [`missing_to_wishlist`] all read it. A theory list
+/// is a plan — it is counted on no tile and it puts nothing on a shopping list, because a plan is
+/// not a deck the user has.
+///
+/// **[`attribute_owned`] left that list on 2026-09-09** and is worth naming as a departure rather
+/// than a deletion ([#435](https://github.com/Msgaihede/mtg-grimoire/issues/435)). It read this
+/// constant to zero every theory row; the question it was answering — *which copies may this row
+/// count* — is now answered one level up, by [`get_deck`] choosing between
+/// [`owned_by_printing`] and [`available_by_printing`]. A plan is still handed none of the
+/// **cardboard** the deck holds, in the sense that nothing is filed into it and nothing can be
+/// moved out of it; what it may now do is count what the reader could put behind it.
 /// `DECK_VARIANTS[0]` by index rather than by spelling, so the two cannot drift.
 const LIVE: &str = crate::schema::DECK_VARIANTS[0];
 
@@ -4663,6 +4670,15 @@ fn deck_card_select(marketplace: crate::sorting::Marketplace) -> String {
 /// **`marketplace` scopes every price in the answer, the categories' totals included**, for the
 /// same reason `variant` scopes every count: a column header priced on Cardmarket over rows
 /// priced on TCGplayer is a screen whose two halves disagree.
+///
+/// **It scopes the *pool* the owned numbers come out of too, and that is the one thing `variant`
+/// decides here that is not simply "which rows"** (2026-09-09,
+/// [#435](https://github.com/Msgaihede/mtg-grimoire/issues/435)). A `live` read is attributed
+/// from [`owned_by_printing`] — the copies filed in this deck's own group, the cardboard in the
+/// box. A `theory` read is attributed from [`available_by_printing`] — every copy the reader
+/// could *put* in that box, this deck's group included. Two questions, and the plan's is the
+/// wider one because a plan is not sleeved: what it is short of is what the reader has not got,
+/// not what they have not filed yet.
 pub fn get_deck(
     conn: &Connection,
     id: i64,
@@ -4675,7 +4691,15 @@ pub fn get_deck(
     };
     let mut cards = read_deck_cards(conn, id, variant, marketplace)?;
     fill_unknown_power_toughness(conn, &mut cards)?;
-    attribute_owned(&mut cards, &owned_by_printing(conn, id)?);
+    // **The variant picks the pool, and this line is the whole of that decision** (2026-09-09).
+    // A live row is answered by the cardboard in the deck's own box; a theory row is answered by
+    // every copy the reader could *put* in that box. See [`available_by_printing`].
+    let pool = if variant == LIVE {
+        owned_by_printing(conn, id)?
+    } else {
+        available_by_printing(conn, id)?
+    };
+    attribute_owned(&mut cards, &pool);
     let categories = crate::deck_meta::list_categories(conn, id, variant, marketplace)?;
     let labels = crate::deck_meta::list_labels(conn, id, variant)?;
     Ok(Some(DeckDetail {
@@ -4872,7 +4896,9 @@ fn printed_power_toughness(json: &str) -> (Option<String>, Option<String>) {
     (pick("power"), pick("toughness"))
 }
 
-/// Copies this deck **holds**, per printing **and finish**.
+/// Copies this deck **holds**, per printing **and finish** — the pool a `live` read is
+/// attributed from, and since 2026-09-09 only a `live` read ([`available_by_printing`] is the
+/// plan's, and it is wider).
 ///
 /// Since schema v25 this is a question about where a collection row physically sits: a deck's
 /// group is one `collection_folders` row with `kind = 'deck'` and `deck_id` set, and every
@@ -4918,6 +4944,65 @@ fn owned_by_printing(
         .map_err(|e| e.to_string())
 }
 
+/// Copies this deck **could hold**, per printing and finish — the pool a `theory` read is
+/// attributed from.
+///
+/// **[`owned_by_printing`]'s question asked one shelf wider, and the width is the whole of it**
+/// (2026-09-09, [#435](https://github.com/Msgaihede/mtg-grimoire/issues/435)). That one answers
+/// *what is in this deck's box*, which is the honest reading of a **live** row: a card is in the
+/// deck when the cardboard is in the deck. A **theory** row is not sleeved and never was, so the
+/// same question asked of a plan reads as a shortage the reader does not have — a Sol Ring loose
+/// in the binder is not a Sol Ring the plan is missing, it is one they have not filed yet.
+///
+/// So the plan counts **the deck's own group *and* every copy that is free to be moved into
+/// it**: the collection root, the reader's own binders, `Recently removed` — everything but
+/// another deck's group and a drawer the reader has set aside. That is
+/// [`crate::collection_source::Availability::ForDeck`] exactly, and it is *reused* rather than
+/// restated: the deck builder's card search has drawn its owned badge from the same scope since
+/// [#349](https://github.com/Msgaihede/mtg-grimoire/issues/349), so a badge in the search panel
+/// and the number on the row it adds cannot come to disagree about what this deck can use. The
+/// folder rules — the root's own arm, the `kind <> 'deck'` term, the **effective** lock — live
+/// in that one function and are spelled nowhere here.
+///
+/// **What it does *not* reach is the shopping list, and that asymmetry is deliberate.**
+/// [`crate::deck_theory::OWNED_SPARE_SQL`] excludes every deck group *including this one*,
+/// because [`crate::deck_theory::theory_diff`] has already subtracted the live list from each
+/// line — folding this deck's own copies into `owned_spare` would count them twice, which is the
+/// arithmetic that module's own doc exists to forbid. The diff compares the plan against the
+/// **list** that is sleeved; this compares the plan against the **cardboard** the reader can
+/// reach. Two questions, and neither is derivable from the other.
+///
+/// **Before this the answer was a flat 0** — `attribute_owned` zeroed every theory row — so a
+/// hundred-card plan with sixty-two of its cards already in the box read *100 of 100 missing*.
+/// It reads *38 of 100* now.
+///
+/// Grouped by `(card_id, finish)` and orphan-tolerant for [`owned_by_printing`]'s reasons, which
+/// are unchanged: a foil row wants a foil copy, and a printing that has left `cards` is still a
+/// `card_id` on both sides of the match.
+fn available_by_printing(
+    conn: &Connection,
+    deck_id: i64,
+) -> Result<HashMap<(String, String), i64>, String> {
+    let sql = crate::collection_source::copies_by_printing_and_finish(
+        conn,
+        crate::collection_source::Availability::ForDeck(deck_id),
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    // No `params!`: `ForDeck` interpolates the deck id into the fragment itself — it is an `i64`,
+    // so there is no text in it to escape, and a `?` buried inside a scope's SQL is one the next
+    // caller to push a parameter positionally could not see. `collection_source`'s own note.
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                (r.get::<_, String>(0)?, r.get::<_, String>(1)?),
+                r.get::<_, i64>(2)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<rusqlite::Result<HashMap<_, _>>>()
+        .map_err(|e| e.to_string())
+}
+
 /// Hand the held copies out to the rows that wanted them.
 ///
 /// Pure, and deliberately so: this is the one piece of the availability story with no SQL in
@@ -4927,38 +5012,36 @@ fn owned_by_printing(
 /// shows must not depend on how it was displayed. `get_deck` is the only caller and hands the
 /// rows straight over.
 ///
-/// **Two kinds of row are passed over rather than served last**, and the shape is unchanged
-/// from the allocator's day even though the reason for each has moved. A row in an **inactive**
-/// category: a switched-off pile counts toward nothing anywhere in the app, so letting it take
-/// from the pool would move copies off the rows that *are* the deck onto a scratchpad. And a
-/// row in the **theory** list, which is the subtler one: a plan reserves nothing, so a theory
-/// read must not hand it the copies the sleeved deck is holding.
+/// **One kind of row is passed over rather than served last**: a row in an **inactive**
+/// category. A switched-off pile counts toward nothing anywhere in the app, so letting it take
+/// from the pool would move copies off the rows that *are* the deck onto a scratchpad. It zeroes
+/// the row rather than taking from the pool — the copies stay in `left` for the rows that count.
 ///
-/// **The `variant != LIVE` test is now true by construction rather than because the table
-/// lacked a variant column**, and that is worth saying plainly because it reads like a leftover.
-/// It used to be a fence around `deck_allocations` carrying no variant — a theory read walked
-/// the *live* deck's claims and would otherwise have handed a plan somebody else's copies. A
-/// group is not scoped to a variant either, so the map [`owned_by_printing`] answers is still the
-/// whole deck's; what has changed is that the map is now a fact about where cards *are* rather
-/// than a ledger of what was reserved. The conclusion is the same one and is still drawn here,
-/// explicitly, rather than left to a table's shape — pinned by
-/// `the_allocator_claims_nothing_for_the_theory_variant`.
+/// **There were two until 2026-09-09, and the second was the whole theory list**
+/// ([#435](https://github.com/Msgaihede/mtg-grimoire/issues/435)). `variant != LIVE` zeroed every
+/// row of a plan, which put *100 of 100 missing* under a deck whose cards were mostly sitting in
+/// its own box. The reason it was there was real and has been answered rather than dropped: a
+/// theory read must not be handed *the live deck's* pool, because a group is not scoped to a
+/// variant and a plan would then have read as covered by cardboard it is not the plan for. What
+/// [`get_deck`] does now is hand it **a different pool** — [`available_by_printing`], the copies
+/// this deck could put behind those rows — so the conclusion is drawn by the choice of map
+/// rather than by a branch in this walk. `a_plan_counts_the_copies_it_could_be_built_from` and
+/// `a_plan_does_not_count_another_deck_s_copies` are the pins.
+///
+/// This function is therefore **variant-blind on purpose**, and that is the property to preserve:
+/// it is handed a pool and a list and does one thing to them, so the two readings of "owned"
+/// cannot drift apart inside it. `row.variant` is not read here at all.
 ///
 /// **The key is `(card_id, finish)` since 2026-09-07 and was the oracle id before it** — see
-/// [`owned_by_printing`] for why the count came down to meet the pull. Nothing else about this
-/// walk moved: the same two rows are passed over for the same two reasons, and the pool is still
-/// a scarce thing handed out in the read's order, so one printing short in two piles still
-/// shares one pool. What changed is that a *different* printing of the same card now has a key
-/// of its own and takes from a pool of its own.
+/// [`owned_by_printing`] for why the count came down to meet the pull. The pool is a scarce thing
+/// handed out in the read's order, so one printing short in two piles shares one pool, and a
+/// *different* printing of the same card has a key of its own and a pool of its own.
 fn attribute_owned(rows: &mut [DeckCardRow], owned: &HashMap<(String, String), i64>) {
     let mut left = owned.clone();
     for row in rows.iter_mut() {
-        // **A plan reserves nothing**, and a switched-off pile counts toward nothing anywhere in
-        // the app. Both zero the row rather than taking from the pool — the copies stay in `left`
-        // for the rows that are the deck. A group holds what the deck physically has, whichever
-        // list the reader is looking at, so a theory read would otherwise hand a plan the very
-        // copies the sleeved deck is holding.
-        if row.variant != LIVE || !row.category_active {
+        // A switched-off pile counts toward nothing anywhere in the app. It zeroes the row rather
+        // than taking from the pool — the copies stay in `left` for the rows that are the deck.
+        if !row.category_active {
             row.owned_quantity = 0;
             continue;
         }
@@ -10966,51 +11049,244 @@ mod tests {
         );
     }
 
-    /// **Rule 2.** A theory list is a plan, and a plan holds nothing: the copies in the deck's
-    /// group belong to what is sleeved up, and the plan beside it must say so rather than
-    /// borrowing the answer.
-    #[test]
-    fn the_allocator_claims_nothing_for_the_theory_variant() {
-        let conn = seeded();
-        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
-        let main = main_of(&conn, deck.id);
-        file_into_group(&conn, deck.id, "bolt-lea", 4);
-
+    /// One theory row of the plan, added to the deck's Main deck pile.
+    ///
+    /// Spelled once because the seven tests below all want the same three lines of `add_card`
+    /// with `THEORY` in the sixth slot, and the argument that actually varies between them is
+    /// where the *cardboard* is rather than how the row was written.
+    fn plan(conn: &Connection, deck_id: i64, card_id: &str, category_id: i64, quantity: i64) {
         add_card(
-            &conn,
-            deck.id,
-            "bolt-lea",
-            Some(main),
+            conn,
+            deck_id,
+            card_id,
+            Some(category_id),
             None,
             THEORY,
             None,
-            4,
+            quantity,
         )
         .unwrap();
+    }
 
-        let theory = get_deck(&conn, deck.id, THEORY, ANY_MARKET)
+    /// [`owned_of`] read of the **plan** rather than of the sleeved deck — the number the Theory
+    /// tab's `N of M missing` band subtracts.
+    fn plan_owned_of(conn: &Connection, deck_id: i64, card_id: &str, category_id: i64) -> i64 {
+        let detail = get_deck(conn, deck_id, THEORY, ANY_MARKET)
             .unwrap()
             .unwrap();
+        card_row(&detail, card_id, category_id).owned_quantity
+    }
+
+    /// **Rule 2, rewritten on 2026-09-09**
+    /// ([#435](https://github.com/Msgaihede/mtg-grimoire/issues/435)). It read *a plan holds
+    /// nothing, so every theory row is served nothing* — which put `100 of 100 missing` under a
+    /// deck whose cards were mostly sitting in its own box. A plan is a list of cardboard the
+    /// reader means to have, so what it is short of is what they **have not got**, not what they
+    /// have not filed yet: it counts the deck's own group *and* every copy free to be moved into
+    /// it.
+    ///
+    /// The two halves in one test because the whole point is that they are one pool: the box and
+    /// the binder answer the same plan.
+    #[test]
+    fn a_plan_counts_the_copies_it_could_be_built_from() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        plan(&conn, deck.id, "bolt-lea", main, 4);
+
         assert_eq!(
-            card_row(&theory, "bolt-lea", main).owned_quantity,
+            plan_owned_of(&conn, deck.id, "bolt-lea", main),
             0,
-            "a plan holds nothing, even while the group holds a playset"
+            "nothing owned anywhere: the plan is short of all four"
         );
 
-        // The same printing, the same category, in the live deck: that one is served — and the
-        // theory row beside it *still* reads 0. This is the half a naive read gets wrong: a
-        // group is not scoped to a variant, so a theory read walks the very copies the sleeved
-        // deck is holding and would hand the plan all four of them.
+        file_into_group(&conn, deck.id, "bolt-lea", 1);
+        assert_eq!(
+            plan_owned_of(&conn, deck.id, "bolt-lea", main),
+            1,
+            "a copy in the deck's own box counts — this is the whole of issue #435"
+        );
+
+        // `own` files at the root, which is where an unsorted collection lives.
+        own(&conn, "bolt-lea", 2);
+        assert_eq!(
+            plan_owned_of(&conn, deck.id, "bolt-lea", main),
+            3,
+            "and a loose copy in the binder counts too: it is one the reader has"
+        );
+    }
+
+    /// **The live list did not move, and this is the fence on that.** The reader's ruling was
+    /// that an actual deck goes on counting exactly as it did — the cardboard in its own box and
+    /// nothing else — so the binder copy the plan above happily counted must leave a *live* row
+    /// still reading short. Without this, the obvious "just widen the pool" mistake passes every
+    /// other test in this block.
+    #[test]
+    fn the_live_list_still_counts_only_the_deck_s_own_box() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
         add(&conn, deck.id, "bolt-lea", main, 4);
-        assert_eq!(owned_of(&conn, deck.id, "bolt-lea", main), 4);
-        let theory = get_deck(&conn, deck.id, THEORY, ANY_MARKET)
-            .unwrap()
-            .unwrap();
+        plan(&conn, deck.id, "bolt-lea", main, 4);
+
+        // The box first and the binder second, which is not stylistic: `file_into_group` writes
+        // through `add_entry`, and `COLLECTION_GRAIN` ends `coalesce(folder_id, 0)` — so a root
+        // row written *first* is one this would fold into and then carry into the group whole.
+        file_into_group(&conn, deck.id, "bolt-lea", 1);
+        own(&conn, "bolt-lea", 3);
+
         assert_eq!(
-            card_row(&theory, "bolt-lea", main).owned_quantity,
-            0,
-            "a plan holds nothing even when the deck it is a plan for holds everything"
+            owned_of(&conn, deck.id, "bolt-lea", main),
+            1,
+            "one filed into the box is the deck's; the three loose ones are not, whatever the \
+             plan beside them says — `Pull from collection` is the press that changes that"
         );
+        assert_eq!(
+            plan_owned_of(&conn, deck.id, "bolt-lea", main),
+            4,
+            "and the two lists disagree on purpose: the plan counts all four"
+        );
+    }
+
+    /// **The half of the old rule that survives, and the reason the pool is a *scope* rather than
+    /// "the whole collection".** A copy sleeved into somebody else's deck is spoken for; a plan
+    /// that counted it would tell the reader they were nearly there while the cardboard is in a
+    /// box they would have to take apart.
+    #[test]
+    fn a_plan_does_not_count_another_deck_s_copies() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let other = create_deck(&conn, &input("Storm", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        plan(&conn, deck.id, "bolt-lea", main, 4);
+
+        file_into_group(&conn, other.id, "bolt-lea", 4);
+        assert_eq!(
+            plan_owned_of(&conn, deck.id, "bolt-lea", main),
+            0,
+            "every copy is in Storm's box: this plan is short of all four"
+        );
+
+        // And the same four, moved home, are the plan's.
+        let entry = conn
+            .query_row(
+                "SELECT id FROM collection_entries WHERE card_id = 'bolt-lea'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap();
+        crate::collection_folders::refile_entry(&conn, entry, Some(group_of(&conn, deck.id)))
+            .unwrap();
+        assert_eq!(plan_owned_of(&conn, deck.id, "bolt-lea", main), 4);
+    }
+
+    /// **A drawer the reader set aside is not a drawer a plan may spend**, and the lock is the
+    /// **effective** one — a subfolder of a display case is set aside too. Both arms here,
+    /// because the recursive half is the one a hand-written `locked <> 0` term would miss while
+    /// passing the first assertion.
+    #[test]
+    fn a_plan_does_not_count_a_drawer_the_reader_set_aside() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        plan(&conn, deck.id, "bolt-lea", main, 4);
+
+        let case = crate::collection_folders::create_folder(&conn, None, "Display case").unwrap();
+        let shelf =
+            crate::collection_folders::create_folder(&conn, Some(case.id), "Top shelf").unwrap();
+        let in_case = own(&conn, "bolt-lea", 1);
+        let on_shelf = own(&conn, "bolt-lea", 1);
+        crate::collection_folders::refile_entry(&conn, in_case, Some(case.id)).unwrap();
+        crate::collection_folders::refile_entry(&conn, on_shelf, Some(shelf.id)).unwrap();
+
+        assert_eq!(
+            plan_owned_of(&conn, deck.id, "bolt-lea", main),
+            2,
+            "unlocked, a binder of the reader's own is theirs to build from"
+        );
+
+        crate::collection_folders::set_folder_locked(&conn, case.id, true).unwrap();
+        assert_eq!(
+            plan_owned_of(&conn, deck.id, "bolt-lea", main),
+            0,
+            "locked, both go — the subfolder by inheritance, which is the arm that gets missed"
+        );
+    }
+
+    /// **`Recently removed` stays on the reader's desk**, which is the same answer
+    /// `deck_theory`'s `OWNED_SPARE_SQL` and `collection::scope` already give: a card that left a
+    /// deck without leaving the database is one the reader is holding and can file anywhere.
+    #[test]
+    fn a_plan_counts_a_copy_in_the_holding_area() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        plan(&conn, deck.id, "bolt-lea", main, 2);
+
+        let removed: i64 = conn
+            .query_row(
+                "SELECT id FROM collection_folders WHERE kind = 'removed'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let entry = own(&conn, "bolt-lea", 2);
+        crate::collection_folders::refile_entry(&conn, entry, Some(removed)).unwrap();
+
+        assert_eq!(plan_owned_of(&conn, deck.id, "bolt-lea", main), 2);
+    }
+
+    /// **The one arm `attribute_owned` still has, read on the theory side.** A switched-off pile
+    /// counts toward nothing anywhere in the app, and widening the pool did not make it an
+    /// exception — nor may it take from the pool and leave the piles that *are* the plan short.
+    #[test]
+    fn an_inactive_theory_pile_is_still_handed_nothing() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        let scratch = crate::deck_meta::category_for_name(&conn, deck.id, "Maybeboard").unwrap();
+        own(&conn, "bolt-lea", 4);
+        plan(&conn, deck.id, "bolt-lea", scratch, 4);
+        plan(&conn, deck.id, "bolt-lea", main, 4);
+
+        assert_eq!(
+            plan_owned_of(&conn, deck.id, "bolt-lea", scratch),
+            0,
+            "the Maybeboard is seeded off, so it is served nothing"
+        );
+        assert_eq!(
+            plan_owned_of(&conn, deck.id, "bolt-lea", main),
+            4,
+            "and it took nothing out of the pool on its way past"
+        );
+    }
+
+    /// **The pool is scarce across the plan's own piles**, exactly as it is across the live
+    /// deck's — one binder copy covers one row, never two. The walk is unchanged; this pins that
+    /// the wider pool did not quietly become a per-row lookup.
+    #[test]
+    fn the_plan_s_pool_is_scarce_across_its_own_piles() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        let side = crate::deck_meta::category_for_name(&conn, deck.id, "Sideboard").unwrap();
+        own(&conn, "bolt-lea", 3);
+        plan(&conn, deck.id, "bolt-lea", main, 2);
+        plan(&conn, deck.id, "bolt-lea", side, 2);
+
+        let in_main = plan_owned_of(&conn, deck.id, "bolt-lea", main);
+        let in_side = plan_owned_of(&conn, deck.id, "bolt-lea", side);
+        assert_eq!(
+            in_main + in_side,
+            3,
+            "three copies, four wanted: one pool between the two piles, not three each"
+        );
+        // Which pile is served first is `read_deck_cards`' `ORDER BY cat.sort_order, cat.id`, and
+        // here that is the **Sideboard** — it is one of the four piles `create_deck` seeds, where
+        // `main_of` creates `Main deck` on first ask and it takes the higher id. Asserted rather
+        // than left to the sum above, because "the first row down the page takes it" is the
+        // property that makes the answer deterministic at all.
+        assert_eq!((in_side, in_main), (2, 1));
     }
 
     /// **The read follows the group's row, because there is nothing else it could follow.**

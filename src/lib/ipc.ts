@@ -1822,11 +1822,17 @@ export type CategoryOrigin = "user" | "auto";
 /**
  * The two decks every deck secretly is — `schema::DECK_VARIANTS`.
  *
- * `live` is what is actually sleeved up: the gallery's card count, the allocator's claims and
- * the "send missing to the wishlist" button all read it and nothing else. `theory` is what
- * the deck is being built toward — a plan, which reserves no copy of anything and appears on
- * no tile. The two are separate rows of `deck_cards`, so a change tried out in Theory can
- * never silently overwrite the deck as it stands.
+ * `live` is what is actually sleeved up: the gallery's card count, the deck's own collection
+ * group and every write that moves cardboard — the pull, the record, the "send missing to the
+ * wishlist" button — all read it and nothing else. `theory` is what the deck is being built
+ * toward — a plan, which holds no cardboard and appears on no tile. The two are separate rows
+ * of `deck_cards`, so a change tried out in Theory can never silently overwrite the deck as it
+ * stands.
+ *
+ * **The variant is also which pool an owned count is read from, since 2026-09-09** (issue
+ * #435). A plan holding no cardboard is a fact about *writes*; it stopped being a reason to
+ * report `0` owned on every row of one. See {@link DeckCard.ownedQuantity} for the two pools
+ * and why they differ.
  */
 export type DeckVariant = "live" | "theory";
 
@@ -1878,11 +1884,14 @@ export interface DeckCategory {
   origin: CategoryOrigin;
   /**
    * **`categoryActive` is the whole of what `maybe` used to mean.** A card in an inactive
-   * category counts toward no deck size, no copy limit and no legality check, and the
-   * allocator claims no copy for it — so its {@link DeckCard.ownedQuantity} is always `0`.
+   * category counts toward no deck size, no copy limit and no legality check, and it is handed
+   * nothing out of the pool its list draws on — so its {@link DeckCard.ownedQuantity} is always
+   * `0`, **on both lists**. That survived 2026-09-09 (issue #435) untouched: a theory row reads
+   * a real owned count now, but a switched-off pile reads `0` in either variant, because
+   * `attribute_owned` checks `category_active` before the row is allowed to draw on anything.
    * The Maybeboard is simply the one predefined category seeded inactive; a user category
-   * switched off behaves identically, and nothing in the engine, the allocator or the stats
-   * needs to know which is which.
+   * switched off behaves identically, and nothing in the engine or the stats needs to know
+   * which is which.
    *
    * Settable on **every** category, `commander` included: deactivating that one is a legal
    * (if unwise) thing to do, and the validation engine reports a missing commander, which is
@@ -2631,6 +2640,14 @@ export interface TheoryDiffRow {
    * of {@link TheoryDiffRow.quantity}, least of all by `deckTheoryMissingToWishlist`:
    * `quantity` has already subtracted the live list and this number has not, so an unbuilt
    * deck's own live copies read as spare here — right for a person, wrong for a subtraction.
+   *
+   * **It did _not_ follow {@link DeckCard.ownedQuantity} across on 2026-09-09** (issue #435),
+   * and the reason is that same subtraction. A theory *row* now counts every copy the deck
+   * could use, this deck's own group included, because nothing has been subtracted from it;
+   * `quantity` here is already `wanted − held`, so folding the group into this field would
+   * count the copies the live list is holding **twice** — once as gone from the shortfall and
+   * once as spare beside it. Two questions, two pools, and the shopping list keeps the narrower
+   * one on purpose.
    */
   ownedSpare: number;
   /**
@@ -3764,42 +3781,81 @@ export interface DeckCard {
    */
   unitPrice: number | null;
   /**
-   * Copies of this exact printing and finish **this deck physically holds**, attributed to
-   * this row in the read's own order.
+   * Copies of this exact printing and finish **this row can draw on**, attributed to it in the
+   * read's own order.
    *
-   * **A sum over the rows filed in the deck's own collection group, and no longer a claim.**
-   * Schema v25 deleted `deck_allocations` and the allocator with it: a card is in a deck
-   * because its `collection_entries` row sits in that deck's `kind = 'deck'` folder. **Since
-   * 2026-09-07 the match is the printing, not the oracle card**: this is `owned_by_printing` —
-   * `sum(quantity)` per `(card_id, finish)` over that one folder — spent down the rows by
-   * `attribute_owned`. There is nothing to clamp any more and nothing that can be out of date,
-   * which is what the old `min(claim, row)` existed for.
+   * **Which copies those are is the _variant's_ question, and that is what changed on
+   * 2026-09-09** ([issue #435](https://github.com/Msgaihede/mtg-grimoire/issues/435)). Two
+   * pools, one field:
+   *
+   * * a **`live`** row draws on the deck's **own group and nothing else** — the
+   *   `collection_entries` filed in the `collection_folders` row with `kind = 'deck'` and this
+   *   deck's id. That is *custody*: what is in this box. Unchanged, and it is what every write
+   *   in the editor still reads.
+   * * a **`theory`** row draws on `collection_source::Availability::ForDeck(deckId)` — the very
+   *   pool the deck builder's card search already counts by ({@link
+   *   SearchRequest.availableForDeck}, issue #349). Every copy the reader owns that *this deck
+   *   could use*: the collection root, **or** this deck's own group, **or** anywhere else that
+   *   is neither *another* deck's group nor an **effectively locked** folder. `Recently
+   *   removed` counts.
+   *
+   * **The two pools differ because the two lists are asked different questions.** A live list
+   * is cardboard, so *what is in this box* is the honest question and custody is the honest
+   * answer. A plan holds no cardboard and never will, so *what does this plan hold* has exactly
+   * one answer — `0` — which is what this field said on every card of every plan until
+   * 2026-09-09, and why a hundred-card plan with sixty-two of its cards already sleeved into
+   * the deck's box read **100 of 100 missing** rather than *38 of 100*. The question worth
+   * answering about a plan is *which of the copies I own could this plan use*, and the app
+   * already knew how to compute that pool for the wall docked beside the deck.
+   *
+   * **Counting changed; writing did not.** A plan still holds no cardboard, so
+   * `deck_pull_plan`, `deck_missing_plan` and `deck_missing_to_wishlist` all still read `live`
+   * only, `collection_to_deck` still refuses a theory row, and the editor still draws no pull,
+   * no record and no wishlist press on that tab. A truthful count is not a claim that there is
+   * anything to move.
+   *
+   * **Both pools are scarce and both are spent down the read's order** — `min(remaining,
+   * quantity)` per `(card_id, finish)` in `attribute_owned` — so two rows of one printing
+   * cannot each claim the same copy, and the number a row shows must not depend on how a list
+   * was displayed.
+   *
+   * **A sum over rows, and no longer a claim.** Schema v25 deleted `deck_allocations` and the
+   * allocator with it: a card is in a deck because its `collection_entries` row sits in that
+   * deck's `kind = 'deck'` folder. **Since 2026-09-07 the match is the printing, not the oracle
+   * card**: `sum(quantity)` per `(card_id, finish)`. There is nothing to clamp any more and
+   * nothing that can be out of date, which is what the old `min(claim, row)` existed for.
    *
    * **An orphaned printing counts now, where the oracle-grained version read it as 0.** A
    * `collection_entries` row whose `card_id` is not in `cards` has no oracle id to be grouped
    * by, so the old map dropped it; at the printing grain there is nothing to look up — the
-   * group's row and this deck's row name the same `card_id` — so the copy counts.
+   * pool's row and this deck's row name the same `card_id` — so the copy counts.
    *
-   * The only one of this file's four `ownedQuantity` fields that is about **custody** rather
+   * The only one of this file's four `ownedQuantity` fields that is about **this deck** rather
    * than about the reader's shelves as a whole: {@link CardSummary.ownedQuantity} is every
    * copy of one printing, {@link ImportMatch.ownedQuantity} is that same count taken per
    * decklist line, {@link WishRow.ownedQuantity} is the copies that fill one wish, and this
-   * one is what is in *this box* — printing-grained (`(card_id, finish)`, not the oracle card
-   * — no more "a Bolt is a Bolt" here), finish-**aware**, still condition-blind.
+   * one is what is in *this box* (live) or what *this box could be filled from* (theory) —
+   * printing-grained (`(card_id, finish)`, not the oracle card — no more "a Bolt is a Bolt"
+   * here), finish-**aware**, still condition-blind.
    *
-   * Three things it will not do, all by design:
+   * Three things about the edges, and the middle one reverses what stood here:
    *
-   * * a row whose `categoryActive` is `false` always reads `0`, because a switched-off pile is
-   *   handed nothing out of the group — so no "owned" badge belongs on that pile at all;
-   * * a `theory` row always reads `0` too: a plan holds no cards, and `attribute_owned` zeroes
-   *   every theory row **explicitly** rather than by luck. A group is not scoped to a variant
-   *   — it holds what the deck physically has, whichever list is on screen — so the
-   *   conclusion is drawn in the read rather than left to a table's shape;
-   * * across several decks these numbers **cannot** double-count, which reverses what this
-   *   said. Two decks sharing a card each carried their own claim once, and the claims could
-   *   overlap; a copy now sits in exactly one folder, so it counts for exactly one deck. What
-   *   is left is the honest cost of custody: this is **as accurate as the reader's filing** —
-   *   an unfiled collection reads as a deck full of red until they drag.
+   * * a row whose `categoryActive` is `false` always reads `0`, **on both lists** — a
+   *   switched-off pile is handed nothing out of either pool, so no "owned" badge belongs on
+   *   that pile at all. That guard is untouched by any of the above;
+   * * **a `theory` row is no longer zeroed.** This list used to say *a `theory` row always
+   *   reads `0` too: a plan holds no cards, and `attribute_owned` zeroes every theory row
+   *   explicitly rather than by luck*. That was the rule and it is history: the explicit zero
+   *   is gone and the second pool stands in its place. The half of it that survives is why the
+   *   conclusion is drawn in the read at all — a group is not scoped to a variant, so nothing
+   *   about a table's shape was ever going to answer this;
+   * * **live rows cannot double-count across decks; theory rows deliberately can.** A copy sits
+   *   in exactly one folder, so it counts for exactly one deck's live list — which reverses the
+   *   allocator era, where two decks sharing a card each carried their own claim and the claims
+   *   could overlap. Two *plans* may each count the same loose copy, and that is right rather
+   *   than a leak: neither is holding it, and each is honestly answering *this deck could use
+   *   it*. What is left is the honest cost of custody on the live side: it is **as accurate as
+   *   the reader's filing** — an unfiled collection reads as a deck full of red until they drag.
    */
   ownedQuantity: number;
   /**

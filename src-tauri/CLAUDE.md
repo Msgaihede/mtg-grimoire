@@ -839,15 +839,22 @@ shared_cell` walks both into two databases and compares them column by column.
   Every refusal is a **sentence** rather than a `CHECK` or a foreign-key failure —
   `deck::set_folder`'s rule, and `PRAGMA foreign_keys` is per-connection anyway. Both writes are
   one transaction: mid-move the copies are in both places or in neither.
-- **"Does the reader own this?" is `collection_source`, and four fragments plus one write
-  wrapper is all that module owns.** `owns_printing`/`copies_of_printing`/`copies_of_oracle`/
-  `owned_rowids` are correlated SQL a caller splices into its own statement; `with_write_owned`
-  is `sync::with_write` plus the facet index's `owned` rebuild, on success only.
-  **The first three take an `Availability`, and it is not a fourth filter**: it narrows no rows,
-  it decides *whose* copies count. `Everything` emits no SQL and is what every caller asks;
-  `ForDeck(id)` is the deck builder's card search alone (`SearchRequest::available_for_deck`,
-  issue #349), and drops another deck's group and every locked drawer while keeping the asking
-  deck's own group, the root and `Recently removed`. **Both halves of "owned" must take the same
+- **"Does the reader own this?" is `collection_source`, and four fragments, one whole statement
+  and one write wrapper is all that module owns.** `owns_printing`/`copies_of_printing`/
+  `copies_of_oracle`/`owned_rowids` are correlated SQL a caller splices into its own statement;
+  `copies_by_printing_and_finish` is the one that stands alone, a `GROUP BY e.card_id, e.finish`
+  a caller runs as-is (2026-09-09, issue #435 — `deck::available_by_printing` is its only
+  caller); `with_write_owned` is `sync::with_write` plus the facet index's `owned` rebuild, on
+  success only.
+  **Everything but `owned_rowids` takes an `Availability`, and it is not a fourth filter**: it
+  narrows no rows, it decides *whose* copies count. `Everything` emits no SQL and is what every
+  caller outside the deck builder asks; `ForDeck(id)` drops another deck's group and every locked
+  drawer while keeping the asking deck's own group, the root and `Recently removed`. **`ForDeck`
+  has two callers and they must stay one pool** — the deck builder's card search
+  (`SearchRequest::available_for_deck`, issue #349) and a `theory` row's owned figure (issue
+  #435). One badge says *you own 2 of the 4 this deck wants* and the other says *×2* over the
+  same card in the search beside it; a second pool would be those two numbers disagreeing.
+  **Both halves of "owned" must take the same
   scope** — the `owned` filter and the badge — or a card sits under the Owned chip reading `×0`.
   The facet index has no deck axis and deliberately does not follow, so those two counts read
   high there; `useCardFacets` carries the argument. **Three
@@ -1502,10 +1509,29 @@ Full detail, with the measurements and the traps behind each rule, is in
   condition and language) entirely, so a foil deck row was answered by whatever copies of that
   card the group held, foil or not. `owned_by_printing` matches `(card_id, finish)` now, so a
   foil row wants a foil copy specifically — condition and language are still ignored.
-- **`attribute_owned` zeroes every `theory` row, explicitly and not by luck.** It was a fence
-  around `deck_allocations` carrying no variant — a theory read walked the *live* deck's claims —
-  and a group is not scoped to a variant either, so the conclusion is still drawn here rather
-  than left to a table's shape. A plan reserves nothing.
+- **The variant picks the _pool_ the owned numbers are attributed from, and `deck::get_deck` is
+  the one line that decides it** (2026-09-09,
+  [issue #435](https://github.com/Msgaihede/mtg-grimoire/issues/435)). A `live` row is answered by
+  `owned_by_printing` — the copies filed in this deck's own group, the cardboard in its box. A
+  `theory` row is answered by `available_by_printing` — every copy the reader could _put_ in that
+  box: the root, this deck's own group, and anywhere else that is neither another deck's group nor
+  an effectively locked drawer, so `Recently removed` counts. That is
+  `collection_source::Availability::ForDeck`'s pool reused rather than restated, so a plan's owned
+  figure and the deck builder's search badge count the same cardboard. Both maps are keyed
+  `(card_id, finish)`, both are scarce, and `attribute_owned` hands either out along
+  `read_deck_cards`' own order with the same `min(remaining, quantity)` walk.
+  **`attribute_owned` no longer zeroes a row for being `theory`; an inactive category is the one
+  arm left in it.** What did _not_ change is that **a plan holds no cardboard** — nothing is filed
+  into a theory list and nothing can be moved out of one — so
+  `collection_alloc::THEORY_HOLDS_NOTHING` still refuses, the theory list's write presses are
+  still refused or absent, and `deck_pull`, `deck_missing` and `deck::missing_to_wishlist` still
+  read `live` only. Counting changed; writing did not.
+- **`deck_theory::OWNED_SPARE_SQL` deliberately did _not_ follow, and folding this deck's own group
+  into it would be a double count.** `theory_diff` already subtracts the live list
+  (`short = wanted − held`), so counting the group as spare on top of that counts it twice — the
+  exact mistake `deck_theory`'s own header and `missing_to_wishlist` both warn about. Two
+  surfaces, two questions: the diff compares the plan against the _list_ that is sleeved, the
+  owned figure compares it against the _cardboard_ the reader can reach.
 - **Switching the theory list on _moves_ the live deck into it and leaves `live` empty.** The
   deck the reader has built is the plan; what is sleeved up starts at nothing and fills as they
   acquire cards. Only on the false→true transition and only when the theory list is empty — a
@@ -1554,6 +1580,13 @@ Full detail, with the measurements and the traps behind each rule, is in
     a virtual copy, and `owned_by_printing` joins that group on `deck_id` — so every owned figure
     is `0` with nothing asking why and no new arm anywhere. An empty group nothing may write to
     was the other candidate and lost: it is a row every reader has to be taught is special.
+    **The 2026-09-09 pool split leaves this standing and only because `1/1` names no kind**: a
+    virtual deck's rows are `live` rows, so they are attributed from the group that is not there.
+    A deck with a theory list is not virtual, and one that becomes virtual has `theory_enabled`
+    cleared by `deck_kind` in the same patch. Its `theory` rows survive the change and its
+    `last_variant` may still say `theory`, but the editor asks for `live` on a deck that keeps no
+    plan, so `deck_get(id, "theory")` — the one call that would hand them the wider pool — is
+    never sent for one.
   - **Becoming virtual releases the deck's copies and drops the group, in the patch's own
     transaction; ceasing to be virtual makes the group again, empty, and fetches nothing back.**
     Two release calls in this order — `release_unclaimed_copies` first, then
@@ -1670,8 +1703,10 @@ viewState)` — absent field means "leave it". It moves **no `updated_at`**, rec
   chooses no format. `deck_last_format` answers the stored string **verbatim or `None`** and
   checks it against `format_specs` not at all: which format a *dialog* starts on is a display
   decision, and TypeScript's `newDeckFormat` is where the fallback to Commander lives.
-- **Owned/missing is `sum(quantity)` over the deck's own group, matched by `(card_id, finish)`
-  since 2026-09-07, and there is no allocator** (schema v25). `deck::owned_by_printing` joins
+- **A `live` row's owned/missing is `sum(quantity)` over the deck's own group, matched by
+  `(card_id, finish)` since 2026-09-07, and there is no allocator** (schema v25). **A `theory`
+  row's comes out of the wider pool instead** — see the deck bullet above, and read every
+  sentence below as being about the live list. `deck::owned_by_printing` joins
   `collection_entries` to `collection_folders` on `f.deck_id = ?1` and groups by `e.card_id,
   e.finish` — the same grain `deck_pull::CANDIDATE_SQL` matches on, which is why a deck's count
   and its pull dialog no longer disagree: an Alpha Bolt in the group used to answer an M10 row in

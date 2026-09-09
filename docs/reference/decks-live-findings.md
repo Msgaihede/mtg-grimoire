@@ -1919,3 +1919,82 @@ Every tile is the same height as its neighbours at every stop, in both states. T
 **224px against a 425px tile**, so a five-button row has room at the top of the ladder and 53px of
 slack at the bottom — the case worth checking, because those buttons scale with the card and the
 tile does too, so the ratio is what holds rather than any one figure.
+
+## The `Game Changers` filter chip, and the crown that sat on its own line — 2026-09-09, `npm run tauri dev` (debug), 1920×1080, a copy of the real db
+
+The game-changer spotlight was withdrawn a day after it shipped and a filter chip took over the
+question it answered (`src/features/decks/CLAUDE.md` carries the argument). This is the pass that
+drove the replacement, on the reader's own 101-card Azula deck — the deck the spotlight was
+reported from, which is what makes the before and after a comparison rather than two pictures.
+
+**It found a layout defect that had already merged**, and the shape of it is the transferable
+half: a class that composes to nothing is invisible to every instrument but a window.
+
+### The defect
+
+`FILTER_CONTROL` is `h-9 … rounded-md border text-sm` plus the press — **geometry, and no
+`display`**. Every other chip in that row is a bare string, so a `<button>`'s initial display has
+always been enough for one. The `Game Changers` chip is the row's first chip with a *glyph* beside
+its words, and it was written with `gap-1.5` and no flex context — so the gap styled nothing at
+all and the crown was a block-level line of its own, stacked **above** the caption inside a fixed
+36px box.
+
+| | Shipped | Fixed |
+| --- | --- | --- |
+| `display` | `block` | `flex` (`inline-flex`, blockified as a flex item) |
+| Crown box `y` | 228 | centre 242 |
+| Caption box `y` | 240 | centre 242 |
+| On one line | **no** | yes |
+| Chip width | 110 (content wants 128) | 128 |
+| Chip height / `y` | 36 / 224 | 36 / 224 |
+
+The height never moved, which is why nothing looked broken in the small: `h-9` held the box open
+while its contents wrapped inside it and the caption clipped against the bottom edge. The fix is
+`inline-flex items-center` at the chip's own site — deliberately **not** on `FILTER_CONTROL`,
+which is shared with every caption-only chip in the app and has no business gaining a display for
+one caller.
+
+**Neither suite can see any of it.** jsdom lays nothing out and computes no `display`, so a test
+asserting the chip's classes passes just as happily while those classes compose to a two-line
+control. What found it was `getBoundingClientRect` on the crown against a `Range` around the
+caption text — a measurement of *two* elements against each other, which is the shape that catches
+a stacking or centring fault where measuring either one alone reads as correct.
+
+### What the chip does, driven
+
+Against the deck's six game changers (Fierce Guardianship, Jeska's Will, Rhystic Study, Cyclonic
+Rift, Gifts Ungiven, Mystical Tutor) and its own `Keeper` label:
+
+| Chips pressed | Cards drawn | Of which crowned |
+| --- | --- | --- |
+| none | 122 | 6 |
+| `Game Changers` | 6 | 6 |
+| `Game Changers` + `Keeper` | 9 | 6 |
+| `Keeper` | 3 | 0 |
+| none (released) | 122 | 6 |
+
+**6 + 3 = 9 is the OR proved rather than asserted.** Under an intersection that row reads **0**,
+and an empty wall is what the reader would have met on the two chips they are most likely to press
+together — the failure the OR was chosen to avoid, measured at the one deck that can show it.
+
+**Every drawn card computes `opacity: 1` in all five states**, checked as a set
+(`new Set(cards.map(el => getComputedStyle(el).opacity))`) rather than sampled: one value, `"1"`.
+So no card is faded in any state of the filter, and a card that survives it is byte for byte the
+card that was there unfiltered — which is the whole of what the spotlight cost and the reason the
+chip replaced it.
+
+The chip's on state reads `rgb(217, 185, 92)` for both `color` and `border-color` — `#d9b95c`,
+`--color-pie-gold`, the crown's own gold rather than the accent. Both `.border-pie-gold` and
+`.text-pie-gold` were confirmed to emit real rules in the built `dist/` CSS before the pass, since
+a Tailwind class that emits nothing is this repo's documented silent failure and would have read
+as a chip that simply never lit.
+
+The ledger's readout, in the same frame: `… | 3 issues | 6 game changers | Bracket ~4`, with the
+count `insideButton: false` and `border-width: 0px` — a figure between two bordered controls, in
+the dim voice the rest of that line reads in, and no longer a press.
+
+**Empty piles keep drawing under the filter** (`Commander · 0 cards · Nothing here yet.`, and the
+Maybeboard likewise). That is `drawsWhenEmpty` behaving exactly as it does under a label chip
+rather than anything this chip introduced — a reader's own piles and the seeded zones stay on
+screen, and stay drop targets, while a filter is running. It is written down because it looks like
+a finding and is the documented rule.

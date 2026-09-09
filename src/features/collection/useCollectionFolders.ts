@@ -106,23 +106,42 @@ export function useCollectionFolders() {
    * it is about the **row** being filed, refusing to let a copy walk out of a deck's group by
    * hand.
    *
-   * Nothing outside `["collection"]` moves — **except the card search, which joined on
-   * 2026-09-03 with issue #349.** No quantity changes, so no wish's `ownedQuantity` moves and no
-   * *unscoped* search row's owned badge can be different afterwards. Nor any deck's owned count,
-   * which since schema v25 is the sum over that deck's *own* group: all five writes are fenced to
-   * `user` folders, so none can reach a deck's group or put one inside a folder about to be
-   * deleted. What did change is that the deck builder's card search now counts *what a deck can
-   * use* (`SearchRequest.availableForDeck`), and that answer reads the **effective lock** — so
-   * `setLocked`, and a `move` that carries a subtree under a locked parent, do move a badge.
+   * Nothing outside `["collection"]` moves **for a quantity's sake** — none of these five writes
+   * changes one, so no wish's `ownedQuantity` moves and no *unscoped* search row's owned badge
+   * can be different afterwards. What does move is every count that reads the **effective lock**,
+   * and there are two roots of those now.
    *
-   * **All five fire it rather than the two that need it**, deliberately: splitting the helper
-   * would put the decision at five call sites where four of them are "no", and a rename that
-   * invalidates a root nothing is observing costs nothing at all — the reader is on the
-   * collection page, where no card search is mounted.
+   * **`["cards", "search"]` joined on 2026-09-03 with issue #349.** The deck builder's card
+   * search counts *what a deck can use* (`SearchRequest.availableForDeck`), and that answer reads
+   * the effective lock — so `setLocked`, and a `move` that carries a subtree under a locked
+   * parent, do move a badge.
+   *
+   * **`["decks"]` joined on 2026-09-09 with
+   * [issue #435](https://github.com/Msgaihede/mtg-grimoire/issues/435), and the sentence it
+   * replaces was flatly false.** This paragraph read *nor any deck's owned count, which since
+   * schema v25 is the sum over that deck's own group: all five writes are fenced to `user`
+   * folders, so none can reach a deck's group* — and the fence is still real while the conclusion
+   * no longer follows. A **theory** row's `DeckCard.ownedQuantity` is not the deck's own
+   * group any more; it is `Availability::ForDeck`, the very pool the card search above counts by,
+   * effective lock and all. So a lock, or a move that carries a subtree under a locked parent,
+   * changes what every plan in the gallery reads as owned — `DeckLedger`'s `Owned` term and
+   * `DeckStats`' `N of M missing` band on the Theory tab, and `["decks", "detail", id]` is where
+   * they come from. **A live row is unaffected and always was**, which is why this is one root
+   * added rather than the old sentence merely deleted.
+   *
+   * `lib/query.ts` sets `staleTime: 30_000`, so the failure this closes is a **stale number**
+   * rather than an error: the plan would go on quoting the shortfall it had before the drawer was
+   * locked, for as long as the reader stayed on the page, and nothing on screen would say so.
+   *
+   * **All five fire all three rather than the ones that need them**, deliberately: splitting the
+   * helper would put the decision at five call sites where most of them are "no", and a rename
+   * that invalidates a root nothing is observing costs nothing at all — the reader is on the
+   * collection page, where neither a card search nor a deck editor is mounted.
    */
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ["collection"] });
     void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+    void queryClient.invalidateQueries({ queryKey: ["decks"] });
   };
   const writes = { onSuccess: invalidate, onError: invalidate };
 
@@ -161,9 +180,11 @@ export function useCollectionFolders() {
    * `invalidate` above takes the whole `["collection"]` root because the other five writes reach
    * **entries**: a delete re-files the sub-tree by hand, so copies surface at the root and the
    * table, both folder subtotals and the header are all suddenly wrong; a lock changes which rows
-   * the list itself answers with. And
-   * {@link useSetCollectionFolder} adds `["decks"]` on top of that, because since schema v25 a deck
-   * owns exactly the copies filed in its own group and filing a copy is how one enters or leaves.
+   * the list itself answers with. It takes `["decks"]` too since 2026-09-09 (issue #435), because
+   * a theory row's owned count reads the effective lock. And
+   * {@link useSetCollectionFolder} adds `["decks"]` for a second reason of its own, because since
+   * schema v25 a deck owns exactly the copies filed in its own group and filing a copy is how one
+   * enters or leaves.
    *
    * **A reorder is neither of those.** It writes `collection_folders.sort_order` and
    * `collection_folders.parent_id`; it moves no `collection_entries.folder_id`, so no quantity, no
@@ -171,8 +192,18 @@ export function useCollectionFolders() {
    * still true — `["collection", "list", …]`, `["collection", "summary", …]`, and
    * `["collection", "folderSummary", marketplace]`, which is a `GROUP BY` over every entry
    * carrying a price expression and is the most expensive query on the page to throw away for
-   * nothing. Nor can any deck's owned count have moved, which is the whole reason `["decks"]` is
-   * in the set below and is absent here.
+   * nothing.
+   *
+   * ⚠️ **`["decks"]` and `["cards", "search"]` are absent here on a narrower argument than the
+   * one above, and the gap is written down rather than closed.** A reorder writes `parent_id` as
+   * well as `sort_order`, so a level placed under a **locked** parent moves the *effective* lock
+   * — which is exactly what {@link useCollectionFolders}' `invalidate` fires those two roots for.
+   * Neither root has ever been settled here: `["cards", "search"]` was not added when the search
+   * began reading the effective lock (2026-09-03, issue #349) and `["decks"]` was not added when
+   * a theory row began to (2026-09-09, issue #435). Both are the *same* omission and both are out
+   * of scope for the change that noticed the second; whoever closes it should close it once, for
+   * the re-parent arm, and say in this comment that a plain same-level placement still settles
+   * narrowly.
    *
    * **The re-parent half is what tempts a wider set, and it is answered by the same key.** A
    * folder card's recursive total is summed by the *tree builder*, in TypeScript, over these flat
@@ -238,12 +269,19 @@ export function useCollectionFolders() {
    * else happened to invalidate it. `lib/query.ts` sets `staleTime: 30_000`, so a mounted
    * observer that is merely stale never refetches on its own.
    *
-   * `["decks"]` stays out, `reorder`'s reason: a deck owns exactly the copies filed in its **own
-   * group** since schema v25, a lock is fenced to the reader's own folders, and §1 of the design
-   * is explicit that locking cannot move a deck's owned or missing figures in either direction.
-   * `["cards", "search"]` is the root that does **not** stay out, and this is the write it is
-   * there for: the deck builder's card search counts what a deck can use and reads the effective
-   * lock, so setting a drawer aside changes an `×N` a reader may be one navigation away from.
+   * **`["decks"]` is in the set since 2026-09-09, and this is the write that put it there**
+   * ([issue #435](https://github.com/Msgaihede/mtg-grimoire/issues/435)). It used to stay out on
+   * `reorder`'s reason — *a deck owns exactly the copies filed in its own group since schema v25,
+   * a lock is fenced to the reader's own folders, and §1 of the design is explicit that locking
+   * cannot move a deck's owned or missing figures in either direction* — every clause of which is
+   * still true of a **live** row and none of which survives on a **theory** one. A plan's owned
+   * count is `Availability::ForDeck` now, which reads the *effective* lock, so setting a drawer
+   * aside is the one folder write a reader can make that changes what a deck they are not looking
+   * at says it owns.
+   * `["cards", "search"]` is the root that never stayed out, and this is the write it was added
+   * for: the deck builder's card search counts what a deck can use and reads the same effective
+   * lock, so setting a drawer aside changes an `×N` a reader may be one navigation away from. The
+   * two roots are one fact with two readers, which is why they move together.
    *
    * On error as well as on success: a refusal is a busy database, a folder another surface has
    * already deleted, or one of the app's own that this write refuses in words — and the middle

@@ -814,13 +814,23 @@ pub const DECK_TOKEN_GRAIN: &str = "deck_id, oracle_id";
 /// in Theory is a different row from the Live one it is being tried against, never a draft
 /// that could silently overwrite it.
 ///
-/// **A theory list is a plan, and a plan holds no cards.** That sentence used to read
+/// **A theory list is a plan, and a plan holds no *cardboard*.** That sentence used to read
 /// *"`deck::allocate_deck` reserves collection copies for `live` only"*, naming a function
 /// schema v25 deleted along with the ledger it wrote. Nothing reserves anything now: a deck
-/// holds a card because a `collection_entries` row sits in that deck's group, and the two
-/// places that draw the conclusion for `theory` say so themselves — `deck::attribute_owned`
-/// zeroes every theory row explicitly, and
-/// [`crate::collection_alloc::THEORY_HOLDS_NOTHING`] refuses to move copies for one.
+/// holds a card because a `collection_entries` row sits in that deck's group, and no such row
+/// ever sits behind a `theory` one. **That is the whole of what "holds no cards" means here** —
+/// nothing is filed into a plan, nothing can be moved out of a plan — and
+/// [`crate::collection_alloc::THEORY_HOLDS_NOTHING`] is the one place left that draws the
+/// conclusion, refusing in words when a theory row is asked to give copies back.
+///
+/// **A plan's rows may still *count* copies, and that is not the same claim** (2026-09-09,
+/// [#435](https://github.com/Msgaihede/mtg-grimoire/issues/435)). This doc said until that day
+/// that `deck::attribute_owned` zeroed every theory row explicitly; it no longer does.
+/// [`crate::deck::get_deck`] picks the pool by variant instead — a `live` row from the copies in
+/// the deck's own group, a `theory` row from every copy the reader could *put* there — so a plan
+/// reads *what am I still short of* against cardboard that is sitting in a binder rather than
+/// against nothing at all. Counting what could fill a slot and holding what fills it are two
+/// different statements about a variant, and only the second one is a folder.
 pub const DECK_VARIANTS: [&str; 2] = ["live", "theory"];
 
 /// Where a card can be played, as Scryfall spells it — the vocabulary of `cards.games` and,
@@ -9327,8 +9337,11 @@ pub(crate) mod tests {
         assert_eq!(in_removed(&conn, "forest", "nonfoil"), 0);
     }
 
-    /// A plan reserves nothing, so a `theory` row claims nothing — `release_live_copies`' rule
-    /// and `attribute_owned`'s, read from the custody end.
+    /// A plan reserves nothing, so a `theory` row claims nothing — `release_live_copies`' rule,
+    /// read from the custody end. **A claim and a count are two different things and only the
+    /// claim is this rung's business**: since 2026-09-09 a theory row's *owned figure* is
+    /// attributed from a wider pool ([`crate::deck::get_deck`], issue #435), and nothing about
+    /// that reaches which copies a group may keep.
     #[test]
     fn the_v36_rung_gives_a_theory_row_no_claim() {
         let conn = user_file_at_36();

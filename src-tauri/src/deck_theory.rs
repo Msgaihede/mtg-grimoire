@@ -10,6 +10,14 @@
 //! [`crate::collection_alloc::THEORY_HOLDS_NOTHING`], which refuses in words when a theory row
 //! is asked to give copies back.
 //!
+//! **"Not a deck the user has" is about cardboard and never about arithmetic**, and 2026-09-09
+//! is where the two came apart ([#435](https://github.com/Msgaihede/mtg-grimoire/issues/435)).
+//! A plan's rows now report an owned figure of their own, attributed from every copy the reader
+//! could put behind them — [`crate::deck::get_deck`] picks that pool by variant. Nothing in this
+//! module followed it, deliberately: [`OWNED_SPARE_SQL`] still drops every deck group including
+//! this deck's own, because [`theory_diff`] has already subtracted the live list and counting
+//! the group as spare on top would count it twice. That warning is on both of them.
+//!
 //! This module is the three things that are only true of the *pair*:
 //!
 //! * **The move.** Switching the theory list on for a deck that has none **moves** the live
@@ -307,6 +315,18 @@ fn diff_select(marketplace: crate::sorting::Marketplace) -> String {
 /// `Recently removed` is on the spare side deliberately: a card that left a deck without leaving
 /// the database is back on the reader's desk, and the folder exists so they can put it somewhere
 /// else.
+///
+/// ⚠️ **This deck's own group is on the *not*-spare side and must stay there, which stopped
+/// looking obvious on 2026-09-09** ([#435](https://github.com/Msgaihede/mtg-grimoire/issues/435)).
+/// That day a `theory` row's *owned figure* started counting this deck's own group — through
+/// [`crate::collection_source::Availability::ForDeck`], which differs from this statement in
+/// exactly that one arm — and the tempting next edit is to make the two agree. It would be a
+/// double count. [`theory_diff`] has already netted the live list out before this figure is
+/// read: `short = wanted − held`, where `held` is what the live list holds, so folding the same
+/// copies in again as "spare" counts them twice. See [`missing_to_wishlist`], which subtracts
+/// nothing for the same reason and argues it at length. **Two surfaces, two questions**: the
+/// diff compares the plan against the *list* that is sleeved, the owned figure compares it
+/// against the *cardboard* the reader can reach. Both may be right about one row at once.
 ///
 /// **On exactly [`Grouped`]'s key, because the figure strip sums this field down the list.**
 /// It was per oracle card until 2026-08-20 — which stopped being defensible the moment a

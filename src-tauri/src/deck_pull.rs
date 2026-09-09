@@ -50,7 +50,10 @@
 //!   object.
 //! * **Candidates match the printing and the finish exactly, and since 2026-09-07 the deck's own
 //!   owned count asks the same question.** [`crate::deck::owned_by_printing`] attributes a deck's
-//!   holdings at `(card_id, finish)` — the grain [`CANDIDATE_SQL`] matches on — so a hole this
+//!   holdings at `(card_id, finish)` — the grain [`CANDIDATE_SQL`] matches on. **Since 2026-09-09
+//!   it is one of two pools and this module still meets the same one** (issue #435): a `theory`
+//!   row is attributed from a wider pool, `deck::available_by_printing`, but this plan reads the
+//!   live list and only the live list, so the count it has to agree with is unchanged. A hole this
 //!   deck's count reports is a hole this dialog can see, and the trade the exactness used to cost
 //!   is gone: the count no longer credits an M10 line as owned because the group holds an Alpha
 //!   copy, only to have this dialog refuse the substitution and come up with nothing. What the
@@ -114,8 +117,17 @@ pub const MORE_THAN_MISSING: &str = "That is more copies than this deck is short
 const DECK_KIND: &str = crate::schema::COLLECTION_FOLDER_KINDS[1];
 /// `COLLECTION_FOLDER_KINDS[2]` — the app's own holding area, second in the candidate ranking.
 const REMOVED_KIND: &str = crate::schema::COLLECTION_FOLDER_KINDS[2];
-/// What is actually sleeved up — `DECK_VARIANTS[0]`, and the only list a pull reads. A plan holds
-/// no cards ([`crate::collection_alloc::THEORY_HOLDS_NOTHING`]), so it is short of none.
+/// What is actually sleeved up — `DECK_VARIANTS[0]`, and the only list a pull reads.
+///
+/// **A pull moves cardboard into the deck's group, and nothing is ever filed against a plan**
+/// ([`crate::collection_alloc::THEORY_HOLDS_NOTHING`]) — so there is no folder for a theory row's
+/// copies to land in and no variant argument to take. This used to read *"a plan holds no cards,
+/// so it is short of none"*; the second half went on 2026-09-09
+/// ([#435](https://github.com/Msgaihede/mtg-grimoire/issues/435)), the day a plan's rows started
+/// reporting a shortfall of their own. What a plan is short of is
+/// [`crate::deck_theory::theory_diff`]'s question, asked against the live *list* rather than
+/// against custody, and it is answered there. The custody half is untouched and is the whole of
+/// this fence.
 const LIVE: &str = crate::schema::DECK_VARIANTS[0];
 /// `FINISHES[0]` — the word [`crate::deck::normalise_finish`] maps *away* on a deck row and the
 /// one `collection_entries.finish` stores for a plain copy. Reading it back is the whole of the
@@ -1122,8 +1134,10 @@ mod tests {
 
     #[test]
     fn a_theory_only_deck_has_nothing_to_pull() {
-        // A plan holds no cards, so it is short of none — `THEORY_HOLDS_NOTHING`'s premise read
-        // from the other end, and the reason this command takes no variant argument.
+        // Nothing is ever filed against a plan, so there is no folder for a pulled copy to land
+        // in — `THEORY_HOLDS_NOTHING`'s premise read from the other end, and the reason this
+        // command takes no variant argument. Not "a plan is short of nothing": since 2026-09-09
+        // a plan reports a shortfall of its own, and it is `deck_theory::theory_diff`'s to fill.
         let (conn, deck, cat) = fixture();
         conn.execute(
             "INSERT INTO deck_cards
