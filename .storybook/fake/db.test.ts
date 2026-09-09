@@ -1984,6 +1984,76 @@ describe("a meld card's other halves", () => {
 });
 
 /**
+ * `card_tcgplayer_ids`, the read behind the card menu's **Open on TCGplayer** row — the one that
+ * turns a name search into the exact product page.
+ *
+ * **Every case asserts the whole object with real integers in it, and that is deliberate.** An
+ * assertion that a printing "has an id" would pass over the two mistakes worth catching: a
+ * handler that put the etched id in the ordinary slot, and one that fell back from an absent
+ * `productId` to `etchedProductId` — the plausible improvement on Rust, which supplies both
+ * unread precisely because only the caller knows the finish. The numbers themselves are the
+ * corpus's own, so `1174` on the Alpha Bolt is checkable against TCGplayer's catalogue rather
+ * than against this file.
+ *
+ * **`null` is ordinary here rather than a failure**, which is the half a fixture usually gets
+ * wrong: 1.62 % of paper English non-token printings have no id, digital-only cards essentially
+ * never do (0.04 %, measured 2026-09-09), and an id nothing resolves answers the same two nulls a
+ * token does. A card the reader opened has to be able to open — the caller's fallback is the name
+ * search — so there is no path here that rejects.
+ */
+describe("a printing's TCGplayer product ids", () => {
+  const ids = (id: string) => readHandlers(makeDb()).card_tcgplayer_ids({ id });
+  const named = (name: string, set: string) =>
+    CARDS.find((c) => c.name === name && c.setCode === set)!;
+
+  it("answers the ordinary product id for a printing TCGplayer sells", () => {
+    expect(ids(named("Lightning Bolt", "lea").id)).toEqual({
+      productId: 1174,
+      etchedProductId: null,
+    });
+  });
+
+  it("answers both ids where the etched product exists beside the ordinary one", () => {
+    // 333 printings carry both. Two of them are in this corpus, and they are two different
+    // shapes of the same fact: `sta 105` is the Japanese Bolt, whose three finishes are already
+    // the fixture for per-finish prices, and `mh2 267` is an ordinary English rare.
+    expect(ids(named("Lightning Bolt", "sta").id)).toEqual({
+      productId: 235146,
+      etchedProductId: 235145,
+    });
+    expect(ids(named("Counterspell", "mh2").id)).toEqual({
+      productId: 238617,
+      etchedProductId: 240803,
+    });
+  });
+
+  it("answers the etched id alone, with no ordinary product to fall back to", () => {
+    // The 892-row state, and the reason both ids come over unread: there is no ordinary product
+    // here at all, so the press has to open the etched one and say `Printing=Foil` about it. A
+    // handler that coalesced the two fields would answer `556344` as the *ordinary* id and the
+    // caller would ask TCGplayer for a `Normal` printing of a product that has none.
+    expect(ids(named("Restart Sequence", "acr").id)).toEqual({
+      productId: null,
+      etchedProductId: 556344,
+    });
+  });
+
+  it("answers two nulls for the printings TCGplayer does not sell", () => {
+    const both = { productId: null, etchedProductId: null };
+    // A digital-only printing (0.04 % of them carry an id), a token, and the meld *result* —
+    // a face nobody sells, where the front half `emn 15` has an ordinary id like any card.
+    expect(ids(named("Black Lotus", "vma").id)).toEqual(both);
+    expect(ids(named("Construct", "tmsc").id)).toEqual(both);
+    expect(ids(named("Brisela, Voice of Nightmares", "emn").id)).toEqual(both);
+    expect(ids(named("Bruna, the Fading Light", "emn").id).productId).toBe(119686);
+  });
+
+  it("answers two nulls for an id no row has, and never throws", () => {
+    expect(ids("no-such-card")).toEqual({ productId: null, etchedProductId: null });
+  });
+});
+
+/**
  * **A card is a priced answer too**, since `card_detail` and `card_printings` gained a
  * marketplace — which is the whole of what the card pane draws in its finish table and down its
  * printings list.
