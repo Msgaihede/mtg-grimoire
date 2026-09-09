@@ -1,5 +1,5 @@
 import type { SVGProps } from "react";
-import { Copy, Folder } from "lucide-react";
+import { Copy, Folder, Lock } from "lucide-react";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 
 /**
@@ -84,20 +84,59 @@ export function ElsewhereMark({ count }: { count: number }) {
  * in another window between the wish read and the folder read. Handled here rather than at the
  * two call sites so that the "no honest text, no chip" rule cannot be remembered in one view and
  * forgotten in the other.
+ *
+ * ## The lock, and why it lives in the wishlist's module
+ *
+ * `locked` is the collection's alone — there is no wishlist equivalent of issue #365 and none
+ * planned, which is `lockedFolderIds`' own reason for refusing to be generic. It is a prop here
+ * rather than a second component for this module's founding reason: the wall's caption strip and
+ * the table's Printing cell are one statement drawn at two sizes, and a collection tile drawing
+ * its own lock beside this glyph would be the drift the header of this file exists to prevent.
+ * Defaulted to `false`, so the wishlist's three call sites say nothing and draw what they always
+ * drew.
+ *
+ * **The glyph swaps rather than doubling**, which is `CollectionFolderCard`'s decision read
+ * across: a `Folder` that is set aside is a `Lock`, and two glyphs in a caption budgeted for one
+ * line is how `CardGrid`'s `CAPTION_HEIGHT` comes to overlap its virtual rows. **And the word
+ * travels with
+ * it** — a glyph is not an accessible name, so the `sr-only` preposition leads with `Locked,` and
+ * the tooltip says it too, both in the folder card's grammar (`locked, …`) rather than a second
+ * one invented here.
  */
-export function WishFolderCaption({ name }: { name: string | null }) {
+export function WishFolderCaption({
+  name,
+  locked = false,
+}: {
+  name: string | null;
+  /**
+   * Whether the drawer this copy is filed in is **effectively** locked — its own flag or any
+   * ancestor's, which is `lockedFolderIds`' answer and never `CollectionFolder.locked`.
+   *
+   * The collection's flattened wall passes it; the wishlist's two views and the collection's
+   * unflattened one do not. Where a tile merges copies from several drawers it is true when
+   * **any** of them is set aside, which is `CollectionPage`'s `tileLocked` and argued there: a
+   * lock that under-reported would be a set-aside copy quietly rejoining what the wall offers,
+   * which is the one direction this feature is not allowed to fail in.
+   */
+  locked?: boolean;
+}) {
   const tip = useTooltip();
   if (name === null) return null;
+  const sentence = locked ? `Filed in ${name}, locked` : `Filed in ${name}`;
+  const Glyph = locked ? Lock : Folder;
   return (
     <span
-      {...tip(`Filed in ${name}`, { describes: false })}
+      {...tip(sentence, { describes: false })}
       className="inline-flex min-w-0 shrink items-center gap-[calc(0.25rem*var(--mark-scale,1))] text-dim"
     >
-      <Folder
+      <Glyph
         aria-hidden="true"
         className="size-[calc(0.75rem*var(--mark-scale,1))] shrink-0"
       />
-      <span className="sr-only">Filed in </span>
+      {/* The trailing space is load-bearing: a flex `gap` is not a word separator, so an
+          accessible name assembled from these three spans would read `Locked, filed inTrade
+          binder` without it. */}
+      <span className="sr-only">{locked ? "Locked, filed in " : "Filed in "}</span>
       <span className="truncate">{name}</span>
     </span>
   );
