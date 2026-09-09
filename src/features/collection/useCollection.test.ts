@@ -150,6 +150,11 @@ function wrapper({ children }: { children: ReactNode }) {
 const lastQuery = () =>
   collectionList.mock.calls[collectionList.mock.calls.length - 1][0] as CollectionQuery;
 
+/** What the header last asked — the same read as {@link lastQuery}, one query along. The two are
+ *  drawn together because `collection::scope` is one predicate list and they must agree. */
+const lastSummary = () =>
+  collectionSummary.mock.calls[collectionSummary.mock.calls.length - 1][0] as CollectionQuery;
+
 describe("useCollection", () => {
   beforeEach(() => {
     collectionList.mockReset().mockResolvedValue({ items: [], total: 0 });
@@ -354,6 +359,40 @@ describe("useCollection", () => {
 
     await waitFor(() => expect(lastQuery().sort).toEqual([{ key: "price", dir: "desc" }]));
     expect(collectionSummary).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * **A locked drawer's copies belong to this page, and neither read may ask them away** —
+   * [issue #436](https://github.com/Msgaihede/mtg-grimoire/issues/436).
+   *
+   * Both queries sent `excludeLocked: true` from #365 until 2026-09-09, so setting a drawer
+   * aside took its copies off the flattened wall **and** out of the reader's card count, unique
+   * count and total value. The report was the header: a set-aside card is still a card they own,
+   * and a collection page that will not count it is the app disagreeing with the cardboard on
+   * their shelf. The lock is about what the app offers a *deck*, which is why
+   * `useCollectionSearch` still sends the flag unconditionally and has its own assertion saying
+   * so — that test is this one's other half, and one of the two going green alone is the
+   * feature half-undone.
+   *
+   * **Asserted on both calls, because widening one alone is the plausible mistake.** `scope` is
+   * one predicate list, so a summary that asked a different question than the list would price a
+   * wall the reader is not looking at — 38 cards over 26 tiles, which is a worse sentence than
+   * the one #436 was reported about. Read off the wire rather than off any state, exactly like
+   * the three-state test below it.
+   *
+   * A real filter is on throughout, so this cannot pass by both payloads being empty.
+   */
+  it("asks neither its list nor its header to leave out a locked drawer", async () => {
+    const { result } = renderHook(() => useCollection(), { wrapper });
+    await waitFor(() => expect(collectionSummary).toHaveBeenCalled());
+
+    act(() => result.current.toggleFinish("foil"));
+
+    await waitFor(() => expect(lastQuery().finishes).toEqual(["foil"]));
+    expect(lastQuery().excludeLocked).toBeUndefined();
+
+    await waitFor(() => expect(lastSummary().finishes).toEqual(["foil"]));
+    expect(lastSummary().excludeLocked).toBeUndefined();
   });
 
   /**

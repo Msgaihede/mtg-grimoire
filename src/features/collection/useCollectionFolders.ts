@@ -253,13 +253,21 @@ export function useCollectionFolders() {
    * **On `writes`, not on {@link settleOrder}, and the difference is the whole reason this is
    * commented at all.** A reorder settles narrowly because it moves no
    * `collection_entries.folder_id` and therefore changes no number counted from entries. A lock
-   * is the opposite kind of write: nothing moves, but the collection page asks its list with
-   * `excludeLocked`, so locking a drawer changes **which rows the list answers with** — and with
-   * it the header's totals and the page's count. Every one of those lives under
-   * `["collection"]`, including `["collection", "folderSummary", marketplace]`, and a settle
-   * that named only `["collection", "folders"]` would leave the table drawing copies the reader
-   * has just set aside until something else happened to invalidate it. `lib/query.ts` sets
-   * `staleTime: 30_000`, so a mounted observer that is merely stale never refetches on its own.
+   * moves none either — and it is still the opposite case, because it changes what the page
+   * *says* about rows that have not moved: every copy in that drawer gains a lock on its tile's
+   * caption and in its Folder cell, and the folder card above them gains its badge.
+   *
+   * **It used to change which rows came back at all, and the correction is worth keeping.**
+   * Until 2026-09-09 the collection page asked its list with `excludeLocked: true`, so locking a
+   * drawer took its copies out of the table *and* out of the header's totals — which is exactly
+   * what [#436](https://github.com/Msgaihede/mtg-grimoire/issues/436) reported as a bug: a
+   * set-aside card is still a card the reader owns. The settle is unchanged by that, and the
+   * reason it is unchanged is the point — a stale mark is as wrong as a stale row. Every query
+   * this touches lives under `["collection"]`, including
+   * `["collection", "folderSummary", marketplace]`, and a settle that named only
+   * `["collection", "folders"]` would leave the table drawing unmarked copies until something
+   * else happened to invalidate it. `lib/query.ts` sets `staleTime: 30_000`, so a mounted
+   * observer that is merely stale never refetches on its own.
    *
    * **`["decks"]` is in the set since 2026-09-09, and this is the write that put it there**
    * ([issue #435](https://github.com/Msgaihede/mtg-grimoire/issues/435)). It used to stay out on

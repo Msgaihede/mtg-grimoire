@@ -403,8 +403,8 @@ pub fn set_folder_locked(
 /// so it drops straight into an `IN (…)` and binds nothing.
 ///
 /// **Spelled once, here, because [`crate::collection`] and [`crate::deck_theory`] are the other
-/// readers** and a second copy in either is how the page's list and the spare count would come
-/// to disagree about which drawers are set aside. `collection::scope` pushes it as
+/// readers** and a second copy in either is how the deck builder's Collection Search tab and the
+/// spare count would come to disagree about which drawers are set aside. `collection::scope` pushes it as
 /// `(e.folder_id IS NULL OR e.folder_id NOT IN (…))` and `deck_theory`'s `OWNED_SPARE_SQL` adds
 /// the same arm beside its deck one — both in this exact shape, which is why this is the whole
 /// statement rather than a bare `WITH` clause somebody has to finish. Do not tidy a copy of it
