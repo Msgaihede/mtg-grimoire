@@ -237,6 +237,32 @@ honest statement about a plain card is *no mark* rather than a mark meaning "pla
 `null` is load-bearing for every paper printing sold in both finishes, the majority of any wall.
 Nothing on this page should ever be routed through it.
 
+### What "the surface named" means in the card modal, and the press that changed it
+
+**A surface can name a finish twice, and the second time is a reader pressing `View as foil`**
+(2026-09-10). The card modal's rail row was reading `paneFinish ?? scope.deck?.finish` — the two
+answers the *store* holds, both fixed at the moment the card was opened — so on the collection and
+the wishlist the reported failure was exact: view as foil, `Open on TCGplayer`, arrive at
+`?Printing=Normal` with the shiny picture still on screen. The deck arm never showed it, because
+there the same press writes `deck_cards.finish` and the row the fold reads comes back changed.
+
+**The finish on screen is the finish being shopped for, so the press outranks both.**
+`CardDetailModal`'s `viewedFinish` is the new top rung of that fold, fed by the press the art
+column already reported and reset with the face and the meld view when the card changes.
+
+**The `null`s are what makes this a precedence and not a third `??` term.** `onToggleFoil` carries
+a `DeckFinish`, whose `null` means *the regular copy*; the fold's other rungs use `null` for
+*nobody said*. The host spells the press's `null` as `"nonfoil"` at the boundary, which is what
+lets a foil tile viewed as regular reach `Normal` — folded raw, the tile's own `foil` would have
+won and the link would have been wrong in the mirror direction.
+
+**Two things a future reader should not re-derive.** `CardModalArt` calls `onToggleFoil` on
+**every** press and always did — only the *write* was ever gated on a deck row — so nothing new
+had to be produced for this; and `railFinish` has exactly one consumer, the rail's `finish` prop,
+so nothing else in the panel moved. The tests are `CardDetailModal.test.tsx`'s two new
+marketplace cases (both confirmed red against the old fold, one per direction) and
+`CardModalArt.test.tsx`'s report-with-no-deck-row pin.
+
 ## Nothing is resolved until the press
 
 **`externalLinks.ts`'s first doctrine survives this change intact: nothing is fetched, resolved or
@@ -283,6 +309,7 @@ forgotten.
 | `src/lib/externalLinks.ts` | The *shapes*: `tcgplayerProductUrl`, `TcgplayerPrinting`, and `marketplaceSearchUrl` for the other four |
 | `src/features/card/openMarketplace.ts` | The decision table, `linkFinish`, and the fallback for both call sites |
 | `src/features/card/CardModalRail.tsx` | The modal's last rail row |
+| `src/features/card/CardDetailModal.tsx` | Which finish that row is handed — the fold, and the `View as …` press at the top of it |
 | `src/features/card/cardMenu.tsx` | The context menu's `Open on →` submenu |
 | `.storybook/fake/` | The workbench's answer — both ids as **fields on the fake row** |
 
