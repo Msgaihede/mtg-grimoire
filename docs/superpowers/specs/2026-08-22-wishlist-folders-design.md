@@ -88,6 +88,23 @@ semantics: `wishlist_list` also answers **`elsewhere`** per row — how many *ot
 for the same oracle card — and a row carrying a non-zero one draws a small "also on your list"
 mark. Drawn in §4.
 
+> **Amended 2026-09-09 — the list is one writer, not three, and the consequence outlived it.**
+> `deck_missing_to_wishlist` and `deck_theory_missing_to_wishlist` each took an optional
+> `folder_id` that day ([issue #437](https://github.com/Msgaihede/mtg-grimoire/issues/437)), so
+> `wishlist_import_commit` is the only writer left that adds at the root and cannot name one —
+> an imported file says nothing about this reader's filing, which is the one of the three
+> reasons that was never about the command's plumbing. Nothing in this section's *mechanism*
+> moved: no schema, no grain, no rung. The two commands simply never passed a field
+> `WishInput.folder_id` had carried since v23, and the fourth term this section argues for is
+> exactly what makes a chosen destination an **add** rather than a move — the licence for the
+> change and not an obstacle to it. **The second-root-row consequence stands**, and so does
+> `elsewhere`: an import still lands one, and a reader who *chooses* the root while the same card
+> sits in a drawer lands the identical pair — which §7's own picker has allowed since this spec
+> shipped and the two deck sweeps allow now. What was wrong here was the roll call, never the
+> price.
+> [wishlist-folders.md](../../reference/wishlist-folders.md#the-two-deck-sweeps-take-a-folder-now-and-the-same-term-is-the-licence)
+> is the record of what shipped.
+
 ### `reset.rs`
 
 `clear_wishlist` empties `wishlist_folders` as well as `wishlist_entries`, in that order or by

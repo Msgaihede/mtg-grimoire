@@ -696,10 +696,16 @@ function starterWishFolders(): FakeWishlistFolder[] {
  *
  * **Every filed wish is a second row for a card the root already wants, and that is the point
  * rather than a shortage of cards.** With `folderId` in the storage grain, a card the reader
- * filed in `Ordered` and a deck sweep then re-added arrives as a *new row at the root* — so the
- * duplicate pair is the state folders create, and `WishRow.elsewhere` is the field that reports
- * it. Three of the five root wishes therefore read `elsewhere: 1`, and Ragavan and Jace read
- * `0`, so a story has both cases without touching the store.
+ * filed in `Ordered` and a deck sweep then re-added at the root arrives as a *new row there* —
+ * so the duplicate pair is the state folders create, and `WishRow.elsewhere` is the field that
+ * reports it. Three of the five root wishes therefore read `elsewhere: 1`, and Ragavan and Jace
+ * read `0`, so a story has both cases without touching the store.
+ *
+ * **"At the root" is the sweep's default rather than its only option** since issue #437 gave
+ * `deck_missing_to_wishlist` and `deck_theory_missing_to_wishlist` a destination — a reader who
+ * picks `Ordered` in that dialog folds into the filed row instead, and one who picks `Someday`
+ * makes a *third*. The seed is unchanged by that and deliberately so: what it stands up is the
+ * pair, and the pair is what the mark is about however the second row was made.
  *
  * It has a second, quieter benefit: no card in the corpus gains a wish it did not already have,
  * so `CardSummary.wishlisted` — the heart on a search tile — is exactly what it was before the

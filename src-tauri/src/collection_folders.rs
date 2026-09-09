@@ -304,10 +304,15 @@ pub fn list_folders(conn: &Connection) -> Result<Vec<CollectionFolder>, String> 
 /// **The parent is fenced in words**, [`user_folder`]'s two refusals: a parent that is gone is
 /// [`FOLDER_GONE`], and nothing may be filed *inside* a folder the app owns — a drawer in the
 /// removed-cards folder is a place the app would have to have an opinion about, and it has
-/// none. (`wishlist_folders::create_folder` leans on its foreign key here and is left with that
-/// hole, for the reason its `move_folder` gives: fixing one side of a ported pair is a
-/// difference somebody later reads as intentional. This side needs the row anyway, for the
-/// kind.)
+/// none. (`wishlist_folders::create_folder` leant on its foreign key here and was left with that
+/// hole, on the argument that fixing one side of a ported pair is a difference somebody later
+/// reads as intentional. **It was closed on 2026-09-09** — issue #437 gave the wishlist a
+/// `New folder…` panel that offers the whole tree as parents, which turned "the caller passes a
+/// parent that has just been deleted" from a shape nothing reached into an ordinary race — so
+/// the ported pair agrees again and that side answers [`FOLDER_GONE`] through its own
+/// `require_folder`. **What is still asymmetric is this side's _second_ refusal**, and it has no
+/// counterpart over there because the wishlist holds no folders the app owns. This side needs
+/// the row anyway, for the kind.)
 ///
 /// **The `id` is SQLite's and is never supplied.** `INTEGER PRIMARY KEY` is what makes
 /// [`crate::schema::COLLECTION_GRAIN`]'s eleventh term — `coalesce(folder_id, 0)` — safe, and
@@ -1443,8 +1448,12 @@ mod tests {
         );
     }
 
-    /// Both halves of the parent fence, which `wishlist_folders::create_folder` leaves to its
-    /// foreign key: an id nothing answers to, and a folder the app owns.
+    /// Both halves of the parent fence: an id nothing answers to, and a folder the app owns.
+    ///
+    /// **The first half was this cabinet's alone until 2026-09-09** —
+    /// `wishlist_folders::create_folder` left it to its foreign key — and is shared now that the
+    /// ported side has closed it. The second is still this cabinet's alone, and always will be:
+    /// the wishlist has no folders the app owns for a create to be refused over.
     #[test]
     fn create_folder_refuses_a_parent_that_is_gone_or_the_apps() {
         let conn = open();
