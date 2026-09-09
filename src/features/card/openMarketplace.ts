@@ -63,92 +63,115 @@ import type { Marketplace } from "@/lib/marketplace";
  * reader is going shopping for. A surface with nothing to say passes `null` (or, for the walls
  * that hold no finish at all, `undefined`), and then the printing answers for itself.
  *
- * **It reads the sole finish itself rather than calling `soleFinish` from `@/lib/finish`, and the
- * divergence is deliberate.** That function answers `null` for a nonfoil-only printing **on
- * purpose** — it drives the foil marking on card art, where the honest statement about a plain card
- * is *no mark* rather than a mark meaning "plain". Here a nonfoil-only printing genuinely is
- * `Normal`: it is sold in exactly one finish, TCGplayer has a word for that finish, and refusing to
- * name it would send a reader to a product page with no printing selected for a card that has only
- * one. So the two functions differ in exactly one row of a three-row table, and this is the
- * near-duplicate a reader will find and want to collapse — it must not be collapsed, because
- * `soleFinish`'s `null` is load-bearing for 53 224 paper printings' worth of unmarked art.
+ * **It always answers a finish, and that is a decision rather than a fallback** (2026-09-09). A
+ * link is meant to land on the version the reader is looking at, so the printing is *always*
+ * asserted — there is no "open it unfiltered and let them choose" case, because the unfiltered page
+ * mixes both finishes and the reader has to filter it by hand to get back to where they started.
+ * This reverses an earlier reading in which an unnamed finish appended nothing.
  *
- * A printing sold in two or three finishes with no statement about it answers `null`: which one a
- * reader wants is genuinely unknown, and the unfiltered page — every listing in both finishes, as
- * the bare URL was measured to show — is a better answer than a coin flip.
+ * **The floor is the most ordinary finish the printing is _actually sold in_, not a flat
+ * `nonfoil`.** That distinction is the whole of what keeps this honest: 12 366 paper printings
+ * exist only in foil and 892 only in etched, and asserting `Normal` on one of those would ask
+ * TCGplayer for a listing that cannot exist — a filtered page with nothing in it, which is worse
+ * than the unfiltered page this replaced. So the preference runs `nonfoil` → `foil` → `etched`
+ * over the finishes the printing lists, and a printing whose `finishes` column is empty or
+ * unreadable falls to `nonfoil` as the ordinary case.
+ *
+ * **This subsumes the sole-finish step it replaced rather than dropping it.** A printing sold in
+ * exactly one finish has that finish as its most ordinary one, so a one-element list answers
+ * exactly as it did before — one rule where there were two, and no row of the old table changes
+ * except the ones that used to answer "none".
+ *
+ * **It therefore no longer resembles `soleFinish` from `@/lib/finish`, which is worth stating
+ * because the two were deliberately near-duplicates until now.** That function answers `null` for a
+ * nonfoil-only printing **on purpose** — it drives the foil marking on card art, where the honest
+ * statement about a plain card is *no mark* rather than a mark meaning "plain". Its `null` is
+ * load-bearing for 53 224 paper printings' worth of unmarked art. Nothing here should ever be
+ * routed through it.
  */
 export function linkFinish(
   surfaceFinish: Finish | null | undefined,
   finishes: string | null,
-): Finish | null {
+): Finish {
   if (surfaceFinish) return surfaceFinish;
   const listed = parseFinishes(finishes);
-  return listed.length === 1 ? listed[0] : null;
+  // Ordinary first. A printing that lists none of the three (an empty or unreadable column) is
+  // treated as the plain card, which is what `chooseTcgplayerLink` then asserts `Normal` for.
+  for (const candidate of ["nonfoil", "foil", "etched"] as const) {
+    if (listed.includes(candidate)) return candidate;
+  }
+  return "nonfoil";
 }
 
-/** One TCGplayer product page, and the printing to assert on it — `null` for "assert none". */
+/**
+ * One TCGplayer product page, and the printing to assert on it.
+ *
+ * **`printing` is not nullable, and the type is where that rule is enforced.** Every link this app
+ * builds names a finish (see {@link linkFinish}); a `null` here would be the "open it unfiltered"
+ * case that no longer exists.
+ */
 export interface TcgplayerLink {
   productId: number;
-  printing: TcgplayerPrinting | null;
+  printing: TcgplayerPrinting;
 }
 
 /**
  * Which id to open, and which printing to assert — `null` when there is no id to open at all.
  *
- * **The governing rule, stated once: assert a printing only when the id actually chosen can be
- * sold in it.** Everything below is that sentence applied to the four finishes and the three
- * shapes the ids come in, and every case that appends nothing does so because the *product* it
- * fell back to has no row of that name.
+ * **The governing rule, stated once: name the printing that the id actually chosen is sold in.**
+ * Every row asserts one, because a link exists to land on the version in front of the reader; what
+ * varies is only *which* word, and the word follows the **product** rather than the finish the
+ * reader named. That is the whole subtlety here, and it is why this is a table and not a mapping:
+ * `etched` is not a `Printing` value, so an etched copy is `Foil` — on its own product where one
+ * exists, and TCGplayer sells no `Normal` row at all on an etched product.
  *
  * | finish | id | `Printing` |
  * | --- | --- | --- |
  * | `etched`, etched id present | `etchedProductId` | `Foil` |
- * | `etched`, no etched id | `productId` | *none* |
+ * | `etched`, no etched id | `productId` | `Foil` |
  * | `foil` | `productId` ?? `etchedProductId` | `Foil` |
  * | `nonfoil`, `productId` present | `productId` | `Normal` |
- * | `nonfoil`, only `etchedProductId` | `etchedProductId` | *none* |
- * | unknown | `productId` ?? `etchedProductId` | *none* |
+ * | `nonfoil`, only `etchedProductId` | `etchedProductId` | `Foil` |
  * | neither id | — | `null`, and the caller searches by name |
  *
  * Row by row:
  *
  * - **Etched with an etched id** is the exact product, and its printing is `Foil` — the etched
- *   product's *own* subtype, measured on `484936 The Ur-Dragon (Foil Etched)`. Etched is not a
- *   third `Printing` word and there is no third word to reach for.
- * - **Etched with no etched id** (892 printings carry only the etched id, so the reverse happens
- *   too) lands on the ordinary product, which is the closest page for the card — but the etched
- *   copy is **not sold under it**, so any printing named there would be a guess about a row that
- *   is not the one the reader asked for. Nothing is appended, so the page opens unfiltered.
+ *   product's *own* subtype, measured on `484936 The Ur-Dragon (Foil Etched)`, whose page offers a
+ *   Foil checkbox and **no Normal row at all**. Etched is not a third `Printing` word and there is
+ *   no third word to reach for.
+ * - **Etched with no etched id** lands on the ordinary product (892 printings carry only the etched
+ *   id, so the reverse shape happens too) and asks for `Foil`. The etched copy is not sold under
+ *   that product, so this is the closest listing rather than the exact one — and `Foil` is the
+ *   closest of the two words, since an etched card is a premium foil treatment and never a plain
+ *   one. This row appended nothing until 2026-09-09; asserting the nearer word beats handing back
+ *   a page mixing plain copies in.
  * - **Foil** takes either id, because both products sell a `Foil` row: the ordinary one's is the
  *   foil printing and the etched one's is the etched card itself. `productId` first — a plain foil
  *   is what "foil" means on a printing that has both, and 333 printings do.
- * - **Nonfoil with an ordinary id** is the one case `Normal` is honest about.
- * - **Nonfoil with only an etched id** is a contradiction in the data rather than in the reader:
- *   an etched product has no `Normal` row, so this appends nothing rather than asking for one.
- * - **Unknown finish** means the reader named none and the printing named none either (see
- *   {@link linkFinish}), so the unfiltered page — every listing — is the honest answer.
+ * - **Nonfoil with an ordinary id** is the plain card on the plain product: `Normal`, the only row
+ *   of this table that uses that word.
+ * - **Nonfoil with only an etched id** is a contradiction in the data rather than in the reader.
+ *   The chosen product has no `Normal` row, so the printing follows the product and asks for
+ *   `Foil` — {@link linkFinish} makes this nearly unreachable anyway, since it would have read
+ *   `etched` off such a printing's own `finishes` rather than defaulting to `nonfoil`.
  */
-export function chooseTcgplayerLink(
-  ids: TcgplayerIds,
-  finish: Finish | null,
-): TcgplayerLink | null {
+export function chooseTcgplayerLink(ids: TcgplayerIds, finish: Finish): TcgplayerLink | null {
   const { productId, etchedProductId } = ids;
   if (finish === "etched") {
-    if (etchedProductId !== null) return { productId: etchedProductId, printing: "Foil" };
-    // The etched copy is not sold under the ordinary product, so no printing can be claimed.
-    return productId === null ? null : { productId, printing: null };
+    // The etched product where there is one; otherwise the ordinary product, still asking for the
+    // nearer of the two words rather than for the plain card.
+    const id = etchedProductId ?? productId;
+    return id === null ? null : { productId: id, printing: "Foil" };
   }
   if (finish === "foil") {
     const id = productId ?? etchedProductId;
     return id === null ? null : { productId: id, printing: "Foil" };
   }
-  if (finish === "nonfoil") {
-    if (productId !== null) return { productId, printing: "Normal" };
-    // An etched product has no `Normal` row to select.
-    return etchedProductId === null ? null : { productId: etchedProductId, printing: null };
-  }
-  const id = productId ?? etchedProductId;
-  return id === null ? null : { productId: id, printing: null };
+  // Nonfoil. `Normal` only on the ordinary product — an etched product has no such row, so the
+  // printing follows the product rather than the finish.
+  if (productId !== null) return { productId, printing: "Normal" };
+  return etchedProductId === null ? null : { productId: etchedProductId, printing: "Foil" };
 }
 
 /**

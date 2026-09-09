@@ -94,24 +94,22 @@ export type TcgplayerPrinting = "Normal" | "Foil";
  * `?Printing=…&Language=English` — TCGplayer appends that itself — so this builder passes the one
  * parameter it means and leaves the site's own to the site.
  *
- * `printing` is nullable and `null` means **append nothing**, which is a deliberate third state
- * rather than a missing default: the page then stays unfiltered, showing every listing in both
- * finishes, and the caller reaches for it whenever the id it chose cannot honestly be claimed to be
- * sold in a finish (`openMarketplaceForCard`'s table says which cases those are). Guessing `Normal`
- * for an etched product would be a parameter naming a row that product has none of — measured
- * above: that product has no Normal checkbox.
+ * **`printing` is required, and there is no way to spell "leave it unfiltered"** (2026-09-09). A
+ * link exists to land on the version the reader is looking at, and the bare product page mixes both
+ * finishes — 8 listings against 4, measured above — so opening one would hand the reader a page they
+ * have to filter by hand to get back to where they started. It was nullable for one afternoon, with
+ * `null` meaning *append nothing*; what replaced it is `openMarketplaceForCard`'s rule that the
+ * printing follows the **product** it chose, so there is always a truthful word to send. `Normal` on
+ * an etched product would name a row that product has none of, and that case is now handled by
+ * asking for `Foil` there rather than by omitting the parameter.
  *
  * The id goes in unencoded because it is a `number` and not a string — so unlike
  * {@link scryfallCardUrl}'s collector number or {@link edhrecCardUrl}'s card name, there is
  * nothing here for a `★` or a `//` to arrive in. That is the one builder in this file with no
  * encoder in it, and the reason is the type rather than an omission.
  */
-export function tcgplayerProductUrl(
-  productId: number,
-  printing: TcgplayerPrinting | null,
-): string {
-  const base = `https://www.tcgplayer.com/product/${productId}`;
-  return printing === null ? base : `${base}?Printing=${printing}`;
+export function tcgplayerProductUrl(productId: number, printing: TcgplayerPrinting): string {
+  return `https://www.tcgplayer.com/product/${productId}?Printing=${printing}`;
 }
 
 /**

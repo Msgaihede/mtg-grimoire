@@ -144,10 +144,12 @@ Product `484935` (The Ur-Dragon, Commander Masters), three states of one page:
 | no parameter | unchecked | unchecked | **8** |
 
 **4 + 4 = 8 is the part worth writing down.** The parameter genuinely *partitions* the listings
-rather than decorating the URL, and the bare page is a real neutral rather than a hidden default —
-which is exactly what the two *omit the parameter* rows of the decision table below rest on. If
-the bare page had silently meant `Normal`, those rows would be wrong and nothing about a 200 would
-have said so.
+rather than decorating the URL, and the bare page is a real neutral rather than a hidden default.
+That neutrality was first read as a *licence to omit* the parameter when nothing named a finish;
+**the same measurement is what retired that reading a few hours later** (see the decision table
+below). A page showing every listing in both finishes is one the reader has to filter by hand to
+get back to the version they were already looking at, so "8 listings" is the cost of omitting
+rather than the safety of it.
 
 **The etched branch is confirmed on its own product.** `484936`'s `h1` reads `The Ur-Dragon (Foil
 Etched) - Commander Masters (CMM)`, and the page offers **only a Foil checkbox — no Normal row at
@@ -163,58 +165,77 @@ because the app asked for anything.
 
 ## The decision table
 
-**The governing rule, stated once: assert a printing only when the id actually chosen can be sold
-in it.** Everything below is that sentence applied to the four finishes and the three shapes the
-ids come in, and every case that appends nothing does so because the *product* it fell back to has
-no row of that name.
+**The governing rule, stated once: name the printing the id actually chosen is sold in.** Every
+row asserts one — a link exists to land on the version in front of the reader — and what varies is
+only *which* word. The word follows the **product**, not the finish the reader named, which is the
+whole subtlety: `etched` is not a `Printing` value, so an etched copy is `Foil`, and an etched
+product has no `Normal` row at all.
 
 | finish the surface named | id used | `Printing` |
 | --- | --- | --- |
 | `etched`, etched id present | `etchedProductId` | `Foil` |
-| `etched`, no etched id | `productId` | *none* |
+| `etched`, no etched id | `productId` | `Foil` |
 | `foil` | `productId` ?? `etchedProductId` | `Foil` |
 | `nonfoil`, ordinary id present | `productId` | `Normal` |
-| `nonfoil`, only an etched id | `etchedProductId` | *none* |
-| unknown | `productId` ?? `etchedProductId` | *none* |
+| `nonfoil`, only an etched id | `etchedProductId` | `Foil` |
 | neither id | — | the name search, unchanged |
 
-The five rows that need an argument of their own:
+**This reverses an earlier reading, and the reversal is the reader's own correction** (2026-09-09).
+The table first carried three *omit the parameter* rows — etched without an etched id, nonfoil with
+only an etched id, and an unknown finish — each argued from "the site's own default is a better
+answer than a guess". The first press in the shipped window went to a printing sold in three
+finishes, opened from the search wall, which names none: `product/235270` with no filter, which is
+the unknown row working exactly as designed and which read as the feature not working. **A link
+whose whole purpose is the exact version must not hand back a page mixing versions**, so the
+unknown row is gone — `linkFinish` now always answers a finish — and the two remaining omissions
+became `Foil`, the nearer of the two words in both cases.
+
+The four rows that need an argument of their own:
 
 - **Etched with an etched id** is the exact product, and `Foil` is that product's own subtype.
   Etched is not a third `Printing` word and there is no third word to reach for.
 - **Etched with no etched id** lands on the ordinary product, which is the closest page for the
-  card — but the etched copy is **not sold under it**, so any printing named there would be a
-  guess about a row that is not the one the reader asked for. Nothing is appended and the site's
-  own default stands.
+  card. The etched copy is not sold under it, so this is the nearest listing rather than the exact
+  one — and `Foil` is the nearer word, since an etched card is a premium foil treatment and never
+  a plain one.
 - **Foil** takes either id, because both products have a `Foil` row: the ordinary one's is the
   foil printing, the etched one's is the etched card itself. `productId` first, because a plain
   foil is what "foil" means on a printing that has both — and 333 do.
-- **Nonfoil with only an etched id** is a contradiction in the data rather than in the reader. An
-  etched product has no `Normal` row, so this appends nothing rather than asking for one. It is
-  reachable: 892 printings have only the etched id.
-- **Unknown** means the reader named no finish and the printing named none either, so TCGplayer's
-  default row is a better answer than a coin flip.
+- **Nonfoil with only an etched id** is a contradiction in the data rather than in the reader, and
+  it is the sharpest illustration that the printing follows the *product*: that product has no
+  `Normal` listing, so asking for one would filter the page down to nothing. `linkFinish` makes it
+  nearly unreachable anyway — such a printing lists `etched` and so never defaults to `nonfoil` —
+  but 892 printings carry only the etched id, so the row is not hypothetical.
 
-### The finish itself: what the surface said, then the printing's sole finish, then nothing
+### The finish itself: what the surface said, then the most ordinary finish it is sold in
 
 `linkFinish` takes the finish the surface named — a collection row's own, a deck row's, a
-wishlist's `preferred_finish` — and falls back to the printing's `finishes` column when it is sold
-in exactly one. That order is `playedFinish`'s one file over, and for the same reason: the
-reader's own statement outranks the object's, because each of those columns says *this copy is the
-shiny one* about the very copy the reader is going shopping for.
+wishlist's `preferred_finish` — and otherwise reads the printing's own `finishes` column. That
+order is `playedFinish`'s one file over, and for the same reason: the reader's own statement
+outranks the object's, because each of those columns says *this copy is the shiny one* about the
+very copy the reader is going shopping for.
 
-**The sole-finish reading is deliberately _not_ `soleFinish` from `@/lib/finish`, and this is the
-near-duplicate somebody will find and want to collapse.** It must not be collapsed. `soleFinish`
-answers `null` for a nonfoil-only printing **on purpose** — it drives the foil marking on card
-art, where the honest statement about a plain card is *no mark* rather than a mark meaning
-"plain", and that `null` is load-bearing for every paper printing sold in both finishes — the
-majority of any wall, by `soleFinish`'s own count at its own definition. Here a
-nonfoil-only printing genuinely **is** `Normal`: it is sold in exactly one finish, TCGplayer has a
-word for that finish, and refusing to name it would send a reader to a product page with no
-printing selected for a card that has only one.
+**It always answers a finish**, which is what makes the decision table above total. The floor is
+**the most ordinary finish the printing is _actually sold in_** — the preference runs `nonfoil` →
+`foil` → `etched` over the finishes listed, whatever order Scryfall wrote them in — and a printing
+whose column is empty or unreadable falls to `nonfoil` as the ordinary case.
 
-So the two functions differ in exactly one row of a three-row table, and the difference is the
-point of each of them.
+**Not a flat `nonfoil` default, and that distinction is the whole of what keeps it honest.** 12 366
+paper printings exist only in foil and 892 only in etched; asserting `Normal` on one of those would
+ask TCGplayer for a listing that cannot exist, and a filtered page with nothing in it is worse than
+the unfiltered page this replaced. Reading the floor off the column instead means a foil-only
+printing gets `Foil` and an etched-only printing gets `Foil` on its own product.
+
+**This subsumes the sole-finish step it replaced rather than dropping it.** A printing sold in
+exactly one finish has that finish as its most ordinary one, so a one-element list answers exactly
+as it did before — one rule where there were two.
+
+**It therefore no longer resembles `soleFinish` from `@/lib/finish`, and that is worth stating
+because the two were deliberately near-duplicates for one afternoon.** `soleFinish` answers `null`
+for a nonfoil-only printing **on purpose** — it drives the foil marking on card art, where the
+honest statement about a plain card is *no mark* rather than a mark meaning "plain", and that
+`null` is load-bearing for every paper printing sold in both finishes, the majority of any wall.
+Nothing on this page should ever be routed through it.
 
 ## Nothing is resolved until the press
 
