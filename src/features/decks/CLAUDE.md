@@ -1560,6 +1560,21 @@ price | type`). An **inactive category stays its own group in all three grouping
     nothing for a drag to have to be exempted from. That absence is what the spotlight cost and is
     the half worth keeping — a mark spread by four views to say _this card is not the one you asked
     about_ is a mark all four have to get right, and a filter needs none of it.
+  - **A chip with a glyph in it needs `inline-flex items-center` of its own, because
+    `FILTER_CONTROL` carries no `display`** (2026-09-09, found by driving the shipped window). That
+    recipe is `h-9 … rounded-md border text-sm` plus the press — geometry only — and it has never
+    needed one, because every other chip in this row is a bare string and a `<button>`'s initial
+    display is enough for a caption. This is the first chip in the row with a **glyph beside its
+    words**, and without a flex context the crown is a block-level line of its own: it stacked
+    *above* the caption, two lines inside a fixed 36px box with the words clipping at the bottom,
+    and the `gap-1.5` written beside it styled nothing at all. **Fix it at the chip and never on
+    `FILTER_CONTROL`**, which is shared with every caption-only chip in the app and must not gain a
+    display for one caller. **Nothing in either suite can go red for this** — jsdom lays nothing
+    out and computes no `display`, so a test asserting the chip's class list passes while those
+    classes compose to a two-line control; the instrument that catches it is the crown's rect
+    measured *against* the caption's, which is
+    [decks-live-findings.md](../../../docs/reference/decks-live-findings.md)'s own rule that a
+    stacking or centring fault names a **pair** and never one element.
 - **What is left in the band is what needs the room**: the pips, the shortfall and the press that
   acts on it, and the four charts. **The deck stats are a band at the foot of the editor, and there
   is no control that hides them** (changed 2026-08-14). They were a 280px aside on the desk row with a `Stats` toggle in
