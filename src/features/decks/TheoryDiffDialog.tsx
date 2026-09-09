@@ -12,6 +12,10 @@ import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
 import { Dialog } from "@/components/Dialog";
+import {
+  useWishDestinationName,
+  WishDestination,
+} from "@/features/wishlist/WishDestination";
 
 /** Stable identity for "not read yet", so the totals below are not recomputed over a new empty
  *  array on every render of a dialog that is still waiting. */
@@ -144,6 +148,52 @@ function heldNote(row: TheoryDiffRow): string | null {
 }
 
 /**
+ * How a line names the object it is about, in the one place both of its controls read it from.
+ *
+ * The quantity, because that is what a press carries; **the finish, because two lines can
+ * otherwise carry the same name** — a plan wanting the foil Bolt as well as the plain one is two
+ * rows sharing a `cardId` and a word, so a name built from `row.name` alone hands a reader two
+ * identical controls. Nothing is said about the regular copy, which is {@link FinishMark}'s own
+ * rule: the plain card is the unmarked case everywhere in this app, and a mark on every row says
+ * nothing.
+ *
+ * **One function rather than the ternary spelled once per control.** The checkbox and the button
+ * on a line differ in their *verb* and — since the destination landed — in what they append, and
+ * in nothing at all about the card. Two spellings of the card half would be free to disagree
+ * about which object the line is, which is the failure {@link rowKey}'s paragraph is about, in
+ * words instead of in a key.
+ */
+function rowPhrase(row: TheoryDiffRow): string {
+  const card = row.finish === null ? row.name : `${FINISH_LABEL[row.finish]} ${row.name}`;
+  return `${row.quantity} more ${card}`;
+}
+
+/**
+ * Where a press files, as the clause every sentence on this surface appends — and `""` at the
+ * wishlist root.
+ *
+ * **The root appends nothing rather than saying "in Wishlist".** A reader who has never touched
+ * the destination control is at the root, which is where this dialog has always written, so the
+ * sentences they read have to be exactly the sentences they read before there was a control at
+ * all: a new clause on every press, on the destination nobody chose, would be the feature
+ * announcing itself on the screens it did not change.
+ *
+ * **`null` is also what {@link useWishDestinationName} answers for a name it does not have yet**
+ * — a folder id whose list is still loading, or one that names no folder any more — so a
+ * destination that cannot be named reads as the root here. That is the honest fallback of the
+ * two available: a clause with a blank in it says where the wishes went and then does not say
+ * it, while the root's sentence is merely the one this surface said for its whole life. What
+ * makes it safe is that the *write* carries the id and not the name, so a name that has not
+ * arrived costs a clause and never a destination.
+ *
+ * One function, so the live region and a row's button cannot come to say "in Ordered" and
+ * "to Ordered" about one press.
+ */
+function filedIn(destination: string | null): string {
+  return destination === null ? "" : ` in ${destination}`;
+}
+
+/**
  * What the plan is short of, and the two ways to buy it.
  *
  * **Read-only about the deck**: nothing here adds, removes or moves a card, and neither write
@@ -166,7 +216,28 @@ function heldNote(row: TheoryDiffRow): string | null {
  * button nobody has pressed should not pay for it, and unmounting says that more plainly than a
  * flag does.
  */
-function useTheoryDiff(deckId: number, marketplace: MarketplaceId) {
+function useTheoryDiff(
+  deckId: number,
+  marketplace: MarketplaceId,
+  /**
+   * Where both writes file, `null` for the wishlist root.
+   *
+   * **An argument to the hook rather than a member of either mutation's variables**, and that is
+   * the shape the two presses force rather than a preference. `wishRow`'s variables are the
+   * *row* — the pending check compares them and `onSuccess` marks them — and `wishAll`'s are the
+   * key list the footer built; widening either into a pair would make one of those comparisons
+   * a deep one for a fact neither press varies. The destination is a property of the dialog,
+   * not of a press made in it, so it arrives the way `deckId` and the marketplace do.
+   *
+   * It is closed over rather than read at the press, which is safe for one reason worth stating:
+   * `useMutation` re-sets its options on every render, and choosing a destination and pressing
+   * Send are two separate user acts with a render between them — so the closure cannot be a
+   * render behind the control. It is **not** safe if a future caller ever fires one of these in
+   * the same tick as the change; that caller should pass the folder through its own variables
+   * rather than assume this.
+   */
+  folderId: number | null,
+) {
   const queryClient = useQueryClient();
 
   /**
@@ -209,9 +280,13 @@ function useTheoryDiff(deckId: number, marketplace: MarketplaceId) {
    * the press — the backend re-reads the diff inside the write — and those are rows the reader
    * never saw. Sending them would be the dialog acting on its own, which is `only`'s own
    * argument for being an include list read from the other end.
+   *
+   * **The destination rides beside the keys** — the third argument, `null` for the root, which
+   * is what every press this dialog made before the control existed was writing.
    */
   const wishAll = useMutation({
-    mutationFn: (only: readonly string[]) => ipc.deckTheoryMissingToWishlist(deckId, only),
+    mutationFn: (only: readonly string[]) =>
+      ipc.deckTheoryMissingToWishlist(deckId, only, folderId),
     onSuccess: bought,
   });
 
@@ -229,7 +304,8 @@ function useTheoryDiff(deckId: number, marketplace: MarketplaceId) {
    * pressed a handful of times.
    *
    * **The variables stay the row rather than the key**, because the row is what the pending
-   * check below compares and what `onSuccess` marks; the key is one call away from either.
+   * check below compares and what `onSuccess` marks; the key is one call away from either — and
+   * so is the destination, which is the hook's argument and not this press's.
    *
    * **`row.quantity` is not passed and never was.** The backend re-reads the difference and
    * writes what that row is short of, which is the one number that cannot have gone stale behind
@@ -238,7 +314,8 @@ function useTheoryDiff(deckId: number, marketplace: MarketplaceId) {
    * out of it and `ownedSpare` has not.
    */
   const wishRow = useMutation({
-    mutationFn: (row: TheoryDiffRow) => ipc.deckTheoryMissingToWishlist(deckId, [rowKey(row)]),
+    mutationFn: (row: TheoryDiffRow) =>
+      ipc.deckTheoryMissingToWishlist(deckId, [rowKey(row)], folderId),
     onSuccess: bought,
   });
 
@@ -360,10 +437,19 @@ export interface TheoryDiffDialogProps {
  * that ancestor the containing block instead — the deck editor has transformed elements in it,
  * so this belongs at the editor's top level rather than inside a column or a row.
  *
+ * **A destination, and one for the whole list** (2026-09-09, issue #437). Every wish written here
+ * went to the wishlist root and nothing on this surface said so, which read as the wishlist's
+ * folders not applying to a deck at all. The footer's `Send to` picks one — the root, any folder,
+ * or a new one made without leaving the dialog — and **both** writes carry it, the footer's press
+ * and each row's own. The root stays the default and stays silent, so a reader who ignores the
+ * control gets the dialog exactly as it was.
+ *
  * **`open` is a mount, not a class**, and it is the shell's guarantee rather than this file's.
  * Everything with state — the query, the two mutations, the caret, the record of which rows have
- * been sent, **and which rows the reader has unticked** — lives in {@link TheoryDiffBody}, so
- * closing the dialog unmounts all of it and reopening starts a genuinely new question. The
+ * been sent, which rows the reader has unticked, **and where the wishes are filed** — lives in
+ * {@link TheoryDiffBody}, so closing the dialog unmounts all of it and reopening starts a
+ * genuinely new question. That is what makes "the destination is the root on every open" a fact
+ * about the tree rather than a reset somebody has to remember to write. The
  * alternative, one component that renders `null`
  * late, keeps every one of those alive behind a flag and has to remember to clear each: the first
  * version of this file did, and its reset was an effect that called `setState` — a cascading
@@ -417,7 +503,36 @@ function TheoryDiffBody({ deckId }: { deckId: number }) {
   // open, already holds a query client of its own, and a shopping list is exactly the surface
   // a reader would open *because* they have just changed which shop they are pricing against.
   const { marketplace } = useMarketplace();
-  const { query, rows, wishAll, wishRow } = useTheoryDiff(deckId, marketplace.id);
+
+  /**
+   * **One destination for the whole dialog** — which wishlist folder every wish written here is
+   * filed into, `null` for the root.
+   *
+   * **`null` on mount, and that is a fact rather than an effect.** {@link Dialog} mounts nothing
+   * while it is closed, so this component is made fresh on each open and this state is born at
+   * the root: a reader who never touches the control gets exactly the writes this dialog made
+   * before the control existed, and the dialog cannot remember a folder across opens. The
+   * alternative — a component that renders `null` late and clears its own state — is the shape
+   * whose reset was an effect that called `setState`, which is what the class doc above records
+   * as the first version of this file's own mistake.
+   *
+   * **One destination and not one per row.** A shopping list is filed where the reader is
+   * shopping; a per-row picker would be twelve controls answering a question the reader asks
+   * once, and the footer's press has no honest answer to give if the rows it carries disagree.
+   */
+  const [folderId, setFolderId] = useState<number | null>(null);
+
+  /**
+   * The folder's own name, or `null` at the root — **and `null` again while the folder list is
+   * still being read, or for an id that names no folder any more.**
+   *
+   * One lookup for the three sentences that need it: the control's own accessible name, the
+   * live region's answer and every row button's name. A second one would be two answers to
+   * "where does this file" on one screen, free to disagree for the length of a read.
+   */
+  const destination = useWishDestinationName(folderId);
+
+  const { query, rows, wishAll, wishRow } = useTheoryDiff(deckId, marketplace.id, folderId);
 
   const [view, setView] = useState<DiffView>("all");
 
@@ -449,6 +564,43 @@ function TheoryDiffBody({ deckId }: { deckId: number }) {
    * they open this. A row button marks its own row because that press *is* about that row.
    */
   const [sent, setSent] = useState<ReadonlySet<string>>(new Set());
+
+  /**
+   * Choosing a destination — **and throwing away every answer this dialog is still standing on**,
+   * because all of them are about a folder that is no longer the one a press would file into.
+   *
+   * **The `sent` marks are the piece of state this feature actually invalidates.** The wishlist's
+   * grain carries `coalesce(folder_id, 0)` as its fourth term, so a row sent to the root and then
+   * sent to `Ordered` is a genuinely **new wish** rather than a fold into the one already there.
+   * A button still reading `Wishlisted` after the destination moved would therefore be lying
+   * about a press that has not happened: the reader would read it as "this card is on the list I
+   * am filing into", which is exactly the thing it can no longer say. Clearing is the only
+   * honest answer — the alternative is a per-destination record of what was sent where, which is
+   * a mark saying "sent, but somewhere else" that no button on this row has room for.
+   *
+   * **The two mutations are reset for the same reason, one sentence over.** `wishAll.isSuccess`
+   * outlives its press, and the live region words its answer with the destination that is
+   * selected *now* — so without this, sending to `Ordered` and then picking `Someday` re-words a
+   * standing sentence into a claim about a press nobody made. A refusal is dropped on the same
+   * argument: `That folder is not there any more.` is a fact about the folder the reader has
+   * just moved off.
+   *
+   * **Guarded on the id actually changing**, because a `Dropdown` row is pressable while it is
+   * already the picked one — a reader who opens the panel and presses `Wishlist` at the root has
+   * chosen nothing, and taking their marks away for it would be the control undoing work in
+   * exchange for no change on screen.
+   *
+   * A plain function rather than a `useCallback`: the two mutation objects it resets are new on
+   * every render, so a memo over them could never hold — a stable identity here would be a claim
+   * this cannot make.
+   */
+  const chooseDestination = (next: number | null) => {
+    if (next === folderId) return;
+    setFolderId(next);
+    setSent(new Set());
+    wishAll.reset();
+    wishRow.reset();
+  };
 
   /** What the list is drawing, which is what everything below counts. */
   const shown = useMemo(() => rows.filter((row) => inView(row, view)), [rows, view]);
@@ -579,6 +731,7 @@ function TheoryDiffBody({ deckId }: { deckId: number }) {
                 key={rowKey(row)}
                 row={row}
                 currency={marketplace.currency}
+                destination={destination}
                 sent={sent.has(rowKey(row))}
                 picked={isPicked(row)}
                 onPick={() => toggleRow(rowKey(row))}
@@ -615,17 +768,71 @@ function TheoryDiffBody({ deckId }: { deckId: number }) {
               buttons change still hears what the press did. Rendered always, so the region is in
               the tree before it has anything to say — a live region mounted with its own text is
               a region that announces nothing. */}
+        {/* **`max-w-36` is a measurement rather than a taste**, and it is one half of what keeps
+            this footer one row taller than it was before the destination joined it. The note
+            column to the left is the only `flex-1` item here, so it absorbs every pixel the other
+            three take: at `w-[47.5rem]` with the destination drawn and this region uncapped, the
+            note was squeezed to **187px** and wrapped to six lines, taking the footer from 96px to
+            **128px** (shipped window, 2026-09-09, debug build, 1280x800). Capping the region — it
+            is usually empty, and its longest sentence wraps to two lines perfectly well — gives
+            the note 269px and four lines, and the footer measures 96px again. */}
         <p
           role="status"
           aria-live="polite"
-          className="min-w-0 shrink text-right text-[0.7rem] text-dim"
+          className="min-w-0 max-w-36 shrink text-right text-[0.7rem] text-dim"
         >
           {failure !== null
             ? ipcError(failure)
             : wishAll.isSuccess
-              ? `Sent. ${wishAll.data} ${wishAll.data === 1 ? "wish" : "wishes"} updated.`
+              ? // Where the wishes went, in the same clause a row button uses — see
+                // {@link filedIn}. At the root the sentence is exactly what it has always been,
+                // which is the point of the clause being appended rather than a term that is
+                // always drawn.
+                `Sent. ${wishAll.data} ${wishAll.data === 1 ? "wish" : "wishes"} updated${filedIn(destination)}.`
               : ""}
         </p>
+
+        {/* Where the press files, immediately left of the press. It is a *destination* rather
+            than a filter, so it belongs with the button rather than up in the band with the
+            controls that decide which rows are drawn — and a reader who wants a folder is about
+            to press Send, so the two sit on the same line in the order they are used.
+
+            A `Dropdown` inside a `Dialog` panel, which is the case `usePopupPlacement.ts` names
+            this very file for: a settled dialog panel carries `scale: 1`, which is a containing
+            block, so a `fixed` panel inside it is positioned against the dialog rather than the
+            viewport. That is the shell's problem and it has solved it — do not hand-roll a popup
+            here, and do not portal one (nothing in this app is portalled; the shipped CSP is
+            `style-src 'self'`).
+
+            `shrink-0`, so the note's `min-w-0 flex-1` column gives up the room instead: at
+            `w-[47.5rem]` the footer's four items are a paragraph that can wrap, a live region
+            that is usually empty, this and the press, and only the first of those has anywhere
+            to go. */}
+        {/* **No visible `Send to` caption, and it is the other half of the measurement above.**
+            One was drawn here for a day, `aria-hidden` because the trigger's own name already
+            begins with those two words. It cost 48px of a row whose only flexible item is the
+            note, and what it bought is a phrase the trigger repeats: the control sits immediately
+            left of a button reading `Send N selected to wishlist`, so the destination it names is
+            the one that press files into, and the trigger draws that destination as its own
+            content. WCAG 2.5.3 is satisfied without it — the visible label is now the folder's
+            name, which is still a prefix of the accessible name below. `DeckStats`' shortfall row
+            reached the same shape from the other end and draws no caption either, so the two
+            surfaces say this one thing one way. */}
+        <div className="flex shrink-0 items-center gap-2">
+          <WishDestination
+            folderId={folderId}
+            onChange={chooseDestination}
+            // A whole sentence, naming the destination it is currently on: the trigger draws
+            // that name as its own visible content, so the name has to carry it or the two
+            // disagree. `Wishlist` is the root's word — the control's own first row — rather
+            // than "nowhere" or a blank.
+            label={`Send to ${destination ?? "Wishlist"} — choose which wishlist folder these wishes are filed in`}
+            // Not while a press is in flight. Changing the destination clears what the answer in
+            // flight is about, and a write that lands after the control has moved would be
+            // announced under a folder it did not write to.
+            disabled={wishAll.isPending || wishRow.isPending}
+          />
+        </div>
 
         <button
           type="button"
@@ -820,6 +1027,7 @@ function ListControls({
 function Row({
   row,
   currency,
+  destination,
   sent,
   picked,
   pending,
@@ -829,6 +1037,15 @@ function Row({
   row: TheoryDiffRow;
   /** How the row's one unit price is written. Which price it *is* was decided by the query. */
   currency: Currency;
+  /**
+   * The folder this row's own press would file into, by name — `null` at the root, and `null`
+   * again for a name that is not known yet.
+   *
+   * A **name** rather than the id, because the only thing a row does with it is say it: the id
+   * is the hook's and never travels through a row. Handed down rather than looked up here, so
+   * twelve lines do not ask the same question twelve times and cannot answer it twelve ways.
+   */
+  destination: string | null;
   sent: boolean;
   /** Whether the footer's press would carry this row. */
   picked: boolean;
@@ -845,13 +1062,14 @@ function Row({
   const art = cardArtSrc(cardImageUrl(row.cardId, 0, "art"), row.imageUris?.art);
   // Named for the card the way the row's own button is, and for the same reason: a column of
   // twelve checkboxes all called "Select" is twelve controls a screen reader cannot tell apart.
-  // The quantity because that is what a press carries, the finish because two lines can
-  // otherwise carry the same name, and the verb different from the button's so that the two
-  // controls on one row are not two spellings of one name.
-  const pickLabel =
-    row.finish === null
-      ? `Select ${row.quantity} more ${row.name}`
-      : `Select ${row.quantity} more ${FINISH_LABEL[row.finish]} ${row.name}`;
+  // {@link rowPhrase} is the card half — the quantity because that is what a press carries, the
+  // finish because two lines can otherwise carry the same name — and the verb is different from
+  // the button's so that the two controls on one row are not two spellings of one name.
+  //
+  // **It deliberately does not name the destination.** Ticking a row is not filing it: the
+  // footer's press is what carries the folder, and a checkbox that named one would be promising
+  // a write it does not make.
+  const pickLabel = `Select ${rowPhrase(row)}`;
 
   return (
     <li className="flex items-center gap-3 rounded-md px-2 py-1.5 transition-colors duration-150 hover:bg-surface motion-reduce:transition-none">
@@ -930,14 +1148,16 @@ function Row({
         onClick={onWishlist}
         disabled={sent || pending}
         // Named for the card, because a list of twelve buttons all called "Wishlist" is twelve
-        // controls a screen reader cannot tell apart — the quantity, because that is what the
-        // press actually writes, and **the finish, because two lines can otherwise carry the
-        // same name**: a plan wanting both objects would give a reader two identical controls.
-        aria-label={
-          row.finish === null
-            ? `Wishlist ${row.quantity} more ${row.name}`
-            : `Wishlist ${row.quantity} more ${FINISH_LABEL[row.finish]} ${row.name}`
-        }
+        // controls a screen reader cannot tell apart — {@link rowPhrase} carries the quantity
+        // and the finish for the reasons written there.
+        //
+        // **And named for where it files**, because this button is the one control on the line
+        // that writes: with the footer's destination set to `Ordered` the press puts the card in
+        // `Ordered`, and a name that stopped at the card would leave a reader who cannot see the
+        // footer pressing a button whose destination is stated nowhere they are standing. At the
+        // root the clause is absent and the name is exactly what it always was — see
+        // {@link filedIn}.
+        aria-label={`Wishlist ${rowPhrase(row)}${filedIn(destination)}`}
         className={cn(
           "shrink-0 rounded-md border border-border px-2 py-0.5 text-[0.7rem] text-dim",
           "transition-colors duration-150 hover:border-accent hover:text-accent",

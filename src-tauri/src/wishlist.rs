@@ -12,9 +12,14 @@
 //! takes a zero as the removal it can only be.
 
 use crate::collection::{valid_quantity, EntryChange};
-// The refusal a folder id nothing answers to gets, reached across rather than re-spelled —
-// `wishlist_folders`' own import of it makes the same argument at length, and this is the third
-// write over `wishlist_entries.folder_id` to need the sentence.
+// The refusal a folder id nothing answers to gets — **and since 2026-09-09 only the tests below
+// name it here**. [`add_wish`] spelled both the lookup and the refusal out until then and calls
+// `wishlist_folders::require_folder` for both now, so the sentence arrives from the module that
+// owns the folders rather than from a second copy of it in this one; that function's doc is
+// where the argument is made. The import stays, gated, because an assertion that spelled the
+// sentence as a string literal would go on passing the day somebody rewords the constant —
+// which is the one drift a shared fence cannot prevent by itself.
+#[cfg(test)]
 use crate::deck_meta::FOLDER_GONE;
 use crate::filters::{escape_like, LIKE_ESCAPE};
 use crate::schema::{FINISHES, WISHLIST_GRAIN};
@@ -44,8 +49,17 @@ pub struct WishInput {
     pub preferred_finish: Option<String>,
     pub notes: Option<String>,
     /// Where to file the wish. **Absent is the root**, which is where every wish landed
-    /// before schema v23 and where every wish still lands unless a menu names a folder —
+    /// before schema v23 and where every wish still lands unless a caller names a folder —
     /// nothing has to be created for the list to work.
+    ///
+    /// **Who can name one grew on 2026-09-09, and the root is the default at every one of
+    /// them.** For as long as folders had existed the wall's **Add to → Wishlist →** menu was
+    /// the only sender; `deck_missing_to_wishlist` and `deck_theory_missing_to_wishlist` take
+    /// an optional folder now
+    /// ([issue #437](https://github.com/Msgaihede/mtg-grimoire/issues/437)) and hand it
+    /// straight to here, sending nothing when the reader leaves their dialog where it opens.
+    /// [`commit_import`] is the one writer that still cannot name a folder at all, and the
+    /// comment where it builds its `None` says why.
     ///
     /// It is the fourth term of [`WISHLIST_GRAIN`], which is what makes "Add to Ordered" an
     /// **add** rather than a move: the conflict target already includes the folder, so a
@@ -53,17 +67,24 @@ pub struct WishInput {
     /// at the root are two rows, and no `DO UPDATE` clause below touches this column. It
     /// could not usefully be in one — an add that reached across folders would undo a filing
     /// decision as a side effect of shopping, and moving a wish between folders is its own
-    /// explicit act (`wishlist_folders::set_wish_folder`).
+    /// explicit act (`wishlist_folders::set_wish_folder`). **So a deck sweep left at the root
+    /// makes a second row for a card the reader already filed**, by their choice rather than
+    /// for want of one, and [`WishRow::elsewhere`] is what tells them about it.
     ///
     /// **Fenced in words against `wishlist_folders`**, and the foreign key is not the reason
     /// it needs to be. The column really does carry one (`ON DELETE SET NULL`), so an id
     /// naming no folder is refused on the insert — with `FOREIGN KEY constraint failed`, which
     /// names the constraint and not the mistake, and only while `PRAGMA foreign_keys` happens
-    /// to be on. `wishlist_folders::set_wish_folder` and `wishlist_folders::move_folder` both
-    /// look the id up and answer [`FOLDER_GONE`] instead, over the same column, and the three
-    /// writes disagreeing about it was a reader deleting a folder in one pane and being told
+    /// to be on. So [`add_wish`] looks the id up first and answers
+    /// [`crate::deck_meta::FOLDER_GONE`], which is what `wishlist_folders::set_wish_folder` and
+    /// `wishlist_folders::move_folder` say to the same mistake. The three writes disagreeing
+    /// about it was a reader deleting a folder in one pane and being told
     /// `FOREIGN KEY constraint failed` by **Add to → Wishlist → Ordered** while
-    /// **Move to folder…** said "That folder is not there any more." One mistake, one wording.
+    /// **Move to folder…** said "That folder is not there any more." One mistake, one wording —
+    /// and since 2026-09-09 **one query**: all three go through
+    /// `wishlist_folders::require_folder`, because a wording three writes agree about today is
+    /// a wording nothing stops one of them rewording tomorrow, and the day a dialog rather than
+    /// a menu started sending this field is the day a stale id stopped being hypothetical.
     pub folder_id: Option<i64>,
 }
 
@@ -191,12 +212,18 @@ pub struct WishRow {
     /// folder, at the root, pinned to another printing, in another finish. `0` is the
     /// ordinary answer and the row draws nothing.
     ///
-    /// This is the mitigation for the price [`WISHLIST_GRAIN`]'s fourth term charges: three
-    /// writers add at the root and cannot name a folder (`deck_missing_to_wishlist`,
-    /// `deck_theory_missing_to_wishlist` and `wishlist_import_commit`), so a deck sweep over
-    /// a card the reader already filed in `Ordered` makes a *second* root row — which is the
-    /// double-order the folders exist to prevent. A row that says "also on your list" turns
-    /// that from a trap into a note.
+    /// This is the mitigation for the price [`WISHLIST_GRAIN`]'s fourth term charges, and the
+    /// price is charged two ways. **One writer cannot name a folder at all** —
+    /// `wishlist_import_commit`, because a file says nothing about this reader's cabinet — so
+    /// an imported line for a card already filed in `Ordered` lands as a *second* root row.
+    /// **And the reader can now choose the root over a card that is already in a drawer**:
+    /// since `deck_missing_to_wishlist` and `deck_theory_missing_to_wishlist` learned to take a
+    /// folder (2026-09-09) the root is the default those sweeps open on rather than the only
+    /// place they can reach, and a default taken is still a decision the app has to live with.
+    /// Either way it is the double-order the folders exist to prevent, and neither is a write
+    /// that went wrong: the grain says two places is two wishes, which is precisely what stops
+    /// today's add undoing last week's filing. A row that says "also on your list" turns that
+    /// from a trap into a note.
     ///
     /// Counted in **SQL, over the whole table**, rather than in TypeScript over the page:
     /// the list is paged and a page cannot see the wishes it did not fetch, so the same
@@ -356,20 +383,26 @@ pub fn add_wish(conn: &Connection, input: &WishInput) -> Result<EntryChange, Str
     }
     // The folder, before anything is looked up, for [`WishInput::folder_id`]'s reason: the
     // foreign key would refuse this write anyway, in a sentence about a constraint rather than
-    // about the folder, and the two other writes over this column already answer
-    // [`FOLDER_GONE`]. Asked here rather than beside the finish check because it costs a query
-    // — a wish that is going to be refused for naming no card should not pay for it.
+    // about the folder, and every other write handed a folder id already answers
+    // [`crate::deck_meta::FOLDER_GONE`].
+    //
+    // **Through `wishlist_folders::require_folder` rather than the `SELECT EXISTS(…)` this
+    // module used to write out.** That copy dates from when this was the only add a folder id
+    // could reach; two deck commands take one now, so the same lookup written twice became a
+    // sentence free to drift between the pane that files a card and the pane that moves it —
+    // and a wording that has drifted goes red nowhere. The helper is that module's own fence,
+    // and it is `pub(crate)` for exactly this call.
+    //
+    // **Asked here, and the placement is the argument rather than the query.** Nothing below
+    // depends on the answer, so what decides its place is what it costs and what it must not
+    // come after: it is a round trip, so a wish about to be refused for naming no card at all
+    // must not pay for it — which puts it after that check and not up beside the finish one —
+    // and it comes before the printing is fetched, so a reader who deleted `Ordered` in another
+    // pane is told about the folder rather than about a printing this write was never going to
+    // reach. `add_wish_asks_about_the_folder_after_the_card_and_before_the_printing` is what
+    // holds both halves.
     if let Some(folder) = input.folder_id {
-        let exists: bool = conn
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM wishlist_folders WHERE id = ?1)",
-                params![folder],
-                |r| r.get(0),
-            )
-            .map_err(|e| e.to_string())?;
-        if !exists {
-            return Err(FOLDER_GONE.to_owned());
-        }
+        crate::wishlist_folders::require_folder(conn, folder)?;
     }
 
     // Whatever the caller did not send, taken from the printing it named.
@@ -522,11 +555,14 @@ pub(crate) fn commit_import(
             quantity: item.quantity,
             preferred_finish: item.preferred_finish.clone(),
             notes: item.notes.clone(),
-            // One of the three writers that add **at the root and cannot name a folder** —
-            // an imported file says nothing about this reader's filing cabinet, so there is
-            // nothing to say here but `None`. The consequence is written down rather than
-            // discovered: a line for a card already filed in a folder lands as a *second*
-            // root row, which [`WishRow::elsewhere`] is what tells the reader about.
+            // **The one writer left that adds at the root and cannot name a folder.** The two
+            // deck sweeps were the others and took an optional one on 2026-09-09
+            // ([issue #437](https://github.com/Msgaihede/mtg-grimoire/issues/437)); this did
+            // not, and the asymmetry is the input's rather than an oversight — an imported file
+            // says nothing about this reader's filing cabinet, so there is nothing here to read
+            // a folder *from* and nothing to say but `None`. The consequence is written down
+            // rather than discovered: a line for a card already filed in a folder lands as a
+            // *second* root row, which [`WishRow::elsewhere`] is what tells the reader about.
             folder_id: None,
         };
         if mode == "add" {
@@ -2974,13 +3010,18 @@ mod tests {
     }
 
     /// A folder id nothing answers to is refused **in words**, and the sentence is the one the
-    /// other two writes over this column already give.
+    /// other writes handed a folder id already give.
     ///
     /// `wishlist_entries.folder_id` carries a real foreign key, so this write was already
     /// impossible — but only while `PRAGMA foreign_keys` is on, and the answer was
     /// `FOREIGN KEY constraint failed`. A reader who deleted `Ordered` in one pane then got
     /// that from **Add to → Wishlist → Ordered** and "That folder is not there any more." from
     /// **Move to folder…**, over one column and one mistake.
+    ///
+    /// **Unchanged by the 2026-09-09 refactor, which is what it was left alone to say.** The
+    /// lookup behind it moved out of this module into `wishlist_folders::require_folder`; a
+    /// refusal that survives its own implementation being replaced is the only evidence that
+    /// the replacement was a refactor.
     #[test]
     fn add_wish_refuses_a_folder_that_is_not_there() {
         let conn = seeded();
@@ -2997,6 +3038,79 @@ mod tests {
 
         assert_eq!(err, FOLDER_GONE);
         assert_eq!(wish_count(&conn), 0, "and the refused add wrote nothing");
+    }
+
+    /// **Where the folder is asked about**, which is the half of that fence a refusal on its own
+    /// can never show: the check sits after "does this wish name a card at all" and before the
+    /// printing is fetched, and both halves are decisions.
+    ///
+    /// It costs a round trip, so a wish that is going to be refused for naming nothing must not
+    /// pay for it — which is why the folder is not asked about up beside the finish check. And
+    /// it comes before the `cards` read, so a reader whose folder went away in another pane is
+    /// told about the folder rather than about a printing this write was never going to reach.
+    ///
+    /// Pinned here because the lookup moved modules on 2026-09-09 —
+    /// `wishlist_folders::require_folder` in place of a `SELECT EXISTS(…)` written out in this
+    /// one — and a one-line helper call is exactly the thing somebody later hoists to the top of
+    /// a function to group the validation together. Hoisted, it would answer
+    /// [`crate::deck_meta::FOLDER_GONE`] to a caller who sent no card and no oracle id at all,
+    /// and every assertion in
+    /// [`add_wish_refuses_a_folder_that_is_not_there`] would stay green over it.
+    #[test]
+    fn add_wish_asks_about_the_folder_after_the_card_and_before_the_printing() {
+        let conn = seeded();
+        // Neither identifier, and a folder that is not there either. The wish is about nothing,
+        // which is the refusal that costs no query and therefore the one that comes first.
+        let about_nothing = add_wish(
+            &conn,
+            &WishInput {
+                quantity: 1,
+                folder_id: Some(404),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert_eq!(
+            about_nothing, "a wish needs either a card or an oracle id",
+            "the cheap refusal comes first"
+        );
+
+        // A printing the card database has never heard of, and the same missing folder. Now the
+        // folder is the answer, because it is asked about before `cards` is read at all.
+        let both_wrong = add_wish(
+            &conn,
+            &WishInput {
+                card_id: Some("no-such-printing".into()),
+                quantity: 1,
+                folder_id: Some(404),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert_eq!(
+            both_wrong, FOLDER_GONE,
+            "and the folder before the printing"
+        );
+
+        // The control, and the assertion above needs it: the same unknown printing with no
+        // folder named at all, which proves the printing check really does fire for this input.
+        // Without it, `both_wrong` would read the same whether the folder is asked about first
+        // or the `cards` read has simply stopped refusing anything.
+        let printing_only = add_wish(
+            &conn,
+            &WishInput {
+                card_id: Some("no-such-printing".into()),
+                quantity: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert_eq!(
+            printing_only,
+            "no card with that id is in the card database"
+        );
+
+        assert_eq!(wish_count(&conn), 0, "and none of the three wrote a row");
     }
 
     /// And the fold still bites *inside* a folder, which is the half a grain that had simply
@@ -3082,8 +3196,9 @@ mod tests {
     }
 
     /// The "also on your list" mark, which is what makes the grain's fourth term affordable:
-    /// three writers add at the root and cannot name a folder, so a card the reader filed in
-    /// `Ordered` can acquire a second root row without anyone deciding to make one.
+    /// `wishlist_import_commit` adds at the root and cannot name a folder, and every writer
+    /// that can name one defaults to the root — so a card the reader filed in `Ordered` can
+    /// acquire a second root row without anyone deciding to make a *second* one.
     ///
     /// Counted across folders, because that is the pair worth knowing about — and `0` for the
     /// two orphans, which is the fence rather than the arithmetic: they have no oracle id, and

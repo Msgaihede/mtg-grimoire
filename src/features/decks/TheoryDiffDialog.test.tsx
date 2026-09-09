@@ -29,6 +29,71 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   ipc: { deckTheoryDiff, deckTheoryMissingToWishlist, wishlistAdd, cardDetail },
 }));
 
+/**
+ * The two wishlist folders every destination case below picks between.
+ *
+ * The ids are this suite's own and are deliberately unlike every other number on this screen —
+ * not the deck's `4`, not a row's quantity, not a price — because what is being checked is that
+ * **the id the reader picked is the id that reaches the backend**, and an id that could be
+ * confused with another argument would let a wrong one read as right.
+ */
+const FOLDER_NAMES = vi.hoisted<Record<number, string>>(() => ({ 7: "Ordered", 9: "Someday" }));
+
+/**
+ * **The shared destination control, stubbed — the boundary rather than a shortcut.**
+ *
+ * `WishDestination` belongs to `src/features/wishlist/` and is storied and tested there. What
+ * *this* file owns is the wiring: that one destination governs the whole dialog, that both
+ * writes carry it, that the sentences name it, and that changing it clears the `sent` marks.
+ * Driving the real `Dropdown` here would hang every one of those assertions off that control's
+ * rows, its panel and its `New folder…` field, so a change to any of them would fail this file
+ * for a reason that is not its own.
+ *
+ * **What keeps the stub honest is the type.** `vi.mock`'s factory is checked against the real
+ * module, so a prop passed under the wrong name, an `onChange` typed with the wrong argument or
+ * a renamed export is a red build rather than a green test over a control that is not there.
+ *
+ * It honours the contract it stands in for, in the three places this file can tell:
+ * - the trigger's accessible name **is** the `label` prop, so an assertion on that name is an
+ *   assertion about what this dialog asked for;
+ * - `useWishDestinationName` answers `null` at the root **and for an id that names no folder**,
+ *   which is the fallback the live region and the row buttons are written against;
+ * - a row press calls `onChange` **unconditionally**, including for the destination already
+ *   picked. That is the real `Dropdown`'s own behaviour — `activate` calls `onActivate(v)`
+ *   without comparing it to the picked value — and it is why re-picking is a gesture this
+ *   dialog has to have an answer for.
+ */
+vi.mock("@/features/wishlist/WishDestination", () => ({
+  WishDestination: ({
+    folderId,
+    onChange,
+    label,
+    disabled,
+  }: {
+    folderId: number | null;
+    onChange: (folderId: number | null) => void;
+    label: string;
+    disabled?: boolean;
+  }) => (
+    <div>
+      {/* The trigger, named by whatever the host asked for and drawing the destination the way
+          the real one does — the picked row's own word. */}
+      <button type="button" aria-label={label} disabled={disabled}>
+        {folderId === null ? "Wishlist" : (FOLDER_NAMES[folderId] ?? "?")}
+      </button>
+      {/* One press per row of the panel the real control opens. Named `Choose …` rather than
+          `Send to …` so that a query for the trigger cannot match one of these. */}
+      {[null, ...Object.keys(FOLDER_NAMES).map(Number)].map((id) => (
+        <button key={String(id)} type="button" disabled={disabled} onClick={() => onChange(id)}>
+          {`Choose ${id === null ? "Wishlist" : FOLDER_NAMES[id]}`}
+        </button>
+      ))}
+    </div>
+  ),
+  useWishDestinationName: (folderId: number | null) =>
+    folderId === null ? null : (FOLDER_NAMES[folderId] ?? null),
+}));
+
 import { diffTotals, TheoryDiffDialog } from "./TheoryDiffDialog";
 
 /**
@@ -157,6 +222,17 @@ const selectAll = () => screen.getByRole("checkbox", { name: /selected$/ });
  *  body-sized span — everything else on the line is data type or a note. */
 const shownNames = () =>
   screen.getAllByRole("listitem").map((li) => li.querySelector("span.text-sm")!.textContent);
+
+/**
+ * The footer's destination control, addressed by the sentence this dialog gives it.
+ *
+ * `^Send to ` reaches the trigger and nothing else on the screen: the bulk button is
+ * `Send 3 selected to wishlist` and the stub's rows are `Choose …`.
+ */
+const destinationTrigger = () => screen.getByRole("button", { name: /^Send to / });
+
+/** One row of the panel that control opens — the stub's stand-in for a `Dropdown` row press. */
+const choose = (where: string) => screen.getByRole("button", { name: `Choose ${where}` });
 
 describe("the theory difference dialog", () => {
   /**
@@ -401,7 +477,7 @@ describe("the theory difference dialog", () => {
     await waitFor(() => expect(deckTheoryMissingToWishlist).toHaveBeenCalledTimes(1));
     // The keys the backend takes are `rowKey`'s own spelling, and the unticked row is not among
     // them — an include list, so a row the reader took out is simply absent.
-    expect(deckTheoryMissingToWishlist).toHaveBeenCalledWith(4, ["ring-c21|", "angel-lea|"]);
+    expect(deckTheoryMissingToWishlist).toHaveBeenCalledWith(4, ["ring-c21|", "angel-lea|"], null);
   });
 
   /**
@@ -459,7 +535,7 @@ describe("the theory difference dialog", () => {
     await user.click(await screen.findByRole("button", { name: "Send 1 selected to wishlist" }));
 
     await waitFor(() => expect(deckTheoryMissingToWishlist).toHaveBeenCalledTimes(1));
-    expect(deckTheoryMissingToWishlist).toHaveBeenCalledWith(4, ["ring-c21|"]);
+    expect(deckTheoryMissingToWishlist).toHaveBeenCalledWith(4, ["ring-c21|"], null);
   });
 
   // --- the two views ------------------------------------------------------------------------
@@ -563,7 +639,7 @@ describe("the theory difference dialog", () => {
 
     await waitFor(() => expect(deckTheoryMissingToWishlist).toHaveBeenCalledTimes(1));
     // Bolt is still ticked and is not in the payload: this view is not drawing it.
-    expect(deckTheoryMissingToWishlist).toHaveBeenCalledWith(4, ["ring-sld|"]);
+    expect(deckTheoryMissingToWishlist).toHaveBeenCalledWith(4, ["ring-sld|"], null);
   });
 
   /**
@@ -601,7 +677,7 @@ describe("the theory difference dialog", () => {
     await user.click(within(sol).getByRole("button", { name: /Wishlist 3 more Sol Ring/ }));
 
     await waitFor(() => expect(deckTheoryMissingToWishlist).toHaveBeenCalledTimes(1));
-    expect(deckTheoryMissingToWishlist).toHaveBeenCalledWith(4, ["ring-c21|"]);
+    expect(deckTheoryMissingToWishlist).toHaveBeenCalledWith(4, ["ring-c21|"], null);
     // The round trip and the hand-written wish are the backend's now.
     expect(cardDetail).not.toHaveBeenCalled();
     expect(wishlistAdd).not.toHaveBeenCalled();
@@ -626,7 +702,7 @@ describe("the theory difference dialog", () => {
     await user.click(screen.getByRole("button", { name: "Wishlist 2 more Lightning Bolt" }));
 
     await waitFor(() => expect(deckTheoryMissingToWishlist).toHaveBeenCalledTimes(1));
-    expect(deckTheoryMissingToWishlist).toHaveBeenCalledWith(4, ["bolt-lea|"]);
+    expect(deckTheoryMissingToWishlist).toHaveBeenCalledWith(4, ["bolt-lea|"], null);
   });
 
   /**
@@ -642,12 +718,14 @@ describe("the theory difference dialog", () => {
 
     await user.click(await screen.findByRole("button", { name: "Send 3 selected to wishlist" }));
 
+    // No clause about where, because nobody chose a destination — see the destination block
+    // below for the folder's sentence and for why the root's is deliberately unchanged.
     await screen.findByText("Sent. 3 wishes updated.");
-    expect(deckTheoryMissingToWishlist).toHaveBeenCalledWith(4, [
-      "bolt-lea|",
-      "ring-c21|",
-      "angel-lea|",
-    ]);
+    expect(deckTheoryMissingToWishlist).toHaveBeenCalledWith(
+      4,
+      ["bolt-lea|", "ring-c21|", "angel-lea|"],
+      null,
+    );
     const keys = invalidate.mock.calls.map(([arg]) => JSON.stringify(arg?.queryKey));
     expect(keys).toContain('["wishlist"]');
     expect(keys).toContain('["cards","search"]');
@@ -718,10 +796,229 @@ describe("the theory difference dialog", () => {
         "Wishlisted",
       ),
     );
-    expect(deckTheoryMissingToWishlist).toHaveBeenCalledWith(4, ["bolt-lea|foil"]);
+    expect(deckTheoryMissingToWishlist).toHaveBeenCalledWith(4, ["bolt-lea|foil"], null);
     expect(within(lines[0]).getByRole("button", { name: /Wishlist/ })).toHaveTextContent(
       "Wishlist",
     );
+  });
+
+  // --- the destination ------------------------------------------------------------------------
+
+  /**
+   * **Where the wishes go, which this dialog had no way of saying until 2026-09-09** (issue
+   * #437). Every press wrote to the wishlist root, so a reader with a cabinet full of folders
+   * got a shopping list that ignored all of them.
+   *
+   * The block below is about the *wiring* rather than about the control: one destination for the
+   * whole dialog, carried by **both** writes, said in every sentence that describes a press, and
+   * clearing the one piece of state a change of folder actually invalidates. The control itself
+   * is stubbed — see the mock at the head of this file for why, and for what the stub promises.
+   */
+  it("leaves the wishlist root as the default, and says nothing about it", async () => {
+    const user = userEvent.setup();
+    wrap(<TheoryDiffDialog {...props} />);
+    await screen.findByText("Lightning Bolt");
+
+    // Born at the root, because `Dialog` mounts nothing while it is closed — so this is the
+    // state of a component made fresh on this open rather than a reset somebody wrote.
+    expect(destinationTrigger()).toHaveAccessibleName(
+      "Send to Wishlist — choose which wishlist folder these wishes are filed in",
+    );
+    // And no clause anywhere: a row button is exactly the control it was before the feature.
+    expect(screen.getByRole("button", { name: "Wishlist 3 more Sol Ring" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Send 3 selected to wishlist" }));
+
+    await screen.findByText("Sent. 3 wishes updated.");
+    // `null` on the wire and never an absent argument: the root is a destination the backend is
+    // told about, which is what makes "the reader chose nothing" and "the reader chose the
+    // root" the same write rather than two.
+    expect(deckTheoryMissingToWishlist).toHaveBeenCalledWith(
+      4,
+      ["bolt-lea|", "ring-c21|", "angel-lea|"],
+      null,
+    );
+  });
+
+  /**
+   * The footer's press carries the folder, and the live region says which one.
+   *
+   * The id asserted here is the stub's own `Ordered` (7) — a number unlike every other argument
+   * on this call, so a folder id crossed with a deck id or a quantity could not read as right.
+   */
+  it("files the footer's press into the folder the reader chose, and names it", async () => {
+    const user = userEvent.setup();
+    wrap(<TheoryDiffDialog {...props} />);
+    await screen.findByText("Lightning Bolt");
+
+    await user.click(choose("Ordered"));
+
+    expect(destinationTrigger()).toHaveAccessibleName(
+      "Send to Ordered — choose which wishlist folder these wishes are filed in",
+    );
+
+    await user.click(screen.getByRole("button", { name: "Send 3 selected to wishlist" }));
+
+    await screen.findByText("Sent. 3 wishes updated in Ordered.");
+    // A clause appended to the one sentence, rather than a second sentence beside it — so the
+    // root's wording is what it always was and this one cannot be read as a different answer.
+    expect(screen.queryByText("Sent. 3 wishes updated.")).not.toBeInTheDocument();
+    expect(deckTheoryMissingToWishlist).toHaveBeenCalledWith(
+      4,
+      ["bolt-lea|", "ring-c21|", "angel-lea|"],
+      7,
+    );
+  });
+
+  /**
+   * A row's own button is the other write, and it files where the footer says.
+   *
+   * **The name is asserted as the computed whole**, never as two halves that happen to both be
+   * present: a `gap` between two elements is CSS and not a text node, which is how
+   * `Different printing2` and `Missing2` were shipped past tests that matched each part. This
+   * name is spelled on the control, so what the assertion proves is that the destination reached
+   * the spelling.
+   */
+  it("files a row's own press into the same folder, and names it on the button", async () => {
+    const user = userEvent.setup();
+    wrap(<TheoryDiffDialog {...props} />);
+    await screen.findByText("Lightning Bolt");
+
+    await user.click(choose("Someday"));
+
+    const send = screen.getByRole("button", { name: "Wishlist 3 more Sol Ring in Someday" });
+    expect(send).toHaveAccessibleName("Wishlist 3 more Sol Ring in Someday");
+    // Ticking a row is not filing it, so the checkbox beside it says nothing about where.
+    expect(screen.getByRole("checkbox", { name: "Select 3 more Sol Ring" })).toBeInTheDocument();
+
+    await user.click(send);
+
+    await waitFor(() => expect(deckTheoryMissingToWishlist).toHaveBeenCalledTimes(1));
+    expect(deckTheoryMissingToWishlist).toHaveBeenCalledWith(4, ["ring-c21|"], 9);
+  });
+
+  /**
+   * **The `sent` marks are the state a change of destination invalidates**, and this is the case
+   * that says why.
+   *
+   * A wish's grain carries `coalesce(folder_id, 0)`, so the same row sent to the root and then
+   * to `Ordered` is a genuinely new wish rather than a fold into the one already there. A button
+   * still reading `Wishlisted` after the folder moved would be claiming a press that has not
+   * happened, on the one list the reader is now filing into.
+   */
+  it("puts the sent marks back when the destination moves", async () => {
+    const user = userEvent.setup();
+    wrap(<TheoryDiffDialog {...props} />);
+    const sol = await rowFor("Sol Ring");
+
+    await user.click(within(sol).getByRole("button", { name: "Wishlist 3 more Sol Ring" }));
+    await waitFor(() =>
+      expect(within(sol).getByRole("button", { name: /Wishlist/ })).toHaveTextContent(
+        "Wishlisted",
+      ),
+    );
+
+    await user.click(choose("Ordered"));
+
+    const again = within(sol).getByRole("button", { name: "Wishlist 3 more Sol Ring in Ordered" });
+    // `not.toHaveTextContent("Wishlisted")` rather than `toHaveTextContent("Wishlist")`, which
+    // is a **substring** match and is satisfied by the very word this is checking for the
+    // absence of — a green assertion over the defect. The enabled check is the same claim from
+    // the other side, since `disabled` is `sent || pending`.
+    expect(again).not.toHaveTextContent("Wishlisted");
+    expect(again).toHaveTextContent("Wishlist");
+    expect(again).toBeEnabled();
+  });
+
+  /**
+   * The other half of that rule: a press on the row the control is **already** on has chosen
+   * nothing, so it takes nothing away.
+   *
+   * This is a real gesture rather than a defensive branch — the real `Dropdown`'s `activate`
+   * calls `onActivate(v)` without comparing it to the picked value, so a reader who opens the
+   * panel and presses the row already ticked lands here.
+   */
+  it("keeps the marks when the reader re-picks the destination it is already on", async () => {
+    const user = userEvent.setup();
+    wrap(<TheoryDiffDialog {...props} />);
+    await screen.findByText("Lightning Bolt");
+
+    await user.click(choose("Ordered"));
+    const sol = await rowFor("Sol Ring");
+    await user.click(
+      within(sol).getByRole("button", { name: "Wishlist 3 more Sol Ring in Ordered" }),
+    );
+    await waitFor(() =>
+      expect(within(sol).getByRole("button", { name: /Wishlist/ })).toHaveTextContent(
+        "Wishlisted",
+      ),
+    );
+
+    await user.click(choose("Ordered"));
+
+    expect(within(sol).getByRole("button", { name: /Wishlist/ })).toHaveTextContent("Wishlisted");
+  });
+
+  /**
+   * The standing answer goes with the marks, for the same reason and one sentence over.
+   *
+   * `wishAll.isSuccess` outlives its press and the region words itself with the destination
+   * selected **now**, so without the reset, sending to the root and then picking a folder
+   * re-words a sentence into a claim about a press nobody made.
+   */
+  it("takes the standing answer down with the destination", async () => {
+    const user = userEvent.setup();
+    wrap(<TheoryDiffDialog {...props} />);
+    await screen.findByText("Lightning Bolt");
+
+    await user.click(screen.getByRole("button", { name: "Send 3 selected to wishlist" }));
+    await screen.findByText("Sent. 3 wishes updated.");
+
+    await user.click(choose("Ordered"));
+
+    expect(screen.queryByText(/^Sent\./)).not.toBeInTheDocument();
+  });
+
+  /**
+   * A folder that has gone while the dialog was open is the backend's refusal, in the backend's
+   * words, in the place every other answer this dialog gives is drawn.
+   *
+   * The check is up front in Rust rather than per row, so what a reader gets is one sentence and
+   * no wishes rather than a partial write they would have to reason about.
+   */
+  it("reports a refused folder in words", async () => {
+    const user = userEvent.setup();
+    deckTheoryMissingToWishlist.mockRejectedValue("That folder is not there any more.");
+    wrap(<TheoryDiffDialog {...props} />);
+    await screen.findByText("Lightning Bolt");
+
+    await user.click(choose("Ordered"));
+    await user.click(screen.getByRole("button", { name: "Send 3 selected to wishlist" }));
+
+    await screen.findByText("That folder is not there any more.");
+    expect(deckTheoryMissingToWishlist).toHaveBeenCalledWith(
+      4,
+      ["bolt-lea|", "ring-c21|", "angel-lea|"],
+      7,
+    );
+  });
+
+  /**
+   * Not while a press is in flight. Changing the destination clears what the answer on its way
+   * back is about, so a write that landed after the control had moved would be announced under a
+   * folder it did not write to.
+   */
+  it("cannot be moved while a press is in flight", async () => {
+    const user = userEvent.setup();
+    // Never answers, so the mutation stays pending for the rest of the test.
+    deckTheoryMissingToWishlist.mockReturnValue(new Promise(() => {}));
+    wrap(<TheoryDiffDialog {...props} />);
+    await screen.findByText("Lightning Bolt");
+
+    await user.click(screen.getByRole("button", { name: "Send 3 selected to wishlist" }));
+
+    await waitFor(() => expect(destinationTrigger()).toBeDisabled());
+    expect(choose("Ordered")).toBeDisabled();
   });
 
   /**

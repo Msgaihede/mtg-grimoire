@@ -5952,8 +5952,16 @@ function cheapestPrinting(
  * Deliberately narrowed to neither the folder nor the page, because the answer this field is
  * for is about a wish the reader is *not* looking at. With `folderId` part of
  * {@link wishGrain}, a card already filed in `Ordered` and re-added by a deck sweep becomes a
- * **second row at the root** rather than a bump to the first, and a non-zero count here is what
- * tells the reader that before they buy the card twice.
+ * **second row wherever that sweep filed it** rather than a bump to the first, and a non-zero
+ * count here is what tells the reader that before they buy the card twice.
+ *
+ * **The duplicate is a reader's choice now, not only a writer's handicap** (issue #437). It used
+ * to be produced entirely by writers that *could not* name a folder, so the second row was
+ * always at the root and the field read as a report on a limitation. Both deck sweeps take a
+ * destination since 2026-09-09 — and the root is one of the destinations they offer — so the
+ * pair a reader meets today is as likely to be `Ordered` plus `Shopping`, chosen twice on
+ * purpose, as `Ordered` plus the root. Which is the same fact needing the same mark: this field
+ * counts every other wish for the card and cares about none of that.
  *
  * **An orphan with no oracle id counts nothing**, and that is a fence rather than the
  * arithmetic: `wishlist.rs` spells it `o.oracle_id IS NOT NULL` for exactly the rewrite that is
@@ -11943,6 +11951,20 @@ function setEntry(
  * second set of rules to keep in step. Clicking "send missing to wishlist" twice therefore
  * raises one line rather than making two, which is this function's contract and not that
  * one's.
+ *
+ * **It refuses a folder that is not there, and did not until 2026-09-09** — a drift found while
+ * giving the two deck sweeps a destination. `wishlist::add_wish` has checked `folder_id` against
+ * `wishlist_folders` since the column existed, because the foreign key would refuse the write
+ * anyway in a sentence about a constraint rather than about the folder; this function wrote the
+ * id straight onto the row. The direction of that drift is the expensive one this workbench
+ * keeps warning about — the fake **kinder** than the app — and here it would have let a story
+ * file a wish into a folder nobody can open, drawn on a page whose tree comes from
+ * `wishlist_folder_list` and therefore never shows it. The wish would simply be invisible.
+ *
+ * **The deck sweeps check it again, ahead of their own walks, and that is not the same check
+ * twice.** This one fires on a row that is about to be written; theirs fire on a press that may
+ * write no rows at all, which is the case a deck short of nothing produces and the case this
+ * function is never called for. See {@link writeHandlers.deck_missing_to_wishlist}.
  */
 function addWish(db: FakeDb, input: WishInput): EntryChange {
   if (input.preferredFinish !== undefined) validFinish(input.preferredFinish);
@@ -11959,6 +11981,12 @@ function addWish(db: FakeDb, input: WishInput): EntryChange {
   if (cardId === null && sentOracleId === null) {
     throw refuse("a wish needs either a card or an oracle id");
   }
+  // The folder, in `add_wish`'s own place in the sequence: behind the question that decides
+  // whether there is anything to look up at all, and ahead of the printing lookup. The crate
+  // puts it here because the check costs a query — a wish that is going to be refused for naming
+  // no card should not pay for it — and the fake keeps the order so the *sentence* a caller
+  // hears for two mistakes at once is the same on both sides.
+  if (input.folderId != null && !wishFolderById(db, input.folderId)) throw refuse(FOLDER_GONE);
   const printing = cardId === null ? null : cardById(db, cardId);
   if (cardId !== null && printing === null) {
     throw refuse("no card with that id is in the card database");
@@ -13526,13 +13554,22 @@ export function writeHandlers(db: FakeDb) {
      * **The id is never supplied**, and that is a fence rather than a habit: {@link wishGrain}'s
      * `?? 0` for the root is safe only while no folder can *be* 0, which is guaranteed only for
      * the rowids SQLite assigns itself.
+     *
+     * **This handler was ahead of the crate and the crate was brought to it** (2026-09-09) —
+     * `wishlist_folder_move`'s own note one function down records the identical trip on
+     * 2026-08-22, and that is now twice. Rust's `create_folder` used to hand `parent_id` straight
+     * to the `INSERT` and let the foreign key answer, which meant a gone parent earned
+     * `FOREIGN KEY constraint failed` — a sentence about a constraint rather than about the
+     * folder — and, with `PRAGMA foreign_keys` off, earned nothing at all: the row went in
+     * hanging off nothing. It calls `require_folder` and answers {@link FOLDER_GONE} now, like
+     * the four other writes over that column. **Nothing here changed**; what changed is that the
+     * line below is a mirror again rather than the fake being stricter than the app.
      */
     wishlist_folder_create: (args: { parentId: number | null; name: string }): WishlistFolder => {
       refuseIfBusy(db);
       const name = validMetaName(args.name, "A folder");
-      // The crate leaves this to `parent_id REFERENCES wishlist_folders(id)` and never spells it
-      // out; this store has no foreign keys, so the refusal is written here — `deck_folder_create`'s
-      // shape one table over, so the workbench cannot build a tree the app would have refused.
+      // `deck_folder_create`'s shape one table over, and `wishlist_folders::create_folder`'s
+      // `require_folder` since 2026-09-09 — so the workbench cannot build a tree the app refuses.
       if (args.parentId !== null && !wishFolderById(db, args.parentId)) throw refuse(FOLDER_GONE);
       const folder: FakeWishlistFolder = {
         id: nextId(db.wishlistFolders),
@@ -13568,11 +13605,16 @@ export function writeHandlers(db: FakeDb) {
      *
      * **The destination is checked, `wishlist_folder_create`'s fence two functions up.** The two
      * write the same column and disagreeing about it is the fake drifting from the app in the
-     * one direction that matters: `wishlist_folders.parent_id REFERENCES wishlist_folders(id)`
-     * is a real foreign key, so the app refuses a parent that is gone while an unchecked store
-     * here would write an orphaned sub-tree and let a story draw a folder hanging off nothing.
-     * The cycle walk above cannot stand in for it — `wishFolderById(...)?.parentId ?? null` reads
-     * an id no folder has as "already at the root" and lets it straight through.
+     * one direction that matters — an orphaned sub-tree written here would let a story draw a
+     * folder hanging off nothing. **Both crate sides now look the parent up and answer
+     * {@link FOLDER_GONE}** — `move_folder` since 2026-08-22, `create_folder` since 2026-09-09 —
+     * so this line is a mirror rather than a fake being stricter than the app. It used to be
+     * argued from `wishlist_folders.parent_id REFERENCES wishlist_folders(id)`, and that
+     * argument was never quite good enough: a foreign key answers `FOREIGN KEY constraint
+     * failed`, which names the table and not the mistake, and answers nothing at all with
+     * `PRAGMA foreign_keys` off. The cycle walk above cannot stand in for it either —
+     * `wishFolderById(...)?.parentId ?? null` reads an id no folder has as "already at the root"
+     * and lets it straight through.
      *
      * **`deck_folder_move` has the identical hole and is deliberately left with it.** Fixing one
      * side of a ported pair is a difference somebody will later read as intentional, so it is
@@ -13642,8 +13684,10 @@ export function writeHandlers(db: FakeDb) {
      * of every wish in it, and two shapes then land on a grain that is already taken:
      *
      * - a filed wish and a **root** wish for the same card — the state the design accepts on
-     *   purpose, since `deck_missing_to_wishlist`, `deck_theory_missing_to_wishlist` and
-     *   `wishlist_import_commit` all add at the root and cannot name a folder;
+     *   purpose. `wishlist_import_commit` is the one writer left that *cannot* name a folder,
+     *   a file having nothing to say about a reader's filing; the two deck sweeps could not
+     *   either until 2026-09-09 (issue #437) and now take a destination, of which the root is
+     *   one — so this shape is a reader keeping the default as often as a writer with no say;
      * - two wishes in **different sub-folders** of the one being deleted, which collide with
      *   each other the moment both reach the root and need no root row at all.
      *
@@ -14753,8 +14797,42 @@ export function writeHandlers(db: FakeDb) {
      * has not decided to play is not a card they need to buy, whether the undecidedness is a
      * switched-off category or a whole plan — and so is an orphan, which has neither an oracle
      * card nor a printing to wish for and is already carrying a sentence that says so.
+     *
+     * **`folderId` is where the wishes land, and absent is the root** (issue #437). It used to
+     * be able to say nothing at all, so every press filed at the top of the list and a reader
+     * who keeps a `Shopping` drawer had to move each row afterwards. The root stays the default
+     * and stays a *choice* — it is a real destination rather than an omission, which is why the
+     * field is optional here and `null` and absent mean the identical thing.
+     *
+     * **It changes nothing about the fold, because the folder is already the fourth term of
+     * {@link wishGrain}.** The same card sent to the root and then to `Shopping` is two wishes
+     * and not one line at double the quantity, which is the whole reason that term exists: an
+     * add may never quietly move the row the reader filed somewhere on purpose. So a second
+     * press at a *different* destination is a second row, and pressing twice at the **same** one
+     * still raises the line it made — the contract this command already had, now said once per
+     * destination.
+     *
+     * **The folder is checked before the shortfall is walked, and that ordering is the whole of
+     * what the check buys.** A deck that is short of nothing never reaches {@link addWish}, so a
+     * refusal that lived only in there would answer a stale folder with a cheerful "0 wishes" —
+     * a press that did nothing, reported as a press that had nothing to do. It sits *behind* the
+     * two refusals about the deck deliberately: {@link DECK_GONE} and {@link FOLDER_GONE} are
+     * both "… is not there any more", and the deck is what the reader is looking at while the
+     * folder is only where they pointed it. The crate has no deck-existence check to order this
+     * against — `live_shortfall` on a dead id simply finds nothing — so this sequence is the
+     * fake's own and is written down here rather than left to be re-derived.
+     *
+     * **There is no snapshot behind the loop, and "a refusal writes nothing" is bought by that
+     * ordering rather than by a rollback.** The crate gets it from the transaction the walk sits
+     * in; {@link wishlist_import_commit} one table over gets it from copying the rows first.
+     * This loop does neither — what makes it honest is that by the time it starts, every
+     * refusal {@link addWish} can still raise names a row the walk has already skipped: a row
+     * with no oracle card, which is the same row {@link deck_theory_missing_to_wishlist} skips
+     * to keep a printing that has left `cards` away from that function's other refusal. A
+     * refusal added to {@link addWish} that a shortfall row *could* trip needs this paragraph
+     * re-read and probably needs a snapshot, because half a shopping list is worse than none.
      */
-    deck_missing_to_wishlist: (args: { deckId: number }): number => {
+    deck_missing_to_wishlist: (args: { deckId: number; folderId?: number | null }): number => {
       refuseIfBusy(db);
       // **A virtual deck has nothing to be short of** (schema v40), so this is the one press on
       // it that would otherwise succeed loudly and wrongly. The shortfall below reads what the
@@ -14767,6 +14845,12 @@ export function writeHandlers(db: FakeDb) {
       if (isVirtual(db, args.deckId)) throw refuse(VIRTUAL_HOLDS_NOTHING);
       const detail = readHandlers(db).deck_get({ id: args.deckId, variant: LIVE });
       if (!detail) throw refuse(DECK_GONE);
+      // Up front, for the reason in the doc above: nothing below this line runs for a deck that
+      // is short of nothing, so a check any later would let a deleted folder pass as "0 wishes".
+      // `?? null` once, here, so the destination that is written onto every wish below and the
+      // destination that was checked are the same value — absent and `null` are one place.
+      const folderId = args.folderId ?? null;
+      if (folderId !== null && !wishFolderById(db, folderId)) throw refuse(FOLDER_GONE);
       const missing = new Map<string, { name: string; quantity: number }>();
       for (const row of detail.cards) {
         if (!row.categoryActive || row.oracleId === null) continue;
@@ -14782,7 +14866,7 @@ export function writeHandlers(db: FakeDb) {
         const want = missing.get(oracleId)!;
         // The deck row's own name: the one name an orphan-safe row always has, and the same
         // name the deck list shows for it.
-        addWish(db, { oracleId, name: want.name, quantity: want.quantity });
+        addWish(db, { oracleId, name: want.name, quantity: want.quantity, folderId });
       }
       return missing.size;
     },
@@ -15637,13 +15721,30 @@ export function writeHandlers(db: FakeDb) {
      * followed since 2026-08-20, and answering it loosely hands the reader back the very
      * substitution the plan was tracking. The regular copy pins **no** finish: `null` is the
      * unmarked case in `deckCards`, and writing `nonfoil` would split this wish from every other
-     * one the app makes for that card on the grain `(oracleId, cardId, preferredFinish)`.
+     * one the app makes for that card on the third term of {@link wishGrain}.
+     *
+     * **`folderId` is where those wishes land, and absent is the root** (issue #437), exactly as
+     * on {@link deck_missing_to_wishlist} — read that one for why the root stays a destination
+     * rather than an omission and why the fold needs nothing said to it. **It composes with
+     * `only` rather than competing with it**, and the two answer different questions: `only`
+     * decides *which* rows of the difference are written, `folderId` decides *where* every one
+     * of them goes. A press that ticked three rows and chose `Shopping` writes those three
+     * there, and neither argument can be read off the other.
+     *
+     * **The folder is checked ahead of the diff**, {@link deck_missing_to_wishlist}'s reason
+     * again and sharper here: a plan that matches the deck produces an empty difference, the
+     * loop below never runs, and a refusal living only in {@link addWish} would answer a deleted
+     * folder with `0`. It sits behind both deck refusals for that command's reason.
      *
      * An orphan is skipped, and that skip now carries two things rather than one: a wish needs
      * an oracle card, *and* {@link addWish} refuses a `cardId` whose printing has left `cards`.
      * The one row that could make this throw is the one row that never reaches it.
      */
-    deck_theory_missing_to_wishlist: (args: { deckId: number; only?: string[] }): number => {
+    deck_theory_missing_to_wishlist: (args: {
+      deckId: number;
+      only?: string[];
+      folderId?: number | null;
+    }): number => {
       refuseIfBusy(db);
       if (!db.decks.some((d) => d.id === args.deckId)) throw refuse(DECK_GONE);
       // **Behind the existence check and ahead of the diff**: "that deck is gone" and "that deck
@@ -15653,6 +15754,10 @@ export function writeHandlers(db: FakeDb) {
       // {@link deckKind} clears the theory switch on the way in, so this is the fence against a
       // fixture rather than against a press.
       if (isVirtual(db, args.deckId)) throw refuse(VIRTUAL_HOLDS_NOTHING);
+      // Ahead of {@link theoryDiff}, so an empty difference still refuses a folder that is not
+      // there — the one case a check inside {@link addWish} can never reach.
+      const folderId = args.folderId ?? null;
+      if (folderId !== null && !wishFolderById(db, folderId)) throw refuse(FOLDER_GONE);
       const only = args.only === undefined ? null : new Set(args.only);
       let touched = 0;
       // The marketplace decides no part of *which* rows are short — it only prices them — so
@@ -15668,6 +15773,9 @@ export function writeHandlers(db: FakeDb) {
           // `DeckFinish` is `null` for the regular copy and `WishInput.preferredFinish` says
           // "no preference" with `undefined`; the two spellings of the unmarked case meet here.
           preferredFinish: grouped.row.finish ?? undefined,
+          // The one destination the whole press shares — checked above, written here, and the
+          // grain's fourth term either way.
+          folderId,
         });
         touched += 1;
       }

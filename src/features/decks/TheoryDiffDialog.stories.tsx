@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, waitFor, within } from "storybook/test";
+import { pickOption } from "@/test-dropdown";
 import { TheoryDiffDialog } from "./TheoryDiffDialog";
 
 /**
@@ -215,6 +216,57 @@ export const SendSome: Story = {
 
     await waitFor(
       async () => await expect(await canvas.findByText("Sent. 4 wishes updated.")).toBeVisible(),
+      { timeout: FRAME_WAIT },
+    );
+  },
+};
+
+/**
+ * **Where the wishes go** (issue #437). Every press this dialog made went to the wishlist root
+ * and nothing on screen said so, which read as the wishlist's folders not applying to a deck at
+ * all.
+ *
+ * The seed's cabinet is three folders — `Ordered`, `Backordered` inside it and `Someday` — so
+ * this is the picker over a real tree rather than over a fixture written for it, and the folder
+ * picked here is a drawer a reader could have made.
+ *
+ * **One destination for the whole dialog**, and the play walks every place it is said: the
+ * trigger, each row's own button and the sentence the press answers with. All three come out of
+ * one `useWishDestinationName` lookup, which is why they cannot disagree — and the point of the
+ * `Shopping` story beside this one is that at the root none of them says anything at all, so a
+ * reader who never touches the control gets the dialog exactly as it was.
+ */
+export const SendToFolder: Story = {
+  play: async ({ canvas }) => {
+    // The dialog's arrival, waited out once — see `Shopping`.
+    await waitFor(async () => expect(await canvas.findByText("Smuggler's Copter")).toBeVisible(), {
+      timeout: FRAME_WAIT,
+    });
+
+    // The root is where it opens, and a row button says nothing about where it files.
+    await expect(
+      canvas.getByRole("button", { name: "Wishlist 2 more Smuggler's Copter" }),
+    ).toBeVisible();
+
+    // Through `pickOption` rather than by hand: the control is a `Dropdown` inside a `Dialog`
+    // panel — `usePopupPlacement.ts` names this very file for that containing-block trap — and
+    // pinning its internals here would be pinning them in one more place.
+    await pickOption(userEvent.setup(), /^Send to Wishlist/, "Ordered");
+
+    await waitFor(async () =>
+      expect(canvas.getByRole("button", { name: /^Send to Ordered/ })).toBeVisible(),
+    );
+    // The clause is appended to the name the button always had, so the card, the count and the
+    // finish still read first and the destination is the tail.
+    await expect(
+      canvas.getByRole("button", { name: "Wishlist 2 more Smuggler's Copter in Ordered" }),
+    ).toBeVisible();
+
+    await userEvent.click(canvas.getByRole("button", { name: "Send 5 selected to wishlist" }));
+
+    await waitFor(
+      async () =>
+        await expect(await canvas.findByText("Sent. 5 wishes updated in Ordered.")).toBeVisible(),
       { timeout: FRAME_WAIT },
     );
   },

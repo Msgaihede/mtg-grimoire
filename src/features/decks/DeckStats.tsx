@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type RefObject } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { useTooltip } from "@/components/tooltip/useTooltip";
+import { useWishDestinationName, WishDestination } from "@/features/wishlist/WishDestination";
 import { count } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
 import { ipcError, type CategoryKind, type DeckCard } from "@/lib/ipc";
@@ -517,9 +518,20 @@ export function deckStats(cards: readonly DeckCard[], separateXGroup = false): D
  *
  * Narrowed rather than passed whole so the strip can be rendered in a test without a query
  * client, and so the one write it makes is visible in its own signature.
+ *
+ * **The narrowing survived the destination and is the reason it could** (issue #437). `mutate`
+ * takes the folder the wishes are filed into — `null` for the wishlist root — and that is the
+ * whole of what this type grew. What it deliberately did **not** grow is a way to *read* the
+ * wishlist: the rule this narrowing exists for is that the strip must not gain a second query
+ * that could disagree with the first, and the shortfall is the only question it asks. The
+ * destination control beside the button reads the folder **list**, which is a different
+ * question about a different table and can no more contradict `N of M missing` than the
+ * marketplace can. `useWishDestinationName` is the same list read for one name.
  */
 export interface MissingWrite {
-  mutate: (variables: void) => void;
+  /** The destination — a `wishlist_folders.id`, or `null` for the root. Required rather than
+   *  optional, so a caller that has not thought about where the wishes go says so out loud. */
+  mutate: (variables: number | null) => void;
   isPending: boolean;
   isSuccess: boolean;
   isError: boolean;
@@ -550,6 +562,14 @@ export interface MissingWrite {
  * charts. The second of those arrived with the pull (2026-09-03) and the third with the add
  * (2026-09-08) — they are `onPull` and `onAddMissing` below, the shortfall's other two answers,
  * and the argument for them living here rather than in the header is made on {@link Missing}.
+ *
+ * **The wishlist press gained a destination and the count of presses did not move** (issue #437,
+ * 2026-09-09). `Send missing to wishlist` filed at the wishlist root and offered no choice; it
+ * now carries a picker beside it for the root, any existing folder, or a new one made on the
+ * spot. **It is emphatically not a fourth press** — the argument for that, and for the cluster
+ * it is drawn in, is on {@link Missing}; what belongs here is the state it needs, which is one
+ * `folderId` and one extra term on the latch below, both for the same reason: `add_wish` folds
+ * on a grain whose fourth term is the folder, so the destination is half of what a press *was*.
  *
  * **A deck that owns nothing is short of nothing, and `tracksCollection` is where that is said**
  * (2026-09-08, issue #401). A *Virtual* deck is one the reader tracks without owning the
@@ -662,6 +682,23 @@ export function DeckStats({
   const sendRef = useRef<HTMLButtonElement>(null);
   const wasPending = useRef(false);
   /**
+   * Where the next press files its wishes — a `wishlist_folders.id`, or `null` for the root
+   * (issue #437).
+   *
+   * **`null` on mount, every time, and deliberately not remembered.** It is the same rule the
+   * deck gallery's filter keeps and the opposite of its sort: an order is how a reader likes to
+   * read a screen, where this is a thing they are doing right now. A strip that opened already
+   * pointing at `Ordered`, with no memory of having been asked, would send a shortfall somewhere
+   * the reader did not look — and the root is where every press went before this existed, so the
+   * default is also today's behaviour exactly.
+   *
+   * **Here rather than in {@link Missing}** for the same reason `sentFor` is here: the two are
+   * one fact between them (what the last press was about) and the latch below has to be able to
+   * see this one change. State inside the component that draws the control would put half of
+   * that pair out of reach of the other half.
+   */
+  const [folderId, setFolderId] = useState<number | null>(null);
+  /**
    * The shortfall the last press was made against, or `null` once that press has stopped being
    * news.
    *
@@ -686,9 +723,26 @@ export function DeckStats({
    * make: {@link MissingWrite} is narrowed to the one command on purpose, and a second query
    * here would be a second answer to "what does this deck need" that could disagree with the
    * first. The floor is "one press per shortfall", and it is a floor rather than a fix.
+   *
+   * **It records the destination beside the shortfall since issue #437, and that pair is the
+   * whole of the rule.** The fold this latch exists to prevent is `add_wish`'s, and `add_wish`
+   * folds on the wishlist's own grain — whose fourth term is `coalesce(folder_id, 0)`. So the
+   * same shortfall sent to the root and then to `Ordered` is not a fold at all: it is a
+   * genuinely new line, in a place the reader has just chosen, and a button still greyed with
+   * *This shortfall is already on your wishlist.* would be refusing a press that has not
+   * happened. Released when **either** term changes, for the one reason both are here: a
+   * changed question is a changed question whichever half of it moved.
+   *
+   * **A pair rather than two `useState`s**, so the release cannot reach one and miss the other
+   * — and cleared during render like the number alone always was, which is React's own answer
+   * for state that has to follow a prop and is what keeps the released answer from coming back.
    */
-  const [sentFor, setSentFor] = useState<number | null>(null);
-  if (sentFor !== null && sentFor !== stats.missing) setSentFor(null);
+  const [sentFor, setSentFor] = useState<{ missing: number; folderId: number | null } | null>(
+    null,
+  );
+  if (sentFor !== null && (sentFor.missing !== stats.missing || sentFor.folderId !== folderId)) {
+    setSentFor(null);
+  }
   const spent = sentFor !== null && !send.isError;
 
   // The disabled-on-press hazard, in the shape it takes outside a dismissible layer: a browser
@@ -734,9 +788,11 @@ export function DeckStats({
             stats={stats}
             pending={send.isPending}
             spent={spent}
+            folderId={folderId}
+            onFolderChange={setFolderId}
             onSend={() => {
-              setSentFor(stats.missing);
-              send.mutate();
+              setSentFor({ missing: stats.missing, folderId });
+              send.mutate(folderId);
             }}
             onPull={onPull}
             onAddMissing={onAddMissing}
@@ -832,11 +888,35 @@ function Pips({ pips }: { pips: Record<PipKey, number> }) {
  * once at {@link DeckStats}, which draws this component or does not. A fourth arm inside these
  * hundred lines would be a fourth way for the count, the buttons and the `All N owned.` fallback
  * to come apart from each other — and the whole point is that they arrive and leave together.
+ *
+ * **The destination is a fourth control and emphatically not a fourth peer** (issue #437). The
+ * three above are three *answers* to the shortfall and their class lists are identical character
+ * for character so the row cannot drift into looking like a primary and two secondaries; a
+ * picker that said where the shopping list is filed would be a fourth box in that line reading
+ * as a fourth answer, and it would sit between two of them or after all three whatever order it
+ * took. So it is drawn **inside** the wishlist press's own cluster —
+ * `[Send missing to wishlist] [♥ Wishlist ▾]`, one flex item at a tighter gap than the row's own
+ * — which leaves the three peers three peers, keeps the narrated order (own it → just acquired →
+ * not yet owned) untouched, and puts the modifier beside the press it modifies rather than
+ * beside the presses it does not.
+ *
+ * **Not a joined pair**, which is the shape this app already has for `Import|Export` and
+ * `Theory|Actual`: those two are *alternatives* sharing one edge, and one of them is always the
+ * answer. This is a press and a setting for it, so each keeps its own border and 4px of air says
+ * they belong together where the row's 12px says the peers do not.
+ *
+ * **It rides with the send button and therefore with the whole `missing > 0` arm.** A deck short
+ * of nothing draws no press for a destination to modify, so a picker left standing would be a
+ * control about a press that is not there. On the **theory** list it stays, because the wishlist
+ * button stays: wanting a card you do not own is exactly what a plan is for, and a plan's
+ * shopping list is as filable as any other.
  */
 function Missing({
   stats,
   pending,
   spent,
+  folderId,
+  onFolderChange,
   onSend,
   onPull,
   onAddMissing,
@@ -846,9 +926,14 @@ function Missing({
 }: {
   stats: DeckStatsSummary;
   pending: boolean;
-  /** This shortfall has already been sent. Pressing again would wish for the same copies a
-   *  second time — the backend folds quantities rather than replacing them. */
+  /** This shortfall has already been sent **to this destination**. Pressing again would wish for
+   *  the same copies a second time — `add_wish` folds quantities rather than replacing them, and
+   *  it folds at a grain that carries the folder, which is why the latch carries it too. */
   spent: boolean;
+  /** Where a press files its wishes — a `wishlist_folders.id`, or `null` for the root. Held by
+   *  {@link DeckStats} beside the latch it releases; see the state's own doc there. */
+  folderId: number | null;
+  onFolderChange: (folderId: number | null) => void;
   onSend: () => void;
   /** Opens the pull dialog, or `null` where there is nothing to open — see the prop on
    *  {@link DeckStats}, which is where the theory list's absence is argued. */
@@ -861,6 +946,25 @@ function Missing({
   failure: string | null;
 }) {
   const tip = useTooltip();
+  /**
+   * The folder's own name, for the sentence the live region says.
+   *
+   * **Read live off the current `folderId` rather than frozen at the press, and the latch is what
+   * makes that safe.** `added` is non-null only while `spent` is, and `spent` is released the
+   * moment the destination changes — so for every render in which there is a sentence to say,
+   * this `folderId` *is* the one that was sent. Freezing a copy would be a second record of the
+   * same fact, free to disagree with the control on screen.
+   *
+   * `null` covers three states on purpose and all three want the same sentence: the wishlist
+   * root, a folder list still loading, and an id that names no folder any more. The first is
+   * what the reader chose; the other two are this strip not knowing a name, and inventing *to a
+   * folder* for either would be a clause that says nothing and could be wrong.
+   *
+   * **The one read this component makes that is not the shortfall, and it is the folder list
+   * rather than the wishlist.** See {@link MissingWrite} — a second answer to *what does this
+   * deck need* is what the narrowing refuses, and a list of drawers is not one.
+   */
+  const destination = useWishDestinationName(folderId);
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs">
       {stats.missing > 0 ? (
@@ -980,32 +1084,71 @@ function Missing({
               was already resting on the button before that click fired (nothing opens on a
               content change alone, only on a fresh `pointerenter`), and a keyboard reader loses
               nothing a `disabled` button was ever going to offer it either. */}
-          <button
-            ref={sendRef}
-            type="button"
-            // Two kinds of "no", and they are spelled differently on purpose. `disabled` is the
-            // half-second the write is in flight. **Spent is `aria-disabled`**, because it
-            // outlasts the press by as long as the deck stays the same: a real `disabled` there
-            // is a control the browser refuses to focus, so the caret this button lost when it
-            // disabled itself could never come back to it, and a keyboard reader would find the
-            // control simply gone from the tab order with no way to ask why. The rail in the
-            // docked search panel says no the same way, for the same reason.
-            disabled={pending}
-            aria-disabled={spent || undefined}
-            onClick={() => {
-              if (!spent) onSend();
-            }}
-            {...tip(spent ? "This shortfall is already on your wishlist." : null)}
-            className={cn(
-              "rounded-md border border-border px-2 py-1 text-dim",
-              "transition-colors duration-150 hover:text-text disabled:opacity-50",
-              "aria-disabled:opacity-50 aria-disabled:hover:text-dim",
-              "motion-reduce:transition-none",
-              FOCUS,
-            )}
-          >
-            Send missing to wishlist
-          </button>
+          {/* **The wishlist press and its destination, as one cluster** (issue #437) — `gap-1`
+              inside against the row's own `gap-x-3`, which is the whole of what says these two
+              belong to each other and the three buttons do not. It is a flex item of the row
+              like each peer is, so it wraps as one thing: a picker that wrapped away from the
+              button it modifies, onto a line with the pull, would read as a fourth answer to the
+              shortfall — which is exactly what drawing it as a fourth peer would have done, one
+              breakpoint later.
+
+              **The order inside is press-then-setting**, so the row still reads left to right as
+              the three answers in the order they should be tried, with this one's modifier
+              trailing it. Put the picker first and the eye meets a folder name before it has met
+              the press that would file anything there. */}
+          <div className="flex items-center gap-1">
+            <button
+              ref={sendRef}
+              type="button"
+              // Two kinds of "no", and they are spelled differently on purpose. `disabled` is the
+              // half-second the write is in flight. **Spent is `aria-disabled`**, because it
+              // outlasts the press by as long as the deck and the destination stay the same: a
+              // real `disabled` there is a control the browser refuses to focus, so the caret
+              // this button lost when it disabled itself could never come back to it, and a
+              // keyboard reader would find the control simply gone from the tab order with no
+              // way to ask why. The rail in the docked search panel says no the same way, for
+              // the same reason.
+              disabled={pending}
+              aria-disabled={spent || undefined}
+              onClick={() => {
+                if (!spent) onSend();
+              }}
+              {...tip(spent ? "This shortfall is already on your wishlist." : null)}
+              className={cn(
+                "rounded-md border border-border px-2 py-1 text-dim",
+                "transition-colors duration-150 hover:text-text disabled:opacity-50",
+                "aria-disabled:opacity-50 aria-disabled:hover:text-dim",
+                "motion-reduce:transition-none",
+                FOCUS,
+              )}
+            >
+              Send missing to wishlist
+            </button>
+            {/* **Always drawn, even for a reader with no folders at all**, which is the
+                component's own guarantee and is what makes the first folder reachable: its
+                `New folder…` row is the only way into a cabinet that is empty.
+
+                **`disabled` for the half-second the write is in flight, where the other two
+                presses in this row deliberately are not.** They are independent writes about one
+                number, so greying them on this one would be a control refusing for something the
+                reader did not press. This is not independent of it: it *is* the argument the
+                write in flight is carrying, and moving it mid-flight releases the latch — so the
+                answer to a press that really happened would never be said. Half a second of no,
+                against a sentence silently lost.
+
+                The name is a whole sentence and names **this deck's** shortfall rather than the
+                wishlist in general, because the Compare dialog draws its own destination over
+                this strip while the strip is still in the DOM behind the scrim — and a name
+                collision is a property of what is on screen together. `Sort decks` over the
+                editor's `Sort`, one control over. */}
+            <WishDestination
+              folderId={folderId}
+              onChange={onFolderChange}
+              label="Which wishlist folder this deck's shortfall goes to"
+              size="sm"
+              disabled={pending}
+            />
+          </div>
         </>
       ) : (
         stats.copies > 0 && (
@@ -1026,13 +1169,30 @@ function Missing({
           with no `oracle_id`. So zero means the recount found nothing short (the strip's own
           number was one edit stale) or that everything short is an orphaned printing, which
           cannot be wished for at all — and saying "already on your wishlist" would be telling
-          the reader the one thing that is certainly not what happened. */}
+          the reader the one thing that is certainly not what happened.
+
+          **It says where, and only where there is a where to say** (issue #437). At the root the
+          sentence is what it has always been — a reader who never opened the picker gets exactly
+          today's words, and `to Wishlist` would be this app naming a place a reader has not been
+          asked to think about. At a folder it names it, in one clause after the count, because
+          the whole of what the destination changed about the press is where those wishes landed
+          and a reader who filed them somewhere has to be told it worked *there*.
+
+          **The zero arm names no folder, deliberately.** Nothing was written, so there is no
+          place anything went — a folder named on that line would say a drawer received something
+          when the sentence's whole job is to say the opposite. That the picker was pointing
+          somewhere is not a fact about a write that did not happen.
+
+          **The refusal line below names none either**, for the near half of the same reason: a
+          refused write filed nothing anywhere, and the one refusal a destination can cause
+          (`That folder is not there any more.`) is quoted verbatim and says so better than a
+          prefix could. */}
       <p role="status" className="text-dim">
         {added === null
           ? ""
           : added === 0
             ? "Nothing to add — a recount covered the shortfall, or what is short has left the card database."
-            : `Added ${count(added)} ${added === 1 ? "wish" : "wishes"} — one per card, for every copy you are short.`}
+            : `Added ${count(added)} ${added === 1 ? "wish" : "wishes"}${destination === null ? "" : ` to ${destination}`} — one per card, for every copy you are short.`}
       </p>
 
       {/* Beside the button that was pressed, not in the editor's banner: that one speaks for
