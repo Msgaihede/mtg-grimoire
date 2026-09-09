@@ -654,60 +654,6 @@ html[data-dragging] * {
 }
 
 /* ---------------------------------------------------------------------------------------
-   The game-changer spotlight: the deck's every other card standing back so the powerful ones
-   can be read at a glance. Added 2026-09-08.
-
-   **Both halves come out of `features/decks/cardControl.tsx` and neither is spelled here.**
-   `GC_SPOTLIGHT_ATTR` is the attribute the deck's view box wears while the spotlight is on —
-   armed by hovering or pressing the ledger's `6 game changers` chip — and `GC_DIMMED` is the
-   class every card that is *not* a game changer already carries, spread by all four views
-   through `deckCardDimmed`. The class is inert on its own: a deck nobody is spotlighting draws
-   exactly what it drew before this rule existed, which is what lets the mark sit on the majority
-   of the cards at no cost.
-
-   **It is a class on the card rather than an attribute because the table cannot stamp one** —
-   `VirtualTable` draws the row and offers `rowClassName` and nothing else — and it marks the
-   *dimmed* state rather than the lit one so that this stays one flat descendant selector. The
-   inverse spelling is `[data-gc-spotlight] *:not(.deck-gc-lit)`, a `:not()` over a broad subject
-   run against every element under the deck; this repo has measured a broad-subject selector
-   taking one jsdom play from 3.5 s to 15 s, so the cheap shape is deliberate.
-
-   **0.25 is a fade, never a hide.** The dimmed cards stay legible, keep their layout and keep
-   every hit target they had — the spotlight answers *which of these* and must not answer *these
-   are the only ones*, because the reader is still building a deck out of the rest of them.
-
-   **A card in the air is exempt, and that is the one collision worth guarding.** The drag rule
-   directly above puts the preview at 0.75 so the reader can see the pile they are aiming at;
-   dnd-kit stamps `data-dnd-dragging` on the source element *in place* (it becomes a popover, and
-   the top layer is a painting order rather than a change of ancestry), so a dimmed card dragged
-   while the spotlight is latched would still match `[data-gc-spotlight] .deck-gc-dimmed` — and
-   at (0,2,0) against the drag rule's (0,1,0) it would win, carrying the card at 0.25 through a
-   gesture the reader is steering by it. `:not([data-dnd-dragging])` on a class-qualified
-   compound costs nothing (it is not the broad subject the paragraph above refuses) and hands the
-   card back to the drag for the length of the drag.
-
-   150ms and `ease` is the deck's own short transition — the row hover beside it is
-   `duration-150` — and the reduced-motion arm is not optional here: a fade is motion, and
-   `docs/reference/motion.md` is explicit that a non-positional property needs its own opt-out
-   because motion's `reducedMotion` only reduces positional keys. Reduced, the cards still dim;
-   they simply arrive there.
-   --------------------------------------------------------------------------------------- */
-
-[data-gc-spotlight] .deck-gc-dimmed:not([data-dnd-dragging]) {
-  opacity: 0.25;
-}
-
-.deck-gc-dimmed {
-  transition: opacity 150ms ease;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .deck-gc-dimmed {
-    transition: none;
-  }
-}
-
-/* ---------------------------------------------------------------------------------------
    A slim scrollbar, for a scroll area **inside** a panel.
 
    The app draws no scrollbars of its own anywhere else: `color-scheme: dark` up in the base

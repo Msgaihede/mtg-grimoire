@@ -1,12 +1,9 @@
-import { useState, type ComponentProps } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, fn, userEvent, within } from "storybook/test";
+import { expect, userEvent, within } from "storybook/test";
 import { TOOLTIP_OPEN_MS } from "@/components/tooltip/TooltipProvider";
 import type { DeckCard } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
-import { cn } from "@/lib/utils";
 import { deckCard, orphanDeckCard, printing } from "../../../.storybook/fake/fixtures";
-import { deckCardDimmed, deckSpotlightProps, GC_SPOTLIGHT_ATTR } from "./cardControl";
 import { DeckLedger } from "./DeckLedger";
 
 /**
@@ -42,14 +39,6 @@ const meta = {
     marketplace: MARKETPLACES.tcgplayer,
     formatName: "Modern",
     gameChangers: 0,
-    // **The latch, and never the `latched || hovered` the deck is drawn under.** The editor
-    // composes those two and hands this chip only the half `aria-pressed` describes, so every
-    // story here starts released and the two callbacks are spies: this component reports the
-    // gestures and decides nothing. {@link Spotlight} is the one story that composes them, and
-    // it does it in a wrapper rather than in this arg.
-    spotlight: false,
-    onSpotlightToggle: fn(),
-    onSpotlightHover: fn(),
     tight: false,
     // The ordinary deck, and what every story on this page but {@link OnAVirtualDeck} draws.
     // `false` takes the `Owned` term and the hairline in front of it away; it is written once, in
@@ -84,23 +73,20 @@ const meta = {
           "baseline with a hairline between neighbours, which is a quarter of the height a " +
           "stacked `Figure` takes and the reason all five fit on a line the action row can " +
           "spare.\n\n" +
-          "**The three controls at the right end are not figures** — the format check, the " +
-          "game-changer count and the bracket estimate. The outer two are slotted in whole, " +
-          "because each opens a layer this component owns nothing about; the stories below " +
-          "stand plain buttons in for them.\n\n" +
-          "**The middle one is drawn here, and since 2026-09-08 it is a press as well as a " +
-          "readout.** Hovering the game-changer count — or Tabbing onto it — fades every card " +
-          "in the deck that is *not* a game changer to a quarter, and a click latches that so " +
-          "the reader can take their hand off the mouse and go and look. It is drawn here " +
-          "rather than slotted because there is no layer, no anchor and no findings behind it: " +
-          "what it needs is two gestures reported and one boolean handed back.\n\n" +
-          "**Three appearances, and only one of them is a state.** Off is `border-border` and " +
-          "dim text; *touched* paints the words gold and leaves the edge alone, drawn by the " +
-          "chip's own `hover:` variant because a pointer resting on a control is not a state " +
-          "the control is in; *latched* takes the edge too and adds the crown the cards it " +
-          "lights up wear. So `spotlight` is the **latch** — what `aria-pressed` describes — " +
-          "and the effective state the deck is drawn under is the editor's `latched || " +
-          "hovered`. {@link Spotlight} is the only story that composes the two.",
+          "**Two controls at the right end, with a figure between them** — the format check and " +
+          "the bracket estimate are each a press with a layer behind them, slotted in whole " +
+          "because this component owns nothing about what they open, and the stories below " +
+          "stand plain buttons in for them. Between them sits the game-changer count, which is " +
+          "drawn here and is not a control: dim mono, no edge, nothing to press.\n\n" +
+          "**It was a press for one day** (2026-09-09). From 2026-09-08 the chip armed a " +
+          "*spotlight* — hovering it, or latching it with a click, faded every card in the deck " +
+          "that is not a game changer to a quarter. It answered *which ones* by making " +
+          "everything else dimmer, and on a hundred-card deck a hundred stacked " +
+          "quarter-opacity cards is a blur rather than an answer. The question moved to a " +
+          "**Game Changers** chip in the toolbar's label-filter row, which narrows the deck to " +
+          "those cards and leaves every card that survives drawn exactly as it was — a shorter " +
+          "list rather than a dimmer one. What is left here is the count, in the place it has " +
+          "held since 2026-08-24 and in the words it has used throughout.",
       },
     },
   },
@@ -128,8 +114,8 @@ const bracket = (
 );
 
 /**
- * The whole line at the app's own window width: the ruleset, five figures, and the three controls
- * pinned to the right.
+ * The whole line at the app's own window width: the ruleset, five figures, and the two controls
+ * pinned to the right with the game-changer count between them.
  *
  * The headline `Cards` figure is `engine.SIZE_KINDS` — the `main`, `commander` **and `maybe`**
  * kinds, in categories that are switched on — imported from the validation engine rather than
@@ -159,12 +145,9 @@ export const Everything: Story = {
     // rule that leaves it out.
     await expect(term("Owned")).toHaveTextContent("64");
     await expect(canvas.getByText("2 game changers")).toBeInTheDocument();
-    // A readout that is also a control, so the name carries the action the drawn words cannot:
-    // "2 game changers" on its own tells nobody there is anything to press. {@link Spotlight} is
-    // where pressing it does something.
-    await expect(
-      canvas.getByRole("button", { name: "2 game changers — press to spotlight them in the deck" }),
-    ).toHaveAttribute("aria-pressed", "false");
+    // A readout and nothing more: the two presses on this line are the caller's, and the count
+    // between them offers none. It was a toggle for one day — see the docs above.
+    await expect(canvas.queryByRole("button", { name: /game changer/i })).toBeNull();
   },
 };
 
@@ -216,139 +199,6 @@ export const Shortfall: Story = {
 };
 
 /**
- * Three cards standing in for the deck the editor draws under this line.
- *
- * Names rather than tiles, because what this story is about is the **fade** and not the card:
- * `deckCardDimmed` puts `deck-gc-dimmed` on everything that is not a game changer, exactly as all
- * four views do, and the one rule in `src/index.css` takes them to a quarter while an ancestor
- * carries the spotlight attribute. Two dimmed against one lit is the smallest arrangement in
- * which "which of these" has an answer.
- */
-const SPOTLIT: { name: string; gameChanger: boolean }[] = [
-  { name: "Llanowar Elves", gameChanger: false },
-  { name: "Rhystic Study", gameChanger: true },
-  { name: "Counterspell", gameChanger: false },
-];
-
-/**
- * The chip's two gestures composed the way `DeckEditor` composes them — **the only place in this
- * file where anything is stateful**, because the chip itself decides nothing.
- *
- * `latched || hovered`, gated on the deck still having a game changer in it, and `spotlight` gets
- * the latch alone. Derived at render rather than stored in a third `useState`: a synced flag would
- * be the derived-state pattern this repo's lint refuses, and it would make hovering while latched
- * a write that could turn the latch off when the pointer left.
- */
-function SpotlightDemo(args: ComponentProps<typeof DeckLedger>) {
-  const [latched, setLatched] = useState(false);
-  const [hovered, setHovered] = useState(false);
-  const on = (latched || hovered) && args.gameChangers > 0;
-
-  return (
-    <div>
-      <DeckLedger
-        {...args}
-        spotlight={latched}
-        onSpotlightToggle={() => setLatched((was) => !was)}
-        onSpotlightHover={setHovered}
-      />
-      <div {...deckSpotlightProps(on)} className="mt-3 flex gap-2">
-        {SPOTLIT.map((card) => (
-          <div
-            key={card.name}
-            className={cn(
-              "rounded-md border border-border bg-surface px-3 py-6 text-xs text-text",
-              deckCardDimmed(card.gameChanger),
-            )}
-          >
-            {card.name}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-/**
- * **The game-changer count is a press**, and this is the only story where pressing it does
- * anything: the three cards under the line are the deck it lights up.
- *
- * Hover the chip, or Tab onto it, and everything that is not a game changer fades to a quarter —
- * the reveal is on focus as well as on hover, because a chip only a pointer could arm would put
- * the whole affordance out of a keyboard reader's reach. Click and the same state **latches**, so
- * it survives the pointer leaving and the reader can go and look; a second press lets go.
- *
- * **Hovering while latched changes nothing, on screen or in the state**, which is the whole
- * reason the chip is handed the latch rather than the composite: the gold is already there, and
- * `aria-pressed` has been saying so since the press.
- */
-export const Spotlight: Story = {
-  args: {
-    cards: modern(deckCard(printing("pcy", "45"))),
-    gameChangers: 1,
-    check,
-    bracket,
-  },
-  render: (args) => <SpotlightDemo {...args} />,
-  play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement);
-    const chip = canvas.getByRole("button", { name: /game changer/ });
-    // The deck's box wears the attribute or it does not — present-or-absent, so the query needs
-    // no value. jsdom applies no stylesheet under `stories.test.tsx`, so this is the whole of
-    // what a play can say about the fade; the quarter itself is the live pass's.
-    const armed = () => canvasElement.querySelector(`[${GC_SPOTLIGHT_ATTR}]`);
-
-    await expect(armed()).toBeNull();
-
-    await userEvent.hover(chip);
-    await expect(armed()).not.toBeNull();
-    // Touched is not pressed: the pointer arriving must not claim a press nobody made.
-    await expect(chip).toHaveAttribute("aria-pressed", "false");
-
-    await userEvent.click(chip);
-    await expect(chip).toHaveAttribute("aria-pressed", "true");
-    await userEvent.unhover(chip);
-    // The latch outliving the pointer is the whole reason it exists.
-    await expect(armed()).not.toBeNull();
-
-    await userEvent.click(chip);
-    await expect(chip).toHaveAttribute("aria-pressed", "false");
-    await userEvent.unhover(chip);
-    await expect(armed()).toBeNull();
-  },
-};
-
-/**
- * The latched appearance on its own, for the docs page — the one of the chip's three states that
- * is a *state*.
- *
- * The edge takes the gold as well as the words, which is what tells a latch from a hover: a hover
- * says "this is live right now" and the border says "this is still on after you let go". The
- * crown is the mark the cards it is lighting up wear, so the reader's eye leaves a crown and
- * lands on crowns.
- */
-export const Latched: Story = {
-  args: {
-    cards: modern(deckCard(printing("pcy", "45"))),
-    gameChangers: 6,
-    spotlight: true,
-    check,
-    bracket,
-  },
-  play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement);
-
-    const chip = canvas.getByRole("button", {
-      name: "6 game changers — press to stop spotlighting them in the deck",
-    });
-    await expect(chip).toHaveAttribute("aria-pressed", "true");
-    // The crown, `aria-hidden` — a bare glyph rather than `GameChangerMark`, which would bind a
-    // second name and a second tooltip inside a button that already has both.
-    await expect(chip.querySelector("svg")).not.toBeNull();
-  },
-};
-
-/**
  * The narrowest editor column the header reasons about — a 1024px window with the rail out, which
  * leaves 761px.
  *
@@ -383,13 +233,12 @@ export const Tight: Story = {
     await expect(canvas.getByText("−3")).toHaveAttribute("aria-hidden", "true");
     await expect(canvas.getByText("3 missing")).toHaveClass("sr-only");
     await expect(canvas.getByText("6 GC")).toHaveAttribute("aria-hidden", "true");
+    // The twin is the whole of what names this figure at this width, and that is newer than it
+    // looks: while the count was a press it carried an `aria-label`, and a label replaces an
+    // element's contents for naming, so the twin was announced to nobody. The label went with
+    // the press on 2026-09-09.
     await expect(canvas.getByText("6 game changers")).toHaveClass("sr-only");
-    // `tight` deletes the word from the **drawing** and never from the name — an `aria-label`
-    // replaces an element's contents for naming, so the `sr-only` twin beside `6 GC` is
-    // announced to nobody and the whole sentence has to be in the label at both widths.
-    await expect(
-      canvas.getByRole("button", { name: "6 game changers — press to spotlight them in the deck" }),
-    ).toBeInTheDocument();
+    await expect(canvas.queryByRole("button", { name: /game changer/i })).toBeNull();
   },
 };
 

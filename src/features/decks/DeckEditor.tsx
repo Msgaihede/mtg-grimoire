@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ChevronLeft,
   Columns3Cog,
+  Crown,
   History,
   Redo2,
   Scale,
@@ -54,7 +55,6 @@ import { cn } from "@/lib/utils";
 import { newestWrite, writeFailure } from "@/lib/writes";
 import {
   DECK_CARD_VARIANT,
-  deckSpotlightProps,
   focusDeckGroup,
   keepsSelection,
   type DeckCardActions,
@@ -328,8 +328,9 @@ const DESK_GAP = 16;
  */
 const DECK_HEIGHT_FLOOR = "min-h-96";
 
-/** Stable identity for "no label filter", so the memo below does not re-run on every
- *  render. */
+/** Stable identity for "no label chip is pressed", so the memo below does not re-run on every
+ *  render. It is the label half of that row and not the whole of it — the `Game Changers` chip
+ *  beside them is a boolean and needs no such identity. */
 const NO_LABELS: readonly number[] = [];
 
 /** Stable identity for the wishes a *closed* {@link QuickUnwishDialog} is handed. The shell
@@ -1120,6 +1121,16 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const [sortBy, setSortBy] = useState<SortBy>(DEFAULT_SORT_BY);
   const [filter, setFilter] = useState("");
   const [labelIds, setLabelIds] = useState<readonly number[]>(NO_LABELS);
+  /**
+   * Whether the toolbar's `Game Changers` chip is pressed — the app's own fixed chip in the row
+   * of the reader's arbitrary label strings, and **the thing that answers _which cards are the
+   * game changers_** now that the ledger's count is a plain readout again.
+   *
+   * Plain `useState` like the two above it and persisted nowhere: which cards a reader is
+   * looking at right now is a fact about the sitting, not about the deck. What is *derived* from
+   * it is {@link gcFilter}, and the derivation is the fence — see it.
+   */
+  const [gcOnly, setGcOnly] = useState(false);
   const [layer, setLayer] = useState<Layer>(null);
   /**
    * A **read** the reader pressed for and that refused, as a sentence — the wishes behind
@@ -3279,11 +3290,48 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   );
 
   /**
+   * Whether the deck **draws** a game changer at all — the chip's own gate, and deliberately
+   * not {@link gameChangers}.
+   *
+   * That figure counts *copies over the piles that count* (`categoryActive`), because it is a
+   * rules readout: the number the format will judge. This is a question about what is on the
+   * desk. A game changer parked in a switched-off Maybeboard is exactly a card a reader wants to
+   * ask *where are the powerful ones* about — it is still in front of them — so the chip is drawn
+   * for it and the filter matches it. That is the same split `validateForMarks` and
+   * `validateDeck` already make one screen over (issue #134): a claim about the deck, and an
+   * answer about each card drawn.
+   */
+  const hasGameChangers = useMemo(
+    () => deck.cards.some((card) => card.gameChanger === true),
+    [deck.cards],
+  );
+
+  /**
+   * The chip's press **as the filter actually reads it** — derived at render and never stored.
+   *
+   * The chip is drawn only for a deck that draws a game changer, so it cannot be *pressed* on a
+   * deck with none; but the flag is this component's state and the answer is a memo over the
+   * deck's rows, so an edit that removes the last game changer takes the chip away and would
+   * leave `gcOnly` standing — a deck narrowed to nothing, with nothing on screen to press to get
+   * it back. Gating the **derivation** rather than clearing the flag in an effect is what keeps
+   * that a *read*: this repo's lint refuses `setState` in an effect and refuses it only at
+   * `npm run verify`, and a reader who steps a card to zero and undoes it finds their filter
+   * exactly where they left it.
+   */
+  const gcFilter = gcOnly && hasGameChangers;
+
+  /**
    * The rows on screen: the deck, narrowed by the two filters the toolbar carries.
    *
    * Filtering happens **before** the grouping, so every count and price in a heading is a count
    * of what is under it — a group saying 60 over four visible rows is a heading that lies about
    * the only thing it is for.
+   *
+   * **The chip row is an `OR` among itself and an `AND` with the text box**, and the game-changer
+   * chip joined the first of those rather than the second (2026-09-09, the reader's call). One
+   * row of chips asks one question — *show me the cards that are any of these* — and an `AND`
+   * would be near useless anyway: a game changer rarely wears a label, so ticking both would
+   * empty the wall and read as the filter having broken.
    *
    * **Filtering used to decide which headings exist and no longer decides anything about it.**
    * `emptyGroupRules` carried a `narrowed` flag: while this filter was running, `grouping.ts`'
@@ -3298,15 +3346,20 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    */
   const shown = useMemo(() => {
     const needle = filter.trim().toLowerCase();
-    if (!needle && labelIds.length === 0) return deck.cards;
+    // Whether *any* chip in that row is pressed, which is the one thing the OR needs to know:
+    // no chip is no chip filter, exactly as an empty `labelIds` was on its own.
+    const chips = labelIds.length > 0 || gcFilter;
+    if (!needle && !chips) return deck.cards;
     return deck.cards.filter(
       (card) =>
-        (labelIds.length === 0 || (card.labelId !== null && labelIds.includes(card.labelId))) &&
+        (!chips ||
+          (gcFilter && card.gameChanger === true) ||
+          (card.labelId !== null && labelIds.includes(card.labelId))) &&
         (!needle ||
           card.name.toLowerCase().includes(needle) ||
           (card.typeLine ?? "").toLowerCase().includes(needle)),
     );
-  }, [deck.cards, filter, labelIds]);
+  }, [deck.cards, filter, labelIds, gcFilter]);
 
   /**
    * Whether the `{X}` spells get a heading of their own — **the deck's, not this editor's.**
@@ -3422,32 +3475,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       ),
     [deck.cards],
   );
-
-  /**
-   * **The game-changer spotlight**, in two facts and one derivation.
-   *
-   * The ledger's count is a press as well as a readout (`DeckLedger`): hovering it, or the caret
-   * landing on it, fades every card in the deck that is not a game changer to a quarter, and a
-   * click latches the same state so it survives the pointer leaving. Two gestures, so two pieces
-   * of state — a latch the reader set and a hover the pointer is making — and `gcSpotlight` is
-   * the `||` of them, **derived at render and never stored**. A third `useState` synced in an
-   * effect would be the derived-state pattern this repo's lint refuses (and refuses only at
-   * `npm run verify`), and it would also make hover-while-latched a write that could turn the
-   * latch off when the pointer left.
-   *
-   * **The `gameChangers > 0` gate is the fence a latch can outlive its own control.** The chip is
-   * drawn only for a deck that has one — so it cannot be *pressed* on a deck with none — but the
-   * latch is this component's state and the count is a `useMemo` over the deck's rows: an edit
-   * that removes the last game changer takes the chip away and leaves `gcLatched` standing, which
-   * would be a whole deck stuck at a quarter with nothing on screen to press to get it back.
-   * Gating the derivation rather than clearing the flag keeps that a *read*: the flag is
-   * meaningless while there is nothing to spotlight and means what it always did the moment a
-   * game changer comes back, so a reader who steps a card to zero and undoes it finds the
-   * spotlight exactly where they left it.
-   */
-  const [gcLatched, setGcLatched] = useState(false);
-  const [gcHovered, setGcHovered] = useState(false);
-  const gcSpotlight = (gcLatched || gcHovered) && gameChangers > 0;
 
   /**
    * Where the docked panel's adds land, and the quick add with them — **the deck row's answer**
@@ -4070,14 +4097,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           marketplace={marketplace}
           formatName={spec?.displayName ?? row.formatName ?? null}
           gameChangers={gameChangers}
-          // **The latch and never `gcSpotlight`.** `aria-pressed` describes a toggle, and the
-          // pointer resting on the chip is not a press — the chip draws that state for itself
-          // with a `hover:` variant, which is also what keeps its three appearances (off,
-          // touched, latched) distinguishable. The composite is what the *deck* is drawn under,
-          // one element down.
-          spotlight={gcLatched}
-          onSpotlightToggle={() => setGcLatched((on) => !on)}
-          onSpotlightHover={setGcHovered}
           tight={tightHeader}
           // Four terms rather than five on a Virtual deck — the `Owned` figure is the one thing
           // on this line that is about a *binder* rather than about the deck. See {@link tracks}.
@@ -4321,19 +4340,60 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               pickers and the tools without moving either in the DOM. */}
           {tightHeader && <span aria-hidden="true" className="order-2 h-0 basis-full" />}
 
-          {/* The deck's own labels, as filters. Nothing at all for a deck with no labels — an
-              empty group with a name is a control that says there is something to press.
+          {/* The deck's own labels, as filters, and the app's own `Game Changers` chip in front
+              of them. Nothing at all for a deck with neither — an empty group with a name is a
+              control that says there is something to press.
+
+              **The gate has two arms and the row is named for both** (2026-09-09): a deck with a
+              game changer and no labels at all draws this row for the chip alone, which is the
+              arm easiest to lose in a tidy.
 
               **A toolbar item of its own, and it was inside the filter's box until 2026-08-24.**
               That box grew a `max-w-[25rem]` ceiling in the same change — the field's, and a good
               one — and a row of arbitrary user strings crammed into 400px is not what the ceiling
               was for. */}
-          {deck.labels.length > 0 && (
+          {(deck.labels.length > 0 || hasGameChangers) && (
             <div
               role="group"
-              aria-label="Filter by label"
+              aria-label="Filter by label or game changer"
               className={cn("flex flex-wrap items-center gap-1.5", tightHeader && "order-3")}
             >
+              {/* **First, and fixed there.** Every other chip in this row is one of the reader's
+                  own strings, so the row's contents move as they add and rename labels; this one
+                  is the app's, and a fixed position is what keeps it where they last left it
+                  rather than somewhere in an alphabet that is not its own.
+
+                  **The crown is drawn always rather than only when pressed**, because here it is
+                  the chip's *identity* and not its state — `aria-pressed` is what says whether
+                  the filter is on. `text-pie-gold` is the gold the crowns and banners on the
+                  cards themselves are drawn in, so the chip and what it narrows to say one fact
+                  in one colour; that is why the on state is written out here instead of taking
+                  {@link filterChipState}'s accent, which would make this the one chip in the row
+                  whose colour disagreed with the cards under it.
+
+                  A bare glyph and never `GameChangerMark`: that component names itself and binds
+                  a tooltip of its own, which inside a control that already has a name would be a
+                  second name on one button. */}
+              {hasGameChangers && (
+                <button
+                  type="button"
+                  aria-pressed={gcFilter}
+                  onClick={() => setGcOnly((on) => !on)}
+                  className={cn(
+                    FILTER_CONTROL,
+                    FILTER_FOCUS,
+                    // The label chips' own type size, for the label chips' own reason — this
+                    // chip shares their line and must not set a taller one.
+                    "gap-1.5 px-2.5 text-xs",
+                    gcFilter
+                      ? "border-pie-gold text-pie-gold"
+                      : "border-border text-dim hover:text-pie-gold",
+                  )}
+                >
+                  <Crown className="size-3 shrink-0" aria-hidden="true" />
+                  Game Changers
+                </button>
+              )}
               {deck.labels.map((label) => {
                 const on = labelIds.includes(label.id);
                 return (
@@ -4525,18 +4585,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
            * below is unconditional, and all four views are drawn in one box with one rule — which
            * is also what the reader asked for, a table at its full height with no scrollbar on it.
            */}
-          <div
-            // **The game-changer spotlight is armed here, and this box is the one that may take
-            // it.** `deckSpotlightProps` stamps an attribute the stylesheet reads as *fade every
-            // `deck-gc-dimmed` under me*, so what it must not contain is any card that is not in
-            // the deck. This box holds the four views and nothing else — the docked search
-            // column is its **sibling** inside the desk row above, so its tiles (cards the reader
-            // is shopping for, most of which are not game changers of anything) are outside the
-            // attribute by construction. The desk row would have been the wrong ancestor for
-            // exactly that reason, and the editor's own root worse again.
-            {...deckSpotlightProps(gcSpotlight)}
-            className={cn("min-w-0 flex-1", DECK_HEIGHT_FLOOR)}
-          >
+          <div className={cn("min-w-0 flex-1", DECK_HEIGHT_FLOOR)}>
             {/* Neither `columnHeight` nor a measured height reaches a view any more. `StackView`
                 packs nothing — every pile is a flex item that wraps on width — and `TextView`
                 still packs, to a fixed readable target rather than to the desk, which is as tall

@@ -16,7 +16,6 @@ import { cn } from "@/lib/utils";
 import { DeckFinishMark, LabelDot, rowMarkColor, TheoryMatchBadge } from "../CardMarks";
 import {
   deckCardBodyProps,
-  deckCardDimmed,
   deckCardName,
   deckCardMenuProps,
   deckCardMarked,
@@ -466,12 +465,7 @@ function TextRow({
       {...deckCardBodyProps()}
       {...deckCardMenuProps(card, actions)}
       {...deckCardSelectedProps(selected)}
-      // The game-changer spotlight's mark, on the whole card rather than on the button inside
-      // it — this element is documented above as the card, controls and all, which is the right
-      // scope for a fade that means *this is not one of the ones you are looking at*. The class
-      // is inert until an ancestor carries the spotlight attribute; `cardControl`'s
-      // `deckCardDimmed` and `index.css` carry the pair.
-      className={cn("group relative rounded", FOCUS, deckCardDimmed(card.gameChanger))}
+      className={cn("group relative rounded", FOCUS)}
     >
       <button
         type="button"
