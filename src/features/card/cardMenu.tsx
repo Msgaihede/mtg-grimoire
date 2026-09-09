@@ -13,6 +13,13 @@
  * its; the deck picker is a `lazy` row whose component mounts on expand. That is a rule, not
  * an optimisation — a menu that fetched on open would fire a request every time a reader
  * right-clicked the wrong tile.
+ *
+ * **Since 2026-09-09 one of those rows asks a command in its `onSelect` too, and that is the rule
+ * holding rather than an exception to it.** `Open on → TCGplayer` resolves the printing's product
+ * ids through `card_tcgplayer_ids` so it can open the exact page; the read is spent by a reader
+ * *choosing* the row, which is the same deliberate act as expanding the deck picker, and building
+ * the menu still asks nothing. Rows for the other four marketplaces make no call at all — see
+ * {@link openMarketplaceForCard}.
  */
 import {
   createContext,
@@ -55,12 +62,7 @@ import { useDeckFolders } from "@/features/decks/useDeckFolders";
 import { playKey, useDecksPlaying } from "@/features/decks/useDeckPlays";
 import { useDecks } from "@/features/decks/useDecks";
 import { copyText } from "@/lib/clipboard";
-import {
-  edhrecCardUrl,
-  marketplaceSearchUrl,
-  openExternal,
-  scryfallCardUrl,
-} from "@/lib/externalLinks";
+import { edhrecCardUrl, openExternal, scryfallCardUrl } from "@/lib/externalLinks";
 import { FINISH_LABEL, parseFinishes, type Finish } from "@/lib/finish";
 import {
   ipc,
@@ -74,6 +76,7 @@ import {
 import type { Marketplace } from "@/lib/marketplace";
 import type { PaneDeckContext, PrintingsRequest } from "@/lib/store";
 import { sortOptions } from "@/lib/options";
+import { openMarketplaceForCard } from "./openMarketplace";
 
 /**
  * The card a menu was opened on, as every surface can describe it.
@@ -421,7 +424,39 @@ export function buildCardMenu(target: CardMenuTarget, deps: CardMenuDeps): MenuI
           kind: "action",
           id: "open-marketplace",
           label: marketplace.label,
-          onSelect: () => run(openExternal(marketplaceSearchUrl(marketplace.id, target.name))),
+          // **The exact product page rather than a search for the name, where the setting is
+          // TCGplayer** (2026-09-09). The ladder above is untouched — still the one selected
+          // marketplace, still the last rung — and what moved is only what the press *opens*:
+          // `openMarketplaceForCard` resolves the printing's stored product ids, picks between the
+          // ordinary product and the etched one, decides whether `?Printing=` can honestly be
+          // claimed of the id it chose, and opens the search this row used to build on every path
+          // where it cannot. The other four marketplaces still have only a search, and that path
+          // asks Rust nothing.
+          //
+          // **None of those decisions is made here, and the reason is the rail.**
+          // `CardModalRail` draws the same row for the same card, so a second copy of that table
+          // is how the menu comes to open a foil listing where the rail opens a plain one.
+          //
+          // `target.finish ?? null` rather than the field itself: the surfaces that name a finish
+          // — a collection row, a wishlist row with a preference — set it and the rest leave it
+          // absent, while the helper's parameter is a `Finish | null` where `null` means "ask the
+          // printing instead". Nothing about `CardMenuTarget` had to change for this, which is the
+          // point of resolving on the press: the ~15 surfaces that build a target already carry
+          // both facts.
+          //
+          // `run` is the same swallow every other row here uses, and it is right rather than lax:
+          // every fallback lives *inside* the helper, so a rejection arriving here would mean the
+          // helper itself threw rather than that the link failed.
+          onSelect: () =>
+            run(
+              openMarketplaceForCard({
+                marketplace,
+                cardId: target.cardId,
+                cardName: target.name,
+                finish: target.finish ?? null,
+                finishes: target.finishes,
+              }),
+            ),
         },
       ],
     },

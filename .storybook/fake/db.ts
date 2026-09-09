@@ -217,6 +217,7 @@ import type {
   TagNamespace,
   TagRef,
   TagStatus,
+  TcgplayerIds,
   GlobalLabel,
   TheoryDiffRow,
   TokenSource,
@@ -7794,6 +7795,45 @@ export function readHandlers(db: FakeDb) {
       const card = cardById(db, args.id);
       if (card === null || card.meldParts === null) return [];
       return JSON.parse(card.meldParts) as MeldRelation[];
+    },
+
+    /**
+     * `card::card_tcgplayer_ids` — the two product ids behind the card menu's **Open on
+     * TCGplayer** row, which opens the exact product page rather than a name search.
+     *
+     * **Two `null`s is an answer and this never throws**, which is `card_meld_parts`' rule one
+     * command over and it is the same rule for the same reason: an unknown id, a `raw` blob that
+     * will not inflate and a row carrying neither field all come back
+     * `{ productId: null, etchedProductId: null }`. A press that leaves the app must not fail to
+     * do *something* — the caller falls back to the marketplace's name search, which is the shape
+     * this row opened before the ids existed — so a handler that refused an unknown id would let
+     * a story pass over a call the window answers differently. Two of Rust's three paths are
+     * reachable here and the third is not — the fixture carries no `raw`, so nothing can fail to
+     * inflate — and this answers the same shape for all three rather than telling them apart.
+     *
+     * **Nothing is chosen between them.** Which product a reader wants depends on the finish the
+     * *surface* named, which the crate cannot see and TS decides — Rust supplies facts, TS draws
+     * conclusions — so both come over unread, exactly as the command does. Etched is a separate
+     * TCGplayer product rather than an option on one, which is why there are two: 892 printings
+     * carry only the etched id and 333 carry both (measured 2026-09-09).
+     *
+     * The ids are {@link FakeCard.tcgplayerId} and {@link FakeCard.tcgplayerEtchedId}, read
+     * rather than derived, for the reason the field above is: `cards` has no column for either,
+     * Rust reads them out of the gzipped blob, and the fixture has no blob. **`null` is an
+     * ordinary value here rather than a gap** — 1.62 % of paper English non-token printings carry
+     * no id at all, digital-only cards essentially never do (0.04 %, because TCGplayer does not
+     * sell them), and the etched field is null on all but 1 225 rows of the whole corpus.
+     *
+     * **No `marketplace`**, like the meld read above and unlike every priced read: these are
+     * TCGplayer's own ids, so the setting decides whether this is called at all and never what it
+     * answers.
+     */
+    card_tcgplayer_ids: (args: { id: string }): TcgplayerIds => {
+      const card = cardById(db, args.id);
+      return {
+        productId: card?.tcgplayerId ?? null,
+        etchedProductId: card?.tcgplayerEtchedId ?? null,
+      };
     },
 
     /**

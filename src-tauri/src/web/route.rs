@@ -180,6 +180,7 @@ pub const COMMANDS: &[&str] = &[
     "card_detail",
     "card_printings",
     "card_meld_parts",
+    "card_tcgplayer_ids",
     "card_holdings",
     "card_image_uri",
     "printing_group_by",
@@ -1669,6 +1670,22 @@ pub fn call(
             encode(
                 command,
                 crate::card::meld_parts(&conn, &id).map_err(RouteError::Failed)?,
+            )
+        }
+
+        // **Routed for parity and not because the browser needs the network less.** The read is
+        // `card_meld_parts`' exactly — one row of `cards.raw`, inflated and parsed in Rust
+        // because `json_extract` over a gzip member is a hard error — so the wasm build answers
+        // it with the same function and no second implementation. Unrouted, the card pane's
+        // "Open on TCGplayer" row would fall back to a name search in a browser and reach the
+        // exact product on the desktop: one feature behaving two ways for no reason a reader
+        // could see, which is `card_holdings`' argument one arm down.
+        "card_tcgplayer_ids" => {
+            let id: String = field(command, args, "id")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::card::tcgplayer_ids(&conn, &id).map_err(RouteError::Failed)?,
             )
         }
 
@@ -3177,9 +3194,12 @@ mod tests {
         // **148 since the share branch added `share_list`** — the cache read, and the only one
         // of the five `share_*` commands that is routable at all, because the other four are
         // `reqwest`.
+        //
+        // **149 since `card_tcgplayer_ids`**, counted off the merged array with the `awk` the
+        // paragraph five above asks for and not by adding one to 148.
         assert_eq!(
             COMMANDS.len(),
-            148,
+            149,
             "update this number when a command is added"
         );
     }

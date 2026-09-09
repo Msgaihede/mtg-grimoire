@@ -250,6 +250,52 @@ export const Empty: Story = {
 };
 
 /**
+ * A copy filed in a drawer the reader has **set aside**, and the drawer says so.
+ *
+ * The lock shipped in [#365](https://github.com/Msgaihede/mtg-grimoire/issues/365) as an
+ * *absence*: the collection page asked its list with `excludeLocked: true`, so a locked drawer's
+ * copies never reached this table at all.
+ * [#436](https://github.com/Msgaihede/mtg-grimoire/issues/436) reversed that — a set-aside card
+ * is still a card the reader owns, still worth what it is worth, and still counted in the header
+ * above this table — so the fact had to move from the absence onto the row, and the Folder cell
+ * is where it goes because the lock is a fact about the *drawer*.
+ *
+ * **`folderLocked` is the caller's answer and never this table's.** The lock inherits down the
+ * tree, so the honest reading is a walk over the whole cabinet (`lockedFolderIds` in
+ * `lib/folderTree.ts`) and a row carries one `folderId`. `CollectionPage` computes it once for
+ * the wall and the table together; here it is spelled as the predicate that page would pass.
+ *
+ * The two rows beside it are the point of the story: a copy at the root and a copy in a deck's
+ * group are both unlocked, so what a reader sees here is one marked drawer among unmarked ones
+ * rather than a table wearing a glyph everywhere. What locking does **not** do is fence the row:
+ * the stepper is live, and the copy drags in and out exactly as it did.
+ */
+export const LockedFolder: Story = {
+  args: {
+    rows: [
+      entry(printing("lea", "232"), "nonfoil", { folderId: 9, folderName: "Display case" }),
+      entry(printing("2ed", "48"), "nonfoil"),
+      entry(printing("mh2", "259"), "nonfoil", { folderId: 4, folderName: "Burn" }),
+    ],
+    total: 3,
+    folderLocked: (row) => row.folderId === 9,
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // Named rather than found by its class: the glyph carries `role="img"` with `Locked` as its
+    // name, so what is asserted is the fact a screen reader gets.
+    const marks = canvas.getAllByRole("img", { name: "Locked" });
+    await expect(marks).toHaveLength(1);
+    await expect(marks[0].closest('[role="row"]')).toHaveTextContent("Display case");
+    // Still listed, and still editable — the lock stops the app *offering* a copy to a deck, and
+    // never stops the reader reaching it.
+    await expect(
+      canvas.getByRole("spinbutton", { name: "Quantity of Black Lotus (Nonfoil, NM)" }),
+    ).toBeInTheDocument();
+  },
+};
+
+/**
  * A flagged row, **listed and counted exactly as before**.
  *
  * `needs_review` is a sentence, not a flag: the reconciler writes what happened and the first

@@ -5,7 +5,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
 } from "react";
-import { Trash2 } from "lucide-react";
+import { Lock, Trash2 } from "lucide-react";
 import { FinishMark } from "@/components/FinishMark";
 import { ManaText } from "@/components/ManaText";
 import { QuantityStepper } from "@/components/QuantityStepper";
@@ -96,6 +96,8 @@ function columnsFor(
   tip: TooltipBinder,
   /** {@link CollectionTable}'s prop of the same name, threaded down to the one cell it fences. */
   quantityBlocked?: (row: CollectionRow) => string | null,
+  /** {@link CollectionTable}'s prop of the same name, threaded down to the Folder cell it marks. */
+  folderLocked?: (row: CollectionRow) => boolean,
 ): TableColumn<CollectionRow>[] {
   const asOf = pricesAsOf(marketplace);
   const currency = marketplace.currency;
@@ -395,8 +397,29 @@ function columnsFor(
               by whatever the last read said. `null` with a `folderId` set cannot happen through
               the join and reads as the root if it ever does — an em dash is the honest answer for
               a drawer this row cannot name. */}
-          <span className="min-w-0 truncate" {...tip(row.folderName, { whenClipped: true })}>
-            {row.folderName ?? "—"}
+          <span className="flex min-w-0 items-center gap-1">
+            {/* **The mark for a copy the reader has set aside** — issue #436, and this column is
+                where it goes because the lock is a fact about the *drawer*, which is the one
+                thing this cell says. A row is one entry and therefore one folder, so unlike the
+                wall's tile there is nothing to reconcile here: `folderLocked` is asked of the
+                row and answers about that drawer alone.
+
+                `role="img"` with its whole word as the name, `ElsewhereMark`'s arrangement: the
+                glyph says nothing on its own, and it sits in a cell rather than inside a
+                control, so naming itself costs nothing else its name. The word is `Locked`
+                because that is what `CollectionFolderCard`'s badge says one surface over — two
+                spellings of one state is how a reader concludes they are two states.
+
+                It costs the name column about 16px on a locked row, out of the 4.5rem the header
+                of this column argues for. That is paid deliberately: on a row that is set aside
+                the lock is the more important of the two facts, and the name keeps its
+                `whenClipped` tooltip. */}
+            {folderLocked?.(row) === true && (
+              <Lock role="img" aria-label="Locked" className="size-3 shrink-0" />
+            )}
+            <span className="min-w-0 truncate" {...tip(row.folderName, { whenClipped: true })}>
+              {row.folderName ?? "—"}
+            </span>
           </span>
           {/* Offered on an empty row and nowhere else — and **no shipped write can produce one
               today, so this button is unreachable in the app as it stands**. Since schema v24
@@ -517,6 +540,7 @@ export function CollectionTable({
   onSetQuantity,
   onRemove,
   quantityBlocked,
+  folderLocked,
   rowMenu,
   rowMenuKey,
   marketplace,
@@ -562,6 +586,28 @@ export function CollectionTable({
    */
   quantityBlocked?: (row: CollectionRow) => string | null;
   /**
+   * Whether this row's copy is filed in a drawer the reader has set aside — issue #365 for the
+   * lock, issue #436 for why this table draws it at all.
+   *
+   * **The mark exists because the exclusion stopped.** Until 2026-09-09 the collection page
+   * asked its list with `excludeLocked: true`, so a locked drawer's copies were absent from
+   * this table and from the header above it — and absence *was* the statement. #436 put them
+   * back: a set-aside card is still owned, still worth what it is worth, and still the reader's
+   * to see. So the lock has to be legible on the copy instead, and the Folder cell is where it
+   * goes because the lock is a fact about the drawer.
+   *
+   * **The *effective* lock, and the caller is the only one who can answer it.** It inherits down
+   * the tree (`lockedFolderIds` in `lib/folderTree.ts`), so the honest answer is a walk over the
+   * whole cabinet and a row carries one `folderId`. A predicate here would be this table
+   * re-deriving a fact the page already holds — which is exactly what `CollectionPage`'s own
+   * rule forbids of the badge, the two greyed rows and the drag confirmation.
+   *
+   * Optional, and optional in {@link quantityBlocked}'s way rather than defaulted: absent, every
+   * row draws the plain cell it drew before the lock existed, which is what every story and
+   * every read-only mount of this table wants.
+   */
+  folderLocked?: (row: CollectionRow) => boolean;
+  /**
    * What a row offers on a right-click — a ready-made `onContextMenu` handler, one per row.
    *
    * A prop rather than a hook here, for the reason the two callbacks above it are props: a
@@ -589,7 +635,14 @@ export function CollectionTable({
   return (
     <VirtualTable
       rows={rows}
-      columns={columnsFor(onSetQuantity, onRemove, marketplace, tip, quantityBlocked)}
+      columns={columnsFor(
+        onSetQuantity,
+        onRemove,
+        marketplace,
+        tip,
+        quantityBlocked,
+        folderLocked,
+      )}
       label="Your collection"
       // A collection total is counted in full, so there is no unknown-count case here.
       total={total}

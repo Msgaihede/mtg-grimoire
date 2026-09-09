@@ -868,6 +868,36 @@ export interface CardHoldings {
   decks: number;
 }
 
+/**
+ * The TCGplayer product ids Scryfall stores for one printing — both of them, unread.
+ *
+ * **Two ids because etched foil is a separate product on TCGplayer rather than an option on
+ * one.** The catalogue lists `484936 The Ur-Dragon (Foil Etched)` as its own product, whose own
+ * subtype is `Foil`; that is why Scryfall carries `tcgplayer_etched_id` beside `tcgplayer_id` at
+ * all. Measured on the corpus 2026-09-09: **892** printings carry only the etched id and **333**
+ * carry both, so neither field is derivable from the other and a single "the product id" would be
+ * wrong for 1 225 printings.
+ *
+ * **Both come over unread because only the caller knows the finish.** Rust supplies facts and TS
+ * draws conclusions (root `CLAUDE.md`), and the fact here is *which products exist*; the
+ * conclusion — which one a reader pressing "Open on TCGplayer" wants — needs the finish the
+ * surface named (a collection row's own, a deck row's, a wishlist preference), which no query
+ * against `cards` can see. `src/features/card/openMarketplace.ts` is where that conclusion is
+ * drawn, once, for both call sites.
+ *
+ * **Either field is `null` for a printing TCGplayer does not sell, and that is common enough to
+ * be the normal case rather than an error.** Coverage of `tcgplayer_id ?? tcgplayer_etched_id`,
+ * measured 2026-09-09: **98.38 %** of paper English non-token printings (99 885 rows), 93.90 % of
+ * all paper, 86.44 % of the whole corpus — and **0.04 %** of digital-only cards, which are not
+ * sold there at all. So a caller must have a fallback for two nulls; it is not a failure path.
+ */
+export interface TcgplayerIds {
+  /** Scryfall's `tcgplayer_id`: the ordinary product, sold as `Normal` and `Foil`. */
+  productId: number | null;
+  /** Scryfall's `tcgplayer_etched_id`: the etched product, which is sold as `Foil` only. */
+  etchedProductId: number | null;
+}
+
 /** One row of the set picker. */
 export interface SetSummary {
   /** Lowercase, as `cards.set_code` stores it — this is what the filter sends back. */
@@ -6132,6 +6162,25 @@ export const ipc = {
    * in a priced query key would refetch a fixed fact on every switch.
    */
   cardMeldParts: (id: string) => invoke<MeldRelation[]>("card_meld_parts", { id }),
+  /**
+   * The TCGplayer product ids for one printing — see {@link TcgplayerIds}.
+   *
+   * **Two `null`s is the answer and it never rejects**, which is `cardMeldParts`' rule one command
+   * over: an unknown id, an unreadable `raw` blob and a row carrying neither field all come back
+   * `{ productId: null, etchedProductId: null }`. A press that leaves the app must never fail to
+   * do *something*, and the something here is the marketplace's name search — the shape this row
+   * opened before the ids existed. `openMarketplaceForCard` owns that fallback.
+   *
+   * **Resolved on the press rather than with the card**, so it is a command and not a field on
+   * {@link CardDetail}: `externalLinks.ts`'s doctrine is that a menu merely *offering* to open a
+   * marketplace has visited nothing, and a card opened is a card whose menu was never used far
+   * more often than not. One id lookup on a keyed index costs less than carrying two integers
+   * through every printing of every wall.
+   *
+   * **No `marketplace`**, unlike every other card read here — these are TCGplayer's own ids, so
+   * the setting decides *whether* this is called at all and never what it answers.
+   */
+  cardTcgplayerIds: (id: string) => invoke<TcgplayerIds>("card_tcgplayer_ids", { id }),
   /**
    * What the reader holds of one oracle card — see {@link CardHoldings}.
    *
