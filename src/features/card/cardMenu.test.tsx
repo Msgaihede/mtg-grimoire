@@ -46,10 +46,23 @@ const deckFolderList = vi.fn();
 const deckGet = vi.fn();
 const deckAddCard = vi.fn();
 const oracleTagsForPrintings = vi.fn();
+/**
+ * The one command `Open on → TCGplayer` spends, and the second read in this whole file.
+ *
+ * **Answered at the exact shape the real command answers — `{ productId, etchedProductId }`, both
+ * nullable — because `ipc.ts` is a hand-written mirror the compiler checks against nothing.** A
+ * spy answering something friendlier (a bare id, a missing `etchedProductId`) would let the cases
+ * below pass against a menu wired to a command that cannot answer that way, which is the whole
+ * failure mode of mocking this module. Two `null`s is the *normal* fallback rather than an
+ * error — 1.62 % of paper English non-token printings and every digital-only card — so it gets
+ * a case of its own.
+ */
+const cardTcgplayerIds = vi.fn();
 vi.mock("@/lib/ipc", async (original) => ({
   ...(await original<typeof import("@/lib/ipc")>()),
   ipc: {
     cardImageUri: vi.fn(),
+    cardTcgplayerIds: (id: string) => cardTcgplayerIds(id),
     deckList: () => deckList(),
     deckFolderList: () => deckFolderList(),
     deckGet: (...args: unknown[]) => deckGet(...args),
@@ -133,6 +146,9 @@ const BOLT: CardMenuTarget = {
   oracleId: "o-bolt",
   finishes: '["nonfoil"]',
 };
+
+/** Lightning Bolt (LEA)'s real `tcgplayer_id`, as measured on Scryfall's own row for it. */
+const BOLT_PRODUCT_ID = 1174;
 
 /**
  * One wishlist folder.
@@ -240,6 +256,12 @@ beforeEach(() => {
   // empty answer is the fail-closed direction, so a case that forgot to arm it greys every deck
   // rather than quietly enabling one.
   plays({});
+  // The ordinary printing: sold on TCGplayer, no etched product beside it. Armed here for the same
+  // reason the census is — `clearAllMocks` leaves an implementation standing, so a case that
+  // armed the two-nulls answer would otherwise hand it to whatever ran next.
+  cardTcgplayerIds
+    .mockReset()
+    .mockResolvedValue({ productId: BOLT_PRODUCT_ID, etchedProductId: null });
 });
 
 describe("buildCardMenu", () => {
@@ -307,6 +329,109 @@ describe("buildCardMenu", () => {
         "https://edhrec.com/route/?cc=Lightning%20Bolt",
       ),
     );
+  });
+
+  /** The bottom rung, reached the way a reader reaches it — through the submenu, never by index
+   *  arithmetic a reordering could quietly satisfy. */
+  function marketplaceRow(
+    over: Partial<CardMenuTarget> = {},
+    marketplace = MARKETPLACES.tcgplayer,
+  ) {
+    const items = buildCardMenu({ ...BOLT, ...over }, deps({ marketplace }));
+    const openOn = find(items, "Open on") as MenuSubmenu;
+    return find(openOn.items, marketplace.label) as MenuAction;
+  }
+
+  /**
+   * The bottom rung's whole point since 2026-09-09: **the printing's own product page at the
+   * finish the surface named**, rather than a search that answers with every printing of the card
+   * and both finishes of each.
+   *
+   * **`target.finish` is what this case is really about, and the fixture is chosen so that
+   * dropping it fails rather than passes differently.** The printing is sold in both finishes, so
+   * a row that stopped reading the field would fall through to "the printing names none either"
+   * and open the bare product page — a URL that looks entirely reasonable and is the wrong
+   * listing for the copy the reader right-clicked.
+   *
+   * The id is asked for **the printing** and never the oracle card: `tcgplayer_id` is a fact about
+   * one piece of cardboard, and Alpha's Bolt and the Commander reprint are two products.
+   */
+  it("opens the exact TCGplayer product page, at the finish the surface named", async () => {
+    marketplaceRow({ finish: "foil", finishes: '["nonfoil","foil"]' }).onSelect();
+
+    expect(cardTcgplayerIds).toHaveBeenCalledExactlyOnceWith("bolt-lea");
+    await waitFor(() =>
+      expect(vi.mocked(openExternal)).toHaveBeenCalledExactlyOnceWith(
+        "https://www.tcgplayer.com/product/1174?Printing=Foil",
+      ),
+    );
+  });
+
+  /**
+   * The half `finish` cannot answer, and the reason **no DTO and none of the ~15 surfaces that
+   * build a target had to change** for any of this: a target that names no finish still gets the
+   * right listing, because `finishes` — a field `CardMenuTarget` has carried all along — says
+   * the printing is sold in nonfoil alone. `Normal` is therefore a fact about the cardboard rather
+   * than a guess, and this is the assertion that goes red if the row stops handing that field
+   * over, since the bare product page is what a helper with neither fact opens.
+   */
+  it("lets the printing name the finish when the target names none", async () => {
+    marketplaceRow().onSelect();
+
+    await waitFor(() =>
+      expect(vi.mocked(openExternal)).toHaveBeenCalledExactlyOnceWith(
+        "https://www.tcgplayer.com/product/1174?Printing=Normal",
+      ),
+    );
+  });
+
+  /**
+   * **The fallback, and it is a normal path rather than an error path** — 1.62 % of paper English
+   * non-token printings carry neither id, and every digital-only card carries neither because
+   * TCGplayer does not sell them. What the reader gets is exactly the search this row opened for
+   * everything before the ids existed, so a press can never do nothing.
+   */
+  it("falls back to the marketplace's name search when TCGplayer has no id for the printing", async () => {
+    cardTcgplayerIds.mockResolvedValue({ productId: null, etchedProductId: null });
+
+    marketplaceRow().onSelect();
+
+    await waitFor(() =>
+      expect(vi.mocked(openExternal)).toHaveBeenCalledExactlyOnceWith(
+        "https://www.tcgplayer.com/search/magic/product?q=Lightning%20Bolt",
+      ),
+    );
+  });
+
+  /**
+   * **The other four marketplaces are a name search and nothing else, and they spend no command
+   * finding that out.** None of them publishes a per-card URL derivable from what `cards` holds,
+   * so a menu that asked `card_tcgplayer_ids` for a Card Kingdom press would be buying an answer
+   * no builder could use — which is why the spy is asserted silent beside the URL.
+   */
+  it("opens a name search for a marketplace that is not TCGplayer, and asks Rust nothing", async () => {
+    marketplaceRow({}, MARKETPLACES.cardkingdom).onSelect();
+
+    await waitFor(() =>
+      expect(vi.mocked(openExternal)).toHaveBeenCalledExactlyOnceWith(
+        "https://www.cardkingdom.com/catalog/search?search=header&filter%5Bname%5D=Lightning%20Bolt",
+      ),
+    );
+    expect(cardTcgplayerIds).not.toHaveBeenCalled();
+  });
+
+  /**
+   * This file's own opening rule, one layer in. "Nothing here reaches the backend while the menu is
+   * merely open" now has a row that reaches it on the *press*, and the distinction is the whole of
+   * why that is still the rule: a right-click on the wrong tile in a wall of forty must cost
+   * nothing, and only a reader choosing the row spends the read.
+   */
+  it("resolves the product ids on the press and never on the right-click", async () => {
+    const row = marketplaceRow();
+    expect(cardTcgplayerIds).not.toHaveBeenCalled();
+
+    row.onSelect();
+    await waitFor(() => expect(cardTcgplayerIds).toHaveBeenCalledOnce());
   });
 
   /**

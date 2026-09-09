@@ -701,6 +701,36 @@ function Body({
    * `setSelectedCardId` clears it, so a step along the walk correctly seeds nothing.
    */
   const paneFinish = useAppStore((s) => s.paneFinish);
+  /**
+   * Which copy the rail's last row goes shopping for — the modal's two answers to "what finish is
+   * this" folded into the one field `CardModalRail` takes.
+   *
+   * **They cannot both be set, and that is structural rather than lucky, so this `??` is a fold
+   * and not a precedence.** Every opener in the store writes both fields in its own `set`:
+   * `openCardFromDeck` clears `paneFinish` explicitly — *the row carries its own finish and the
+   * pane reads it off the context* — while `openCardAsFinish` and `openCardFromDeckSearch` each
+   * clear `paneDeckContext`, and `viewPrinting` touches neither. So no press this app can make
+   * observes the order, and a test that tried to pin it would have to write the store into a state
+   * no opener produces.
+   *
+   * **It is nonetheless written the way the evidence would resolve it if that ever changed.**
+   * `paneFinish` is only ever set by a surface naming a finish about the very copy the reader
+   * pressed — a collection tile that *is* the foil, the deck editor's search panel — where the
+   * deck slot is a fact about a row that may be sitting behind the modal. That is also the
+   * direction the store already argues for: `openCardFromDeck` clears this field rather than
+   * losing to it.
+   *
+   * **A deck row's `null` is the *regular* copy and reaches the helper as "no finish named", which
+   * is a floor rather than a wrong answer.** `DeckFinish` is `"foil" | "etched" | null` and its
+   * `null` genuinely means nonfoil, so this could say `scope.deck.finish ?? "nonfoil"` and buy an
+   * asserted `?Printing=Normal`. It deliberately does not: `openMarketplaceForCard` reads the
+   * printing's own `finishes` when nothing is named, so a nonfoil-only printing still gets `Normal`
+   * from there, and the only case that loses anything is a printing sold in several finishes whose
+   * deck row plays the plain one — where TCGplayer's own default row stands. Upgrading it here
+   * would put a second reading of `DeckFinish`'s `null` in a file that is not where that word is
+   * defined.
+   */
+  const railFinish = paneFinish ?? scope.deck?.finish ?? null;
   const { deps, error: menuFailure } = useCardMenuDeps();
   const addToDeck = useOptionalAddCardToDeck();
 
@@ -1604,6 +1634,9 @@ function Body({
                 actions={railActions}
                 counts={counts}
                 marketplace={marketplace}
+                // The finish the rail's last row shops for — see `railFinish` for why the two
+                // sources fold rather than rank, and why a deck row's plain copy arrives as `null`.
+                finish={railFinish}
               />
             </div>
           </div>

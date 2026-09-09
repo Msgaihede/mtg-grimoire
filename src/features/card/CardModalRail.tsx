@@ -36,12 +36,8 @@
  */
 import { ExternalLink } from "lucide-react";
 import { useId } from "react";
-import {
-  edhrecCardUrl,
-  marketplaceSearchUrl,
-  openExternal,
-  scryfallCardUrl,
-} from "@/lib/externalLinks";
+import { edhrecCardUrl, openExternal, scryfallCardUrl } from "@/lib/externalLinks";
+import type { Finish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
 import type { CardDetail, DeckVariant } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
@@ -49,6 +45,7 @@ import { PRESS_SOFT } from "@/lib/motion";
 import { useAppStore, type CardOverlay } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import type { CardModalScope } from "./cardModalScope";
+import { openMarketplaceForCard } from "./openMarketplace";
 
 /** One surface-specific rail entry — a word and what pressing it does, and nothing else. */
 export interface RailAction {
@@ -122,6 +119,7 @@ export function CardModalRail({
   actions,
   counts,
   marketplace,
+  finish,
 }: {
   card: CardDetail;
   scope: CardModalScope;
@@ -137,6 +135,20 @@ export function CardModalRail({
    * query of its own would need a provider under every test and story that draws it alone.
    */
   marketplace: Marketplace;
+  /**
+   * The finish the surface that opened this card named, or `null`.
+   *
+   * **The same argument the `marketplace` prop above carries, one field over.** The host already
+   * holds it — it reads `paneFinish` to seed `CardModalArt`'s foil view and has the deck slot in
+   * hand for the swap offers — and a rail that read a store or a query of its own to answer this
+   * would need a provider under every test and story that draws it alone.
+   *
+   * It is what sends the last row to the *foil* listing for a foil copy rather than to the card's
+   * default one, and `null` is a complete answer rather than a gap: with nothing named,
+   * `openMarketplaceForCard` asks the printing whether it is sold in only one finish, and asserts
+   * no printing at all when it is sold in several.
+   */
+  finish: Finish | null;
 }) {
   const optionsId = useId();
   const grimoireId = useId();
@@ -180,11 +192,35 @@ export function CardModalRail({
     },
     {
       // `Open on TCGplayer`, `Open on Card Kingdom`… — the label follows the setting, which is
-      // why this row is last (see the file comment). A search for the name rather than a product
-      // page, for `externalLinks`' reason: no priced site publishes one this app can derive.
+      // why this row is last (see the file comment).
+      //
+      // **The exact product page where the app can name one, and the name search everywhere
+      // else** (2026-09-09). What stood here read *a search for the name rather than a product
+      // page, for `externalLinks`' reason: no priced site publishes one this app can derive* —
+      // and that is still true of four of the five and stopped being true of TCGplayer, whose
+      // product id Scryfall carries on every printing it sells.
+      //
+      // **Which page, and whether a printing can honestly be asserted on it, is
+      // `openMarketplaceForCard`'s decision and not this row's.** The context menu draws the same
+      // row for the same card (`cardMenu`'s `Open on →`), so a rail that branched on the
+      // marketplace here would be a second copy of that table — and two copies is how the menu
+      // comes to open a foil listing where the rail opens a plain one for the card sitting under
+      // both of them. All this row supplies is the four facts only a surface knows: which printing,
+      // its name, the finish the surface named, and the finishes the printing is sold in.
+      //
+      // `void` rather than a `catch`, exactly like the two rows above: every way the exact page
+      // cannot be had already falls back to the search *inside* that helper, so a rejection
+      // arriving here would mean the helper itself threw rather than that the link failed.
       label: `Open on ${marketplace.label}`,
       external: true,
-      onSelect: () => void openExternal(marketplaceSearchUrl(marketplace.id, card.name)),
+      onSelect: () =>
+        void openMarketplaceForCard({
+          marketplace,
+          cardId: card.id,
+          cardName: card.name,
+          finish,
+          finishes: card.finishes,
+        }),
     },
     ...actions,
   ];
