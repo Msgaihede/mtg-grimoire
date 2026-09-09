@@ -38,7 +38,6 @@ import { stackCardWidth, stackLiftRoom } from "../CardStack";
 import {
   CARD_BODY_ATTR,
   DECK_GROUP_ATTR,
-  GC_DIMMED,
   LANDED_ATTR,
   SELECTED_ATTR,
   type DeckCardActions,
@@ -1026,82 +1025,6 @@ describe.each(VIEWS)("$name editing", ({ render: renderView }) => {
     render(renderView({ groups: GROUPS, marketplace: TCG }));
     expect(screen.queryByLabelText(/^Copies of/)).toBeNull();
     expect(screen.queryByLabelText(/^Move /)).toBeNull();
-  });
-});
-
-/**
- * **The game-changer spotlight's half of the wiring that lives in the views.**
- *
- * The ledger's chip arms the state and the editor puts `GC_SPOTLIGHT_ATTR` on the box holding the
- * four views; what each view owes is the other half — every card that is **not** a game changer
- * carries {@link GC_DIMMED}, so one flat descendant rule in `src/index.css` can fade it to 25 %
- * while the attribute is up. That is **four separate call sites which have to agree**, reached by
- * three different routes: `GridView` and `TextView` spread `deckCardDimmed` where they already
- * spread `deckCardBodyProps()`, `CardStack` does the same on the stacked card's own body, and
- * `TableView` — which does not own its row element — goes through `VirtualTable`'s `rowClassName`.
- * A sweep rather than four cases for the sweeps above's reason: one surface quietly dropping it is
- * a reader who presses the chip, switches view and finds the deck no longer answering.
- *
- * **The class is asserted through `classList.contains` and never through `className.toContain`**,
- * which is this file's own rule elsewhere and matters more here than usual: `deck-gc-dimmed` is a
- * substring of nothing today and would be of any longer class somebody added tomorrow.
- *
- * **jsdom loads no stylesheet, so nothing here can see the fade itself** — the opacity, the 150ms
- * transition, the `prefers-reduced-motion` arm and the `:not([data-dnd-dragging])` carve-out are
- * all a live pass's to answer. What a suite can see is which cards are marked, which is the half
- * that is four files' worth of agreement rather than one rule's.
- */
-describe.each(VIEWS)("$name spotlight", ({ render: renderView }) => {
-  /**
-   * The element a view puts the mark on, found the same way in all four.
-   *
-   * Three of them mark the card's whole **body** — face, chin, controls and all — which is what
-   * `CARD_BODY_ATTR` already names; the table marks its `role="row"`, because that element is
-   * `VirtualTable`'s and the class arrives through `rowClassName`. It is the same pair of
-   * selectors the landed-mark sweep above resolves a mark against, for the same reason.
-   */
-  const cardBody = (name: string) =>
-    screen.getByText(name).closest<HTMLElement>(`[${CARD_BODY_ATTR}], [role="row"]`)!;
-
-  /**
-   * **Both halves in one case, because either alone is satisfied by a defect.** "The ordinary card
-   * is marked" passes against a view that marks every card, which would fade the game changers the
-   * reader pressed the chip to *find*; "the game changer is not marked" passes against a view that
-   * marks nothing at all, which is the spotlight doing nothing. `GROUPS` holds exactly one game
-   * changer (Sol Ring) and three cards that are not, spread across the deck's three piles — the
-   * command zone and the switched-off Maybeboard among them — so the discrimination is real in
-   * every view and in every box each of them draws.
-   */
-  it("marks every card but the game changers, so the spotlight has something to fade", () => {
-    render(renderView({ groups: GROUPS, marketplace: TCG }));
-
-    expect(cardBody("Sol Ring").classList.contains(GC_DIMMED)).toBe(false);
-    for (const name of ["Arcane Signet", "Serah Farron", "Avacyn"]) {
-      expect(cardBody(name).classList.contains(GC_DIMMED)).toBe(true);
-    }
-  });
-
-  /**
-   * **An orphan dims**, which is `deckCardDimmed`'s own rule and the one arm a `!card.gameChanger`
-   * written by hand at four call sites would get right by accident and a `=== false` would get
-   * wrong. `DeckCard.gameChanger` is `boolean | null` — `null` is a printing that has left the
-   * corpus, or one the format has no opinion about — and anything but `true` is *not a game
-   * changer*, exactly as `deckCardName` and `CardMarks` already read it.
-   */
-  it("dims a card whose printing says nothing either way", () => {
-    render(
-      renderView({
-        groups: buildGroups(
-          [card({ name: "Sol Ring", gameChanger: null })],
-          [RAMP],
-          "category",
-          "alphabetical",
-        ),
-        marketplace: TCG,
-      }),
-    );
-
-    expect(cardBody("Sol Ring").classList.contains(GC_DIMMED)).toBe(true);
   });
 });
 
@@ -3682,35 +3605,6 @@ describe("TableView", () => {
     expect(gutter(plain)).toHaveAttribute("aria-hidden", "true");
     expect(gutter(plain).children).toHaveLength(0);
     expect(within(plain).queryByText("Game changer")).not.toBeInTheDocument();
-  });
-
-  /**
-   * **A group band is never dimmed, and the guard that keeps it out is one clause in one
-   * callback.**
-   *
-   * This view marks the spotlight's cards through `VirtualTable`'s `rowClassName`, which is
-   * handed *every* row — bands included — so the `row.kind === "card"` test is the whole of what
-   * stops a run of faded headings saying the piles themselves were the thing being passed over.
-   * It is asserted here rather than in the four-view sweep because a band is the one row shape
-   * only this view has: the other three draw a heading that is not a card at all.
-   *
-   * Both halves in one case, for the sweep's reason — "no band is marked" passes against a view
-   * that marks nothing, so the card rows under the bands are read in the same pass.
-   */
-  it("never dims a group band, whatever the cards under it are", () => {
-    setup();
-
-    const bands = [...document.querySelectorAll("[aria-colspan]")].map(
-      (cell) => cell.closest("[role=row]") as HTMLElement,
-    );
-    expect(bands.length).toBeGreaterThan(1);
-    for (const band of bands) expect(band.classList.contains(GC_DIMMED)).toBe(false);
-
-    // And the rows that *are* cards still answer, so the absence above is a guard rather than a
-    // view that has stopped marking anything.
-    const rowFor = (name: string) => screen.getByText(name).closest("[role=row]") as HTMLElement;
-    expect(rowFor("Sol Ring").classList.contains(GC_DIMMED)).toBe(false);
-    expect(rowFor("Arcane Signet").classList.contains(GC_DIMMED)).toBe(true);
   });
 
   /**

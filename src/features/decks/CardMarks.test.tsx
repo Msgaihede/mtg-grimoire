@@ -23,9 +23,9 @@
  * alone; what it has now is a **boolean with three consequences** — a crown is drawn, a clause is
  * appended to the sentence, and the colour of the glyph is decided by the fill rather than fixed —
  * and all three are answerable with no layout. The stack's suite still owns *the mark on a card*:
- * that the crown is in the title strip, that the rule break is still told apart from it four ways,
- * that a card's whole body dims under the spotlight. What is owned here is the component's own
- * promise, which is what every one of the four views is relying on.
+ * that the crown is in the title strip, and that the rule break is still told apart from it four
+ * ways. What is owned here is the component's own promise, which is what every one of the four
+ * views is relying on.
  *
  * **{@link CountTag} is covered here too, and it is covered here because it has no test file of
  * its own** — `src/components/` carries `CountTag.tsx` and `CountTag.stories.tsx` and nothing

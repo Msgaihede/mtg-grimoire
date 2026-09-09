@@ -456,36 +456,56 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   so the fact is drawn once in that column instead of twice. On `TextView` there is no such twin and
   there never was: the row **is** a button with an explicit `aria-label`, so the whole gutter is
   `aria-hidden` and the words are `deckCardName`'s.
-- **The game-changer _spotlight_ is one CSS rule, and every drawing decision in it is about
-  cost or about a collision** (2026-09-08). The ledger's `6 game changers` chip is a toggle:
-  hovering it, focusing it, or clicking it to latch fades every deck card that is not a game
-  changer to **25 %**. The contract — the two states, the derivation, `aria-pressed`, the chip's
-  three appearances, and which box is armed — is in
-  [`src/features/decks/CLAUDE.md`](../../src/features/decks/CLAUDE.md); what belongs here is how
-  it is *drawn*.
-  - **`[data-gc-spotlight] .deck-gc-dimmed:not([data-dnd-dragging]) { opacity: 0.25 }`**, with the
-    transition on the class rather than on the rule so the fade runs in both directions: 150ms
-    `ease`, which is the deck's own short transition and the same `duration-150` the row hover
-    beside it uses. **The `prefers-reduced-motion` arm is not optional**: opacity is a
-    non-positional property and `motion`'s `reducedMotion` only reduces positional keys, so a
-    fade needs its own opt-out. Reduced, the cards still dim; they simply arrive there.
-  - **0.25 is a fade and never a hide.** The dimmed cards keep their layout, their legibility and
-    every hit target they had. The spotlight answers *which of these*, and a reader who could no
-    longer read or press the rest of the deck would have been given a filter nobody asked for.
-  - **The dimmed state is what is marked, and the selector's shape is why.** The inverse spelling
-    is `[data-gc-spotlight] *:not(.deck-gc-lit)` — a `:not()` over a **broad subject**, evaluated
-    against every element under the deck. The measured cost of that shape in this repo is one
-    jsdom play going **3.5 s → 15 s** and a whole run 181 s → 231 s, which is why the majority of
-    the cards carry the class and the selector stays one flat descendant compound.
-  - **`:not([data-dnd-dragging])` is a specificity collision, not a tidy-up.** The drag rule
-    directly above it puts a dragged card at `opacity: 0.75` so the reader can see the pile they
-    are aiming at, and dnd-kit stamps its attribute on the source element **in place** — the card
-    becomes a popover, and the top layer is a painting order rather than a change of ancestry — so
-    a dimmed card dragged under a latched spotlight still matches, at **(0,2,0)** against the drag
-    rule's **(0,1,0)**, and would carry the card through the gesture at a quarter. The guard
-    qualifies a class rather than the broad subject above, so it costs nothing.
-  - **Nothing here has been driven in the shipped window.** jsdom applies no stylesheet, so no
-    suite can see any of it either; the only figures above are the ones written into the rule.
+- **The game-changer _spotlight_ was one CSS rule. It shipped on 2026-09-08 and was deleted on
+  2026-09-09, and what killed it is a fact about decks rather than about opacity.** The ledger's
+  `6 game changers` chip was a toggle: hovering it, focusing it, or clicking it to latch faded
+  every deck card that was not a game changer to **25 %**, through
+  `[data-gc-spotlight] .deck-gc-dimmed:not([data-dnd-dragging]) { opacity: 0.25 }` — the transition
+  on the class rather than on the rule so the fade ran in both directions, 150ms `ease` (the deck's
+  own short transition, the same `duration-150` the row hover beside it uses), with a
+  `prefers-reduced-motion` arm setting `transition: none`, because opacity is a non-positional
+  property and `motion`'s `reducedMotion` only reduces positional keys. Reduced, the cards still
+  dimmed; they simply arrived there.
+  **0.25 was chosen as a fade and never a hide**, so the dimmed cards would keep their layout,
+  their legibility and every hit target they had: the spotlight answered *which of these*, and a
+  reader who could no longer read or press the rest of the deck would have been given a filter
+  nobody asked for. Three things that promise did not reckon with, and all three are about scale:
+  - **The fade landed on the great majority of the cards**, not on a few. Six game changers in a
+    hundred-card Commander deck is ninety-odd faded cards against six lit ones, so what dimmed
+    was the **ground** — the screen read as having changed rather than as six cards standing out
+    of it.
+  - **The deck's views overlap cards, so translucency compounds.** A stacked pile shows 34px of
+    each card under the one in front of it, so most of what a reader sees of any card is other
+    cards showing *through* it at a quarter each. It is the one geometry in this app where an
+    opacity is not a single multiplication, and no figure in the rule anticipated it.
+  - **So neither half of the promise survived.** The dimmed cards were neither legible nor
+    findable, which is exactly what a hide would have cost and what the 0.25 existed to avoid. The
+    reader's own words: *"the current preview is almost impossible to use, as the stacked
+    transparent cards give a blur effect."* No other opacity is the fix, which is why the gesture
+    went rather than the number.
+
+  **What replaced it narrows instead of dimming**: a `Game Changers` chip in the deck toolbar's
+  label-filter row, pressed and pressed again like the label chips beside it, joining their OR,
+  drawn only where the deck has a game changer, and lit `pie-gold` with a crown rather than the
+  accent — because that is the gold the crowns on the cards themselves wear. **It draws nothing on
+  any card**, which is the drawing decision this whole entry turns into: a card that survives the
+  filter looks exactly as it looks unfiltered, so there is no class to spread across four views, no
+  container attribute to arm and no drag to exempt. Its rules are in
+  [`src/features/decks/CLAUDE.md`](../../src/features/decks/CLAUDE.md).
+  **Two findings the deleted rule leaves behind, both still true of anything shaped like it.** The
+  **dimmed** state was what carried the class, because the inverse spelling is
+  `[data-gc-spotlight] *:not(.deck-gc-lit)` — a `:not()` over a **broad subject**, evaluated
+  against every element under the deck, whose measured cost in this repo is one jsdom play going
+  **3.5 s → 15 s** and a whole run 181 s → 231 s. And `:not([data-dnd-dragging])` was a specificity
+  collision rather than a tidy-up: the drag rule directly above it puts a dragged card at
+  `opacity: 0.75` so the reader can see the pile they are aiming at, and dnd-kit stamps its
+  attribute on the source element **in place** — the card becomes a popover, and the top layer is a
+  painting order rather than a change of ancestry — so a dimmed card dragged under a latched
+  spotlight still matched, at **(0,2,0)** against the drag rule's **(0,1,0)**, and would have
+  carried the card through the gesture at a quarter.
+  **No pass ever drove it in the shipped window, and a reader did.** jsdom applies no stylesheet,
+  so no suite could see any of it either, and the only figures above are the ones written into the
+  rule — while the failure that ended it is one only a real deck on a real screen shows.
 - **The rule break's edge is the fourth separation, and on the stacked card it is drawn by _two_
   elements** (fixed 2026-08-14). `CardStack`'s data line is a sibling of the face, not a band
   inside it: `-mx-px` puts its own border exactly where the card's is, and being `relative` and

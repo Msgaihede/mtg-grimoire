@@ -1,8 +1,6 @@
 import { useMemo, type ReactNode } from "react";
-import { Crown } from "lucide-react";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { count } from "@/lib/counts";
-import { FOCUS } from "@/lib/focus";
 import type { DeckCard } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
@@ -26,17 +24,22 @@ import { deckStats } from "./DeckStats";
  * drawn, and the separators are `div`s rather than the design's `span`s so the list stays a valid
  * one.
  *
- * **The three controls at the right end are not figures.** What the rules make of the deck
- * ({@link check}), what the format calls powerful, and the bracket the two add up to are each a
- * press; the outer two are slotted in whole, because each opens a layer this component owns
- * nothing about, and the middle one is drawn here because it opens nothing at all.
+ * **Two controls at the right end, with a figure between them.** What the rules make of the deck
+ * ({@link check}) and the bracket the deck reads as ({@link bracket}) are each a press with a
+ * layer behind it, and both are slotted in whole because this component owns nothing about what
+ * they open. Between them sits the game-changer count, which is drawn here and is not a control
+ * at all: a readout in the dim mono voice the rest of this line reads in, with no edge, no ring
+ * and nothing to press.
  *
- * **The middle one is the odd press on the line and worth naming as such** (2026-09-08). The
- * game-changer count is a *readout that is also a control*: hovering it, or pressing it to latch,
- * fades every card in the deck that is not a game changer to a quarter — see {@link spotlight}.
- * It is drawn here rather than slotted like its two neighbours because there is no layer, no
- * anchor and no findings behind it; what it needs is two gestures reported and a boolean handed
- * back, and the state it composes them into belongs to the editor drawing the deck it lights up.
+ * **It was a press for one day, and the day is worth writing down** (2026-09-09). From
+ * 2026-09-08 the chip armed a *spotlight* — hovering it, or latching it with a click, faded every
+ * card in the deck that is not a game changer to a quarter. It answered *which ones* by making
+ * everything else dimmer, and on a hundred-card desk a hundred stacked quarter-opacity cards is a
+ * blur rather than an answer: the deck the reader was reading the answer out of had stopped being
+ * legible. The question moved to a **Game Changers** chip in the toolbar's label-filter row, which
+ * narrows the deck to those cards and leaves every card that survives looking exactly as it looked
+ * unfiltered — a shorter list rather than a dimmer one. What is left here is the count, in the
+ * place it has held since 2026-08-24 and in the words it has used throughout.
  *
  * **Five figures on a regular deck and four on a virtual one** (2026-09-08, issue #401). A Virtual
  * deck is one the reader tracks without owning the cardboard, so `Owned` would read `0` beside a
@@ -51,9 +54,6 @@ export function DeckLedger({
   marketplace,
   formatName,
   gameChangers,
-  spotlight,
-  onSpotlightToggle,
-  onSpotlightHover,
   tight,
   tracksCollection,
   check,
@@ -78,44 +78,9 @@ export function DeckLedger({
    */
   formatName: string | null;
   /** Copies of the cards the format calls game changers, over the piles that count. Nothing is
-   *  drawn for a deck with none — a chip reading `0 game changers` is a control saying there is
-   *  something to look at, and since that chip became a press it would be one that does nothing
-   *  when pressed. */
+   *  drawn for a deck with none — `0 game changers` is a readout pointing at cards to go and find
+   *  where there are none to find, and the words are the whole of what this figure is. */
   gameChangers: number;
-  /**
-   * Whether the game-changer spotlight is **latched** on — the chip's own pressed state, and
-   * deliberately not the effective one the deck is drawn under.
-   *
-   * The editor's effective state is `latched || hovered`, and the difference is what makes this
-   * chip's three appearances legible. A latch is a *toggle*, which is exactly what `aria-pressed`
-   * describes and exactly what a second press releases; a hover is the control being *touched*,
-   * which is not a state a button is in and which the chip draws for itself with a `hover:`
-   * variant. Handing the composite down instead would say `aria-pressed` of a chip nobody has
-   * pressed, and would make the pointer arriving indistinguishable from the latch it is offering.
-   */
-  spotlight: boolean;
-  /**
-   * A press: latch the spotlight on, or release a latch. The chip is told nothing about which —
-   * it reports the gesture and the editor holds the state, for the reason every other control on
-   * this line reports rather than decides.
-   */
-  onSpotlightToggle: () => void;
-  /**
-   * The pointer arriving on the chip or leaving it, and **the caret doing the same thing** —
-   * `onFocus`/`onBlur` are wired to this alongside `onMouseEnter`/`onMouseLeave`, because a
-   * reveal a keyboard cannot reach is not a reveal. One callback for both, since neither the chip
-   * nor the editor has any use for the difference.
-   *
-   * ## Two callbacks rather than one `onSpotlight({ latched?, hovered? })`
-   *
-   * The partial-object shape can spell states this chip can never ask for — `{}`, which means
-   * nothing at all, and `{ latched: true, hovered: false }`, which is two gestures at once — so
-   * the receiver has to read a bag and work out what happened. Two named callbacks are two verbs:
-   * each one is a gesture the reader actually made, the compiler refuses a call that names
-   * neither, and the composition (`latched || hovered`) stays entirely the editor's, which is
-   * where it can also be gated on the deck still having a game changer in it.
-   */
-  onSpotlightHover: (on: boolean) => void;
   /**
    * The narrowest editor column this header reasons about, where the two counted figures that
    * carry a sentence say it in a number instead.
@@ -163,19 +128,6 @@ export function DeckLedger({
     .map((category) => `${count(category.quantity)} ${category.name.toLowerCase()}`)
     .join(" + ");
   const spare = stats.copies - stats.sized;
-
-  // **Bound here rather than spread inline, because this is the one anchor in the file whose own
-  // handlers collide with the tooltip's.** `useTooltip`'s binding is four handlers, and two of
-  // them are `onFocus`/`onBlur` — the pair React re-implements over `focusin`/`focusout` so a
-  // hint reaches a caret and not just a pointer. The spotlight chip needs those two props for
-  // itself, and a `{...tip(…)}` spread followed by an `onFocus` of its own does not merge them:
-  // the later prop **replaces** the earlier one, silently, and what is lost is the half of the
-  // tooltip only a keyboard reader ever sees. Every other `tip(…)` on this row goes on an
-  // element with no focus handlers of its own, which is why this is the only one bound to a name.
-  //
-  // The pointer half needs no such care: the tooltip listens on `onPointerEnter`/`onPointerLeave`
-  // and the chip arms itself on `onMouseEnter`/`onMouseLeave`, which are four different props.
-  const spotlightTip = tip(spotlightName(gameChangers, spotlight), { describes: false });
 
   return (
     <dl
@@ -298,90 +250,20 @@ export function DeckLedger({
           // is legal by definition — it is the bracket conversation, not the legality one — so
           // folding the number into a chip that reads "4 issues" would invent four problems.
           //
-          // **And since 2026-09-08 the figure is also the press that answers *which ones*.** The
-          // count says how many; the deck laid out under it says nothing about where they are,
-          // and on a hundred-card desk that is a hunt through four views' worth of gold crowns.
-          // Hovering the chip fades every card that is not a game changer to a quarter, so the
-          // ones that are stand out of the deck; a click latches the same state so the reader can
-          // take their hand off the mouse and go and look. The chip decides neither — it reports
-          // the two gestures and the editor composes `latched || hovered`, which is why hovering
-          // while latched changes nothing and only a second press lets go.
-          //
-          // **The reveal is on focus as well as on hover, and that is not a courtesy.** A chip
-          // that only a pointer could arm would put the whole affordance out of reach of a
-          // keyboard, so `onFocus`/`onBlur` are the same callback as `onMouseEnter`/`onMouseLeave`
-          // and a reader who Tabs here gets the spotlight for as long as the caret rests on it.
-          //
-          // **Three appearances, and only one of them is a *state*.** Off is what shipped —
-          // `border-border`, `text-dim`. Hovered (or focused) paints the words gold and leaves
-          // the edge alone, and it is drawn by this chip's own `hover:` variant rather than by
-          // {@link spotlight}, because a pointer resting on a control is not a state the control
-          // is in. Latched takes the border too and adds the crown, which is the mark the cards
-          // it is lighting up wear. So hovering while latched changes nothing on screen, exactly
-          // as it changes nothing in the editor — the gold is already there.
-          <button
-            type="button"
-            // A toggle button, so `aria-pressed` is how the latch is said — the gold border and
-            // the crown are the sighted half of exactly this sentence, and the hover is neither.
-            aria-pressed={spotlight}
-            // The accessible name carries the **action**, because the visible text is a readout
-            // and a readout is not an affordance: "6 game changers" tells nobody there is
-            // anything to press. The count stays the name's first token so the visible words are
-            // still a prefix of it (WCAG 2.5.3) at both widths — `tight` deletes the word from
-            // the *drawing* and never from the name.
-            aria-label={spotlightName(gameChangers, spotlight)}
-            // The same sentence for a pointer, and one string rather than two so the two readers
-            // cannot be told different things — `ValidationPanel`'s arrangement one control over.
-            // `describes: false`, since the name above already says it and a wired
-            // `aria-describedby` would have it announced twice.
-            {...spotlightTip}
-            onClick={onSpotlightToggle}
-            onMouseEnter={() => onSpotlightHover(true)}
-            onMouseLeave={() => onSpotlightHover(false)}
-            // **Both, in that order** — see {@link spotlightTip}. The spread above puts the
-            // tooltip's own `onFocus`/`onBlur` on this element and these two would otherwise
-            // replace them, leaving a keyboard reader with the spotlight and no hint. The hint
-            // goes first because it is the passive half: if `onSpotlightHover` ever threw, the
-            // panel a reader asked for would already be open.
-            onFocus={(event) => {
-              spotlightTip.onFocus?.(event);
-              onSpotlightHover(true);
-            }}
-            onBlur={(event) => {
-              spotlightTip.onBlur?.(event);
-              onSpotlightHover(false);
-            }}
-            className={cn(
-              "inline-flex h-7 shrink-0 items-center gap-1 whitespace-nowrap rounded-md",
-              "border px-2 font-mono text-[0.6875rem] tabular-nums",
-              "transition-colors duration-150 motion-reduce:transition-none",
-              // The border is what tells a *latch* from a *hover*: hovering paints the words gold
-              // and leaves the edge where it was, so the chip says "this is live right now";
-              // latching takes the edge too, so it says "this is still on after you let go". One
-              // extra signal for the one state that outlives the pointer.
-              //
-              // `text-pie-gold` is the gold the crowns and the banners on the cards themselves
-              // are drawn in — one colour for one fact, and deliberately not the accent, which on
-              // this line already means something else: `DeckBracket`'s accent edge says *a
-              // reading you can go and look at*, and this is not a reading.
-              spotlight
-                ? "border-pie-gold text-pie-gold"
-                : "border-border text-dim hover:text-pie-gold focus-visible:text-pie-gold",
-              FOCUS,
-            )}
-          >
-            {/* Drawn only while the spotlight is on, so the chip carries the same mark the cards
-                it is lighting up carry — the reader's eye leaves a crown and lands on crowns.
-                `aria-hidden` and a bare lucide glyph rather than `GameChangerMark`: that
-                component names itself and binds a tooltip of its own, which inside a button that
-                already has both would be a second name and a second hint on one control. */}
-            {spotlight && <Crown className="size-3 shrink-0" aria-hidden="true" />}
-            {/* The narrow arm is exactly what it was, and one thing about it changed meaning:
-                an `aria-label` *replaces* an element's contents for naming, so the `sr-only`
-                twin is now announced to nobody — {@link spotlightName} says the words instead.
-                It is kept rather than deleted because it is the name this chip falls back to if
-                the label ever goes, and because it keeps the two widths one string split at a
-                space rather than two spellings free to drift. */}
+          // **A `span` with no edge, because the edge is what said "pressable"** (2026-09-09).
+          // This was a bordered readout from 2026-08-24 and a bordered *button* for the day the
+          // game-changer spotlight lasted — see the component's doc block for what that press did
+          // and why it went. A bordered span left standing between two real buttons would go on
+          // making the offer the press used to keep, so the border went with the handlers and what
+          // is left is dim mono: the voice every other figure on this line reads in, which is what
+          // this is.
+          <span className="inline-flex h-7 shrink-0 items-center whitespace-nowrap font-mono text-[0.6875rem] tabular-nums text-dim">
+            {/* The narrow arm is exactly what it was and its `sr-only` twin is **load-bearing
+                again**: while the count was a press it carried an `aria-label`, and a label
+                *replaces* an element's contents for naming, so the twin was announced to nobody.
+                The label went with the press, so at this width these two spans are the whole of
+                what names the figure — the words for a screen reader, the abbreviation for the
+                eye — and they stay one string split at a space rather than two free to drift. */}
             {tight ? (
               <>
                 <span className="sr-only">{gameChangerWords(gameChangers)}</span>
@@ -390,7 +272,7 @@ export function DeckLedger({
             ) : (
               gameChangerWords(gameChangers)
             )}
-          </button>
+          </span>
         )}
         {bracket}
       </div>
@@ -401,23 +283,6 @@ export function DeckLedger({
 /** `1 game changer`, `6 game changers`. */
 function gameChangerWords(n: number): string {
   return n === 1 ? "1 game changer" : `${count(n)} game changers`;
-}
-
-/**
- * What the game-changer chip is called, and what a pointer resting on it is told — one string
- * for both, so the two readers cannot be told different things.
- *
- * It opens with {@link gameChangerWords}, which is the visible text at the roomy width and the
- * `sr-only` twin at the narrow one, so the drawn words stay a prefix of the name (WCAG 2.5.3)
- * whichever way the chip is drawn. What follows is the **action**, because that is the half a
- * readout cannot show: a figure that says `6 game changers` and nothing else is a control nobody
- * knows is a control. It names the state the press would move *to* rather than the one the chip
- * is in — a toggle's label is a verb, and `aria-pressed` is already saying where it stands.
- */
-function spotlightName(n: number, spotlight: boolean): string {
-  return spotlight
-    ? `${gameChangerWords(n)} — press to stop spotlighting them in the deck`
-    : `${gameChangerWords(n)} — press to spotlight them in the deck`;
 }
 
 /**

@@ -1103,11 +1103,17 @@ row measured 38px. The whole line read
 `Format Commander · Cards 100+3 · Lands 32 · Avg. mana 2.58 · Price $948.94 · Owned 0 / 103
 missing` with `1 issue · 6 game changers · Bracket ~4` in the right-hand group at **297px**.
 
-**That 297 was read with `6 game changers` as a `<span>`, and it became a `<button>` on
-2026-09-08** — the game-changer spotlight. The words are unchanged and so is the height, but a
-**latched** chip draws a 12px crown plus a `gap-1` inside its own box, so the right-hand group is
-~16px wider in that one state and this figure describes the off state only. Nothing about the
-spotlight has been driven in the shipped window.
+**That 297 was read with `6 game changers` as a `<span>`; it became a `<button>` on 2026-09-08 —
+the game-changer spotlight — and it is a `<span>` again since 2026-09-09**, when the spotlight was
+deleted. What ended it is not a width: the fade landed on the great majority of the cards, the
+deck's views overlap cards so it compounded, and a hundred-card deck at a quarter opacity read as
+one blur rather than as a deck with a few cards standing out of it
+([frontend-design.md](frontend-design.md) carries the whole account). **So the 297 above is the
+figure that stands**, in both directions — the words never changed and neither did the height, and
+what the button cost was ~16px more in its **latched** state alone, for a 12px crown and a `gap-1`
+inside its own box. Nothing on this line is a press again; the question the spotlight was asking is
+a `Game Changers` chip in the toolbar's label-filter row now, one line down, which moves nothing on
+the ledger. Neither the button nor the chip has been driven in the shipped window.
 
 ### The toolbar's split, read off the y coordinates
 
