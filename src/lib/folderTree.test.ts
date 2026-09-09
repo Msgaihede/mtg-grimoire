@@ -155,7 +155,18 @@ describe("lockedFolderIds", () => {
     parentId: number | null,
     name: string,
     locked = false,
-  ): CollectionFolder => ({ id, parentId, name, kind: "user", deckId: null, sortOrder: 0, locked });
+  ): CollectionFolder => ({
+    id,
+    parentId,
+    name,
+    kind: "user",
+    deckId: null,
+    sortOrder: 0,
+    locked,
+    // Scenery, like every field but `locked`: nothing about the lock walk reads a folder's
+    // cross-device name, and nothing in this file publishes one.
+    syncUid: null,
+  });
 
   /**
    * **The whole of the inheritance, in one tree.** `Trade binder` is locked; `Foils` sits inside

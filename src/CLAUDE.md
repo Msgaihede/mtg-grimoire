@@ -222,6 +222,26 @@ Every one of these has its measurement and its story in
   box now — and **the mark is plain visible text rather than `aria-hidden` with an `sr-only`
   twin**, which is legitimate here only because the corner is a _sibling_ of the tile's button and
   not inside its accessible name.
+- **A space *inside* an element does not separate it from the next one; a space *between* two
+  elements does — so assert the computed accessible name and never the parts.** Name computation
+  **trims each element's contribution before appending it**, so `{owner}’s{" "}` in a `<span>`
+  concatenates to `Giradeli’sTrade binder`, while `</span>{" "}<span>` survives as a sibling text
+  node and reads correctly. An `aria-label` spelling the phrase once is the third way. This is
+  the `Missing2` failure (a `gap` between a label and its count) one layer up, and it shipped on
+  a public page in 2026-09-08 because the test asserted the two texts **separately** — which is
+  exactly what a broken name still passes. jsdom trims the same way, so the fence is cheap:
+  `toHaveAccessibleName`, on the element, with the whole phrase.
+- **A view whose guarantee is "it cannot write" needs a source sweep, because there is no
+  read-only mode on this app's data path.** `lock_db_read` returns the *write* connection on
+  wasm, and `@/lib/writes` is only about which mutation owns the error banner — so a flag would
+  be a claim. `src/features/share/readOnly.test.ts` is the shape to copy: an `import.meta.glob`
+  over the subtree, `ipc.<name>` matched against two enumerated lists, four back doors
+  (`ipc["…"]`, a binding taken off `ipc`, `ipc` passed as an argument, a namespace import)
+  refused outright, and an anti-vacuity guard so a moved directory cannot turn the guarantee into
+  a green build over an empty set. **The permitted write goes on its own list** — `WRITES`, not
+  two more entries on `READS` — so a diff that touches it is a diff about the view's promise. It stays total only while the calls are made **in** the swept
+  files, which is why that view writes its own paging loop rather than importing a helper that
+  would take the callback elsewhere.
 - **`pointer-events` inherits, so a `title` or an SVG `<title>` inside anything
   `pointer-events-none` is a tooltip that can never be shown — and nothing goes red.** A hit
   target is invisible to the DOM, so no test sees it either. `FoilOverlay`'s chip is
@@ -562,7 +582,7 @@ Every one of these has its measurement and its story in
   entries rather than one loose comparison — and it narrowed `Ctrl+Shift+Y` and `Shift+Delete`
   away, both of which only ever worked because the old guards never tested `shiftKey`. The
   `isTextField` yield stays at each **call site**: the deck editor's undo must yield to the
-  browser's own and `Ctrl+1…6` must not. Four rows stand outside the fence and
+  browser's own and `Ctrl+1…8` must not. Four rows stand outside the fence and
   [keyboard-shortcuts.md](../docs/reference/keyboard-shortcuts.md) names each — `Escape` and
   `Shift+F10` are bound by `useDismissOnEscape` and `menu/useContextMenu`, which do not read the
   catalogue, and the two pointer rows can never be matched by construction.
@@ -1211,3 +1231,5 @@ Full detail and every measurement: [docs/reference/motion.md](../docs/reference/
 | `lib/` | `ipc.ts` (the Rust mirror), `layers.ts`, `activity.ts`, `sort.ts`, `tokens.test.ts` |
 | `features/decks/` | Has its own `CLAUDE.md` — the deck domain rules live there |
 | `features/tags/` | Browse by what a card **is of**. Storied under `Tags/*`; the wall is `features/search`'s, reused with collapse off |
+| `features/share/` | Somebody else's binder, read-only — the guarantee is structural and `readOnly.test.ts` is the fence. [collection-sharing.md](../docs/reference/collection-sharing.md) |
+| `share/` (repo root) | **Not part of this program's bundle** — the *public* web viewer, a second Vite entry over the same `src/` components, with no `ipc`, no core, no wasm and no service worker. In `tsconfig.json`'s `include`, built by `npm run share:build`, which **neither `verify` nor CI runs** |

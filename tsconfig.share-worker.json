@@ -1,0 +1,44 @@
+{
+  /* The share Worker's type-check program. Every compiler option below is `tsconfig.relay.json`'s
+     byte for byte, and that file carries the whole argument for why a Worker gets a program of
+     its own rather than a wider `include` in `tsconfig.json`: `@cloudflare/workers-types`
+     declares `Request`, `Response` and about four hundred other globals, and the app under
+     `src/` must see the DOM's versions of those names and nothing else.
+
+     It is a *second* file rather than a widened `include` in `tsconfig.relay.json` for the reason
+     spec §5.1 gives for the Worker itself: `mtg-grimoire-share` is a separate deploy with a
+     separate blast radius, and one program spanning both would let a share-side edit fail the
+     relay's check.
+
+     **The two `relay/src` entries are in the program because this Worker imports them.**
+     `token.ts`'s `verify` is the bearer gate — the same signature over the same
+     `RELAY_HMAC_KEY`, which is what lets this Worker accept a token the relay minted with no
+     service binding between them — and `fakeD1.ts` is the D1 harness `shares.test.ts` drives.
+     A type-check that could not see them would be checking half a module. Naming them
+     individually rather than including `relay/src` keeps the relay's *other* modules out: they
+     are `tsconfig.relay.json`'s to check, and a duplicate program over them is two answers to
+     one question. (Their own imports are still followed, so `relay/src/index.ts` and its graph
+     are pulled in as dependencies — they are checked here, not owned here.)
+
+     `share-worker/`'s `*.test.ts` is deliberately inside this program, for the reason
+     `tsconfig.relay.json` states: a test that does not type-check is a test that can drift from
+     the function it is asserting about. */
+  "compilerOptions": {
+    "target": "ES2022",
+    /* No `DOM`: this is not a browser. `@cloudflare/workers-types` supplies the fetch, stream
+       and URL globals workerd actually has, which are a different and smaller set. */
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["@cloudflare/workers-types"],
+
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": ["share-worker/src", "relay/src/token.ts", "relay/src/fakeD1.ts"]
+}

@@ -20,7 +20,7 @@ use crate::{
     deck_meta, deck_missing, deck_pull, deck_quick_add, deck_theory, deck_tokens, deck_undo,
     deckpane, decksort, errors, export, flatten, images, import, index, listview, markcolors,
     marketplace, marketplace_feed, mirror, nav, paths, reset, scanner, schema, scryfall, search,
-    searchopen, sync, sync_engine, sync_pair, tags, update, wishlist, wishlist_folders,
+    searchopen, share, sync, sync_engine, sync_pair, tags, update, wishlist, wishlist_folders,
     wishlist_optimize, zoom,
 };
 // **Not in the list above, because this file compiles for Android too.** Its name says
@@ -384,6 +384,19 @@ pub fn run() {
             collection_folders::collection_folder_delete,
             collection_folders::collection_set_folder,
             collection_folders::collection_folder_summary,
+            // Publishing a binder as a read-only page, and reading somebody else's. Registered
+            // from `share::commands` for the pairs above's reason: `generate_handler!` names a
+            // command after the **last path segment**, so these are `share_list`,
+            // `share_create`, `share_refresh`, `share_revoke` and `share_open`.
+            //
+            // **Four of the five reach the network and `share_open` reaches it with no token at
+            // all** — viewing a share needs the link and nothing else (spec §9), which is the
+            // whole of the entitlement asymmetry this feature is built around.
+            share::commands::share_list,
+            share::commands::share_create,
+            share::commands::share_refresh,
+            share::commands::share_revoke,
+            share::commands::share_open,
             // The two writes that move copies across the deck boundary. Registered from
             // `collection_alloc::commands` so the wire names match the crate's own — see that
             // module. `generate_handler!` names a command after the last path segment.

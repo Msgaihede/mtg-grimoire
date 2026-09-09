@@ -45,6 +45,9 @@ const BINDER: CollectionFolder = {
   deckId: null,
   sortOrder: 0,
   locked: false,
+  // The row's cross-device name. Nothing in this hook reads it — it is carried so the list a
+  // surface receives is the list the command answers.
+  syncUid: "uid-binder",
 };
 const FOILS: CollectionFolder = {
   id: 2,
@@ -54,6 +57,7 @@ const FOILS: CollectionFolder = {
   deckId: null,
   sortOrder: 0,
   locked: false,
+  syncUid: "uid-foils",
 };
 
 /** One summary row per folder above — direct per folder, never recursive, and copies rather than

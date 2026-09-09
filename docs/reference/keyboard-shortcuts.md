@@ -119,8 +119,8 @@ question. `"global"` is first and always present.
 an open editor would list chords for a page that is not on screen. `deckEditor` is therefore not a
 `ViewId` and never will be.
 
-**A scope with no shortcuts draws nothing — not a heading over a gap.** **All nine view scopes are
-empty today** — `search`, `tags`, `decks`, `collection`, `wishlist`, `scanner`, `trade`,
+**A scope with no shortcuts draws nothing — not a heading over a gap.** **All ten view scopes are
+empty today** — `search`, `tags`, `decks`, `collection`, `wishlist`, `shared`, `scanner`, `trade`,
 `playtesting`, `settings` — and
 `SHORTCUTS` spells each of them out with an empty array rather than leaving them off the record:
 making the emptiness explicit is what stops a scope being forgotten when a view starts binding
@@ -130,9 +130,9 @@ the shape of the mistake rather than as a state anything is still in: it counts 
 the editor's chords, and `deckEditor` *replaces* `decks` rather than nesting under it — the
 paragraph above. The design and `KeyMap.tsx`'s comment were corrected first, `KeyMap.stories.tsx`
 and `KeyMap.test.tsx` on the review pass that found them still saying it. Six, not five, in all
-four — a count this page has since carried to seven for `scanner` and to **nine** for `trade` and
-`playtesting`.) That emptiness is the whole reason `Ctrl+1…9` sits in `"global"` — it is what gives
-the panel something true to say on a page that binds nothing.
+four — a count this page has since carried to seven for `scanner`, to **nine** for `trade` and
+`playtesting`, and to **ten** for `shared`.) That emptiness is the whole reason `Ctrl+1…9` sits in
+`"global"` — it is what gives the panel something true to say on a page that binds nothing.
 
 **Scanner joined the rail on 2026-09-08, before Settings, and that is the design working rather
 than a special case.** `NAV`'s order is the single list `switchView`'s chords bind against by
@@ -152,6 +152,33 @@ step with the first.
 is proposed.** `Ctrl+0` is not a tenth step of the run: it reads as zero, it sits at the far end of
 the row, and a panel drawing `Ctrl` `1` **to** `Ctrl` `0` would promise a sequence no reader can
 count. A tenth entry needs a different answer — not one more line in `switchView.chords`.
+
+### The tenth destination arrived the same day, and the answer is that it has no chord
+
+**`shared` — somebody else's collection, opened from a link — makes `NAV` ten**, and the paragraph
+above is why that could not be ten digits. So the chords bind `AppShell`'s **`CHORD_NAV`**, which
+is `NAV` minus that one entry, and `Ctrl+1…9` walk the nine destinations every reader has:
+Search, Tagger, Decks, Collection, Wishlist, Scanner, Trade, Playtesting, Settings. **Settings
+stays `Ctrl+9`.**
+
+**Which entry goes without is forced rather than chosen.** A chord's whole value is that it does
+not move, and `shared` is the one row the rail does not always draw — its row appears only once a
+reader has opened a link (the collection-sharing spec's decision 6). A digit bound to it would
+either shift every digit after it depending on something the reader did last week, or point at a
+row half the readers do not have. That is the same argument that made these chords bind against a
+*list* rather than against what is on screen; here it picks which list.
+
+⚠️ **This reverses the `Ctrl+6` the shared view shipped with earlier on 2026-09-08.** That chord
+existed for one reason, stated at the time: *before the cabinet grows its own Share control that
+is the only way in*. The cabinet has it — `features/collection/ShareFolderMenu.tsx` draws **Open a
+shared collection** beside the Share control, so the view is reached by a signpost rather than by
+a key nobody was told about. What the reversal costs is a keyboard route to one view; what it
+buys is that no other view's digit moved.
+
+`AppShell`'s floor moved with it: `i >= CHORD_NAV.length`, still guarding the direction that
+throws — a chord with no destination behind it. A destination with no chord costs nothing, which
+is exactly what `shared` now relies on, and `nav.test.ts` pins the `- 1` against the **id** rather
+than as a bare number so a second exclusion would have to be written down.
 
 ## `range` is declared, never counted
 

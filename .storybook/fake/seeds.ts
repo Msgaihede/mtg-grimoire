@@ -31,6 +31,11 @@
  *   is where a reader stands after pairing and before connecting Patreon. It is deliberately not
  *   seeded as a supporter: connecting is two presses a story can make, so a world that arrived
  *   already connected would take the claim flow away from every story that wants to show it.
+ * * **`shared`** — `starter` in a group with a live membership, one drawer already published,
+ *   **and a link from somebody else waiting to be opened**. Both halves, because sharing has two
+ *   sides and each is a screen: the cabinet's Share control draws the published row, and the
+ *   shared view draws the binder a friend sent. A seed with only the first would leave the view
+ *   this whole feature is *for* with nothing to render.
  * * **`combosMissing`** — `starter` with the combo tables never fetched. A **seed** and not a
  *   fault, where the two taxonomies each get a fault for the same state, because it is not
  *   something that has gone *wrong* with a world: it is where every database is before its first
@@ -66,6 +71,8 @@ import {
   oracleTagEdges,
   oracleTagMeta,
   oracleTagRows,
+  publishShare,
+  SUPPORTING_SINCE,
 } from "./db";
 import type {
   FakeCollectionFolder,
@@ -78,6 +85,7 @@ import type {
   FakeDeckLabel,
   FakeDeckToken,
   FakeEntry,
+  FakeRelayShare,
   FakeWish,
   FakeWishlistFolder,
 } from "./db";
@@ -92,7 +100,8 @@ export type SeedName =
   | "bracketMismatch"
   | "combosMissing"
   | "virtualDeck"
-  | "paired";
+  | "paired"
+  | "shared";
 
 /* ------------------------------------------------------------------ row builders ------- */
 
@@ -2063,6 +2072,149 @@ function combosMissingSeed(): FakeDb {
   return db;
 }
 
+/* ------------------------------------------------------------------ shared ------------- */
+
+/** The link `sharedSeed`'s friend handed over, and the id inside it. Named because a story has
+ *  to paste it and `db.test.ts` has to open it, and a link written out twice is a link that can
+ *  disagree with itself. */
+export const FRIEND_SHARE_ID = "giradeli000000";
+export const FRIEND_SHARE_URL = `https://share.example/s/${FRIEND_SHARE_ID}`;
+
+/** The two folders the friend published, as their uids travel. */
+const FRIEND_ROOT = "giradeli-trade";
+const FRIEND_STAPLES = "giradeli-staples";
+
+/**
+ * Somebody else's binder, as the relay is holding it.
+ *
+ * **Hand-written, where this seed's *own* share goes through {@link publishShare}**, and the
+ * asymmetry is the honest one: a share this device published is a function of this device's
+ * rows, and a share somebody else published is a function of a database this fake does not have.
+ * So the only thing to write down is what the wire carries.
+ *
+ * Every copy in it earns its place against `starter`'s own two lists, because the whole reason
+ * this view exists is the cross-reference:
+ *
+ * * **Rhystic Study** — wanted **2** (a wish at the root and a second in `Ordered`) and owned 0.
+ *   The row the want list is *for*, and the one that makes the dialog's already-wanted line
+ *   say something.
+ * * **Jace** — wanted 1, owned 0, and **ungraded**, so it carries no `c` at all while the
+ *   snapshot advertises `condition`. The format's first absence, on a card a reader wants.
+ * * **Ragavan, foil** — the reader's wish for this printing is a wish for the *foil*
+ *   (`preferredFinish`), and their own copy is nonfoil. So the tile reads owned and wanted at
+ *   once, and the want list carries a finish rather than dropping it.
+ * * **Lightning Bolt `2x2 117`** — owned **4**, wanted 0. The row a reader scrolls past, and
+ *   proof the wall is not just a list of things they want.
+ * * **Sol Ring `sld 913`** — the corpus's one printing with **no `usd` key at all**, so it
+ *   carries no `p` while the snapshot advertises `value`: the format's second absence. It is
+ *   also matched by `starter`'s **any-printing** Sol Ring wish, which is the only row here that
+ *   exercises `wantedByName` rather than the printing map.
+ * * **Swords to Plowshares** — neither owned nor wanted, so the *You do not own it* chip and the
+ *   *On your wishlist* chip narrow to different sets rather than to the same one.
+ *
+ * `updatedAt` is below `CLOCK_BASE` for {@link starterDecks}' reason, so nothing here pushes a
+ * story's first write past the fixture's clock.
+ */
+function friendsBinder(): FakeRelayShare {
+  const copy = (
+    card: FakeCard,
+    folderUid: string,
+    quantity: number,
+    over: { finish?: string; condition?: string } = {},
+  ) => ({
+    cardId: card.id,
+    finish: over.finish ?? "nonfoil",
+    quantity,
+    folderUid,
+    condition: over.condition ?? "NM",
+    lang: card.lang,
+  });
+  return {
+    id: FRIEND_SHARE_ID,
+    owner: "Giradeli",
+    title: "Trade binder",
+    updatedAt: CLOCK_BASE - DAY * 3,
+    marketplace: "tcgplayer",
+    // All three advertised, which is what makes the two absences above visible: `fields` says
+    // which question the publisher answered and never that every card has an answer.
+    fields: { condition: true, lang: true, value: true },
+    folders: [
+      { uid: FRIEND_ROOT, name: "Trade binder", parent: null },
+      { uid: FRIEND_STAPLES, name: "Staples", parent: FRIEND_ROOT },
+    ],
+    copies: [
+      copy(printing("pcy", "45"), FRIEND_ROOT, 2),
+      copy(printing("wwk", "31"), FRIEND_STAPLES, 1, { condition: "NONE" }),
+      copy(printing("mh2", "138"), FRIEND_STAPLES, 1, { finish: "foil" }),
+      copy(printing("2x2", "117"), FRIEND_ROOT, 3, { condition: "LP" }),
+      copy(printing("sld", "913"), FRIEND_ROOT, 1),
+      copy(printing("ema", "32"), FRIEND_STAPLES, 4),
+    ],
+    state: "live",
+  };
+}
+
+/**
+ * `starter` with sharing having **happened**, in both directions.
+ *
+ * A seed rather than a fault, `paired`'s argument and its wording: nothing here has gone wrong.
+ * It is where a reader arrives after connecting a membership and pressing Share once, plus the
+ * one thing that needs no press at all — a link somebody sent them.
+ *
+ * # What it takes to have published, and why the membership is here
+ *
+ * `share_create` refuses a device with no entitlement, so a world holding a published row and no
+ * membership is one the app cannot produce. The group and the grant are therefore part of the
+ * seed rather than something a story presses first — and this is the one seed that arrives
+ * **connected**, which `paired` deliberately is not: connecting is two presses a story can make,
+ * and a published share is not.
+ *
+ * # The published drawer is `Binder`, and it is published through the press
+ *
+ * {@link publishShare} rather than a hand-written row, so the seeded share is exactly what the
+ * button produces — `commitShare` is one function and both callers go through it. `Binder`
+ * (folder id 1) rather than the whole collection, because the interesting half of the cabinet's
+ * Share control is a *folder* share: the badge on one drawer, the two drawers this seed leaves
+ * unshared beside it, and `Someday` — which is **locked**, and therefore the folder whose Share
+ * row is refused in words rather than greyed by taste.
+ */
+function sharedSeed(): FakeDb {
+  const db = starterSeed();
+  const now = Math.floor(Date.now() / 1000);
+  db.pairing = {
+    ...db.pairing,
+    deviceName: "Desk",
+    group: { groupId: "5a6b7c8d9e0f1a2b3c4d5e6f70819283", epoch: 1 },
+    devices: [
+      { deviceId: db.pairing.deviceId, name: "Desk", addedAt: now - 86_400 * 40, revokedAt: null },
+    ],
+    pending: null,
+  };
+  // Connected, and connected **on this device** — `refreshSecret` true. The second device's
+  // shape, entitled through the group with no secret of its own, is `patreonGroupEntitled`'s
+  // fault and stays there: one world, one answer to that question.
+  db.supporter = {
+    refreshSecret: true,
+    status: "active",
+    since: SUPPORTING_SINCE,
+    groupBound: true,
+  };
+  db.relay = { pending: 0, lastSyncAt: now - 3_600 };
+  publishShare(db, {
+    // `folder-uid-1` is `Binder`'s, derived the same way `toCollectionFolder` derives it — the
+    // seed says nothing about `syncUid`, so both sides answer `folder-uid-<id>`.
+    folderUid: "folder-uid-1",
+    ownerName: "Ada",
+    // Condition and value, and **not** language: a published share that answers two of the three
+    // is what makes `fields` worth carrying at all, and it is the state a snapshot with every
+    // column ticked could never show.
+    fields: { condition: true, lang: false, value: true },
+    at: CLOCK_BASE - DAY,
+  });
+  db.relayShares.push(friendsBinder());
+  return db;
+}
+
 /* ------------------------------------------------------------------ virtualDeck -------- */
 
 /** The fifth deck this seed adds — a **Virtual** one, `decks.virtual_only` (schema v40). Named
@@ -2229,6 +2381,8 @@ export function seed(name: SeedName): FakeDb {
       return virtualDeckSeed();
     case "paired":
       return pairedSeed();
+    case "shared":
+      return sharedSeed();
     default:
       return starterSeed();
   }

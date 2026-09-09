@@ -667,6 +667,11 @@ mod tests {
             // (spec §4.1), so no plan in this module may depend on the flag — a fixture that
             // set it would be claiming a difference that must not exist.
             locked: false,
+            // **`None` for the same reason `locked` is `false`**, one column along: a folder's
+            // cross-device name is what a *share* addresses it by, and the mirror writes files
+            // for the machine it is on. No plan in this module may read it, so a fixture that
+            // carried one would be claiming a difference that must not exist.
+            sync_uid: None,
         }
     }
 

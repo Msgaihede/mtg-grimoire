@@ -51,22 +51,22 @@ deliberately**: no screenshots are stored.
   a derived token to none — and is left alone. **The rule it is an instance of: a shared seed
   states what the app can produce, and nothing else.**
 - **Seeds and faults are state, not response stubs**: `parameters: { fake: { seed, fault } }`.
-  **Eight** seeds
+  **Nine** seeds
   (`empty`/`starter`/`needsReview`/`large`/`bracketMismatch`/`combosMissing`/`paired`/
-  `virtualDeck`),
-  **twenty-five** faults
+  `virtualDeck`/`shared`),
+  **twenty-six** faults
   (`busy`/`syncing`/`syncError`/`imageFailures`/`gone`/`indexCold`/`deckMeta`/`updateAvailable`/
   `updateError`/`errorLog`/`feedFetchError`/`oracleTagsMissing`/`oracleTagsFetchError`/
   `artTagsMissing`/`artTagsFetchError`/`imageUrisMissing`/`exportWriteError`/
   `mirrorRootUnwritable`/`combosFetchError`/`pairingReadError`/`patreonDeclined`/
-  `patreonLapsed`/`patreonGroupEntitled`/`wishGone`/`scannerMissing`); saying
+  `patreonLapsed`/`patreonGroupEntitled`/`wishGone`/`scannerMissing`/`shareLapsed`); saying
   nothing gets `starter` with no fault. A
   fault is set on the _world_, so a story shows what the **app** does with a refusal rather than
   what one mocked call returns. **`syncing` is `busy`'s neighbour and reaches exactly one
   command**: `cache_clear` refuses outright while a card update is in flight, because
   `data/tmp/` is where the corpus download puts 77 MB the ingest then reads back — and it is
   checked *before* the write connection is asked for, which is why it is not `busy`.
-  **Eight of the twenty-five are not failures at all** — `indexCold` is
+  **Eight of the twenty-six are not failures at all** — `indexCold` is
   the search index mid-build; `oracleTagsMissing` is the Oracle tag taxonomy having never
   been ingested, which is every install's first launch and the state the type-line fallback
   exists for; `artTagsMissing` is the same thing one dataset over, where the honest floor is a
@@ -127,6 +127,23 @@ deliberately**: no screenshots are stored.
   `bracketMismatch` is reached — and that seed's own comment already records the same finding from
   the other end. **The rule it is an instance of: a deck that would change what every existing
   story sees is a new seed, however small the row is.**
+  **`shared` is a seed and `shareLapsed` is a fault, and the split is `paired`/`pairingReadError`
+  one feature over.** Sharing having *happened* is not something that has gone wrong with a
+  world — it is where a reader arrives after connecting a membership and pressing Share once,
+  plus the one thing that needs no press at all, a link somebody sent them. The seed carries
+  **both sides**, which is why it is one seed and not two: the cabinet's Share control draws the
+  published row, the shared view draws the friend's binder, and a seed with only the first would
+  leave the view the whole feature is *for* with nothing to render. It is also the one seed that
+  arrives **connected**, where `paired` deliberately does not — `share_create` refuses a device
+  with no entitlement, so a world holding a published row and no membership is one the app cannot
+  produce. What *is* a fault is the single refusal in the viewer's flow a reader cannot produce by
+  typing: a paste that is not a link earns `NOT_A_LINK` before any request, a mistyped id earns
+  `NO_SUCH_SHARE`, a publish that died between its two steps earns `SHARE_NOT_READY` — each a
+  shape the handler raises from what it was given — and what is left is a link that was real and
+  has stopped answering. `shareLapsed` is that 410, and it lands on `share_open` alone: the
+  *publisher's* half of a membership ending is `collection_shares.state`, a stored word a seed can
+  carry, so it needs no fault to be storyable. **The fault sits below the shape check** so a bad
+  paste still earns its own sentence, and `db.ts`'s comment on it is the long form.
   **Re-count this list when you add one** — it said "four" for three faults' worth of drift, and
   then "eight" while `errorLog` had been in the union for a whole feature, because a prose-only
   edit routes to neither CI job and nothing goes red.

@@ -31,6 +31,7 @@ import deckTokensRs from "../../src-tauri/src/deck_tokens.rs?raw";
 import markcolorsRs from "../../src-tauri/src/markcolors.rs?raw";
 import resetRs from "../../src-tauri/src/reset.rs?raw";
 import searchRs from "../../src-tauri/src/search.rs?raw";
+import shareRs from "../../src-tauri/src/share/commands.rs?raw";
 import syncCommandsRs from "../../src-tauri/src/sync_engine/commands.rs?raw";
 import syncLiveRs from "../../src-tauri/src/sync_engine/live.rs?raw";
 import wishlistFoldersRs from "../../src-tauri/src/wishlist_folders.rs?raw";
@@ -1295,6 +1296,42 @@ describe("ipc argument names match the Rust command signatures", () => {
 
     for (const key of sent) {
       expect(declared, `\`combos_for_card\` is sent \`${key}\` and does not declare it`).toContain(
+        key,
+      );
+    }
+  });
+
+  /**
+   * **`share_create` on the same fence, and it is the loudest member of this family yet.**
+   *
+   * Tauri camel-cases a command's parameters, so `folder_uid: Option<String>` is `folderUid` on
+   * the wire — and a wrapper spelling it `folderId`, or `uid`, or the snake name sends a key the
+   * command does not declare. **Tauri drops a payload field a command does not name**, so
+   * `folder_uid` arrives `None`, and `None` is not an error here: it is *the whole collection*.
+   * The press succeeds, the link works, and it publishes every card the reader owns instead of
+   * the one binder they picked — a refusal would have been the kinder failure.
+   *
+   * The expected list is read out of `ipc.ts` rather than written down here, which is exactly
+   * what the share `describe` further down cannot do: its expectations are hand-typed, so it
+   * pins the two sides against a third opinion and this pins them against the crate.
+   *
+   * Containment rather than equality, `finishBearing`'s rule: `state` is declared and never
+   * sent. Both length guards are what stop a parser that found nothing from reading as a pass.
+   */
+  it("share_create declares every argument ipc.ts sends it", () => {
+    const sent = payloadKeys(ipcSource, "share_create").map(snake);
+    const declared = commandParams(shareRs, "share_create");
+
+    expect(sent, "nothing parsed out of ipc.ts for `share_create`").toContain("folder_uid");
+    expect(declared, "nothing parsed out of the crate for `share_create`").toContain("folder_uid");
+    // Named on its own as well as looped over: the loop is only as strong as what `ipc.ts`
+    // happens to send, so a wrapper that dropped the owner's name on the floor would make it
+    // vacuous — and spec §4.3 has the *second* device in a group publish under that name.
+    expect(sent, "`ipc.ts` sends `share_create` no owner name").toContain("owner_name");
+    expect(declared, "the crate's `share_create` declares no `owner_name`").toContain("owner_name");
+
+    for (const key of sent) {
+      expect(declared, `\`share_create\` is sent \`${key}\` and does not declare it`).toContain(
         key,
       );
     }
@@ -2842,6 +2879,118 @@ describe("the collection folder wrappers name the commands `collection_folders.r
 });
 
 /**
+ * The five share commands — publishing one of those folders read-only.
+ *
+ * **`invoke` matches by name**, and Tauri camel-cases a command's parameters — so a wrapper
+ * spelling `folder_uid` binds nothing, the command is handed `None`, and `None` is not a
+ * rejection here: it is **the whole collection**. That is the failure this block exists for, and
+ * it is worse than an error — a publish that succeeds and shares more than the reader asked for.
+ *
+ * These expectations are hand-typed, so they pin the two sides against a third opinion rather
+ * than against the crate; `share_create declares every argument ipc.ts sends it` above is the
+ * half that reads `share/commands.rs` itself. Neither is redundant: this one sees the *values*
+ * a wrapper sends, that one sees a name this file could have got wrong twice.
+ */
+describe("the share wrappers name the commands `share/commands.rs` registers", () => {
+  /** One published share, shaped as `ShareRow` serializes — nine fields, `ownerName` and `url`
+   *  among them, because both are stored columns rather than anything a page rebuilds. */
+  const row = {
+    id: "kQ2p7fMx9Lb0RtVw",
+    folderUid: "uid-1",
+    title: "Trade binder",
+    ownerName: "Giradeli",
+    url: "https://share.example/s/kQ2p7fMx9Lb0RtVw",
+    fields: ["value"],
+    state: "live",
+    published: 1_757_308_800,
+    updatedAt: 1_757_308_800,
+  };
+
+  it("sends a folder share under `folderUid`, and a whole-collection share as null", async () => {
+    invoke.mockResolvedValue(row);
+
+    await ipc.shareCreate("uid-1", "Giradeli", { condition: true, lang: true, value: true });
+    expect(invoke).toHaveBeenCalledWith("share_create", {
+      folderUid: "uid-1",
+      ownerName: "Giradeli",
+      fields: { condition: true, lang: true, value: true },
+    });
+
+    // `null` is the whole collection, and it has to reach the wire as a value rather than as an
+    // omitted key — an absent `folderUid` and an explicit null are the same on this wire only
+    // because Rust reads `Option`; do not rely on it.
+    await ipc.shareCreate(null, "Giradeli", { condition: false, lang: false, value: false });
+    expect(invoke).toHaveBeenLastCalledWith("share_create", {
+      folderUid: null,
+      ownerName: "Giradeli",
+      fields: { condition: false, lang: false, value: false },
+    });
+  });
+
+  /**
+   * **Three booleans under their own names, never a list of field names** — `ShareFieldsArg` is
+   * a struct precisely so a page cannot invent a fourth field by spelling one.
+   *
+   * Each of the three is `#[serde(default)]`, which is what makes a misspelling here silent
+   * rather than a rejection: it arrives `false`, the publish succeeds, and the column the reader
+   * ticked is missing from every card in the snapshot. So the three are sent **mixed** here
+   * rather than all on or all off, which is what the case above sends: a wrapper that passed two
+   * of them through each other's names satisfies both of those and only this one.
+   */
+  it("names each of the three field switches, on and off", async () => {
+    invoke.mockResolvedValue(row);
+
+    await ipc.shareCreate(null, "Giradeli", { condition: true, lang: false, value: true });
+
+    expect(invoke).toHaveBeenLastCalledWith("share_create", {
+      folderUid: null,
+      ownerName: "Giradeli",
+      fields: { condition: true, lang: false, value: true },
+    });
+  });
+
+  it.each([
+    ["shareRefresh", "share_refresh"],
+    ["shareRevoke", "share_revoke"],
+  ] as const)("%s sends the id under `id`", async (method, command) => {
+    invoke.mockResolvedValue(method === "shareRefresh" ? row : undefined);
+
+    await ipc[method]("kQ2p7fMx9Lb0RtVw");
+
+    expect(invoke).toHaveBeenCalledWith(command, { id: "kQ2p7fMx9Lb0RtVw" });
+  });
+
+  it("shareList takes no arguments", async () => {
+    invoke.mockResolvedValue([]);
+
+    await ipc.shareList();
+
+    expect(invoke).toHaveBeenCalledWith("share_list");
+  });
+
+  /**
+   * **`share_open` answers unknown JSON on purpose, and this pins that the wrapper passes it
+   * through untouched.**
+   *
+   * The crate answers `serde_json::Value` because spec §10 wants a snapshot from a *newer* build
+   * told about rather than refused, and a strict Rust struct turns that into a parse error at the
+   * wrong layer. `parseSnapshot` in `@/lib/shareSnapshot` is what draws the conclusion, so a
+   * wrapper that narrowed the answer here would be a fourth implementation of the format.
+   */
+  it("shareOpen sends the pasted link under `url` and answers what it was given", async () => {
+    const body = { v: 1, title: "Trade binder", cards: [], folders: [] };
+    invoke.mockResolvedValue(body);
+
+    const out = await ipc.shareOpen("https://share.example/s/kQ2p7fMx9Lb0RtVw");
+
+    expect(invoke).toHaveBeenCalledWith("share_open", {
+      url: "https://share.example/s/kQ2p7fMx9Lb0RtVw",
+    });
+    expect(out).toEqual(body);
+  });
+});
+
+/**
  * Pairing's commands — spec §7.5 and §7.6.
  *
  * **The number is deliberately not written down.** This line said *eight* while `desktop.rs`
@@ -3450,6 +3599,28 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     // simply never remembers a fold. Both are a green build, a drawable page and a setting that
     // silently stopped working.
     ["DeckFolderPane", deckpaneRs, "DeckFolderPane"],
+    // **The share list's two, added with the feature** (2026-09-08). `ShareRow` is here rather
+    // than on `mirrors` above for `PullRow`'s reason: it draws no picture and is nine fields
+    // against that table's floor of ten, and both of those rules are properties of a card
+    // *wall's* row rather than of a mirror.
+    //
+    // What a drift costs is the quiet kind this table exists for, and every one of the four is a
+    // page that still draws. A renamed `state` reads `undefined`, the *Lapsed* row never draws,
+    // and the reader learns their share stopped answering from the friend they sent it to. A
+    // renamed `url` gives a Copy-link row that copies `undefined` — the one field that cannot be
+    // rebuilt from anything, because the Worker builds the link from its own `SHARE_BASE`. A
+    // renamed `ownerName` empties the name the *next* device in the group publishes under (spec
+    // §4.3), which is a field this device never has to look at. And a renamed `published` is
+    // nullish for ever, so a second device offers *Share* where it owes *Update*.
+    //
+    // `ShareFieldsArg` is the one the app **sends**, which is where a drift is loudest —
+    // `MissingPick`'s and `WishOptimizeApplyItem`'s lesson above, and sharper here because all
+    // three of its fields are `#[serde(default)]`: a renamed one is not a refusal, it is `false`.
+    // The publish succeeds and the column the reader ticked is missing from every card in it.
+    // Named `ShareFields` on this side, which is why the pair is spelled out rather than assumed
+    // — `DeckCard`/`DeckCardRow`'s row above is the precedent.
+    ["ShareRow", shareRs, "ShareRow"],
+    ["ShareFields", shareRs, "ShareFieldsArg"],
     // Added 2026-09-08 by a rename that this table would have caught and nothing else could.
     // `missing` became `copies` on both sides by hand when the wishlist stopped subtracting the
     // collection, and a rename reaching only one of them is the quiet kind: every folder card

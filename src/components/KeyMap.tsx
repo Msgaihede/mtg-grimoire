@@ -83,7 +83,7 @@ function headingFor(scope: ShortcutScope): string {
  * range that exists today and is not a fact this component can check.
  *
  * A word rather than a glyph in both cases: an en dash between two caps is read out as nothing
- * at all by a screen reader, and `1 6` is a different shortcut from `1 to 6`.
+ * at all by a screen reader, and `1 8` is a different shortcut from `1 to 8`.
  *
  * **The whitespace between the caps is text, not the `gap`, and that is what the row is read out
  * with.** Adjacent inline elements with nothing between them concatenate when their text is

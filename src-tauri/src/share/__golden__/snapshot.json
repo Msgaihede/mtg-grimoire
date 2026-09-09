@@ -1,0 +1,54 @@
+{
+  "v": 1,
+  "id": "testshareid00000",
+  "title": "Trade binder",
+  "owner": "Giradeli",
+  "updatedAt": 1757308800,
+  "marketplace": "tcgplayer",
+  "currency": "USD",
+  "fields": [
+    "condition",
+    "lang",
+    "value"
+  ],
+  "folders": [
+    {
+      "uid": "uid-Trade binder",
+      "name": "Trade binder",
+      "parent": null
+    },
+    {
+      "uid": "uid-Duals",
+      "name": "Duals",
+      "parent": "uid-Trade binder"
+    }
+  ],
+  "cards": [
+    {
+      "id": "0000579f-7b35-4ed3-b44c-db2a538066fe",
+      "n": "Fury Sliver",
+      "s": "tsp",
+      "cn": "157",
+      "f": "nonfoil",
+      "q": 2,
+      "fo": "uid-Trade binder",
+      "img": "https://cards.scryfall.io/display/front/0/0/0000579f-7b35-4ed3-b44c-db2a538066fe.webp?1757308800",
+      "c": "NM",
+      "l": "en",
+      "p": 0.34
+    },
+    {
+      "id": "56ebc372-aabd-4174-a943-c7bf59e5028d",
+      "n": "Tundra",
+      "s": "tsp",
+      "cn": "157",
+      "f": "nonfoil",
+      "q": 1,
+      "fo": "uid-Duals",
+      "img": "https://cards.scryfall.io/display/front/5/6/56ebc372-aabd-4174-a943-c7bf59e5028d.webp?1757308800",
+      "c": "NM",
+      "l": "en",
+      "p": 0.34
+    }
+  ]
+}

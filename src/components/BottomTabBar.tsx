@@ -1,6 +1,6 @@
 import { useRef } from "react";
 import type { LucideIcon } from "lucide-react";
-import { NAV } from "@/components/nav";
+import { NAV, type NavEntry } from "@/components/nav";
 import { useSidebarDropTarget, type SidebarDrop } from "@/components/useSidebarDrops";
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { PRESS } from "@/lib/motion";
@@ -45,6 +45,16 @@ import { cn } from "@/lib/utils";
  * fewer destinations down here than up in the rail — and that is a larger question than the two
  * placeholders that made it visible.
  *
+ * ⚠️ **Nine is the usual bar and there is a tenth, which is un-measured.** `NAV` holds ten
+ * destinations since the shared view landed, and the shell passes the *filtered* list — the
+ * Shared row appears only once a reader has opened somebody else's binder — so nine is what
+ * almost every reader has and every figure above is that bar. A reader who has opened one gets
+ * **ten**: 39 per box against the same 44 floor, which is more overlap and one more clipped
+ * pixel, and none of it has been driven. It sharpens the paragraph above rather than changing
+ * it — the row was already at its floor at nine, and the question is still what a phone's
+ * navigation *is* rather than how much a tenth costs. Recorded so nobody reads the figures above
+ * as covering the widest case.
+ *
  * **jsdom lays nothing out**, so none of that can go red in this component's suite: what the tests
  * pin is markup, and every pixel above came from a browser.
  *
@@ -58,12 +68,23 @@ import { cn } from "@/lib/utils";
 export function BottomTabBar({
   activeView,
   onSelect,
+  entries = NAV,
   dragging,
   decks,
   wishlist,
 }: {
   /** Which of the nine is open — the one that wears `aria-current`. */
   activeView: ViewId;
+  /**
+   * Which destinations to draw, defaulting to the whole of `NAV`.
+   *
+   * **A prop rather than this file filtering, and a default rather than a required one.** The
+   * Shared row appears only once a reader has opened a link (spec decision 6), and the shell is
+   * where that is decided — passing the shell's own answer down is what keeps the rail and this
+   * bar from being two components with two opinions about it. The default is what lets a story
+   * or a test draw the bar without knowing about the rule.
+   */
+  entries?: readonly NavEntry[];
   /** A tab was pressed. The bar reports and does not navigate: the store write is the shell's,
    *  exactly as it is for the rail. */
   onSelect: (view: ViewId) => void;
@@ -71,7 +92,7 @@ export function BottomTabBar({
   dragging: boolean;
   /** What a drop on Decks would mean, from `useSidebarDrops`. */
   decks: SidebarDrop | null;
-  /** …and on Wishlist. The other four take nothing and say so by passing `null`. */
+  /** …and on Wishlist. Every other destination takes nothing and says so by passing `null`. */
   wishlist: SidebarDrop | null;
 }) {
   return (
@@ -92,7 +113,7 @@ export function BottomTabBar({
       className="flex shrink-0 border-t border-border bg-surface"
       style={{ paddingBottom: "var(--safe-b)" }}
     >
-      {NAV.map(({ id, label, Icon }) => (
+      {entries.map(({ id, label, Icon }) => (
         <Tab
           key={id}
           label={label}

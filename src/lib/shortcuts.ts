@@ -91,14 +91,25 @@ export const SHORTCUTS: Record<ShortcutScope, readonly Shortcut[]> = {
        */
       range: true,
       /**
-       * Nine chords in `NAV` order, and the *index* is the binding: `AppShell` walks these and
-       * activates `NAV[i]`, so the rail's own order stays the single list rather than being
-       * restated as a second copy here.
+       * Nine chords in `NAV` order, and the *index* is the binding: `AppShell` walks
+       * `CHORD_NAV` and activates its `i`th entry, so the rail's own order stays the single list
+       * rather than being restated as a second copy here.
        *
-       * **Nine is the ceiling this spelling has**, and the row that reaches it is worth knowing
-       * about before a tenth destination is proposed: `Ctrl+0` is not a tenth step of this run —
-       * it reads as zero and sits at the wrong end of the keyboard — so a tenth entry needs a
-       * different answer rather than one more line here.
+       * **Nine is the ceiling this spelling has**, and the tenth destination arrived on
+       * 2026-09-08: `Ctrl+0` is not a tenth step of this run — it reads as zero and sits at the
+       * wrong end of the keyboard — so one entry has to go without.
+       *
+       * **The one that goes without is `shared`, and the reason is that it is the one row the
+       * rail does not always draw.** A chord's whole value is that it does not move; a digit
+       * bound to a row that appears and disappears would mean two things to two readers, which
+       * is the same argument that made these bind against a *list* rather than against what is
+       * on screen. So `CHORD_NAV` is `NAV` minus that entry, and the nine digits are the nine
+       * unconditional destinations — `Ctrl+9` is Settings for every reader, always.
+       *
+       * ⚠️ **This reverses the `Ctrl+6` the shared view shipped with on 2026-09-08**, and the
+       * reversal is what the entry point bought: that chord existed because *nothing else
+       * reached the view*, and `features/collection/ShareFolderMenu.tsx` now draws **Open a
+       * shared collection** beside the Share control. A signpost where there was only a key.
        */
       chords: [
         { key: "1", ctrl: true },
@@ -147,6 +158,7 @@ export const SHORTCUTS: Record<ShortcutScope, readonly Shortcut[]> = {
   decks: [],
   collection: [],
   wishlist: [],
+  shared: [],
   scanner: [],
   trade: [],
   playtesting: [],

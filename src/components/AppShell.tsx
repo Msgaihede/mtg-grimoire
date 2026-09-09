@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   PanelLeftClose,
@@ -84,6 +84,26 @@ const SWITCH_VIEW = shortcut("global", "switchView");
 const KEY_MAP = shortcut("global", "keyMap");
 
 /**
+ * The destinations `Ctrl+1…9` walk — `NAV` minus the one row that is not always drawn.
+ *
+ * **Ten destinations against nine digits, and this is which one goes without.** `Ctrl+0` is not a
+ * tenth step of that run (`lib/shortcuts.ts` says why), so one entry has to have no chord, and
+ * the choice is forced by what a chord is *for*: it does not move. Every other row is on the rail
+ * for every reader; `shared` appears only once a link has been opened, so a digit bound to it
+ * would either shift the digits after it — one press meaning two things to two readers — or
+ * point at a row half the readers do not have.
+ *
+ * It costs that view its keyboard route and nothing else. The route it had was a *fallback*,
+ * written when nothing in the app offered a first share; `features/collection/ShareFolderMenu.tsx`
+ * draws **Open a shared collection** beside the Share control now, which is the signpost the
+ * chord was standing in for. `docs/reference/keyboard-shortcuts.md` carries the record.
+ *
+ * Derived rather than written out, so a destination added to `NAV` joins the run by construction
+ * and only a deliberate second exclusion could ever be a decision again.
+ */
+const CHORD_NAV = NAV.filter((n) => n.id !== "shared");
+
+/**
  * The window: sidebar, ribbon, and whatever view the store points at.
  *
  * Owns the sync status because everything that needs it lives here — the ribbon's summary
@@ -106,6 +126,9 @@ export function AppShell({ children, update }: { children: ReactNode; update: Up
 function Shell({ children, update }: { children: ReactNode; update: Update }) {
   const activeView = useAppStore((s) => s.activeView);
   const setActiveView = useAppStore((s) => s.setActiveView);
+  // Only its length is read, and only to decide whether the rail draws the Shared row — see
+  // `entries` below.
+  const openedShares = useAppStore((s) => s.openedShares);
   // The flag `TitleBar` draws the map from and this component's `F1` turns over — see its doc in
   // `store.ts` for why one press and one panel need a store between them.
   const setKeyMapOpen = useAppStore((s) => s.setKeyMapOpen);
@@ -120,7 +143,7 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   const drops = useSidebarDrops();
   /**
    * Whether there is room for a rail beside the content at all — and, below the phone width,
-   * there is not: the nine destinations move to a bar across the foot of the window instead.
+   * there is not: the destinations move to a bar across the foot of the window instead.
    *
    * **The one viewport branch in this app**, and `src/lib/viewports.ts` demands a reason wherever
    * one appears. The reason is that *the shell is the window*: every other fold here is a
@@ -133,8 +156,8 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
    *
    * **It is the rail's presence it decides, not its width.** `collapsed` below is a reader's
    * choice about a rail that exists; this is whether one is drawn. Below the phone width the
-   * `<nav>` is not rendered at all rather than hidden — a rail off-screen is still six tab stops
-   * and six drop targets — and `BottomTabBar` takes its place after `<main>`.
+   * `<nav>` is not rendered at all rather than hidden — a rail off-screen is still a tab stop
+   * and a drop target per destination — and `BottomTabBar` takes its place after `<main>`.
    */
   const narrowWindow = useNarrowWindow();
   /**
@@ -146,7 +169,7 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
    * `app_meta`, so the choice outlives the process.
    *
    * **A read that fails answers `false`.** A database that cannot say must open the way the app
-   * has always opened — six named destinations — rather than hiding them behind a mystery the
+   * has always opened — its destinations named — rather than hiding them behind a mystery the
    * reader then has to guess their way out of.
    */
   const { collapsed, setCollapsed } = useNavCollapsed();
@@ -155,7 +178,7 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
    * and one tween later in the other**, which is the whole of the two bugs reported 2026-08-22.
    *
    * The rail's width is a CSS transition and its labels are a React commit, so a single flag
-   * driving both meant the words arrived 180ms before the room for them: six labels re-entering
+   * driving both meant the words arrived 180ms before the room for them: a column of labels re-entering
    * the flow at full width inside a 68px rail, painted over the view beside it for the length of
    * the tween, because `<nav>` cannot carry an `overflow-hidden` (the collapsed rail's floating
    * notes hang off it at `left-full`). `useNavLabels` holds them back until the rail has arrived
@@ -209,8 +232,8 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   // app, and passed down `isWebTarget()`-gated at the call site below.
   const deviceSync = useDeviceSyncLive();
   /**
-   * The app's two window-wide chords: `Ctrl+1`…`Ctrl+9` to jump between the nine destinations,
-   * and `F1` to open the map that says so.
+   * The app's two window-wide chords: `Ctrl+1`…`Ctrl+9` to jump between the nine destinations
+   * {@link CHORD_NAV} names, and `F1` to open the map that says so.
    *
    * **Both matched against `@/lib/shortcuts` rather than compared by hand**, which is what makes
    * the panel's rows and these bindings one fact instead of two that drift silently past both CI
@@ -259,12 +282,19 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
       const i = SWITCH_VIEW.chords.findIndex((c) => matchesChord(c, e));
       // `-1` is "not one of ours". The second half is not ceremony: the chords and the
       // destinations are two lists that agree by construction rather than by type, and the day
-      // a tenth chord is written without a tenth `NAV` entry, `NAV[i]` is `undefined` and
-      // this handler throws on every press. The reverse — a tenth destination with no chord —
-      // costs nothing and needs no guard.
-      if (i === -1 || i >= NAV.length) return;
+      // a tenth chord is written without a tenth `CHORD_NAV` entry, the lookup is `undefined`
+      // and this handler throws on every press. The reverse — a destination with no chord —
+      // costs nothing and needs no guard, which is what `shared` relies on.
+      //
+      // **`CHORD_NAV` and never the filtered `entries` below**, which is the one thing about
+      // this line that is a decision rather than arithmetic. The rail hides the Shared row until
+      // a reader has opened a link; binding against what is *drawn* would move every digit after
+      // it depending on something the reader did last week, so one chord would mean two things
+      // to two readers. Against a fixed list the digits never move — and the list is fixed
+      // precisely because the conditional row is the one left out of it.
+      if (i === -1 || i >= CHORD_NAV.length) return;
       e.preventDefault();
-      setActiveView(NAV[i].id);
+      setActiveView(CHORD_NAV[i].id);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -370,6 +400,30 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
 
   const title = NAV.find((n) => n.id === activeView)?.label ?? "";
 
+  /**
+   * The destinations this reader actually has, which is `NAV` minus the row they have not earned.
+   *
+   * **Shared appears once a link has been opened** (spec decision 6): a reader who never trades
+   * pays no rail slot for a view they will never press. It is filtered *here* rather than in
+   * `nav.ts` so that module stays a plain list — one `nav.test.ts` can assert literally, and one
+   * {@link CHORD_NAV} can be derived from.
+   *
+   * **`activeView === "shared"` keeps the row while the reader is standing on it**, which is what
+   * makes closing the last binder safe: without it the row would vanish from under the reader in
+   * the same frame the view emptied.
+   *
+   * **The way *in* before there is a row at all is the collection's own control** —
+   * `features/collection/ShareFolderMenu.tsx` draws **Open a shared collection** beside the Share
+   * control, and opening one is what puts this row on the rail. It was `Ctrl+6` until 2026-09-08,
+   * when a tenth destination left nine digits to go round; {@link CHORD_NAV} carries that whole
+   * argument, and the entry point is why it costs nothing.
+   */
+  const entries = useMemo(
+    () =>
+      NAV.filter((n) => n.id !== "shared" || openedShares.length > 0 || activeView === "shared"),
+    [openedShares.length, activeView],
+  );
+
   return (
     // A column now, where it was a row: the title bar spans the window and the sidebar starts
     // below it. `min-h-0` on the row underneath is what lets it shrink past its content —
@@ -466,7 +520,7 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
           and one with no positioned ancestor resolves to the *initial* containing block, is laid
           out at its static position and is clipped by nothing — which stretches the **document**
           (`src/CLAUDE.md`; the deck editor's 1704px phantom scrollbar is what that costs). A
-          collapsed rail turns six labels into exactly that shape, so the containing block has to
+          collapsed rail turns every one of its labels into exactly that shape, so the containing block has to
           be here. It is also what the two floating notes below are positioned against, which is
           what keeps their `left-full top-0` free of any offset arithmetic.
 
@@ -487,7 +541,7 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
           `collapsed`: the width belongs to the rail's own state, and every question about
           whether there is room for a word belongs to the other. */}
         {/* **Not drawn at all below the phone width, rather than hidden there.** A rail pushed
-          off-screen is still six tab stops, six drop targets and six accessible names for a
+          off-screen is still a tab stop, a drop target and an accessible name per destination, for a
           reader who cannot see any of them, and `BottomTabBar` after `<main>` is already
           carrying that landmark's `aria-label`. Everything inside — the collapse toggle, the
           refused-add alert, both floating notes — goes with it, which is the point: the width
@@ -504,7 +558,7 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
               collapsed ? "w-17" : "w-52",
             )}
           >
-            {NAV.map(({ id, label, Icon }) => (
+            {entries.map(({ id, label, Icon }) => (
               <NavItem
                 key={id}
                 label={label}
@@ -673,7 +727,7 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
                 replaced it.**
 
                 Both lived in the `<nav>` above — the drop report under the entry a card landed
-                on, the refused-add alert under all six of them — and below the phone width
+                on, the refused-add alert under all of them — and below the phone width
                 there is no `<nav>` to be a line in. They go *here* rather than up beside the
                 ribbon because they are the **navigation's** sentences: both are about where a
                 card just went, the reader's thumb is already at the foot of the window, and the
@@ -715,7 +769,14 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
                 )}
                 <CardMenuRefusal error={cardToDeckRefusal} />
               </div>
-              <BottomTabBar activeView={activeView} onSelect={setActiveView} {...drops} />
+              <BottomTabBar
+                activeView={activeView}
+                onSelect={setActiveView}
+                // The same filtered list the rail draws, so the two drawings of navigation
+                // cannot disagree about which destinations this reader has.
+                entries={entries}
+                {...drops}
+              />
             </>
           )}
         </div>

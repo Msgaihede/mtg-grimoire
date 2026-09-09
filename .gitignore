@@ -7,6 +7,9 @@ dist/
 # portable exe.
 dist-web/
 web/public/
+# The shared-collection viewer's bundle. `share-worker/wrangler.jsonc` declares an `assets`
+# binding over it, so a deploy needs it on disk and nothing needs it in the history.
+dist-share/
 storybook-static/
 # `tsconfig.node.json` is `composite`, so anything that builds it as a *project* — `tsc -b`,
 # or an editor's TS server doing the same — drops a `.tsbuildinfo` beside it. `npm run build`

@@ -1,0 +1,14 @@
+/* The viewer's stylesheet.
+   ---------------------------------------------------------------------------------------------
+   **The app's own sheet, plus one line.** `src/index.css` is the single source of the palette,
+   the type scale, the focus variant and the base layer; a second copy of any of it here would
+   drift the day either moved, and the whole point of drawing `CardArt` and `CardChin` on this
+   page is that a shared binder looks like the binder it was shared from.
+
+   `index.css` opens with `@import "tailwindcss" source(none)` and names its own sources, so
+   nothing is scanned unless a `@source` says so — and its `@source "../src"` resolves against
+   `src/`, which this directory is not under. Without the line below every class written in
+   `share/*.tsx` would emit **no rule at all**, silently: the page would render with the app's
+   tokens and none of its own layout. */
+@import "../src/index.css";
+@source "../share";

@@ -78,6 +78,7 @@ import {
   type CollectionDrop,
 } from "./collectionDrag";
 import { PickCopies, type CopyChoice } from "./PickCopies";
+import { ShareFolderMenu, shareTargetFor } from "./ShareFolderMenu";
 import { PinnedFolders, pinnedFolders } from "./PinnedFolders";
 import { useCollection, type Collection } from "./useCollection";
 import { useCollectionFolders, useSetCollectionFolder } from "./useCollectionFolders";
@@ -1458,6 +1459,29 @@ export function CollectionPage() {
    */
   const lockedIds = useMemo(() => lockedFolderIds(folders.folders), [folders.folders]);
 
+  /**
+   * What the Share control is about — **the level on screen**, and `null` where this level has
+   * nothing to publish.
+   *
+   * The level rather than a row of the wall, because the root is a target too and the root has no
+   * card to hang a control on. Standing in a drawer is therefore how a reader shares one, and the
+   * breadcrumb above the wall is what says which drawer that is.
+   *
+   * **A `folderId` naming a folder this list no longer carries is the root**, which is
+   * {@link trailOf}'s rule read from the other end and the same answer the wall is already
+   * drawing — never *no control*, which would be this one control disagreeing with the
+   * breadcrumb about where the reader is standing.
+   *
+   * `lockedIds` and not `folder.locked`, because `share::snapshot` drops a folder with a locked
+   * ancestor exactly as it drops a locked one — the effective answer, like every other consumer
+   * of the lock on this page.
+   */
+  const shareTarget = useMemo(() => {
+    const here = folderId === null ? null : (folders.folders.find((f) => f.id === folderId) ?? null);
+    if (here === null) return shareTargetFor(null, false);
+    return shareTargetFor(here, lockedIds.has(here.id));
+  }, [folderId, folders.folders, lockedIds]);
+
   /** Every folder's parent, for {@link lockRootOf}'s walk. A `Map` for {@link folderNames}' reason:
    *  the walk runs once per end of every drag frame, and the whole list is already in memory. */
   const parentById = useMemo(
@@ -2578,12 +2602,27 @@ export function CollectionPage() {
         // dialogs carry a control called `Import` and two of those on one screen is a pair a
         // screen reader can only tell apart by position.
         actions={
-          <ImportExportPair
-            onImport={() => setImporting(true)}
-            onExport={() => setExporting(true)}
-            importLabel="Import cards"
-            exportLabel="Export collection"
-          />
+          // Two bordered groups on one line — sharing, then transfer. `items-start` rather than
+          // `items-center`: the Share group carries a status line under it that grows and
+          // shrinks, and centring would lift the transfer pair off the row every time it said
+          // something. `flex-wrap` is what puts them on two lines rather than out of the window
+          // when the row is short, and it is inert unless `FigureRow`'s actions box can be
+          // squeezed — see that file, where the `shrink-0` that made this wrap unreachable is
+          // recorded with the measurement that found it.
+          <div className="flex flex-wrap items-start justify-end gap-2">
+            <ShareFolderMenu target={shareTarget} />
+            <ImportExportPair
+              onImport={() => setImporting(true)}
+              onExport={() => setExporting(true)}
+              importLabel="Import cards"
+              exportLabel="Export collection"
+              // **Glyphs below the phone fold**, which is this pair's own rule applied by the
+              // caller: what it competes with for the line is the sharing group beside it, and
+              // worded the two came to 421.67px in the phone's 335px row. `ShareFolderMenu` reads
+              // the same fold for the same reason and carries the argument.
+              compact={narrowWindow}
+            />
+          </div>
         }
       />
 

@@ -164,7 +164,18 @@ const binder = (
   sortOrder = 0,
   kind = "user",
   locked = false,
-): CollectionFolder => ({ id, parentId, name, kind, deckId: null, sortOrder, locked });
+): CollectionFolder => ({
+  id,
+  parentId,
+  name,
+  kind,
+  deckId: null,
+  sortOrder,
+  locked,
+  // A share addresses a folder by its cross-device uid and nothing here publishes one, so `null`
+  // — *not shareable* — is the honest fixture. No assertion in this file reads it.
+  syncUid: null,
+});
 
 /**
  * One deck's group — the app's own folder, carrying the deck it stands for.
@@ -188,6 +199,8 @@ const deckGroup = (
   // A deck's group is the app's own and can never be set aside — `set_folder_locked` refuses it
   // in words, so `false` here is the only row this helper could honestly build.
   locked: false,
+  // `binder`'s reason, one kind over: a deck's group is not a drawer anybody publishes.
+  syncUid: null,
 });
 
 /** Everything the menu needs that is not the card, with every write a spy. A surface's real

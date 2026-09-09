@@ -41,6 +41,10 @@ export default tseslint.config(
       // never runs `build:wasm`, which is exactly why this had to be found by hand.
       "web/public/",
       "dist-web/",
+      // The public share viewer's bundle. Generated output like `dist/` above, and on disk on
+      // any machine that has run `npm run share:build` — which `share-worker`'s deploy requires,
+      // because `wrangler.jsonc` declares an `assets` binding over it.
+      "dist-share/",
       "storybook-static/",
       "src-tauri/",
       "node_modules/",

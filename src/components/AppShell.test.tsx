@@ -290,7 +290,17 @@ beforeEach(() => {
   // popover full of rows and captions into the tree of whatever ran next — where the queries are
   // `screen`-wide rather than scoped — and the red would land on that test rather than on the
   // one that pressed the key.
-  useAppStore.setState({ activeView: "search", openDeckId: null, keyMapOpen: false });
+  //
+  // `openedShares` is reset with them for the plainest version of it: it decides whether the rail
+  // draws an eighth row, and this file's very first case asserts the rail's buttons **literally**.
+  // A share left open by one test would fail a case about something else entirely, naming the
+  // wrong culprit.
+  useAppStore.setState({
+    activeView: "search",
+    openDeckId: null,
+    keyMapOpen: false,
+    openedShares: [],
+  });
   queryClient.clear();
   invalidate.mockClear();
   syncStatus.mockReset().mockResolvedValue(status());
@@ -345,6 +355,74 @@ it("renders nav and refresh button", async () => {
   ]);
   expect(await screen.findByRole("button", { name: /refresh/i })).toBeInTheDocument();
   expect(screen.getByText("content")).toBeInTheDocument();
+});
+
+/**
+ * The eighth destination, and the only one the rail does not always draw.
+ *
+ * Shared is somebody else's collection opened from a link, and a reader who never opens one never
+ * sees the row (spec decision 6) — so the case above, which asserts the rail's buttons literally,
+ * is also the *absence* half of this rule.
+ *
+ * **The filter is `AppShell`'s and not `nav.ts`'s**, which is what keeps `NAV` a plain list that
+ * `nav.test.ts` asserts whole and that `switchView`'s chords bind against by index. `Ctrl+6`
+ * therefore reaches this view whether or not the row is drawn, which is the way in before the
+ * first link has been pasted.
+ */
+describe("the Shared row", () => {
+  const railButtons = () =>
+    within(screen.getByRole("navigation", { name: "Views" }))
+      .getAllByRole("button")
+      .map((b) => b.textContent);
+
+  it("is absent from the rail until a share has been opened", () => {
+    render(
+      <AppShell update={noUpdate}>
+        <div>content</div>
+      </AppShell>,
+    );
+
+    expect(railButtons()).not.toContain("Shared");
+  });
+
+  it("appears once a link has been opened, between Wishlist and Scanner", () => {
+    useAppStore.setState({ openedShares: ["https://share.example/s/testshareid00000"] });
+    render(
+      <AppShell update={noUpdate}>
+        <div>content</div>
+      </AppShell>,
+    );
+
+    expect(railButtons()).toEqual([
+      "Search",
+      "Tagger",
+      "Decks",
+      "Collection",
+      "Wishlist",
+      "Shared",
+      "Scanner",
+      "Trade",
+      "Playtesting",
+      "Settings",
+      "Collapse",
+    ]);
+  });
+
+  /**
+   * And it stays for as long as the reader is standing on the view. Without this the row would
+   * vanish from under them in the same frame they closed their last binder, leaving the page they
+   * are looking at reachable only by a chord nobody has told them about.
+   */
+  it("stays while the reader is on the view with nothing open", () => {
+    useAppStore.setState({ activeView: "shared", openedShares: [] });
+    render(
+      <AppShell update={noUpdate}>
+        <div>content</div>
+      </AppShell>,
+    );
+
+    expect(railButtons()).toContain("Shared");
+  });
 });
 
 /**
@@ -1686,6 +1764,68 @@ describe("the shell's keyboard bindings", () => {
     // than as `NAV[2].id`, per the rule that an assertion must not read its own constant.
     expect(useAppStore.getState().activeView).toBe("decks");
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Decks");
+  });
+
+  /**
+   * ⚠️ **The Shared view has no chord, and this case is the fence around that.**
+   *
+   * Ten destinations against nine digits: `Ctrl+0` is not a tenth step of the run, so exactly one
+   * entry goes without, and it is the one row the rail does not always draw. A digit bound to a
+   * row that appears and disappears would either shift every digit after it or point at a row
+   * half the readers do not have — one press meaning two things to two readers, which is the
+   * whole thing these chords binding against a *list* exists to prevent.
+   *
+   * It cost that view its keyboard route and nothing else: the way in is the cabinet's own
+   * **Open a shared collection** button, which is what the chord was standing in for while
+   * nothing else reached the view.
+   *
+   * **`Ctrl+6` is Scanner**, and asserting that rather than merely asserting *not shared* is what
+   * makes this a test of the binding rather than of an absence.
+   */
+  it("gives the Shared view no chord, and Ctrl+6 reaches Scanner instead", async () => {
+    const user = userEvent.setup();
+    render(
+      <AppShell update={noUpdate}>
+        <div>content</div>
+      </AppShell>,
+    );
+    expect(
+      within(screen.getByRole("navigation", { name: "Views" })).queryByRole("button", {
+        name: "Shared",
+      }),
+    ).toBeNull();
+
+    await user.keyboard("{Control>}6{/Control}");
+
+    expect(useAppStore.getState().activeView).toBe("scanner");
+    // …and no digit reaches it: the run is nine long and the tenth destination is not on it.
+    for (const digit of ["1", "2", "3", "4", "5", "6", "7", "8", "9"]) {
+      await user.keyboard(`{Control>}${digit}{/Control}`);
+      expect(useAppStore.getState().activeView).not.toBe("shared");
+    }
+  });
+
+  /** The rows the two placeholders pushed along, so the shift itself is pinned — and Settings on
+   *  the last digit, which is what the shared view going without is what keeps true. */
+  it("keeps Scanner on Ctrl+6 and Settings on Ctrl+9", async () => {
+    const user = userEvent.setup();
+    render(
+      <AppShell update={noUpdate}>
+        <div>content</div>
+      </AppShell>,
+    );
+
+    await user.keyboard("{Control>}6{/Control}");
+    expect(useAppStore.getState().activeView).toBe("scanner");
+
+    await user.keyboard("{Control>}7{/Control}");
+    expect(useAppStore.getState().activeView).toBe("trade");
+
+    await user.keyboard("{Control>}8{/Control}");
+    expect(useAppStore.getState().activeView).toBe("playtesting");
+
+    await user.keyboard("{Control>}9{/Control}");
+    expect(useAppStore.getState().activeView).toBe("settings");
   });
 
   it("does not switch view while a modal is open", async () => {

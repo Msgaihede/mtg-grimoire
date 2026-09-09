@@ -65,6 +65,10 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 /** The clipboard is the operating system's, and jsdom has nothing behind Tauri's `invoke`. */
 vi.mock("@/lib/clipboard", () => ({ copyText: vi.fn().mockResolvedValue(undefined) }));
 
+// `supporterState` moved to `@/lib/query` when the collection cabinet's Share control became its
+// second reader — see that file's note above `SUPPORTER_KEY`. The cases below are unchanged;
+// only where the function is declared moved.
+import { supporterState } from "@/lib/query";
 import {
   LEAVE_WARNING,
   REMOVAL_WARNING,
@@ -74,7 +78,6 @@ import {
   relayNote,
   relayState,
   supporterNote,
-  supporterState,
 } from "./SyncPanel";
 
 const ME = "aa".repeat(16);

@@ -38,7 +38,7 @@ both plus the frontend.
   columns does not (schema v2; `the_v2_backfill_leaves_the_search_index_answering` is the
   proof).
 - **The data folder holds two databases, and which one is `main` is the whole design**
-  (schema 27). `data/user.db` is the reader's — the twenty-two tables in `schema::TABLES` marked
+  (schema 27). `data/user.db` is the reader's — the twenty-five tables in `schema::TABLES` marked
   `Side::User`, which nothing outside this app can produce again — and it is what
   `Connection::open` names. `data/corpus.db` is everything a feed or this app's own ladder can
   rebuild, and it is **`ATTACH`ed as `corpus`**, because *you cannot `DETACH main`*: discarding
@@ -126,8 +126,9 @@ both plus the frontend.
   every upgraded one, and a fresh worktree is a fresh install, so nothing else here can see it.
   The single-file ladder is frozen at **v26** — `schema::migrate_single_file`
   climbs to `schema::LEGACY_SINGLE_FILE_VERSION` and stops, and the two files carry their own
-  numbers from there (`USER_SCHEMA_VERSION` **40** since decks learned a third *kind* —
-  one rung above the theory mark growing a third tier, which is one above it growing a second,
+  numbers from there (`USER_SCHEMA_VERSION` **41** since the reader could publish a folder —
+  one rung above decks learning a third *kind*, which is one above the theory mark growing a
+  third tier, which is one above it growing a second,
   which is one above decks learning which tokens they make,
   which is one above a deck's group
   holding only copies its live list claims at `(card_id, finish)`, itself one above a
@@ -214,6 +215,31 @@ both plus the frontend.
   neighbour of is `theory_enabled`, the *other half of the same pair*, so an index that landed
   there would hand a deck's kind to its own opposite with every field still holding a `0` or
   a `1`.
+  **v41** (2026-09-08) creates `collection_shares`, the cache of the relay's list of the
+  folders the reader has published read-only. **It is the first user table since the split
+  that is deliberately not synced** — no `sync_uid` column and no `SYNCED_TABLES` entry, which
+  stays at thirteen — because the relay's `GET /g/{group}/shares` is the roster exactly as the
+  rewrapped key set is the roster for group membership: a synced copy would be a second record
+  of a fact the relay already holds, and the two would disagree the first time a device was
+  offline during a revoke. What the table buys is a *shared* badge on a folder that survives
+  being offline, and the links to go with it. **`owner_name` and `url` are stored rather than
+  derived, and both were added to the rung after the fact** (2026-09-08, Task 7): the name is
+  what the *next* device in the group publishes under instead of asking the reader to type it
+  again (spec §4.3), and the link is built by the Worker from its own `SHARE_BASE` binding — so
+  rebuilding it here from `share::publish::SHARE_BASE` would be one string built twice, and a
+  placeholder until the day that Worker is deployed. Neither can be answered offline by anything
+  but a column. **Its two partial unique indexes are one lesson, not two.**
+  `idx_collection_shares_folder` is `(folder_uid) WHERE folder_uid IS NOT NULL` and says a
+  folder may be shared once; a whole-collection share carries a NULL `folder_uid` and so is in
+  no index at all, which is why there is a second. The trap is that the obvious second index —
+  `(folder_uid) WHERE folder_uid IS NULL` — **refuses nothing**: every key in it is NULL and
+  SQLite holds NULLs in a UNIQUE index distinct from each other, so it reads as a fence and is
+  not one. `idx_collection_shares_whole` indexes the *expression* `(folder_uid IS NULL)`, which
+  is the same `1` for every row the `WHERE` admits. It is `COLLECTION_GRAIN`'s
+  `coalesce(folder_id, 0)` argument reaching a second table, and it was measured rather than
+  reasoned about — the column form was written first, and let the second row straight in.
+  The whole record is
+  [collection-sharing.md](../docs/reference/collection-sharing.md).
   **v35, v36, v37 and v38 all landed within days of each other from four branches; the token rung
   was renumbered twice on its way in and the theory rung three times** — written as 35, moved to
   36 when the sixth grade landed, to 37 when the deck-group sweep did, and to 38 when the token
@@ -1805,6 +1831,33 @@ viewState)` — absent field means "leave it". It moves **no `updated_at`**, rec
   registrations and every measurement:
   [decks-storage.md](../docs/reference/decks-storage.md).
 
+## Sharing a collection (`share/`)
+
+The whole record — the format, both viewers, the Worker, the state machine and the bugs still
+open — is [collection-sharing.md](../docs/reference/collection-sharing.md). The binding rules:
+
+- **A share is a snapshot the owner publishes, not a window onto their database.** Everything a
+  viewer sees was true at the last publish, and nothing a viewer does can reach back.
+- ⚠️ **`share::snapshot` does its own read and must never ride on `collection::list_entries`.**
+  That query scopes a named folder with `e.folder_id = ?` — direct members only, so a parent
+  share would silently omit every subfolder — and skips `exclude_locked` entirely once a folder
+  is named, because *a named folder is served whole*. Both defaults publish more than the reader
+  asked for. **`CollectionQuery`'s unasked question keeps every row; this one's keeps none.**
+- **Six columns are absent from the format rather than switched off in it** — `purchase_price`,
+  `purchase_currency`, `acquired_at`, `acquisition_source`, `notes` and the free-text `tags` —
+  because an optional field is one a future switch can turn on by accident. The fence is a sweep
+  over the **serialised text** that reads values as well as key names: a leak under a legitimate
+  key name is the one the key-only version passed.
+- **The order is read → POST → PUT → write `collection_shares`**, and the refusals fire before
+  any request. A publish that dies halfway leaves the *previous* snapshot serving; a folder the
+  app is about to refuse must never have left a row on the relay.
+- ⚠️ **`share::publish::SHARE_BASE` is a placeholder and the Worker is not deployed.** `endpoint`
+  refuses on the **scheme** with `NOT_DEPLOYED` before any request and before any `error_log`
+  row. The `sync_state` key `share_url` is the only way to exercise the publisher at all.
+- **`collection_shares` is a cache and is not synced** — the relay's list is the roster. Its
+  whole-collection unique index is on the **expression** `(folder_uid IS NULL)`; the column form
+  refuses nothing, because SQLite holds NULLs in a UNIQUE index as distinct.
+
 ## Scryfall and the network
 
 The rules, and where each is enforced, are in
@@ -2164,6 +2217,7 @@ The whole record, including the pipeline the crate implements:
 | [commander-brackets.md](../docs/reference/commander-brackets.md) | `combos.rs`, the v26 rung and **corpus schema 2** — the feed measured end to end, what is kept and what is skipped, **both** match queries and the card side's three statements, the shape gate and why a version gate skips every fresh install, the launch gate and the clear, and `decks.bracket` |
 | [wishlist-folders.md](../docs/reference/wishlist-folders.md) | The wishlist's cabinet (v23) — the four-term grain, the merge rule, the root-add duplicate |
 | [collection-folders.md](../docs/reference/collection-folders.md) | The collection's cabinet (v24–v25) — the eleventh grain term, the deck groups and `Recently removed`, the conversion that made them, what a zero quantity now costs |
+| [collection-sharing.md](../docs/reference/collection-sharing.md) | `share/` and the second Worker (v41) — the snapshot format and its six absences, the size measured, the two `collection.rs` traps the publisher exists to avoid, the two-step upload, both partial indexes and the one that refused nothing, the `live`/`lapsed`/`revoked` pass, and what is not deployed |
 | [sync.md](../docs/reference/sync.md) | `sync_pair/`, `sync_engine/` and the user-schema rungs sync owns, v29 to v31 — the pairing protocol step by step and the six digits; then the thirteen synced tables, how a row is named across devices, the three SQLite facts the capture triggers' shape follows from, §7.3's five rules against the test that proves each, the envelope measured, the relay's endpoints, and what is not built |
 | [web-target.md](../docs/reference/web-target.md) | The browser build — the module map, the OPFS pair, the measured browse and facet, and the first run's open memory failure |
 | [text-mirror.md](../docs/reference/text-mirror.md) | `mirror/` — the layout, the dirty map, why the pruner reads a manifest instead of guessing, what a pass costs measured, and the bugs still open |

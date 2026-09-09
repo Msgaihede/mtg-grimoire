@@ -1341,6 +1341,19 @@ honoured or refused, and nothing these two can be made to spend is on that line.
 a removed device spending `/keys` reads until its auth ages out of the eight-epoch window — is
 accepted for the same reason.
 
+### A second Worker binds the same D1 and the same secret
+
+**`share-worker/` is not on this list and never will be** — it is a separate Cloudflare Worker
+for blast radius, added 2026-09-08 for read-only shared collections. What it shares with the
+relay is the **D1 database** and the **`RELAY_HMAC_KEY`** secret, so it verifies a token the relay
+minted without a service binding; `relay/`'s source and its deploy are untouched by it. Two
+consequences reach this page: **publishing is gated by the same bearer token sync mints**, so a
+share is an entitlement of the *group* exactly as everything else here is; and **its lapse pass
+reads the `status` the relay's own `reconcile` wrote and never re-runs `decide`**, because one
+account with two opinions about when a membership ended is the failure that arrangement exists to
+avoid. It is written and **not deployed** — [collection-sharing.md](collection-sharing.md) is the
+record, and *ask the host* applies there exactly as it does here.
+
 ### The rendezvous: outside the gate, same reasoning, a different namespace
 
 Added 2026-08-31, and not a `/g/{group}/…` route at all — `/p/{rv}/{slot}`, keyed on a pairing

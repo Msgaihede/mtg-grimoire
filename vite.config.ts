@@ -90,7 +90,26 @@ export default defineConfig({
     // does not drift the way that sentence did.
     // `relay/` is absent from `coverage.include` for the same reason `src-tauri/` is: it is not
     // app code and would move a number that is about the app.
-    include: ["src/**/*.test.{ts,tsx}", ".storybook/**/*.test.ts", "relay/src/**/*.test.ts"],
+    // The fourth glob is the *share* Worker — a second Cloudflare Worker beside the relay, for
+    // spec §5.1's blast-radius reason — and everything the third glob's paragraph says applies
+    // to it unchanged: no workerd, plain handlers over an injected `Env`, `fakeD1`'s SQL
+    // evaluator standing in for D1. It is absent from `coverage.include` beside `relay/`.
+    // ⚠️ A directory this list does not name is collected by **nothing**, and `vitest run
+    // share-worker/…` answers `No test files found` — which prints on stdout and is easy to read
+    // as a pass. That was the state of `share-worker/` for exactly one commit.
+    include: [
+      "src/**/*.test.{ts,tsx}",
+      ".storybook/**/*.test.ts",
+      "relay/src/**/*.test.ts",
+      "share-worker/src/**/*.test.ts",
+      // The fifth glob is the **public web viewer** — `share/`, built by
+      // `vite.share.config.ts` into `dist-share/` and served by the share Worker's `assets`
+      // binding. It is a React page like `src/`, so unlike the two Worker globs above it needs
+      // `.tsx`, and unlike `src/` it has no core: no `ipc`, no store, no Tauri boundary
+      // anywhere in it. `share/SharePage.test.tsx` holds a sweep of its own import graph that
+      // keeps it that way.
+      "share/**/*.test.{ts,tsx}",
+    ],
     // Vitest stubs CSS imports as empty strings by default, which would hand
     // `iconFont.test.ts` an empty `mana.css?raw` to assert against. No *component* imports
     // CSS; `.storybook/preview.tsx` imports three files of it and reaches the suite through

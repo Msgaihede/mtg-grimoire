@@ -14,13 +14,22 @@ import type { TransferFieldId, TransferSurface } from "@/features/transfer/field
 import type { ExportFormat } from "@/features/transfer/formats";
 import type { DeckFinish, DeckVariant } from "./ipc";
 
-/** The nine top-level destinations in the sidebar. */
+/**
+ * The ten top-level destinations in the sidebar.
+ *
+ * **`shared` is the one the rail does not always draw.** It is somebody else's collection, opened
+ * from a link, and a reader who never opens one never sees the row — `AppShell` filters `NAV` on
+ * {@link AppState.openedShares}, so `nav.ts` stays the whole set and `nav.test.ts` goes on
+ * asserting it literally. It is also the one destination with no chord, and the two facts are the
+ * same fact: see `lib/shortcuts.ts`'s `switchView`.
+ */
 export type ViewId =
   | "search"
   | "tags"
   | "collection"
   | "wishlist"
   | "decks"
+  | "shared"
   | "scanner"
   | "trade"
   | "playtesting"
@@ -232,6 +241,41 @@ export interface ExportPrefs {
 interface AppState {
   activeView: ViewId;
   setActiveView: (view: ViewId) => void;
+  /**
+   * The shared collections this reader has opened, **most recent first**, as their links.
+   *
+   * Three things it is, and each answers a question the shared view would otherwise have to ask
+   * somewhere worse:
+   *
+   * * **It is what makes the rail row appear** (spec decision 6). Empty is a reader who has never
+   *   opened a share, and they pay no rail slot for a feature they do not use.
+   * * **Its head is the binder on screen.** One field rather than a list plus a "current" — two
+   *   fields would be free to disagree about a link that had been forgotten, and the head of a
+   *   most-recent-first list is a definition rather than a second piece of state.
+   * * **In memory, like every other field here, and deliberately not one `app_meta` row.** A link
+   *   is a capability over somebody else's data: writing the set of them down is a decision about
+   *   what this app remembers of other people's collections, and spec §8 asks for no such thing.
+   *   The snapshots behind them are session-lived too — TanStack's cache — so a persisted list
+   *   would come back on the next launch as a row of links that all have to be refetched anyway.
+   */
+  openedShares: string[];
+  /**
+   * Remember a link and make it the binder on screen. Idempotent: opening one already in the
+   * list moves it to the head rather than adding it twice.
+   *
+   * **It does not change {@link AppState.activeView}**, which is the caller's press to make: the
+   * dialog is opened from the shared view itself as well as from outside it, and a store action
+   * that navigated would make the first case a no-op that looks like one.
+   */
+  openShare: (url: string) => void;
+  /**
+   * Forget one — the reader is done with that binder.
+   *
+   * Forgetting the last one leaves the rail row drawn for as long as the reader is standing on
+   * the view (`AppShell`'s filter), so nothing vanishes from under them; it is gone the next time
+   * they go somewhere else.
+   */
+  closeShare: (url: string) => void;
   /**
    * Whether the keyboard map is showing.
    *
@@ -1004,6 +1048,14 @@ export const useAppStore = create<AppState>((set) => ({
         returnToDeckId: null,
       };
     }),
+  // Nothing until a reader pastes a link, which is what keeps the rail row off the screen of
+  // everybody who never does. Not cleared by `setActiveView` above: a binder a reader opened is
+  // theirs to come back to for the rest of the session, and clearing it on the way out would make
+  // the rail row a thing that appeared and vanished on one trip to Settings.
+  openedShares: [],
+  openShare: (url) =>
+    set((s) => ({ openedShares: [url, ...s.openedShares.filter((u) => u !== url)] })),
+  closeShare: (url) => set((s) => ({ openedShares: s.openedShares.filter((u) => u !== url) })),
   // Closed on launch, and deliberately not cleared by `setActiveView` above the way the card
   // pane and the open deck are: those two are *about* the view that is going away, while this
   // panel's whole subject is the view being arrived at. A reader who pressed `Ctrl+3` with the

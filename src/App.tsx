@@ -17,6 +17,7 @@ import { DecksPage } from "@/features/decks/DecksPage";
 import { PlaytestingPage } from "@/features/playtesting/PlaytestingPage";
 import { ScannerPage } from "@/features/scanner/ScannerPage";
 import { SearchPage } from "@/features/search/SearchPage";
+import { SharedPage } from "@/features/share/SharedPage";
 import { SettingsPage } from "@/features/settings/SettingsPage";
 import { TagsPage } from "@/features/tags/TagsPage";
 import { TradePage } from "@/features/trade/TradePage";
@@ -33,6 +34,13 @@ function ActiveView({ update }: { update: Update }) {
   if (activeView === "tags") return <TagsPage />;
   if (activeView === "collection") return <CollectionPage />;
   if (activeView === "wishlist") return <WishlistPage />;
+  // Somebody else's collection, opened from a link. The rail may not be drawing a row for it —
+  // it appears once a share has been opened (spec decision 6) — and **it has no chord**: ten
+  // destinations against `Ctrl+1…9` left one to go without, and `AppShell`'s `CHORD_NAV` says why
+  // it is this one. The way in is `features/collection/ShareFolderMenu.tsx`'s *Open a shared
+  // collection*, beside the cabinet's Share control; after that the rail row is the way back, and
+  // the view's own empty state is where a reader pastes their first link.
+  if (activeView === "shared") return <SharedPage />;
   if (activeView === "scanner") return <ScannerPage />;
   if (activeView === "trade") return <TradePage />;
   if (activeView === "playtesting") return <PlaytestingPage />;

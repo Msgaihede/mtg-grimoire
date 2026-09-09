@@ -888,6 +888,12 @@ mod tests {
                 "cards_fts_data",
                 "cards_fts_docsize",
                 "cards_fts_idx",
+                // The cache of the relay's share list (user schema v41). A share is a
+                // *published* copy of a binder, and no mirrored file quotes one — the plain-text
+                // mirror is the reader's own collection on their own disk, and what a stranger
+                // can see on the web is a different question about the same rows. `None` is the
+                // decision rather than an omission.
+                "collection_shares",
                 // The Commander Spellbook feed's three (schema v26). They map to nothing for
                 // `cards`' and `marketplace_prices`' reason and a sharper one: a refresh
                 // rewrites all three wholesale, the reader never edits a row in any of them,

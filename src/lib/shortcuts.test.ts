@@ -406,6 +406,7 @@ describe("the catalogue's shape", () => {
     expect(SHORTCUTS.decks).toEqual([]);
     expect(SHORTCUTS.collection).toEqual([]);
     expect(SHORTCUTS.wishlist).toEqual([]);
+    expect(SHORTCUTS.shared).toEqual([]);
     expect(SHORTCUTS.scanner).toEqual([]);
     expect(SHORTCUTS.trade).toEqual([]);
     expect(SHORTCUTS.playtesting).toEqual([]);
