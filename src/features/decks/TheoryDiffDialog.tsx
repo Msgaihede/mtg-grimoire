@@ -768,10 +768,18 @@ function TheoryDiffBody({ deckId }: { deckId: number }) {
               buttons change still hears what the press did. Rendered always, so the region is in
               the tree before it has anything to say — a live region mounted with its own text is
               a region that announces nothing. */}
+        {/* **`max-w-36` is a measurement rather than a taste**, and it is one half of what keeps
+            this footer one row taller than it was before the destination joined it. The note
+            column to the left is the only `flex-1` item here, so it absorbs every pixel the other
+            three take: at `w-[47.5rem]` with the destination drawn and this region uncapped, the
+            note was squeezed to **187px** and wrapped to six lines, taking the footer from 96px to
+            **128px** (shipped window, 2026-09-09, debug build, 1280x800). Capping the region — it
+            is usually empty, and its longest sentence wraps to two lines perfectly well — gives
+            the note 269px and four lines, and the footer measures 96px again. */}
         <p
           role="status"
           aria-live="polite"
-          className="min-w-0 shrink text-right text-[0.7rem] text-dim"
+          className="min-w-0 max-w-36 shrink text-right text-[0.7rem] text-dim"
         >
           {failure !== null
             ? ipcError(failure)
@@ -800,13 +808,17 @@ function TheoryDiffBody({ deckId }: { deckId: number }) {
             `w-[47.5rem]` the footer's four items are a paragraph that can wrap, a live region
             that is usually empty, this and the press, and only the first of those has anywhere
             to go. */}
+        {/* **No visible `Send to` caption, and it is the other half of the measurement above.**
+            One was drawn here for a day, `aria-hidden` because the trigger's own name already
+            begins with those two words. It cost 48px of a row whose only flexible item is the
+            note, and what it bought is a phrase the trigger repeats: the control sits immediately
+            left of a button reading `Send N selected to wishlist`, so the destination it names is
+            the one that press files into, and the trigger draws that destination as its own
+            content. WCAG 2.5.3 is satisfied without it — the visible label is now the folder's
+            name, which is still a prefix of the accessible name below. `DeckStats`' shortfall row
+            reached the same shape from the other end and draws no caption either, so the two
+            surfaces say this one thing one way. */}
         <div className="flex shrink-0 items-center gap-2">
-          {/* `aria-hidden`, because the trigger's own name below already begins with these two
-              words — the visible text stays a prefix of the accessible name (WCAG 2.5.3) and a
-              screen reader is not read "Send to" twice. */}
-          <span aria-hidden="true" className="text-[0.7rem] text-dim">
-            Send to
-          </span>
           <WishDestination
             folderId={folderId}
             onChange={chooseDestination}
