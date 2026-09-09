@@ -4388,9 +4388,24 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                   className={cn(
                     FILTER_CONTROL,
                     FILTER_FOCUS,
-                    // The label chips' own type size, for the label chips' own reason — this
-                    // chip shares their line and must not set a taller one.
-                    "gap-1.5 px-2.5 text-xs",
+                    // **`inline-flex items-center` is load-bearing and `FILTER_CONTROL` does not
+                    // carry it** (2026-09-09). That recipe is `h-9 … rounded-md border text-sm`
+                    // plus the press — geometry, no display — because every other chip in this
+                    // row is a bare string, and a `<button>`'s initial `display` is enough for
+                    // one. This is the row's first chip with a *glyph* beside its words, so
+                    // without a flex context the crown is a block-level line of its own: it
+                    // stacked **above** the caption, two lines inside a fixed 36px box with the
+                    // words clipped, and the `gap-1.5` below styled nothing at all.
+                    //
+                    // Driven in the shipped window 2026-09-09 (debug build, 1920×1080, real
+                    // corpus): the crown's box at y=228 against the caption's at y=240, the chip
+                    // 110px wide where its content wants 128. jsdom lays nothing out and computes
+                    // no `display`, so neither suite can go red for it — a live pass is the only
+                    // witness, and this is what one found.
+                    //
+                    // The type size is the label chips' own, for the label chips' own reason —
+                    // this chip shares their line and must not set a taller one.
+                    "inline-flex items-center gap-1.5 px-2.5 text-xs",
                     gcFilter
                       ? "border-pie-gold text-pie-gold"
                       : "border-border text-dim hover:text-pie-gold",
