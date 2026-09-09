@@ -74,6 +74,13 @@ export const DEFAULT_ALLOCATION: Allocation = "unallocated";
  * It is `DEFAULT_ALLOCATION`'s neighbour in every sense except that there is **no press that
  * turns it off** — the allocation toggle widens to the copies a *deck* is holding, which says
  * nothing about a drawer the reader took off the table themselves.
+ *
+ * **This tab is the only sender there is, since 2026-09-09** — the collection page sent it too
+ * until [#436](https://github.com/Msgaihede/mtg-grimoire/issues/436) established that the lock
+ * is a statement about what the app offers a *deck* and never about what the reader *has*. That
+ * makes this constant the whole of the feature's query side rather than half of it, and the
+ * coupling above it correspondingly load-bearing: there is no second caller left whose behaviour
+ * would hint that this one had stopped asking.
  */
 export const DEFAULT_EXCLUDE_LOCKED = true;
 

@@ -227,8 +227,9 @@ async function tagsFor(rows: readonly ImportResolveRow[]): Promise<PrintingTags[
  *
  * **`["decks"]`, the whole root, from every write and on refusal as well as on success** —
  * `useDeck`'s and `useDecks`' rule, kept here for their reasons. A commit adds and removes rows
- * in **this** deck, and `ownedQuantity` is the deck's own group handed out across them, so every
- * row of it re-attributes; a create adds a tile; and a refusal is either a busy database or a
+ * in **this** deck, and `ownedQuantity` is a pool handed out across them — the deck's own group on
+ * the Actual list, the wider `Availability::ForDeck` pool on the plan since 2026-09-09 (issue
+ * #435) — so every row of it re-attributes; a create adds a tile; and a refusal is either a busy database or a
  * deck another surface has already deleted, the second of which must not leave a screen painting
  * a deck that is gone. The root is a prefix of `["decks", "list"]` and of every
  * `["decks", "detail", id, variant]`, so one key covers the gallery and the editor both.

@@ -367,9 +367,11 @@ export function StackView({
    * every card in every pile is drawn against, so reading it per card would be a hundred answers
    * to one question. It reaches `deckCardShort` and `deckCardName` at the bottom of the chain,
    * which is the red `3/4` in a stacked card's chin and the *you own 3 of 4* clause in its name.
-   * A virtual deck has no `collection_folders` group, so `owned_by_printing` joins nothing and
+   * A virtual deck has no `collection_folders` group, so it can draw on no pool at all and
    * **every** row reads 0 owned — a hundred red marks all saying the same untrue thing, which is
-   * the theory list's own failure (issue #354) reached by a different route.
+   * the failure issue #354 reported on a plan, reached by a different route. That plan's half
+   * has since stopped being an arithmetic: a theory row reads a truthful count since 2026-09-09
+   * (issue #435), and `deckCardShort` passes it over by a product call instead.
    *
    * **`card.variant` cannot answer it**, which is why this is a prop rather than a fourth clause
    * in the predicate: a virtual deck's rows are ordinary `live` rows on purpose, because

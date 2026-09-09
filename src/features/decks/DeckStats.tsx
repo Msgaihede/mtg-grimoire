@@ -106,9 +106,11 @@ type Tallied = CategoryCount & { kind: CategoryKind; active: boolean };
  * the only reading under which a curve, a price and a deck size can be talked about together.
  *
  * **A switched-off category counts toward nothing** — not size, not price, not the curve —
- * which is the same line `validateDeck` opens with and the same read the allocator makes, so
- * "counts toward nothing" and "reserves no copy of anything" cannot come apart. It is
- * `categoryActive` that says so and never a kind: a Maybeboard the reader switched *on* is
+ * which is the same line `validateDeck` opens with and the same read `attribute_owned` makes, so
+ * "counts toward nothing" and "is handed no copies" cannot come apart. That is one of the two
+ * guards 2026-09-09 left alone: a switched-off pile reads `0` owned on **both** lists, where a
+ * theory row now reads a truthful count (issue #435). It is `categoryActive` that says so and
+ * never a kind: a Maybeboard the reader switched *on* is
  * counted like any other pile, and a pile of their own they switched off is not. Everything
  * else counts: a sideboard is cards you own, sleeve and pay for.
  */
@@ -215,7 +217,18 @@ export interface DeckStatsSummary {
    *  fully priced on TCGplayer and entirely unpriced on Cardmarket — so this number travels
    *  with the figure beside it and is never carried across a switch. */
   unpriced: number;
-  /** Copies this deck secured from the collection, and the ones it could not. */
+  /**
+   * Copies of this list the reader owns, and the ones they do not — summed straight off
+   * {@link DeckCard.ownedQuantity}, so **which copies count is the variant's question and not
+   * this module's**. On the Actual list it is what the deck physically holds; on the Theory list,
+   * since 2026-09-09 ([issue #435](https://github.com/Msgaihede/mtg-grimoire/issues/435)), it is
+   * every copy the reader owns that this deck could use — the deck's own box included. A plan of
+   * 100 with 62 of its cards already sleeved up reads `62` and `38` where it read `0` and `100`.
+   *
+   * **This band draws that number on both lists and offers the writes on neither but one.** The
+   * count became truthful; nothing about what a plan can be *made* to do moved with it, which is
+   * why `onPull` and `onAddMissing` are still `null` on Theory.
+   */
   owned: number;
   missing: number;
 }
@@ -568,8 +581,16 @@ export function DeckStats({
    */
   send: MissingWrite;
   /**
-   * Opens the pull dialog. `null` where there is nothing to open — the theory list, whose rows
-   * hold no cards at all.
+   * Opens the pull dialog. `null` where there is nothing to open — the theory list, where a plan
+   * holds no cardboard for a pull to move copies *into*.
+   *
+   * **The reason is the write and no longer the number** (2026-09-09,
+   * [issue #435](https://github.com/Msgaihede/mtg-grimoire/issues/435)). This said *whose rows
+   * hold no cards at all*, which was a statement about `ownedQuantity` reading `0`; a theory row
+   * reads a truthful count now, so the band above this button says `38 of 100 missing` on the
+   * plan rather than `100 of 100`. The absence stands anyway, because `deck_pull_plan` takes no
+   * variant and reads the live list: a plan is a list of cards to acquire, not a box to move
+   * copies into.
    *
    * **A callback and not a write**, which is the difference between this prop and `send` beside
    * it. The wishlist is one press and one command, so the strip can make it and word the answer;
@@ -585,7 +606,9 @@ export function DeckStats({
    * the one answer to a shortfall that *creates* cardboard rather than moving it or listing it.
    *
    * `null` where there is nothing to open, and it is `onPull`'s absence for `onPull`'s reason,
-   * said in the same words: a plan holds no cards, so the theory list is short of nothing.
+   * said in the same words: a plan holds no cardboard, so there is nowhere on that list to
+   * record copies *to*. Not because the plan is short of nothing — since 2026-09-09 it says
+   * exactly what it is short of (issue #435), and `deck_missing_plan` still walks the live list.
    * **Absent, never greyed** — a control that spends a whole tab refusing teaches the reader to
    * stop looking at the line it is in.
    *
@@ -901,7 +924,9 @@ function Missing({
 
               **Drawn only inside the `missing > 0` arm, like both its neighbours**, and `null` is
               the same second absence the pull's prop argues at {@link DeckStats} — the theory
-              list, whose rows hold no cards at all, so there is nothing to be short of.
+              list, which holds no cardboard for this press to record copies into. The shortfall
+              beside it is real on that tab since 2026-09-09 (issue #435); what is absent is the
+              place to put the answer, not the question.
 
               **`aria-haspopup` without `aria-expanded`, for the pull's reason**: the layer it
               opens is a full-window overlay, so while it is up this button is behind a scrim and

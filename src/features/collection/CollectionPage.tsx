@@ -391,6 +391,33 @@ function filedIn(
 }
 
 /**
+ * Whether the caption's glyph is a lock — **true when any drawer behind this tile is set
+ * aside**, and the asymmetry with {@link filedIn} above it is the decision rather than an
+ * oversight.
+ *
+ * A tile merges every copy of one printing in one finish across grades, languages **and
+ * folders**, so it can perfectly well stand for a copy in a display case and a copy loose at the
+ * root at once. `filedIn` refuses to name one of several drawers because naming one claims the
+ * others are somewhere they are not; a lock has the opposite failure available. Under-reporting
+ * — drawing a plain `Folder` because one of three copies is not set aside — is a set-aside copy
+ * quietly rejoining what the wall offers, which is the one direction the whole of issue #365 is
+ * shaped against, and it is `folder_row`'s "a `2` is locked" reasoning arriving at a second site.
+ * Over-reporting costs the reader a glyph they can resolve by opening the drawer, which the
+ * caption's `2 folders` is already telling them to do.
+ *
+ * **`lockedIds` and never a folder's own `locked` flag**, for the reason every consumer of the
+ * lock on this page has: it inherits down the tree, so a copy in a subfolder of a locked binder
+ * carries no flag of its own and is set aside all the same. `null` is the root, which is never a
+ * folder and can never be locked.
+ *
+ * This is the wall's whole share of issue #436. The copies came back to the list and the header
+ * in that issue; the mark is what keeps "set aside" legible now that absence no longer says it.
+ */
+function tileLocked(tile: CollectionTile, lockedIds: ReadonlySet<number>): boolean {
+  return tile.folders.some((id) => id !== null && lockedIds.has(id));
+}
+
+/**
  * The caption a **flattened** wall draws: the printing, and the drawer its copies sit in.
  *
  * Built for that state and handed to `CardGrid` only there — unflattened the slot is left unset, so
@@ -401,7 +428,9 @@ function filedIn(
  * **{@link WishFolderCaption} is reused across the feature boundary rather than twinned**, and its
  * name is the only thing about it that is the wishlist's: it takes a folder name and draws a glyph,
  * a truncating word and a `Filed in …` tooltip, scaling on `var(--mark-scale)` like every other
- * mark drawn on a card. A local copy would be one fact rendered twice — two glyphs, two shades,
+ * mark drawn on a card. **The lock is the one thing it takes that the wishlist never passes**
+ * (issue #436), and it is a prop on that shared component rather than a second glyph drawn here
+ * for the same reason the component is shared at all — the argument is at its own site. A local copy would be one fact rendered twice — two glyphs, two shades,
  * two sentences, none of it decided — which is the drift `wishMarks.tsx`'s own header exists to
  * prevent; and this app already imports the other way, `WishlistGrid` drawing the collection's
  * `REVEAL_ON_HOVER`.
@@ -412,12 +441,14 @@ function filedIn(
  * `WishlistGrid`'s arrangement, for its reason: at 170px a drawer the reader named is worth more
  * than the last few characters of a set code.
  *
- * A closure over the page's one answer rather than module scope, which costs nothing here:
- * `caption` is read on **render** rather than registered, unlike `dragRecord`/`tileRef` and the
- * three card-fact slots `CardGrid` asks to be held still.
+ * A closure over the page's two answers — the folder census and {@link lockedFolderIds}' set —
+ * rather than module scope, which costs nothing here: `caption` is read on **render** rather than
+ * registered, unlike `dragRecord`/`tileRef` and the three card-fact slots `CardGrid` asks to be
+ * held still.
  */
 const captionFor =
-  (folderNameOf: (folderId: number | null) => string | null) => (tile: CollectionTile) => (
+  (folderNameOf: (folderId: number | null) => string | null, lockedIds: ReadonlySet<number>) =>
+  (tile: CollectionTile) => (
     <span className="flex min-w-0 items-center gap-[calc(0.375rem*var(--mark-scale,1))]">
       {/* `CardGrid`'s own default text, restated because the slot is the whole of that line and
           there is nothing to append to — see the component's `caption`, which is the *text* and
@@ -425,7 +456,15 @@ const captionFor =
       <span className="min-w-0 truncate">
         {`${tile.setCode.toUpperCase()} · ${tile.collectorNumber}`}
       </span>
-      <WishFolderCaption name={filedIn(tile, folderNameOf)} />
+      {/* The glyph turns into a lock for a copy the reader has set aside (issue #436) — see
+          {@link tileLocked}, which is where "any of them" is argued. Flattened is the one state
+          where a locked copy sits beside an unlocked one with nothing above the wall to tell
+          them apart: unflattened, the root sends `rootOnly` and a folder's own page has the
+          breadcrumb and the badged folder card saying it once. */}
+      <WishFolderCaption
+        name={filedIn(tile, folderNameOf)}
+        locked={tileLocked(tile, lockedIds)}
+      />
     </span>
   );
 
@@ -3159,7 +3198,7 @@ export function CollectionPage() {
                 // which drawer these are, so the caption has to say it per tile. Unset otherwise, so
                 // the wall draws its own `SET · number` and this page spells that text exactly once
                 // — in {@link captionFor}, which is the flattened line and nothing else.
-                caption={flatten ? captionFor(folderNameOf) : undefined}
+                caption={flatten ? captionFor(folderNameOf, lockedIds) : undefined}
                 /* **The wall's own stepper** (issue #284), standing in the tile's right margin
                    (issue #348). Until it landed this view could maintain quantities in its *table*
                    alone, which made the wall the layout a reader looked at and the table the one
@@ -3283,6 +3322,13 @@ export function CollectionPage() {
                   // other is a difference no reader can account for. See {@link quantityBlocked},
                   // which carries the three sentences and why the third names no mechanism.
                   quantityBlocked={quantityBlocked}
+                  // **The wall's caption mark, said in the table** (issue #436). One predicate on
+                  // this page for the same reason `quantityBlocked` above it is one: the table and
+                  // the wall are two drawings of one list, and a copy marked set-aside in one of
+                  // them and not the other is a difference no reader can account for. It reads
+                  // {@link lockedIds}, which is the page's single answer about the *effective*
+                  // lock — a row's own `folderId` against the whole cabinet's ancestry.
+                  folderLocked={(row) => row.folderId !== null && lockedIds.has(row.folderId)}
                   rowMenu={rowMenu}
                   rowMenuKey={rowMenuKey}
                   marketplace={marketplace}

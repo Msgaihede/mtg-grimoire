@@ -403,8 +403,8 @@ pub fn set_folder_locked(
 /// so it drops straight into an `IN (…)` and binds nothing.
 ///
 /// **Spelled once, here, because [`crate::collection`] and [`crate::deck_theory`] are the other
-/// readers** and a second copy in either is how the page's list and the spare count would come
-/// to disagree about which drawers are set aside. `collection::scope` pushes it as
+/// readers** and a second copy in either is how the deck builder's Collection Search tab and the
+/// spare count would come to disagree about which drawers are set aside. `collection::scope` pushes it as
 /// `(e.folder_id IS NULL OR e.folder_id NOT IN (…))` and `deck_theory`'s `OWNED_SPARE_SQL` adds
 /// the same arm beside its deck one — both in this exact shape, which is why this is the whole
 /// statement rather than a bare `WITH` clause somebody has to finish. Do not tidy a copy of it
@@ -426,11 +426,13 @@ pub(crate) const LOCKED_FOLDER_IDS: &str = "WITH RECURSIVE locked_folders(id) AS
 
 /// Is that one folder locked — its own flag, or anything above it?
 ///
-/// [`LOCKED_FOLDER_IDS`] in the same `?1 IN (…)` shape the two query modules use, rather than a
+/// [`LOCKED_FOLDER_IDS`] in the same `?1 IN (…)` shape the three query modules use, rather than a
 /// Rust walk up `parent_id`: one statement, one answer, and the fence a press meets is then
 /// literally the same SQL as the term that drops the folder's copies out of a list.
 ///
-/// `pub(crate)` for the same two readers the fragment has. An id nothing answers to is `false`,
+/// `pub(crate)` for the same readers the fragment has — [`crate::collection`]'s `scope`,
+/// [`crate::deck_theory`]'s `OWNED_SPARE_SQL` and [`crate::collection_source`]'s
+/// `Availability::and_arm`. An id nothing answers to is `false`,
 /// which is what makes [`delete_folder`]'s "an id that is not there is a success" survive the
 /// check being the first thing it does.
 pub(crate) fn effectively_locked(conn: &Connection, id: i64) -> Result<bool, String> {

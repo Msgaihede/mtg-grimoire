@@ -25,10 +25,21 @@ deliberately**: no screenshots are stored.
   costs is exactly what `scope.ts` exists to prevent, so `installWorld` calls `resetWindow()`
   beside the store reset. A story that maximized the window must not leave the next one maximized.
 - **The fake stores table rows and derives DTOs** (`fake/db.ts`), because `ownedQuantity` means
-  three different things on three DTOs. A fake that stored DTOs would make all three agree, and
+  three different things. A fake that stored DTOs would make all three agree, and
   teach a reader a model the app does not have. (It was **four** until 2026-09-08: `WishRow`
   carried a finish-aware count of the copies filling each wish, and it went with every other
   comparison the wishlist made against the collection.)
+  **Two of the three are now one field on one DTO** (2026-09-09, issue #435), which is the
+  strongest form the rule has taken yet: `DeckCard.ownedQuantity` answers one question on a
+  `live` row — what this deck's own group physically holds, which is *custody* — and a different
+  one on a `theory` row, where it is every copy the reader owns that this deck could use
+  (`collection_source::Availability::ForDeck`: the root, this deck's own group, and any drawer
+  that is neither another deck's group nor effectively locked; `Recently removed` counts).
+  Every theory row read 0 before that date, so a reader with a shelf full of the cards their
+  plan named saw a wall of zeroes and a shopping list of the whole deck. `db.ts` derives the two
+  from one `attributeOwned` handed one of two pools, and the *variant* picks which — a fake
+  storing the number could have stored one answer for both, and the story that drew it would
+  have looked right.
 - **No seed holds a `collection_entries` row at quantity zero, and a test that needs one builds it
   locally** (2026-09-08, issue #425). `starter` carried one for months, under a comment stating the
   pre-v24 rule: the row survives the day the reader owns none of the card, and deleting is
