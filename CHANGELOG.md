@@ -30,6 +30,66 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.23.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.22.0...v0.23.0) (2026-09-09)
+
+
+### Features
+
+* build a want list from a shared collection ([5fe4bb3](https://github.com/Msgaihede/mtg-grimoire/commit/5fe4bb347413294b1cbe0e46b270a838e53616eb))
+* darken a lapsed membership's share links, and light them again ([bde07b5](https://github.com/Msgaihede/mtg-grimoire/commit/bde07b5487ab57c0d1ebfea8bb82a48cac1cfa06))
+* **decks:** rename folders and decks inline, on the gallery wall ([51e3347](https://github.com/Msgaihede/mtg-grimoire/commit/51e3347cf4afbd086c7cf7f2a0e9e3e84d3a97fc))
+* **decks:** rename folders and decks inline, on the gallery wall ([a676210](https://github.com/Msgaihede/mtg-grimoire/commit/a67621003a2bcdb40a6d5fedcce1e72ccaac2ba1))
+* mirror the five share commands in ipc.ts ([b9b08cf](https://github.com/Msgaihede/mtg-grimoire/commit/b9b08cf782c017c0d6a277ba4cc1365fc0b9cb3b))
+* **nav:** use the Camera glyph for Scanner ([1b8f9db](https://github.com/Msgaihede/mtg-grimoire/commit/1b8f9dbd3da99e6e5548d985d833d8704d0afa71))
+* **nav:** use the Camera glyph for Scanner ([985b872](https://github.com/Msgaihede/mtg-grimoire/commit/985b872e11ce80681e1112b5b9791b320a370db9))
+* open a shared collection inside the app ([fbea4e1](https://github.com/Msgaihede/mtg-grimoire/commit/fbea4e1a22703977e9d0b6ae63c22c7054253f28))
+* open the exact TCGplayer product page, at the right printing ([8c15e0d](https://github.com/Msgaihede/mtg-grimoire/commit/8c15e0dd236bc241ae96b4c3a3d1779b3e232fa9))
+* open the exact TCGplayer product page, at the right printing ([164af24](https://github.com/Msgaihede/mtg-grimoire/commit/164af2498b842e67c4712e781d0a278c7452bed4))
+* publish, refresh and revoke a shared collection ([a1f50bb](https://github.com/Msgaihede/mtg-grimoire/commit/a1f50bb740bb08c168dd77999ed3b4c0e53ac80c))
+* put a collection folder's sync_uid on the wire ([0f05fec](https://github.com/Msgaihede/mtg-grimoire/commit/0f05fec32de6f10bd5e8a08b1ed796696cbbe1ac))
+* replace the game-changer spotlight with a Game Changers filter chip ([5cb15aa](https://github.com/Msgaihede/mtg-grimoire/commit/5cb15aac8b724d13c2e9754e2c4b545139717c9f))
+* replace the game-changer spotlight with a Game Changers filter chip ([9155d0a](https://github.com/Msgaihede/mtg-grimoire/commit/9155d0adb791254908a45dad108e062d0781364b))
+* send a deck's missing cards to a wishlist folder ([98ccded](https://github.com/Msgaihede/mtg-grimoire/commit/98ccded12d35abad0995508196866db770407d82))
+* send a deck's missing cards to a wishlist folder ([61f88fd](https://github.com/Msgaihede/mtg-grimoire/commit/61f88fd18b64076b90819802749c0d3c3672dba5))
+* share a collection folder as a read-only link ([13f2f75](https://github.com/Msgaihede/mtg-grimoire/commit/13f2f75c8ccd429bbec6e92b9859d677e17bde78))
+* share a collection folder from the cabinet ([5c02c79](https://github.com/Msgaihede/mtg-grimoire/commit/5c02c7907fcc628f7450ec30c9f7f8928a8a2724))
+* **shell:** Trade and Playtesting in the rail, and Settings on Ctrl+9 ([07c702a](https://github.com/Msgaihede/mtg-grimoire/commit/07c702a333e3910568757653287f810f9ba9c07c))
+* **shell:** Trade and Playtesting in the rail, and Settings on Ctrl+9 ([1b0f0a0](https://github.com/Msgaihede/mtg-grimoire/commit/1b0f0a0dbf81dcaa04ca4eed7a9f73efaa2088f8))
+* **storybook:** fake the five share commands, and story the shared view ([b965037](https://github.com/Msgaihede/mtg-grimoire/commit/b965037f3d2daed19618ef47af45b978986afed0))
+* the share Worker's blob store, public routes and shell ([f19ee41](https://github.com/Msgaihede/mtg-grimoire/commit/f19ee41728c5eb68bc0fcbf29e1acc1d32ae0dbf))
+* the shared collection web viewer ([0c7d627](https://github.com/Msgaihede/mtg-grimoire/commit/0c7d6270cc838c94a6de007e1d1343bc444b759f))
+* user schema v41, the collection_shares cache ([5083c98](https://github.com/Msgaihede/mtg-grimoire/commit/5083c9834fc104562ed94cec2392f7c6fe985f17))
+* **wishlist:** redesign the wish tile, and stop comparing the list to the collection ([d49492c](https://github.com/Msgaihede/mtg-grimoire/commit/d49492c3c4cd94352109ba441c463111f6e554b3))
+
+
+### Bug Fixes
+
+* a share of a once-revoked folder could never be refreshed again ([b7a13a7](https://github.com/Msgaihede/mtg-grimoire/commit/b7a13a7b9072e6a1b7b62081d1064477ea29bdc5))
+* always name the printing on a TCGplayer product link ([59b80c4](https://github.com/Msgaihede/mtg-grimoire/commit/59b80c4bf5dbb851a6cec9e27bf73fea9ae0c880))
+* always name the printing on a TCGplayer product link ([6d1dbeb](https://github.com/Msgaihede/mtg-grimoire/commit/6d1dbebf429df5f4fdb407f33e3f84371ede0ca4))
+* **collection,wishlist:** let the walls grow and the page scroll them ([8c5069f](https://github.com/Msgaihede/mtg-grimoire/commit/8c5069f9d8c0ace1fca126828b2bb230c05da605))
+* **collection,wishlist:** let the walls grow and the page scroll them ([de2839b](https://github.com/Msgaihede/mtg-grimoire/commit/de2839bc4cd85fc7d2a2e3601ced491f43805132))
+* count a locked drawer's copies in the collection, and mark them ([88c220d](https://github.com/Msgaihede/mtg-grimoire/commit/88c220d806f79c782be9e7d7980a33f6247dfb8c))
+* count a locked drawer's copies in the collection, and mark them ([af4b6d5](https://github.com/Msgaihede/mtg-grimoire/commit/af4b6d52f12238e160d028dfc1dad399e0208f31))
+* count a theory deck's own cards toward its owned figure ([27956fc](https://github.com/Msgaihede/mtg-grimoire/commit/27956fc05e437ecfd6485a0b76a88b84d062934b))
+* count a theory deck's own cards toward its owned figure ([fb170c4](https://github.com/Msgaihede/mtg-grimoire/commit/fb170c4a2113cfe4bdf59da9bb1d0d55b7c5ebcc)), closes [#435](https://github.com/Msgaihede/mtg-grimoire/issues/435)
+* draw no figure until the cross-reference has one ([e7c58d7](https://github.com/Msgaihede/mtg-grimoire/commit/e7c58d7e3e3ce4c5c6c45ad977f4c407e1acb902))
+* keep the collection's action row inside the phone's window ([887264b](https://github.com/Msgaihede/mtg-grimoire/commit/887264b00635a6ba04bd91d5a648da4296c238a5))
+* keep the compare dialog's footer one row tall ([385a522](https://github.com/Msgaihede/mtg-grimoire/commit/385a5220c40e18df1e41b736229da7be46028fea))
+* refuse a share with no host, and pin the order it refuses in ([48af4ff](https://github.com/Msgaihede/mtg-grimoire/commit/48af4ff82ba261307fef456fa687cd1a4cd4a023))
+* **share:** cover Update now, and give the membership key one home ([936d781](https://github.com/Msgaihede/mtg-grimoire/commit/936d78149c7e5225fe0cf486f4ec1d9672edfd51))
+* **share:** key the binder, and promise the fold the wishlist really makes ([1170c1f](https://github.com/Msgaihede/mtg-grimoire/commit/1170c1f68469d7cd7174c70f8b258502dd1c2245))
+* **share:** name the heading as one phrase, and keep a drawer inside a cycle ([f1d3d41](https://github.com/Msgaihede/mtg-grimoire/commit/f1d3d418c433979f8988157f161a5810edbb5289))
+* **share:** pin the two live-pass bugs, and cover the branch a stranger meets ([09a1613](https://github.com/Msgaihede/mtg-grimoire/commit/09a161328e803057614c2e975a684597a081b963))
+* **storybook:** drop the fake's zero-quantity collection row ([9cab590](https://github.com/Msgaihede/mtg-grimoire/commit/9cab5902863e5ac574b687a36e3db6fa962be78f))
+* **storybook:** drop the fake's zero-quantity collection row ([4dd7db4](https://github.com/Msgaihede/mtg-grimoire/commit/4dd7db4196f7451599d64ac9ef58667c1f6dd365)), closes [#425](https://github.com/Msgaihede/mtg-grimoire/issues/425)
+* the Game Changers chip stacked its crown above its caption ([bbb79c5](https://github.com/Msgaihede/mtg-grimoire/commit/bbb79c509d97fc6bd61d727523c790f6561ea09d))
+* the Game Changers chip stacked its crown above its caption ([dd18e82](https://github.com/Msgaihede/mtg-grimoire/commit/dd18e82f02708f5dd8d2ab0cf754d978d34fdfbd))
+* the share Worker's edge cache answered a withdrawn snapshot ([6015686](https://github.com/Msgaihede/mtg-grimoire/commit/6015686c735a5851be7139a3f7d16bb3da9a6021))
+* the whole-branch review's eight findings on collection sharing ([530a2c8](https://github.com/Msgaihede/mtg-grimoire/commit/530a2c8127a64609642fd005fc4c15263dee5a49))
+* **wishlist:** draw no stack price on a wish for a single copy ([41d1240](https://github.com/Msgaihede/mtg-grimoire/commit/41d1240f7665372d99c54044af1949adf4c9930d))
+* **wishlist:** draw no stack price on a wish for a single copy ([a341cec](https://github.com/Msgaihede/mtg-grimoire/commit/a341cec320f1672c47a866bffe90fd721516b291)), closes [#334](https://github.com/Msgaihede/mtg-grimoire/issues/334)
+
 ## [0.22.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.21.0...v0.22.0) (2026-09-08)
 
 
