@@ -31,6 +31,16 @@ const deckMoveCard = vi.fn();
 const deckSwapPrinting = vi.fn();
 const getMarketplace = vi.fn();
 const marketplaceFeedStatus = vi.fn();
+/**
+ * The one command the rail's last row spends, and the only read in this file a reader has to press
+ * a button to make.
+ *
+ * **Answered at the exact shape the real command answers — `{ productId, etchedProductId }`, both
+ * nullable — because `ipc.ts` is a hand-written mirror the compiler checks against nothing.** A
+ * spy answering something friendlier would let the two finish cases below pass against a modal
+ * wired to a command that cannot answer that way.
+ */
+const cardTcgplayerIds = vi.fn();
 
 /**
  * The whole IPC surface this modal reaches, and it is a long list because the modal is the one
@@ -75,11 +85,24 @@ vi.mock("@/lib/ipc", async (original) => ({
     deckSwapPrinting: (...args: unknown[]) => deckSwapPrinting(...args),
     getMarketplace: () => getMarketplace(),
     marketplaceFeedStatus: () => marketplaceFeedStatus(),
+    cardTcgplayerIds: (id: string) => cardTcgplayerIds(id),
   },
+}));
+
+/**
+ * The app's one call that leaves it, faked at the module that owns it —
+ * `CardModalRail.test.tsx`'s shape. **Every URL builder around it is left real**, so the two
+ * literals below are the strings a reader's browser would be handed rather than ones this file
+ * agreed with itself about.
+ */
+vi.mock("@/lib/externalLinks", async (original) => ({
+  ...(await original<typeof import("@/lib/externalLinks")>()),
+  openExternal: vi.fn(() => Promise.resolve()),
 }));
 
 import { CardDetailModal } from "./CardDetailModal";
 import { LABEL_COLORS } from "@/features/decks/labelColors";
+import { openExternal } from "@/lib/externalLinks";
 import { useAppStore } from "@/lib/store";
 
 const detail: CardDetail = {
@@ -193,6 +216,10 @@ beforeEach(() => {
   // Nobody has chosen one, which is what a fresh install reads.
   getMarketplace.mockReset().mockResolvedValue("tcgplayer");
   marketplaceFeedStatus.mockReset().mockResolvedValue([]);
+  // Both products, so a case naming `etched` can be told apart from one naming `foil` by the id
+  // the link lands on rather than only by a query parameter. 333 real printings carry both.
+  cardTcgplayerIds.mockReset().mockResolvedValue({ productId: 1174, etchedProductId: 484936 });
+  vi.mocked(openExternal).mockClear();
 });
 
 it("names the panel after the card, and puts the type line in the heading with it", async () => {
@@ -460,6 +487,75 @@ it("seeds the foil view from the finish the surface that opened the card named",
 
   const toggle = await screen.findByRole("button", { name: "View as nonfoil" });
   expect(toggle).toHaveAttribute("aria-pressed", "true");
+});
+
+/**
+ * Render the modal over whatever the store has already been told, and press the rail's last row.
+ *
+ * `renderModal` cannot be used for either case below: it calls `setSelectedCardId`, which clears
+ * both `paneFinish` and `paneDeckContext` in one `set` — deliberately, so that every other way of
+ * opening a card leaves no finish behind — so the opener has to be the *only* write and the
+ * render has to come after it.
+ */
+async function pressOpenOnTcgplayer() {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={qc}>
+      <CardDetailModal />
+    </QueryClientProvider>,
+  );
+  await userEvent.click(await screen.findByRole("button", { name: "Open on TCGplayer" }));
+}
+
+/**
+ * **The host is where the rail's `finish` comes from, and this is the collection tile's arm of
+ * it.** `CardModalRail` reads no store — the same reason `marketplace` is a prop — so a foil
+ * copy opens the plain listing unless this file hands the finish down.
+ *
+ * The fixture makes the failure a *different URL* rather than an absent one: the printing is sold
+ * in both finishes, so a modal that stopped passing `paneFinish` would leave the helper with
+ * nothing to go on and open the bare product page, which looks entirely correct and is the wrong
+ * listing for the copy the reader pressed.
+ */
+it("sends the rail's marketplace row to the foil listing for a foil copy", async () => {
+  cardDetail.mockResolvedValue({ ...detail, finishes: '["nonfoil","foil"]' });
+  useAppStore.getState().openCardAsFinish("c1", "foil");
+
+  await pressOpenOnTcgplayer();
+
+  await waitFor(() =>
+    expect(vi.mocked(openExternal)).toHaveBeenCalledExactlyOnceWith(
+      "https://www.tcgplayer.com/product/1174?Printing=Foil",
+    ),
+  );
+});
+
+/**
+ * The other arm, and the one that cannot be reached from `paneFinish` at all: **a card opened out
+ * of a deck row carries the row's own finish**, which the store keeps on `paneDeckContext` and
+ * clears `paneFinish` for (`openCardFromDeck` says so at its own site — *the row carries its own
+ * finish and the pane reads it off the context*). So the two are mutually exclusive by
+ * construction and the modal folds them; this is the half a fold reading only the tile's answer
+ * would drop.
+ *
+ * **Etched rather than foil, because it lands on a different product id and not merely a different
+ * query parameter.** Etched foil is a separate TCGplayer product (`484936`), so a modal that
+ * stopped reading the deck slot would open `1174` — a URL for the wrong piece of cardboard, which
+ * no parameter assertion could catch.
+ */
+it("sends it to the etched product for a deck row that plays the etched copy", async () => {
+  cardDetail.mockResolvedValue({ ...detail, finishes: '["nonfoil","etched"]' });
+  deckGet.mockResolvedValue(deckDetail());
+  useAppStore.setState({ activeView: "decks" });
+  useAppStore.getState().openCardFromDeck({ ...deckRow, finish: "etched" });
+
+  await pressOpenOnTcgplayer();
+
+  await waitFor(() =>
+    expect(vi.mocked(openExternal)).toHaveBeenCalledExactlyOnceWith(
+      "https://www.tcgplayer.com/product/484936?Printing=Foil",
+    ),
+  );
 });
 
 it("asks for meld relations only for a meld card", async () => {

@@ -728,6 +728,146 @@ pub async fn card_meld_parts(
 }
 
 // ---------------------------------------------------------------------------------------
+// TCGplayer's own product ids — the two Scryfall has been storing all along
+// ---------------------------------------------------------------------------------------
+
+/// The TCGplayer product ids one printing has, and the whole of what [`tcgplayer_ids`]
+/// answers.
+///
+/// **Both ids, unread.** Rust supplies facts; TypeScript draws conclusions — this module's own
+/// header, applied to a link. *Which* product page to open for the card in front of the reader
+/// depends on the finish they hold or picked, and that is a question about a collection row and
+/// a page's state rather than about a printing. One field per id, `null` for absent, leaves
+/// every reading of it available to the caller; folding the pair into a single
+/// `tcgplayer_id ?? tcgplayer_etched_id` down here would decide it once — and wrongly for the
+/// **333 printings that carry both**, whose etched copies would then all link to the ordinary
+/// product.
+///
+/// **The two ids are unrelated numbers and the etched one is not a refinement of the other**,
+/// which is the strongest reason they are two fields. `Weather the Storm` (STA 58) is
+/// `tcgplayer_id: 235270` and `tcgplayer_etched_id: 235269` — the etched product is the *lower*
+/// number; `Imperial Recruiter` (MH2 281) is 239769 against 240826, a thousand apart. Nothing
+/// can be derived from one about the other, and 892 rows have only the etched id at all.
+///
+/// **These are TCGplayer's own catalogue ids, verified against it rather than assumed.**
+/// Scryfall's `tcgplayer_id` for Lightning Bolt (LEA, `d573ef03-…`) is `1174`; tcgcsv.com's
+/// Magic catalogue calls the same card `productId: 1174`, and
+/// `https://www.tcgplayer.com/product/1174` answers HTTP 200. So one integer is enough to reach
+/// the exact printing, which is the point of the whole command: the row it feeds ran a *name
+/// search* before, landing a reader who asked about the Alpha Bolt on a list of every Bolt ever
+/// printed. **The URL is not built here** — a link is a string a page renders, and this crate
+/// neither formats nor fetches it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TcgplayerIds {
+    /// Scryfall's `tcgplayer_id`, verbatim — the printing's ordinary product, covering
+    /// whichever of nonfoil and foil TCGplayer sells under it.
+    pub product_id: Option<i64>,
+    /// Scryfall's `tcgplayer_etched_id`, verbatim — the **etched** product, which TCGplayer
+    /// lists as a separate item from the printing's ordinary one.
+    ///
+    /// 1 225 rows in the corpus carry it and **892 of those carry no `product_id`**: a card
+    /// printed only in etched foil (`Miara, Thorn of the Glade`, CMR 566, `["etched"]`) has this
+    /// id and nothing else. So a caller that reads only the field above answers *no product* for
+    /// 892 real printings that have one.
+    pub etched_product_id: Option<i64>,
+}
+
+/// One of the two ids, if the field is present **and an integer**.
+///
+/// Scryfall writes both as JSON numbers, and on a full pass of the corpus not one row carries a
+/// string or a float in either field (2026-09-09, 117 738 rows). So a non-integer arriving here
+/// means the wire shape has changed under us, and `serde_json::Value::as_i64` answers `None` for
+/// every way it could — a quoted `"1174"`, a `1174.5`, and an integer too large for the column.
+/// **That is deliberately an absent id and not a parse failure**: see [`tcgplayer_ids`] for why
+/// nothing about this question may fail the card the reader has open.
+fn int_field(v: &serde_json::Value, key: &str) -> Option<i64> {
+    v.get(key).and_then(serde_json::Value::as_i64)
+}
+
+/// Both TCGplayer product ids of one printing, out of `cards.raw`.
+///
+/// No schema change and no ingest change: `cards.raw` has held Scryfall's card JSON verbatim
+/// since schema v3, both fields with it, so this reads one row on a press exactly as
+/// [`meld_parts`] does. `raw` is a **gzip BLOB** from v3 on, which is why the inflate happens
+/// in Rust — [`crate::card_row::raw_json`] over `CAST(raw AS BLOB)` — and not in SQL:
+/// `json_extract` reads a BLOB argument as JSONB, a gzip member is not valid JSONB, and the
+/// call raises a hard `malformed JSON` error rather than answering NULL (CLAUDE.md).
+///
+/// **There is no gate to put in front of it, and that is the contrast with [`meld_parts`] worth
+/// being explicit about.** That function can ask `layout = 'meld'` first and so inflates 0.06%
+/// of the rows it is called on (72 of the 116 590 it was measured against); *this* question can
+/// be asked of any card, because any card might be for sale, and no column rules a row out. So
+/// the decompression is unconditional — one row, roughly 2 KB. For scale: inflating and parsing
+/// the **whole** corpus takes 4.8 s (117 738 rows, 2026-09-09), so a single row is microseconds
+/// and the press is a link the reader just clicked. The gate is absent because there is nothing
+/// to gate on, not because it was forgotten.
+///
+/// **Coverage of `tcgplayer_id` or `tcgplayer_etched_id`, measured 2026-09-09** against the dev
+/// corpus, 117 738 rows:
+///
+/// - **98.38%** of paper English non-token printings — 99 885 rows, the population a card pane
+///   is opened on.
+/// - 93.90% of all paper printings (108 382 rows), 86.44% of the whole corpus.
+/// - **0.04% of the 9 356 digital-only rows** (Arena and MTGO), 4 of which carry an id. That is
+///   not a gap in the data: those cards are not sold on TCGplayer at all, so *no id* is the
+///   correct answer for them and the caller's fallback is the honest one.
+///
+/// **Every way this can fail answers two `None`s, never an `Err`.** An unknown id, a `raw` that
+/// will not inflate, a `raw` that will not parse, absent fields, a field that is not an
+/// integer. This is [`meld_parts`]' rule and [`card_detail`]'s about the marketplace, and the
+/// reason is the same one a third time: a card the reader has open must not fail over a link,
+/// and the caller has a working fallback — the name search this row used before the ids were
+/// read at all. Two `None`s and a name search is a slightly worse link; an `Err` is a card that
+/// will not open. The `Result` covers the SQL round trip and nothing else.
+pub fn tcgplayer_ids(conn: &Connection, id: &str) -> Result<TcgplayerIds, String> {
+    // One column and one row on the primary key. Nothing else here reads a `cards` column —
+    // both ids live in the blob — so, unlike `meld_parts`, no fact rides along with the read.
+    let stored: Option<Option<Vec<u8>>> = conn
+        .query_row(
+            "SELECT CAST(raw AS BLOB) FROM cards WHERE id = ?1",
+            params![id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    // An unknown id is an answer: no product, because there is no card. The inner `Option` is
+    // the column's own NULL, which a row written by a pre-v3 ingest path can still be.
+    let Some(json) = stored
+        .flatten()
+        .as_deref()
+        .and_then(crate::card_row::raw_json)
+    else {
+        return Ok(TcgplayerIds::default());
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&json) else {
+        return Ok(TcgplayerIds::default());
+    };
+    Ok(TcgplayerIds {
+        product_id: int_field(&value, "tcgplayer_id"),
+        etched_product_id: int_field(&value, "tcgplayer_etched_id"),
+    })
+}
+
+/// The TCGplayer product ids of one printing. Read-only connection, blocking pool — as
+/// [`card_meld_parts`] is, and for the same reason.
+///
+/// Takes no `marketplace`: this answers what TCGplayer's catalogue calls this printing, not
+/// what anything costs. The ids are the same whichever marketplace the reader has chosen, which
+/// is also why nothing about them belongs in [`FinishPrices`].
+#[cfg(not(target_family = "wasm"))]
+#[tauri::command]
+pub async fn card_tcgplayer_ids(
+    state: tauri::State<'_, Arc<AppState>>,
+    id: String,
+) -> Result<TcgplayerIds, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || tcgplayer_ids(&lock_db_read(&state), &id))
+        .await
+        .map_err(|e| format!("the TCGplayer product ids could not be read: {e}"))?
+}
+
+// ---------------------------------------------------------------------------------------
 // What the reader holds of this card — the pane's "In your grimoire" block, in one read
 // ---------------------------------------------------------------------------------------
 
@@ -2390,6 +2530,245 @@ mod tests {
             ],
             "credited from the named row; None both when that row has no artist and when \
              there is no such row — and the relationship survives either way"
+        );
+    }
+
+    // -----------------------------------------------------------------------------------
+    // TCGplayer product ids
+    // -----------------------------------------------------------------------------------
+
+    /// A bulk line carrying nothing this command reads but the fields it is handed, written as
+    /// **literal JSON tokens** rather than typed values.
+    ///
+    /// That is what lets one builder seed a number, a quoted string and a float from the same
+    /// call site — `int_field`'s refusals are exactly what the last two are for, and a builder
+    /// taking `Option<i64>` could not spell them at all. A field absent from the slice is
+    /// absent from the JSON, which is how Scryfall writes a card it has no id for: the key is
+    /// missing rather than null.
+    fn raw_with_tcg(name: &str, fields: &[(&str, &str)]) -> String {
+        let mut out = format!(r#"{{"object":"card","name":"{name}","layout":"normal""#);
+        for (key, literal) in fields {
+            out.push_str(&format!(r#","{key}":{literal}"#));
+        }
+        out.push('}');
+        out
+    }
+
+    /// One row whose `raw` is **gzipped**, through the meld section's own inserter — the ingest
+    /// writes [`crate::card_row::gzip_raw`] and nothing here should test a text column no live
+    /// database has had since schema v3.
+    fn insert_tcg_card(conn: &Connection, id: &str, name: &str, fields: &[(&str, &str)]) {
+        insert_card_with_raw(
+            conn,
+            id,
+            name,
+            "normal",
+            None,
+            &crate::card_row::gzip_raw(&raw_with_tcg(name, fields)),
+        );
+    }
+
+    /// **The ordinary product, and the id verified against TCGplayer's own catalogue.** Lightning
+    /// Bolt (LEA) is `tcgplayer_id: 1174` in the live corpus; tcgcsv.com calls the same card
+    /// `productId: 1174` and `tcgplayer.com/product/1174` answers 200. The etched field is
+    /// absent, which is the ordinary case: 1 225 of 117 738 rows carry one.
+    #[test]
+    fn a_printing_answers_the_product_id_scryfall_stored() {
+        let conn = crate::schema::memory_pair();
+        insert_tcg_card(
+            &conn,
+            "bolt-lea",
+            "Lightning Bolt",
+            &[("tcgplayer_id", "1174")],
+        );
+        assert_eq!(
+            tcgplayer_ids(&conn, "bolt-lea").unwrap(),
+            TcgplayerIds {
+                product_id: Some(1174),
+                etched_product_id: None,
+            }
+        );
+    }
+
+    /// **892 real rows are this shape and the plain field must stay `None` on every one of
+    /// them.** `Miara, Thorn of the Glade` (CMR 566) is printed in `["etched"]` and nothing
+    /// else, so Scryfall has an etched id for it and no ordinary one. A read that coalesced the
+    /// two would answer 227069 as the *product* id and send an ordinary copy to the etched
+    /// listing; one that read only the ordinary field would answer "no product" for a card
+    /// TCGplayer sells.
+    #[test]
+    fn an_etched_only_printing_answers_its_etched_id_and_no_other() {
+        let conn = crate::schema::memory_pair();
+        insert_tcg_card(
+            &conn,
+            "miara-cmr",
+            "Miara, Thorn of the Glade",
+            &[("tcgplayer_etched_id", "227069")],
+        );
+        assert_eq!(
+            tcgplayer_ids(&conn, "miara-cmr").unwrap(),
+            TcgplayerIds {
+                product_id: None,
+                etched_product_id: Some(227069),
+            }
+        );
+    }
+
+    /// **333 rows carry both, and this function chooses between them for none of them.**
+    /// `Weather the Storm` (STA 58) is sold in all three finishes and is the pair worth pinning:
+    /// the etched product is `235269` and the ordinary one `235270`, so the etched id is the
+    /// *lower* number and no arithmetic relates the two. Which one the reader wants depends on
+    /// the finish they hold, which is the caller's fact and not this one's.
+    #[test]
+    fn a_printing_with_both_ids_answers_both_and_chooses_neither() {
+        let conn = crate::schema::memory_pair();
+        insert_tcg_card(
+            &conn,
+            "weather-sta",
+            "Weather the Storm",
+            &[
+                ("tcgplayer_id", "235270"),
+                ("tcgplayer_etched_id", "235269"),
+            ],
+        );
+        assert_eq!(
+            tcgplayer_ids(&conn, "weather-sta").unwrap(),
+            TcgplayerIds {
+                product_id: Some(235270),
+                etched_product_id: Some(235269),
+            }
+        );
+    }
+
+    /// **Two `None`s is an answer, not a failure.** 1.62% of paper English non-token printings
+    /// have neither id, and 9 352 of the 9 356 digital-only rows have neither because Arena and
+    /// MTGO cards are not sold on TCGplayer at all. An unknown printing id answers the same
+    /// thing for the same reason: there is no card, so there is no product.
+    #[test]
+    fn a_printing_tcgplayer_does_not_sell_has_no_product_and_neither_does_an_unknown_id() {
+        let conn = crate::schema::memory_pair();
+        insert_tcg_card(&conn, "arena-only", "Alchemy Card", &[]);
+        for id in ["arena-only", "no-such-printing"] {
+            assert_eq!(
+                tcgplayer_ids(&conn, id).unwrap(),
+                TcgplayerIds::default(),
+                "{id:?} has no TCGplayer product, which is a fact and not an error"
+            );
+        }
+    }
+
+    /// **A blob that will not inflate is two `None`s and never an `Err`.** `1f 8b` is the gzip
+    /// magic [`crate::card_row::raw_json`] discriminates on, so these bytes take the
+    /// decompression path and fail inside it — the shape a truncated or half-written row has.
+    /// A card the reader has open must not fail over a link it may not even have; the caller
+    /// still has the name search it used before these ids were read.
+    #[test]
+    fn a_raw_blob_that_will_not_inflate_has_no_product_rather_than_failing() {
+        let conn = crate::schema::memory_pair();
+        insert_card_with_raw(
+            &conn,
+            "torn",
+            "Torn Blob",
+            "normal",
+            None,
+            &[0x1f, 0x8b, 0x08, 0x00, 0xff, 0xff, 0xff, 0xff],
+        );
+        // And a blob that inflates to something that is not JSON at all: the second failure,
+        // one step further in, with the same answer.
+        insert_card_with_raw(
+            &conn,
+            "not-json",
+            "Not JSON",
+            "normal",
+            None,
+            &crate::card_row::gzip_raw("this was never a card"),
+        );
+        for id in ["torn", "not-json"] {
+            assert_eq!(
+                tcgplayer_ids(&conn, id).unwrap(),
+                TcgplayerIds::default(),
+                "{id:?} is unreadable, which costs a link and never the card"
+            );
+        }
+    }
+
+    /// **Only an integer is an id.** Scryfall writes both fields as JSON numbers and no row in
+    /// the corpus carries anything else (117 738 rows, 2026-09-09), so a quoted number or a
+    /// float means the shape has changed under us — and the answer to that is an absent id
+    /// rather than a failure. The float is the sharper half: `as_i64` refuses it, where a
+    /// `1174.5` coerced through `as_f64` would silently link to product 1174.
+    #[test]
+    fn an_id_that_is_not_an_integer_is_an_absent_id() {
+        let conn = crate::schema::memory_pair();
+        insert_tcg_card(
+            &conn,
+            "quoted",
+            "Quoted Id",
+            &[("tcgplayer_id", "\"1174\"")],
+        );
+        insert_tcg_card(
+            &conn,
+            "fractional",
+            "Fractional Id",
+            &[("tcgplayer_id", "1174.5")],
+        );
+        insert_tcg_card(&conn, "nulled", "Nulled Id", &[("tcgplayer_id", "null")]);
+        insert_tcg_card(
+            &conn,
+            "quoted-etched",
+            "Quoted Etched Id",
+            &[("tcgplayer_etched_id", "\"227069\"")],
+        );
+        for id in ["quoted", "fractional", "nulled", "quoted-etched"] {
+            assert_eq!(
+                tcgplayer_ids(&conn, id).unwrap(),
+                TcgplayerIds::default(),
+                "{id:?} carries no integer, so it names no product"
+            );
+        }
+    }
+
+    /// **A row written before the gzip switch still answers**, because
+    /// [`crate::card_row::raw_json`] reads plain text as well — a database that has climbed to
+    /// v3 but not yet synced holds every `raw` as the bulk line itself.
+    /// `card_row::raw_json_reads_a_row_written_before_the_gzip_switch` is the precedent; this is
+    /// that fact reaching this command, since a reader on such a database can open a card pane
+    /// long before the first sync finishes.
+    #[test]
+    fn a_row_written_before_the_gzip_switch_still_names_its_product() {
+        let conn = crate::schema::memory_pair();
+        let line = raw_with_tcg("Lightning Bolt", &[("tcgplayer_id", "1174")]);
+        insert_card_with_raw(
+            &conn,
+            "bolt-text",
+            "Lightning Bolt",
+            "normal",
+            None,
+            line.as_bytes(),
+        );
+        assert_eq!(
+            tcgplayer_ids(&conn, "bolt-text").unwrap().product_id,
+            Some(1174)
+        );
+    }
+
+    /// The wire names, which nothing else in this build compares: a field renamed on one side of
+    /// the IPC boundary is `undefined` at the call site and no type error anywhere. Both
+    /// absences serialise as `null` rather than being omitted, which is what the caller
+    /// distinguishes "not sold" by.
+    #[test]
+    fn the_tcgplayer_dto_serialises_under_the_names_the_page_reads() {
+        assert_eq!(
+            serde_json::to_value(TcgplayerIds {
+                product_id: Some(235270),
+                etched_product_id: Some(235269),
+            })
+            .unwrap(),
+            serde_json::json!({ "productId": 235270, "etchedProductId": 235269 })
+        );
+        assert_eq!(
+            serde_json::to_value(TcgplayerIds::default()).unwrap(),
+            serde_json::json!({ "productId": null, "etchedProductId": null })
         );
     }
 

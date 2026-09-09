@@ -16,6 +16,7 @@ vi.mock("@/lib/platform", () => ({ isAndroid: vi.fn(() => false) }));
 // compares the hand-written mirror below with the crate it mirrors. `viewports.test.ts`
 // reads `tauri.conf.json` the same way, for the same reason — Rust owns the fact and
 // TypeScript only quotes it, so the quote is what can rot.
+import cardRs from "../../src-tauri/src/card.rs?raw";
 import collectionRs from "../../src-tauri/src/collection.rs?raw";
 import collectionFoldersRs from "../../src-tauri/src/collection_folders.rs?raw";
 import combosRs from "../../src-tauri/src/combos.rs?raw";
@@ -194,6 +195,43 @@ describe("ipc argument names match the Rust command signatures", () => {
     // A mirror typed as `Printing[]` would read `.length` as the whole story and the
     // compiler would agree with it.
     expect(printings).toEqual({ items: [], total: 0 });
+  });
+
+  /**
+   * The TCGplayer product ids, whose **failure is the feature's own fallback**.
+   *
+   * `card_tcgplayer_ids` is what the `Open on TCGplayer` row asks before it opens an exact
+   * product page, and a printing with no id is a designed answer rather than an error — so
+   * `openMarketplaceForCard` treats a rejection and two `null`s alike and opens the name search
+   * that row used to open unconditionally. That is the right behaviour and it is why this needs
+   * pinning: a name Rust does not register rejects at runtime, the helper swallows it, and every
+   * card in the app quietly goes back to a name search with nothing red and nothing logged.
+   * The bug and the design read identically from the page.
+   *
+   * **No `marketplace`, unlike the two reads above it.** Which products exist is a fact about
+   * the printing; the marketplace decides only whether this wrapper is *called*, and that
+   * branch is the helper's.
+   */
+  it("asks for a printing's TCGplayer product ids under `id`, with no marketplace", async () => {
+    invoke.mockResolvedValue({ productId: 1174, etchedProductId: null });
+
+    const ids = await ipc.cardTcgplayerIds("p1");
+
+    expect(invoke).toHaveBeenCalledWith("card_tcgplayer_ids", { id: "p1" });
+    // **Both ends of the name, because either alone is half a fence.** The wire name *is* the
+    // Rust function name, so renaming that function and its `generate_handler!` entry together
+    // compiles clean, ships, and leaves this wrapper invoking a command nothing registers —
+    // which is the silent fallback above. Read out of the crate rather than restated, the way
+    // `finishBearing` below reads its parameter lists.
+    expect(cardRs).toContain("pub async fn card_tcgplayer_ids(");
+    // The argument too: `id: String` is what Tauri matches the `{ id }` above against, and a
+    // parameter renamed on the Rust side is a deserialization rejection at the boundary.
+    expect(cardRs).toMatch(/pub async fn card_tcgplayer_ids\([^)]*\bid: String\b/s);
+    // Read the answer back rather than only the call: `TcgplayerIds` is on the `mirrors` table
+    // below, so the *field* names cannot drift from the crate — but a wrapper that unwrapped,
+    // renamed or defaulted them on the way through would satisfy that table and still hand the
+    // helper something it reads as "no product". The DTO travels verbatim.
+    expect(ids).toEqual({ productId: 1174, etchedProductId: null });
   });
 
   /**
@@ -3627,6 +3665,39 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     // reads `undefined` for the field, `face()` takes its "not counted yet" arm, and the whole
     // cabinet draws an em dash over drawers that are full. Green build, drawable page, no figure.
     ["WishlistFolderSummary", wishlistFoldersRs, "WishlistFolderSummary"],
+    // **The first row from `card.rs`, and it is here because its drift is _indistinguishable
+    // from the feature working_** (2026-09-09). `TcgplayerIds` carries the two product ids the
+    // `Open on TCGplayer` row opens an exact page with, and a printing that has **neither** is a
+    // designed answer rather than an error — 1.62 % of paper English non-token printings, and
+    // every digital-only card — whose fallback is the name search that row used to open
+    // unconditionally. So a field renamed on one side only reads `undefined` here, is treated as
+    // *absent* by `openMarketplaceForCard`, and falls back to that same search — on every card in
+    // the app at once, with no rejection, no console line and nothing red. **The bug and the
+    // design are the same picture**, which is the quiet kind this table exists for and the
+    // sharpest case of it on either list: the other rows here lose a figure or a control, where
+    // this one loses a feature and leaves its own fallback standing in for it.
+    //
+    // **What this row does _not_ catch is a dropped `#[serde(rename_all = "camelCase")]`, and
+    // that is true of every row on both tables** (measured 2026-09-09 by removing the attribute
+    // and re-running: 183 passed). `rustFields(...).map(camel)` applies the camel step
+    // *unconditionally*, so it reads `product_id` as `productId` whether or not serde actually
+    // renames anything — the step assumes the attribute rather than proving it. The attribute is
+    // fenced on the Rust side instead, by `card.rs`'s own
+    // `the_tcgplayer_dto_serialises_under_the_names_the_page_reads`, which asserts against
+    // `serde_json::to_value` and so reads the real wire names. Worth knowing before trusting this
+    // table with a struct whose rename is the only thing standing between two spellings.
+    //
+    // On this table rather than on `mirrors` above for `ShareRow`'s reason, twice over: it draws
+    // no picture, and it is **two** fields against that table's floor of ten. Both of those are
+    // properties of a card wall's row rather than of a mirror. Two fields are also the whole of
+    // what needs comparing — both are `Option<i64>` → `number | null`, so there is no nested
+    // struct to walk and no enum to keep in step — and the `camel` step this table applies is
+    // load-bearing, because the struct does carry `rename_all = "camelCase"`.
+    //
+    // The command **name** and its `id` argument are pinned separately, in *"asks for a
+    // printing's TCGplayer product ids under `id`"* above: this row compares struct fields and
+    // would say nothing about either.
+    ["TcgplayerIds", cardRs, "TcgplayerIds"],
   ];
 
   it.each(plainMirrors)(

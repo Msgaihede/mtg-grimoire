@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { edhrecCardUrl, marketplaceSearchUrl, scryfallCardUrl } from "./externalLinks";
+import {
+  edhrecCardUrl,
+  marketplaceSearchUrl,
+  scryfallCardUrl,
+  tcgplayerProductUrl,
+} from "./externalLinks";
 import { MARKETPLACE_IDS } from "./marketplace";
 
 describe("edhrecCardUrl", () => {
@@ -45,6 +50,39 @@ describe("scryfallCardUrl", () => {
   });
 });
 
+describe("tcgplayerProductUrl", () => {
+  it("builds the product page for an id", () => {
+    // Lightning Bolt (LEA) is `tcgplayer_id: 1174` and this URL answered 200 live on 2026-09-09.
+    expect(tcgplayerProductUrl(1174, null)).toBe("https://www.tcgplayer.com/product/1174");
+  });
+
+  it("appends TCGplayer's own `Printing` parameter when a printing is given", () => {
+    // `Normal` and `Foil` are the only two words the Magic catalogue's price rows use
+    // (`subTypeName`, measured on Commander Masters, 2026-09-09), and the parameter really does
+    // select with them: driven in Chrome over CDP on product 484935 the same day, `Printing=Foil`
+    // left the Foil checkbox checked and Normal clear with 4 listings, `Printing=Normal` the
+    // mirror with 4, and the bare URL neither box and 8 — so 4 + 4 = 8 and the parameter
+    // partitions the listings. That was Chrome and not the app's WebView2, so it settles
+    // TCGplayer's end of the press and not this app's.
+    expect(tcgplayerProductUrl(1174, "Foil")).toBe(
+      "https://www.tcgplayer.com/product/1174?Printing=Foil",
+    );
+    expect(tcgplayerProductUrl(1174, "Normal")).toBe(
+      "https://www.tcgplayer.com/product/1174?Printing=Normal",
+    );
+  });
+
+  it("appends nothing at all for a null printing, rather than an empty parameter", () => {
+    // `null` is a third state and not a missing default: it means "let TCGplayer's own default row
+    // stand", which is what `chooseTcgplayerLink` asks for whenever the product it picked cannot
+    // honestly be claimed to be sold in a finish. A `?Printing=` with nothing after it would be a
+    // parameter naming no row.
+    const url = tcgplayerProductUrl(484936, null);
+    expect(url).toBe("https://www.tcgplayer.com/product/484936");
+    expect(url).not.toContain("?");
+  });
+});
+
 describe("marketplaceSearchUrl", () => {
   it("answers a real URL for every marketplace this app knows", () => {
     // Card trader has no price feed we can reach, but its website exists -- and if a new id
@@ -54,6 +92,16 @@ describe("marketplaceSearchUrl", () => {
       expect(() => new URL(url), `${id} must build a valid URL`).not.toThrow();
       expect(url.startsWith("https://"), `${id} must be https`).toBe(true);
     }
+  });
+
+  it("is still the name search for TCGplayer, which is now the fallback rather than the only shape", () => {
+    // `tcgplayerProductUrl` is what the marketplace row usually opens since 2026-09-09; this is
+    // what the 1.62 % of paper English non-token printings carrying neither product id fall back
+    // to, and what an id lookup that failed falls back to. Written out as a literal so the two
+    // shapes cannot quietly become one.
+    expect(marketplaceSearchUrl("tcgplayer", "Lightning Bolt")).toBe(
+      "https://www.tcgplayer.com/search/magic/product?q=Lightning%20Bolt",
+    );
   });
 
   it("percent-encodes the card name rather than pasting it in", () => {
