@@ -20,7 +20,6 @@ import { useCardZoomGesture } from "@/lib/useCardZoomGesture";
 import { cn } from "@/lib/utils";
 import {
   deckCardBodyProps,
-  deckCardDimmed,
   deckCardName,
   deckCardMenuProps,
   deckCardMarked,
@@ -457,11 +456,6 @@ function GridCard({
         // painted beyond the border box, so a picked card that also breaks a rule wears a gold
         // ring around a red card rather than one edge arguing with itself. See `SELECTED_CARD`.
         selected && SELECTED_CARD,
-        // What the game-changer spotlight fades. It marks the cards that are *not* game changers
-        // and is inert until the toolbar's count puts the attribute on an ancestor — see
-        // `deckCardDimmed` and the rule in `index.css`. It goes on this element because the tile
-        // is the card's whole body: face, chin, controls and all fade together.
-        deckCardDimmed(card.gameChanger),
       )}
     >
       <button

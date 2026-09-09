@@ -37,7 +37,7 @@ import {
   stackImageHeight,
   stackLiftRoom,
 } from "./CardStack";
-import { CARD_BODY_ATTR, GC_DIMMED, LANDED_ATTR, SELECTED_ATTR } from "./cardControl";
+import { LANDED_ATTR, SELECTED_ATTR } from "./cardControl";
 import { deckCardSlot } from "./dnd";
 import type { TheoryPlan } from "./theoryMatch";
 import { card } from "./validation/fixtures";
@@ -723,70 +723,6 @@ describe("CardStack landed mark", () => {
   });
 });
 
-describe("CardStack game-changer spotlight", () => {
-  /**
-   * **What the stack owes the spotlight is one class on one element** (2026-09-08), and this is
-   * the stack's half of it.
-   *
-   * The ledger's `N game changers` chip is the control and `DeckEditor` arms the view box; a
-   * sibling's suite owns both. All four of the deck's views have to carry the vocabulary or the
-   * gesture answers about three of them, so what is checked here is that this view does: the
-   * cards that are **not** game changers wear {@link GC_DIMMED} and the one that is does not.
-   *
-   * **The mark is on the card's whole body and that is the load-bearing half**, not a detail of
-   * where a class happened to land. `src/index.css` fades whatever matches, so a class on the
-   * face alone would leave the chin and the stepper column at full opacity beside a quarter-lit
-   * picture — which is why this asserts the element carrying {@link CARD_BODY_ATTR} rather than
-   * merely "some element under the card". Face, foot and controls fade together or the card is
-   * two objects.
-   *
-   * **It is a class rather than an attribute**, alone among this card's marks, and `cardControl`'s
-   * own doc carries why — nothing ever asks the DOM which cards are dimmed, so there is no
-   * question for a query handle to answer. That is also why this asserts `classList.contains`
-   * rather than a substring of `className`: a substring test passes against the class being
-   * absent about as readily as against it being present.
-   *
-   * jsdom applies no stylesheet, so the 0.25 itself is not visible from here and is not claimed.
-   */
-  it("dims every card that is not a game changer, on the card's whole body", () => {
-    render(<CardStack cards={CARDS} label="Ramp" currency="usd" />);
-
-    const bodies = items();
-    expect(bodies).toHaveLength(3);
-    for (const body of bodies) expect(body).toHaveAttribute(CARD_BODY_ATTR);
-
-    // Sol Ring and Arcane Signet are ordinary cards; The Great Henge is the fixture's one game
-    // changer. The lit card's list is asserted from both ends — it does not wear the class, and
-    // the other two do — because "nobody is dimmed" and "everybody is dimmed" would each satisfy
-    // half of this on its own.
-    expect(bodies[0].classList.contains(GC_DIMMED)).toBe(true);
-    expect(bodies[1].classList.contains(GC_DIMMED)).toBe(true);
-    expect(bodies[2].classList.contains(GC_DIMMED)).toBe(false);
-  });
-
-  /**
-   * **An orphan dims**, which is `deckCardDimmed`'s rule rather than this view's: `gameChanger`
-   * is `boolean | null`, `null` is a printing that has left the corpus or one the format has no
-   * opinion about, and anything but `true` is *not a game changer* — the same reading
-   * `deckCardName` and `CardMarks` already take of the same field. The card that would be wrong
-   * to leave lit is exactly the one nothing can say is a game changer.
-   */
-  it("dims a card whose printing cannot answer the question", () => {
-    render(
-      <CardStack
-        cards={[card({ name: "Gone Card", gameChanger: null })]}
-        label="Ramp"
-        currency="usd"
-      />,
-    );
-
-    expect(items()[0].classList.contains(GC_DIMMED)).toBe(true);
-    // And it wears no crown, for the same reading of the same field — one fact, two drawings that
-    // cannot disagree.
-    expect(document.querySelector(".lucide-crown")).toBeNull();
-  });
-});
-
 describe("CardStack selection and the pointer", () => {
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -1458,6 +1394,32 @@ describe("CardStack tooltips", () => {
   });
 
   /**
+   * **An orphan is not a game changer**, which is the one arm of that question no fixture reaches
+   * by leaving a field out: `DeckCard.gameChanger` is `boolean | null` and `validation/fixtures`
+   * defaults it to `false`, so every other crown assertion in this file is made against a card
+   * that said *no*. `null` is a printing the corpus no longer has a row for — the format has no
+   * opinion about it rather than a negative one — and this app treats anything but `true` as not
+   * a game changer, on the card's mark exactly as `deckCardName` and `CardMarks` do.
+   *
+   * It is asserted here because it used to be asserted next door, as a rider on a game-changer
+   * spotlight case that was deleted with the spotlight on 2026-09-09. A claim about a mark that
+   * stays should not leave the suite with the feature that happened to be carrying it.
+   */
+  it("draws no crown on a printing the corpus has no opinion about", () => {
+    render(
+      <TooltipProvider>
+        <CardStack
+          cards={[card({ name: "Sol Ring", quantity: 4, gameChanger: null })]}
+          label="Ramp"
+          currency="usd"
+        />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByText("4").querySelector(".lucide-crown")).toBeNull();
+  });
+
+  /**
    * **An orphan's printing gets no tooltip at all, and that is the honest answer.**
    *
    * `setCode` and `collectorNumber` are denormalised onto `deck_cards` precisely so a printing
@@ -1561,7 +1523,7 @@ describe("CardStack marks", () => {
     // words moved off the one DOM attribute a query could read, it needed an attribute of its
     // own, the same way `STACK_OPEN_ATTR` and `LANDED_ATTR` exist for marks CSS alone cannot
     // answer for. (The crown takes lucide's own class instead, which is a handle rather than a
-    // question the DOM is ever asked; `cardControl.tsx`'s `GC_DIMMED` doc draws that line.)
+    // question the DOM is ever asked.)
     const ticks = document.querySelectorAll(`[${THEORY_MATCH_ATTR}]`);
     expect(ticks).toHaveLength(1);
 

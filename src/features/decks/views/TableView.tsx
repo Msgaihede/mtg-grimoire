@@ -48,7 +48,6 @@ import {
   TheoryMatchBadge,
 } from "../CardMarks";
 import {
-  deckCardDimmed,
   deckCardMarked,
   deckCardProps,
   deckCardSelectedProps,
@@ -556,18 +555,6 @@ export function TableView({
             : undefined
         }
         isSelected={(row) => row.kind === "card" && deckCardMarked(row.card, selectedSlot, actions)}
-        // The game-changer spotlight's mark. This view does not own its row element —
-        // `VirtualTable` does — so it goes through the hook that already exists for exactly
-        // this, beside `isSelected`. **Not a new prop on `VirtualTable`**: that is a shared
-        // primitive drawn over 100k rows by three other surfaces, and this file's own notes
-        // record the decision not to push a handler into it for one caller.
-        //
-        // The `kind === "card"` guard is the whole of what keeps a band out of it: a group's
-        // heading is not a card, so it is neither lit nor faded — a run of dimmed bands would
-        // say the piles themselves were the thing being passed over.
-        rowClassName={(row) =>
-          row.kind === "card" ? deckCardDimmed(row.card.gameChanger) : undefined
-        }
         renderRow={renderRow}
       />
     </div>
