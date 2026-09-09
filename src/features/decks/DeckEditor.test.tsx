@@ -3180,9 +3180,10 @@ describe("DeckEditor", () => {
 
   /**
    * **No pull on the plan, and it is the list rather than the feature.** Since schema v25 a deck
-   * holds a card because a collection row sits in its group, so a theory row holds no cards at
-   * all and there is nothing on that tab to pull copies into — which is also why
-   * `deck_pull_plan` takes no variant.
+   * holds a card because a collection row sits in its group, so a plan holds no cardboard and
+   * there is nothing on that tab to pull copies *into* — which is also why `deck_pull_plan` takes
+   * no variant. Not because the plan is short of nothing: its own count has been truthful since
+   * 2026-09-09 (issue #435), and only the writes stayed where they were.
    *
    * The Live half is asserted in the same case, because a button absent on both tabs would pass
    * a bare absence check while being broken everywhere.
@@ -3269,9 +3270,11 @@ describe("DeckEditor", () => {
 
   /**
    * **No add press on the plan, and it is the list rather than the feature** — `onPull`'s
-   * argument one button over. A theory row holds no cards, so the plan is short of nothing and
-   * `deck_missing_plan` takes no variant: it walks the live list, exactly as `deck_pull_plan`
-   * and `deck_missing_to_wishlist` do. Absent rather than greyed.
+   * argument one button over. A plan holds no cardboard, so there is nowhere on it to record
+   * copies, and `deck_missing_plan` takes no variant: it walks the live list, exactly as
+   * `deck_pull_plan` and `deck_missing_to_wishlist` do. Absent rather than greyed. **Not because
+   * the plan is short of nothing** — it says what it is short of since 2026-09-09 (issue #435),
+   * and that sentence stood here while it could not.
    *
    * The Live half is asserted in the same case, because a button absent on both tabs would pass
    * a bare absence check while being broken everywhere.

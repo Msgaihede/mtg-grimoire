@@ -790,10 +790,12 @@ function StackedCard({
   // make, so one card is not marked two ways on one screen.
   const treatments = finishTreatments(card.promoTypes, finish);
   // {@link deckCardShort}, which is also what `deckCardName` says this card's shortage in words
-  // from — an inactive pile, the theory list and a virtual deck each read 0 owned for a reason
-  // that is not an empty shelf. The **switch**, never the kind: a Maybeboard switched *on* is
-  // short of copies like any other pile. The third of those is the deck's and cannot be read off
-  // the row, which is why it arrives as a prop — see `deckCardShort`.
+  // from — an inactive pile and a virtual deck each read 0 owned for a reason that is not an
+  // empty shelf, and a theory row is passed over by a product call rather than by its number
+  // (2026-09-09, issue #435: a plan's rows read a truthful owned count now and still wear no
+  // mark). The **switch**, never the kind: a Maybeboard switched *on* is short of copies like
+  // any other pile. The virtual one is the deck's and cannot be read off the row, which is why
+  // it arrives as a prop — see `deckCardShort`.
   const short = deckCardShort(card, tracksCollection);
 
   return (

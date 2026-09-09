@@ -54,10 +54,12 @@ function invalidate(client: QueryClient, roots: readonly QueryKey[]): void {
  *   `owned` tri-state both count `collection_entries`, so every row and the Owned chip above
  *   them are now describing a collection that is gone.
  * * `["card"]` — the detail pane, whose printings list carries the same count per printing.
- * * `["decks"]` — `DeckCard.ownedQuantity` is what the deck's **own collection group** holds for
- *   that oracle card, and the wipe just emptied every group in the app. Since schema v25 there is
- *   no claim ledger to delete: a copy is in a deck because its row is filed there, so clearing the
- *   collection is what takes it out.
+ * * `["decks"]` — `DeckCard.ownedQuantity` counts `collection_entries`, and the wipe just deleted
+ *   all of them. On a **live** row that is the deck's own group at `(card_id, finish)`; on a
+ *   **theory** row it is the wider `Availability::ForDeck` pool since 2026-09-09 (issue #435), and
+ *   a wipe empties both by construction. Since schema v25 there is no claim ledger to delete: a
+ *   copy is in a deck because its row is filed there, so clearing the collection is what takes it
+ *   out.
  *
  * **`["wishlist"]` was the fifth and is deliberately not here any more.** It was on the list
  * because a wish counted the copies that already filled it (`WishRow.ownedQuantity`), so a wipe

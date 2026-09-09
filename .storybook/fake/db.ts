@@ -2,16 +2,23 @@
  * The fake backend's store: **table rows**, and the read handlers that derive the DTOs from
  * them exactly as `src-tauri/src` does.
  *
- * Rows, not DTOs, and the whole design turns on one field. `ownedQuantity` appears on two
- * DTOs in `src/lib/ipc.ts` and answers two different questions: on `CardSummary` it is
- * every copy of one *printing* and finish-blind; on `DeckCard` it is what this deck's **own
- * group** physically holds — printing-and-finish-grained, condition-blind, and attributed
- * neither to a category the user has switched off nor to the `theory` list, whatever the
- * category is called. Since 2026-09-07 that is the same grain `deck_pull_plan` reads its
- * candidates at, so a deck's missing count and its Pull dialog finally agree. A fixture that
- * stored DTOs would hard-code both, they would agree, and every story built on it would
- * teach a reader a model the app does not have. Derived from rows they come out right
- * without anyone deciding that they should.
+ * Rows, not DTOs, and the whole design turns on one field. `ownedQuantity` is spelled on
+ * several DTOs in `src/lib/ipc.ts` — no count of them is written here, because that file is
+ * where they live and a number in this header goes red nowhere — and it answers **three**
+ * different questions. On `CardSummary` it is every copy of one *printing*, finish-blind, and
+ * `ImportMatch` asks that same question once per decklist line, which is why it is not a
+ * fourth. On a `live` `DeckCard` it is what this deck's **own group** physically holds —
+ * printing-and-finish-grained, condition-blind, and attributed to no category the user has
+ * switched off, whatever that category is called; since 2026-09-07 that is the same grain
+ * `deck_pull_plan` reads its candidates at, so a deck's missing count and its Pull dialog
+ * finally agree. And on a `theory` `DeckCard` — the third, as of 2026-09-09 and issue #435 —
+ * it is every copy the reader owns that this deck *could* use: the root, this deck's own
+ * group, and any drawer that is neither another deck's group nor locked. A plan is a statement
+ * about what is being built toward, so the only question worth asking of one is how much of it
+ * the reader already has; before that date every theory row was forced to 0, and the answer a
+ * reader with a full shelf got was a wall of zeroes. A fixture that stored DTOs would hard-code
+ * all three, they would agree, and every story built on it would teach a reader a model the app
+ * does not have. Derived from rows they come out right without anyone deciding that they should.
  *
  * **`WishRow` was the third of them until 2026-09-08, and the wishlist asks the collection
  * nothing at all now.** A wishlist is a list the reader keeps: they take a card off it when
@@ -5407,9 +5414,12 @@ function cardById(db: FakeDb, id: string | null): FakeCard | null {
 /**
  * `collection_source::Availability` — **which** of the reader's copies a figure counts.
  *
- * `undefined` is `Availability::Everything`, the answer every caller but one asks: a collection
- * lists what its owner owns, wherever it is filed. A deck id is `ForDeck`, the deck builder's
- * card search, where the question is *what can this deck use* — issue #349.
+ * `undefined` is `Availability::Everything`, the answer most callers ask: a collection lists what
+ * its owner owns, wherever it is filed. A deck id is `ForDeck`, where the question is *what can
+ * this deck use* — the deck builder's card search since issue #349, and since 2026-09-09 a
+ * **theory** row's owned count too ({@link theoryPool}, issue #435). The two are one predicate
+ * on purpose: a plan counting a different set of copies than the search a reader fills it from
+ * would be two numbers about one card, on two halves of one screen, neither wrong on its own.
  *
  * The three arms are the crate's, in the crate's order, and each has to let a row through on
  * its own:
@@ -6057,10 +6067,13 @@ function toCollectionFolder(f: FakeCollectionFolder): CollectionFolder {
 /**
  * `schema::DECK_VARIANTS` — the two decks every deck secretly is.
  *
- * `live` is what is sleeved up: the gallery's count, {@link attributeOwned} and
- * `missing_to_wishlist` read it and nothing else. `theory` is what the deck is being built toward, and a plan
- * reserves no copy of anything. {@link LIVE} is index 0 rather than a second spelling of the
- * word, exactly as `deck::LIVE` is.
+ * `live` is what is sleeved up: the gallery's count, the pull plan, the missing plan and
+ * `missing_to_wishlist` read it and nothing else. `theory` is what the deck is being built
+ * toward, and a plan reserves no copy of anything — which since 2026-09-09 (issue #435) is a
+ * statement about *custody* rather than about counting: a theory row now reads an owned count
+ * off {@link theoryPool}, every copy the reader owns that this deck could use, while reserving
+ * none of them. {@link LIVE} is index 0 rather than a second spelling of the word, exactly as
+ * `deck::LIVE` is.
  */
 const VARIANTS: DeckVariant[] = ["live", "theory"];
 const LIVE = VARIANTS[0];
@@ -6404,8 +6417,10 @@ function labelsWorn(db: FakeDb, deckId: number, variant: DeckVariant): DeckLabel
  * this grain there is nothing to look up: the deck row and the collection row name the same
  * `card_id` directly, and the copy counts.
  *
- * The group is **not** scoped to a variant, exactly as the SQL is not: {@link attributeOwned} is
- * where a plan is refused its share, explicitly, rather than by a table's shape.
+ * The group is **not** scoped to a variant, exactly as the SQL is not — but this pool is the
+ * **live** list's, and since 2026-09-09 it is no longer the only one: a plan is attributed from
+ * {@link theoryPool} instead, and {@link readHandlers.deck_get} is where the variant picks
+ * between the two.
  */
 function ownedByPrinting(db: FakeDb, deckId: number): Map<string, number> {
   const group = deckGroup(db, deckId);
@@ -6413,6 +6428,48 @@ function ownedByPrinting(db: FakeDb, deckId: number): Map<string, number> {
   const owned = new Map<string, number>();
   for (const e of db.collectionEntries) {
     if (e.folderId !== group.id) continue;
+    const key = `${e.cardId}|${e.finish}`;
+    owned.set(key, (owned.get(key) ?? 0) + e.quantity);
+  }
+  return owned;
+}
+
+/**
+ * `collection_source::copies_by_printing_and_finish` at `Availability::ForDeck` — every copy the
+ * reader owns that **this deck could use**, rolled up per `(card_id, finish)` and keyed exactly
+ * as {@link ownedByPrinting} keys the live pool, because {@link attributeOwned} spends either
+ * one and must not have to know which it was handed.
+ *
+ * **This is what a `theory` row is counted from as of 2026-09-09 (issue #435), where every one
+ * of them read 0 before.** A plan is a statement about what the reader is *building toward*, and
+ * the only useful question to ask of one is *how much of it do I already have* — which the old
+ * answer refused to ask at all, so a reader with a shelf full of the cards their plan names read
+ * a wall of zeroes and a shopping list of the whole deck. The live list keeps
+ * {@link ownedByPrinting}'s narrower pool and must: a sleeved deck's owned count is a statement
+ * about *custody*, so it counts the copies physically filed in its own group and nothing else.
+ *
+ * **The pool is {@link availableToDeck}'s and not a fourth spelling of the folder rules**, which
+ * is the whole reason this function is three lines. That predicate is
+ * `collection_source::Availability::ForDeck` — the root, plus this deck's own group, plus
+ * anywhere that is neither another deck's group nor {@link collectionFolderLocked} — and it is
+ * already what the deck builder's card search draws its `×N` and its Owned chip from. A plan
+ * counting a *different* set of copies than the search a reader adds to it from would put two
+ * numbers about one card on two halves of one screen, and neither would be wrong on its own.
+ *
+ * **It is not {@link ownedSpare}, and the two must not be folded together.** That one is the
+ * theory diff's, it excludes **every** deck group including this deck's own, and it has to: the
+ * diff subtracts the live list before it compares, so counting this deck's own copies there
+ * would count them twice. Here they belong — a copy sleeved up in this very deck is a copy the
+ * plan already has.
+ *
+ * **`Recently removed` counts**, exactly as it does everywhere else that asks what is on the
+ * reader's desk: it is a `kind` of its own rather than a `deck`, and the folder exists so a card
+ * that left a deck can be put somewhere else.
+ */
+function theoryPool(db: FakeDb, deckId: number): Map<string, number> {
+  const owned = new Map<string, number>();
+  for (const e of db.collectionEntries) {
+    if (!availableToDeck(db, e, deckId)) continue;
     const key = `${e.cardId}|${e.finish}`;
     owned.set(key, (owned.get(key) ?? 0) + e.quantity);
   }
@@ -6529,52 +6586,53 @@ function deckReadOrder(db: FakeDb): Compare<FakeDeckCard> {
 }
 
 /**
- * `deck::attribute_owned` — hand the copies the deck's group holds out to the rows that wanted
- * them.
+ * `deck::attribute_owned` — hand a scarce pool of copies out to the rows that wanted them.
  *
  * Pure, and deliberately so: this is the one piece of the availability story with no store read
  * in it beyond the two lookups a row needs to identify itself. It walks **the slice's own
  * order**, which {@link deckReadOrder} has already put the rows in — the read's order and never
  * a caller's, so the number a row shows does not depend on how the list was displayed.
  *
- * **Two kinds of row are passed over rather than served last**, and the shape survives the
- * allocator that used to justify it. A row in an **inactive** category: a switched-off pile
- * counts toward nothing anywhere in the app, so letting it take from the pool would move copies
- * off the rows that *are* the deck onto a scratchpad. And a row in the **theory** list, which is
- * the subtler one: a plan reserves nothing, so a theory read must not hand it the copies the
- * sleeved deck is holding.
+ * **Which pool it is handed is the caller's decision and no longer this walk's** (2026-09-09,
+ * issue #435). {@link readHandlers.deck_get} passes {@link ownedByPrinting} for the live list —
+ * the copies filed in the deck's own group, which is *custody* — and {@link theoryPool} for a
+ * plan, which is every copy the deck could use. This function's job either way is the *handing
+ * out*: first come, first served in the read's order, `min(remaining, quantity)` per row, so one
+ * printing short in two piles still shares one pool.
  *
- * **That `variant !== LIVE` test is now true by construction rather than because a table lacked
- * a variant column**, which is worth saying plainly because it reads like a leftover. A group is
- * not scoped to a variant either, so {@link ownedByPrinting}'s map is the whole deck's; what has
- * changed is that the map is a fact about where cards *are* rather than a ledger of what was
- * reserved. The conclusion is the same one and is still drawn here, explicitly — the rule
- * `deck::tests::the_allocator_claims_nothing_for_the_theory_variant` pins.
+ * **The `variant !== LIVE` arm that used to stand at the top of this loop is gone with it.** It
+ * zeroed every theory row on the stated grounds that a plan reserves nothing — true, and beside
+ * the point, because the pool it was guarding was the *live* deck's copies and handing a plan
+ * those would have been claiming the sleeved deck's cardboard twice. Now the plan is handed a
+ * pool of its own, so there is nothing left to guard against and a zero there would only be the
+ * app declining to answer the one question a plan is for. `deck.rs`'s
+ * `the_allocator_claims_nothing_for_the_theory_variant` went the same way, and the rule that
+ * replaced it is that the two variants read from two pools.
+ *
+ * **One kind of row is still passed over rather than served last**: a row in an **inactive**
+ * category. A switched-off pile counts toward nothing anywhere in the app, so letting it take
+ * from the pool would move copies off the rows that *are* the deck onto a scratchpad — and that
+ * is true of a plan's Maybeboard exactly as it is of the deck's, which is why the test is not
+ * scoped to a variant.
  *
  * **The key build is a plain one since 2026-09-07, where it used to be a guard.** A deck row
  * always has a `cardId`, so there is no `oracleId` that can be missing and nothing left to
- * filter on beside `isActive` — which now stands on its own next to the `variant` test rather
- * than folded into the same one. {@link collectionFinish} supplies the `row.finish` half of the
+ * filter on beside `isActive`. {@link collectionFinish} supplies the `row.finish` half of the
  * key, `normaliseFinish`'s translation read the other way.
  *
  * The `min(remaining, row.quantity)` clamp is the crate's: a deck listing four copies of a card
- * whose group holds one owns one of them.
+ * the pool holds one of owns one of them.
  */
 function attributeOwned(
   db: FakeDb,
   rows: readonly FakeDeckCard[],
-  ownedByPrinting: ReadonlyMap<string, number>,
+  pool: ReadonlyMap<string, number>,
 ): Map<number, number> {
-  const left = new Map(ownedByPrinting);
+  const left = new Map(pool);
   const owned = new Map<number, number>();
   for (const row of rows) {
-    // A plan reserves nothing, whichever list the reader is looking at.
-    if (row.variant !== LIVE) {
-      owned.set(row.id, 0);
-      continue;
-    }
-    // A switched-off pile counts toward nothing anywhere in the app — its own test now, where
-    // it used to ride beside the oracle-id lookup this grain no longer needs.
+    // A switched-off pile counts toward nothing anywhere in the app — a plan's included, which
+    // is why this is the one test left here and why it asks nothing about the variant.
     if (categoryById(db, row.categoryId)?.isActive !== true) {
       owned.set(row.id, 0);
       continue;
@@ -8372,11 +8430,18 @@ export function readHandlers(db: FakeDb) {
       const rows = db.deckCards
         .filter((dc) => dc.deckId === deck.id && dc.variant === variant)
         .sort(deckReadOrder(db));
-      // `owned_by_printing` then `attribute_owned`, in that order and with no variant test
-      // between them — exactly as `deck::get_deck` calls them. The map is what this deck's
-      // group physically holds, whichever list is being read; {@link attributeOwned} is where a
-      // theory row is refused its share, by hand and for a reason of its own.
-      const owned = attributeOwned(db, rows, ownedByPrinting(db, deck.id));
+      // **The variant picks the pool, and that is the whole of what issue #435 changed here**
+      // (2026-09-09). The live list is attributed from what this deck's group *physically
+      // holds* — custody, {@link ownedByPrinting} — and a plan from {@link theoryPool}, every
+      // copy the reader owns that this deck could use. Both are handed to the same
+      // {@link attributeOwned}, which spends whichever it is given in the read's order and
+      // knows nothing about which one it was; the choice is made once, here, exactly as
+      // `deck::get_deck` makes it.
+      const owned = attributeOwned(
+        db,
+        rows,
+        variant === LIVE ? ownedByPrinting(db, deck.id) : theoryPool(db, deck.id),
+      );
       const cards = rows
         // The join on `deck_categories` is inner, so a row whose category is gone is not a
         // row: `flatMap` is what drops one, and nothing in this fake can produce it.
@@ -8628,9 +8693,14 @@ export function readHandlers(db: FakeDb) {
      *
      * **The `live` list only, because a plan holds no cards** ({@link THEORY_HOLDS_NOTHING}'s
      * reasoning without the refusal): a theory row reserves nothing, so it is short of nothing
-     * there is anywhere to put. That is not a second rule to remember — {@link attributeOwned}
-     * already answers `0` for every theory row, so a plan walking both variants would read the
-     * whole theory list as one enormous hole.
+     * there is anywhere to put. **That is now a rule of its own, where it used to fall out of
+     * the attribution** (2026-09-09, issue #435): {@link attributeOwned} answered 0 for every
+     * theory row until that date, so a plan walking both variants would have read the whole
+     * theory list as one enormous hole and the mistake announced itself. A theory row now reads
+     * a real owned count off {@link theoryPool}, so a walk over both variants would produce a
+     * *plausible* shortfall — an offer to move cardboard into a deck for a card the deck does
+     * not play — which is the more expensive failure and is why the variant is named here
+     * explicitly rather than left to be implied.
      *
      * **The shortfall is folded to the printing, never to the pile.** The same card short in two
      * categories is one row here for the sum, because what a reader is short of is *cardboard*
@@ -8791,8 +8861,9 @@ export function readHandlers(db: FakeDb) {
      * **The same fold {@link deck_pull_plan} makes, with a different tail**, and that is a
      * statement about the crate rather than a convenience here: the shortfall walk is written
      * once there (`deck::live_shortfall`, three callers), so it is spelled once here too — the
-     * **live** list only, because a plan holds no cards and {@link attributeOwned} answers 0 for
-     * every theory row; a switched-off pile short of nothing; `(cardId, finish)` as the grain, so
+     * **live** list only, because a plan holds no cards, which is {@link deck_pull_plan}'s
+     * paragraph on why that is a rule stated here rather than one the attribution draws;
+     * a switched-off pile short of nothing; `(cardId, finish)` as the grain, so
      * a foil and a nonfoil of one printing are two rows the reader ticks separately; and the
      * deck's own read order kept by a `Map` rather than a sorted key. `categories` names the
      * piles for the reader and is never a term in the arithmetic.
@@ -9813,10 +9884,10 @@ const THEORY_HOLDS_NOTHING = "A theory list is a plan, and a plan holds no cards
  * variant.
  *
  * **In words rather than by answering an empty list**, which is the whole reason this constant
- * exists. `attributeOwned` already reads 0 for a deck with no group, so a virtual deck would
- * *silently* produce a "0 owned, all missing" readout — a shopping list a hundred cards long,
- * from a deck whose owner never meant to buy one of them. An empty shortfall and a deck that
- * owns nothing by definition are the same JSON and very different sentences.
+ * exists. {@link ownedByPrinting} already reads 0 for a deck with no group, so a virtual deck's
+ * **live** list would *silently* produce a "0 owned, all missing" readout — a shopping list a
+ * hundred cards long, from a deck whose owner never meant to buy one of them. An empty shortfall
+ * and a deck that owns nothing by definition are the same JSON and very different sentences.
  *
  * **One constant rather than nine**, `deck.rs`'s own argument for naming it on the crate: nine
  * handlers say it here, and a sentence spelled nine times is a sentence that will be spelled
@@ -11383,9 +11454,11 @@ function seedFromLive(db: FakeDb, deckId: number): number {
  *
  * **It moves no copies**, which since schema v25 needs saying rather than arranging: what the
  * deck holds is what sits in its group, and this write touches only `deck_cards.variant`. So the
- * copies stay in the deck's folder while the list that claimed them becomes a plan —
- * {@link attributeOwned} is what then reads 0 against every one of those rows, because a plan
- * reserves nothing.
+ * copies stay in the deck's folder while the list that claimed them becomes a plan — and since
+ * 2026-09-09 (issue #435) those rows go on **counting** them, because this deck's own group is
+ * inside {@link theoryPool}. The number a reader sees across the switch is therefore the number
+ * they saw before it, which is the honest answer to "did pressing this take my cards away": it
+ * did not, and until that date the readout said it had.
  *
  * Row ids, tags and `needsReview` travel with the row because it *is* the same row. Answers the
  * number of rows moved.
@@ -11462,10 +11535,16 @@ function deckKind(patch: DeckPatch): [boolean | undefined, boolean | undefined] 
  * **This was the only such figure until issue #349**, and the second one is a *spare* count too
  * wearing an owned count's clothes: the deck builder's card search asks {@link availableToDeck}
  * with the open deck's id, so its `×N` and its Owned chip drop a locked drawer's copies for
- * exactly this sentence's reason. The two are not one helper because they disagree about one
- * arm — a plan cannot count on its own deck's cards, and the deck builder's search can — and a
- * shared helper would have had to take a flag saying which, which is the same two functions with
- * the difference hidden.
+ * exactly this sentence's reason. **{@link theoryPool} is the third, and it is the one that makes
+ * the split worth restating** (2026-09-09, issue #435): it counts a theory *row*'s owned
+ * quantity out of the same `ForDeck` scope, so it and this function are now two readings of one
+ * plan, differing on exactly one arm. **This deck's own group is the arm.** A plan's row counts
+ * the copies already sleeved into it — they are copies the reader has — while `ownedSpare` must
+ * not, because {@link theoryDiff} has already taken the live list off the row's `quantity` before
+ * this figure is put beside it. Counting the group here as well would let one pair of copies
+ * excuse the same purchase twice: once as the live rows that shrank the row, and again as the
+ * spares that sit next to it. They stay two functions rather than one taking a flag, which is
+ * the same two functions with the difference hidden.
  *
  * This used to be `held − what every built deck had claimed`, floored at zero because a stored
  * claim could outlive the copies under it. Nothing can be stale any more, so nothing has to be
@@ -13668,9 +13747,13 @@ export function writeHandlers(db: FakeDb) {
       //
       // **A virtual deck is that deck on purpose** (schema v40). It owns no cardboard, so a
       // group for it would be a drawer every collection command already refuses to file into —
-      // and its *absence* is what makes every owned readout answer 0 with no new branch
+      // and its *absence* is what makes the **live** readout answer 0 with no new branch
       // anywhere, because {@link ownedByPrinting} looks the group up and answers an empty map
-      // when there is none, which {@link attributeOwned} then spends on nothing. The
+      // when there is none, which {@link attributeOwned} then spends on nothing. **A plan is
+      // read the other way and needs no branch either** (2026-09-09, issue #435): a virtual
+      // deck's theory list, if a kind switch left one behind, is attributed from
+      // {@link theoryPool} — the reader's own desk — which is the same sentence as every other
+      // plan's and says nothing about a group. The
       // alternative — an empty group nothing may write to — is a row every reader has to
       // remember is special, instead of this one `if`.
       if (!row.virtualOnly) createDeckGroup(db, row.id, row.name);
@@ -13693,8 +13776,9 @@ export function writeHandlers(db: FakeDb) {
      * the file being deleted. And switching `theoryEnabled` **on moves the live list into
      * theory** — see {@link moveLiveToTheory}: the deck the reader built becomes the plan, the
      * live list is left empty and {@link FakeDeck.lastVariant} is left at `theory` so the editor
-     * opens on what they now have. The copies stay in the deck's group; what changes is that
-     * every row now reads owned 0, because a plan reserves nothing. Switching it off keeps every
+     * opens on what they now have. The copies stay in the deck's group **and the rows go on
+     * counting them** (2026-09-09, issue #435) — {@link theoryPool} is what makes the owned
+     * numbers survive the press, where they all fell to 0 before. Switching it off keeps every
      * row.
      *
      * **A rename moves the deck's group with it**, which is the one write here that reaches
@@ -13930,8 +14014,8 @@ export function writeHandlers(db: FakeDb) {
       // already holds that grain.
       //
       // **And then the group row, rather than an empty group left standing** —
-      // {@link deck_create}'s argument read from the other end: its *absence* is what makes
-      // every owned readout answer 0 with no new branch anywhere.
+      // {@link deck_create}'s argument read from the other end: its *absence* is what makes the
+      // live readout answer 0 with no new branch anywhere.
       //
       // **Ceasing to be Virtual makes the group again, empty**, which is the only way back: a
       // deck that has been given a group can hold copies, and {@link collection_to_deck} refuses
@@ -14097,9 +14181,13 @@ export function writeHandlers(db: FakeDb) {
     /**
      * `deck::duplicate_deck` — the cards come across in **both variants**, never `archived`. A
      * copy is a **draft**: it is not something the user filed away, and it holds no copies —
-     * every card in it reads owned 0 until the reader moves something into its group, because
-     * the original is the deck the cards are physically in. The theory list comes too, because a
-     * copy made to try something out is exactly the copy that wants the plan.
+     * every card in its **live** list reads owned 0 until the reader moves something into its
+     * group, because the original is the deck the cards are physically in. The theory list comes
+     * too, because a copy made to try something out is exactly the copy that wants the plan —
+     * and since 2026-09-09 (issue #435) that list reads its owned counts off the reader's own
+     * desk ({@link theoryPool}) rather than off a group the copy has only just been given. It
+     * still sees none of the original's copies: those sit in **another deck's** group, which is
+     * the one thing that pool excludes.
      *
      * `separateXGroup` comes across in the spread below with the rest of the row, and belongs
      * with the theory list rather than with the two exceptions: it is how the reader reads a

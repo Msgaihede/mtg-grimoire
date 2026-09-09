@@ -27,8 +27,9 @@ export function useDecks() {
    * The whole root, from every write.
    *
    * Not `["decks", "list"]`: a rename changes the tile *and* the header of the editor that
-   * deck is open in, and every `DeckCard.ownedQuantity` in the open detail is a sum over the
-   * deck's collection group. Only the queries actually mounted pay for a refetch, and at most
+   * deck is open in, and every `DeckCard.ownedQuantity` in the open detail is a sum over the pool
+   * that row's list draws on — the deck's own collection group on the Actual list, and the wider
+   * `Availability::ForDeck` pool on the plan since 2026-09-09 (issue #435). Only the queries actually mounted pay for a refetch, and at most
    * two of these are ever on screen.
    *
    * **The wishlist is deliberately left alone** by all five: no quantity changes and no

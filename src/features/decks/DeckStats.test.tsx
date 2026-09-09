@@ -985,8 +985,10 @@ describe("DeckStats", () => {
   });
 
   /**
-   * `null` is the **theory** list, whose rows hold no cards at all — so there is nothing on that
-   * tab to pull copies into, and the button is absent rather than greyed.
+   * `null` is the **theory** list, which holds no cardboard — so there is nothing on that tab to
+   * pull copies *into*, and the button is absent rather than greyed. Not because the plan is
+   * short of nothing: since 2026-09-09 the band beside this button says exactly what it is short
+   * of (issue #435), and `deck_pull_plan` still takes no variant.
    *
    * The wishlist button is asserted *present* in the same breath, which is the half that makes
    * this a claim about the prop: a strip drawing neither would pass a bare absence check while
@@ -1120,8 +1122,10 @@ describe("DeckStats", () => {
   });
 
   /**
-   * `null` is the **theory** list, whose rows hold no cards at all — so there is nothing there to
-   * record copies against, and the press is absent rather than greyed exactly as the pull is.
+   * `null` is the **theory** list, which holds no cardboard — so there is nowhere there to record
+   * copies *to*, and the press is absent rather than greyed exactly as the pull is. The shortfall
+   * beside it is real on that tab since 2026-09-09 (issue #435); what is absent is the place to
+   * put the answer, not the question.
    *
    * The other two are asserted *present* in the same breath, which is the half that makes this a
    * claim about the prop: a strip drawing none of the three would pass a bare absence check while

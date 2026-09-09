@@ -408,8 +408,18 @@ export function TableView({
               key: "owned",
               width: "4rem",
               header: "Owned",
-              // The allocator claims nothing for an inactive category, so a badge there would read
-              // as "you own none of these" when the truth is "this deck reserved none".
+              // A switched-off pile is handed nothing out of the pool its list draws on, so a
+              // badge there would read as "you own none of these" when the truth is "this deck
+              // was handed none".
+              //
+              // **It draws on the Theory tab too since 2026-09-09**
+              // ([issue #435](https://github.com/Msgaihede/mtg-grimoire/issues/435)), and that is
+              // a consequence rather than a decision made here. A theory row's `ownedQuantity`
+              // used to be zeroed, and `OwnedBadge` answers `null` for a row that owns nothing
+              // and wishes for nothing — so this column was silently blank on a plan. It counts
+              // every copy the deck could use now, so the badge appears. That is right and it is
+              // not the red `N/M` mark `deckCardShort` still keeps off a plan: this is a **count**
+              // of what the reader has, where that is a **shortage** the plan cannot act on.
               cell: (row: Row) =>
                 row.kind === "card" && row.card.categoryActive ? (
                   <OwnedBadge owned={row.card.ownedQuantity} />

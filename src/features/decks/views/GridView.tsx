@@ -94,9 +94,11 @@ export function GridView({
    * about the deck that every tile on the wall is drawn against. What it decides here is
    * `deckCardShort` — the red `3/4` in a tile's chin, which this view has drawn since 2026-09-08,
    * and the *you own 3 of 4* clause in the tile's accessible name. A virtual deck has no
-   * `collection_folders` group, so `owned_by_printing` joins nothing, every row reads 0 owned and
-   * **every** tile would wear the mark: the theory list's hundred red marks (issue #354) reached
-   * by a different route.
+   * `collection_folders` group, so it can draw on no pool at all, every row reads 0 owned and
+   * **every** tile would wear the mark: the hundred red marks issue #354 reported on a plan
+   * (2026-08 to 2026-09-03), reached by a different route. The plan's own case is no longer an
+   * arithmetic one — a theory row reads a truthful count since 2026-09-09 (issue #435) and
+   * `deckCardShort` passes it over by choice — but a virtual deck's still is.
    *
    * **`card.variant` cannot answer it**: a virtual deck's rows are ordinary `live` rows on
    * purpose, because `DeckRow.cardCount` and the gallery's colour bar both count
@@ -390,11 +392,12 @@ function GridCard({
   const tip = useTooltip();
   const dragRef = useDeckCardDrag(card, actions?.drop !== undefined, actions?.groupDrag);
   // {@link deckCardShort}, which is also what `deckCardName` says this card's shortage in words
-  // from — an inactive pile, the theory list and a virtual deck each read 0 owned for a reason
-  // that is not an empty shelf. The **switch**, never the kind: a Maybeboard switched *on* is
+  // from — an inactive pile and a virtual deck each read 0 owned for a reason that is not an
+  // empty shelf, and a theory row is passed over by a product call rather than by its number
+  // (2026-09-09, issue #435). The **switch**, never the kind: a Maybeboard switched *on* is
   // short of copies like any other pile. It is the stack's figure, and this tile draws it now
-  // because the two views are one card. The third guard is the deck's rather than the row's and
-  // cannot be read off `card`, which is why it arrives as a prop.
+  // because the two views are one card. The virtual guard is the deck's rather than the row's
+  // and cannot be read off `card`, which is why it arrives as a prop.
   const short = deckCardShort(card, tracksCollection);
 
   return (

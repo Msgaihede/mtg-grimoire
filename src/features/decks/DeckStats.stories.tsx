@@ -56,7 +56,8 @@ const meta = {
     // the deck's own folder. The one answer to a shortfall that *creates* cardboard rather than
     // moving it or listing it — so it is a press and a preview like the pull, never a command
     // this strip makes. Same `fn()` and same cast, for the same two reasons, and its `null` is
-    // {@link OnTheTheoryList}'s too: a plan holds no cards, so both of these go together there.
+    // {@link OnTheTheoryList}'s too: a plan holds no cardboard, so both of these go together
+    // there.
     onAddMissing: fn() as (() => void) | null,
     // The ordinary deck — one with a binder behind it — which is what every story on this page but
     // {@link OnAVirtualDeck} is a shape of. The `false` arm takes the whole shortfall half of the
@@ -391,9 +392,17 @@ export const Price: Story = {
  * `onPull` and `onAddMissing` are both `null`, so neither `Pull from collection` nor
  * `Add missing to collection` is drawn. It is one fact about the *list* rather than two about two
  * features: since schema v25 a deck holds a card because a collection row sits in its group, and
- * a theory row holds no cards at all — so there is nothing on that tab to pull copies into and
- * nothing there to record copies against. `deck_pull_plan` does not take a variant for that
- * reason, and `deck_missing_plan` reads the live list for the same one.
+ * a plan holds no cardboard — so there is nothing on that tab to pull copies *into* and nowhere
+ * there to record copies *to*. `deck_pull_plan` does not take a variant for that reason, and
+ * `deck_missing_plan` reads the live list for the same one.
+ *
+ * **The number beside them is real on that tab, and since 2026-09-09 it is _truthful_**
+ * ([issue #435](https://github.com/Msgaihede/mtg-grimoire/issues/435)). A theory row's
+ * `ownedQuantity` used to be zeroed, so a plan read `N of N missing` whatever the reader owned;
+ * it counts every copy the deck could use now, so the band states a real shortfall while the two
+ * writes stay absent. **Counting changed and writing did not**, which is exactly what this story
+ * draws: a question with two of its three answers missing, rather than a question nobody can
+ * ask.
  *
  * The wishlist button stays, because wanting a card you do not own is exactly what a plan is
  * for. Absent rather than greyed, by the same rule that takes all three away when nothing is
@@ -428,9 +437,9 @@ export const OnTheTheoryList: Story = {
  * proxies (issue #401) — where the whole shortfall half of this band is absent.
  *
  * It is a different absence from {@link OnTheTheoryList} above, and the two are worth reading
- * together. That one is about a *list*: a plan holds no cards, so two of the three answers to a
- * shortfall have nothing to act on, and the wishlist press stays because wanting a card you do not
- * own is what a plan is for. This one is about the *deck*: there is no collection behind it at
+ * together. That one is about a *list*: a plan holds no cardboard, so two of the three answers to
+ * a shortfall have nowhere to act, while the shortfall itself is stated truthfully (issue #435)
+ * and the wishlist press stays because wanting a card you do not own is what a plan is for. This one is about the *deck*: there is no collection behind it at
  * all, so there is no shortfall to state — the count, all three presses **and the `All N owned.`
  * fallback** go together. That last one is the reason this cannot be left to the arithmetic: every
  * row reads `ownedQuantity: 0`, so a virtual deck would otherwise print `20 of 20 missing` over

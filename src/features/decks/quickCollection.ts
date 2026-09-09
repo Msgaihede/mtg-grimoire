@@ -44,10 +44,15 @@ import { NO_CHOICE, planPull, pullKey } from "./pullPlan";
  * a boolean: the alternative considered was one copy per press, and it costs four presses on the
  * deck somebody has just finished buying.
  *
- * The floor is not defensive. `ownedQuantity` is a sum over the copies in the deck's own group
- * attributed to this row, and a group can hold *more* than the list asks for — a reader who cut
- * a 4-copy line to 2 without taking the cardboard out — so a negative shortfall is an ordinary
- * state and reads as nothing missing.
+ * The floor is not defensive. `ownedQuantity` is a sum over the copies attributed to this row
+ * out of the pool its list draws on, and that pool can hold *more* than the list asks for — a
+ * reader who cut a 4-copy line to 2 without taking the cardboard out — so a negative shortfall
+ * is an ordinary state and reads as nothing missing.
+ *
+ * **Only ever asked about a live row**, which is why the pool above is written as *the pool its
+ * list draws on* rather than as the deck's group: {@link quickAddBlock} answers `"theory"` ahead
+ * of every other arm, so the wider pool a plan's rows have counted since 2026-09-09 (issue #435)
+ * never reaches this arithmetic.
  */
 export function quickAddShort(card: DeckCard): number {
   return Math.max(0, card.quantity - card.ownedQuantity);
@@ -60,11 +65,19 @@ export function quickAddShort(card: DeckCard): number {
  * every card of this surface *can* be short, so a row that vanished on the cards it does not
  * apply to would read as a bug rather than as an answer.
  *
- * - `"theory"` — a plan holds no cards. `deck.rs`'s rule 2, and the reason it is a block rather
- *   than a shortfall of zero: a theory row's `ownedQuantity` is zeroed explicitly, so
- *   {@link quickAddShort} would answer the row's whole quantity and offer to record cardboard
- *   for a list that holds none. The backend refuses it too (`NOT_IN_DECK` reads the live list
- *   only), so this is the surface saying in advance what the write would say afterwards.
+ * - `"theory"` — a plan holds no cards. `deck.rs`'s rule 2, and it is a block rather than a
+ *   shortfall of zero because these three rows *write cardboard*: a plan holds none, so there is
+ *   nothing for a quick add to file into and nothing for a pull to move. The backend refuses
+ *   each of them too (`THEORY_HOLDS_NOTHING`, and `NOT_IN_DECK` reads the live list only), so
+ *   this is the surface saying in advance what the write would say afterwards.
+ *
+ *   **The reason changed on 2026-09-09 and the arm did not**
+ *   ([issue #435](https://github.com/Msgaihede/mtg-grimoire/issues/435)). It used to read: *a
+ *   theory row's `ownedQuantity` is zeroed explicitly, so {@link quickAddShort} would answer the
+ *   row's whole quantity* — an argument about a number that is no longer zero. A theory row now
+ *   counts every copy the reader owns that this deck could use, so `quickAddShort` would answer
+ *   a **truthful** shortfall here. It is still blocked, because a truthful count of what a plan
+ *   *could* use is not a place to put cardboard: counting changed and writing did not.
  * - `"nothing-missing"` — the group already holds what the row asks for. Nothing to record and
  *   nothing to pull.
  *

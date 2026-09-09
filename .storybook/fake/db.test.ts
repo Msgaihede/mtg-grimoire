@@ -2154,25 +2154,194 @@ describe("what a deck owns", () => {
   });
 
   /**
-   * A plan reserves nothing. The group is not scoped to a variant — the copies really are in the
-   * deck's folder whichever list is being read — so this is a rule `attributeOwned` draws by hand
-   * rather than one a table's shape draws for it. The `deck.rs` test of the same name is the
-   * other half.
+   * **The theory pool, and the whole of what issue #435 changed** (2026-09-09). Every one of
+   * these read `ownedQuantity` 0 before that date, whatever the reader owned and wherever it
+   * sat, because `attributeOwned` zeroed a theory row on the way past. The rule now is the
+   * crate's `Availability::ForDeck` — the same predicate the deck builder's card search draws
+   * its `×N` from — asked one question at a time.
+   *
+   * A plan reserves nothing still: nothing below moves a copy, files one, or takes one away
+   * from the live list beside it. What changed is *counting*, which is the only question worth
+   * asking of a list of cards to acquire — how much of it do I already have.
+   *
+   * `THEORY_ROWS` is one theory row of four Bolts in the main pile, which is every case here
+   * except the two that need a second row or a second deck.
    */
-  it("attributes nothing to the theory variant", () => {
-    const db = makeDeckDb({
-      collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 4, folderId: groupId(1) })],
-      decks: [deck({ id: 1 })],
-      deckCards: [
-        deckCard({ id: 1, cardId: BOLT.id, variant: "theory", categoryKind: "main", quantity: 4 }),
-      ],
+  describe("a theory row's pool", () => {
+    const THEORY_ROWS = [
+      deckCard({ id: 1, cardId: BOLT.id, variant: "theory", categoryKind: "main", quantity: 4 }),
+    ];
+    /** Well clear of {@link groupId}'s hundreds, so the two cabinets in one store do not
+     *  collide — *the deck a search counts copies for* makes the same room for the same reason. */
+    const CASE_FOLDER = 1;
+    const SHELF_FOLDER = 2;
+
+    const theoryDeck = (db: FakeDb, id = 1) =>
+      readHandlers(db).deck_get({ id, variant: "theory" })!;
+    const theoryOwned = (db: FakeDb, id = 1) => theoryDeck(db, id).cards[0].ownedQuantity;
+
+    /**
+     * The copies sleeved into this very deck are copies the reader has, and the row one column
+     * over already says so — which is the whole difference from `ownedSpare`, whose exclusion of
+     * every deck group including this one is `theoryDiff` avoiding a double subtraction rather
+     * than a claim about what the reader owns.
+     */
+    it("serves a theory row out of the deck's own group", () => {
+      const db = makeDeckDb({
+        collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 3, folderId: groupId(1) })],
+        decks: [deck({ id: 1 })],
+        deckCards: THEORY_ROWS,
+      });
+      expect(theoryOwned(db)).toBe(3);
     });
-    const theory = readHandlers(db).deck_get({ id: 1, variant: "theory" })!;
-    expect(theory.cards).toHaveLength(1);
-    expect(theory.cards[0].ownedQuantity).toBe(0);
-    // Same printing, same category, in the live deck: that one is attributed the copies.
-    db.deckCards.push(deckCard({ id: 2, cardId: BOLT.id, categoryKind: "main", quantity: 4 }));
-    expect(liveDeck(db)!.cards[0].ownedQuantity).toBe(4);
+
+    /** The root is the arm that is load-bearing rather than tidy: it is where every copy starts
+     *  and the only place an unfiled one can be, so a plan that could not see it would read 0
+     *  against the shelf most readers keep. */
+    it("serves a theory row out of the collection root", () => {
+      const db = makeDeckDb({
+        collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 2, folderId: null })],
+        decks: [deck({ id: 1 })],
+        deckCards: THEORY_ROWS,
+      });
+      expect(theoryOwned(db)).toBe(2);
+      // And the live list beside it still sees nothing: its pool is the group, and the group is
+      // empty. The two variants read two pools, which is the change stated from the other end.
+      db.deckCards.push(deckCard({ id: 2, cardId: BOLT.id, categoryKind: "main", quantity: 4 }));
+      expect(liveDeck(db)!.cards[0].ownedQuantity).toBe(0);
+    });
+
+    /**
+     * Exclusivity survives the widening, and it is the arm that keeps two decks' plans from
+     * both counting one Bolt: a copy filed into deck 2 is *physically* in deck 2, so deck 1
+     * cannot build toward anything with it.
+     */
+    it("does not serve a theory row from another deck's group", () => {
+      const decks = [deck({ id: 1 }), deck({ id: 2, name: "Theirs" })];
+      const db = makeDeckDb({
+        collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 4, folderId: groupId(2) })],
+        decks,
+        deckCards: THEORY_ROWS,
+      });
+      expect(theoryOwned(db)).toBe(0);
+      // Moved to the reader's own desk, the same copies count — so the fixture is not passing
+      // because there is nothing to find.
+      db.collectionEntries[0].folderId = null;
+      expect(theoryOwned(db)).toBe(4);
+    });
+
+    /**
+     * A card in a display case is not one a plan can count on — spec §4.2, the sentence
+     * `ownedSpare` was written for, applied to the second figure that means *spare*. **And the
+     * lock is the effective one**, so a drawer inside a locked drawer goes with it: only the
+     * folder the reader pressed Lock on carries the flag, and a pool reading that flag alone
+     * would count a sub-folder's copies the app has set aside.
+     */
+    it("does not serve a theory row from a locked folder, or from a folder inside one", () => {
+      const decks = [deck({ id: 1 })];
+      const db = makeDeckDb({
+        decks,
+        collectionFolders: [
+          ...groupsOf(decks),
+          { id: CASE_FOLDER, parentId: null, name: "Display case", kind: "user", deckId: null,
+            sortOrder: 0, locked: true },
+          // Unlocked itself, and locked by its parent — the recursive rule, in one row.
+          { id: SHELF_FOLDER, parentId: CASE_FOLDER, name: "Top shelf", kind: "user",
+            deckId: null, sortOrder: 0, locked: false },
+        ],
+        collectionEntries: [
+          entry({ id: 1, cardId: BOLT.id, quantity: 2, folderId: CASE_FOLDER }),
+          entry({ id: 2, cardId: BOLT.id, quantity: 2, folderId: SHELF_FOLDER }),
+        ],
+        deckCards: THEORY_ROWS,
+      });
+      expect(theoryOwned(db)).toBe(0);
+      // Unlock the case and both rows arrive together, the child's included: the sub-folder was
+      // never locked itself, so this is what proves the walk climbed to the parent.
+      writeHandlers(db).collection_folder_set_locked({ id: CASE_FOLDER, locked: false });
+      expect(theoryOwned(db)).toBe(4);
+    });
+
+    /** `Recently removed` is a `kind` of its own and not a `deck`, so it stays counted — a card
+     *  that left a deck without leaving the database is back on the reader's desk, which is what
+     *  the folder is for. */
+    it("serves a theory row out of Recently removed", () => {
+      const db = makeDeckDb({
+        collectionEntries: [
+          entry({ id: 1, cardId: BOLT.id, quantity: 2, folderId: REMOVED_FOLDER }),
+        ],
+        decks: [deck({ id: 1 })],
+        deckCards: THEORY_ROWS,
+      });
+      expect(theoryOwned(db)).toBe(2);
+    });
+
+    /**
+     * The one row still passed over, and the reason is a plan's Maybeboard is a scratchpad
+     * exactly as the deck's is: a switched-off pile counts toward nothing anywhere in the app,
+     * so letting it take from the pool would move copies off the rows that *are* the plan.
+     */
+    it("attributes nothing to a theory row in a pile the reader switched off", () => {
+      const db = makeDeckDb({
+        collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 4, folderId: null })],
+        decks: [deck({ id: 1 })],
+        deckCards: [
+          deckCard({
+            id: 1, cardId: BOLT.id, variant: "theory", categoryKind: "maybe", quantity: 4,
+          }),
+        ],
+      });
+      expect(theoryDeck(db).cards[0].categoryKind).toBe("maybe");
+      expect(theoryOwned(db)).toBe(0);
+      // Switched back on, the same four copies are attributed — so the zero above is the switch
+      // and not an empty pool.
+      db.deckCategories.find((c) => c.kind === "maybe")!.isActive = true;
+      expect(theoryOwned(db)).toBe(4);
+    });
+
+    /**
+     * **The pool is scarce and handed out in the read's order**, which is the property the
+     * widening had to keep: three copies against two piles wanting two each is 2 and 1, never
+     * 2 and 2. The Commander pile sorts ahead of the main deck, so it is served first — the
+     * deck's own read order, never the caller's.
+     */
+    it("splits a scarce pool between two theory rows of one printing", () => {
+      const db = makeDeckDb({
+        collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 3, folderId: null })],
+        decks: [deck({ id: 1, formatKey: "commander" })],
+        deckCards: [
+          deckCard({
+            id: 1, cardId: BOLT.id, variant: "theory", categoryKind: "main", quantity: 2,
+          }),
+          deckCard({
+            id: 2, cardId: BOLT.id, variant: "theory", categoryKind: "commander", quantity: 2,
+          }),
+        ],
+      });
+      const owned = (kind: CategoryKind) =>
+        theoryDeck(db).cards.find((c) => c.categoryKind === kind)!.ownedQuantity;
+      expect(owned("commander")).toBe(2);
+      expect(owned("main")).toBe(1);
+    });
+
+    /** The finish is still part of the key, exactly as it is for the live list: a plan naming
+     *  the foil is not answered by the regular copy. */
+    it("keeps the finish in the key", () => {
+      const db = makeDeckDb({
+        collectionEntries: [
+          entry({ id: 1, cardId: BOLT.id, finish: "nonfoil", quantity: 4, folderId: null }),
+        ],
+        decks: [deck({ id: 1 })],
+        deckCards: [
+          deckCard({
+            id: 1, cardId: BOLT.id, variant: "theory", finish: "foil", quantity: 4,
+          }),
+        ],
+      });
+      expect(theoryOwned(db)).toBe(0);
+      db.collectionEntries[0].finish = "foil";
+      expect(theoryOwned(db)).toBe(4);
+    });
   });
 
   /**
@@ -5679,14 +5848,25 @@ describe("pulling owned copies into a deck", () => {
     expect(plan(shortOfThree({ collectionEntries: [] }))).toEqual([]);
   });
 
-  /** A plan holds no cards, so it is short of nothing there is anywhere to put — and every
-   *  theory row already reads `ownedQuantity` 0, which is what would read as one enormous hole
-   *  if this walked both variants. */
+  /**
+   * A plan holds no cards, so it is short of nothing there is anywhere to put.
+   *
+   * **This test got sharper on 2026-09-09 rather than weaker** (issue #435). A theory row used
+   * to read `ownedQuantity` 0 whatever the reader owned, so a pull that walked both variants
+   * announced itself as one enormous hole. A theory row now counts the reader's own desk, and
+   * the three copies seeded at the root below are exactly what such a walk would find — so the
+   * failure it would produce is a *plausible* one-copy shortfall, offering to move cardboard
+   * into a deck for a card the deck does not play. The fixture is built to make that offer if
+   * the variant is ever dropped, which is the only reason those three copies are here.
+   */
   it("plans nothing for a deck whose only list is the theory one", () => {
     const db = shortOfThree({
       deckCards: [deckCard({ id: 1, cardId: BOLT.id, variant: "theory", quantity: 4 })],
       collectionEntries: [entry({ id: 2, cardId: BOLT.id, quantity: 3 })],
     });
+    // The plan is empty, and the count the deck read answers over the same rows is not — so
+    // this is the *variant* being honoured and not an empty collection.
+    expect(readHandlers(db).deck_get({ id: 1, variant: "theory" })!.cards[0].ownedQuantity).toBe(3);
     expect(plan(db)).toEqual([]);
   });
 
@@ -11734,12 +11914,18 @@ describe("categories, labels, folders, history and the plan", () => {
   });
 
   /**
-   * **The copies do not move and the number does**, which is the whole shape of what schema v25
+   * **Neither the copies nor the number moves**, which is the whole shape of what schema v25
    * left behind: the switch rewrites `deck_cards.variant` and touches no folder at all, so deck
-   * 1's group still holds its two Counterspells — and every row of the plan reads 0, because a
-   * plan reserves nothing and `attributeOwned` says so by hand.
+   * 1's group still holds its two Counterspells — and the row goes on counting them, because
+   * this deck's own group is inside the theory pool.
+   *
+   * **This test asserted the opposite until 2026-09-09** (issue #435): the number fell to 0 on
+   * the press, on the grounds that a plan reserves nothing. It reserves nothing still — the
+   * copies are in the same folder either side of the write, which is what the second assertion
+   * is for — but a reader who pressed a switch and watched their owned counts vanish was being
+   * told their cards had gone somewhere, and they had not.
    */
-  it("reads 0 across a plan while the copies stay in the deck's own group", () => {
+  it("keeps the owned counts across the switch, with the copies where they were", () => {
     const { db, r, w } = testbed();
     const group = db.collectionFolders.find((f) => f.deckId === 1)!;
     const heldByFolder = () =>
@@ -11751,7 +11937,7 @@ describe("categories, labels, folders, history and the plan", () => {
 
     w.deck_update({ id: 1, patch: { theoryEnabled: true } });
 
-    expect(counterspell("theory").ownedQuantity).toBe(0);
+    expect(counterspell("theory").ownedQuantity).toBe(2);
     expect(heldByFolder()).toBe(3);
   });
 

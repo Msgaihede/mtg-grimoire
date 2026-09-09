@@ -1127,8 +1127,9 @@ describe("CardStack cards", () => {
     expect(SIGNET).not.toContain("you own");
   });
 
-  /** The allocator claims no copy for an inactive category, so every card in one reads 0
-   *  owned by construction — a shortage there is one the reader does not have. */
+  /** A switched-off pile is handed nothing out of the pool its list draws on, on either list, so
+   *  every card in one reads 0 owned by construction — a shortage there is one the reader does
+   *  not have. */
   it("never calls an inactive category short of copies", () => {
     render(
       <CardStack
@@ -1142,27 +1143,34 @@ describe("CardStack cards", () => {
   });
 
   /**
-   * **The theory list is the second reason a row reads 0 owned without the shelf being empty**
-   * ([issue #354](https://github.com/Msgaihede/mtg-grimoire/issues/354)). `deck.rs`'s rule 2 is
-   * that a plan holds nothing — the copies in the deck's group belong to what is sleeved up — so
-   * every card of a plan drew `0/N` in red, however full the collection was. Both halves go: the
-   * figure and the clause in the name, which is the whole of what a keyboard reader hears.
+   * **A plan wears no shortage mark, and since 2026-09-09 that is a product call rather than an
+   * arithmetic one.**
    *
-   * The row is otherwise identical to `SOL_RING`, which draws `1/2` and says "you own 1 of 2" in
-   * the test above; only the variant differs, so this cannot pass for want of a shortage.
+   * It began as arithmetic: `deck.rs`'s rule 2 was that a plan holds nothing, so every card of a
+   * plan drew `0/N` in red however full the collection was —
+   * [issue #354](https://github.com/Msgaihede/mtg-grimoire/issues/354), and both halves went, the
+   * figure and the clause in the name, which is the whole of what a keyboard reader hears.
+   * [Issue #435](https://github.com/Msgaihede/mtg-grimoire/issues/435) then gave a theory row a
+   * truthful count — every copy the reader owns that this deck could use — so the marks would now
+   * be accurate, and the repo owner chose to leave them off anyway: a hundred accurate red marks
+   * down a plan is still noise nobody asked for.
+   *
+   * **The fixture is the assertion.** It is `SOL_RING` exactly — 2 wanted, 1 owned, which draws
+   * `1/2` and says "you own 1 of 2" in the test above — with only the variant changed, so this
+   * cannot pass for want of a shortage, and it cannot pass on a zero either.
    */
-  it("never calls a theory row short of copies", () => {
+  it("never calls a theory row short of copies, even when it truly is", () => {
     render(
       <CardStack
         cards={[
-          card({ name: "Sol Ring", quantity: 2, ownedQuantity: 0, variant: "theory" }),
+          card({ name: "Sol Ring", quantity: 2, ownedQuantity: 1, variant: "theory" }),
         ]}
         label="Ramp"
         currency="usd"
       />,
     );
 
-    expect(screen.queryByText("0/2")).not.toBeInTheDocument();
+    expect(screen.queryByText("1/2")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Sol Ring, 2 copies" })).toBeInTheDocument();
   });
 

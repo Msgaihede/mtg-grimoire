@@ -558,11 +558,17 @@ describe("buildDeckCardMenu", () => {
 
     /**
      * **Greyed _with_ a reason**, where this menu's zone and finish rows grey silently — the split
-     * is `cardMenu.tsx`'s test rather than a drift. A plan holding no cards is a rule about the
-     * list the reader is standing in, and nothing on the card in front of them says it.
+     * is `cardMenu.tsx`'s test rather than a drift. A plan holding no cardboard is a rule about
+     * the list the reader is standing in, and nothing on the card in front of them says it.
+     *
+     * **The fixture carries a truthful owned count on purpose** (2026-09-09,
+     * [issue #435](https://github.com/Msgaihede/mtg-grimoire/issues/435)): a theory row's
+     * `ownedQuantity` is no longer zeroed, so `1` of `4` here is a real shortfall and the three
+     * rows are greyed by the `theory` arm rather than by an arithmetic that could only ever have
+     * answered the row's whole quantity.
      */
     it("greys all three rows on a theory row, and says why", () => {
-      const plan = bolt({ quantity: 4, ownedQuantity: 0, variant: "theory" });
+      const plan = bolt({ quantity: 4, ownedQuantity: 1, variant: "theory" });
       const rows = collection(buildDeckCardMenu(plan, collectionDeps())).items;
       const actions = rows.filter((i): i is MenuAction => i.kind === "action");
 
