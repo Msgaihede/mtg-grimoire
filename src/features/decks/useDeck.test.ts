@@ -1040,9 +1040,13 @@ describe("useDeck", () => {
     expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["cards", "search"] });
 
     invalidate.mockClear();
-    const wishes = await result.current.missingToWishlist.mutateAsync();
+    // `null` is the wishlist root and is the argument this write has taken since issue #437 —
+    // required rather than optional, so a caller that has not thought about where the wishes go
+    // says so out loud. What each folder is worth is the two cases below this one; this line is
+    // about the three invalidations, and the root is the destination every deck starts on.
+    const wishes = await result.current.missingToWishlist.mutateAsync(null);
 
-    expect(deckMissingToWishlist).toHaveBeenCalledWith(4);
+    expect(deckMissingToWishlist).toHaveBeenCalledWith(4, null);
     expect(wishes).toBe(2);
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] });
     // And the deck too: the push reallocates before it counts, so what the deck is short of
@@ -1054,6 +1058,58 @@ describe("useDeck", () => {
     // printing of every card the deck was short of, and a search behind this is visibly wrong
     // rather than stale in a field nothing draws.
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cards", "search"] });
+  });
+
+  /**
+   * **The destination reaches the command, and the deck id keeps its place in front of it**
+   * (issue #437).
+   *
+   * The mutation's whole job here is to put `opened(id)` and the folder on the wire in that
+   * order, so the two things worth pinning are that a picked folder arrives as itself and that
+   * the argument is **positional** — an implementation that passed `{ folderId }` or reversed
+   * the pair would satisfy any assertion that only counted calls. Both destinations in one case,
+   * against one mounted hook, so this reads as the before/after of a reader opening the picker
+   * rather than as two decks.
+   *
+   * `null` is asserted **last** on purpose: it is the value a broken implementation falls back
+   * to, so a test that only ever sent `null` would pass over a folder id being dropped on the
+   * floor — and one that only sent a folder would pass over the root being turned into `0`.
+   */
+  it("carries the wishlist folder to the command, and the root as null", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    await result.current.missingToWishlist.mutateAsync(7);
+    expect(deckMissingToWishlist).toHaveBeenLastCalledWith(4, 7);
+
+    await result.current.missingToWishlist.mutateAsync(null);
+    expect(deckMissingToWishlist).toHaveBeenLastCalledWith(4, null);
+    expect(deckMissingToWishlist).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * **A folder that has gone is refused by the backend, and this hook lets the refusal through
+   * untouched.**
+   *
+   * `missing_to_wishlist` checks the id before it counts anything, precisely so that a vanished
+   * folder cannot answer the `0` a deck short of nothing already answers — and the mutation has
+   * no `onError` of its own, so the message reaches `DeckStats`' failure line as the crate wrote
+   * it. The three invalidations are asserted **absent** in the same breath: a refused write
+   * moved no wish and filed nothing anywhere, and a refetch of the wishlist behind a refusal is
+   * a round trip that can only answer what is already on screen.
+   */
+  it("passes a refused folder back without invalidating anything", async () => {
+    deckMissingToWishlist.mockRejectedValueOnce("That folder is not there any more.");
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    await expect(result.current.missingToWishlist.mutateAsync(9)).rejects.toBe(
+      "That folder is not there any more.",
+    );
+
+    expect(deckMissingToWishlist).toHaveBeenCalledWith(4, 9);
+    expect(invalidate).not.toHaveBeenCalled();
   });
 
   /**

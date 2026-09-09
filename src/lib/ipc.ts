@@ -7037,12 +7037,45 @@ export const ipc = {
    * `nonfoil` would split this wish from every other one the app makes for that card.
    *
    * Because a pinned wish and an any-printing one are **different rows** on the wishlist grain
-   * `(oracleId, cardId, preferredFinish)`, a reader who pressed this before that change keeps
-   * their old any-printing line and gains a pinned one. Nothing is lost or double-counted; the
-   * upsert folds each into its own row.
+   * `(oracleId, cardId, preferredFinish, folderId)`, a reader who pressed this before that
+   * change keeps their old any-printing line and gains a pinned one. Nothing is lost or
+   * double-counted; the upsert folds each into its own row. (**That grain has had four terms
+   * since schema v23 and this sentence named three until 2026-09-09** — an omission that read
+   * as harmless only while every wish this command wrote went to the same place, and a wrong
+   * description of exactly the term `folderId` below turns on.)
+   *
+   * **`folderId` files the whole difference into one wishlist folder, and absent — or `null` —
+   * is the root** (issue #437). The root is where every wish this command has ever written
+   * landed, so a caller that passes nothing means precisely what it always did; what changed is
+   * that the root is now a destination the reader *picked* rather than the only one there was.
+   * `null` and absent are the same answer here on purpose: {@link WishInput.folderId} is
+   * `number | null`, Rust takes `Option<i64>`, and a caller holding a nullable folder id should
+   * be able to forward it without first turning it into `undefined`.
+   *
+   * **The fourth term of the grain is what makes this an _add_ and not a move**, and it is the
+   * whole licence for offering a destination at all. `WISHLIST_GRAIN`'s `coalesce(folder_id, 0)`
+   * means a card the reader already wants *somewhere else* gets a **second wish**, in the folder
+   * this press named, with the old line untouched. Without that term the same press would land
+   * on the wish they filed into `Ordered` last week and raise its quantity — the wish would
+   * appear to move, and a filing decision made deliberately would be undone by a press about
+   * shopping. Moving a wish between folders stays its own explicit act,
+   * {@link ipc.wishlistSetFolder}, which is the distinction this argument must never blur.
+   *
+   * **A folder id naming nothing is refused in words ahead of the diff** — `FOLDER_GONE`, *That
+   * folder is not there any more.* — which is the third of this command's three refusals, behind
+   * "that deck is gone" and "that deck keeps no cardboard", because all three are different
+   * mistakes and each is owed its own sentence. Up front rather than at the write, so a plan
+   * that is short of nothing still refuses instead of answering `0`: `add_wish` fences the
+   * column per row and a press that reaches it not once would otherwise report a success. A
+   * dialog cannot tell "the folder you picked was deleted in another window" from "you already
+   * own all of it" any other way, and those are two very different things to tell somebody who
+   * has just pressed a button.
    */
-  deckTheoryMissingToWishlist: (deckId: number, only?: readonly string[]) =>
-    invoke<number>("deck_theory_missing_to_wishlist", { deckId, only }),
+  deckTheoryMissingToWishlist: (
+    deckId: number,
+    only?: readonly string[],
+    folderId?: number | null,
+  ) => invoke<number>("deck_theory_missing_to_wishlist", { deckId, only, folderId }),
   /**
    * Put copies into a category, folding on `(deck, variant, category, card)` — the drag-in
    * and the click-to-add write, and **not** the stepper's.
@@ -7249,8 +7282,32 @@ export const ipc = {
    * `deckId`, where the four commands above take `id`: the odd one out, and Tauri matches by
    * name. It reallocates before counting — a button that shopped for cards already bought
    * would be worse than no button.
+   *
+   * **`folderId` files the whole shortfall into one wishlist folder, and absent — or `null` —
+   * is the root** (issue #437). Every wish this command has written since it existed landed at
+   * the root, so a caller that passes nothing is unchanged in meaning as well as in spelling;
+   * the root is simply an option now rather than the absence of one. `null` and absent say the
+   * same thing deliberately — {@link WishInput.folderId} is `number | null` and Rust takes
+   * `Option<i64>`, so a caller holding a nullable folder id forwards it as it stands.
+   *
+   * **It is an add into that folder, never a move of a wish filed elsewhere**, and the reason is
+   * the wishlist's storage grain rather than anything this command does: `(oracleId, cardId,
+   * preferredFinish, folderId)`, whose fourth term arrived with schema v23. A card the reader
+   * already wants in another folder gains a **second wish** here and keeps the first one at its
+   * own quantity. Without that term this argument could not exist — the press would land on the
+   * existing row and the wish would appear to migrate into whichever folder the reader happened
+   * to name, undoing a filing decision as a side effect of shopping. The deliberate move is
+   * {@link ipc.wishlistSetFolder} and stays a separate gesture.
+   *
+   * **A folder id naming nothing is refused in words up front** — `FOLDER_GONE`, *That folder is
+   * not there any more.* — checked before the shortfall is walked and behind the virtual deck's
+   * own refusal, so a deck that is short of nothing refuses rather than answering `0`.
+   * `add_wish` fences the column too, but per row, and a press that never reaches it would
+   * otherwise report a success: "the folder went away" and "you own it all already" would arrive
+   * as the same silent `0`, and only one of them is good news.
    */
-  deckMissingToWishlist: (deckId: number) => invoke<number>("deck_missing_to_wishlist", { deckId }),
+  deckMissingToWishlist: (deckId: number, folderId?: number | null) =>
+    invoke<number>("deck_missing_to_wishlist", { deckId, folderId }),
   /**
    * What this deck is short of that the reader **already owns** — the read half of the pull, and
    * the mirror of {@link ipc.deckMissingToWishlist}'s question one grain narrower.

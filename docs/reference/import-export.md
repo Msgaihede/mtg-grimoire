@@ -537,8 +537,13 @@ formats carry *cards*, and a folder is not one: no format has a channel for it, 
 foreign formats this app reads would know what to do with one, and inventing a column would make
 this app's CSV unreadable by everything it was designed to interoperate with. So an export names no
 folder and an import writes none — `wishlist_import_commit` sends `folder_id: None` on every line,
-which is **one of the three writers that add at the root and cannot name a folder**, beside
-`deck_missing_to_wishlist` and `deck_theory_missing_to_wishlist`.
+which since 2026-09-09 makes it **the only writer left that adds at the root and cannot name a
+folder**. It was one of three. `deck_missing_to_wishlist` and `deck_theory_missing_to_wishlist`
+stood beside it until [issue #437](https://github.com/Msgaihede/mtg-grimoire/issues/437) gave each
+an optional folder, and the difference between them and this one is the whole reason the pair could
+move and this cannot: a deck sweep is a press made in a dialog, with a reader in front of it who
+can be asked; a file is a file, and there is nothing in it to read a destination from. See
+[wishlist-folders.md](wishlist-folders.md#the-two-deck-sweeps-take-a-folder-now-and-the-same-term-is-the-licence).
 
 The consequence is real and is written down rather than left to be discovered: with `folder_id` in
 the grain, a line for a card the reader has already filed in `Ordered` lands as a *second* row at

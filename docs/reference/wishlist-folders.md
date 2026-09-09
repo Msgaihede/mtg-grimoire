@@ -143,6 +143,94 @@ preferredFinish: finish, folderId })` — the printing's own first available fin
 and the `cardId` rather than the `oracleId`, so a drop is a wish for *the printing on the tile*
 where the popup is still where a reader asks for any printing. That needed the discriminator below.
 
+### The two deck sweeps take a folder now, and the same term is the licence
+
+**Since 2026-09-09 the two commands that put a deck's missing cards on the wishlist take an
+optional `folderId`** ([issue #437](https://github.com/Msgaihede/mtg-grimoire/issues/437)):
+`deck_theory_missing_to_wishlist`, which is the deck editor's **Compare** dialog — its footer press
+and each row's own `Wishlist` button — and `deck_missing_to_wishlist`, which is
+`Send missing to wishlist` in the live deck's stats strip. The two are short of different things
+(the plan against the live list, and the live list against the collection —
+[decks-storage.md](decks-storage.md) keeps them apart) and they were the two that filed the same
+way: at the root, with no folder on offer. Absent, or `null`, is still the root, so every press
+made before today means exactly what it always meant; what changed is that the root is a
+destination the reader **picked** rather than the only one there was.
+
+**Nothing was widened for this and no rung was spent.** `wishlist_entries.folder_id`, the grain's
+fourth term and `WishInput.folder_id` have all been in place since v23 — these two commands were
+simply the two that never passed the field, exactly as `AddToCollectionButton` was two days
+earlier. The argument [the section above](#the-add-path-has-a-folder-default-now-and-the-fourth-term-is-what-makes-that-safe)
+makes for the `+` button is this one verbatim and is not repeated: the fourth term is what makes a
+named destination an **add**, so sending a card to `Ordered` writes a wish in `Ordered` and leaves
+the one the reader filed at the root last week at its own quantity. Without the term the same press
+would raise that row and the wish would appear to *move*, undoing a filing decision as a side
+effect of shopping. What is new here is who is making the press, not what the write means.
+
+**The folder is validated up front — inside the transaction, before the shortfall is walked.**
+`wishlist_folders::require_folder` answers `FOLDER_GONE`, *That folder is not there any more.*, and
+the placement is the decision rather than tidiness: a deck that is short of nothing never reaches
+`add_wish`, so a check that rode along with the write would answer **0 wishes** for a folder
+another window had just deleted. "You already own all of it" and "the drawer you picked is gone"
+are two different things to tell somebody who has just pressed a button, and they must not arrive
+as the same cheerful number. **In the Compare command it is the third refusal and goes third**,
+behind the deck's own two: "that deck is gone", "that deck keeps no cardboard" and "that folder is
+not there any more" are three different mistakes and each is owed its own sentence, so the folder
+must not be able to answer for either of the first two. And it is *inside* the transaction rather
+than in front of it — the rule `update_deck` sets for a validation is that a check with nothing to
+roll back should not have taken a write lock, and this is not one of those: it reads a
+`wishlist_folders` row the loop below is about to write against, so the answer has to be the one
+that write will see.
+
+**One control serves both surfaces**, `src/features/wishlist/WishDestination.tsx`, so two dialogs
+cannot describe one cabinet differently. It is a `Dropdown` of three kinds of row:
+
+- **`Wishlist`** — the root, wearing the `Heart` glyph and not a `Folder`. That is
+  `buildWishlistTargetItems`' rule read one surface over: the root is the list itself rather than a
+  drawer in it, it wears the same glyph as the offer it hangs off, and it is the answer a reader
+  wants most often.
+- **Every folder, by its full path** — `Ordered / Draft night`. The card menu can afford a bare name
+  because it nests real submenus; a flat dropdown row cannot indent, so two drawers both called
+  `Someday` under different parents would be one row printed twice, which is a picker that cannot
+  answer the only question it is asked.
+- **`New folder…`**, which opens a small panel holding a name field and `MoveToFolder` in its
+  `inline` mode as a parent picker — so a drawer can be made at any level without leaving the
+  dialog and losing the plan on screen behind it.
+
+**It is drawn even when the reader has no folders at all, and that is a deliberate departure from
+`cardMenu.tsx`'s rule.** `wishlistItem` collapses to a single `action` when
+`wishlistFolders.length === 0`, on the argument that turning one press into a submenu with one row
+in it is a cost paid by every reader to describe a cabinet that is empty. That argument does not
+carry here, and the reason is the row it would be describing: in the card menu a reader with no
+folders has other routes to making one, and here **making one is the feature**. A reader whose
+cabinet is empty is precisely the reader this control is for, so the empty case draws the control
+rather than collapsing it back to the press.
+
+**Two marks had to learn about the destination, and the fourth term is why both did.**
+
+- **The Compare dialog clears its `sent` set when the destination changes**, and resets both
+  mutations with it. Those marks turn a row's button into `Wishlisted` and disable it, because a
+  second press against the same destination would wish for the same copies twice. Against a
+  *different* folder it would not: the fourth term makes that a second wish in a second place,
+  which is a press a reader may perfectly well mean, so a button still reading `Wishlisted` would
+  be lying about a press that has not happened. The mutations go for the neighbouring reason — the
+  live region words its standing answer with the destination selected *now*, so a success left
+  behind re-words itself into a claim about a press nobody made, and `That folder is not there any
+  more.` is a fact about a folder the reader has just moved off. **The change is guarded on the id
+  actually moving**: a `Dropdown` row is pressable while it is already the picked one, and taking a
+  reader's marks away for choosing what they had chosen is the control undoing work in exchange for
+  nothing on screen. Clearing is the only honest answer available, because the alternative is a
+  per-destination record of what went where — a mark reading "sent, but somewhere else" that no
+  row's button has room for.
+- **The stats strip's `spent` latch keys on the destination as well as on the shortfall.**
+  `sentFor` latched the number the press was made against and released the button when the deck
+  said something new; it is `{ missing, folderId }` now and releases when **either** term moves. A
+  changed destination is exactly "something new" — the same shortfall asked about a different
+  drawer, and a press `add_wish` will fold nowhere near the last one. The rule is the latch's own,
+  one term wider, and the term it widened by is the grain's fourth read on the glass. The strip
+  still makes no wishlist read of its own, which is what `MissingWrite`'s narrowing is for: the
+  destination control beside the button reads the folder *list*, a different question about a
+  different table, and one that cannot come to disagree with `N of M missing`.
+
 ## The merge rule, shared by both new writes
 
 `wishlist_set_folder` and `wishlist_set_printing` each move one wish onto a grain another row may
@@ -193,19 +281,35 @@ than hanging.
 
 The fourth term is not free, and the price is written down here rather than discovered later.
 
-**Three writers add wishes at the root and cannot name a folder**, because none of them has one to
-name:
+**One writer adds wishes at the root and cannot name a folder**, and it is the only one left:
+`wishlist_import_commit`, because an imported file says nothing about this reader's filing and
+there is nothing to read a destination from — see [import-export.md](import-export.md), where the
+decision is recorded beside the formats.
 
-| Writer | Why it has no folder to name |
+**Two more stood here until 2026-09-09 and no longer do.** `deck_missing_to_wishlist` and
+`deck_theory_missing_to_wishlist` were listed under *a deck sweep is about a deck, and a deck knows
+nothing about the reader's shopping cabinet* — which was true about the **command** and never about
+the press, because there was a reader standing in front of a dialog the whole time. Both take an
+optional folder now:
+[the section above](#the-two-deck-sweeps-take-a-folder-now-and-the-same-term-is-the-licence).
+
+**The duplicate outlived the list, which is why this section did.** A wish landing at the root
+beside one the reader has already filed in `Ordered` is still a **second row** rather than a raised
+quantity — the accepted cost of "Add to always adds a new" — and there are two ways into it now
+rather than three writers with no choice:
+
+| How the pair arrives | What it is |
 | --- | --- |
-| `deck_missing_to_wishlist` | A deck sweep is about a deck, and a deck knows nothing about the reader's shopping cabinet. |
-| `deck_theory_missing_to_wishlist` | The same, one variant over. |
-| `wishlist_import_commit` | An imported file says nothing about this reader's filing — see [import-export.md](import-export.md). |
+| An import | The one writer left that cannot name a folder, exactly as before. |
+| A reader **choosing** the root | Every write that can name a folder offers `Wishlist` among the destinations — the card menu's submenu since v23, the search sidebar's `+` since 2026-09-07 and the two deck sweeps since 2026-09-09 — so a card sent to the root while the same card sits in a drawer is a deliberate press. The deck sweeps open on it, having no folder to be standing in; the `+` opens on the folder that is. |
 
-So a deck sweep run over a card the reader has already filed in `Ordered` produces a **second row
-at the root** rather than raising the quantity of the one they filed. That is the accepted cost of
-"Add to always adds a new", and it is uncomfortably close to the double-order the whole feature
-exists to prevent.
+**Only the first of those is a writer with no choice, and neither is a write that went wrong.** The
+fourth term says two places is two wishes, which is the whole of what makes an add an add — so
+nothing refuses the pair, and a state nothing refuses is a state that is really there. What it
+still is, either way, is uncomfortably close to the double-order the whole feature exists to
+prevent. It is also the pair that used to brick a delete: `wishlist_folders::delete_folder`'s doc
+carries that argument and both of its collision shapes, and re-files a doomed folder's wishes one
+at a time rather than letting `ON DELETE SET NULL` walk them onto a taken grain.
 
 **The mitigation changes no add semantics.** `wishlist_list` answers `elsewhere` per row — how many
 *other* wishes exist for the same oracle card — and a row carrying a non-zero one draws a small
@@ -1022,3 +1126,6 @@ dx 0.0 / dy 0.0 from its trigger on keyboard activation, which is what `menuClic
 | `src/components/NewFolderCard.tsx` | The tile that makes a folder, and the field it becomes |
 | `src/components/ParentFolderCard.tsx` | The up-one-level tile all three cabinets draw, and its stories |
 | `src/features/card/cardMenu.tsx` | `buildWishlistTargetItems` — `Add to → Wishlist` |
+| `src/features/wishlist/WishDestination.tsx` | The destination dropdown both deck sweeps draw — the root, the full-path rows, and `New folder…` |
+| `src-tauri/src/deck_theory.rs` | `missing_to_wishlist`, the Compare dialog's write and its up-front folder check |
+| `src-tauri/src/deck.rs` | `missing_to_wishlist`, the live deck's, taking the same optional folder |

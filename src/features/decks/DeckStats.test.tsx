@@ -12,6 +12,81 @@ import {
   type MissingWrite,
 } from "./DeckStats";
 
+/**
+ * The two folders this file's stand-in offers.
+ *
+ * **A `path` and a `name`, because the real component answers with both and they are not the
+ * same string.** `WishDestination` draws its rows — and therefore its trigger — by full path, so
+ * two drawers called `Someday` can be told apart; `useWishDestinationName` answers the folder's
+ * **own** name, which is what a sentence says. A stand-in that returned one string for both
+ * would encode a state the real seam cannot produce and would pass over a live region that read
+ * the trigger's words instead of asking the hook. The second folder is nested and its own name
+ * carries spaces, so neither half is a single word that could pass by accident.
+ *
+ * `vi.hoisted` because a `vi.mock` factory runs at import time, before a plain module-level
+ * `const` has been initialised — a `FOLDERS` declared normally is a temporal-dead-zone throw
+ * from inside the factory rather than a working mock.
+ */
+const FOLDERS = vi.hoisted(() => [
+  { id: 1, name: "Ordered", path: "Ordered" },
+  { id: 2, name: "Buy at the LGS", path: "Ordered / Buy at the LGS" },
+]);
+
+/**
+ * The destination control, stood in for — **the seam this file is testing across, not the
+ * control itself**.
+ *
+ * `WishDestination` is the wishlist's own component and owns its own suite; what these cases are
+ * about is the wiring on this side of it — which folder id a press carries, when the spent latch
+ * lets go, and what the live region says. Mocking it is also what keeps `DeckStats.test.tsx`'s
+ * standing property true: the strip renders with **no query client**, which is the reason
+ * {@link MissingWrite} is narrowed in the first place, and the real control reads the folder
+ * list.
+ *
+ * Two deliberate simplifications, and neither can flatter the code under test. The rows are
+ * always in the DOM rather than behind an opened dropdown, so a test picks a destination in one
+ * press; and only two folders and the root are offered. What is faithful is the contract this
+ * file depends on: `folderId`/`onChange` as the value pair, `label` as the trigger's whole
+ * accessible name, `disabled` reaching the trigger, and `useWishDestinationName` answering
+ * `null` at the root **and** for an id that names no folder.
+ */
+vi.mock("@/features/wishlist/WishDestination", () => ({
+  WishDestination: ({
+    folderId,
+    onChange,
+    label,
+    disabled,
+  }: {
+    folderId: number | null;
+    onChange: (folderId: number | null) => void;
+    label: string;
+    size?: "sm" | "md";
+    disabled?: boolean;
+  }) => (
+    <span>
+      <button type="button" aria-label={label} disabled={disabled}>
+        {FOLDERS.find((folder) => folder.id === folderId)?.path ?? "Wishlist"}
+      </button>
+      <button type="button" disabled={disabled} onClick={() => onChange(1)}>
+        Pick Ordered
+      </button>
+      <button type="button" disabled={disabled} onClick={() => onChange(2)}>
+        Pick the nested folder
+      </button>
+      <button type="button" disabled={disabled} onClick={() => onChange(null)}>
+        Pick the root
+      </button>
+    </span>
+  ),
+  useWishDestinationName: (folderId: number | null) =>
+    folderId === null
+      ? null
+      : (FOLDERS.find((folder) => folder.id === folderId)?.name ?? null),
+}));
+
+/** The trigger's whole accessible name — one spelling, so a reword is one edit here. */
+const DESTINATION = "Which wishlist folder this deck's shortfall goes to";
+
 /** The write the strip's one button makes, in whatever state a test needs it. */
 function sender(overrides: Partial<MissingWrite> = {}): MissingWrite {
   return {
@@ -779,7 +854,12 @@ describe("DeckStats", () => {
     expect(screen.getByText("3 of 6 missing")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Send missing to wishlist" }));
 
-    expect(send.mutate).toHaveBeenCalled();
+    // **`null` and never a bare `toHaveBeenCalled()`**: the press carries a destination since
+    // issue #437, and the root is what it carries until the reader says otherwise — which is
+    // exactly the behaviour this line has always been about, now stated in the argument as well
+    // as in the absence of one. Asserted here rather than only in the destination block below,
+    // because this is the case every deck meets.
+    expect(send.mutate).toHaveBeenCalledWith(null);
   });
 
   /**
@@ -1281,6 +1361,274 @@ describe("DeckStats", () => {
   });
 
   /**
+   * **The destination beside the wishlist press (issue #437).**
+   *
+   * The press filed at the wishlist root and offered no choice; it now carries a picker for the
+   * root, an existing folder, or a new one. Every case here is about the **wiring** — which
+   * folder id a press carries, when the spent latch lets go, and what the live region says —
+   * because the control itself is the wishlist's and has its own suite. See the `vi.mock` at the
+   * top of this file for what is faithful about the stand-in and what is simplified.
+   */
+  describe("the wishlist destination", () => {
+    /**
+     * Pick a destination, press, then let the write settle — {@link press} with the one extra
+     * act a folder adds, so the two flows differ by exactly the thing under test.
+     *
+     * The idle `send` is returned rather than kept private, because half of these cases are
+     * about the **argument** the press carried and the other half about the sentence that
+     * followed it.
+     */
+    async function pressAt(cards: DeckCard[], pick: string, settled: MissingWrite) {
+      const idle = sender();
+      const view = render(
+        <DeckStats
+          tracksCollection
+          cards={cards}
+          send={idle}
+          onPull={null}
+          onAddMissing={null}
+        />,
+      );
+      await userEvent.click(screen.getByRole("button", { name: pick }));
+      await userEvent.click(screen.getByRole("button", { name: "Send missing to wishlist" }));
+      view.rerender(
+        <DeckStats
+          tracksCollection
+          cards={cards}
+          send={settled}
+          onPull={null}
+          onAddMissing={null}
+        />,
+      );
+      return { ...view, idle };
+    }
+
+    /**
+     * The whole of what the picker is for: the id reaches the write.
+     *
+     * Both halves in one case on purpose — a press before any pick and a press after one — so
+     * that an implementation which hard-coded `null` fails on the second half rather than
+     * passing a test that only ever checked the default. The root half is the same claim
+     * `counts what the deck is short of, and offers to wish for it` makes above; it is repeated
+     * here against the *same* mounted strip, which is what makes the pair a before/after rather
+     * than two decks.
+     */
+    it("sends the folder the reader picked, and the root until they pick one", async () => {
+      const send = sender();
+      strip(short(), send);
+
+      await userEvent.click(screen.getByRole("button", { name: "Send missing to wishlist" }));
+      expect(send.mutate).toHaveBeenLastCalledWith(null);
+
+      await userEvent.click(screen.getByRole("button", { name: "Pick Ordered" }));
+      await userEvent.click(screen.getByRole("button", { name: "Send missing to wishlist" }));
+
+      expect(send.mutate).toHaveBeenLastCalledWith(1);
+      expect(send.mutate).toHaveBeenCalledTimes(2);
+    });
+
+    /**
+     * **The spent latch keys on the destination as well as on the shortfall, and this is the
+     * case that says why.** `add_wish` folds on the wishlist's own grain, whose fourth term is
+     * `coalesce(folder_id, 0)` — so the same shortfall sent to the root and then to `Ordered` is
+     * a genuinely new line rather than a fold, and a button still greyed with *This shortfall is
+     * already on your wishlist.* would be refusing a press that has not happened.
+     *
+     * The `aria-disabled` before the pick is the half that makes the release a claim: without
+     * it, a strip that never latched at all would pass the second half.
+     */
+    it("releases the spent button when the destination changes", async () => {
+      const settled = sender({ isSuccess: true, data: 1 });
+      await press(short(), settled);
+      expect(screen.getByRole("button", { name: "Send missing to wishlist" })).toHaveAttribute(
+        "aria-disabled",
+        "true",
+      );
+
+      await userEvent.click(screen.getByRole("button", { name: "Pick Ordered" }));
+
+      const button = screen.getByRole("button", { name: "Send missing to wishlist" });
+      expect(button).not.toHaveAttribute("aria-disabled");
+      await userEvent.click(button);
+      expect(settled.mutate).toHaveBeenCalledWith(1);
+    });
+
+    /**
+     * And it stays spent for the destination it was actually sent to, which is the other
+     * direction of the same rule: a latch that released on *any* render of the picker would
+     * make a second press at one folder legal, and that press really does fold — six wished for
+     * a shortfall of three, answering the same cheerful number both times.
+     */
+    it("keeps the button spent while the destination is the one it was sent to", async () => {
+      const settled = sender({ isSuccess: true, data: 1 });
+      const { idle } = await pressAt(short(), "Pick Ordered", settled);
+      // The press that armed the latch really did carry the folder, so what is refused below is
+      // a *second* press at `Ordered` rather than a strip that never sent anything.
+      expect(idle.mutate).toHaveBeenCalledWith(1);
+
+      const button = screen.getByRole("button", { name: "Send missing to wishlist" });
+      expect(button).toHaveAttribute("aria-disabled", "true");
+      await userEvent.click(button);
+
+      expect(settled.mutate).not.toHaveBeenCalled();
+    });
+
+    /**
+     * **The answer goes with the question here too.** The live region's sentence is gated on the
+     * same latch, so changing the destination clears it — a *"Added 1 wish to Ordered"* left
+     * standing over a picker now reading `Someday` is a sentence about a write the reader is no
+     * longer looking at.
+     */
+    it("clears the last answer when the destination changes", async () => {
+      await press(short(), sender({ isSuccess: true, data: 1 }));
+      expect(screen.getByRole("status")).not.toHaveTextContent("");
+
+      await userEvent.click(screen.getByRole("button", { name: "Pick Ordered" }));
+
+      expect(screen.getByRole("status")).toHaveTextContent("");
+    });
+
+    /**
+     * The sentence names where the wishes went — and it names the folder's **own** name, which
+     * is what `useWishDestinationName` answers and deliberately not the full path the picker's
+     * trigger beside it is drawing. A path disambiguates a row in a list of rows; a sentence
+     * about a press has the drawer's name in it, the way a reader would say it. The fixture's
+     * two strings differ, so an implementation that read the trigger's words rather than asking
+     * the hook fails here rather than passing on a one-word folder.
+     */
+    it("names the folder in the live region", async () => {
+      await pressAt(short(), "Pick the nested folder", sender({ isSuccess: true, data: 2 }));
+
+      // `textContent` against the whole string rather than `toHaveTextContent`, which normalises
+      // whitespace before it compares and would therefore pass over the failure the case below
+      // this one is guarding — a clause appended empty, leaving `wishes  —` with two spaces in
+      // it. One matcher for the pair, so neither half can be right for the wrong reason.
+      expect(screen.getByRole("status").textContent).toBe(
+        "Added 2 wishes to Buy at the LGS — one per card, for every copy you are short.",
+      );
+    });
+
+    /**
+     * **And invents no clause at the root**, which is the half a destination-shaped change is
+     * most likely to break: `to Wishlist` would be this app naming a place the reader was never
+     * asked to think about, on every press made by everyone who never opened the picker.
+     *
+     * Asserted on `textContent` rather than through `toHaveTextContent`, which normalises
+     * whitespace before it compares: a strip that appended the clause **empty** would read
+     * `Added 2 wishes  — one per…` with two spaces in it and pass the normalising matcher, which
+     * is the one failure a `?? ""` fallback actually produces.
+     */
+    it("invents no destination clause at the wishlist root", async () => {
+      await press(short(), sender({ isSuccess: true, data: 2 }));
+
+      expect(screen.getByRole("status").textContent).toBe(
+        "Added 2 wishes — one per card, for every copy you are short.",
+      );
+    });
+
+    /**
+     * **Zero names no folder either.** Nothing was written, so there is no place anything went —
+     * naming the drawer the picker happened to be pointing at would say it received something,
+     * which is the exact opposite of what the sentence is for.
+     */
+    it("names no folder on the nothing-added sentence", async () => {
+      await pressAt(short(), "Pick Ordered", sender({ isSuccess: true, data: 0 }));
+
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "Nothing to add — a recount covered the shortfall, or what is short has left the card database.",
+      );
+      expect(screen.getByRole("status")).not.toHaveTextContent(/Ordered/);
+    });
+
+    /**
+     * **A folder that has gone reaches the failure line**, which is the one refusal a
+     * destination can cause and the reason the backend checks the id up front rather than
+     * answering 0 — a deck short of nothing already answers 0, and the two would be
+     * indistinguishable.
+     */
+    it("says so when the folder is not there any more", async () => {
+      await pressAt(
+        short(),
+        "Pick Ordered",
+        sender({ isError: true, error: "That folder is not there any more." }),
+      );
+
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Could not add to the wishlist — That folder is not there any more.",
+      );
+      // And the press is available again: a refusal spends nothing, so the reader can pick
+      // another drawer and try. `spent` is `!send.isError`'s own arm, which the destination
+      // term did not touch.
+      const button = screen.getByRole("button", { name: "Send missing to wishlist" });
+      expect(button).toBeEnabled();
+      expect(button).not.toHaveAttribute("aria-disabled");
+    });
+
+    /**
+     * **Drawn beside the press it modifies, and inside the same box** — which is what keeps the
+     * three peers three peers. Asserted as containment rather than as document order: an
+     * implementation that put the picker fourth in the row would still satisfy "it comes after
+     * the send button", and that is exactly the arrangement this design refuses.
+     */
+    it("draws the destination in the send button's own cluster, not as a fourth peer", () => {
+      strip(short(), sender(), vi.fn(), vi.fn());
+
+      const send = screen.getByRole("button", { name: "Send missing to wishlist" });
+      const destination = screen.getByRole("button", { name: DESTINATION });
+      const cluster = send.parentElement;
+      expect(cluster).not.toBeNull();
+      expect(cluster).toContainElement(destination);
+      // …and the three answers are outside it, so none of them shares a box with a setting.
+      for (const name of ["Pull from collection", "Add missing to collection"]) {
+        expect(cluster).not.toContainElement(screen.getByRole("button", { name }));
+      }
+    });
+
+    /**
+     * **It rides with the whole `missing > 0` arm.** A deck short of nothing draws no press for
+     * a destination to modify, so a picker left standing would be a control about a press that
+     * is not there.
+     */
+    it("draws no destination when the deck is fully owned", () => {
+      strip([card({ name: "Bolt", quantity: 4, ownedQuantity: 4 })], sender(), vi.fn(), vi.fn());
+
+      expect(screen.queryByRole("button", { name: DESTINATION })).not.toBeInTheDocument();
+    });
+
+    /**
+     * **But it stays on the theory list**, where the pull and the add are absent and the
+     * wishlist press is not: wanting a card you do not own is exactly what a plan is for, and a
+     * plan's shopping list is as filable as any other. The two absences beside it are what make
+     * this a claim about the destination rather than about the arm.
+     */
+    it("keeps the destination on the theory list, beside the press that survives there", () => {
+      strip(short(), sender(), null, null);
+
+      expect(screen.queryByRole("button", { name: "Pull from collection" })).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Add missing to collection" }),
+      ).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Send missing to wishlist" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: DESTINATION })).toBeInTheDocument();
+    });
+
+    /**
+     * **Refused for the half-second the write is in flight, where the two sibling presses
+     * deliberately are not.** They are independent writes about one number; this one *is* the
+     * argument the write in flight is carrying, and moving it mid-flight releases the latch — so
+     * the answer to a press that really happened would never be said.
+     */
+    it("refuses the destination while the write it is carrying is in flight", () => {
+      strip(short(), sender({ isPending: true }), vi.fn(), vi.fn());
+
+      expect(screen.getByRole("button", { name: DESTINATION })).toBeDisabled();
+      // The other two are untouched, which is the row's own standing rule.
+      expect(screen.getByRole("button", { name: "Pull from collection" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Add missing to collection" })).toBeEnabled();
+    });
+  });
+
+  /**
    * **A Virtual deck (issue #401) — the whole shortfall half absent, and the charts untouched.**
    *
    * Every case above this block is a claim about `tracksCollection: true`, which is the
@@ -1314,6 +1662,11 @@ describe("DeckStats", () => {
         "Pull from collection",
         "Add missing to collection",
         "Send missing to wishlist",
+        // The destination goes with the press it modifies (issue #437). A deck with no binder
+        // behind it is short of nothing, so there is no shopping list for a folder to be about —
+        // and a picker left standing would be the one control on the line still claiming there
+        // is something to file.
+        DESTINATION,
       ]) {
         expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
       }

@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, fn, within } from "storybook/test";
+import { expect, fn, userEvent, within } from "storybook/test";
 import type { DeckCard } from "@/lib/ipc";
 import { deckCard, orphanDeckCard, printing } from "../../../.storybook/fake/fixtures";
 import { DeckStats } from "./DeckStats";
@@ -386,6 +386,75 @@ export const Price: Story = {
 };
 
 /**
+ * **Where the shopping list is filed** (issue #437) — the picker that rides beside
+ * `Send missing to wishlist`.
+ *
+ * The press used to file at the wishlist root and offer no choice. It now carries a destination:
+ * the root (still the default), any folder the reader has, or a new one made on the spot from the
+ * picker's own `New folder…` row — which is what keeps a reader with an empty cabinet from having
+ * to go and build one somewhere else first.
+ *
+ * **It is not a fourth press, and that is the whole of the drawing decision.** The three buttons
+ * on this line are three *answers* to the shortfall — own it → just acquired → not yet owned —
+ * and their class lists are identical character for character so the row cannot drift into
+ * reading as a primary and two secondaries. A picker standing among them would read as a fourth
+ * answer wherever it sat. So it is drawn **inside the wishlist press's own cluster**, at a
+ * tighter gap than the row's, which leaves the three peers three peers, keeps their narrated
+ * order intact, and puts the modifier beside the press it modifies rather than beside the two it
+ * does not.
+ *
+ * The folders below are the `starter` seed's — `Ordered`, `Ordered / Backordered` and `Someday` —
+ * so the rows are a real tree with a real nesting in it rather than one flat name.
+ *
+ * **What this page cannot show is the sentence that follows a press.** The live region names the
+ * folder (`Added 2 wishes to Ordered — one per card, …`) and says nothing extra at the root, and
+ * both are gated on the *latch* — which is armed by a press and released the moment the shortfall
+ * or the destination changes. A story's `send` is an idle `fn()` that never settles, so there is
+ * no state here for that sentence to be in; it is `DeckStats.test.tsx`'s claim, along with the
+ * latch releasing on a changed destination.
+ */
+export const WishlistDestination: Story = {
+  args: {
+    cards: [
+      deckCard(printing("mh2", "138"), { quantity: 4, ownedQuantity: 1 }),
+      deckCard(printing("fut", "153"), { quantity: 4, ownedQuantity: 4 }),
+      deckCard(printing("lea", "288"), { quantity: 12, ownedQuantity: 12 }),
+    ],
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const send = canvas.getByRole("button", { name: "Send missing to wishlist" });
+    const destination = canvas.getByRole("button", {
+      name: "Which wishlist folder this deck's shortfall goes to",
+    });
+
+    // **Containment, not document order** — an implementation that drew the picker fourth in the
+    // row would still satisfy "it comes after the send button", and that is exactly the
+    // arrangement this design refuses. The two peers are asserted *outside* the same box, which
+    // is the half that makes this a claim about the cluster rather than about the DOM having a
+    // `<div>` in it.
+    const cluster = send.parentElement!;
+    await expect(cluster).toContainElement(destination);
+    for (const name of ["Pull from collection", "Add missing to collection"]) {
+      await expect(cluster).not.toContainElement(canvas.getByRole("button", { name }));
+    }
+
+    // The rows: the root first, then the reader's own drawers by full path. `New folder…` is the
+    // one that has to be there whatever the cabinet holds, and it is asserted by pattern because
+    // its ellipsis is the component's own character rather than three dots.
+    await userEvent.click(destination);
+    await expect(canvas.getByRole("option", { name: "Wishlist" })).toBeInTheDocument();
+    await expect(canvas.getByRole("option", { name: /Backordered/ })).toBeInTheDocument();
+    await expect(canvas.getByRole("option", { name: /New folder/ })).toBeInTheDocument();
+
+    // And picking one moves the press's destination: the trigger names the drawer, so what the
+    // next press would do is readable without opening anything.
+    await userEvent.click(canvas.getByRole("option", { name: /Backordered/ }));
+    await expect(destination).toHaveTextContent(/Backordered/);
+  },
+};
+
+/**
  * The same shortfall on the **theory** list, where two of the three answers to it do not exist.
  *
  * `onPull` and `onAddMissing` are both `null`, so neither `Pull from collection` nor
@@ -420,6 +489,11 @@ export const OnTheTheoryList: Story = {
     ).toBeInTheDocument();
     await expect(canvas.queryByRole("button", { name: "Pull from collection" })).toBeNull();
     await expect(canvas.queryByRole("button", { name: "Add missing to collection" })).toBeNull();
+    // The destination stays with the press it modifies (issue #437). A plan's shopping list is as
+    // filable as any other, so nothing about a folder is a fact about which list is on screen.
+    await expect(
+      canvas.getByRole("button", { name: "Which wishlist folder this deck's shortfall goes to" }),
+    ).toBeInTheDocument();
   },
 };
 
@@ -463,6 +537,9 @@ export const OnAVirtualDeck: Story = {
       "Pull from collection",
       "Add missing to collection",
       "Send missing to wishlist",
+      // The destination goes with the press it modifies (issue #437): a deck with no binder
+      // behind it is short of nothing, so there is no shopping list to file anywhere.
+      "Which wishlist folder this deck's shortfall goes to",
     ]) {
       await expect(canvas.queryByRole("button", { name })).toBeNull();
     }

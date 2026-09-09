@@ -622,12 +622,18 @@ pub fn call(
             )
         }
 
+        // `folderId` is optional and absent means the wishlist's root, which is where this
+        // command filed everything until 2026-09-09 — so a page that has not been taught the
+        // argument keeps the behaviour it had.
         "deck_missing_to_wishlist" => {
             let deck_id: i64 = field(command, args, "deckId")?;
+            let folder_id: Option<i64> = optional(command, args, "folderId")?;
             encode(
                 command,
-                crate::sync::with_write(state, |c| crate::deck::missing_to_wishlist(c, deck_id))
-                    .map_err(RouteError::Failed)?,
+                crate::sync::with_write(state, |c| {
+                    crate::deck::missing_to_wishlist(c, deck_id, folder_id)
+                })
+                .map_err(RouteError::Failed)?,
             )
         }
 
@@ -987,13 +993,17 @@ pub fn call(
             )
         }
 
+        // `only` narrows which rows are sent and `folderId` says where they land; both are
+        // optional and neither reads the other. Absent `folderId` is the wishlist's root, which
+        // is where the Compare dialog filed everything until 2026-09-09.
         "deck_theory_missing_to_wishlist" => {
             let deck_id: i64 = field(command, args, "deckId")?;
             let only: Option<Vec<String>> = optional(command, args, "only")?;
+            let folder_id: Option<i64> = optional(command, args, "folderId")?;
             encode(
                 command,
                 crate::sync::with_write(state, |c| {
-                    crate::deck_theory::missing_to_wishlist(c, deck_id, only.as_deref())
+                    crate::deck_theory::missing_to_wishlist(c, deck_id, only.as_deref(), folder_id)
                 })
                 .map_err(RouteError::Failed)?,
             )

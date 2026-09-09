@@ -225,6 +225,15 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     cardDetail,
     collectionList,
     collectionToDeck,
+    // **The shortfall line's destination picker asks on every open of a deck that is short of
+    // something** (issue #437), so every test in this file pays for it whether or not it looks
+    // at the control — the Tokens & emblems band's reason, one row over. Answered with an empty
+    // list: the picker then offers the wishlist root and its own `New folder…` row, which is the
+    // state a reader with no folders is in and the one that keeps the first folder reachable.
+    // Left off the mock entirely the read rejects with `ipc.wishlistFolderList is not a
+    // function`, and every `getByRole("alert")` in this file starts finding whatever that
+    // control draws for a refused read.
+    wishlistFolderList: vi.fn().mockResolvedValue([]),
   },
 }));
 
@@ -4370,7 +4379,12 @@ describe("DeckEditor", () => {
     expect(screen.getByText("3 of 6 missing")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Send missing to wishlist" }));
 
-    await waitFor(() => expect(deckMissingToWishlist).toHaveBeenCalledWith(4));
+    // `null` is the wishlist root — the destination every press carries until the reader opens
+    // the picker beside this button (issue #437), and therefore the argument this end-to-end
+    // path has always made without saying so. Which folder ids reach the command is
+    // `useDeck.test.ts`' seam and the strip's own `DeckStats.test.tsx`; what this line pins is
+    // that the editor's press still lands on the root.
+    await waitFor(() => expect(deckMissingToWishlist).toHaveBeenCalledWith(4, null));
     // Wishes are cards and the shortfall is copies, so the sentence says which it counts.
     expect(
       await screen.findByText("Added 3 wishes — one per card, for every copy you are short."),

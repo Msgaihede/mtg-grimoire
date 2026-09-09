@@ -1136,9 +1136,32 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
    * *every* printing of every card the deck was short of, and a search left on screen behind
    * it is visibly wrong rather than stale in a field nothing draws. The same key the quick-add
    * and the wishlist's own writes take, for the same reason.
+   *
+   * **It names a folder now, and that leaves every word above true** (issue #437). The wish is
+   * still oracle-grained and still finish-blind — what a folder adds is *where the line is
+   * filed*, which is the wishlist's fourth grain term (`coalesce(folder_id, 0)`) and not a
+   * fifth thing about the card. So the fold is unchanged in kind and narrower in reach: two
+   * presses at one destination still raise one line, and the same shortfall sent to the root
+   * and then to `Ordered` is two lines rather than one folded twice — which is right, because
+   * those are two *places*, and a reader who filed the second one somewhere else meant a
+   * second line. `null` is the wishlist root, and the argument is **required** rather than
+   * optional for this hook's standing reason: a caller that has not thought about where these
+   * wishes go must say `null` out loud rather than get the root by silence.
+   *
+   * **None of the three invalidations moves.** `["wishlist"]` is the root every folder key in
+   * that feature sits under — the folder list and every folder summary — so a line written
+   * inside `Ordered` re-counts that folder for free and no fourth key belongs here. And
+   * `["cards", "search"]` is unaffected by *where* a wish sits: `CardSummary.wishlisted` is an
+   * `EXISTS` over `oracle_id` and has never read `folder_id`.
+   *
+   * **A folder id that names nothing is refused up front** — "That folder is not there any
+   * more." — rather than answered with 0. That is the backend's decision and it is the one this
+   * hook depends on: 0 is already the honest answer for a deck that is short of nothing, so a
+   * vanished folder answering the same number would be a press that reported success and wrote
+   * nowhere. It reaches the reader through `DeckStats`' own failure line, beside the button.
    */
   const missingToWishlist = useMutation({
-    mutationFn: () => ipc.deckMissingToWishlist(opened(id)),
+    mutationFn: (folderId: number | null) => ipc.deckMissingToWishlist(opened(id), folderId),
     onSuccess: () => {
       invalidate();
       void queryClient.invalidateQueries({ queryKey: ["wishlist"] });

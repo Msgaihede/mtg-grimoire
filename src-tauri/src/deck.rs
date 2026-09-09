@@ -5119,6 +5119,31 @@ pub fn live_shortfall(conn: &Connection, deck_id: i64) -> Result<Vec<ShortfallRo
 /// second set of rules to keep in step. Clicking twice therefore raises the quantity of one
 /// line rather than making two, which is `add_wish`'s contract and not this function's.
 ///
+/// **`folder_id` says where the wishes are filed, and `None` is the root** (2026-09-09,
+/// [issue #437](https://github.com/Msgaihede/mtg-grimoire/issues/437)). **Send missing to
+/// wishlist** put every card at the root until then and offered no choice at all; the root is
+/// still what a caller that names nothing gets, so nothing written before this argument existed
+/// has changed its meaning. The id is passed into [`crate::wishlist::WishInput::folder_id`] and
+/// this function decides nothing else about it.
+///
+/// **Naming a folder writes a *second* wish rather than moving the first**, which is
+/// [`WISHLIST_GRAIN`](crate::schema::WISHLIST_GRAIN)'s fourth term — `coalesce(folder_id, 0)` —
+/// earning its place. A card the reader filed into *Ordered* last week and the same card sent to
+/// the root today are two rows on that grain, and `add_wish`'s `DO UPDATE` clause touches
+/// neither one's folder. Without the term this press would land on the row they had already
+/// filed and raise its quantity, so the wish would appear to **move** as a side effect of
+/// shopping — where moving a wish between folders is its own explicit act
+/// ([`crate::wishlist_folders::set_wish_folder`]).
+///
+/// **The folder is looked up once, up front, and [`crate::wishlist::add_wish`]'s per-row check
+/// is not a substitute for it.** A deck that is short of nothing never reaches `add_wish` at
+/// all, so a reader who picked a folder another window had just deleted would be told the press
+/// touched **0 wishes** by a command that never got far enough to notice. It sits *inside* the
+/// transaction, where the [`VIRTUAL_HOLDS_NOTHING`] refusal below is deliberately outside one:
+/// a deck's kind is a fact about the argument and needs no database open ([`update_deck`]'s rule
+/// for its validations), while a folder's existence is a fact about a table this very
+/// transaction is about to write against.
+///
 /// **Nothing is reallocated first, and there is nothing left that could be out of date.** This
 /// used to open by rebuilding the deck's claims, because a claim ledger could be a collection
 /// edit behind and a button that puts already-bought cards on a shopping list is worse than no
@@ -5139,7 +5164,11 @@ pub fn live_shortfall(conn: &Connection, deck_id: i64) -> Result<Vec<ShortfallRo
 /// *"it rewrites this deck's claims"* four lines under the paragraph saying nothing is
 /// reallocated; there are no claims to rewrite since schema v25, and this command writes no
 /// deck table at all.)
-pub fn missing_to_wishlist(conn: &Connection, deck_id: i64) -> Result<usize, String> {
+pub fn missing_to_wishlist(
+    conn: &Connection,
+    deck_id: i64,
+    folder_id: Option<i64>,
+) -> Result<usize, String> {
     // **A virtual deck has nothing to be short of** (schema v40), so this is the one press on it
     // that would otherwise succeed loudly and wrongly. `live_shortfall` reads what the deck
     // plays against what its group holds; a virtual deck has no group, so every card in it comes
@@ -5152,6 +5181,17 @@ pub fn missing_to_wishlist(conn: &Connection, deck_id: i64) -> Result<usize, Str
         return Err(VIRTUAL_HOLDS_NOTHING.to_owned());
     }
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+
+    // **The folder, before the shortfall is walked.** [`crate::wishlist::add_wish`] fences this
+    // column too, but per row — and a deck that is short of nothing calls it not once, so
+    // without this line naming a folder another window had just deleted would answer "0 wishes"
+    // rather than "That folder is not there any more." Those are two different things to be
+    // told and only one of them would have been true. Inside the transaction, unlike the deck
+    // kind above it: that refusal reads an argument and this one reads a table the loop below is
+    // about to write against, so it has to see what that write will see.
+    if let Some(id) = folder_id {
+        crate::wishlist_folders::require_folder(&tx, id)?;
+    }
 
     // Oracle-grained, so the same card short in two categories is one wish for the sum — which
     // is what "one wish per card still missing" means, and what the reader would count. It is a
@@ -5179,6 +5219,11 @@ pub fn missing_to_wishlist(conn: &Connection, deck_id: i64) -> Result<usize, Str
                 // has — and the same name the list would show for it.
                 name: Some(name),
                 quantity,
+                // Where the reader pointed, straight through — and the root when they pointed
+                // nowhere, which is what every press meant before 2026-09-09. It is a grain
+                // term, so naming a folder adds a wish rather than moving one; the argument is
+                // in this function's doc.
+                folder_id,
                 ..Default::default()
             },
         )?;
@@ -5676,18 +5721,24 @@ pub async fn deck_last_format(
 }
 
 /// The one click: everything this deck is short of, onto the wishlist.
+///
+/// **`folderId` is where they are filed, and absent is the wishlist's root** — the destination
+/// every press had before the button could offer one, and the destination a caller that sends
+/// nothing still gets. A folder that is not there is refused by name before a single wish is
+/// written, including for a deck that turns out to be short of nothing.
 #[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_missing_to_wishlist(
     state: tauri::State<'_, Arc<AppState>>,
     deck_id: i64,
+    folder_id: Option<i64>,
 ) -> Result<usize, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         // Plain `with_write`: a deck write moves nothing the reader owns. PR 3's
         // `collection_to_deck`/`deck_to_collection` DO move ownership and must use
         // `collection_source::with_write_owned` instead.
-        with_write(&state, |c| missing_to_wishlist(c, deck_id))
+        with_write(&state, |c| missing_to_wishlist(c, deck_id, folder_id))
     })
     .await
     .map_err(unfinished)?
@@ -12177,6 +12228,13 @@ mod tests {
     /// the wishlist grain; run twice → the wish is 6 (the fold is `add_wish`'s contract, not
     /// double-counted rows); a fully-owned card adds nothing; an inactive category and the
     /// theory list never count.
+    ///
+    /// **Both presses pass `folder_id: None`, and the fold is why that matters.** The root is
+    /// [`WISHLIST_GRAIN`](crate::schema::WISHLIST_GRAIN)'s fourth term like any other value, so
+    /// two presses land on one row only because they name the same destination — not because
+    /// this command has no destination to name, which is what it had until 2026-09-09. The two
+    /// destinations kept apart are
+    /// `the_same_card_at_the_root_and_in_a_folder_is_two_wishes`.
     #[test]
     fn missing_to_wishlist_writes_any_printing_wishes_through_the_wishlist_grain() {
         let conn = seeded();
@@ -12210,7 +12268,7 @@ mod tests {
         )
         .unwrap();
 
-        let touched = missing_to_wishlist(&conn, deck.id).unwrap();
+        let touched = missing_to_wishlist(&conn, deck.id, None).unwrap();
 
         assert_eq!(touched, 1, "one card is short; the Angel is not");
         let wishes: Vec<(Option<String>, Option<String>, String, i64)> = conn
@@ -12226,7 +12284,7 @@ mod tests {
             "any printing will do — a shopping list is not a printing preference"
         );
 
-        assert_eq!(missing_to_wishlist(&conn, deck.id).unwrap(), 1);
+        assert_eq!(missing_to_wishlist(&conn, deck.id, None).unwrap(), 1);
         let (rows, quantity): (i64, i64) = conn
             .query_row(
                 "SELECT count(*), sum(quantity) FROM wishlist_entries",
@@ -12238,6 +12296,193 @@ mod tests {
             (rows, quantity),
             (1, 6),
             "the grain folds the repeat — one line, a bigger number"
+        );
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Where the shopping list is filed. **Send missing to wishlist** put every card at the
+    // wishlist's root until 2026-09-09 and offered no choice at all
+    // ([issue #437](https://github.com/Msgaihede/mtg-grimoire/issues/437)). What makes offering
+    // one safe is `WISHLIST_GRAIN`'s **fourth** term: `coalesce(folder_id, 0)` is in the
+    // conflict target, so naming a folder adds a wish rather than quietly moving the one the
+    // reader filed last week.
+    // ---------------------------------------------------------------------------------------
+
+    /// One folder at the root of the **wishlist's** tree. This file already builds deck folders
+    /// and collection folders, so the name says which of the three cabinets is meant.
+    fn wish_folder(conn: &Connection, name: &str) -> i64 {
+        crate::wishlist_folders::create_folder(conn, None, name)
+            .unwrap()
+            .id
+    }
+
+    /// Every wish as `(oracle card, folder, copies)` in write order — this command writes an
+    /// any-printing wish, so the oracle id is the one identifier every row of it carries. The
+    /// folder is [`WISHLIST_GRAIN`](crate::schema::WISHLIST_GRAIN)'s fourth term, read as an
+    /// `Option<i64>` so that the root is a `None` rather than a magic number and a row which
+    /// quietly acquired a folder fails the comparison instead of passing a count.
+    fn filed_wishes(conn: &Connection) -> Vec<(Option<String>, Option<i64>, i64)> {
+        conn.prepare(
+            "SELECT oracle_id, folder_id, quantity
+               FROM wishlist_entries ORDER BY id",
+        )
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+    }
+
+    /// **The wishes land in the folder the press named**, which is the whole of what picking one
+    /// does: the id rides on every [`crate::wishlist::WishInput`] the loop builds. Two cards
+    /// short rather than one, so a build that carried the folder on the first wish and lost it
+    /// afterwards has somewhere to fail.
+    #[test]
+    fn missing_to_wishlist_files_the_wishes_in_the_folder_it_was_given() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        let ordered = wish_folder(&conn, "Ordered");
+        add(&conn, deck.id, "bolt-lea", main, 4);
+        add(&conn, deck.id, "serra-lea", main, 2);
+
+        assert_eq!(
+            missing_to_wishlist(&conn, deck.id, Some(ordered)).unwrap(),
+            2
+        );
+
+        assert_eq!(
+            filed_wishes(&conn),
+            vec![
+                (Some("o1".to_owned()), Some(ordered), 4),
+                (Some("o2".to_owned()), Some(ordered), 2),
+            ],
+            "both wishes are in the folder the reader pointed at, and neither is at the root"
+        );
+    }
+
+    /// **A press that names no folder still files at the root**, which is where every wish this
+    /// command wrote before the argument existed went, and what every caller that has not been
+    /// taught about it still means.
+    ///
+    /// **The folder in the fixture is made and deliberately not named.** A database with no
+    /// folders in it could not tell "the reader chose the root" from "there was nowhere else a
+    /// wish could have gone", and it is the first of those two this case is pinning.
+    #[test]
+    fn missing_to_wishlist_still_files_at_the_root_when_no_folder_is_named() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        wish_folder(&conn, "Ordered");
+        add(&conn, deck.id, "bolt-lea", main, 4);
+
+        assert_eq!(missing_to_wishlist(&conn, deck.id, None).unwrap(), 1);
+
+        assert_eq!(
+            filed_wishes(&conn),
+            vec![(Some("o1".to_owned()), None, 4)],
+            "the root, exactly as it was before this command could be told anything else"
+        );
+    }
+
+    /// **A folder that is not there is refused by name, before anything is written** — and the
+    /// second deck is the half only the up-front check can answer.
+    ///
+    /// [`crate::wishlist::add_wish`] fences this column too, but **per row**, and a deck short
+    /// of nothing never reaches it: without the lookup at the top of the transaction the reader
+    /// would be told the press touched `0` wishes, with nothing anywhere to say that the folder
+    /// they had picked was gone. "There was nothing to buy" and "that folder is not there any
+    /// more" are different answers and only one of them would have been true.
+    ///
+    /// The folder is **made and then deleted** rather than invented as a stray id, because that
+    /// is the situation the check is for: another window emptied the cabinet between the menu
+    /// opening and the button being pressed.
+    #[test]
+    fn a_folder_that_is_gone_is_refused_before_a_wish_is_written() {
+        let conn = seeded();
+        let short = create_deck(&conn, &input("Burn", "modern")).unwrap().id;
+        add(&conn, short, "bolt-lea", main_of(&conn, short), 4);
+
+        // A deck holding every copy it plays. The premise is asserted as the press itself
+        // rather than as an empty [`live_shortfall`], because what the case turns on is that
+        // this press reaches [`crate::wishlist::add_wish`] **not once** — and a `0` from a
+        // successful press is exactly the answer a deleted folder must not be able to hide
+        // behind three lines further down.
+        let settled = create_deck(&conn, &input("Settled", "modern")).unwrap().id;
+        file_into_group(&conn, settled, "serra-lea", 2);
+        add(&conn, settled, "serra-lea", main_of(&conn, settled), 2);
+        assert_eq!(
+            missing_to_wishlist(&conn, settled, None).unwrap(),
+            0,
+            "the fixture's premise: this deck is short of nothing at all"
+        );
+
+        let gone = wish_folder(&conn, "Ordered");
+        crate::wishlist_folders::delete_folder(&conn, gone).unwrap();
+
+        assert_eq!(
+            missing_to_wishlist(&conn, short, Some(gone)).unwrap_err(),
+            crate::deck_meta::FOLDER_GONE
+        );
+        assert_eq!(
+            missing_to_wishlist(&conn, settled, Some(gone)).unwrap_err(),
+            crate::deck_meta::FOLDER_GONE,
+            "the deck with nothing to buy is told about the folder, not handed a 0"
+        );
+        assert_eq!(
+            count(&conn, "wishlist_entries"),
+            0,
+            "and neither press wrote a wish — not in the folder, and not at the root either"
+        );
+    }
+
+    /// **The same card at the root and then in a folder is two wishes, not one folded row.**
+    /// This is what [`WISHLIST_GRAIN`](crate::schema::WISHLIST_GRAIN)'s fourth term is for, and
+    /// the reason a destination on this button is an *add* rather than a move: take
+    /// `coalesce(folder_id, 0)` out of the conflict target and the second press lands on the row
+    /// the first one wrote and raises it to eight — the reader watching four copies they had
+    /// filed at the root walk into *Ordered* as a side effect of pressing a shopping button.
+    ///
+    /// **The two presses are identical apart from the folder, deliberately.** Nothing about the
+    /// deck changes between them — a wish moves no cardboard — so the shortfall is re-read to
+    /// the same four copies of the same oracle card, and the grain's other three terms all
+    /// match. Two rows can therefore only have been separated by the fourth; a fixture that
+    /// varied the quantity would have passed with that term gone.
+    ///
+    /// **The third press is what says the fold still works**, so that "two rows" cannot be read
+    /// as the upsert having been switched off: it repeats the *first* press exactly, and lands
+    /// on the root's row and nowhere else.
+    #[test]
+    fn the_same_card_at_the_root_and_in_a_folder_is_two_wishes() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        let ordered = wish_folder(&conn, "Ordered");
+        add(&conn, deck.id, "bolt-lea", main, 4);
+
+        assert_eq!(missing_to_wishlist(&conn, deck.id, None).unwrap(), 1);
+        assert_eq!(
+            missing_to_wishlist(&conn, deck.id, Some(ordered)).unwrap(),
+            1
+        );
+
+        assert_eq!(
+            filed_wishes(&conn),
+            vec![
+                (Some("o1".to_owned()), None, 4),
+                (Some("o1".to_owned()), Some(ordered), 4),
+            ],
+            "two rows of four copies, not one row of eight"
+        );
+
+        assert_eq!(missing_to_wishlist(&conn, deck.id, None).unwrap(), 1);
+        assert_eq!(
+            filed_wishes(&conn),
+            vec![
+                (Some("o1".to_owned()), None, 8),
+                (Some("o1".to_owned()), Some(ordered), 4),
+            ],
+            "the root's wish doubled on the repeat and the folder's was not touched"
         );
     }
 
@@ -13242,7 +13487,7 @@ mod tests {
         let main = main_of(&conn, tracked);
         add(&conn, tracked, "bolt-lea", main, 4);
 
-        let err = missing_to_wishlist(&conn, tracked).unwrap_err();
+        let err = missing_to_wishlist(&conn, tracked, None).unwrap_err();
         assert_eq!(err, VIRTUAL_HOLDS_NOTHING);
         assert_eq!(
             count(&conn, "wishlist_entries"),
@@ -13254,7 +13499,7 @@ mod tests {
         let cardboard_main = main_of(&conn, cardboard);
         add(&conn, cardboard, "bolt-lea", cardboard_main, 4);
         assert_eq!(
-            missing_to_wishlist(&conn, cardboard).unwrap(),
+            missing_to_wishlist(&conn, cardboard, None).unwrap(),
             1,
             "the same press on a deck about cardboard still works"
         );

@@ -964,9 +964,17 @@ shared_cell` walks both into two databases and compares them column by column.
   an add cannot silently move a row the reader filed last week, and moving one between folders
   is its own explicit act. `coalesce(folder_id, 0)` can never collide with a real folder because
   `wishlist_folders.id` is `INTEGER PRIMARY KEY`, which SQLite never assigns 0. **The price is
-  written down rather than discovered**: the three writers that add at the root and cannot name
-  a folder (`deck_missing_to_wishlist`, `deck_theory_missing_to_wishlist`,
-  `wishlist_import_commit`) make a *second* root row for a card already filed elsewhere.
+  written down rather than discovered**: a wish can land at the root for a card already filed in a
+  drawer, and the pair is what `WishRow.elsewhere` exists to advertise. ⚠️ **This read "the three
+  writers that add at the root and cannot name a folder" until 2026-09-09, and one is left** —
+  `wishlist_import_commit`, because a file says nothing about where its lines should be filed.
+  `deck_missing_to_wishlist` and `deck_theory_missing_to_wishlist` each take an optional
+  `folder_id` now ([issue #437](https://github.com/Msgaihede/mtg-grimoire/issues/437)), and the
+  fourth term is the **licence** for that rather than the obstacle: with the folder in the grain a
+  destination is a *second wish*, so a sweep into `Ordered` cannot move the root wish the reader
+  made last week. **The price did not go with the writers.** Both default to the root and offer it
+  as a choice, so the duplicate arrives by a reader *choosing* it as well as by an import — which
+  is a state nothing refuses and therefore one that is really there.
 - **`wishlist_folders` is `deck_folders` ported, cascade rules included** (schema v23):
   `parent_id` CASCADEs onto its own table so a sub-tree goes in one press, and
   `wishlist_entries.folder_id` is `ON DELETE SET NULL` so deleting the cabinet surfaces the
@@ -980,16 +988,27 @@ shared_cell` walks both into two databases and compares them column by column.
   and before the folder row goes. Left to the cascade it answered
   `UNIQUE constraint failed: index 'idx_wishlist_grain'` — with nothing moved and the folder
   still standing — in two shapes, and the first is the feature's own documented state: a
-  sub-tree wish colliding with the second **root** row the three root-only writers above make,
-  and two sub-tree wishes colliding with *each other* once both land at the root. One at a time
+  sub-tree wish colliding with the second **root** row described above — **both routes to it, not
+  just the importer's**, since a reader who takes the root from a sweep's destination list makes
+  exactly the same pair — and two sub-tree wishes colliding with *each other* once both land at
+  the root. One at a time
   is what answers the second. Every other write that can land on a taken wishlist grain already
   merged; this was the one that let the index decide.
-- **All three writes that take a `folder_id` answer the same sentence.** `add_wish`,
-  `wishlist_folders::set_wish_folder` and `wishlist_folders::move_folder` each look the id up
-  and refuse with `deck_meta::FOLDER_GONE`. The foreign key alone is not the answer: it is
-  per-connection (`PRAGMA foreign_keys`), and `FOREIGN KEY constraint failed` names the
-  constraint rather than the mistake. `deck_meta::move_folder` still has the hole and is
-  deliberately left with it — fixing one side of a ported pair is worse than neither.
+- **Every write that names a wishlist folder answers the same sentence, through the one query.**
+  `wishlist_folders::require_folder` is `pub(crate)` and is that query; `create_folder`,
+  `move_folder`, `reorder_folders`, `set_wish_folder` and `wishlist::add_wish` all call it, and
+  the two deck sweeps that gained a `folder_id` on 2026-09-09 call it too — **before the walk
+  rather than during it**, because a deck short of nothing never reaches `add_wish`, so a check
+  left to the loop answers "0 wishes" for a drawer that has just been deleted. The foreign key
+  alone is not the answer: it is per-connection (`PRAGMA foreign_keys`), and
+  `FOREIGN KEY constraint failed` names the constraint rather than the mistake. ⚠️ **This read
+  "all three writes" and named `add_wish`, `set_wish_folder` and `move_folder` — it was short by
+  two even then.** `reorder_folders` re-parents as well as places, and **`create_folder` did not
+  refuse at all**: it handed the id to its `INSERT`, so a gone parent answered the foreign key's
+  wording, or nothing whatever with the pragma off. That hole was closed the day the wishlist
+  gained a `New folder…` panel offering the whole tree as parents — the race stopped being
+  theoretical. `deck_meta::move_folder` still has it, for the deck cabinet, and is deliberately
+  left with it.
 - `needs_review` is a **sentence, not a flag** — the reconciler writes what happened, and
   the first message wins (a later sweep does not overwrite one). Non-NULL means "listed,
   counted, and asking to be looked at", never "hidden".

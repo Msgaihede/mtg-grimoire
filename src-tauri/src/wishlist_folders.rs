@@ -143,6 +143,33 @@ pub fn list_folders(conn: &Connection) -> Result<Vec<WishlistFolder>, String> {
 /// `wishlist_folders` carries no grain constant and no unique index on `(parent_id, name)`, so
 /// two sibling folders may share one, exactly as two sibling `deck_folders` may.
 ///
+/// **The parent is fenced in words, and only since 2026-09-09.** Until then this write handed
+/// the id to its `INSERT` and left the answer to
+/// `parent_id REFERENCES wishlist_folders(id)`: a parent that had gone came back as
+/// `FOREIGN KEY constraint failed`, a sentence about a constraint rather than about the folder,
+/// and with `PRAGMA foreign_keys` off — per-connection, so nothing in a signature promises it —
+/// came back as a sub-tree hanging off nothing and no error at all. [`move_folder`]'s doc named
+/// this write among the fenced for a year before it was, and
+/// `.storybook/fake/db.ts`'s `wishlist_folder_create` has refused all along with a comment
+/// saying the crate did not, which is the fake being *stricter* than the app and the direction
+/// of drift nobody watches for.
+///
+/// **What made it worth closing is a surface rather than a discovery.** For as long as the only
+/// way to make a folder was a panel drawn from the tree it was about, an id nobody could send
+/// was a hole nobody could fall into.
+/// [Issue #437](https://github.com/Msgaihede/mtg-grimoire/issues/437)
+/// gives the wishlist destination control a `New folder…` panel that offers the whole tree as
+/// parents, so a reader picking `Ordered` while another window deletes it is now an ordinary
+/// race on a surface built this week — and it is exactly the failure
+/// [`crate::wishlist::WishInput::folder_id`] describes, on the one write still producing it.
+/// [`crate::collection_folders::create_folder`] is the port that had the fence first and cites
+/// this function as the one without it; that citation is now the wrong way round.
+///
+/// **Where the question sits is [`crate::wishlist::add_wish`]'s argument, both ends.** After
+/// [`valid_name`], which needs no query at all — a blank name is the caller's mistake whether
+/// the parent is there or not, so the free refusal goes first — and before the
+/// `max(sort_order)` scan, because a create that is going to be refused should not pay for one.
+///
 /// **The `id` is SQLite's and is never supplied.** `INTEGER PRIMARY KEY` is what makes
 /// [`crate::schema::WISHLIST_GRAIN`]'s fourth term — `coalesce(folder_id, 0)` — safe, and the
 /// guarantee is narrower than it looks: SQLite never *auto-assigns* rowid 0, but it will
@@ -155,6 +182,11 @@ pub fn create_folder(
     name: &str,
 ) -> Result<WishlistFolder, String> {
     let name = valid_name(name)?;
+    // The parent, through the same helper every other write handed a folder id goes through —
+    // see the doc above for why this one joined them, and why the call sits exactly here.
+    if let Some(parent) = parent_id {
+        require_folder(conn, parent)?;
+    }
     // `IS`, not `=`: `parent_id` is nullable (root), and `=` never matches a bound NULL.
     let next_order: i64 = conn
         .query_row(
@@ -189,9 +221,39 @@ pub fn rename_folder(conn: &Connection, id: i64, name: &str) -> Result<WishlistF
     read_folder(conn, id)?.ok_or_else(|| FOLDER_GONE.to_owned())
 }
 
-/// The destination fence, in one place because [`move_folder`] and [`reorder_folders`] both owe
-/// it — the sentence, not the foreign key, for the reason [`move_folder`]'s doc gives at length.
-fn require_folder(conn: &Connection, id: i64) -> Result<(), String> {
+/// The destination fence, in one place because every write that is handed a folder id owes it:
+/// [`create_folder`], [`move_folder`] and [`reorder_folders`] over
+/// `wishlist_folders.parent_id`, [`set_wish_folder`] and [`crate::wishlist::add_wish`] over
+/// `wishlist_entries.folder_id`. The sentence, not the foreign key, for the reason
+/// [`move_folder`]'s doc gives at length.
+///
+/// **`pub(crate)` since 2026-09-09, and the visibility is the point rather than a convenience.**
+/// Two of those five used to carry their own `SELECT EXISTS(…)` and their own
+/// `Err(FOLDER_GONE)` — [`set_wish_folder`] here and [`crate::wishlist::add_wish`] a module
+/// over — and a third, [`create_folder`], asked nothing and let the foreign key answer. So one
+/// question against one table had three spellings and one silence. What made collapsing them
+/// worth doing on that day is
+/// [issue #437](https://github.com/Msgaihede/mtg-grimoire/issues/437):
+/// `deck_missing_to_wishlist` and `deck_theory_missing_to_wishlist` learned to take a folder,
+/// so the add that had only ever been driven by a menu built from the tree it was about is now
+/// driven by a *dialog*, carrying an id the reader chose minutes ago from a tree another pane
+/// may since have deleted — and that dialog's `New folder…` panel offers the whole tree as
+/// parents, which is the same race one write over. Both surfaces landed in one week, which is
+/// why the two copies and the silence were collapsed in one pass rather than one at a time.
+/// A refusal written three times is a refusal that comes to disagree
+/// with itself, which is [`refuse_cycle`]'s argument about the walk one step further; the
+/// difference is that a disagreeing **sentence** goes red nowhere. Every copy answers
+/// *something*, and only a reader holding two panes open ever learns they answer differently —
+/// which is exactly how the wording came to be shared in the first place, and the story
+/// [`crate::wishlist::WishInput::folder_id`] tells.
+///
+/// **Where a caller asks is still the caller's**, and deliberately so. Each write owes the
+/// question at the point its own argument puts it — [`crate::wishlist::add_wish`] after it
+/// knows the wish names a card at all and before it looks the printing up,
+/// [`create_folder`] after the name and before the ordering scan, the other three before they
+/// touch a row — so the helper takes an id, answers about that id, and decides nothing about
+/// the write around it.
+pub(crate) fn require_folder(conn: &Connection, id: i64) -> Result<(), String> {
     let exists: bool = conn
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM wishlist_folders WHERE id = ?1)",
@@ -244,8 +306,17 @@ fn refuse_cycle(conn: &Connection, id: i64, start: i64) -> Result<(), String> {
 /// as the root: `optional()?.flatten()` folds "no such folder" and "that folder is at the root"
 /// into one `None`, the climb ends on the first hop and the id sails through. So the check is
 /// its own statement, answering [`FOLDER_GONE`] the way [`create_folder`]'s parent and
-/// [`set_wish_folder`]'s destination already do — after this the three folder-taking writes in
-/// the feature all say the same sentence. **`deck_meta`'s `move_folder` has the identical hole
+/// [`set_wish_folder`]'s destination do — after this every write in the feature that takes a
+/// folder id says the same sentence, and since 2026-09-09 they all say it through one query
+/// ([`require_folder`], whose doc lists them). **This paragraph was ahead of [`create_folder`]
+/// and that write has
+/// been brought to it**: it named the created folder's parent among the fenced from the day it
+/// was written, which was true of nothing until 2026-09-09 — until then that write handed its
+/// parent to the `INSERT` and let the foreign key answer. Closing it is
+/// [issue #437](https://github.com/Msgaihede/mtg-grimoire/issues/437)'s doing rather than
+/// tidying: the destination control's `New folder…` panel offers the whole tree as parents, so
+/// an id that has gone became something a reader can really send. See [`create_folder`].
+/// **`deck_meta`'s `move_folder` has the identical hole
 /// and is deliberately left with it**: fixing one side of a ported pair is a difference somebody
 /// later reads as intentional, and the deck gallery is out of this branch's scope.
 ///
@@ -360,10 +431,16 @@ pub fn reorder_folders(
 /// nothing moved:
 ///
 /// * a wish in the sub-tree and a **root** wish for the same card, which is the state spec §1
-///   accepts on purpose — `deck_missing_to_wishlist`, `deck_theory_missing_to_wishlist` and
-///   `wishlist_import_commit` all add at the root and cannot name a folder, so a card the
-///   reader has filed acquires a second root row and `WishRow.elsewhere` exists to advertise
-///   it. The duplicate the design tolerates was the one that bricked the delete.
+///   accepts on purpose, and there are two ways into it. `wishlist_import_commit` adds at the
+///   root and **cannot** name a folder — a file says nothing about this reader's cabinet, so
+///   there is nothing to read one from — and every write that *can* name one offers the root
+///   among the choices and opens on it, the two deck sweeps included since they grew an
+///   optional folder on 2026-09-09. Either way a card the reader has filed acquires a second
+///   root row, and `WishRow.elsewhere` exists to advertise it. **Neither way is a write that
+///   went wrong**: [`crate::schema::WISHLIST_GRAIN`]'s fourth term says two places is two
+///   wishes, which is the whole of what makes an add an add — so the pair is the design
+///   working, nothing refuses it, and a state nothing refuses is a state that is really there.
+///   The duplicate the design tolerates was the one that bricked the delete.
 /// * **two sub-tree wishes colliding with each other**, needing no root row at all: `Top/A` and
 ///   `Top/B` each holding the same card land on one grain the moment both reach the root.
 ///
@@ -457,18 +534,13 @@ pub fn set_wish_folder(
     // Validated in words rather than left to the foreign key, [`crate::deck::set_folder`]'s
     // reasoning verbatim: `wishlist_entries.folder_id` does declare
     // `REFERENCES wishlist_folders(id)`, but `PRAGMA foreign_keys` is a per-connection setting
-    // and a constraint failure names the table rather than the mistake.
+    // and a constraint failure names the table rather than the mistake. Through
+    // [`require_folder`] rather than spelled out here — this was one of the two hand-written
+    // copies of that one lookup the crate carried, and see there for why the helper is now the
+    // only spelling. Inside the transaction, so the refusal takes the handle down with it and
+    // nothing this function opened survives its own `Err`.
     if let Some(folder) = folder_id {
-        let exists: bool = tx
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM wishlist_folders WHERE id = ?1)",
-                params![folder],
-                |r| r.get(0),
-            )
-            .map_err(|e| e.to_string())?;
-        if !exists {
-            return Err(FOLDER_GONE.to_owned());
-        }
+        require_folder(&tx, folder)?;
     }
     refile_wish(&tx, id, folder_id).and_then(|change| {
         tx.commit().map_err(|e| e.to_string())?;
@@ -863,6 +935,38 @@ mod tests {
         assert!(ordered.id > 0, "SQLite assigned it, and never 0");
     }
 
+    /// The parent fence this write did not have until 2026-09-09. Until then it handed the id
+    /// to its `INSERT`: with `PRAGMA foreign_keys` on — which [`conn`] sets, so this test would
+    /// have failed here rather than passed — a reader got `FOREIGN KEY constraint failed`, a
+    /// sentence about a constraint; with it off, a folder parented to nothing and no error at
+    /// all. `.storybook/fake/db.ts` has refused it all along.
+    ///
+    /// **The control is what stops the first half passing vacuously.** A fence that refused
+    /// every `Some(_)` would satisfy the refusal and the empty table and be wrong in the way
+    /// that matters most, and reaching a shared helper with the wrong argument is exactly the
+    /// mistake one call site makes easy — so a parent that really is there has to still create,
+    /// and the folder has to still come back filed under it rather than at the root.
+    #[test]
+    fn create_folder_refuses_a_parent_that_is_not_there() {
+        let conn = conn();
+
+        let err = create_folder(&conn, Some(404), "Someday").unwrap_err();
+        assert_eq!(err, FOLDER_GONE);
+        assert!(
+            list_folders(&conn).unwrap().is_empty(),
+            "and the refused create wrote nothing"
+        );
+
+        let ordered = create_folder(&conn, None, "Ordered").unwrap();
+        let someday = create_folder(&conn, Some(ordered.id), "Someday").unwrap();
+        assert_eq!(
+            someday.parent_id,
+            Some(ordered.id),
+            "a parent that is there still creates, and still parents"
+        );
+        assert_eq!(list_folders(&conn).unwrap().len(), 2);
+    }
+
     #[test]
     fn create_folder_refuses_a_blank_name() {
         let conn = conn();
@@ -950,10 +1054,12 @@ mod tests {
     /// `optional()?.flatten()` folds "no such folder" into the same `None` as "that folder is
     /// at the root", so the climb ends on the first hop and an id nothing answers to sails
     /// through to the `UPDATE` — which refuses it as `FOREIGN KEY constraint failed`, a
-    /// sentence about a constraint, and only while `PRAGMA foreign_keys` is on. `create_folder`
-    /// and `set_wish_folder` both answer [`FOLDER_GONE`] over the same column and this now does
-    /// too; `.storybook/fake/db.ts` has always answered it, and the fake being kinder than the
-    /// app is the drift that makes a story document a lie.
+    /// sentence about a constraint, and only while `PRAGMA foreign_keys` is on. [`create_folder`],
+    /// [`set_wish_folder`] and [`crate::wishlist::add_wish`] all answer [`FOLDER_GONE`] to the
+    /// same mistake and this does too — all four through [`require_folder`] since 2026-09-09,
+    /// which is also the day the first of those four started answering it at all.
+    /// `.storybook/fake/db.ts` has always answered it, and the fake being kinder than the app
+    /// is the drift that makes a story document a lie.
     #[test]
     fn move_folder_refuses_a_parent_that_is_not_there() {
         let conn = conn();
@@ -1040,10 +1146,16 @@ mod tests {
 
     /// **Shape (a) of the collision the un-filing exists for**: a wish at the root, and the same
     /// card filed in the folder being deleted. Not contrived — it is the feature's own
-    /// documented state. Spec §1 accepts that `deck_missing_to_wishlist`,
-    /// `deck_theory_missing_to_wishlist` and `wishlist_import_commit` all add at the **root**
-    /// and cannot name a folder, so a card the reader has filed acquires a second root row and
-    /// `WishRow.elsewhere` exists to advertise it. That exact duplicate is the one that used to
+    /// documented state, reachable two ways. Spec §1 accepts that `wishlist_import_commit` adds
+    /// at the **root** and cannot name a folder at all; and every write that can name one — the
+    /// wall's add menu, and the two deck sweeps since they grew an optional folder on
+    /// 2026-09-09 — still offers the root and still defaults to it, so a reader who takes that
+    /// default over a card they filed last week lands the same pair by choosing rather than by
+    /// being given no choice. [`crate::schema::WISHLIST_GRAIN`]'s fourth term is what makes it
+    /// two wishes instead of one, and `WishRow.elsewhere` exists to advertise it. **The fixture
+    /// below is deliberately neither of those routes** — two raw `INSERT`s, because the shape is
+    /// what has to hold and which writer produced it is exactly the fact that has already
+    /// changed once. That duplicate is the one that used to
     /// brick the delete: with the re-filing left to `ON DELETE SET NULL`, this answered
     /// `Err("UNIQUE constraint failed: index 'idx_wishlist_grain'")`, nothing moved and the
     /// folder was still there.

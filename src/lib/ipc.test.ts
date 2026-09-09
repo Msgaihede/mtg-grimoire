@@ -820,6 +820,11 @@ describe("ipc argument names match the Rust command signatures", () => {
 
     invoke.mockResolvedValue(2);
     const wishes = await ipc.deckMissingToWishlist(4);
+    // **No destination named, so nothing about the folder is sent** — which is what every call
+    // site that predates issue #437 means and what the root has always been. `folderId` is left
+    // off this expectation deliberately rather than written as `undefined`: `toHaveBeenCalledWith`
+    // compares like `toEqual`, so the two are the same object to it either way, and the case
+    // below is where that absence is read off the call and asserted.
     expect(invoke).toHaveBeenCalledWith("deck_missing_to_wishlist", { deckId: 4 });
     // How many wishes were *touched*, not how many copies were added — clicking twice raises
     // one line rather than making two, which is `add_wish`'s fold.
@@ -1338,6 +1343,55 @@ describe("ipc argument names match the Rust command signatures", () => {
   });
 
   /**
+   * **The two deck→wishlist pushes on the same fence, for the term that decides _where_** —
+   * added 2026-09-09 with the destination folder (issue #437).
+   *
+   * `deck_card_set_label`'s failure again, in the family where it is quietest. Both commands
+   * gained `folder_id: Option<i64>`, and the two sides spell it independently: Rust in the
+   * signature, `ipc.ts` in the object literal. **Tauri drops a payload field a command does not
+   * name**, so a crate that called it `folder`, or `dest_folder_id`, or `wishlist_folder` — each
+   * of which reads perfectly at its own site — hands the writer a `None`. And `None` here is not
+   * an error: it is **the root**. The press succeeds, the count is right, the wishes are real;
+   * they are simply in a drawer the reader did not choose, and there is nothing for them to read
+   * that as except a folder picker that does not work.
+   *
+   * Nothing else in the build compares the two spellings. `invoke` is typed on its return and
+   * not its payload, the behavioural case further down sends `folderId` to a mock that would
+   * accept any key at all, and the Storybook fake takes the camelCase side — so it agrees with
+   * the bug.
+   *
+   * Containment rather than equality, `finishBearing`'s rule: `state` is declared and never
+   * sent. Both length guards are what stop a parser that found nothing from reading as a pass —
+   * and the source each command is looked up in is worth one line of care, because
+   * **`deck_missing_to_wishlist` is declared in `deck.rs` and not in `deck_missing.rs`**, which
+   * is a module about the pull's picks. Pointed at the wrong file this is a green test over an
+   * empty list, which is the one way a fence lies.
+   */
+  const folderBearing: [command: string, rustSource: string][] = [
+    ["deck_missing_to_wishlist", deckRs],
+    ["deck_theory_missing_to_wishlist", deckTheoryRs],
+  ];
+
+  it.each(folderBearing)("%s declares the folder ipc.ts sends it", (command, rustSource) => {
+    const sent = payloadKeys(ipcSource, command).map(snake);
+    const declared = commandParams(rustSource, command);
+
+    expect(sent.length, `nothing parsed out of ipc.ts for \`${command}\``).toBeGreaterThan(1);
+    expect(declared.length, `nothing parsed out of the crate for \`${command}\``).toBeGreaterThan(
+      1,
+    );
+    // Named as well as looped over: the loop is only as strong as what `ipc.ts` happens to send,
+    // so a wrapper that took a `folderId` parameter and then dropped it on the floor would make
+    // this vacuous — green on both sides while every press files at the root.
+    expect(sent, `\`ipc.ts\` sends \`${command}\` no folder`).toContain("folder_id");
+    expect(declared, `the crate's \`${command}\` declares no \`folder_id\``).toContain("folder_id");
+
+    for (const key of sent) {
+      expect(declared, `\`${command}\` is sent \`${key}\` and does not declare it`).toContain(key);
+    }
+  });
+
+  /**
    * The five folder commands — the one family in the deck surface that is about **no deck**.
    *
    * `deck_folder_list` therefore takes nothing, and `create`/`move` both spell their target
@@ -1437,8 +1491,95 @@ describe("ipc argument names match the Rust command signatures", () => {
     const wishes = await ipc.deckTheoryMissingToWishlist(4);
     // A **second** command rather than a variant argument on `deck_missing_to_wishlist`: that
     // one reads `live` and only `live`, and the two shopping lists are different questions.
+    // Neither `only` nor `folderId` is written out here — both are absent, both compare equal to
+    // an omitted key under `toEqual`, and the case below is where the absence is the assertion.
     expect(invoke).toHaveBeenCalledWith("deck_theory_missing_to_wishlist", { deckId: 4 });
     expect(wishes).toBe(3);
+  });
+
+  /**
+   * **Where the two shopping lists file, which is a fourth thing the wire now has to carry** —
+   * issue #437.
+   *
+   * Both commands wrote at the root and offered nothing else until 2026-09-09. The root is still
+   * the default and still a destination a reader can pick; what is new is that they can point at
+   * a wishlist folder instead, and the whole of that instruction is one key on the payload.
+   *
+   * **Both commands in one case on purpose.** The destination is a single feature spread across
+   * two commands that answer different questions, and the failure a per-command case reads
+   * straight past is the wrapper that grew the argument on the live side and not the theory side
+   * — a folder picker that works from the deck's own footer and silently files at the root from
+   * the plan's diff dialog.
+   *
+   * **The absence leg is what protects every existing call site**, and it cannot be written as an
+   * expectation object. `toHaveBeenCalledWith` compares like `toEqual`, so an absent key and an
+   * `undefined` one are the same object to it — which means the two destination assertions would
+   * still pass if these wrappers invented a folder of their own. The payload is read off the call
+   * for that, which is `cardPrintings`' rule one command family over.
+   *
+   * **`null` is asserted as itself, and the distinction is observable here where it is not on the
+   * wire.** `toEqual` does *not* fold `null` into an absent key, so a wrapper that coerced
+   * `folderId ?? undefined` goes red on the explicit-root leg. It should: Rust reads either
+   * spelling as `None` and cannot tell them apart, but a **caller** can, because
+   * {@link WishInput.folderId} and every folder-aware surface in this app hold a
+   * `number | null` — so forwarding that value unchanged has to be legal, and a seam that
+   * quietly rewrote it would make the root reachable only by leaving an argument out. What this
+   * pins is the honesty of the seam, not a difference the backend can see.
+   */
+  it("files both deck shopping lists where it is told, and at the root when it is not", async () => {
+    invoke.mockResolvedValue(2);
+    await ipc.deckMissingToWishlist(4, 12);
+    expect(invoke).toHaveBeenCalledWith("deck_missing_to_wishlist", { deckId: 4, folderId: 12 });
+
+    // The two narrowings are independent: `only` picks the rows, `folderId` picks the drawer.
+    invoke.mockResolvedValue(3);
+    await ipc.deckTheoryMissingToWishlist(4, ["ring-c21|"], 12);
+    expect(invoke).toHaveBeenCalledWith("deck_theory_missing_to_wishlist", {
+      deckId: 4,
+      only: ["ring-c21|"],
+      folderId: 12,
+    });
+
+    // The footer's untouched press with a folder picked — the whole difference, into one folder.
+    // A positional third argument means the second has to be spellable as "no narrowing", so the
+    // `undefined` here is the call shape a dialog with nothing ticked actually makes.
+    invoke.mockResolvedValue(9);
+    await ipc.deckTheoryMissingToWishlist(4, undefined, 12);
+    expect(invoke).toHaveBeenCalledWith("deck_theory_missing_to_wishlist", {
+      deckId: 4,
+      only: undefined,
+      folderId: 12,
+    });
+
+    // The explicit root: a destination the reader chose from a menu, forwarded as the `null` the
+    // menu is holding rather than translated into an omission on the way past.
+    invoke.mockResolvedValue(1);
+    await ipc.deckMissingToWishlist(4, null);
+    expect(invoke).toHaveBeenCalledWith("deck_missing_to_wishlist", { deckId: 4, folderId: null });
+    await ipc.deckTheoryMissingToWishlist(4, undefined, null);
+    expect(invoke).toHaveBeenCalledWith("deck_theory_missing_to_wishlist", {
+      deckId: 4,
+      only: undefined,
+      folderId: null,
+    });
+
+    // And the omission, read off the call rather than compared against an object: a caller from
+    // before the folder existed sends no folder at all, and JSON drops an `undefined` key, so
+    // this is also the assertion that nothing new reaches Rust for those callers.
+    await ipc.deckMissingToWishlist(4);
+    const live = invoke.mock.lastCall?.[1] as { deckId?: number; folderId?: number | null };
+    expect(live.deckId, "the deck stopped being sent, so this proves nothing").toBe(4);
+    expect(live.folderId).toBeUndefined();
+
+    await ipc.deckTheoryMissingToWishlist(4);
+    const theory = invoke.mock.lastCall?.[1] as {
+      deckId?: number;
+      only?: readonly string[];
+      folderId?: number | null;
+    };
+    expect(theory.deckId, "the deck stopped being sent, so this proves nothing").toBe(4);
+    expect(theory.only).toBeUndefined();
+    expect(theory.folderId).toBeUndefined();
   });
 
   /**

@@ -3039,7 +3039,7 @@ describe("the wishlist's folders", () => {
     });
   }
 
-  it("files a new folder among its siblings and refuses a blank name", () => {
+  it("files a new folder among its siblings, refuses a blank name and refuses a gone parent", () => {
     const db = filing();
     const w = writeHandlers(db);
     const inner = w.wishlist_folder_create({ parentId: 1, name: "  Paid for  " });
@@ -3047,6 +3047,15 @@ describe("the wishlist's folders", () => {
     // the root's own numbering is untouched.
     expect(inner).toMatchObject({ parentId: 1, name: "Paid for", sortOrder: 1 });
     expect(w.wishlist_folder_create({ parentId: null, name: "Someday" }).sortOrder).toBe(1);
+
+    // The parent, which the block below argues about at length and nothing here asserted until
+    // 2026-09-09 — the fake has refused this all along and the crate's `create_folder` was
+    // brought to it, so it is worth a line that fails if either side slips back.
+    const standing = db.wishlistFolders.length;
+    expect(() => w.wishlist_folder_create({ parentId: 404, name: "Nowhere" })).toThrow(
+      /^That folder is not there any more\.$/,
+    );
+    expect(db.wishlistFolders).toHaveLength(standing);
 
     expect(() => w.wishlist_folder_create({ parentId: null, name: "   " })).toThrow(
       /A folder needs a name\./,
@@ -3107,8 +3116,7 @@ describe("the wishlist's folders", () => {
   /**
    * The destination, which the cycle walk above cannot check for it and does not.
    *
-   * `wishlist_folder_create` refuses a parent that is gone, because `wishlist_folders.parent_id`
-   * is a real foreign key and SQLite refuses one in the app. `wishlist_folder_move` writes the
+   * `wishlist_folder_create` refuses a parent that is gone; `wishlist_folder_move` writes the
    * **same column** and so has to refuse the same thing, or the pair disagree — the fake would
    * write a sub-tree hanging off nothing, and a story would then draw a folder that cannot
    * exist.
@@ -3117,12 +3125,23 @@ describe("the wishlist's folders", () => {
    * folder has as "already at the root" and ends the climb on the first hop, so an unchecked
    * move sails straight through it.
    *
-   * **This test was ahead of the crate and the crate was brought to it** (2026-08-22). Rust's
-   * `move_folder` had the identical hole — `optional()?.flatten()` reads a missing id as the
-   * root, exactly as the walk here does — so the `UPDATE` ran and answered
-   * `FOREIGN KEY constraint failed`, a sentence about a constraint rather than about the folder,
-   * and only while `PRAGMA foreign_keys` was on. It looks the id up and answers `FOLDER_GONE`
-   * now, which is what this had been asserting all along.
+   * **The fake was ahead of the crate twice, and the crate was brought to it twice.** This block
+   * used to argue from the DDL — "`wishlist_folders.parent_id` is a real foreign key and SQLite
+   * refuses one in the app" — and that argument was doing less work than it looked like: a
+   * foreign key answers `FOREIGN KEY constraint failed`, which names the table rather than the
+   * mistake, and answers nothing at all while `PRAGMA foreign_keys` is off.
+   *
+   * - **`move_folder`, 2026-08-22.** Rust had the identical hole — `optional()?.flatten()` reads
+   *   a missing id as the root, exactly as the walk here does — so the `UPDATE` ran and the
+   *   constraint (or nothing) answered. It looks the id up and answers `FOLDER_GONE` now.
+   * - **`create_folder`, 2026-09-09.** Rust handed `parent_id` straight to the `INSERT` for the
+   *   same reason and paid the same price, with a worse ending: with the pragma off the row went
+   *   in, parented to nothing. It calls `require_folder` now, like the four other writes over
+   *   that column.
+   *
+   * Both times this file was already asserting the answer the crate eventually gave, and neither
+   * time did anything in `db.ts` change. Which is the argument for writing a fence the *app*
+   * ought to have rather than the one it happens to have: the fake is where the rule is legible.
    */
   it("refuses a parent that is gone, the fence `wishlist_folder_create` already has", () => {
     const db = filing();
@@ -3169,8 +3188,10 @@ describe("the wishlist's folders", () => {
    * shapes are reachable in the shipped app:
    *
    * - a **root** wish plus the same card filed in the folder, which the design accepts on
-   *   purpose — the three writers that add at the root cannot name a folder, so a card the
-   *   reader has filed acquires a second root row;
+   *   purpose — `wishlist_import_commit` is the one writer left that cannot name a folder (a
+   *   file says nothing about a reader's filing), and the two deck sweeps, which could not
+   *   either until issue #437 gave them a destination, still offer the root and still default
+   *   to it. Either way a card the reader has filed acquires a second root row;
    * - two wishes in **sibling sub-folders**, colliding with each other with no root row in play.
    *
    * A bare loop over the rows produced both here while the app answered `UNIQUE constraint
@@ -3326,6 +3347,37 @@ describe("the wishlist's folders", () => {
       query: { limit: 10, offset: 0, flatten: true },
     }).items;
     expect(rows.map((r) => r.elsewhere)).toEqual([1, 1]);
+  });
+
+  /**
+   * An add naming a folder that is not there is **refused in words**, and the fake did not
+   * refuse it at all until 2026-09-09.
+   *
+   * `wishlist::add_wish` has checked `folder_id` against `wishlist_folders` since the column
+   * existed — the foreign key would refuse the write anyway, in a sentence about a constraint
+   * rather than about the folder — and `addWish` here wrote the id straight onto the row. That
+   * is the fake being **kinder** than the app, which is the direction of drift this workbench
+   * keeps paying for: the wish would have been stored pointing at a folder no tree can draw,
+   * so the wishlist page — whose tree comes from `wishlist_folder_list` — would simply never
+   * show it, and a story could stand in a state the reader cannot reach.
+   *
+   * The refusal is asked ahead of the printing lookup and behind the "names neither a card nor
+   * an oracle card" question, which is where the crate asks it: a wish that is going to be
+   * refused for naming no card should not pay for the folder query.
+   */
+  it("refuses an add into a folder that is not there, and stores nothing", () => {
+    const db = filing();
+    const w = writeHandlers(db);
+    expect(() =>
+      w.wishlist_add({ wish: { oracleId: BOLT.oracleId!, quantity: 1, folderId: 404 } }),
+    ).toThrow(/^That folder is not there any more\.$/);
+    expect(db.wishlistEntries).toEqual([]);
+
+    // `null` is the root and is never refused — it is a destination, not a missing folder.
+    expect(
+      w.wishlist_add({ wish: { oracleId: BOLT.oracleId!, quantity: 1, folderId: null } }),
+    ).toMatchObject({ quantity: 1 });
+    expect(db.wishlistEntries).toHaveLength(1);
   });
 
   /**
@@ -8055,6 +8107,39 @@ describe("the third deck kind", () => {
 });
 
 describe("missing to the wishlist", () => {
+  /**
+   * The one folder every test below sends to. Id `1` and not a big number on purpose: it is the
+   * id `wishGrain`'s `?? 0` has to stay distinguishable from the root, and a fixture numbering
+   * its folders from 1 is what the store's own `nextId` would have produced.
+   */
+  const SHOPPING = 1;
+  /** An id nothing answers to, which is what the reader's dialog is holding after another
+   *  window deleted the drawer they picked. */
+  const DELETED = 404;
+  /** `deck_meta::FOLDER_GONE` — the sentence every folder write in both cabinets answers, and
+   *  one `db.ts` does not export. Spelled **whole** rather than as a fragment: `DECK_GONE` is
+   *  the same six words about the deck, so `/not there any more/` alone would be satisfied by
+   *  the wrong refusal — which is precisely the confusion the check's placement is about. */
+  const FOLDER_GONE = /^That folder is not there any more\.$/;
+
+  /** A deck four Bolts short of its main deck, with a `Shopping` drawer to send them to. */
+  function shortDeck(over: Partial<FakeDb> = {}): FakeDb {
+    return makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [deckCard({ id: 1, cardId: BOLT_A.id, categoryKind: "main", quantity: 4 })],
+      wishlistFolders: [{ id: SHOPPING, parentId: null, name: "Shopping", sortOrder: 0 }],
+      ...over,
+    });
+  }
+
+  /** The same deck, covered — nothing is short, so nothing reaches `addWish` and every claim
+   *  about this command's *refusals* has to be answered before the walk or not at all. */
+  function coveredDeck(): FakeDb {
+    return shortDeck({
+      collectionEntries: [entry({ id: 1, cardId: BOLT_A.id, quantity: 4, folderId: groupId(1) })],
+    });
+  }
+
   it("counts wishes, not rows: one card short in two categories is one wish for the sum", () => {
     const db = makeDeckDb({
       decks: [deck({ id: 1 })],
@@ -8070,7 +8155,14 @@ describe("missing to the wishlist", () => {
     });
     expect(writeHandlers(db).deck_missing_to_wishlist({ deckId: 1 })).toBe(1);
     expect(db.wishlistEntries).toHaveLength(1);
-    expect(db.wishlistEntries[0]).toMatchObject({ oracleId: BOLT.oracleId, quantity: 3 });
+    // `folderId: null` is asserted rather than assumed: this call names no destination, so what
+    // it pins since issue #437 is that **the root is still the default** — the press a caller
+    // written before the argument existed makes, unchanged.
+    expect(db.wishlistEntries[0]).toMatchObject({
+      oracleId: BOLT.oracleId,
+      quantity: 3,
+      folderId: null,
+    });
   });
 
   it("subtracts what the deck already holds, and pressing twice raises the line", () => {
@@ -8086,6 +8178,9 @@ describe("missing to the wishlist", () => {
     const w = writeHandlers(db);
     expect(w.deck_missing_to_wishlist({ deckId: 1 })).toBe(1);
     expect(db.wishlistEntries[0].quantity).toBe(3);
+    // Twice at the **same** destination — both presses take the default — which is the fold this
+    // command has always promised. Two presses at two destinations is the test below, and the
+    // two claims are not in tension: the folder is a term of the grain, not a term of the fold.
     expect(w.deck_missing_to_wishlist({ deckId: 1 })).toBe(1);
     expect(db.wishlistEntries).toHaveLength(1);
     expect(db.wishlistEntries[0].quantity).toBe(6);
@@ -8101,6 +8196,109 @@ describe("missing to the wishlist", () => {
     });
     expect(writeHandlers(db).deck_missing_to_wishlist({ deckId: 1 })).toBe(0);
     expect(db.wishlistEntries).toHaveLength(0);
+  });
+
+  /**
+   * The destination reaches the row (issue #437).
+   *
+   * The whole of what `folderId` has to do is end up on the wish, because everything the reader
+   * then sees — which folder the wishlist page draws it under, which subtotal it joins, whether
+   * `elsewhere` marks it — is read off that one column. So this asserts the column and not a
+   * count: a handler that took the argument, validated it and dropped it on the way to
+   * `addWish` would answer `1` exactly as this one does and file at the root.
+   */
+  it("files every wish in the folder it was given", () => {
+    const db = shortDeck();
+    expect(writeHandlers(db).deck_missing_to_wishlist({ deckId: 1, folderId: SHOPPING })).toBe(1);
+    expect(db.wishlistEntries).toEqual([
+      expect.objectContaining({ oracleId: BOLT.oracleId, quantity: 4, folderId: SHOPPING }),
+    ]);
+  });
+
+  /**
+   * The two spellings of the root, which are one place.
+   *
+   * `folderId: null` is a **destination** on this command as it is on `wishlist_set_folder` —
+   * the reader picking "Wishlist" at the top of the picker — and an absent field is the caller
+   * that predates the picker. If those two ever came apart, the second press here would make a
+   * second row instead of raising the first, and the wishlist would hold one card twice with
+   * nothing on screen to tell the two rows apart.
+   */
+  it("reads an absent folder and an explicit null as the same root", () => {
+    const db = shortDeck();
+    const w = writeHandlers(db);
+    expect(w.deck_missing_to_wishlist({ deckId: 1 })).toBe(1);
+    expect(w.deck_missing_to_wishlist({ deckId: 1, folderId: null })).toBe(1);
+    expect(db.wishlistEntries).toEqual([
+      expect.objectContaining({ quantity: 8, folderId: null }),
+    ]);
+  });
+
+  /**
+   * **Two destinations, two wishes** — the grain's fourth term doing the one job it exists for.
+   *
+   * A three-term grain `(oracleId, cardId, preferredFinish)` folds these two presses into one
+   * row of eight, which is not merely a different count: it is the reader's `Shopping` list
+   * silently absorbing a press they made at the root, and the row they filed on purpose moving
+   * quantity it never had. `elsewhere` is asserted beside it because that is the mark the app
+   * draws *because* of this shape — the two rows have to know about each other, or the reader
+   * buys the card twice.
+   */
+  it("makes a second wish when the same card is sent to the root and then to a folder", () => {
+    const db = shortDeck();
+    const w = writeHandlers(db);
+    w.deck_missing_to_wishlist({ deckId: 1 });
+    w.deck_missing_to_wishlist({ deckId: 1, folderId: SHOPPING });
+
+    expect(db.wishlistEntries.map((x) => [x.folderId, x.quantity])).toEqual([
+      [null, 4],
+      [SHOPPING, 4],
+    ]);
+    const rows = readHandlers(db).wishlist_list({
+      query: { limit: 10, offset: 0, flatten: true },
+    }).items;
+    expect(rows.map((r) => r.elsewhere)).toEqual([1, 1]);
+  });
+
+  /**
+   * The refusal, and the case that is the whole reason it is checked **before** the walk.
+   *
+   * A deck short of nothing never reaches `addWish`, so a folder check living only in there is
+   * unreachable from this press: the reader who picked a drawer another window has since deleted
+   * would be told `0` — a press that refused, reported as a press with nothing to do — and would
+   * go on believing the drawer is still there. The short deck is asserted beside it so the
+   * refusal is shown to be about the folder rather than about having found nothing.
+   */
+  it("refuses a folder that is not there, whether or not the deck is short of anything", () => {
+    const short = shortDeck();
+    expect(() =>
+      writeHandlers(short).deck_missing_to_wishlist({ deckId: 1, folderId: DELETED }),
+    ).toThrow(FOLDER_GONE);
+    expect(short.wishlistEntries).toEqual([]);
+
+    // The case only the early check answers. Without it this line reads `0`.
+    const covered = coveredDeck();
+    expect(() =>
+      writeHandlers(covered).deck_missing_to_wishlist({ deckId: 1, folderId: DELETED }),
+    ).toThrow(FOLDER_GONE);
+    expect(covered.wishlistEntries).toEqual([]);
+  });
+
+  /**
+   * Which "not there any more" a doubly-stale press hears.
+   *
+   * `DECK_GONE` and `FOLDER_GONE` are the same six words about two different things, so the
+   * order they are asked in is a decision rather than an accident: the deck is what the reader
+   * has open and the folder is only where they pointed it, so a dead deck wins. The crate has no
+   * deck-existence check to be compared against here — `live_shortfall` on a stale id simply
+   * finds nothing — which is exactly why the fake's own order is pinned rather than assumed.
+   */
+  it("tells a stale deck about the deck rather than about the folder", () => {
+    const db = shortDeck();
+    expect(() =>
+      writeHandlers(db).deck_missing_to_wishlist({ deckId: 99, folderId: DELETED }),
+    ).toThrow(/^That deck is not there any more\.$/);
+    expect(db.wishlistEntries).toEqual([]);
   });
 });
 
@@ -11613,11 +11811,115 @@ describe("categories, labels, folders, history and the plan", () => {
 
     expect(w.deck_theory_missing_to_wishlist({ deckId: 4, only: [`${lotus.cardId}|`] })).toBe(1);
     expect(db.wishlistEntries).toHaveLength(before + 1);
-    expect(db.wishlistEntries[before]).toMatchObject({ name: "Black Lotus", cardId: lotus.cardId });
+    // `folderId: null` since issue #437 gave this command a destination: naming none is what
+    // every caller written before that argument does, and what it means is **the root**.
+    expect(db.wishlistEntries[before]).toMatchObject({
+      name: "Black Lotus",
+      cardId: lotus.cardId,
+      folderId: null,
+    });
 
     expect(w.deck_theory_missing_to_wishlist({ deckId: 4, only: [] })).toBe(0);
     expect(w.deck_theory_missing_to_wishlist({ deckId: 4, only: ["no-such-card|"] })).toBe(0);
     expect(db.wishlistEntries).toHaveLength(before + 1);
+  });
+
+  /** `starterWishFolders`' first drawer, which the seed already files two wishes into — so a
+   *  press aimed at it is aimed somewhere a story can actually look. */
+  const ORDERED = 1;
+  /** An id nothing answers to: the drawer the reader picked and another window deleted. */
+  const GONE_FOLDER = 404;
+  /** Whole rather than a fragment — `DECK_GONE` is the same six words about the deck, and which
+   *  of the two a press hears is the thing the check's placement decides. */
+  const FOLDER_GONE = /^That folder is not there any more\.$/;
+
+  /**
+   * `only` and `folderId` **compose**, because they answer different questions (issue #437).
+   *
+   * `only` is the reader's ticks and decides *which* rows of the difference are written;
+   * `folderId` is the picker beside them and decides *where* every one of those rows goes.
+   * Neither can be read off the other, and a handler that let one stand in for the other — an
+   * `only` that filed at the root because a folder was named, a `folderId` ignored because ticks
+   * were — would look right on a press that used just one of them.
+   */
+  it("writes only the ticked rows, and writes them into the folder it was given", () => {
+    const { db, r, w } = testbed();
+    const diff = r.deck_theory_diff({ deckId: 4 });
+    const lotus = diff.find((d) => d.name === "Black Lotus")!;
+    const ring = diff.find((d) => d.name === "Sol Ring")!;
+    const before = db.wishlistEntries.length;
+
+    expect(
+      w.deck_theory_missing_to_wishlist({
+        deckId: 4,
+        only: [`${lotus.cardId}|`],
+        folderId: ORDERED,
+      }),
+    ).toBe(1);
+
+    expect(db.wishlistEntries).toHaveLength(before + 1);
+    expect(db.wishlistEntries[before]).toMatchObject({
+      name: "Black Lotus",
+      cardId: lotus.cardId,
+      folderId: ORDERED,
+    });
+    // And the row the reader did not tick reached neither that folder nor the list at all. The
+    // seed's own Sol Ring wish names no printing, so this is a question about *this* press.
+    expect(db.wishlistEntries.some((x) => x.cardId === ring.cardId)).toBe(false);
+  });
+
+  /**
+   * **Two destinations, two wishes; the same destination twice, one line raised.**
+   *
+   * The fourth term of `wishGrain` is what separates the first pair, and nothing separates the
+   * second — which is the whole design in one test. Without that term all three presses below
+   * fold into a single row carrying every copy of all three, and the reader's `Ordered` drawer
+   * would quietly absorb a press they aimed at the top of the list.
+   */
+  it("splits the same plan row across two destinations and folds it within one", () => {
+    const { db, r, w } = testbed();
+    const diff = r.deck_theory_diff({ deckId: 4 });
+    const lotus = diff.find((d) => d.name === "Black Lotus")!;
+    const only = [`${lotus.cardId}|`];
+
+    w.deck_theory_missing_to_wishlist({ deckId: 4, only });
+    w.deck_theory_missing_to_wishlist({ deckId: 4, only, folderId: ORDERED });
+    // The difference is re-read inside each write and a wish changes no deck row, so the third
+    // press is short of exactly what the second was — and lands on the grain the second made.
+    w.deck_theory_missing_to_wishlist({ deckId: 4, only, folderId: ORDERED });
+
+    const lotuses = db.wishlistEntries.filter((x) => x.cardId === lotus.cardId);
+    expect(lotuses.map((x) => x.folderId)).toEqual([null, ORDERED]);
+    expect(lotuses.map((x) => x.quantity)).toEqual([lotus.quantity, lotus.quantity * 2]);
+  });
+
+  /**
+   * The refusal, and the case that is the only reason it is checked ahead of the difference.
+   *
+   * A plan that matches the deck produces an empty difference, so the loop never runs and
+   * `addWish` is never called — a folder check living only in there would answer the reader who
+   * picked a deleted drawer with `0`, a refusal reported as "nothing to do". Deck 1 of `starter`
+   * has no theory rows at all, which is that state exactly.
+   */
+  it("refuses a folder that is not there, including for a deck whose plan is short of nothing", () => {
+    const { db, w } = testbed();
+    const before = db.wishlistEntries.length;
+
+    expect(() =>
+      w.deck_theory_missing_to_wishlist({ deckId: 4, folderId: GONE_FOLDER }),
+    ).toThrow(FOLDER_GONE);
+    expect(db.wishlistEntries).toHaveLength(before);
+
+    expect(() =>
+      w.deck_theory_missing_to_wishlist({ deckId: 1, folderId: GONE_FOLDER }),
+    ).toThrow(FOLDER_GONE);
+    expect(db.wishlistEntries).toHaveLength(before);
+    // Nothing about the refusal depends on the ticks: `only` narrows what would have been
+    // written, and there is nothing to narrow behind a folder that is not there.
+    expect(() =>
+      w.deck_theory_missing_to_wishlist({ deckId: 4, only: [], folderId: GONE_FOLDER }),
+    ).toThrow(FOLDER_GONE);
+    expect(db.wishlistEntries).toHaveLength(before);
   });
 
   /**
@@ -11635,7 +11937,9 @@ describe("categories, labels, folders, history and the plan", () => {
     w.deck_theory_missing_to_wishlist({ deckId: 4 });
 
     // Found by id, because the seed already holds an **any-printing** Sol Ring wish and the two
-    // are different rows on the grain `(oracleId, cardId, preferredFinish)`.
+    // are different rows on `wishGrain`'s **second** term — the printing. Both are at the root,
+    // so the fourth term is doing nothing here and the second is the whole of what separates
+    // them; naming the terms rather than listing three of them keeps that honest.
     const wish = db.wishlistEntries.find((x) => x.cardId === ring.cardId)!;
     // The plan names the foil Secret Lair, so that is the cardboard being shopped for — the
     // printing and the object both, carried end to end.

@@ -226,10 +226,10 @@ preferred_finish`'s nullability one table over.
   shows under both views **at its full quantity**, because the count on screen is what a press
   writes. That is the discipline `owned_spare` is held to one field over, stated on the other axis.
 - **`deck_theory_missing_to_wishlist` takes an include list and writes a _pinned_ wish**
-  (2026-08-22). `only` is a list of `group_key` strings — the spelling `deck_theory_slots` still
-  answers **in the `key` half of** its rows, so nothing new crosses the boundary — and an absent
-  one still means the whole
-  difference. It is an **include** list although the gesture it serves is exclusion ("drop three of
+  (2026-08-22), into an optional folder (2026-09-09). `only` is a list of `group_key` strings —
+  the spelling `deck_theory_slots` still answers **in the `key` half of** its rows, so nothing new
+  crosses the boundary — and an absent one still means the whole difference. It is an **include**
+  list although the gesture it serves is exclusion ("drop three of
   these and send the rest"): the two differ only for rows that appeared between the read and the
   press, and those are rows the reader never saw. The diff is re-read inside the write, so a key
   naming no current row writes nothing rather than refusing — a row ticked and then acquired in
@@ -242,11 +242,28 @@ preferred_finish`'s nullability one table over.
     argument that lost.
   - **The regular copy pins no finish.** `deck_cards.finish` is NULL for it, and writing `nonfoil`
     would split this wish from every other one the app makes for that card on the wishlist grain
-    `(oracle_id, card_id, preferred_finish)`. `foil` and `etched` pass straight through.
+    `(oracle_id, card_id, preferred_finish, coalesce(folder_id, 0))`. `foil` and `etched` pass
+    straight through. **That grain has had four terms since schema v23 and this line named three
+    until 2026-09-09** — harmless only while this command wrote to one folder, and the wrong
+    description of exactly the term the bullet below turns on.
   - **A pinned wish and an any-printing one are different rows on that grain**, so a reader who
     pressed this before the change keeps their old line and gains a pinned one. Nothing is lost or
     double-counted — the upsert folds each into its own row — but it is the one visible wart of the
     change and it is worth recognising before treating it as a duplicate bug.
+  - **`folderId` says which wishlist folder they land in, and absent — or `null` — is the root**
+    (2026-09-09, [issue #437](https://github.com/Msgaihede/mtg-grimoire/issues/437)). The root is
+    where every wish this command has ever written landed, so a caller that sends nothing means
+    what it always meant; what changed is that the Compare dialog now has a reader who picked it.
+    The id goes straight into `WishInput.folder_id`, a field on the wire since v23, so this is one
+    argument passed and not a second way into the table. **It is an add and never a move**: the
+    grain's fourth term makes a card the reader already wants in `Ordered` a *second* wish here,
+    with the first left at its own quantity — `wishlist_set_folder` stays the deliberate move.
+    **A folder that is gone is refused by name up front**, `FOLDER_GONE`, inside the transaction
+    and before the diff is walked: `add_wish` fences the column too, but per row, and a plan short
+    of nothing reaches `add_wish` not once — so a later check would answer `0 wishes` for a drawer
+    another window had just deleted. `deck::missing_to_wishlist` took the same argument on the same
+    day. Whole reasoning:
+    [wishlist-folders.md](wishlist-folders.md#the-two-deck-sweeps-take-a-folder-now-and-the-same-term-is-the-licence).
   - **The orphan skip is now load-bearing twice.** `add_wish` **refuses** a `card_id` that is not in
     `cards` ("no card with that id is in the card database"), and that refusal would abort the whole
     transaction — so the `oracle_id.is_none()` guard that was there to keep a wish from having no
@@ -1064,8 +1081,11 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
 variant, quantity)`; `deck_move_card(deckId, cardId, fromCategoryId, toCategoryId,
 toCategoryName, variant)`, which stays inside one variant and takes **either an id or a name
   exactly as the add does** — see the bullet below; `deck_swap_printing(deckId, fromCardId, toCardId, categoryId,
-variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inactive
-  categories. Two fences every write opens with, **neither of them enforced by the DDL**: the
+variant)`; `deck_missing_to_wishlist(deckId, folderId?)`, which reads `live` and skips inactive
+  categories, and whose `folderId` is a **wishlist** folder rather than anything of the deck's —
+  absent or `null` is the wishlist's root, which is where this press landed on every build before
+  2026-09-09, and a folder that is not there is refused as `FOLDER_GONE` before the shortfall is
+  walked. Two fences every write opens with, **neither of them enforced by the DDL**: the
   variant must be one the schema knows, and the category must belong to _this_ deck —
   `deck_cards.category_id`'s FK only asks that the category exist, not whose it is.
 - **`deck_move_card` grew the add's two-arm target on 2026-08-15**, for the quick zones' `Auto`
@@ -1929,7 +1949,15 @@ keeps the account rather than the entry.
   all; `DECK_CARD_GONE` still answers a stale editor first.
 - **`deck::missing_to_wishlist` puts it before the transaction opens**, `update_deck`'s rule for
   its validations: there is nothing to roll back and no reason to have taken a write lock to find
-  out.
+  out. **The folder fence both commands took on 2026-09-09 goes inside the transaction instead,
+  and that is not the same rule broken**: `is_virtual` reads a fact about the deck this press is
+  about and has nothing to roll back, where `require_folder` reads a `wishlist_folders` row the
+  loop below is about to write against and has to see what that write will see. It still runs
+  before the shortfall is walked — a check that rode along with the write would answer `0 wishes`
+  for a deleted drawer on a deck that is short of nothing. In `deck_theory::missing_to_wishlist`,
+  where all three fences sit inside one transaction, it goes **third**: "that deck is gone", "that
+  deck keeps no cardboard" and "that folder is not there any more" are three different mistakes,
+  and the folder must not be able to answer for either of the other two.
 
 **`is_virtual` answers the fact and never the conclusion**, which is this crate's own boundary and
 the reason it is a `bool` rather than a `Result<(), String>` that refuses on the caller's behalf.

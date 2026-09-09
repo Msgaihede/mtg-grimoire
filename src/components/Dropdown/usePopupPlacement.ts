@@ -18,8 +18,10 @@ import type { Placement } from "./types";
  * `scale`, `rotate`, `translate`, `filter`, `contain` or `backdrop-filter`. `Dialog`'s panel
  * animates through the `dialog` preset — `scale: 0.97 → 1` — and motion leaves the `scale`
  * longhand on the element at rest. **`scale: 1` is not `none`**, so a settled dialog panel is a
- * containing block, and eight of this app's dropdowns live inside one. `TheoryDiffDialog` and
- * `menu/panel.ts` each record the same trap for their own elements.
+ * containing block, and a good many of this app's dropdowns are drawn inside one. **Not a count** —
+ * this line said "eight" and was wrong the next time a dialog grew a picker, which a prose-only
+ * edit routes to neither CI job; `grep -rn "<Dropdown" src/` is what answers it. `TheoryDiffDialog`
+ * and `menu/panel.ts` each record the same trap for their own elements.
  *
  * The fix is not a walk up the ancestor chain looking for the seven properties above — that list
  * grows, and a property nobody thought of is a panel in the wrong place with nothing red. Instead
