@@ -1169,6 +1169,15 @@ function Body({
    * `aria-hidden`, so the row's name is still the label's name — colour is what a reader tells two
    * labels apart by on every other surface in the app, and a picker without it would be the one
    * place a label is only a word.
+   *
+   * **`triggerIcon` is the same swatch at 16px, and the two sizes are the point.** The list is
+   * showing every colour at once, so a row's job is to be told apart from the row above it and
+   * 10px does that; the *closed* trigger is the only place a reader reads a label's colour with
+   * nothing to compare it to, which is what the design draws it big for — 16px against the
+   * control's 36, measured in a browser rather than taken off the artboard.
+   * `rounded-[4px]` rather than the swatch's own `[2px]` for the same reason a bigger box needs a
+   * bigger radius to read as the same shape. The row with no label carries neither, so an unset
+   * picker draws the words alone rather than a hole where a colour would go.
    */
   const labelOptions: DropdownOption[] = useMemo(() => {
     const seen = new Set(deck.labels.map((l) => l.id));
@@ -1177,6 +1186,7 @@ function Body({
       value: String(l.id),
       label: l.name,
       icon: <LabelSwatch color={l.color} />,
+      triggerIcon: <LabelSwatch color={l.color} className="size-4 rounded-[4px]" />,
     });
     return [{ value: "", label: "No label" }, ...deck.labels.map(row), ...rest.map(row)];
   }, [deck.labels, allLabels.data]);
