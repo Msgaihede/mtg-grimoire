@@ -238,9 +238,20 @@ figure disagree the first time either changes.*
 
 **Both breakdowns group over `sorting::price_expr`**, the same fragment `collection_summary` uses,
 so a breakdown can never disagree with the total printed above it. The four dimensions are
-`cards.rarity`, `cards.colors` (colour identity buckets through `lib/mana.ts`'s vocabulary),
-`cards.set_code` (with `set_name` returned beside it, because only the corpus knows it) and
-`collection_entries.finish`. A row the marketplace cannot price contributes to `cards` and not to
+`cards.rarity`, `cards.color_identity`, `cards.set_code` (with `set_name` returned beside it,
+because only the corpus knows it) and `collection_entries.finish`.
+
+**`color_identity` is a string of letters and not a JSON array** — `card_row.rs` writes `["W","U"]`
+as `"WU"`, and `filters.rs` reads it with `instr`. So the bucket is a `length()`: one letter keys
+on that colour, `length > 1` keys `multi`, empty keys `c`. A `json_array_length` there answers NULL
+on every row and files the whole collection into one bucket — **and the sums still add up**, which
+is why this is written down rather than left to the next reader to rediscover.
+
+The `set` dimension keys on `coalesce(c.set_code, e.set_code)` rather than the corpus column alone:
+an orphaned row's `c.set_code` is NULL, and `collection_entries.set_code` is `NOT NULL` precisely
+because it is migration insurance — what the reader owns, in the terms printed on the card, still
+readable when the id stops resolving. Its `name` stays absent, which is the honest statement: the
+set's name left with the printing. A row the marketplace cannot price contributes to `cards` and not to
 `value`, and the widget prints the unpriced count beside the total rather than folding it in.
 
 **`deck_values` filters to the same cards `cardCount` counts** — `variant = 'live'`,

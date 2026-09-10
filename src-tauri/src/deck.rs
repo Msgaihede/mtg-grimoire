@@ -6224,6 +6224,124 @@ pub async fn deck_set_card_finish(
     .map_err(unfinished)?
 }
 
+/// One deck's live list, valued — the home page's deck tile, and the figure `deck_list` has
+/// never carried.
+///
+/// **Every deck gets one of these**, a deck holding no cards and an archived deck included, so
+/// a caller can index the answer by `deck_id` with no missing-key branch and decide for itself
+/// what to draw. That is [`deck_values_for`]'s join shape rather than a promise made in prose:
+/// the read starts at `decks` and everything below it is a `LEFT JOIN`.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeckValue {
+    pub deck_id: i64,
+    /// What the deck's live list is worth at the marketplace the caller named:
+    /// `sum(quantity × unit price)` over [`crate::sorting::deck_card_price_expr`], which is
+    /// [`DeckCardRow::unit_price`]'s own expression and not a second one — so a tile and the
+    /// deck it opens can never quote one pile at two prices. Never `cards.price_usd`, which is
+    /// a display/sort fallback chain: summing it is what this crate forbids everywhere.
+    ///
+    /// **`None` rather than `0.0` when the marketplace prices nothing in the deck**, which is
+    /// [`crate::collection_folders::CollectionFolderSummary::value`]'s rule and for its reason:
+    /// a tile is a small number beside a name and has no room for the collection header's
+    /// "n unpriced" note, so a deck of cards the feed has never heard of would otherwise read
+    /// as a deck worth nothing. `None` draws an em dash, which is this app's answer for a price
+    /// it does not have.
+    pub value: Option<f64>,
+    /// Copies **in that same pile** the marketplace has no price for — the note a widget prints
+    /// beside the figure, [`crate::collection::CollectionSummary::unpriced`]'s job on a smaller
+    /// surface. Copies rather than rows, because the total it qualifies is copies too, and the
+    /// number moves with the marketplace, which is the whole point of showing it.
+    pub unpriced: i64,
+}
+
+/// Every deck's live list valued at one marketplace — one round trip for the whole wall.
+///
+/// **The pile is [`DeckRow::card_count`]'s, term for term**: `variant = 'live'`,
+/// `cat.is_active = 1`, `cat.kind IN ('main','commander','maybe')`, copied off
+/// [`DECK_SELECT`]'s correlated subquery rather than re-derived — [`PIP_COSTS_SQL`]'s
+/// arrangement, and for its reason. A tile draws this number directly under that count, so a
+/// value covering a different pile than the count covers is a tile disagreeing with itself,
+/// and nothing on the screen would say which half to believe. Sideboard and companion are
+/// played *beside* the deck and are outside the count; they are therefore outside the value.
+/// `the_gallery_count_reads_only_live_rows_in_active_categories` pins the count's literals and
+/// `a_decks_value_counts_the_same_cards_its_card_count_does` pins these against them.
+///
+/// **A theory row is never counted.** `'live'` is spelled out rather than interpolated from
+/// [`LIVE`] because there is nothing to interpolate with inside a `format!` already spending
+/// its braces on the price — the same trade `DECK_SELECT` makes one screen up.
+///
+/// **The category filter sits in the join's `ON` and not in a `WHERE`**, which is the one thing
+/// here that a reader has to get right: a `WHERE` over a LEFT JOIN drops the deck rows this
+/// query exists to keep, and a category predicate written below the join would let a sideboard
+/// row through with `cat` NULL and its quantity still in the sum. Chaining `decks → the
+/// categories that count → their live cards → the printing` puts every term where it filters
+/// what it names.
+///
+/// **No `GROUP BY` arm for the empty cases.** A deck with no counted category, or with one
+/// holding no cards, groups to a single row whose `dc` columns are NULL: `sum()` over nothing
+/// is NULL — which is exactly [`DeckValue::value`]'s "nothing priced" — and the `coalesce` on
+/// the unpriced count turns the same NULL into `0`.
+pub fn deck_values_for(
+    conn: &Connection,
+    marketplace: crate::sorting::Marketplace,
+) -> Result<Vec<DeckValue>, String> {
+    let price = crate::sorting::deck_card_price_expr(marketplace);
+    let sql = format!(
+        "SELECT d.id,
+                sum(dc.quantity * ({price})),
+                coalesce(sum(CASE WHEN dc.id IS NOT NULL AND ({price}) IS NULL
+                                  THEN dc.quantity ELSE 0 END), 0)
+           FROM decks d
+           LEFT JOIN deck_categories cat
+                  ON cat.deck_id = d.id
+                 AND cat.is_active = 1
+                 AND cat.kind IN ('main','commander','maybe')
+           LEFT JOIN deck_cards dc
+                  ON dc.category_id = cat.id
+                 AND dc.deck_id = d.id
+                 AND dc.variant = 'live'
+           LEFT JOIN cards c ON c.id = dc.card_id
+          GROUP BY d.id
+          ORDER BY d.id"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(DeckValue {
+                deck_id: r.get(0)?,
+                value: r.get(1)?,
+                unpriced: r.get(2)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())
+}
+
+/// Every deck's value, for the home page's tiles. **Read-only** connection, blocking pool — as
+/// every read in this app is, so a home page never queues behind a sync.
+///
+/// **No arguments but the shop**, [`deck_pip_costs`]'s reasoning: the page draws whichever decks
+/// its widgets pin and there is nothing to narrow by, since an archived deck is a tile too. And
+/// anything the app does not recognise is TCGplayer — [`crate::sorting::Marketplace::from_opt`]'s
+/// rule for every list query, so a marketplace this build has never heard of costs a fallback
+/// rather than a failed page.
+#[cfg(not(target_family = "wasm"))]
+#[tauri::command]
+pub async fn deck_values(
+    state: tauri::State<'_, Arc<AppState>>,
+    marketplace: Option<String>,
+) -> Result<Vec<DeckValue>, String> {
+    let state = state.inner().clone();
+    let marketplace = crate::sorting::Marketplace::from_opt(marketplace.as_deref());
+    tauri::async_runtime::spawn_blocking(move || {
+        deck_values_for(&crate::sync::lock_db_read(&state), marketplace)
+    })
+    .await
+    .map_err(|e| format!("the deck values could not be read: {e}"))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -14202,6 +14320,189 @@ mod tests {
         assert!(
             !is_virtual(&conn, 9_999).unwrap(),
             "a stale id is not this function's refusal to make"
+        );
+    }
+
+    /// **The tile's two numbers describe one pile**, which is the whole of [`deck_values_for`]'s
+    /// contract: `variant = 'live'`, an active category, and one of the three kinds
+    /// [`DeckRow::card_count`] counts. The deck below holds a copy of every case at once —
+    /// main, commander, an active Maybeboard, the two kinds played *beside* the deck, and a
+    /// category of the reader's own switched off — so a filter written one term short is a
+    /// wrong number here rather than a case nobody seeded.
+    ///
+    /// The prices are picked so each excluded pile would be *visible* if it leaked: the
+    /// sideboard's four Serra Angels and the companion's would add $5 to a $921.50 deck, and a
+    /// switched-off pile would add $360. A fixture priced flat would let three of the five
+    /// terms be dropped with the assertion still passing.
+    #[test]
+    fn a_decks_value_counts_the_same_cards_its_card_count_does() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "commander")).unwrap();
+        let main = main_of(&conn, deck.id);
+        let commander = kind_of(&conn, deck.id, "commander");
+        let maybe = kind_of(&conn, deck.id, "maybe");
+        let bench = crate::deck_meta::category_for_name(&conn, deck.id, "Bench").unwrap();
+
+        add(&conn, deck.id, "bolt-lea", main, 2); // 2 × 400.00 = 800.00
+        add(&conn, deck.id, "serra-lea", commander, 1); // 1 × 120.00 = 120.00
+        crate::deck_meta::set_category_active(&conn, maybe, true).unwrap();
+        add(&conn, deck.id, "bolt-m10", maybe, 1); // 1 ×   1.50 =   1.50
+
+        // Played beside the deck rather than in it — CR 100.4a for the sideboard and EDH's
+        // "effectively a 101st card" for the companion. Both are outside `card_count`, so both
+        // are outside the value.
+        add(
+            &conn,
+            deck.id,
+            "serra-8ed",
+            kind_of(&conn, deck.id, "side"),
+            4,
+        );
+        add(
+            &conn,
+            deck.id,
+            "serra-8ed",
+            kind_of(&conn, deck.id, "companion"),
+            1,
+        );
+        // And a category switched off counts toward nothing, kind or no kind.
+        add(&conn, deck.id, "serra-lea", bench, 3);
+        crate::deck_meta::set_category_active(&conn, bench, false).unwrap();
+
+        let rows = deck_values_for(&conn, ANY_MARKET).unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].deck_id, deck.id);
+        assert_eq!(
+            rows[0].value,
+            Some(921.50),
+            "the two piles beside the deck and the pile switched off are worth nothing here"
+        );
+        assert_eq!(rows[0].unpriced, 0);
+        assert_eq!(
+            read_deck(&conn, deck.id).unwrap().unwrap().card_count,
+            4,
+            "and the count over the same rows is the four copies the value is made of"
+        );
+    }
+
+    /// **A plan holds no cards**, so it is worth nothing on a tile — [`LIVE`]'s rule, which
+    /// [`DeckRow::card_count`] already states and this number has to state the same way. The
+    /// theory row is deliberately the expensive one: a query that summed both variants would
+    /// read $880 over a deck the gallery captions as holding one card.
+    #[test]
+    fn a_theory_row_is_not_counted() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "bolt-lea", main, 1);
+        add_card(
+            &conn,
+            deck.id,
+            "serra-lea",
+            Some(main),
+            None,
+            THEORY,
+            None,
+            4,
+        )
+        .unwrap();
+
+        let rows = deck_values_for(&conn, ANY_MARKET).unwrap();
+
+        assert_eq!(
+            rows[0].value,
+            Some(400.00),
+            "the plan's four Angels are not the deck's"
+        );
+        assert_eq!(
+            rows[0].unpriced, 0,
+            "and a theory row is not an unpriced copy either — it is not a copy at all"
+        );
+    }
+
+    /// **`None`, never `Some(0.0)`** — [`DeckValue::value`]'s rule and
+    /// [`crate::collection_folders::CollectionFolderSummary::value`]'s reason: a tile has no
+    /// room for the collection header's "n unpriced" note, so a deck of cards the feed has
+    /// never heard of would otherwise read as a deck worth nothing rather than as a deck this
+    /// marketplace cannot price.
+    ///
+    /// `bolt-jp` is the fixture's unpriced printing — its `prices` blob is NULL, which is what
+    /// "in `cards` and absent from the feed" looks like from a price expression.
+    #[test]
+    fn a_deck_with_nothing_priced_answers_null_and_not_zero() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Untranslated", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "bolt-jp", main, 3);
+
+        let rows = deck_values_for(&conn, ANY_MARKET).unwrap();
+        assert_eq!(rows[0].value, None, "no price is not a price of zero");
+        assert_eq!(rows[0].unpriced, 3, "copies, not rows");
+
+        // And an unpriced copy beside a priced one is still counted rather than folded into the
+        // total at zero — the point of shipping the two numbers together.
+        add(&conn, deck.id, "bolt-lea", main, 1);
+        let rows = deck_values_for(&conn, ANY_MARKET).unwrap();
+        assert_eq!(rows[0].value, Some(400.00));
+        assert_eq!(rows[0].unpriced, 3);
+    }
+
+    /// **Every deck gets a row**, so the caller can index by id with no missing-key branch. A
+    /// deck with nothing in it is a deck the reader just made, and a home page that drew no
+    /// tile for it would be answering a question nobody asked.
+    #[test]
+    fn a_deck_with_no_cards_still_gets_a_row() {
+        let conn = seeded();
+        let empty = create_deck(&conn, &input("Nothing Yet", "modern")).unwrap();
+        let stocked = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        add(&conn, stocked.id, "bolt-lea", main_of(&conn, stocked.id), 1);
+
+        let rows = deck_values_for(&conn, ANY_MARKET).unwrap();
+
+        assert_eq!(
+            rows.len(),
+            2,
+            "both decks, and the empty one is not an omission"
+        );
+        let row = rows.iter().find(|r| r.deck_id == empty.id).unwrap();
+        assert_eq!(
+            row.value, None,
+            "a deck holding nothing is worth nothing sayable"
+        );
+        assert_eq!(
+            row.unpriced, 0,
+            "and there are no copies to be unable to price"
+        );
+    }
+
+    /// **An archived deck gets a row too** — what to draw is the caller's decision, not this
+    /// query's. `deck_list` ships archived decks for the same reason and lets the UI separate
+    /// them; a read that filtered here would make a pinned archived deck's tile read as a
+    /// missing key instead of as an archived deck.
+    #[test]
+    fn an_archived_deck_gets_a_row_too() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Old Standard", "standard")).unwrap();
+        add(&conn, deck.id, "bolt-lea", main_of(&conn, deck.id), 2);
+        update_deck(
+            &conn,
+            deck.id,
+            &DeckPatch {
+                archived: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let rows = deck_values_for(&conn, ANY_MARKET).unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].deck_id, deck.id);
+        assert_eq!(
+            rows[0].value,
+            Some(800.00),
+            "archiving a deck does not spend what is in it"
         );
     }
 }

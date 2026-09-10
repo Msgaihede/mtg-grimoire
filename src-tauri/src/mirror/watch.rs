@@ -875,6 +875,11 @@ mod tests {
         assert_eq!(
             ignored,
             [
+                // The home page's feed (user schema v43). A row here says what the reader
+                // *did*, and the mirror is a picture of what the reader *has* — no mirrored
+                // file quotes a history, and one that did would be a second, worse copy of a
+                // log the app already draws. `None` is the decision rather than an omission.
+                "activity",
                 "app_meta",
                 "art_tag_illustrations",
                 "art_tag_meta",

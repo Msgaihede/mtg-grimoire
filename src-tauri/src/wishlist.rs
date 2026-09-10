@@ -1203,6 +1203,271 @@ pub async fn wishlist_list(
     .map_err(|e| format!("the wishlist could not be read: {e}"))?
 }
 
+// ---------------------------------------------------------------------------------------
+// The whole list's money — the header's four numbers, and the same money one dimension at
+// a time
+// ---------------------------------------------------------------------------------------
+
+/// The four numbers the **whole** wishlist is worth, root included.
+///
+/// [`crate::wishlist_folders::folder_summary`]'s arithmetic with the folder taken out of it, and
+/// that is the entire specification: the same join, the same
+/// [`crate::sorting::row_price_expr`] over [`WISH_PREFERRED_FINISH`], the same
+/// `quantity × unit_price`, the same rule for what counts as unpriced. A folder's subtotal and
+/// the page header's total have to be one piece of arithmetic; two implementations of one figure
+/// disagree the first time either changes.
+///
+/// It exists because `WishlistPage.tsx` summed `unitPrice × quantity` in the browser over the
+/// rows on screen, and [`MAX_LIMIT`] is 500 — so that figure was a *page*'s total wearing the
+/// name of a *list*'s.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WishlistSummary {
+    /// Rows — one per wish, wherever it is filed.
+    pub wishes: i64,
+    /// Copies wanted — `sum(quantity)`, the figure a folder tile's `copies` is the subtotal of.
+    pub copies: i64,
+    /// What those copies cost at the named marketplace. Unpriced rows are left out, never
+    /// quoted at another marketplace's rate. `0.0` and not NULL when nothing is priced —
+    /// `WishlistFolderSummary::cost`'s type, kept, because a header has room for the note
+    /// beside it that a tile does not.
+    pub cost: f64,
+    /// How many wishes the marketplace could not price.
+    pub unpriced: i64,
+}
+
+/// The one join every figure on this page is read through, and the one place it is spelled.
+///
+/// `folder_summary`'s join **verbatim in shape**: the card a wish is *about* is its pinned
+/// printing, or the **cheapest** printing of its oracle card at the marketplace being summed,
+/// and it is a `LEFT JOIN` because a wish outlives the printing it was made from.
+///
+/// ⚠️ **The join has to agree as exactly as the price does.** An any-printing wish is drawn,
+/// quoted and summed as one printing; a total that priced the newest printing over rows quoting
+/// the cheapest would not add up to the list under it, and nothing on screen would say which of
+/// the two figures to believe. That is why `price` is threaded through *both* holes — the
+/// `ORDER BY` that chooses the printing and the column that prices it — rather than the choice
+/// being made once and reused.
+fn priced_wishes(price: &str) -> String {
+    format!(
+        "wishlist_entries w
+           LEFT JOIN cards c
+             ON c.id = coalesce(w.card_id,
+                    (SELECT c.id FROM cards c
+                      WHERE c.oracle_id = w.oracle_id
+                      ORDER BY ({price}) ASC NULLS LAST, c.released_at DESC, c.id ASC
+                      LIMIT 1))"
+    )
+}
+
+/// The whole list's four numbers, in one round trip.
+///
+/// **This is [`crate::wishlist_folders::folder_summary`]'s SQL with two clauses removed**, and
+/// naming both is the point:
+///
+/// * **`GROUP BY folder_id`** — there is one answer here rather than one per drawer.
+/// * **`WHERE w.folder_id IS NOT NULL`** — that clause is what keeps root-level wishes out of a
+///   folder *tile*, because the root is not a folder and has no tile to draw. A list total that
+///   inherited it would be wrong by **exactly the root**, silently, and the root is where most
+///   wishes live.
+///
+/// The one thing *added* is the `coalesce` around each outer aggregate, and removing the
+/// `GROUP BY` is what forces it: a grouped query has at least one row per group, an ungrouped
+/// one over an empty table answers a single row of NULLs. It changes no arithmetic — every
+/// price, every multiplication and every rule about what counts stays character for character
+/// what the folder tile uses.
+///
+/// **Nothing here can be fenced by the compiler, so it is fenced by a test.** The two queries
+/// live in two modules and cannot share a string without one of them owning the other's price
+/// rule; `tests::the_list_total_is_the_folder_subtotals_plus_the_root` is what fails the moment
+/// either drifts.
+pub fn summarise_wishlist(
+    conn: &Connection,
+    marketplace: crate::sorting::Marketplace,
+) -> Result<WishlistSummary, String> {
+    // The price is evaluated once per row in an inner SELECT and aggregated by name in the outer
+    // one, which is `folder_summary`'s own note: it can be a correlated subquery, so spelling it
+    // three times in the aggregate list would run it three times per row for one answer.
+    let price = crate::sorting::row_price_expr(marketplace, WISH_PREFERRED_FINISH);
+    let sql = format!(
+        "SELECT count(*) AS wishes,
+                coalesce(sum(copies), 0) AS copies,
+                coalesce(sum(CASE WHEN unit_price IS NULL THEN 0.0
+                                  ELSE copies * unit_price END), 0.0) AS cost,
+                coalesce(sum(CASE WHEN unit_price IS NULL THEN 1 ELSE 0 END), 0) AS unpriced
+           FROM (SELECT w.quantity AS copies,
+                        {price} AS unit_price
+                   FROM {from})",
+        from = priced_wishes(&price)
+    );
+    conn.query_row(&sql, [], |r| {
+        Ok(WishlistSummary {
+            wishes: r.get(0)?,
+            copies: r.get(1)?,
+            cost: r.get(2)?,
+            unpriced: r.get(3)?,
+        })
+    })
+    .map_err(|e| e.to_string())
+}
+
+/// What [`breakdown`] says to a dimension it has never heard of.
+///
+/// A sentence rather than a constraint failure, this crate's rule wherever a command parameter
+/// reaches SQL: the four arms are a fact about **columns**, and a caller asking for a fifth has
+/// made a mistake no `CHECK` could word.
+const BAD_DIMENSION: &str = "That is not a way to break down a list.";
+
+/// The colour bucket, over `cards.color_identity`.
+///
+/// **That column is concatenated single letters and never JSON** — `card_row::joined_letters`
+/// writes `["W","U"]` as `"WU"` — so this is `length()` rather than a `json_array_length`.
+/// Three arms, and they **partition**, which is what lets the breakdown's rows sum to the header
+/// above them: exactly one colour keys on that colour, two or more key `multi`, and none keys
+/// `c`.
+///
+/// ⚠️ **This is [`crate::collection::breakdown`]'s arm character for character, and it has to
+/// be.** One widget draws both lists' bars and one TypeScript vocabulary maps all six keys, so
+/// the two lists cannot disagree about what a bucket is called — a `w` here against a `W` there
+/// would be two bars nothing on screen could relate. The colour keys are therefore the **stored
+/// uppercase letter** and the two special keys are lowercase, which is the wire the plan fixed
+/// rather than an inconsistency to tidy.
+///
+/// **A wish whose printing has left the card database lands in `c` too**, because the join found
+/// no row and `coalesce(NULL, '')` is `''`. It is the honest bucket at bar size — the same wish
+/// is already in `unpriced`, which is where "we know nothing about this printing" is said in
+/// words — and it keeps the arms at three rather than adding an `unknown` the five colours would
+/// then have to be told apart from.
+const COLOR_BUCKET: &str = "CASE
+            WHEN coalesce(c.color_identity, '') = '' THEN 'c'
+            WHEN length(c.color_identity) > 1 THEN 'multi'
+            ELSE c.color_identity END";
+
+/// The grouping column for a dimension, and the display name that travels beside it.
+///
+/// Four arms and no fifth, on a `&str` that arrives from the webview. **`BreakdownDimension` is
+/// TypeScript's vocabulary and this is deliberately not a second copy of it** — these are the
+/// names of *columns of this database*, which is a fact Rust owns; what a widget offers is not.
+///
+/// `name` is `NULL` for three of them because the key **is** the label — a rarity, a colour and
+/// a finish each say themselves — and only the set code needs a second column, since nothing but
+/// the corpus knows that `isd` is *Innistrad*.
+fn breakdown_columns(dimension: &str) -> Result<(&'static str, &'static str), String> {
+    Ok(match dimension {
+        // Coalesced because a wish outlives its printing: the join can miss, and `key` is a
+        // `String` rather than an `Option<String>` precisely so every row lands in a bucket and
+        // the sums hold.
+        "rarity" => ("coalesce(c.rarity, 'unknown')", "NULL"),
+        "color" => (COLOR_BUCKET, "NULL"),
+        // Through the wish's **own** denormalised `set_code` before giving up, which is
+        // `crate::collection::breakdown`'s fallback with one more link: a pinned wish records
+        // what was printed on the card, so an orphan still files under the set it came from
+        // rather than under a hole. That column is nullable here where the collection's is NOT
+        // NULL — an any-printing wish never had a set to record — so the literal is the floor.
+        // No Scryfall set code is spelled `unknown`, so the bucket cannot collide with a real
+        // one.
+        "set" => ("coalesce(c.set_code, w.set_code, 'unknown')", "c.set_name"),
+        // The wishlist's finish is the **wish's** column and not the printing's, so an orphan
+        // wish still buckets correctly here. NULL is *the reader has not said*, which is a real
+        // answer rather than a gap — `row_price_expr`'s two arms turn on exactly that — so it
+        // gets a bucket of its own rather than being folded into `nonfoil`.
+        "finish" => ("coalesce(w.preferred_finish, 'any')", "NULL"),
+        _ => return Err(BAD_DIMENSION.to_owned()),
+    })
+}
+
+/// The same money [`summarise_wishlist`] totals, grouped one dimension at a time.
+///
+/// Same join, same price, same multiplication — so a bar can never disagree with the figure
+/// printed above it, and `sum(row.cards)` is `WishlistSummary::copies` for **every** dimension.
+///
+/// **`value` is `None` and not `Some(0.0)` when nothing in a bucket is priced**, which is
+/// `CollectionFolderSummary::value`'s rule; here it is SQLite's own `sum()` rather than a `CASE`,
+/// because that function skips NULL terms and answers NULL only when every term is one — which
+/// is exactly the distinction wanted. A row the marketplace cannot price therefore contributes
+/// to `cards` and not to `value`, and the widget prints the unpriced count beside the total
+/// rather than folding it in.
+///
+/// The order is a convenience for a caller drawing bars — dearest first, then by copies, then by
+/// key so it is deterministic — and never a conclusion. Rust supplies the facts; which order a
+/// widget wants them in is TypeScript's.
+pub fn breakdown(
+    conn: &Connection,
+    dimension: &str,
+    marketplace: crate::sorting::Marketplace,
+) -> Result<Vec<crate::collection::BreakdownRow>, String> {
+    let (bucket, name) = breakdown_columns(dimension)?;
+    let price = crate::sorting::row_price_expr(marketplace, WISH_PREFERRED_FINISH);
+    // **No `WHERE w.quantity > 0`**, where `crate::collection::breakdown` needs one: schema v24
+    // lets a collection row sit at zero, and `wishlist_entries` carries `CHECK (quantity > 0)`
+    // — a wish for none of something is not a wish. The two lists differ in the table rather
+    // than in the query, which is why this reads as an omission and is not one.
+    //
+    // The bucket, the name and the price are each evaluated **once per row** in the inner SELECT
+    // and aggregated by name in the outer one — `folder_summary`'s note, and it bites harder
+    // here: three aggregates naming the price would run a correlated subquery three times per
+    // row for one answer.
+    let sql = format!(
+        "SELECT bucket,
+                max(bucket_name) AS name,
+                sum(copies) AS cards,
+                sum(copies * unit_price) AS value
+           FROM (SELECT {bucket} AS bucket,
+                        {name} AS bucket_name,
+                        w.quantity AS copies,
+                        {price} AS unit_price
+                   FROM {from})
+          GROUP BY bucket
+          ORDER BY value DESC NULLS LAST, cards DESC, bucket ASC",
+        from = priced_wishes(&price)
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(crate::collection::BreakdownRow {
+                key: r.get(0)?,
+                name: r.get(1)?,
+                cards: r.get(2)?,
+                value: r.get(3)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())
+}
+
+/// The wishlist's header figures. **Read-only** connection, blocking pool — as every read in
+/// this app is.
+#[cfg(not(target_family = "wasm"))]
+#[tauri::command]
+pub async fn wishlist_summary(
+    state: tauri::State<'_, Arc<AppState>>,
+    marketplace: crate::sorting::Marketplace,
+) -> Result<WishlistSummary, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        summarise_wishlist(&crate::sync::lock_db_read(&state), marketplace)
+    })
+    .await
+    .map_err(|e| format!("the wishlist could not be read: {e}"))?
+}
+
+/// The same money, one dimension at a time. **Read-only**, like its neighbour.
+#[cfg(not(target_family = "wasm"))]
+#[tauri::command]
+pub async fn wishlist_breakdown(
+    state: tauri::State<'_, Arc<AppState>>,
+    dimension: String,
+    marketplace: crate::sorting::Marketplace,
+) -> Result<Vec<crate::collection::BreakdownRow>, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        breakdown(&crate::sync::lock_db_read(&state), &dimension, marketplace)
+    })
+    .await
+    .map_err(|e| format!("the wishlist could not be read: {e}"))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3553,5 +3818,353 @@ mod tests {
             )
             .unwrap();
         assert_eq!(review, None);
+    }
+
+    // -- summarise_wishlist and breakdown ------------------------------------------------------
+
+    /// The marketplace the money tests below read through. TCGplayer, because [`usd`] writes the
+    /// `$.usd` key and that is the one this marketplace quotes from.
+    const PRICED_AT: Marketplace = Marketplace::Tcgplayer;
+
+    /// A `cards.prices` blob carrying a nonfoil dollar price and nothing else.
+    fn usd(price: &str) -> String {
+        format!(r#"{{"usd":"{price}"}}"#)
+    }
+
+    /// One printing carrying everything the four breakdown dimensions read.
+    ///
+    /// [`seed_card_with_prices`] is the neighbour that answers a different question — that one
+    /// makes a card that is the only printing of itself, to pin *which finish* is priced. This
+    /// one carries a rarity, a colour identity and a set, so a bucket has something to be.
+    fn summary_card(
+        conn: &Connection,
+        id: &str,
+        oracle_id: &str,
+        rarity: &str,
+        color_identity: &str,
+        set: (&str, &str),
+        prices: &str,
+    ) {
+        conn.execute(
+            "INSERT INTO cards (id, oracle_id, name, set_code, set_name, collector_number, lang,
+                                layout, rarity, color_identity, prices, raw)
+             VALUES (?1, ?2, ?2, ?3, ?4, '1', 'en', 'normal', ?5, ?6, ?7, '{}')",
+            params![id, oracle_id, set.0, set.1, rarity, color_identity, prices],
+        )
+        .unwrap();
+    }
+
+    /// One wish, written straight into the table.
+    ///
+    /// [`add_wish`] is the command that makes one; what these tests need is a row to total, not
+    /// its conflict handling — and writing the folder directly is what lets a fixture put the
+    /// same card in two drawers **and** at the root, which is the shape the first test is about.
+    fn summary_wish(
+        conn: &Connection,
+        oracle_id: &str,
+        quantity: i64,
+        folder_id: Option<i64>,
+        finish: Option<&str>,
+    ) {
+        conn.execute(
+            "INSERT INTO wishlist_entries
+                (oracle_id, name, quantity, folder_id, preferred_finish, created_at, updated_at)
+             VALUES (?1, ?1, ?2, ?3, ?4, unixepoch(), unixepoch())",
+            params![oracle_id, quantity, folder_id, finish],
+        )
+        .unwrap();
+    }
+
+    /// A folder at the top of the wishlist's cabinet, or inside another.
+    fn drawer(conn: &Connection, parent: Option<i64>, name: &str) -> i64 {
+        crate::wishlist_folders::create_folder(conn, parent, name)
+            .unwrap()
+            .id
+    }
+
+    /// **The bug this command exists to fix.** `wishlist_folder_summary` carries
+    /// `WHERE w.folder_id IS NOT NULL`, because the root is not a folder and draws no tile; a
+    /// list total that inherited that clause would be short by **exactly the root**, silently,
+    /// and the root is where most wishes live.
+    ///
+    /// The fixture therefore files wishes in two folders **and at the root**, and the root's own
+    /// cost is asserted nonzero first — without that, an implementation that dropped the root
+    /// entirely would pass this test.
+    ///
+    /// It is also the fence on the two queries agreeing. They live in two modules and cannot
+    /// share a string; nothing the compiler can see relates them, so this is what fails the day
+    /// either one's price, join or multiplication drifts from the other's.
+    #[test]
+    fn the_list_total_is_the_folder_subtotals_plus_the_root() {
+        let conn = empty();
+        let lea = ("lea", "Limited Edition Alpha");
+        summary_card(&conn, "bolt", "o1", "common", "R", lea, &usd("5.00"));
+        summary_card(&conn, "bear", "o2", "common", "G", lea, &usd("0.25"));
+        summary_card(
+            &conn,
+            "wrath",
+            "o3",
+            "rare",
+            "W",
+            ("isd", "Innistrad"),
+            &usd("2.00"),
+        );
+        summary_card(&conn, "sol", "o4", "uncommon", "", lea, &usd("10.00"));
+
+        let ordered = drawer(&conn, None, "Ordered");
+        let someday = drawer(&conn, Some(ordered), "Someday");
+
+        // Three filed in two drawers...
+        summary_wish(&conn, "o1", 3, Some(ordered), None); // 3 × $5.00
+        summary_wish(&conn, "o2", 4, Some(ordered), None); // 4 × $0.25
+        summary_wish(&conn, "o3", 2, Some(someday), None); // 2 × $2.00
+
+        // ...and two at the root, which no folder tile can see.
+        summary_wish(&conn, "o4", 1, None, None); // 1 × $10.00
+        summary_wish(&conn, "o1", 5, None, None); // 5 × $5.00
+
+        // Read off the fixture rather than out of the query under test, so this is an
+        // independent statement about what the root is worth.
+        //
+        // **The non-vacuity guard is `total.cost > folders` at the foot of this test, not an
+        // `assert!(ROOT_COST > 0.0)` here.** A comparison between two literals is a fact the
+        // compiler settles — clippy's `assertions_on_constants` refuses it, and rightly: it
+        // proves the arithmetic on this line, which was never in doubt, rather than proving the
+        // fixture actually put something at the root. The runtime assertion does that, against
+        // the query's own answer.
+        const ROOT_COST: f64 = 10.00 + 5.0 * 5.00;
+
+        let folders: f64 = crate::wishlist_folders::folder_summary(&conn, PRICED_AT)
+            .unwrap()
+            .iter()
+            .map(|f| f.cost)
+            .sum();
+        assert!(
+            (folders - 20.0).abs() < 1e-9,
+            "$16.00 in Ordered and $4.00 in Someday, got {folders}"
+        );
+
+        let total = summarise_wishlist(&conn, PRICED_AT).unwrap();
+
+        assert!(
+            (total.cost - (folders + ROOT_COST)).abs() < 1e-9,
+            "the list is the drawers plus the root: {} against {}",
+            total.cost,
+            folders + ROOT_COST
+        );
+        assert!(
+            total.cost > folders,
+            "a total that inherited the tile's WHERE would be short by exactly the root"
+        );
+        assert_eq!(total.wishes, 5, "rows, wherever they are filed");
+        assert_eq!(total.copies, 15, "3 + 4 + 2 + 1 + 5");
+        assert_eq!(total.unpriced, 0);
+    }
+
+    /// `folder_summary`'s own rule, one clause removed: an unpriced wish is left out of the cost
+    /// and counted in the note beside it, never quoted at another marketplace's rate.
+    #[test]
+    fn an_unpriced_wish_counts_in_copies_and_not_in_cost() {
+        let conn = empty();
+        let lea = ("lea", "Limited Edition Alpha");
+        summary_card(&conn, "bolt", "o1", "common", "R", lea, &usd("5.00"));
+        // A printing this marketplace does not quote: no `usd` key at all, which is the shape a
+        // card with no TCGplayer listing takes.
+        summary_card(&conn, "forest", "o2", "common", "G", lea, "{}");
+        summary_wish(&conn, "o1", 2, None, None);
+        summary_wish(&conn, "o2", 3, None, None);
+        // A wish for an oracle card no printing answers to — the join finds nothing at all, and
+        // a wish outliving its printing is why that join is a LEFT one.
+        summary_wish(&conn, "ghost", 4, None, None);
+
+        let total = summarise_wishlist(&conn, PRICED_AT).unwrap();
+
+        assert_eq!(total.wishes, 3);
+        assert_eq!(total.copies, 9, "2 + 3 + 4 -- every copy wanted");
+        assert!(
+            (total.cost - 10.0).abs() < 1e-9,
+            "2 × $5.00 and nothing else, got {}",
+            total.cost
+        );
+        assert_eq!(total.unpriced, 2, "the Forest and the ghost");
+    }
+
+    /// An any-printing wish is priced at the **cheapest** printing of its oracle card, which is
+    /// the printing the list above it draws and quotes.
+    ///
+    /// `released_at` is NULL on both printings on purpose, so a join that ordered by "newest"
+    /// would fall to its `id ASC` tiebreak and take the dear one — the fixture disagrees with
+    /// the rule it is not testing.
+    #[test]
+    fn an_any_printing_wish_is_priced_at_the_cheapest_printing() {
+        let conn = empty();
+        summary_card(
+            &conn,
+            "bolt-a-dear",
+            "o1",
+            "common",
+            "R",
+            ("lea", "Limited Edition Alpha"),
+            &usd("40.00"),
+        );
+        summary_card(
+            &conn,
+            "bolt-b-cheap",
+            "o1",
+            "common",
+            "R",
+            ("2ed", "Unlimited Edition"),
+            &usd("2.00"),
+        );
+        summary_wish(&conn, "o1", 3, None, None);
+
+        let total = summarise_wishlist(&conn, PRICED_AT).unwrap();
+
+        assert_eq!(total.copies, 3);
+        assert!(
+            (total.cost - 6.0).abs() < 1e-9,
+            "3 × the $2 printing, not 3 × the $40 one the id order reaches first, got {}",
+            total.cost
+        );
+
+        // And the breakdown chose the same printing. Two joins that disagreed would put a bar
+        // under a header the bar does not add up to.
+        let rows = breakdown(&conn, "set", PRICED_AT).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].key, "2ed",
+            "the cheapest printing is the row's subject"
+        );
+    }
+
+    /// Every dimension's rows sum to the header the widget prints above them — at **every**
+    /// marketplace, which also proves each dimension's SQL prepares.
+    ///
+    /// `crate::sorting::price_expr` emits a structurally different expression per marketplace (a
+    /// `json_extract`, a nested `CASE`, a correlated subquery over `marketplace_prices`), and a
+    /// wrong alias in any of them is a run-time `prepare` failure rather than a compile error —
+    /// `folder_summary_prepares_at_every_marketplace`'s argument, one module over.
+    #[test]
+    fn a_breakdown_sums_to_the_summary_for_every_dimension() {
+        let conn = empty();
+        let lea = ("lea", "Limited Edition Alpha");
+        let isd = ("isd", "Innistrad");
+        summary_card(&conn, "bolt", "o1", "common", "R", lea, &usd("5.00"));
+        summary_card(
+            &conn,
+            "snap",
+            "o2",
+            "rare",
+            "WU",
+            isd,
+            r#"{"usd":"3.00","usd_foil":"9.00"}"#,
+        );
+        summary_card(&conn, "waste", "o3", "uncommon", "", isd, &usd("1.00"));
+        // Quoted nowhere, so its buckets keep a `cards` figure and no value at all.
+        summary_card(&conn, "relic", "o4", "mythic", "G", lea, "{}");
+
+        summary_wish(&conn, "o1", 2, None, None);
+        summary_wish(&conn, "o2", 1, None, Some("foil"));
+        summary_wish(&conn, "o3", 4, None, Some("nonfoil"));
+        summary_wish(&conn, "o4", 3, None, None);
+
+        for id in crate::marketplace::MARKETPLACE_IDS {
+            let market = Marketplace::from_id(id);
+            let total = summarise_wishlist(&conn, market)
+                .unwrap_or_else(|e| panic!("the list could not be summed at {id}: {e}"));
+            assert_eq!(total.copies, 10, "at {id}");
+
+            for dimension in ["rarity", "color", "set", "finish"] {
+                let rows = breakdown(&conn, dimension, market)
+                    .unwrap_or_else(|e| panic!("{dimension} at {id}: {e}"));
+                assert!(
+                    !rows.is_empty(),
+                    "{dimension} at {id} answered nothing at all"
+                );
+                let cards: i64 = rows.iter().map(|r| r.cards).sum();
+                let value: f64 = rows.iter().filter_map(|r| r.value).sum();
+                assert_eq!(cards, total.copies, "{dimension} at {id} lost a copy");
+                assert!(
+                    (value - total.cost).abs() < 1e-9,
+                    "{dimension} at {id} summed to {value}, header says {}",
+                    total.cost
+                );
+            }
+        }
+
+        // The dollar figures, and the four things a sum check structurally cannot see.
+        let total = summarise_wishlist(&conn, PRICED_AT).unwrap();
+        assert!(
+            (total.cost - (2.0 * 5.00 + 9.00 + 4.0 * 1.00)).abs() < 1e-9,
+            "2 × $5, one foil at $9, 4 × $1, and the mythic unpriced -- got {}",
+            total.cost
+        );
+
+        let colors = breakdown(&conn, "color", PRICED_AT).unwrap();
+        let keys: Vec<&str> = colors.iter().map(|r| r.key.as_str()).collect();
+        assert!(
+            keys.contains(&"multi"),
+            "two colours is one bucket: {keys:?}"
+        );
+        assert!(
+            keys.contains(&"c"),
+            "a colourless card is bucketed, never dropped: {keys:?}"
+        );
+        assert!(
+            keys.contains(&"R") && keys.contains(&"G"),
+            "one colour keys on the stored letter, as the collection's own breakdown spells it: {keys:?}"
+        );
+
+        let sets = breakdown(&conn, "set", PRICED_AT).unwrap();
+        let innistrad = sets.iter().find(|r| r.key == "isd").expect("a set bucket");
+        assert_eq!(
+            innistrad.name.as_deref(),
+            Some("Innistrad"),
+            "only the corpus knows what a set code is called"
+        );
+
+        let rarities = breakdown(&conn, "rarity", PRICED_AT).unwrap();
+        let mythic = rarities
+            .iter()
+            .find(|r| r.key == "mythic")
+            .expect("the unpriced card's bucket");
+        assert_eq!(mythic.cards, 3, "an unpriced copy is still a copy");
+        assert_eq!(
+            mythic.value, None,
+            "and leaves the value null rather than zero"
+        );
+
+        let finishes = breakdown(&conn, "finish", PRICED_AT).unwrap();
+        let unsaid = finishes
+            .iter()
+            .find(|r| r.key == "any")
+            .expect("the wishes that name no finish");
+        assert_eq!(
+            unsaid.cards, 5,
+            "2 Bolts and 3 relics -- 'has not said' is its own bucket, never folded into nonfoil"
+        );
+    }
+
+    /// The four arms are a fact about columns of this database, and there is no fifth. A
+    /// sentence rather than a constraint failure, because a caller asking for one has made a
+    /// mistake no `CHECK` could word.
+    #[test]
+    fn an_unknown_dimension_is_refused() {
+        let conn = empty();
+        for dimension in ["rarity", "color", "set", "finish"] {
+            assert!(
+                breakdown(&conn, dimension, PRICED_AT).is_ok(),
+                "{dimension} is one of the four"
+            );
+        }
+        // Including the near misses: the match is exact, so a case fold or another spelling of
+        // the same idea is refused rather than silently answering the wrong column.
+        for dimension in ["sideboard", "", "RARITY", "colour", "set_name", "folder"] {
+            assert_eq!(
+                breakdown(&conn, dimension, PRICED_AT).unwrap_err(),
+                BAD_DIMENSION,
+                "{dimension:?}"
+            );
+        }
     }
 }

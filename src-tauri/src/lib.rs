@@ -31,6 +31,11 @@
 //! one cannot change desktop behaviour, and the one that adds arms cannot fail to compile.
 
 // ── Every target ─────────────────────────────────────────────────────────────────
+/// **The collection's and the wishlist's history, and the feed that reads it beside
+/// [`deck_audit`].** A table, a `record` that takes the caller's `&Connection` so a row lands
+/// inside the transaction of the change it describes, and one query. No clock beyond SQLite's
+/// own `unixepoch()`, no filesystem and no network — so it is on the every-target half.
+pub mod activity;
 /// **The `app_meta` key–value store, carved out of [`update`] so both targets have it.**
 /// Eleven modules keep view state in that one table and only `update` swaps an `.exe`; a
 /// re-export from there does not work, because a name re-exported from a gated module is
@@ -105,6 +110,12 @@ pub mod filters;
 /// to would be looked for rather than in this run; the run is a place in the alphabet, not the
 /// list of view-state modules.
 pub mod flatten;
+/// **[`markcolors`]'s shape with a document instead of a map.** One `app_meta` row, an
+/// infallible read that answers the default layout for anything it cannot parse, and a write
+/// that validates the document's *shape* and never its vocabulary — a widget kind this build
+/// has never heard of survives a round trip, which is what stops an older build quietly
+/// emptying a newer one's row.
+pub mod home;
 pub mod image_uri;
 pub mod index;
 pub mod ingest;
@@ -158,6 +169,11 @@ pub mod sorting;
 /// legacy `mtg.db` to convert — its OPFS pool was created by a build that already had two
 /// files — so there is nothing here for the web target to call.
 pub mod split;
+/// **[`nav`]'s shape with a word instead of a bit, and [`listview`]'s split.** Which view the
+/// app opens on is one `app_meta` row; *which views exist* is TypeScript's, so this module
+/// stores a non-empty word and validates nothing else. A Rust-side allow-list would make every
+/// new view a Rust change and would strand a reader on a page a downgrade no longer draws.
+pub mod startview;
 pub mod sync;
 /// **Every layer of the engine compiles for wasm, and that is the point rather than a bonus.**
 /// The conflict rules are one implementation on three targets (spec §2), so a layer that

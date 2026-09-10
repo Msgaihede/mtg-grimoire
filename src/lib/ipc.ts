@@ -15,12 +15,15 @@
  * `FinishPrices`/`MeldRelation`                  — `src-tauri/src/card.rs`
  * `SyncOutcome`/`SyncStatus`/`Progress`          — `src-tauri/src/sync.rs`
  * `EntryInput`/`EntryPatch`/`EntryChange`/`CollectionQuery`/`CollectionRow`/
- * `CollectionPage`/`CollectionSummary`           — `src-tauri/src/collection.rs`
+ * `CollectionPage`/`CollectionSummary`/`BreakdownRow` — `src-tauri/src/collection.rs`
  * `MoveOutcome`                                  — `src-tauri/src/collection_alloc.rs`
- * `WishInput`/`WishlistQuery`/`WishRow`/`WishlistPage` — `src-tauri/src/wishlist.rs`
+ * `WishInput`/`WishlistQuery`/`WishRow`/`WishlistPage`/
+ * `WishlistSummary`                              — `src-tauri/src/wishlist.rs`
  * `DeckInput`/`DeckPatch`/`DeckViewState`/`DeckRow`/`DeckCardRow`/`DeckDetail`/
  * `FormatSpecRow`/`PipCost`/`DeckPipCosts`/
- * `BracketCardRow`/`DeckBracketRead`              — `src-tauri/src/deck.rs`
+ * `BracketCardRow`/`DeckBracketRead`/`DeckValue`   — `src-tauri/src/deck.rs`
+ * `ActivityEntry`                                — `src-tauri/src/activity.rs`
+ * `HomeWidget`/`HomeLayout`                      — `src-tauri/src/home.rs`
  * `CardFilters`, flattened into both list queries — `src-tauri/src/filters.rs`
  * `MarketplaceFeedStatus`                        — `src-tauri/src/marketplace_feed.rs`
  * `CardTags`/`PrintingTags`                     — `src-tauri/src/tags/oracle.rs`
@@ -57,29 +60,33 @@
  * mirror keeps the Rust spelling verbatim; `ipc.test.ts`'s `snakeMirrors` is the table that
  * compares them with no camel step.
  *
- * **Ten settings are one `app_meta` row each, and nine of them carry no struct at all.** Of the
- * nine: three answered as a
+ * **Twelve settings are one `app_meta` row each, and ten of them carry no struct at all.** Of the
+ * ten: four answered as a
  * bare string — `getMarketplace`/`setMarketplace` (`src-tauri/src/marketplace.rs`),
- * `printingGroupBy`/`setPrintingGroupBy` (`src-tauri/src/card.rs`) and
- * `deckSort`/`setDeckSort` (`src-tauri/src/decksort.rs`) — five as a bare map,
+ * `printingGroupBy`/`setPrintingGroupBy` (`src-tauri/src/card.rs`),
+ * `deckSort`/`setDeckSort` (`src-tauri/src/decksort.rs`) and
+ * `startView`/`setStartView` (`src-tauri/src/startview.rs`) — five as a bare map,
  * `cardZoom`/`setCardZoom` (`src-tauri/src/zoom.rs`), `listView`/`setListView`
  * (`src-tauri/src/listview.rs`), `flattenState`/`setFlattenState`
  * (`src-tauri/src/flatten.rs`), `markColors`/`setMarkColor`
  * (`src-tauri/src/markcolors.rs`) and `searchOpen`/`setSearchOpen`
  * (`src-tauri/src/searchopen.rs`), and one as a
- * bare `boolean`: `navCollapsed`/`setNavCollapsed` (`src-tauri/src/nav.rs`). All ten are
+ * bare `boolean`: `navCollapsed`/`setNavCollapsed` (`src-tauri/src/nav.rs`). All twelve are
  * the shape a stored preference has to have: the read falls back on its default for a row that
  * is missing *or* holds a value this build does not recognise, and only the *write* refuses.
  *
- * Eight of them are therefore typed loosely here rather than as their unions: the narrowing
+ * Nine of them are therefore typed loosely here rather than as their unions: the narrowing
  * belongs to the module that owns the vocabulary (`@/lib/marketplace`,
  * `@/features/card/printings`, `@/lib/cardZoom`, `@/lib/store` for both of its two rows,
- * `@/features/decks/deckSort`, `@/lib/useMarkColors`, `@/features/search/useSearchOpen`), and a
+ * `@/features/decks/deckSort`, `@/lib/useMarkColors`, `@/features/search/useSearchOpen`,
+ * `@/features/home` for the start view), and a
  * row a newer build wrote
- * must reach this side as what it is. **The deck sort is the one where the *write* refuses
- * nothing either**, and it is the rule above meeting a vocabulary the backend does not have
- * rather than an exception to it: three of the six sort keys are computed on this side, so
- * `deck_sort.rs` has no list to check a word against — see {@link ipc.setDeckSort}. **The one bare boolean left is the one with no narrowing to do**, and that is
+ * must reach this side as what it is. **The deck sort and the start view are the two where the
+ * *write* refuses nothing but a blank**, and they are the rule above meeting a vocabulary the
+ * backend does not have rather than an exception to it: three of the six sort keys are computed on
+ * this side, so `deck_sort.rs` has no list to check a word against, and which views exist is a
+ * fact about this app's router, so `startview.rs` has none either — see {@link ipc.setDeckSort}
+ * and {@link ipc.setStartView}. **The one bare boolean left is the one with no narrowing to do**, and that is
  * the same argument arriving at nothing rather than an exception to it: a boolean has no
  * vocabulary for a later build to have widened, so there is no third state a row could come back
  * in. Its far end folds a missing row, a junk row and an unreadable one alike into one
@@ -105,16 +112,27 @@
  * search-column row has one *kind* of value under keys this side invents, and this one has two
  * *different* values under names both sides already know, so a `Record<string, unknown>` here
  * would throw away the only thing worth checking. Being a struct is also what puts it on
- * `ipc.test.ts`' mirror table, where the nine below cannot be — a bare `boolean` has no fields
- * to compare — so this is the one stored setting whose *shape* cannot drift silently.
- * **`width` is nullable and `collapsed` is not**, which is the same asymmetry those nine turn on:
+ * `ipc.test.ts`' mirror table, where the ten below cannot be — a bare `boolean` has no fields
+ * to compare — so it is one of the two stored settings whose *shape* cannot drift silently.
+ * **`width` is nullable and `collapsed` is not**, which is the same asymmetry those ten turn on:
  * how wide is a number a reader has to have produced, so a database nobody has dragged has
  * nothing honest to say and says `null`; folded-or-not has a default that is true of every
  * database from the first launch. `@/features/decks/useFolderPane` is where the `null` becomes a
  * pixel count, and `FolderTree` owns that number.
  *
+ * **The eleventh is the second, and it is a struct for the opposite reason.** {@link HomeLayout}
+ * (`src-tauri/src/home.rs`) is the home page's tiles — their order, their widths and whatever each
+ * one remembers — and where the folder pane is a struct because its two *known* fields must land
+ * together, this one is a struct because most of what it holds is **unknown to the backend
+ * entirely**: `kind` is a word this side invents and `config` is a shape only the widget that
+ * wrote it can read. So `markcolors.rs`' third rule is the one that governs it — a write preserves
+ * what this build does not understand — and a layout a newer build wrote survives a round trip
+ * through an older one rather than being flattened to what that one happens to know. Being a
+ * struct puts it on the same mirror table, which is what its two declared fields are worth
+ * checking for; nothing on this side can fence the rest, and nothing should try.
+ *
  * The zoom row, the list-layout row, the flatten row, the mark-colour row and the search-column
- * row are the five of the nine whose *shape* is a map, and the difference is worth a sentence:
+ * row are the five of the ten whose *shape* is a map, and the difference is worth a sentence:
  * none has a single default to fall back on, because there are eight walls, four lists, two
  * cabinets, three search columns and a handful of marks, and each one has been touched or not. So
  * the backend answers only what it has, and a section it says nothing about keeps the default the
@@ -1466,6 +1484,42 @@ export interface CollectionSummary {
 }
 
 /**
+ * One bucket of a list, sliced along one dimension — the home page's two value widgets.
+ *
+ * **One struct for two commands**, and the two are deliberately not one: `collection.rs` owns the
+ * Rust definition and `wishlist.rs` imports it, because breaking a collection down by rarity and
+ * breaking a shopping list down by rarity are the same question asked of different rows. Which
+ * dimension a `key` is a value *of* is the caller's — it is whatever it asked for, and nothing on
+ * the row repeats it.
+ *
+ * **A breakdown sums to the summary above it, by construction.** Both sides group over the same
+ * `sorting::price_expr` fragment {@link CollectionSummary} totals, so a slice can never disagree
+ * with the figure it is a slice of, and the colour buckets partition rather than overlap — a card
+ * with two colours is in `multi` and a card with none is in `c`, so nothing is dropped and nothing
+ * is counted twice.
+ */
+export interface BreakdownRow {
+  /** The bucket, as its grouping column spells it: a rarity, a colour bucket (`"multi"` and
+   *  `"c"` included), a lowercase set code, or a finish — and for the wishlist's finish
+   *  dimension, `"any"` for a wish pinned to none. */
+  key: string;
+  /** A name to draw where the key is not one — the set name beside the set code. `null` for
+   *  every dimension whose key is already the word, which is three of the four. */
+  name: string | null;
+  /** Copies in the bucket, not rows. */
+  cards: number;
+  /**
+   * Summed at the marketplace the caller named, over the copies it has a price for.
+   *
+   * **`null` means the marketplace priced nothing in this bucket, and that is not zero** — it is
+   * the em dash every priced figure in this file falls back to, and a `?? 0` on this side would
+   * turn "we do not know" into "worth nothing" on a bucket of forty cards. Zero is a real answer
+   * beside it and means the feed priced these cards *at* nothing.
+   */
+  value: number | null;
+}
+
+/**
  * One wish, as the UI sends it.
  *
  * Either identifier will do: `cardId` alone pins the wish to that printing and looks the
@@ -1638,6 +1692,35 @@ export interface WishRow {
 export interface WishlistPage {
   items: WishRow[];
   total: number;
+}
+
+/**
+ * The whole wishlist as one aggregate — {@link CollectionSummary} one cabinet over, and
+ * deliberately not its twin: a shopping list has no condition, no tradelist and nothing to
+ * review.
+ *
+ * **It is the folder subtotals plus the root, which is the whole reason it is its own command.**
+ * {@link WishlistFolderSummary} comes from a query carrying `WHERE w.folder_id IS NOT NULL` —
+ * what keeps root-level wishes out of a folder tile — and a list total that inherited that clause
+ * would be wrong by exactly the root, silently and only for readers who file some of their wishes.
+ * Same expression, one clause fewer.
+ */
+export interface WishlistSummary {
+  /** Rows, not copies: how many distinct things the reader is shopping for. */
+  wishes: number;
+  /** Copies, summed over those rows. */
+  copies: number;
+  /**
+   * What they would cost at the marketplace the caller named, over the copies it has a price
+   * for. An **any-printing** wish is priced at its cheapest printing, the same join a folder
+   * tile uses — so the two figures are two readings of one expression rather than two opinions.
+   */
+  cost: number;
+  /** Copies with no price for their finish at that marketplace — {@link CollectionSummary.unpriced}'s
+   *  rule and its reason: a cost that silently omits them is a number that lies by rounding
+   *  down, and the count has to travel beside the figure because the two marketplaces do not
+   *  have the same holes. */
+  unpriced: number;
 }
 
 /**
@@ -2829,6 +2912,68 @@ export interface DeckAuditEntry {
 }
 
 /**
+ * One line of the home page's activity feed — **what happened, not how to say it.**
+ *
+ * {@link DeckAuditEntry}'s design with a scope instead of a deck, and the sentence is drawn the
+ * same way: Rust records the facts inside the transaction that made the change, and
+ * `src/features/home/` turns them into the words a person reads. A row that stored the sentence
+ * would be a history to migrate the day the wording changes.
+ *
+ * **It is two tables read as one, and that is the shape of every field below.** The `collection`
+ * and `wishlist` rows come from `activity`; the `deck` rows come from `deck_audit` and are the
+ * same rows the deck history drawer draws — so a change that writes a deck audit row writes no
+ * `activity` row, and appears here exactly once rather than twice. The consequence worth writing
+ * down: **the `id`s collide across the two tables**. Nothing joins on them, and a key on this side
+ * is `scope` plus `id`.
+ */
+export interface ActivityEntry {
+  /** Unique **within its own table**, not across the feed — see above. */
+  id: number;
+  /** Unix **seconds**, like {@link DeckAuditEntry.at} — not milliseconds. The feed is ordered
+   *  `at DESC, id DESC`, because `unixepoch()` has one-second resolution and one press can write
+   *  two rows inside one second. */
+  at: number;
+  /**
+   * Which cabinet the change was made in — one of `"collection" | "wishlist" | "deck"`.
+   *
+   * A raw `string` rather than that union, for {@link ipc.getMarketplace}'s reason: **Rust stores
+   * strings and TypeScript owns the vocabulary**, so the narrowing lives in `src/features/home/`
+   * beside the renderer that switches on it, and a scope a newer build wrote reaches this side as
+   * what it is rather than as a parse error. {@link DeckAuditEntry.payload} makes the same trade
+   * one field over.
+   */
+  scope: string;
+  /**
+   * What was done — and **the vocabulary depends on the scope, so the two are not one list**. An
+   * `activity` row carries one of `add`, `remove`, `quantity`, `move`, `edit`, `folder`, `import`
+   * or `clear`; a `deck` row carries `deck_audit`'s own {@link DeckAuditKind}, which shares four
+   * of those words and adds five of its own. A renderer that switched on `kind` before `scope`
+   * would read a deck's `folder` as a collection's.
+   */
+  kind: string;
+  /** The deck the change was made to — **non-`null` only on a `deck`-scoped row**, which is to
+   *  say only on a row that came from `deck_audit`. Every `activity` row carries `null`, because
+   *  that table records changes made to no deck at all and the column is a `NULL` literal in the
+   *  half of the union that reads it. */
+  deckId: number | null;
+  /** The printing the change was about, softly referenced like every card id in a user table.
+   *  `null` wherever the change was about no one card — a folder rename, an import, a clear. */
+  cardId: string | null;
+  /** Denormalized at write time, for {@link DeckAuditEntry.cardName}'s reason: a feed line still
+   *  names its card the day that printing leaves the card database. */
+  cardName: string | null;
+  /** **JSON text**, not an object — {@link DeckAuditEntry.payload}'s contract verbatim, including
+   *  its instruction to read every field as optional and be total over unknowns. The shape
+   *  depends on `scope` and `kind`, and `src/features/home/` is the only place in the app that
+   *  looks inside this string. */
+  payload: string;
+  /** Signed **copies**, and `0` where the change is not about copies — an edit, a folder rename,
+   *  a move. {@link DeckAuditEntry.delta}'s rule: zero means "this changed no card count", never
+   *  "nothing happened". */
+  delta: number;
+}
+
+/**
  * One new deck, as the "New deck" dialog sends it — **the whole deck, in one INSERT**.
  *
  * Rust carries `#[serde(default)]` so both strings are optional on the wire, but they stay
@@ -3496,6 +3641,37 @@ export interface DeckRow {
    * anybody has read at all.
    */
   bracket: number;
+}
+
+/**
+ * What one deck's cards are worth, at the marketplace the caller named.
+ *
+ * **Every deck at once, and one argument** — {@link ipc.deckPipCosts}' shape and its reason: the
+ * caller is drawing a gallery, and a per-deck read would be a round trip per tile for one figure.
+ * `deck_get` prices a deck properly and rolls up every category, and none of that is this.
+ *
+ * **Every deck gets a row**, archived and empty ones included — the one difference from
+ * {@link DeckPipCosts}, which is absent for a deck with nothing to say. A `LEFT JOIN` rather than
+ * a `GROUP BY` over the cards, so the caller can index by id with no missing-key branch and decide
+ * for itself what an archived deck is worth drawing.
+ */
+export interface DeckValue {
+  deckId: number;
+  /**
+   * Summed over the copies the marketplace has a price for — **`null` when that is none of them**,
+   * which is {@link BreakdownRow.value}'s rule and not a zero: a deck of unpriced cards is an em
+   * dash, and a deck of tokens really is worth nothing.
+   *
+   * The pile is {@link DeckRow.cardCount}'s exactly, so the value and the count on the tile beside
+   * it are two readings of one list: the **live** variant, in **active** categories of kind
+   * `main`, `commander` or `maybe`. A sideboard, a companion, a theory row and every pile the
+   * reader switched off are outside it.
+   */
+  value: number | null;
+  /** Copies in that pile with no price for their finish — {@link CollectionSummary.unpriced}'s
+   *  rule: the figure above is worth less than it looks wherever this is not zero, and the two
+   *  travel together. */
+  unpriced: number;
 }
 
 /**
@@ -5850,6 +6026,51 @@ export interface DeckFolderPane {
 }
 
 /**
+ * One tile on the home page — **a document the backend stores and does not understand**.
+ *
+ * `kind` is a `string` and `config` is `unknown` on purpose, and it is the strongest version of
+ * {@link ipc.deckSort}'s split rather than an exception to it: the widget vocabulary is
+ * TypeScript's, it appears in no Rust file, and the union that narrows it is a **different type**
+ * — `WidgetKind` in `src/features/home/widgets.ts`. Naming the kinds here as a union would make a
+ * layout a *newer* build wrote unparseable by an older one, and a portable app that a reader runs
+ * two versions of is exactly where that happens. Rust validates that both words are non-empty and
+ * nothing else; this side draws what it knows and carries the rest through untouched.
+ */
+export interface HomeWidget {
+  /** Stable across a reorder — the key a drag moves and the row a `config` belongs to. */
+  id: string;
+  /** Which tile this is. See above: **not** `WidgetKind`, deliberately. */
+  kind: string;
+  /** How many columns wide, `1` or `2`. The only field of the four Rust bounds by value. */
+  span: number;
+  /** Whatever that kind of tile remembers — a dimension, a marketplace, a row count.
+   *  `unknown` rather than a union of every widget's shape for `kind`'s reason: a build that
+   *  cannot read a config must still write it back the way it found it. */
+  config: unknown;
+}
+
+/**
+ * The whole home page, as one `app_meta` row — the **eleventh** stored setting and the second that
+ * carries a struct, after {@link DeckFolderPane}.
+ *
+ * A document rather than a row per tile for that struct's reason, arrived at from the other end: a
+ * reorder changes every widget's place at once, so one write is the only shape that cannot half
+ * land. `markcolors.rs`'s four rules govern it — reading can never fail, writing validates, **a
+ * write preserves what this build does not understand**, and no migration, because `app_meta` is
+ * schema v6's table.
+ *
+ * **An empty `widgets` is a layout, not a missing row.** A reader who removed every tile has said
+ * something, and handing them the default back on the next launch would be the app arguing with
+ * them; only a row that is *absent* or unparseable falls back to the six the crate seeds.
+ */
+export interface HomeLayout {
+  /** `1` today. Rust **refuses** a write carrying anything else rather than downgrading it, so a
+   *  document from a future build survives an older one untouched. */
+  version: number;
+  widgets: HomeWidget[];
+}
+
+/**
  * Which edge detector runs — `Method` in `crates/card-scanner/src/session.rs`, whose
  * `#[serde(rename_all = "lowercase")]` is the whole of the mapping.
  */
@@ -6355,6 +6576,22 @@ export const ipc = {
   collectionSummary: (query: CollectionQuery) =>
     invoke<CollectionSummary>("collection_summary", { query }),
   /**
+   * The whole collection sliced along one dimension — `rarity`, `color`, `set` or `finish`.
+   *
+   * **The whole collection, and no query**: this is the home page's figure, not the wall's, so it
+   * takes no filters and cannot be narrowed. What it can be is priced, and the `marketplace`
+   * decides every `value` in the answer — so it belongs in the caller's query key like every other
+   * priced read.
+   *
+   * `dimension` is a `string` here and **four `match` arms in Rust**, which is the one place the
+   * usual split runs the other way: the arms are a fact about which SQL columns exist, not a
+   * vocabulary about widgets, so the backend really does own this list and refuses a fifth word in
+   * a sentence. `BreakdownDimension` in `src/features/home/` is the same four words on this side,
+   * and a caller should send one of them.
+   */
+  collectionBreakdown: (dimension: string, marketplace: MarketplaceId) =>
+    invoke<BreakdownRow[]>("collection_breakdown", { dimension, marketplace }),
+  /**
    * One transaction for a whole imported file, rather than one `collectionAdd` per line — a
    * 500-row CSV would otherwise be 500 transactions, and a failure halfway through would leave
    * a collection nobody can reason about. A refusal rolls the whole file back.
@@ -6575,6 +6812,20 @@ export const ipc = {
   wishlistRemove: (id: number) => invoke<EntryChange>("wishlist_remove", { id }),
   wishlistList: (query: WishlistQuery) => invoke<WishlistPage>("wishlist_list", { query }),
   /**
+   * The whole wishlist as one aggregate — see {@link WishlistSummary}, where the reason it is not
+   * a folder subtotal is written out.
+   *
+   * **The whole list, and no query**, {@link ipc.collectionBreakdown}'s rule: this is the home
+   * page's figure rather than the wall's, and the `marketplace` decides every number in it.
+   */
+  wishlistSummary: (marketplace: MarketplaceId) =>
+    invoke<WishlistSummary>("wishlist_summary", { marketplace }),
+  /** The wishlist sliced along one dimension — {@link ipc.collectionBreakdown}'s contract
+   *  verbatim, one cabinet over, and the same {@link BreakdownRow} back. The `finish` dimension
+   *  groups on `preferred_finish`, where an any-printing wish lands in a bucket keyed `"any"`. */
+  wishlistBreakdown: (dimension: string, marketplace: MarketplaceId) =>
+    invoke<BreakdownRow[]>("wishlist_breakdown", { dimension, marketplace }),
+  /**
    * One transaction for a whole imported file — {@link ipc.collectionImportCommit}'s rule. The
    * `set` arm reaches its row through `add_wish` first and corrects the quantity after, so a
    * `set` of 0 **deletes** the wish rather than leaving an empty one.
@@ -6685,6 +6936,16 @@ export const ipc = {
     invoke<WishlistOptimizeOutcome>("wishlist_optimize_apply", { items }),
   /** The gallery: every deck, archived last, most recently touched first. */
   deckList: () => invoke<DeckRow[]>("deck_list"),
+  /**
+   * Every deck's worth at once — see {@link DeckValue}, including which cards it counts and why
+   * `null` is not zero.
+   *
+   * **Not on {@link DeckRow}**, deliberately: a price is a fact about a marketplace and a deck row
+   * is not, so folding it in would make the gallery's own read change its answer with a setting
+   * and invalidate on every marketplace switch. Its own command, its own query key, and a caller
+   * that draws the tiles before the figures arrive.
+   */
+  deckValues: (marketplace: MarketplaceId) => invoke<DeckValue[]>("deck_values", { marketplace }),
   /**
    * Every deck's printed mana costs at once — the colour bar's facts, and the whole of them.
    *
@@ -7102,6 +7363,20 @@ export const ipc = {
    */
   deckAuditList: (deckId: number, limit: number) =>
     invoke<DeckAuditEntry[]>("deck_audit_list", { deckId, limit }),
+  /**
+   * The home page's feed — every cabinet's recent changes, newest first, `at DESC, id DESC` like
+   * the history above it.
+   *
+   * **It reads {@link ipc.deckAuditList}'s table as one half of itself**, which is why it sits
+   * here: a `UNION ALL` over `activity` and `deck_audit`, so a deck edit appears once — in the
+   * drawer *and* in the feed — rather than being logged twice. See {@link ActivityEntry} for what
+   * that costs (colliding `id`s, and a `kind` vocabulary that depends on the `scope`).
+   *
+   * `limit` is **required and clamped into `1..=500`** by the backend, {@link ipc.deckAuditList}'s
+   * rule and its reason: the clamp is what stops a `0` or a negative from meaning *no limit at
+   * all*, which is exactly how SQLite reads a negative `LIMIT`.
+   */
+  activityRecent: (limit: number) => invoke<ActivityEntry[]>("activity_recent", { limit }),
   /**
    * What the deck editor's Undo and Redo buttons would do — see {@link DeckUndoState}.
    *
@@ -7806,7 +8081,7 @@ export const ipc = {
    * they left it.
    *
    * The **fourth** `app_meta` setting and the first that is a bare `boolean` — see this file's
-   * header. It is also one of the two that need no narrowing on this side: the other seven carry
+   * header. It is also the one that needs no narrowing on this side: the other nine carry
    * a vocabulary a newer build could have widened, and `true`/`false` has none, so there is no
    * third state to fall back from. **The far end is infallible**: a missing row, a row holding
    * something that is not a boolean, and a row that cannot be read at all all answer `false` —
@@ -8064,6 +8339,48 @@ export const ipc = {
    * for its reason: a refusal costs the next launch's starting order and nothing this session.
    */
   setDeckSort: (sort: string) => invoke<void>("set_deck_sort", { sort }),
+  /**
+   * The home page's tiles, in the order and at the widths the reader left them — see
+   * {@link HomeLayout}.
+   *
+   * The **eleventh** `app_meta` setting and the second that carries a struct. **The read cannot
+   * fail**: a missing row, a row this build cannot parse and a row holding something that is not a
+   * layout all answer the six-tile default, which is what a reader who has never touched the page
+   * sees. An empty widget list is the one thing that is *not* that default — it is a layout, and a
+   * reader who cleared the page keeps it cleared.
+   */
+  homeLayout: () => invoke<HomeLayout>("home_layout"),
+  /**
+   * Remember the whole page — **the document, not a tile**, so a reorder cannot half land.
+   *
+   * The write is the half that validates: a `version` that is not `1`, a blank `id` or `kind`, a
+   * `span` outside `1..=2` and a document over 64 KiB are each refused in a sentence, and a refusal
+   * leaves the stored row exactly as it was. Everything else survives the round trip **including
+   * what this build does not understand** — an unknown `kind` and its `config` come back verbatim,
+   * which is the whole reason {@link HomeWidget} is typed as loosely as it is.
+   *
+   * Answers `collection::BUSY` under a running sync like every other write.
+   */
+  setHomeLayout: (layout: HomeLayout) => invoke<void>("set_home_layout", { layout }),
+  /**
+   * Which view the app opens on, as a stored word — `"home"` for a database nobody has changed.
+   *
+   * The **twelfth** `app_meta` setting and the fourth answered as a bare string. It is
+   * {@link ipc.deckSort}'s split exactly, and for the sharper version of that reason: **the
+   * vocabulary of views is TypeScript's** and `startview.rs` has no list to check a word against,
+   * because which pages exist is a fact about this app's router. So the backend hands back
+   * whatever was stored and this side narrows it — a word a *newer* build wrote reaches an older
+   * one as itself and degrades to the default here, where a Rust-side allow-list would have
+   * stranded the reader on a page that no longer exists.
+   */
+  startView: () => invoke<string>("start_view"),
+  /**
+   * Remember it. **One refusal and it is a blank** — {@link ipc.setDeckSort}'s trade, for its
+   * reason: a blank is refusable without a vocabulary, and it is the one value the read discards,
+   * so storing it would be a write that reported success and read back as `home` for ever. The
+   * word is trimmed on the way in. Answers `collection::BUSY` under a running sync.
+   */
+  setStartView: (view: string) => invoke<void>("set_start_view", { view }),
   /**
    * Download one marketplace's price feed and rewrite its rows. Answers the feed's state
    * afterwards.
