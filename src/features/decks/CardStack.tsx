@@ -153,10 +153,10 @@ export const STACK_DATA_HEIGHT = CHIN_HEIGHT;
  * How far the chin rides **up** over the face's bottom corners — `lib/cardZoom.ts`'s `CHIN_RISE`.
  * Does not zoom; see there.
  *
- * It is what joins the two boxes into one card: the face clips its own 7px corners, and a bar
- * butted flush under them would show two hairlines of background through the gap. Four pixels
- * is the radius less its own border, so the bar's square top corners are covered by the face
- * exactly where the face is still solid.
+ * It is what joins the two boxes into one card: the face clips its own corners, and a bar butted
+ * flush under them would show two hairlines of background through the gap. **Four is a measured
+ * number and no longer a derived one** — the face's corner is `DeckCardFace`'s `FACE_RADIUS` and
+ * the old arithmetic was about a 7px one; `CHIN_RISE` itself carries the re-measurement.
  */
 export const STACK_DATA_RISE = CHIN_RISE;
 export const STACK_CARD_HEIGHT =
@@ -221,7 +221,8 @@ export function stackDataHeight(zoom: number): number {
  * The rise is subtracted unscaled on purpose — see {@link STACK_DATA_RISE}. So the card is the one
  * sum here with two different behaviours in it: a scaled face and foot, and three fixed lengths
  * (two hairlines and the rise), each fixed because the thing it is derived from — a 1px border, a
- * 7px corner radius — is a Tailwind class that does not scale either. The foot was a third
+ * corner radius in whole pixels — is a Tailwind class that does not scale either. The foot was a
+ * third
  * behaviour, a floor, until the type inside it started scaling; see {@link stackDataHeight}.
  */
 export function stackCardHeight(zoom: number): number {
@@ -858,7 +859,17 @@ function StackedCard({
         // face clips its own corners now, and the data line under it clips its own — because
         // the data line has to be able to hang 24px *below* the face and a clip here would cut
         // it off at the picture's edge.
-        "relative block rounded-lg border",
+        //
+        // **`bg-surface` is the card being an opaque object, and it became load-bearing on
+        // 2026-09-10.** This box painted nothing until then and got away with it, because the
+        // face over-filled its own corners by the 2px `DeckCardFace`'s `FACE_RADIUS` has now
+        // taken back: the padding box was covered edge to edge and the desk could not show
+        // through it. It can now — the face's bottom corners curve away in the *middle* of the
+        // card, where what is behind them is this element rather than the border — and measured
+        // over the dev server that was **two pixels of felt** at each bottom corner, just above
+        // the chin. The face and the chin are both `bg-surface`, so a card that paints its own
+        // is one unbroken surface at every radius either of them picks.
+        "relative block rounded-lg border bg-surface",
         // Deeper than Tailwind's own `shadow-lg`/`shadow-2xl`, whose alphas are 0.1 and 0.25 —
         // written for a card on white. These sit on the app's felt at 0.16 lightness, where a
         // 10 % shadow is not a shadow, and a stack whose cards do not separate is a texture.
@@ -961,8 +972,11 @@ function StackedCard({
         // The card's own edge, and the two must move together — see `CardChin`'s `tone`.
         tone={ruleBreakText !== null ? "destructive" : "default"}
         // This surface's, and the reason the prop has no default: the card is `rounded-lg border`
-        // with the face inset at `rounded-[7px]`, so the chin draws sides only and rides onto the
-        // card's own border rather than supplying a bottom edge of its own.
+        // with the face inset at `DeckCardFace`'s `FACE_RADIUS`, so the chin draws sides only and
+        // rides onto the card's own border rather than supplying a bottom edge of its own. **Its
+        // own `rounded-b-[7px]` is not that constant and was measured against it** — the bar's box
+        // is the border box across and the padding box down, so it is neither of the card's two
+        // curves; see `FACE_RADIUS` for what 9px did to this corner.
         seam="card"
         // **The shortage, and it is drawn only where it says something**: a fully covered card
         // prints nothing at all, because sixty ticks are sixty things to read past on the way to
