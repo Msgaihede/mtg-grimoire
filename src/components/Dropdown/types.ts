@@ -3,8 +3,8 @@ import type { ReactNode } from "react";
 /**
  * One row of a dropdown.
  *
- * Six fields, and deliberately **no render prop**. All 45 `<option>` bodies this app replaced were
- * plain strings and the set picker's row is exactly `icon + label + hint + tick`, so there is
+ * Seven fields, and deliberately **no render prop**. All 45 `<option>` bodies this app replaced
+ * were plain strings and the set picker's row is exactly `icon + label + hint + tick`, so there is
  * nothing today a `renderRow` would serve — and a render prop is how two dropdowns start looking
  * different again, which is the whole thing this component exists to stop.
  */
@@ -18,8 +18,30 @@ export type DropdownOption = {
    * matched against — see `DropdownShell`.
    */
   label: string;
-  /** Drawn at the head of the row. The set picker's keyrune glyph is the only one today. */
+  /**
+   * Drawn at the head of the row — and, when this row is the picked one, at the head of the
+   * **closed trigger** too, so a control says what it is set to rather than only what it is
+   * called.
+   *
+   * `<MultiDropdown>` draws it in the list and nowhere else: its trigger says a count ("2 sets"),
+   * and a count is not any one row's to illustrate.
+   */
   icon?: ReactNode;
+  /**
+   * The trigger's glyph where it must not be the row's. {@link icon} is the fallback, so a caller
+   * supplies this only when the two genuinely differ.
+   *
+   * One caller today and it differs in **size** alone: the card modal's label picker draws a 10px
+   * swatch in a list row and a 16px one on the trigger, because the trigger is where a reader
+   * reads the colour off *without opening anything* — the list is already showing them every
+   * colour at once. Where the two agree — the wishlist's destination glyphs, the set picker's
+   * keyrune — this stays `undefined` and the row's own icon is what the trigger draws.
+   *
+   * **Not the render prop this type refuses**, and the line is worth stating: a caller passes a
+   * node it has already decided on for a slot the component owns, rather than being handed the
+   * row to draw itself.
+   */
+  triggerIcon?: ReactNode;
   /** A dim, right-aligned second fact — the set picker's code. */
   hint?: string;
   /**
