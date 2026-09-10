@@ -448,7 +448,62 @@ From the design's §9, plus two the build itself turned up:
   widget still leaves the page and nothing is said: the optimistic, deliberately-unrolled-back
   write `useHomeLayout` documents.
 
-## 9. The schema rung collision, and what it cost
+## 9. The live pass
+
+Driven over CDP in the shipped window on **2026-09-10**, debug build, against a **copy of the real
+debug database** (277 collection entries, 89 wishes, 5 decks) rather than a fresh sync — a fresh one
+gives cards and an empty collection, so every widget would have drawn its empty state and the pass
+would have proved nothing. Viewport 1920×1080 unless a line says otherwise.
+
+**The v44 migration ran on a real database, which no fixture can prove.** The copied file arrived at
+v43 and came back `user_version = 44` with `activity`, `deck_notes` and `deck_note_cards` all
+present and the 277 entries and 5 decks intact.
+
+**Two invariants the design rests on, confirmed on screen rather than in a test:**
+
+| | |
+| --- | --- |
+| The breakdown agrees with the total | Summary read `$3,869.83 / 340 cards`; the collection value widget read `$3,869.83 / 340 cards`. Two commands, one `price_expr`. |
+| The feed's union works | `activity` held **0** rows, and the widget still drew *"Changed Valakut Awakening // Valakut Stoneforge from 2 to 1 in Drawpower"* — a `deck_audit` row, worded by the deck history's own sentence builder. |
+
+`Test Deck · Commander · 0 cards · —` drew the em dash for a deck the marketplace priced nothing in,
+which is the `null`-is-not-zero rule reaching the screen.
+
+**The popover.** Opened the `Collection value by` picker: panel at `1405,372`, 71×112, wholly inside
+the viewport, **and the hit test at its centre returns the panel's own `LI[option]`** — a rect
+inside the viewport proves nothing on its own. Rows came back `Color, Finish, Rarity, Set`, which is
+`sortOptions` in effect. This is the check the flex-wrap grid exists to pass; a container query here
+would have reparented that panel to the widget box.
+
+> ⚠️ **A first attempt at this read the wrong thing, and the failure is worth keeping.** The hit at
+> the panel's centre came back as a large `DIV` the panel did not contain, which looks exactly like
+> a clipped or reparented popover. Reading the whole stack rather than the top element found a
+> `fixed inset-0` element at `z=50` over everything: **`SyncProgress`'s first-run gate**, because
+> that first launch had no corpus. Nothing about the popover was wrong. `elementsFromPoint` — the
+> plural — is what tells "my thing is broken" from "something else is in front of it".
+
+**Phone width.** At **390 px** (`PHONE_PX`, so the rail is replaced by the bottom tab bar): widgets
+stack one per row at `x=20`, span-1 cards 352 px against `main`'s 375 px content box, and
+`main.scrollWidth === main.clientWidth === 375` — **no horizontal scroll**, in edit mode as well as
+at rest, with all six drag grips drawn and inside the box. The 352 px `min-w-[22rem]` clears 375 px
+by 23 px, which is the whole of the margin this layout has at the fold.
+
+> ⚠️ **A first attempt measured at 400 px and read as a bug.** The rail was still drawn and `main`
+> was 192 px, so the 352 px cards overflowed it — but `PHONE_PX` is **390**, so 400 is *above* the
+> fold and the rail was correct to stay. The lesson is the ordinary one: a layout finding at a width
+> nobody ships is not a finding. The app's own `DESKTOP_FLOOR_PX` is 1024, so the band between them
+> is not a window a reader can make.
+
+**The launch flash — measured, fixed, and the fix backed out.** Sampled per `requestAnimationFrame`
+across a reload with `start_view` set to `search`: the ribbon read **Home at 224 ms** and **Search at
+317 ms**. So a reader who moved off the default watches ~**93 ms** of a page they did not choose,
+every launch. §4 of `src/lib/useStartView.ts` carries the whole reasoning; the short version is that
+gating the view area on that read trades a bounded flicker for an unbounded blank — `lib/query.ts`
+sets `retry: 1`, and a view that is waiting looks exactly like a view that is broken. Nine
+`App.test.tsx` cases went red the moment the gate landed, each one a read that had not settled in
+time, which is the failure arriving as a warning rather than as a bug report. **The swap stays.**
+
+## 10. The schema rung collision, and what it cost
 
 This branch and `deck_notes` ([issue #447](https://github.com/Msgaihede/mtg-grimoire/issues/447))
 each wrote a **v43** on 2026-09-10. Main landed first, so `activity` renumbered to **v44** — the
