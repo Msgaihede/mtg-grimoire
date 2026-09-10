@@ -111,7 +111,7 @@ import { QuickCategoryDialog, QuickZones } from "./QuickZones";
 import { asSortBy, DEFAULT_SORT_BY, SORT_OPTIONS, type SortBy } from "./sorting";
 import { LabelsDialog } from "./LabelsDialog";
 import { TheoryDiffDialog } from "./TheoryDiffDialog";
-import { theoryMatchPlan } from "./theoryMatch";
+import { theoryMatchPlan, theoryProgress } from "./theoryMatch";
 import {
   pullPlanQuery,
   quickAddWishesQuery,
@@ -3296,6 +3296,26 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   );
 
   /**
+   * How far the live list has got toward the plan — the stats band's `Matches theory` figure,
+   * derived from the query above rather than from one of its own.
+   *
+   * **Gated on exactly the pair `theoryPlan` is gated on, and for exactly that reason.** A
+   * disabled `useQuery` still serves whatever sits in the cache under its key, and this key is
+   * the *deck's*: without the gate, pressing `Theory` after Live had loaded would carry Live's
+   * answer over and compare the plan against **itself**, since `deck.cards` is the plan's own
+   * rows on that tab. The figure would read `100%` — issue #159's mark-side bug, one readout
+   * over, and it would be the more convincing for being a plausible number.
+   *
+   * A memo because it walks every row of the deck and the band is redrawn on every edit; the
+   * dependency list is the memo above's less the three mark switches, which this does not read.
+   */
+  const theoryDone = useMemo(
+    () =>
+      theoryEnabled && variant === "live" ? theoryProgress(planned.data, deck.cards) : null,
+    [planned.data, theoryEnabled, variant, deck.cards],
+  );
+
+  /**
    * Whether the deck **draws** a game changer at all — the chip's own gate, and deliberately
    * not {@link gameChangers}.
    *
@@ -4754,16 +4774,18 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         // call stands: a landmark is a promise about the page and this block is not a
         // complementary one.
         //
-        // Named by its `aria-label` and by nothing drawn: every figure in it carries its own
-        // label and every chart its own caption, so a heading over the top would be a fifth
-        // word for something already said four times — and a line of deck height for it.
+        // **The `<section>` and its chrome are `DeckStats`' own since 2026-09-10, where they
+        // were this file's** — the band has a disclosure now, and a header that could be
+        // collapsed while the rule and the padding around it stayed here would be one control
+        // whose two halves live in two files. `DeckTokensPanel` above it made the same call for
+        // the same reason, and the two bands draw one grammar between them.
         //
         // **`shrink-0`, and that is the whole of why this editor scrolls now** — see
         // {@link DECK_HEIGHT_FLOOR}. The band is drawn whole or not at all: a curve with its
         // last two buckets cut off and a legend with its last colour under the fold is a chart
         // that has stopped being one, which is the same line `DeckStats` takes about wrapping
-        // rather than truncating.
-        <section aria-label="Deck stats" className="shrink-0 border-t border-border pt-3">
+        // rather than truncating. It rides on the component's own root now.
+        <>
           {/* Every number over the same rows the view is drawn from — one query, so a curve and
               a legality panel can never disagree. Unfiltered on purpose: the toolbar's filter
               narrows what is *shown*, and a deck's mana curve is a fact about the deck rather
@@ -4815,15 +4837,36 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               exists because pressing twice wishes for the same copies again, where a second
               press here re-plans against a shortfall the first one closed and finds nothing to
               offer. */}
+          {/* **`marketplace` came back with the Figures card** — the band quoted no money
+              between 2026-08-24 and 2026-09-10, and quotes three sums now. The rows arrived
+              priced at this marketplace, so what travels is the **currency** and never a second
+              lookup of a price.
+
+              **`theory` is derived from the query this editor already makes for the per-card
+              marks**, and that is the whole of why the band takes an answer rather than asking
+              one: a second read of the plan would be a second answer to *what does this deck
+              need* that could come to disagree with the ticks on the cards. It is `null` on a
+              deck with no plan and on the Theory tab itself — a plan compared against itself is
+              a figure that can only ever read `100%`.
+
+              **The open state is `decks.stats_open` and rides the ordinary `deck_update`**,
+              exactly as the tokens band's does one component up. What it does *not* share is the
+              default: that column is `DEFAULT 1`, because this band has been on screen for every
+              deck since 2026-08-14 with no control that hides it, so a collapsed default would
+              take a band away from every deck in the database rather than choose one. */}
           <DeckStats
             cards={deck.cards}
             send={deck.missingToWishlist}
             onPull={tracks && variant === "live" ? openPull : null}
             onAddMissing={tracks && variant === "live" ? openAddMissing : null}
             tracksCollection={tracks}
+            marketplace={marketplace}
+            theory={theoryDone}
+            open={row.statsOpen}
+            onToggle={(next) => deck.update.mutate({ statsOpen: next })}
             separateXGroup={separateX}
           />
-        </section>
+        </>
       )}
 
       {/* The overlays, mounted **at the editor's top level and as siblings of the layout

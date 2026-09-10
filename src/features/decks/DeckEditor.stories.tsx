@@ -243,6 +243,31 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 /**
+ * One of the **header ledger's** `<dt>` terms — the one outside the Deck stats band.
+ *
+ * **Two surfaces name the same figures since the stats redesign** (2026-09-10): `DeckLedger` draws
+ * `Cards`, `Lands`, `Avg. mana`, `Price` and `Owned` in the header, and the band's Figures card
+ * draws `Cards`, `Price`, `Owned` and `Matches theory` at the foot. That is the arrangement rather
+ * than a duplicate — the header is what a reader edits *against*, the band is the deeper readout
+ * with the splits — but it means a bare `getByText("Cards", { selector: "dt" })` that found one
+ * element for a year now throws *found multiple*, in three story plays at once.
+ *
+ * **Scoped by exclusion rather than by a container**, because the ledger is a bare `<dl>` in the
+ * header with no landmark of its own, while the band *is* a named region: "not inside the band" is
+ * the only test that names a real boundary, and it stays true if the ledger is ever wrapped.
+ * The length assertion is the anti-vacuity half — a third surface growing a `Cards` term should
+ * fail here rather than silently hand back whichever one the DOM happened to order first.
+ */
+function ledgerTerm(canvas: ReturnType<typeof within>, label: string): HTMLElement {
+  const band = canvas.getByRole("region", { name: "Deck stats" });
+  const outside = canvas
+    .getAllByText(label, { selector: "dt" })
+    .filter((term: HTMLElement) => !band.contains(term));
+  expect(outside).toHaveLength(1);
+  return outside[0];
+}
+
+/**
  * Sixty Modern-legal cards, a full sideboard, and nothing wrong with any of it.
  *
  * **Five categories, three headings** — and which three is the format's answer rather than the
@@ -312,9 +337,13 @@ export const Modern60: Story = {
     // Not the 75 copies the price and the shortfall are counted over. The figure and its spare
     // count are the header's ledger since 2026-08-24 — `Decks/DeckLedger` is where the pile that
     // spare count names is spelled out, in the tooltip a 36px line has no room to write.
-    await expect(
-      canvas.getByText("Cards", { selector: "dt" }).closest("div"),
-    ).toHaveTextContent("60+15");
+    //
+    // **Scoped to outside the band, because there are two `Cards` terms on this page since the
+    // stats redesign** (2026-09-10): the ledger's, up here, and the Figures card's, down there.
+    // That is the deliberate arrangement rather than a duplicate — the header is what a reader
+    // edits *against* and the band is the deeper readout — so the query has to say which it
+    // means. `getByText` found one for a year and now throws *found multiple*.
+    await expect(ledgerTerm(canvas, "Cards").closest("div")).toHaveTextContent("60+15");
 
     // The shortage, spoken rather than only marked: every mark on a stacked card is
     // `aria-hidden`, so the button's own name is the whole of what a keyboard reader gets.
@@ -396,7 +425,14 @@ export const FourViews: Story = {
     await expect(await canvas.findByRole("table", { name: "This deck" })).toBeInTheDocument();
 
     await pickOption(user, "View", "Text");
-    await waitFor(async () => await expect(canvas.queryByRole("table")).toBeNull());
+    // **Named, because the editor holds a second table since the stats redesign** (2026-09-10):
+    // Opening hand odds is a `<table>` at the foot of the page and is there under every view. A
+    // bare `queryByRole("table")` was a claim about the deck's own view and stopped being one the
+    // moment a readout below the deck grew a table of its own — so the query says which table it
+    // means rather than counting how many the page has.
+    await waitFor(
+      async () => await expect(canvas.queryByRole("table", { name: "This deck" })).toBeNull(),
+    );
     await expect(canvas.getByRole("region", { name: "Main deck" })).toBeVisible();
 
     await pickOption(user, "View", "Grid");
@@ -808,9 +844,14 @@ export const FilterAndStats: Story = {
     // The headline figure is the header's ledger since 2026-08-24 and the charts are the band's;
     // the claim below is about **both** — the filter narrows what is *shown* and nothing that is
     // counted, so neither surface moves.
-    const cards = canvas.getByText("Cards", { selector: "dt" }).closest("div");
+    const cards = ledgerTerm(canvas, "Cards").closest("div");
     const whole = cards?.textContent;
-    const curve = within(stats).getByRole("list", { name: "Mana curve" }).textContent;
+    // The band's own readout of the same fact, which since 2026-09-10 is a `region` named by the
+    // card's heading rather than a `list` named by a caption — `StatsCard` labels each readout
+    // and `BarChart`'s `<ul>` is `aria-hidden`, because the picture is decoration over sentences
+    // that are already text.
+    const curveCard = () => within(stats).getByRole("region", { name: "Mana curve" }).textContent;
+    const curve = curveCard();
 
     await userEvent.type(canvas.getByLabelText("Filter this deck"), "counterspell");
 
@@ -820,13 +861,19 @@ export const FilterAndStats: Story = {
       ).toBeInTheDocument();
     });
 
-    // The whole deck, not the four rows the filter left on screen — and nothing offers to put
-    // the band away.
+    // The whole deck, not the four rows the filter left on screen.
     await expect(cards).toHaveTextContent(whole ?? "");
-    await expect(
-      within(stats).getByRole("list", { name: "Mana curve" }).textContent,
-    ).toEqual(curve);
+    await expect(curveCard()).toEqual(curve);
+    // **The band can be put away now, and the old `Stats` toggle still may not come back.** This
+    // read `queryByRole("button", { name: "Stats" })` is null — an assertion about the *toolbar*
+    // control that was deleted on 2026-08-14, whose whole job was to hand a 280px aside's width
+    // back to the docked search panel. The disclosure that landed on 2026-09-10 is a different
+    // control answering a different question: it is on the band's own header, it trades height
+    // rather than width, and it takes nothing off the desk. Both claims are worth keeping.
     await expect(canvas.queryByRole("button", { name: "Stats" })).toBeNull();
+    await expect(
+      within(stats).getByRole("button", { name: "Deck stats" }),
+    ).toHaveAttribute("aria-expanded", "true");
   },
 };
 

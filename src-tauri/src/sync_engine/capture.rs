@@ -347,6 +347,15 @@ pub const TABLES: [Spec; 13] = [
             // per-deck view state, and a reader who opened that area on one device meant it
             // about the deck rather than about the machine.
             "tokens_open",
+            // And whether the **Deck stats** band is (user schema v42) — `tokens_open`'s twin
+            // one column along and on this list for its reason: a reader who collapsed the
+            // stats band on one device meant it about the deck rather than about the machine.
+            // **`DEFAULT 1` where the line above it defaults 0**, which changes nothing about
+            // the old-peer direction described below: a device on v41 sending a deck op names
+            // no such field, `apply::creations` omits it from the INSERT, and the DDL default
+            // arrives at what that device can only have meant — the band open, which is what
+            // every deck on that device is showing.
+            "stats_open",
             "bracket",
             // **Schema v38's two theory marks and v39's third, and they travel for `bracket`'s
             // reason** — which
@@ -1022,6 +1031,57 @@ mod tests {
         assert!(
             fields.get("theory_enabled").is_some(),
             "and so must the other half of the pair, in {fields}"
+        );
+    }
+
+    /// **A deck's stats disclosure travels, and this is the only thing that says so.**
+    ///
+    /// `a_decks_kind_is_captured_on_both_of_its_columns`' argument verbatim, one column along:
+    /// the `decks` spec spells its field list by hand and there is **no fence in the other
+    /// direction**, so a column added to a synced table and left off that list is captured by
+    /// nothing and goes red nowhere. `every_column_a_spec_names_exists_on_its_table` walks the
+    /// list rather than the table and cannot catch it. What the missing line would cost is
+    /// smaller than a deck's kind and just as invisible: a reader who collapses the band on the
+    /// laptop finds it open again on the desktop, for ever, with nothing to say why.
+    ///
+    /// **`tokens_open` is asserted beside it, and the two are moved in opposite directions.**
+    /// They are the editor's two disclosures, both `INTEGER` columns holding a `0` or a `1`,
+    /// declared next to each other in every struct that carries them — so a spec entry, a
+    /// trigger or a positional read that crossed them would swap one band for the other with
+    /// every value still looking like an answer. One write that opens one and closes the other
+    /// is the shape that cannot pass over that.
+    #[test]
+    fn a_decks_two_disclosures_are_captured_separately() {
+        let conn = db();
+        // Born with the tokens band open, so that the write below really *moves* it: a capture
+        // op carries the fields that changed, and a column that was already `0` would be left
+        // out of the op for the honest reason that nothing happened to it.
+        conn.execute(
+            "INSERT INTO decks (id, name, format_key, tokens_open, created_at, updated_at)
+             VALUES (1, 'Burn', 'modern', 1, 0, 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute("DELETE FROM sync_ops", []).unwrap();
+
+        conn.execute(
+            "UPDATE decks SET stats_open = 0, tokens_open = 0 WHERE id = 1",
+            [],
+        )
+        .unwrap();
+
+        let rows = ops(&conn);
+        assert_eq!(rows.len(), 1, "one write, one op");
+        let fields: serde_json::Value = serde_json::from_str(&rows[0].2).unwrap();
+        assert_eq!(
+            fields.get("stats_open"),
+            Some(&serde_json::json!(0)),
+            "a collapsed stats band must reach the reader's other devices, in {fields}"
+        );
+        assert_eq!(
+            fields.get("tokens_open"),
+            Some(&serde_json::json!(0)),
+            "and the other disclosure is a field of its own, in {fields}"
         );
     }
 

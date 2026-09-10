@@ -286,6 +286,7 @@ const DECK: DeckRow = {
   // value Scryfall gives it until the reader says otherwise.
   separateXGroup: false,
   tokensOpen: false,
+  statsOpen: true,
   // Schema v16, and `0` is `AUTO_CATEGORY` — the column's own default and the state every deck
   // is born in: an add that names no pile is filed by what the card does. A test about the
   // setting overrides it through `detail()`, which is the *only* way to move it now — it was a
@@ -1643,7 +1644,11 @@ describe("DeckEditor", () => {
     expect(screen.getByRole("table", { name: "This deck" })).toBeInTheDocument();
 
     await pickOption(user, "View", "Text");
-    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    // **Named, and no longer a bare `queryByRole("table")`.** The stats band's opening-hand odds
+    // are a real `<table>` with an `sr-only` `<caption>` of their own, so an unnamed query finds
+    // one whichever view is up — and would have gone red here for a reason that has nothing to do
+    // with the view switch. The deck's own table is the claim.
+    expect(screen.queryByRole("table", { name: "This deck" })).not.toBeInTheDocument();
     expect(
       within(group("Main deck")).getByRole("button", { name: /^Lightning Bolt/ }),
     ).toBeVisible();
@@ -1703,40 +1708,111 @@ describe("DeckEditor", () => {
   /**
    * What the deck adds up to, over the same rows the view is drawn from — one query, so a curve
    * and a legality panel can never disagree. A band at the foot of the page rather than an aside
-   * beside the deck, and **nothing puts it away**: there is no toggle, because a block that
-   * takes no width off the desk row is a block nobody has to trade anything for.
+   * beside the deck.
+   *
+   * **And it puts itself away, which reverses what this test used to assert.** It read *nothing
+   * puts it away: there is no toggle, because a block that takes no width off the desk row is a
+   * block nobody has to trade anything for* — true of the four charts on one line it was written
+   * about (2026-08-14), and not of the seven readouts that replaced them on 2026-09-10. Seven is
+   * two screens of a page a reader scrolls past every time they open a finished deck, so the band
+   * carries a disclosure of its own, drawn by `DeckStats` rather than by this file. It opens
+   * **open**, because `decks.stats_open` is `DEFAULT 1` and this band has been on screen for
+   * every deck since it shipped.
    */
-  it("adds the deck up in a band under the deck", async () => {
+  it("adds the deck up in a band under the deck, behind a disclosure of its own", async () => {
     await open();
 
     const stats = screen.getByRole("region", { name: "Deck stats" });
-    // Four Bolts and two Bears, both nonlands, both mana value 1.
+    // Four Bolts and two Bears, both nonlands, both mana value 1. Scoped to the Mana curve card:
+    // the six colour curves bucket the same nine mana values and say the same sentences.
     expect(
-      within(within(stats).getByRole("list", { name: "Mana curve" })).getByText(
+      within(within(stats).getByRole("region", { name: "Mana curve" })).getByText(
         "6 cards at mana value 1",
       ),
     ).toBeInTheDocument();
 
+    // The disclosure is the band's own control and is named for the band, so the editor has no
+    // `Stats` button of its own — which is the half of the old assertion that survives.
     expect(screen.queryByRole("button", { name: "Stats" })).not.toBeInTheDocument();
+    expect(within(stats).getByRole("button", { name: "Deck stats" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
   });
 
   /**
-   * **The five figures are the header's ledger and are drawn exactly once** (2026-08-24). They
-   * were the band's `FigureRow` until then, under two screens of deck — the wrong end of the page
-   * for the numbers a reader edits against — and both surfaces derive them from `deckStats` over
-   * the same rows, so moving them could only ever have left a duplicate rather than a
-   * disagreement. The absence below is what pins that it did not.
+   * **The press writes `decks.stats_open` through the ordinary `deck_update`**, which is the one
+   * piece of this band's wiring nothing else covers: `DeckStats.test.tsx` owns the disclosure's
+   * own behaviour (it asks for the negation) and has no backend to write to, and this file owns
+   * the deck the answer is stored on.
+   *
+   * **The assertion is on the write and never on the band closing.** Nothing in the component
+   * holds the flag — it is handed `open` and hands back a request — so a band that shut itself
+   * would be a second copy of the deck row's state, free to disagree with it for the length of
+   * the round trip. That is `separateXGroup`'s own rule two controls over.
    */
-  it("heads the deck with a ledger of what it adds up to, and draws it once", async () => {
+  it("writes the stats band's open state onto the deck", async () => {
     await open();
 
-    // Four Bolts and two Bears, none of them lands.
-    const cards = screen.getByText("Cards", { selector: "dt" });
-    expect(cards.closest("div")).toHaveTextContent("6");
-    expect(screen.getAllByText("Cards", { selector: "dt" })).toHaveLength(1);
-    expect(
-      within(screen.getByRole("region", { name: "Deck stats" })).queryByText("Cards"),
-    ).not.toBeInTheDocument();
+    const stats = screen.getByRole("region", { name: "Deck stats" });
+    await userEvent.click(within(stats).getByRole("button", { name: "Deck stats" }));
+
+    await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { statsOpen: false }));
+  });
+
+  /**
+   * And it is drawn from the deck the read answered with, exactly as the `Split X` chip is: a
+   * disclosure whose state came from anywhere else would spring open on a deck the reader had
+   * put away, on every window that had not made the press.
+   */
+  it("draws the stats band shut for a deck that carries it shut", async () => {
+    deckGet.mockResolvedValue(detail({ statsOpen: false }, [bolt(), bear()]));
+
+    await open();
+
+    const stats = screen.getByRole("region", { name: "Deck stats" });
+    expect(within(stats).getByRole("button", { name: "Deck stats" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    // Nothing of the band is drawn, which is what makes the flag readable at all — the readouts
+    // are gone from the accessible tree rather than merely hidden with CSS.
+    expect(within(stats).queryByRole("region", { name: "Mana curve" })).not.toBeInTheDocument();
+
+    await userEvent.click(within(stats).getByRole("button", { name: "Deck stats" }));
+    await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { statsOpen: true }));
+  });
+
+  /**
+   * **The five figures a reader edits *against* are the header's ledger** (2026-08-24). They were
+   * the band's `FigureRow` until then, under two screens of deck — the wrong end of the page for
+   * the numbers a reader is watching while they type.
+   *
+   * **The band draws a `Cards` figure again since 2026-09-10, and it is not the duplicate this
+   * test was written to keep out.** That one was the same five numbers in two places at once; the
+   * Figures card is the *split* — what the price is owed against, what is still missing, and how
+   * far the list has got toward the plan — and its `Cards` entry is the headline those three
+   * notes hang under. Both surfaces derive from `deckStats` over the same rows, so the two can
+   * never disagree; what would be a regression is the **ledger** drawing its own figure twice, or
+   * the band's landing loose in the band rather than inside the Figures card. Both are asserted.
+   */
+  it("heads the deck with a ledger of what it adds up to, and draws that ledger once", async () => {
+    await open();
+
+    const band = screen.getByRole("region", { name: "Deck stats" });
+    // Four Bolts and two Bears, none of them lands — in the header, which is everything outside
+    // the band.
+    const header = screen
+      .getAllByText("Cards", { selector: "dt" })
+      .filter((term) => !band.contains(term));
+    expect(header).toHaveLength(1);
+    expect(header[0].closest("div")).toHaveTextContent("6");
+
+    // The band's own is inside the Figures card and nowhere else, which is what says it is that
+    // card's headline rather than a second ledger line.
+    const figures = within(band).getByRole("region", { name: "Figures" });
+    expect(within(figures).getByText("Cards", { selector: "dt" })).toBeInTheDocument();
+    expect(within(band).getAllByText("Cards", { selector: "dt" })).toHaveLength(1);
   });
 
   /**

@@ -3013,6 +3013,33 @@ files no step either. What it *does* do, unlike `deck_set_view_state`'s three co
 deck to the top of a gallery sorted by most-recently-touched. Worth writing down rather than
 rediscovering, and cheap to change if it ever reads wrong.
 
+### `decks.stats_open`, and the one number in it that is not `tokens_open`'s
+
+User schema **v42** (2026-09-10, [issue #389](https://github.com/Msgaihede/mtg-grimoire/issues/389))
+is `decks.stats_open INTEGER NOT NULL DEFAULT 1` — whether the editor's **Deck stats** band is
+expanded. Everything in the section above applies to it unchanged and by construction: it is on the
+`decks` capture `Spec`, it rides `DeckPatch` / `DeckRow` / `DECK_SELECT` with no per-field arm, it
+is the last *named* column of that select and the last positional read in `deck_row`, it moves
+`IMAGE_COL` one further along, it writes no `deck_audit` row and no undo step, and it moves
+`updated_at` like every other `update_deck` write.
+
+**The default is the whole of the difference, and it is a decision rather than a copy that drifted.**
+`tokens_open` is `DEFAULT 0`: that band was new when its column landed, so a collapsed default cost
+no reader anything they already had. The stats band has been drawn under every deck since
+2026-08-14 with **no control that hides it**, so `DEFAULT 0` here would not be a default at all —
+it would be a feature silently removed from every deck in the database at the moment of upgrade,
+which is the one thing a migration must never do quietly. `1` is today's behaviour exactly and the
+disclosure is purely additive.
+
+**Two places the number is written and they are not the same statement.** The `ALTER TABLE` in the
+v42 rung is what every *existing* database gets; the column on `USER_SCHEMA_SQL`'s `decks` tail is
+what a *fresh or converted* file is created with. They agree, and a reader changing one owes the
+other — the ladder and the head constant are checked against each other by
+`the_user_schema_is_byte_identical_to_what_the_ladder_builds`, which catches a shape mismatch but
+not a default that disagrees with itself. The Storybook fake is a third: `toDeckRow`'s
+`statsOpen: d.statsOpen ?? true` sits directly under `tokensOpen: d.tokensOpen ?? false`, and
+copying the line above it is the bug.
+
 ### A stale comment found on the way, and deliberately not fixed here
 
 `search.rs:1252` claims token-only and memorabilia sets have no rows in `cards` at all, "because

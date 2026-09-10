@@ -638,6 +638,11 @@ mod tests {
             // `bracket`'s reason one comment up — the layout reads five fields and not this
             // one, and `DeckRow` has no `Default`.
             tokens_open: false,
+            // Schema v42's column, and `true` is what a fresh deck carries — the one place
+            // this builder's two disclosures disagree, because their two `DEFAULT`s do. Here
+            // for `bracket`'s reason three comments up: the layout reads five fields and not
+            // this one, and `DeckRow` has no `Default`.
+            stats_open: true,
             // The cover printing's picture, and `None` for `cover_card_id`'s reason one line
             // per field up: a deck with no cover has none. The mirror writes plain text and can
             // draw nothing, so this is here only because the struct has no `Default`.

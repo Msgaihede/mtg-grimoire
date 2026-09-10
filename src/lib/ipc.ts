@@ -3064,6 +3064,17 @@ export interface DeckPatch {
    */
   tokensOpen?: boolean;
   /**
+   * Whether the editor's **Deck stats** band is expanded. See {@link DeckRow.statsOpen} — a
+   * per-deck reading preference, so switching it writes one column and touches not one
+   * `deck_cards` row.
+   *
+   * **It rides this patch and not {@link ipc.deckSetViewState}**, for the argument spelled out on
+   * {@link tokensOpen} beside it: the two commands differ in what a write *costs*, and a
+   * disclosure a reader opens once and leaves open is a handful of audited writes over a deck's
+   * life, where a tab or a sort is written on every press.
+   */
+  statsOpen?: boolean;
+  /**
    * Which of this deck's categories an add that names none lands in. See
    * {@link DeckRow.defaultCategoryId} — `0` is `AUTO_CATEGORY` and is a **value**, not an
    * absence: sending it puts the deck back on "by what the card does".
@@ -3420,6 +3431,28 @@ export interface DeckRow {
    */
   tokensOpen: boolean;
   /**
+   * Whether the editor's **Deck stats** band is expanded — `decks.stats_open INTEGER NOT NULL
+   * DEFAULT 1`.
+   *
+   * **The default is the one place this does not mirror {@link tokensOpen}, and the difference is
+   * the whole reason to state it.** The token wall was new when its column landed, so a collapsed
+   * default cost no reader anything they already had. The stats band has been on screen for every
+   * deck since 2026-08-14 with **no control that hides it** — so a `DEFAULT 0` here would not be a
+   * default, it would be a feature silently removed from every deck in the database on upgrade.
+   * `1` is today's behaviour exactly, and the disclosure is purely additive: what a reader gains
+   * is the ability to put two screens of charts away, which is what the band's own history says
+   * they wanted when it was a 280px aside with a toggle.
+   *
+   * **Per deck rather than app-wide**, for {@link tokensOpen}'s reason one column over: whether a
+   * reader wants four charts in front of them is an answer about a particular deck — a list being
+   * tuned wants them, a finished one does not — and a single setting would make them re-decide on
+   * every deck they opened.
+   *
+   * Read on the row as well as written through {@link DeckPatch}: a setting the app can write and
+   * never see is a setting nothing can draw.
+   */
+  statsOpen: boolean;
+  /**
    * Which of this deck's categories an add that names no pile lands in — `decks.default_category_id`,
    * schema v16, and **`AUTO_CATEGORY` (`0`) for "let the card's own text decide"**.
    *
@@ -3705,6 +3738,32 @@ export interface DeckCard {
    * together.
    */
   colorIdentity: string | null;
+  /**
+   * Which colours of mana this card can **make** — Scryfall's `produced_mana`, in the same
+   * concatenated-letter form as the two fields above and equally not JSON. A Command Tower is
+   * `"WUBRG"`, an Island `"U"`, a Sol Ring `"C"`.
+   *
+   * **This is the only field in the deck read that answers what a card _makes_ rather than what
+   * it costs**, and the two are what the stats band's Mana pips tile sets against each other: a
+   * deck whose costs are 47% red and whose sources are 34% red is a deck that stumbles, and no
+   * amount of reading `manaCost` or `colors` can see it. `colorIdentity` is not a substitute —
+   * a Bojuka Bog's identity is black and it taps for black, but an Ancient Tomb's identity is
+   * colourless and so is its mana, while a Dryad Arbor's identity is green because of a *land
+   * type* rather than because of anything it produces.
+   *
+   * **Three values, and `""` and `null` are emphatically not the same answer.**
+   * * `"WU"` — this card makes white or blue.
+   * * `""` — this card makes **no** mana. Scryfall omits the key entirely for a Lightning Bolt;
+   *   the ingest writes an empty string so that this case is a fact rather than a gap.
+   * * `null` — **this row predates the column**, which is every row of a database that has not
+   *   re-ingested since the corpus rung landed. The corpus is dropped and rebuilt by every sync
+   *   and Scryfall regenerates the bulk file daily, so the state is short-lived — but it is a
+   *   state, and a reader in it must be told the sources half is unanswered rather than shown a
+   *   chart of zeroes. `deck::fill_unknown_produced_mana` narrows the window further by
+   *   gunzipping `cards.raw` for exactly the null rows at read time; what survives that is a row
+   *   whose printing has left the corpus, and an orphan has no answer to give.
+   */
+  producedMana: string | null;
   /**
    * JSON: **this printing's** legality blob, not the oracle card's. That is what makes Old
    * School come out right with no special case — `oldschool` is the one printing-sensitive

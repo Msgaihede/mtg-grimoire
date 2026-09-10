@@ -355,6 +355,9 @@ fn write_batch(db: &Mutex<Connection>, batch: &mut Vec<CardRow>) -> Result<(), I
                 c.toughness,
                 c.search_text,
                 c.raw,
+                // `?44`, last, matching the column list in `STAGING_INSERT` — the two lists
+                // are one statement written twice and must move together. Corpus schema 3.
+                c.produced_mana,
             ])?;
         }
     }
@@ -371,9 +374,11 @@ const STAGING_INSERT: &str =
         color_identity, legalities, legal_mask, games, finishes, prices, price_usd, price_eur,
         faces, illustration_id, frame_effects, border_color, full_art, promo, promo_types,
         digital, is_paper, edhrec_rank, game_changer, image_status, image_updated_at,
-        image_uris, face_image_uris, artist, power, toughness, search_text, raw)
+        image_uris, face_image_uris, artist, power, toughness, search_text, raw,
+        produced_mana)
      VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,
-        ?23,?24,?25,?26,?27,?28,?29,?30,?31,?32,?33,?34,?35,?36,?37,?38,?39,?40,?41,?42,?43)";
+        ?23,?24,?25,?26,?27,?28,?29,?30,?31,?32,?33,?34,?35,?36,?37,?38,?39,?40,?41,?42,?43,
+        ?44)";
 
 #[cfg(test)]
 mod tests {
@@ -563,7 +568,62 @@ mod tests {
         assert_eq!(ticks, 1, "the final progress call always fires");
     }
 
-    /// The 43-parameter INSERT is positional, and SQLite columns are dynamically typed:
+    /// **Corpus schema 3's column, end to end — and the empty string is the assertion.**
+    ///
+    /// `produced_mana` is what the deck stats band reads to say which colours a list can make,
+    /// and it is stored the way `colors` is: concatenated single letters, never JSON.
+    ///
+    /// ⚠️ **The Bolt line is the one that matters.** Scryfall omits the key entirely for a card
+    /// that makes no mana, `card_row::joined_letters` answers `None` for a missing key, and
+    /// passing that `None` through to the column would spell *makes nothing* and *this row
+    /// predates the column* the same way — which would leave
+    /// `deck::fill_unknown_produced_mana` gunzipping every instant and sorcery in every deck on
+    /// every open, for ever, and finding nothing every time. So the ingest writes `Some("")`,
+    /// and `NULL` is left to mean one thing.
+    ///
+    /// The other three lines are the vocabulary: two colours, Scryfall's `"C"` for colourless,
+    /// and the rare `"2"` an Ancient Tomb publishes — all single characters, which is what lets
+    /// one letter string carry the whole list. Driven through `ingest_gz` rather than through
+    /// `CardRow` alone, because the other half of this rung is `STAGING_INSERT` and
+    /// `write_batch`'s `params!` staying in lockstep: a column named and not bound, or bound in
+    /// the wrong place, is a run that either fails at the first insert or writes the wrong
+    /// column's value into this one.
+    #[test]
+    fn the_ingest_writes_the_letters_a_card_makes_and_an_empty_string_when_it_makes_none() {
+        let db = mem_db();
+        let p = gz_fixture(&[
+            // No `produced_mana` key at all — every instant, sorcery and ordinary creature.
+            r#"{"object":"card","id":"bolt","name":"Lightning Bolt","lang":"en","layout":"normal","set":"lea","collector_number":"161","games":["paper"],"finishes":["nonfoil"],"digital":false}"#,
+            r#"{"object":"card","id":"birds","name":"Two Colours","lang":"en","layout":"normal","set":"x","collector_number":"1","games":["paper"],"finishes":["nonfoil"],"digital":false,"produced_mana":["W","U"]}"#,
+            r#"{"object":"card","id":"solring","name":"Sol Ring","lang":"en","layout":"normal","set":"x","collector_number":"2","games":["paper"],"finishes":["nonfoil"],"digital":false,"produced_mana":["C"]}"#,
+            r#"{"object":"card","id":"tomb","name":"Ancient Tomb","lang":"en","layout":"normal","set":"x","collector_number":"3","games":["paper"],"finishes":["nonfoil"],"digital":false,"produced_mana":["C","2"]}"#,
+        ]);
+
+        ingest_gz(&db, &p, &mut |_| {}).unwrap();
+
+        let conn = crate::db::lock_blocking(&db);
+        let made = |id: &str| -> Option<String> {
+            conn.query_row("SELECT produced_mana FROM cards WHERE id = ?1", [id], |r| {
+                r.get(0)
+            })
+            .unwrap()
+        };
+        assert_eq!(
+            made("bolt").as_deref(),
+            Some(""),
+            "a card that makes no mana is an empty string, and NULL is reserved for a row \
+             that predates the column"
+        );
+        assert_eq!(made("birds").as_deref(), Some("WU"));
+        assert_eq!(made("solring").as_deref(), Some("C"));
+        assert_eq!(
+            made("tomb").as_deref(),
+            Some("C2"),
+            "the rare numeric entry is one character like every other and needs no second shape"
+        );
+    }
+
+    /// The 44-parameter INSERT is positional, and SQLite columns are dynamically typed:
     /// two transposed parameters would still insert without complaint and only show
     /// up much later as wrong data. So read a fully-populated row back and check
     /// every column against the value its name promises. Every text value is distinct
@@ -578,7 +638,7 @@ mod tests {
         // sorts keys or preserves input order. The lone `card_faces` entry is what pushes
         // `search_text` ("ORACLE FACENAME") apart from `oracle_text` ("ORACLE"), and it
         // carries images of its own so `face_image_uris` is populated too.
-        let line = r#"{"object":"card","id":"ID1","oracle_id":"OID","name":"NAME","lang":"LANG","released_at":"2020-01-02","set":"SET","set_name":"SETNAME","collector_number":"CN","rarity":"rare","layout":"normal","mana_cost":"{R}","cmc":3.0,"type_line":"TYPE","oracle_text":"ORACLE","colors":["R"],"color_identity":["R","G"],"legalities":{"modern":"legal"},"games":["paper"],"finishes":["foil"],"prices":{"eur":"2.5","usd":"1.25"},"card_faces":[{"image_uris":{"grid":"FACEGRID"},"name":"FACENAME"}],"illustration_id":"ILL","frame_effects":["showcase"],"border_color":"black","full_art":true,"promo":false,"promo_types":["prerelease"],"digital":false,"edhrec_rank":42,"game_changer":true,"image_status":"lowres","image_updated_at":"2021-02-03T00:00:00Z","image_uris":{"grid":"TOPGRID"},"artist":"ARTIST","power":"POW","toughness":"TUF"}"#;
+        let line = r#"{"object":"card","id":"ID1","oracle_id":"OID","name":"NAME","lang":"LANG","released_at":"2020-01-02","set":"SET","set_name":"SETNAME","collector_number":"CN","rarity":"rare","layout":"normal","mana_cost":"{R}","cmc":3.0,"type_line":"TYPE","oracle_text":"ORACLE","colors":["R"],"color_identity":["R","G"],"legalities":{"modern":"legal"},"games":["paper"],"finishes":["foil"],"prices":{"eur":"2.5","usd":"1.25"},"card_faces":[{"image_uris":{"grid":"FACEGRID"},"name":"FACENAME"}],"illustration_id":"ILL","frame_effects":["showcase"],"border_color":"black","full_art":true,"promo":false,"promo_types":["prerelease"],"digital":false,"edhrec_rank":42,"game_changer":true,"image_status":"lowres","image_updated_at":"2021-02-03T00:00:00Z","image_uris":{"grid":"TOPGRID"},"artist":"ARTIST","power":"POW","toughness":"TUF","produced_mana":["G","U"]}"#;
         // Five boolean columns cannot be told apart by one row — with two values to
         // go round, some pair always matches. These two extra rows give each boolean a
         // distinct pattern across the three: full_art 100, promo 011, digital 010,
@@ -590,7 +650,7 @@ mod tests {
         ingest_gz(&db, &gz_fixture(&[line, bools_2, bools_3]), &mut |_| {}).unwrap();
         let conn = crate::db::lock_blocking(&db);
 
-        let expected: [(&str, Option<&str>); 40] = [
+        let expected: [(&str, Option<&str>); 41] = [
             ("id", Some("ID1")),
             ("oracle_id", Some("OID")),
             ("name", Some("NAME")),
@@ -640,6 +700,12 @@ mod tests {
             ("power", Some("POW")),
             ("toughness", Some("TUF")),
             ("search_text", Some("ORACLE FACENAME")),
+            // Corpus schema 3's column, last in the parameter list and last here. **Its value
+            // agrees with neither `colors` ("R") nor `color_identity` ("RG")**, which is the
+            // point of putting it in this table at all: the three hold strings of the same
+            // colour letters, so a transposed parameter among them is the one swap on this
+            // whole row that SQLite, serde and every type in Rust would take without a word.
+            ("produced_mana", Some("GU")),
         ];
 
         // CAST so REAL and INTEGER columns come back as text too — this compares the
@@ -946,7 +1012,18 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         crate::split::convert(&dir).unwrap();
-        let db = std::sync::Mutex::new(crate::db::open_write(&dir).unwrap());
+        let conn = crate::db::open_write(&dir).unwrap();
+        // **The corpus is brought to head, because a launch brings it to head** —
+        // `index::fixtures::state_with_seeded_cards`' line and its whole argument. `convert`
+        // builds the file through the frozen `migrate_single_file` ladder and *then* stamps
+        // `CORPUS_SCHEMA_VERSION` on it, so what comes out wears head while carrying whatever
+        // shape that ladder last built; `db::open_write` migrates nothing, by design. Without
+        // this line the fixture is a database no launch can produce, and corpus schema 3 is
+        // where that stopped being invisible: the `cards` this ingest stages from had no
+        // `produced_mana`, and the run died on `table cards_staging has no column named
+        // produced_mana` — the exact field failure the rung's shape gate exists to prevent.
+        crate::schema::migrate_corpus(&conn).unwrap();
+        let db = std::sync::Mutex::new(conn);
 
         // Eight batches' worth. Only the seven release points *after* the first batch
         // count, so the run has to have plenty of them left once counting opens.

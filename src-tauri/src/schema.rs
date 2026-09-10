@@ -359,7 +359,17 @@ pub const LEGACY_SINGLE_FILE_VERSION: i64 = 26;
 /// for taking the next free number at the moment you land rather than at the moment you start.
 /// The
 /// user's ladder can never restart, because its rungs describe rows nothing else can produce.
-pub const USER_SCHEMA_VERSION: i64 = 41;
+///
+/// **42 (2026-09-10) is `decks.stats_open`** — whether the editor's Deck stats band is expanded,
+/// `tokens_open`'s twin one column along and the same per-deck reading preference.
+/// ⚠️ **`NOT NULL DEFAULT 1`, which is the one place it deliberately parts company with the
+/// rung it copies.** The tokens band was *new* when v37 landed, so a collapsed default cost
+/// nobody anything; the stats band is on screen for every deck the reader already has, with no
+/// control to hide it. `DEFAULT 0` would take a band away from every one of those decks on the
+/// upgrade — a change nobody asked for, made by a rung, which is the thing v40's `DEFAULT 0` is
+/// the same argument *for*: a default is what the reader gets, so it must be today's behaviour.
+/// `DEFAULT 1` is exactly today's behaviour and the new control is purely additive.
+pub const USER_SCHEMA_VERSION: i64 = 42;
 
 /// `corpus.db`'s version, on a number line of its own.
 ///
@@ -368,6 +378,21 @@ pub const USER_SCHEMA_VERSION: i64 = 41;
 /// "is this file's shape what this build expects", and a corpus rung is *allowed* to give up
 /// and rebuild, because what is behind it is a download. Sharing a scale would invite somebody
 /// to subtract them.
+///
+/// **3 (2026-09-10) is `cards.produced_mana`** — which colours of mana a printing can *make*,
+/// a field Scryfall has always published and this app parsed past. The deck editor's stats band
+/// asks it per row, and no amount of reading a type line answers it: a Sol Ring makes colourless
+/// and a Birds of Paradise makes all five, and neither says so anywhere but in that array.
+/// **Its rung is `ALTER TABLE {schema}.cards ADD COLUMN produced_mana TEXT` and nothing else** —
+/// no index (nothing searches on it), no `cards_fts` rebuild (the rung adds an *unindexed*
+/// column and renumbers no rowid, which is schema v2's precedent), and **no backfill, because
+/// there cannot be one**: the letters live in `raw`, `raw` is a gzip BLOB, and SQL cannot see
+/// into one. Every existing row reads NULL until the next full ingest drops and recreates
+/// `cards` — a gap of at most a day, since Scryfall regenerates the bulk file daily — and
+/// `crate::deck::fill_unknown_produced_mana` is the bridge across it.
+/// **NULL therefore means one thing and one thing only, *this row predates the column*,** which
+/// is bought by [`crate::card_row::CardRow::produced_mana`] storing `Some("")` rather than
+/// `None` for a card that makes no mana.
 ///
 /// **2 is the first rung this side has ever had**, and it is the licence above spent: `combos`
 /// grows four columns Commander Spellbook has always published and this app parsed past —
@@ -389,7 +414,7 @@ pub const USER_SCHEMA_VERSION: i64 = 41;
 /// on an INSERT naming four columns the table does not have. [`migrate_corpus`] therefore asks
 /// the *shape*; this number is the record of what the shape is, and the thing a future rung
 /// will still want to have moved.
-pub const CORPUS_SCHEMA_VERSION: i64 = 2;
+pub const CORPUS_SCHEMA_VERSION: i64 = 3;
 
 /// Which of the two files a table lives in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3579,7 +3604,7 @@ CREATE TABLE {schema}.decks (
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
              , folder_id INTEGER
-                REFERENCES deck_folders(id) ON DELETE SET NULL, notes TEXT, theory_enabled INTEGER NOT NULL DEFAULT 0, last_variant TEXT NOT NULL DEFAULT 'live', last_group_by TEXT NOT NULL DEFAULT 'category', last_sort_by TEXT NOT NULL DEFAULT 'alphabetical', separate_x_group INTEGER NOT NULL DEFAULT 0, default_category_id INTEGER NOT NULL DEFAULT 0, game_key TEXT NOT NULL DEFAULT 'any', bracket INTEGER NOT NULL DEFAULT 0, sync_uid TEXT, tokens_open INTEGER NOT NULL DEFAULT 0, theory_mark_exact INTEGER NOT NULL DEFAULT 1, theory_mark_name INTEGER NOT NULL DEFAULT 1, theory_mark_unplanned INTEGER NOT NULL DEFAULT 1, virtual_only INTEGER NOT NULL DEFAULT 0);
+                REFERENCES deck_folders(id) ON DELETE SET NULL, notes TEXT, theory_enabled INTEGER NOT NULL DEFAULT 0, last_variant TEXT NOT NULL DEFAULT 'live', last_group_by TEXT NOT NULL DEFAULT 'category', last_sort_by TEXT NOT NULL DEFAULT 'alphabetical', separate_x_group INTEGER NOT NULL DEFAULT 0, default_category_id INTEGER NOT NULL DEFAULT 0, game_key TEXT NOT NULL DEFAULT 'any', bracket INTEGER NOT NULL DEFAULT 0, sync_uid TEXT, tokens_open INTEGER NOT NULL DEFAULT 0, theory_mark_exact INTEGER NOT NULL DEFAULT 1, theory_mark_name INTEGER NOT NULL DEFAULT 1, theory_mark_unplanned INTEGER NOT NULL DEFAULT 1, virtual_only INTEGER NOT NULL DEFAULT 0, stats_open INTEGER NOT NULL DEFAULT 1);
 
 CREATE TABLE {schema}.app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
@@ -4065,7 +4090,7 @@ CREATE TABLE {schema}.cards (
     image_status TEXT,
     image_updated_at TEXT,
     search_text TEXT,
-    raw TEXT NOT NULL, image_uris TEXT, face_image_uris TEXT, artist TEXT, power TEXT, toughness TEXT, legal_mask INTEGER NOT NULL DEFAULT 0);
+    raw TEXT NOT NULL, image_uris TEXT, face_image_uris TEXT, artist TEXT, power TEXT, toughness TEXT, legal_mask INTEGER NOT NULL DEFAULT 0, produced_mana TEXT);
 
 CREATE TABLE {schema}.sets (
                 code TEXT PRIMARY KEY, name TEXT NOT NULL, arena_code TEXT, mtgo_code TEXT,
@@ -5813,6 +5838,38 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
         tx.commit()?;
     }
 
+    // v42: the editor's **Deck stats** band got a disclosure, and this is where the deck
+    // remembers whether it is open (2026-09-10).
+    //
+    // `decks.tokens_open` one column along, and everything v37 says about that flag holds
+    // here — it is per-deck view state, `ADD COLUMN` and never a rebuild (v34's argument
+    // verbatim), and the ALTER splices its text onto the end of the one-line tail every column
+    // since v12 has landed on. [`USER_SCHEMA_SQL`] wears that exact shape.
+    //
+    // ⚠️ **`DEFAULT 1` and not `0`, which is the one place this deliberately differs from the
+    // rung it copies.** v37's band was *new*: no deck had ever shown it, so a collapsed default
+    // took nothing away from anybody. The stats band is on screen for every deck on every disk
+    // today, with no control to hide it — so `DEFAULT 0` would be this rung silently closing a
+    // band the reader has been reading since the day they made the deck, on an upgrade they did
+    // not ask for. `DEFAULT 1` is today's behaviour exactly and the new control is purely
+    // additive, which is v38's reasoning (*the default is what the reader gets*) rather than
+    // v40's (*a kind is what a deck is*) — the two rungs are the same question answered
+    // opposite ways, and which one applies turns on whether the upgrade changes what is on
+    // screen.
+    //
+    // **No index on the flag**, [`UNDO_V20`]'s rule and v37's: it is read once per deck and
+    // interpreted, never searched on. And **no `CARDS_INDEXES` replay to inherit** — the rung
+    // below it has none, because nothing on the user side has ever touched that list.
+    if v < 42 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch("ALTER TABLE decks ADD COLUMN stats_open INTEGER NOT NULL DEFAULT 1;")?;
+        // Literal `42`, for the reason every step before it writes its own: this step is what
+        // *makes* a database version 42. `USER_SCHEMA_VERSION` would commit "fully migrated"
+        // before any step added after it had run.
+        tx.execute_batch("PRAGMA main.user_version = 42;")?;
+        tx.commit()?;
+    }
+
     // **The clock, repaired on every launch at every version — and this is not belt-and-braces.**
     //
     // Every capture trigger ends `FROM sync_clock c, sync_identity i, sync_group g`. That is a
@@ -5856,10 +5913,11 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
 /// answer and only an empty schema can survive — every statement in [`CORPUS_SCHEMA_SQL`] is a
 /// bare `CREATE TABLE`, so running it over a corpus that has a `cards` in it raises `table
 /// cards already exists` and stops the launch rather than quietly doing nothing. Anything else
-/// is a file with a shape, and the only thing this rung has to say about one is that the combo
-/// feed's three tables may be a version behind.
+/// is a file with a shape, and the only things these rungs have to say about one are that the
+/// combo feed's three tables may be a version behind and that `cards` may be missing
+/// `produced_mana`.
 ///
-/// **The rung is gated on the shape and not on `v < CORPUS_SCHEMA_VERSION`, and that is the
+/// **Both rungs are gated on the shape and not on `v < CORPUS_SCHEMA_VERSION`, and that is the
 /// trap worth writing down.** `crate::split`'s `finish` stamps [`CORPUS_SCHEMA_VERSION`] — head,
 /// whatever head is on the day the build ships — onto the legacy file it renames into
 /// `corpus.db`, and what is *in* that file is whatever [`migrate_single_file`]'s frozen v26
@@ -5867,8 +5925,12 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
 /// populations there are arrive here already wearing head with a v1-shaped `combos` in them. A
 /// version gate would skip exactly them, the shape would never be repaired, and the failure
 /// would surface as an ingest raising `table combos has no column named description` on a
-/// machine nobody could reproduce from a fresh worktree. Asking the catalog costs one pragma
-/// per launch and is right for every population at once — which is [`TAG_INDEXES_SQL`]'s own
+/// machine nobody could reproduce from a fresh worktree. **Corpus schema 3 is the same
+/// sentence about `cards`**, and its symptom is one table over:
+/// `table cards_staging has no column named produced_mana`, because [`create_staging`] derives
+/// staging's layout from the live table's own `PRAGMA table_info`. Asking the catalog costs one
+/// pragma each per launch and is right for every population at once — which is
+/// [`TAG_INDEXES_SQL`]'s own
 /// argument one line down: a rung fires once, in one direction, and a shape that has to be
 /// right on *every* launch cannot be defended by one.
 ///
@@ -5896,8 +5958,18 @@ pub(crate) fn migrate_corpus(conn: &Connection) -> rusqlite::Result<()> {
     let v: i64 = conn.query_row(&format!("PRAGMA {CORPUS}.user_version"), [], |r| r.get(0))?;
     if v == 0 {
         create_corpus_schema(conn, CORPUS)?;
-    } else if !combos_are_at_head(conn, CORPUS)? {
-        rebuild_combo_tables(conn, CORPUS)?;
+    } else {
+        if !combos_are_at_head(conn, CORPUS)? {
+            rebuild_combo_tables(conn, CORPUS)?;
+        }
+        // Corpus schema 3, and **shape-gated for the rung above it's reason and not as a
+        // matter of taste**: the two populations that arrive here already stamped at head —
+        // every converted database and every fresh install — carry a v26-shaped `cards`, so a
+        // version gate would skip exactly them and the next ingest would die on
+        // `table cards_staging has no column named produced_mana`.
+        if produced_mana_is_owed(conn, CORPUS)? {
+            add_produced_mana(conn, CORPUS)?;
+        }
     }
     if v < CORPUS_SCHEMA_VERSION {
         conn.execute_batch(&format!(
@@ -5955,6 +6027,57 @@ fn combo_column_names(conn: &Connection, schema: &str) -> rusqlite::Result<Vec<S
     let mut stmt = conn.prepare(&format!("PRAGMA {schema}.table_info(combos)"))?;
     let names = stmt.query_map([], |r| r.get::<_, String>(1))?;
     names.collect()
+}
+
+/// Whether corpus schema 3's `ALTER` is owed on `cards` in `schema` — the rung's gate.
+///
+/// [`combos_are_at_head`]'s idiom and every one of its reasons, phrased as the *debt* rather
+/// than as the shape because the two differ on one input. **The column name and never
+/// `sqlite_master`'s text**: `cards` is dropped and recreated by [`swap_staging`] on every
+/// sync, so its stored `CREATE TABLE` is whatever [`create_staging`] rebuilt out of
+/// `PRAGMA table_info` — the same columns, a different string — and a text probe would issue
+/// the `ALTER` a second time and die at `duplicate column name` on exactly the databases that
+/// are already correct.
+///
+/// ⚠️ **A `cards` that is not there at all owes nothing, and that is the input that makes this
+/// a debt question.** `PRAGMA table_info` on a missing table is an empty result rather than an
+/// error, so "has the column" and "is missing the column" are both false for it — and
+/// `ALTER TABLE … ADD COLUMN` on a table that does not exist raises, which
+/// [`migrate_corpus`] is one of the two things allowed to stop a launch over. This rung cannot
+/// create `cards` and has no business trying: an ingest does that, and
+/// `maintenance::tests::a_launch_survives_a_repair_it_cannot_carry_out` is the fixture that
+/// says so — a launch must survive a repair it cannot carry out.
+fn produced_mana_is_owed(conn: &Connection, schema: &str) -> rusqlite::Result<bool> {
+    let mut stmt = conn.prepare(&format!("PRAGMA {schema}.table_info(cards)"))?;
+    let names: Vec<String> = stmt
+        .query_map([], |r| r.get::<_, String>(1))?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(!names.is_empty() && !names.iter().any(|n| n == "produced_mana"))
+}
+
+/// Corpus schema 3: give `cards` its `produced_mana` column.
+///
+/// **Schema-qualified through [`on_schema`], and that is not decoration.** A bare
+/// `ALTER TABLE cards ADD COLUMN` means `main` — the reader's own file — and says nothing about
+/// it: with the corpus attached the statement *succeeds*, putting the column on a table
+/// `user.db` does not have and leaving the one that matters untouched.
+/// `tests::a_full_sync_leaves_every_table_on_its_own_side` is the fence.
+///
+/// **One statement and no more.** No [`CARDS_INDEXES`] entry — nothing searches on this column,
+/// it is read one deck at a time and interpreted — and no `cards_fts` rebuild, because the rung
+/// adds an unindexed column and renumbers no rowid, which is schema v2's precedent and
+/// `the_v2_backfill_leaves_the_search_index_answering`'s.
+///
+/// **And no backfill, because none is possible.** The letters live in `raw`, `raw` is a gzip
+/// BLOB from schema v3 on, and `json_extract` over one is a hard `malformed JSON` error rather
+/// than a NULL. Every existing row reads NULL until the next full ingest, which drops and
+/// recreates `cards` outright — at most a day away, Scryfall regenerating the bulk file daily —
+/// and [`crate::deck::fill_unknown_produced_mana`] is the read-time bridge across that gap.
+fn add_produced_mana(conn: &Connection, schema: &str) -> rusqlite::Result<()> {
+    conn.execute_batch(&on_schema(
+        schema,
+        "ALTER TABLE {schema}.cards ADD COLUMN produced_mana TEXT;",
+    ))
 }
 
 /// Corpus schema 2: drop the combo feed's tables and build them again from head.
@@ -6747,7 +6870,7 @@ pub(crate) mod tests {
     /// reader who has not.
     ///
     /// **"The ladder" is both of them since corpus schema 2**, and that is what the
-    /// [`rebuild_combo_tables`] call below is — the user side's own `migrate_user` line, one
+    /// [`rebuild_combo_tables`] and [`add_produced_mana`] calls below are — the user side's own `migrate_user` line, one
     /// file over. [`migrate_single_file`] is frozen at [`LEGACY_SINGLE_FILE_VERSION`] and builds
     /// the combo feed's tables in their v1 shape; the rung is what brings them to head, and
     /// [`crate::split::convert`] hands every converted and every fresh install exactly that
@@ -6788,6 +6911,10 @@ pub(crate) mod tests {
         let ladder = Connection::open_in_memory().unwrap();
         migrate_single_file(&ladder).unwrap();
         rebuild_combo_tables(&ladder, "main").unwrap();
+        // Corpus schema 3's rung, in the order [`migrate_corpus`] runs it. Take this line
+        // away and the ladder's `cards` is the v26 shape and this goes red on that table —
+        // which is the same "the rung fired" assertion the line above it makes about `combos`.
+        add_produced_mana(&ladder, "main").unwrap();
         let want = dump(&ladder, "main");
 
         let pair = memory_pair();
@@ -7098,7 +7225,30 @@ pub(crate) mod tests {
     /// `idx_device_names_uid` with it.
     const UNDO_V31: &str = "DROP TABLE IF EXISTS device_names;";
 
-    /// v41's share cache — the newest rewind on the user ladder.
+    /// v42's stats disclosure — the newest rewind on the user ladder.
+    ///
+    /// Owed for [`UNDO_V13`]'s **loud** reason rather than [`UNDO_V14`]'s quiet one:
+    /// `ALTER TABLE decks ADD COLUMN` is not idempotent, so a fixture that kept the column dies
+    /// at `duplicate column name` on the way back up — a failure no real upgrade can produce,
+    /// and one that takes every unrelated test in the chain with it rather than only the ones
+    /// about the stats band.
+    ///
+    /// **It runs first, before [`UNDO_V41`]**, for that constant's stated reason: a rewind
+    /// walks the ladder backwards and this is now the top of it. The doc directly below said
+    /// the same of itself and told whoever wrote rung 42 to expect to collect the line; this
+    /// is that line, and the sentence goes on being a prediction rather than history for
+    /// exactly one rung at a time.
+    ///
+    /// **One statement**, [`UNDO_V40`]'s shape: v42 appends a single column, so there is a
+    /// single column to take back off and the stored table text lands back on exactly what v41
+    /// left.
+    ///
+    /// **No index needs a line of its own**, [`UNDO_V20`]'s rule: the rung creates none, and
+    /// `DROP COLUMN` would refuse a column an index named. The only table-level `CHECK` on
+    /// `decks` names `cover_kind`, which is the other thing `DROP COLUMN` refuses over.
+    const UNDO_V42: &str = "ALTER TABLE decks DROP COLUMN stats_open;";
+
+    /// v41's share cache — the rewind directly under [`UNDO_V42`].
     ///
     /// Owed for [`UNDO_V13`]'s **loud** reason rather than [`UNDO_V14`]'s quiet one: the rung
     /// is a plain `CREATE TABLE`, not `CREATE TABLE IF NOT EXISTS`, so a fixture that left
@@ -7106,11 +7256,10 @@ pub(crate) mod tests {
     /// failure no real upgrade can produce, and one that takes every unrelated test in the
     /// chain with it rather than only the ones about sharing.
     ///
-    /// **It runs first, before [`UNDO_V40`]**, for that constant's stated reason: a rewind
-    /// walks the ladder backwards and this is now the top of it. The doc directly below said
-    /// the same of itself and told whoever wrote rung 41 to expect to collect the line; this
-    /// is that line, and the sentence goes on being a prediction rather than history for
-    /// exactly one rung at a time.
+    /// **It runs after [`UNDO_V42`] and before [`UNDO_V40`]**, for that constant's stated
+    /// reason: a rewind walks the ladder backwards. It said "first" and "the top of it" while
+    /// v41 was head, which the stats disclosure ended one rung later — the prediction the doc
+    /// above now carries, and the reason it is worth writing down each time.
     ///
     /// **Neither index needs a line of its own**, [`UNDO_V20`]'s rule and [`UNDO_V31`]'s:
     /// `DROP TABLE` takes `idx_collection_shares_folder` and `idx_collection_shares_whole`
@@ -7400,7 +7549,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
+            "{UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
              PRAGMA main.user_version = 28;"
         ))
         .unwrap();
@@ -7432,7 +7581,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 31;"
+            "{UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 31;"
         ))
         .unwrap();
         conn
@@ -7459,7 +7608,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} PRAGMA main.user_version = 33;"
+            "{UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} PRAGMA main.user_version = 33;"
         ))
         .unwrap();
         conn
@@ -7486,7 +7635,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
+            "{UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
         ))
         .unwrap();
         conn
@@ -7510,7 +7659,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} PRAGMA main.user_version = 37;"
+            "{UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} PRAGMA main.user_version = 37;"
         ))
         .unwrap();
         conn
@@ -7531,7 +7680,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V41} {UNDO_V40} {UNDO_V39} PRAGMA main.user_version = 38;"
+            "{UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} PRAGMA main.user_version = 38;"
         ))
         .unwrap();
         conn
@@ -7552,9 +7701,28 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V41} {UNDO_V40} PRAGMA main.user_version = 39;"
+            "{UNDO_V42} {UNDO_V41} {UNDO_V40} PRAGMA main.user_version = 39;"
         ))
         .unwrap();
+        conn
+    }
+
+    /// A user file at 41 — the shape every machine carries the day before the editor's stats
+    /// band got a disclosure, and the only population the v42 rung is *for*.
+    ///
+    /// [`user_file_at_39`]'s construction two rungs up, and one rewind does it because v42 is
+    /// the only rung above 41. The three docs above record exactly what that claim has been
+    /// worth on this ladder — one rung each, three times running — so read it as owing a line
+    /// to rung 43 rather than as a fact about the file.
+    ///
+    /// **It takes no `foreign_keys` parameter**, for [`user_file_at_37`]'s reason: v42 is a
+    /// single `ADD COLUMN` against `decks`, and no setting of that pragma can make one behave
+    /// two ways.
+    fn user_file_at_41() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        create_user_schema(&conn, "main").unwrap();
+        conn.execute_batch(&format!("{UNDO_V42} PRAGMA main.user_version = 41;"))
+            .unwrap();
         conn
     }
 
@@ -7602,7 +7770,7 @@ pub(crate) mod tests {
         // without `{UNDO_V38}` v38 dies at `duplicate column name`; the third tier adds one
         // more, so without `{UNDO_V39}` v39 dies the same way. Newest first.
         conn.execute_batch(&format!(
-            "{UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} PRAGMA main.user_version = 35;"
+            "{UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} PRAGMA main.user_version = 35;"
         ))
         .unwrap();
         seed_v35_groups(&conn);
@@ -7759,7 +7927,7 @@ pub(crate) mod tests {
         .unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 32;"
+            "{UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 32;"
         ))
         .unwrap();
         conn
@@ -7816,7 +7984,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} \
+            "{UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} \
              PRAGMA main.user_version = 27;"
         ))
         .unwrap();
@@ -8194,7 +8362,7 @@ pub(crate) mod tests {
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, USER_SCHEMA_VERSION);
-        assert_eq!(USER_SCHEMA_VERSION, 41);
+        assert_eq!(USER_SCHEMA_VERSION, 42);
     }
 
     /// **It is synced, and `sync_devices` still is not.** The whole point is that a NAME
@@ -9174,7 +9342,7 @@ pub(crate) mod tests {
         .unwrap();
 
         conn.execute_batch(&format!(
-            "{UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
+            "{UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
         ))
         .unwrap();
 
@@ -9261,7 +9429,7 @@ pub(crate) mod tests {
         // The literal, for the reason the two tests below spell out. It is **head**, not this
         // rung's own number — `migrate_user` climbs the whole ladder — so every rung that lands
         // moves it.
-        assert_eq!(version, 41);
+        assert_eq!(version, 42);
         assert_eq!(
             in_group(&conn, DECK_A, "bolt-lea", "nonfoil"),
             2,
@@ -9558,9 +9726,9 @@ pub(crate) mod tests {
         // 38 → 39 for the mark's third tier — which landed with the rung and missed these three
         // lines on the first pass, exactly the way this sentence says a rung would — and
         // 39 → 40 for the deck kind, which missed them the same way and was told so by these
-        // three tests going red, and 40 → 41 for the share cache. **Six times**, and the
-        // count is the argument.
-        assert_eq!(version, 41);
+        // three tests going red, and 40 → 41 for the share cache, and 41 → 42 for the deck's
+        // stats disclosure. **Seven times**, and the count is the argument.
+        assert_eq!(version, 42);
         assert_eq!(
             in_group(&conn, DECK_A, "bolt-m10", "nonfoil"),
             1,
@@ -9582,7 +9750,7 @@ pub(crate) mod tests {
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
         // The literal, for the reason the test above spells out — head, which every rung moves.
-        assert_eq!(version, 41);
+        assert_eq!(version, 42);
     }
 
     /// The fixture is a real v35 file and not head wearing a v35 label.
@@ -10021,7 +10189,7 @@ pub(crate) mod tests {
         let v: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 41);
+        assert_eq!(v, 42);
         conn.execute(
             "INSERT INTO collection_shares
                  (id, folder_uid, title, owner_name, url, fields, state, updated_at)
@@ -10118,6 +10286,123 @@ pub(crate) mod tests {
         );
     }
 
+    /// **v42's column, and the deck that already existed when the rung ran.**
+    ///
+    /// `v40_leaves_every_existing_deck_a_cardboard_deck`'s job two rungs up, with the default
+    /// the other way round again — and *that* reversal is the whole of what this test is for.
+    /// `NOT NULL DEFAULT 1` is the rung, because the Deck stats band is on screen for every
+    /// deck in every database today and there has never been a control to hide it. A rung
+    /// writing `DEFAULT 0` would collapse that band on every deck the reader has, at the first
+    /// launch on the new build, with nothing on screen saying why and no press that caused it.
+    ///
+    /// **The deck is seeded before the climb rather than after it**, v40's argument verbatim: a
+    /// row inserted at head takes the column default through the *frozen* [`USER_SCHEMA_SQL`]
+    /// and would pass while the rung wrote `DEFAULT 0` — the one population a fresh worktree
+    /// cannot be, because a fresh install never climbs a rung at all.
+    #[test]
+    fn v42_leaves_every_existing_deck_showing_its_stats() {
+        let conn = user_file_at_41();
+        conn.execute(
+            "INSERT INTO decks (id, name, format_key, created_at, updated_at)
+             VALUES (1, 'Burn', 'modern', 0, 0)",
+            [],
+        )
+        .unwrap();
+
+        migrate_user(&conn).unwrap();
+
+        assert_eq!(has_column(&conn, "decks", "stats_open"), 1);
+        let open: i64 = conn
+            .query_row("SELECT stats_open FROM decks WHERE id = 1", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(
+            open, 1,
+            "a deck that existed before the rung is still showing its stats after it"
+        );
+
+        // **And the disclosure beside it is untouched**, which is the half a matched pair of
+        // defaults could never show: `tokens_open` defaults 0 and this one defaults 1, so a
+        // rung that had written the wrong `DEFAULT`, or an ALTER that landed on the wrong
+        // column, changes exactly one of these two numbers.
+        let tokens: i64 = conn
+            .query_row("SELECT tokens_open FROM decks WHERE id = 1", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(tokens, 0, "the two disclosures are two columns");
+
+        // And a deck made *after* the climb reads the same, which is the half a fresh install
+        // gets — the two populations must not disagree, and the fence that makes them agree is
+        // `the_user_schema_is_byte_identical_to_what_the_ladder_builds` rather than this line.
+        conn.execute(
+            "INSERT INTO decks (id, name, format_key, created_at, updated_at)
+             VALUES (2, 'Storm', 'modern', 0, 0)",
+            [],
+        )
+        .unwrap();
+        let open: i64 = conn
+            .query_row("SELECT stats_open FROM decks WHERE id = 2", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(open, 1, "a deck is born showing its stats");
+    }
+
+    /// The second pass has to be a no-op rather than `duplicate column name`.
+    ///
+    /// `the_v40_rung_is_idempotent_over_an_already_upgraded_database`'s job two rungs up.
+    /// SQLite offers no `IF NOT EXISTS` on `ALTER TABLE … ADD COLUMN`, so the version stamp is
+    /// the only thing making a second launch survivable — and it is inside the rung's
+    /// transaction with the `ALTER`, so a launch that died mid-rung left neither.
+    #[test]
+    fn the_v42_rung_is_idempotent_over_an_already_upgraded_database() {
+        let conn = user_file_at_41();
+        migrate_user(&conn).unwrap();
+        migrate_user(&conn).unwrap();
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, USER_SCHEMA_VERSION);
+    }
+
+    /// The fixture is a real v41 file and not head wearing a v41 label.
+    ///
+    /// `the_v39_fixture_carries_none_of_v40`'s job two rungs up. What it catches is the fixture
+    /// rewound in only one of its two halves: the column really gone but the version left at
+    /// head would leave `migrate_user` no rung to run, and every assertion above would pass
+    /// while watching nothing happen. The other order is loud on its own — a fixture that kept
+    /// the column dies at `duplicate column name`, which is [`UNDO_V42`]'s whole reason.
+    ///
+    /// **`collection_shares` is probed as *present*, and that is the half a version number
+    /// cannot give you**: a rewind chain that ran [`UNDO_V41`] as well would leave a file the
+    /// stamp still calls 41 while it is really a 40, which would then climb both rungs together
+    /// and pass every assertion about the disclosure while testing the wrong one.
+    #[test]
+    fn the_v41_fixture_carries_none_of_v42() {
+        let conn = user_file_at_41();
+
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 41);
+        assert_eq!(
+            has_column(&conn, "decks", "stats_open"),
+            0,
+            "stats_open must not exist before the rung that adds it"
+        );
+        let shares: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master
+                  WHERE type = 'table' AND name = 'collection_shares'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(shares, 1, "a v41 file still has v41's own table");
+    }
+
     /// A v28 file walks up keeping every row it had, and twice is the same as once.
     #[test]
     fn migrating_a_v28_user_file_keeps_its_rows_and_is_idempotent() {
@@ -10208,7 +10493,7 @@ pub(crate) mod tests {
             })
             .collect();
         conn.execute_batch(&format!(
-            "{UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
+            "{UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
              PRAGMA main.user_version = 28;"
         ))
         .unwrap();
@@ -16819,6 +17104,153 @@ pub(crate) mod tests {
                 .unwrap();
             assert_eq!(n, 1, "{index} did not survive the rung");
         }
+    }
+
+    // ---- corpus schema 3: the colours a card can make ---------------------------------
+
+    /// A pair whose corpus wears **head's version stamp over a `cards` that has no
+    /// `produced_mana`** — which is every converted database and every fresh install on the
+    /// day corpus schema 3 ships, for [`migrate_corpus`]'s stated reason.
+    ///
+    /// Built by taking the column *off* head rather than by transcribing the v26 `cards` DDL,
+    /// which is the opposite of [`corpus_at_schema_1`]'s choice and right for the opposite
+    /// reason: there the four columns *were* the subject and a head table wearing an old label
+    /// would have proved nothing, while here the subject is one column and every other one on
+    /// that table is beside the point. `DROP COLUMN` is available because the rung deliberately
+    /// adds no index — the one thing SQLite refuses a drop over.
+    fn corpus_missing_produced_mana() -> Connection {
+        let conn = memory_pair();
+        conn.execute_batch(&format!(
+            "ALTER TABLE {CORPUS}.cards DROP COLUMN produced_mana;"
+        ))
+        .unwrap();
+        conn.execute_batch(&format!(
+            "PRAGMA {CORPUS}.user_version = {CORPUS_SCHEMA_VERSION};"
+        ))
+        .unwrap();
+        conn
+    }
+
+    /// Whether `cards` in the corpus carries a column, by name.
+    fn corpus_cards_has(conn: &Connection, column: &str) -> bool {
+        let mut stmt = conn
+            .prepare(&format!("PRAGMA {CORPUS}.table_info(cards)"))
+            .unwrap();
+        let found = stmt
+            .query_map([], |r| r.get::<_, String>(1))
+            .unwrap()
+            .map(Result::unwrap)
+            .any(|n| n == column);
+        found
+    }
+
+    /// **The population a version gate would miss, one table over from
+    /// `a_corpus_stamped_at_head_wearing_the_old_shape_is_still_repaired`.**
+    ///
+    /// The corpus already reports [`CORPUS_SCHEMA_VERSION`] — which is what `crate::split`'s
+    /// `finish` stamps onto every converted file and every fresh install — and its `cards` is
+    /// the shape the frozen v26 ladder built. An `if v < CORPUS_SCHEMA_VERSION` arm skips
+    /// exactly this database, and the failure lands much later and somewhere else: the next
+    /// ingest raises `table cards_staging has no column named produced_mana`, because
+    /// [`create_staging`] derives staging's layout from the live table's own `PRAGMA
+    /// table_info`.
+    #[test]
+    fn a_corpus_stamped_at_head_with_no_produced_mana_still_gets_it() {
+        let conn = corpus_missing_produced_mana();
+        // The fixture is really the state being claimed: head's number over the old shape.
+        let version: i64 = conn
+            .query_row(&format!("PRAGMA {CORPUS}.user_version"), [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, CORPUS_SCHEMA_VERSION);
+        assert!(
+            !corpus_cards_has(&conn, "produced_mana"),
+            "the fixture must start without the column or it tests nothing"
+        );
+
+        migrate_corpus(&conn).unwrap();
+
+        assert!(
+            corpus_cards_has(&conn, "produced_mana"),
+            "the number said head and the shape did not"
+        );
+    }
+
+    /// ⚠️ **The rung is schema-qualified, and this is what says so.**
+    ///
+    /// A bare `ALTER TABLE cards ADD COLUMN` names `main` — the reader's own file — and says
+    /// nothing about it. The fixture gives **both** databases a `cards`, because that is the
+    /// only shape in which the two spellings can disagree: with a table on each side, the
+    /// unqualified form lands on the wrong one and the qualified form cannot. In the field the
+    /// user file has no `cards` at all, which is what makes the mistake *silent* rather than
+    /// loud — nothing raises, the corpus is left unrepaired, and the next ingest fails for a
+    /// reason that names a different table.
+    ///
+    /// `tests::a_full_sync_leaves_every_table_on_its_own_side` is the standing fence for the
+    /// staging paths; this is the same rule for a migration rung, which that test does not walk.
+    #[test]
+    fn the_produced_mana_rung_lands_on_the_corpus_and_not_on_the_user_file() {
+        let conn = corpus_missing_produced_mana();
+        // A decoy on the user side, so an unqualified `ALTER` has somewhere wrong to land.
+        conn.execute_batch("CREATE TABLE main.cards (id TEXT PRIMARY KEY);")
+            .unwrap();
+
+        add_produced_mana(&conn, CORPUS).unwrap();
+
+        assert!(
+            corpus_cards_has(&conn, "produced_mana"),
+            "the column belongs to the corpus"
+        );
+        let mut stmt = conn.prepare("PRAGMA main.table_info(cards)").unwrap();
+        let user_side: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(1))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            user_side,
+            vec!["id".to_owned()],
+            "an unqualified ALTER puts the corpus's column in the reader's own file, silently"
+        );
+    }
+
+    /// The counterweight: a corpus already carrying the column is left alone.
+    ///
+    /// `a_launch_over_an_ingested_corpus_leaves_the_combos_where_they_are`'s job for this rung,
+    /// and it is louder than that one. `ALTER TABLE … ADD COLUMN` has no `IF NOT EXISTS`, so a
+    /// gate that fired unconditionally would not quietly waste work — it would raise
+    /// `duplicate column name` and **stop the launch**, on every database that is already
+    /// correct, which after one sync is all of them.
+    #[test]
+    fn a_launch_over_a_corpus_that_has_the_column_does_not_add_it_twice() {
+        let conn = memory_pair();
+        assert!(corpus_cards_has(&conn, "produced_mana"));
+
+        migrate_corpus(&conn).unwrap();
+        migrate_corpus(&conn).unwrap();
+
+        assert!(corpus_cards_has(&conn, "produced_mana"));
+    }
+
+    /// And a corpus with no `cards` at all owes nothing rather than dying.
+    ///
+    /// The debt this rung can repair is *a table missing a column*, never *a missing table* —
+    /// only an ingest can put `cards` back. [`migrate_corpus`] is one of the two things allowed
+    /// to stop a launch, so a rung that raised here would turn a repairable database into an
+    /// app that will not start; `maintenance::tests::a_launch_survives_a_repair_it_cannot_carry
+    /// _out` is the fixture that first found it, and this is the same claim stated at the gate.
+    #[test]
+    fn a_corpus_with_no_cards_table_owes_the_rung_nothing() {
+        let conn = memory_pair();
+        conn.execute_batch(&format!(
+            "DROP TABLE {CORPUS}.cards_fts; DROP TABLE {CORPUS}.cards;"
+        ))
+        .unwrap();
+
+        assert!(
+            !produced_mana_is_owed(&conn, CORPUS).unwrap(),
+            "there is no table to alter, so nothing is owed"
+        );
+        migrate_corpus(&conn).expect("a launch must not die over a repair it cannot carry out");
     }
 
     /// And it takes an interrupted ingest's staging pair with it, so nothing shaped like

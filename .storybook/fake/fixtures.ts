@@ -158,6 +158,89 @@ export function deckCategory(kind: CategoryKind, over: Partial<DeckCategory> = {
 }
 
 /**
+ * What each fixture printing taps for, as `cards.produced_mana` stores it — Scryfall's
+ * `produced_mana`, and the answer {@link producedManaOf} hands every deck row built here.
+ *
+ * **Concatenated single letters, never JSON**, which is `colors` and `colorIdentity`'s encoding
+ * one column over: `["W","U"]` is `"WU"` and `JSON.parse` throws on it. It is a **set** and not
+ * a count — Sol Ring's `{T}: Add {C}{C}` is `"C"`, because two colourless mana is one kind of
+ * mana twice, and a `"CC"` here would be a fixture teaching a reader an encoding the ingest
+ * does not use.
+ *
+ * **Three values, and the third is the whole reason the column is nullable.** `"UR"` is a card
+ * that makes blue or red; `""` is a card that makes none at all, which is what the ingest
+ * stores for a printing Scryfall omits the key on; and `null` means *only* that the row
+ * predates the column — a database that has not re-synced since it landed — which is a state
+ * no card in this corpus is in. So every value here is a letter set or the empty string, and
+ * {@link orphanDeckCard} is the one fixture in this file that answers `null`. A fake answering
+ * `null` throughout would put every story behind the never-re-synced fence and none of them in
+ * front of the real chart, which is the opposite of what these fixtures are for.
+ *
+ * **Hand-written here rather than added to {@link FakeCard}, and that is a rule rather than a
+ * shortcut**: `cards.ts` is generated *wholesale* by `scripts/gen-storybook-cards.mjs`, so a
+ * column added to it by hand is deleted by the next corpus refresh with nothing to notice.
+ * `.storybook/CLAUDE.md` states it for combo rows and it is the same argument here. This file
+ * is where hand-written facts *over* that corpus live.
+ *
+ * **Keyed by name rather than by `(setCode, collectorNumber)`**, which is the one place this
+ * file departs from {@link printing}'s rule, and the reason is that producing mana is a fact
+ * about the *oracle card*: all four Lightning Bolts make nothing, both Sol Rings make `{C}`,
+ * and a regeneration that adds a sixth Bolt printing is right for free. What the key costs runs
+ * the other way — a mana-producing card the regeneration *adds* is absent here and reads `""`,
+ * which is the safe answer rather than a wrong colour, and a name it drops leaves an entry that
+ * answers for nothing. **Anything not named here makes no mana**, which is the large majority of
+ * the corpus.
+ */
+const PRODUCED_MANA: Readonly<Record<string, string>> = {
+  // The two basics, and the pair every mana story starts from.
+  Forest: "G",
+  Island: "U",
+  // The one-mana dork and the two-mana rock — the shapes a ramp count is drawn over.
+  "Llanowar Elves": "G",
+  "Sol Ring": "C",
+  // `{T}: Add {C}{C}` and `I — This Saga gains "{T}: Add {C}."` — both a **set** of one letter,
+  // for the reason above: what the table records is which mana a card can make, never how much.
+  "Ancient Tomb": "C",
+  "Urza's Saga": "C",
+  // A modal double-faced card, and the letter comes off the **back**: the front is a sorcery
+  // that makes nothing and `Agadeem, the Undercrypt` is a land that taps for `{B}`. Scryfall
+  // carries `produced_mana` at the top level of an MDFC rather than per face, which is why one
+  // letter answers for the whole printing — and it is the corpus's only `{X}` card, so the
+  // curve's X story and the mana story reach the same row.
+  "Agadeem's Awakening // Agadeem, the Undercrypt": "B",
+  // "Add three mana of any one color" — five letters and **no `C`**: *any color* is the five
+  // colours, and colourless is not one of them.
+  "Black Lotus": "WUBRG",
+  // "{T}, Sacrifice this token: Add one mana of any color", on both Treasure printings at once,
+  // which is what a name key buys — `tafr 15` and `thob 13` are one oracle card and could not
+  // honestly disagree.
+  Treasure: "WUBRG",
+  // The corpus's only **two-letter** producer: "{T}: Add X mana in any combination of {U}
+  // and/or {R}". Two letters is the case a chart that special-cased one-colour sources would
+  // draw wrong, and without this row nothing here reaches it.
+  "A-Vivi Ornitier": "UR",
+  // **The plane, not the Elves** — `ohop 22`, `Plane — Dominaria`, whose text is `All creatures
+  // have "{T}: Add {G}{G}."` It grants a mana ability rather than having one, and this fixture
+  // does not claim to know which way Scryfall's own derivation falls on that. `""` is written
+  // out rather than left to the default so the judgement is recorded: a plane is in no deck's
+  // mana base, so the safe answer costs no story anything, and CLAUDE.md's rule is that an
+  // unsure fixture says `""` rather than guessing a colour.
+  Llanowar: "",
+};
+
+/**
+ * `cards.produced_mana` for one fixture printing — {@link PRODUCED_MANA}'s lookup, and `""` for
+ * every card that makes no mana.
+ *
+ * **Never `null`**, which is the whole of what this function is for: a card the corpus holds has
+ * been synced by definition, and `null` is reserved for a row written before the column existed.
+ * {@link orphanDeckCard} and `db.ts`'s LEFT JOIN miss are the two places that answer it.
+ */
+export function producedManaOf(card: FakeCard): string {
+  return PRODUCED_MANA[card.name] ?? "";
+}
+
+/**
  * One `deck_cards` row joined to its card, as `deck::get_deck` answers it.
  *
  * Built from `CARDS` rather than through `validation/fixtures`' `card()` builder, and the
@@ -226,6 +309,11 @@ export function deckCard(card: FakeCard, over: Partial<DeckCard> = {}): DeckCard
     oracleText: card.oracleText,
     colors: card.colors,
     colorIdentity: card.colorIdentity,
+    // {@link PRODUCED_MANA}'s answer, in the same concatenated-letter encoding as the two lines
+    // above it and never JSON. `""` for the many rows that make no mana, and **never `null`**
+    // here: a printing the corpus holds has been synced, so the never-re-synced fence belongs to
+    // {@link orphanDeckCard} alone.
+    producedMana: producedManaOf(card),
     legalities: card.legalities,
     power: card.power,
     toughness: card.toughness,
@@ -320,6 +408,15 @@ export function orphanDeckCard(over: Partial<DeckCard> = {}): DeckCard {
     oracleText: null,
     colors: null,
     colorIdentity: null,
+    // **The one fixture in this file where `null` is the right answer, and it means something
+    // different from every other null on this row.** The rest are a LEFT JOIN's worth of "there
+    // is no card here"; this column's `null` is also what a row written *before the column
+    // existed* reads — a database that has not re-synced since it landed — and the deck stats
+    // have a fence for exactly that. An orphan reaches it from the other side, which is what
+    // makes that fence storyable at all: no card in the corpus can produce it, because
+    // {@link producedManaOf} answers `""` for everything it holds. `""` here instead would
+    // quietly claim this vanished printing is known to make no mana.
+    producedMana: null,
     legalities: null,
     power: null,
     toughness: null,

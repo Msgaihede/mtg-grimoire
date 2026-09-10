@@ -57,6 +57,7 @@ const BURN: DeckRow = {
   lastSortBy: "alphabetical",
   separateXGroup: false,
   tokensOpen: false,
+  statsOpen: true,
   defaultCategoryId: 0,
   bracket: 0,
 };

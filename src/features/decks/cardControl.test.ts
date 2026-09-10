@@ -78,6 +78,7 @@ const BOLT: DeckCard = {
   oracleText: "Lightning Bolt deals 3 damage to any target.",
   colors: "R",
   colorIdentity: "R",
+  producedMana: "",
   legalities: '{"modern":"legal"}',
   power: null,
   toughness: null,

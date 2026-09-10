@@ -92,6 +92,26 @@ pub struct CardRow {
     /// `TEXT NOT NULL` — SQLite's TEXT affinity leaves a BLOB a BLOB, so the storage class
     /// is honest even though the declaration is v1's and frozen.
     pub raw: Vec<u8>,
+    /// Which colours of mana this card can **make** — corpus schema 3.
+    ///
+    /// **Concatenated single letters, [`CardRow::colors`]' form and never JSON**: `["W","U"]`
+    /// becomes `"WU"`, built by the same [`joined_letters`]. Scryfall also emits `"C"` for
+    /// colourless and, on a handful of cards, `"2"` (Ancient Tomb's kind); both are single
+    /// characters, so the letter form carries them with no second shape.
+    ///
+    /// ⚠️ **`Some("")` for a card that produces nothing, and never `None` — this is the whole
+    /// fence.** Scryfall omits the key entirely for Lightning Bolt, and [`joined_letters`]
+    /// answers `None` for a missing key, so the read below deliberately does not pass that
+    /// `None` through. Every row written from a bulk line therefore carries a *string*, which
+    /// is what makes `cards.produced_mana IS NULL` mean exactly one thing on disk: **this row
+    /// predates the column**. [`crate::deck::fill_unknown_produced_mana`] is built on that and
+    /// on nothing else — a `None` here would make an ordinary Bolt indistinguishable from an
+    /// un-migrated row and buy it a gunzip on every deck open, for ever.
+    ///
+    /// **Top level only, no face fallback**, unlike [`CardRow::colors`]. `produced_mana` is a
+    /// whole-card property in Scryfall's schema (an MDFC with a land back carries it at the top
+    /// level), so a face read would be a second source for one fact.
+    pub produced_mana: Option<String>,
 }
 
 /// A bulk line, gzipped for storage.
@@ -309,6 +329,11 @@ impl CardRow {
             toughness: pick("toughness"),
             search_text,
             raw: gzip_raw(line),
+            // **`Some` unconditionally**, so that NULL in the column keeps exactly one
+            // meaning — see the field's doc. `joined_letters` answers `None` for the key
+            // Scryfall omits on every card that makes no mana, and passing that through
+            // would spell "makes nothing" and "row predates the column" the same way.
+            produced_mana: Some(joined_letters(v, "produced_mana").unwrap_or_default()),
         })
     }
 }

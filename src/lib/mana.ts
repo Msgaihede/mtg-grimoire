@@ -38,6 +38,56 @@ export function manaSymbolClass(key: ManaKey): string {
 }
 
 /**
+ * The token that fills a **field with a mana symbol on it** — a chip, a pip, a band segment, a
+ * bar in the deck stats band.
+ *
+ * **`--color-mana-*` and never `--color-pie-*`**, and `index.css` states the split at the tokens
+ * themselves: these six are how a printed symbol is filled, glyphs sit on them in near-black
+ * exactly as on a real symbol, and they are *"never a panel, never a border, never text"*. The
+ * pie deeps are the colour-**identity** palette — saturated enough to carry meaning at one pixel,
+ * and far too hot at bar size.
+ *
+ * **This exists because a third surface asked for it, which is the condition
+ * `src/features/decks/CLAUDE.md` already wrote down**: `DeckColorBar` filling its segments and
+ * `DeckStats`' `PIP_COLOR` filling its dots were two answers from one palette and that was not
+ * drift — *"A third surface filling by colour key is the point at which all of them want one home
+ * in `mana.ts`."* The deck stats redesign is that third surface, several times over: the two pips
+ * bands, the six per-colour cost/source tracks, and the six colour curves. So the home is here.
+ *
+ * A `var()` reference rather than a hex, so the palette can move in one file — and a **custom
+ * property rather than a Tailwind class**, because Tailwind scans source text for whole class
+ * names and a `bg-mana-${key}` assembled at runtime emits no rule at all.
+ */
+export const MANA_FILL: Record<ManaKey, string> = {
+  W: "var(--color-mana-w)",
+  U: "var(--color-mana-u)",
+  B: "var(--color-mana-b)",
+  R: "var(--color-mana-r)",
+  G: "var(--color-mana-g)",
+  C: "var(--color-mana-c)",
+};
+
+/**
+ * Which colours of mana a card can make, from the concatenated-letter `producedMana` — one
+ * `ManaKey` per distinct letter the field names, in {@link MANA_KEYS} order.
+ *
+ * **`null` in, empty out, and the caller is what tells the two apart.** This answers only "which
+ * letters are in this string"; whether an empty answer means *this card makes no mana* or *this
+ * row predates the column* is `DeckCard.producedMana`'s own distinction (`""` against `null`), and
+ * folding it in here would let a caller lose it by accident. `deckStats` keeps both.
+ *
+ * Scryfall's array can also carry `"2"` — the two-generic half of a `{2/W}`-style producer — and
+ * every letter that is not one of the six is dropped rather than guessed at, which is the same
+ * rule `addPips` keeps for a symbol it does not know.
+ */
+export function producedKeys(produced: string | null): ManaKey[] {
+  if (produced === null || produced === "") return [];
+  const seen = new Set<string>();
+  for (const letter of produced) seen.add(letter);
+  return MANA_KEYS.filter((key) => seen.has(key));
+}
+
+/**
  * Every `mana-font` class a printed cost can be drawn with, keyed the way the font spells
  * them: lowercase, and slash-less for hybrids (`{W/U}` → `.ms-wu`).
  *

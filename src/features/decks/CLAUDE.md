@@ -1577,14 +1577,38 @@ price | type`). An **inactive category stays its own group in all three grouping
     measured *against* the caption's, which is
     [decks-live-findings.md](../../../docs/reference/decks-live-findings.md)'s own rule that a
     stacking or centring fault names a **pair** and never one element.
-- **What is left in the band is what needs the room**: the pips, the shortfall and the press that
-  acts on it, and the four charts. **The deck stats are a band at the foot of the editor, and there
-  is no control that hides them** (changed 2026-08-14). They were a 280px aside on the desk row with a `Stats` toggle in
-  the toolbar, and the aside's width was subtracted from `DECK_FLOOR` before the docked search
-  panel was asked whether it fit — so opening Stats at 1280 with a card pane docked cost the
-  reader their search, and the toggle existed to give that width back. Full width under the deck
-  the four charts sit on one line and nothing on the desk is traded for them. Three consequences,
-  each measured in the shipped window and none of them visible to a test:
+- **The deck stats are a band at the foot of the editor, drawn full width, and since 2026-09-10
+  they sit behind a disclosure again** — `decks.stats_open`, the same shape `tokens_open` has one
+  band up, and [the redesign](https://github.com/Msgaihede/mtg-grimoire/issues/389) is what put it
+  there. **This reverses "there is no control that hides them", and the half that reversed is not
+  the half the old rule was defending.** That rule (2026-08-14) was written against a 280px
+  **aside on the desk row** with a `Stats` toggle in the toolbar: the aside's width was subtracted
+  from `DECK_FLOOR` before the docked search panel was asked whether it fit, so opening Stats at
+  1280 with a card pane docked cost the reader their search — and the toggle existed only to give
+  that width back. Every word of that is still true and none of it applies to a disclosure on a
+  full-width band, which trades **height a reader was going to scroll past anyway** and no width
+  at all. What actually changed the answer is that the band stopped being four charts on one line
+  and became seven readouts in two columns: a finished deck is one a reader opens to look at,
+  and two screens of arithmetic under it is two screens to scroll past every time.
+  - **`DEFAULT 1`, which is the one place it does not copy `tokens_open`.** That band was new when
+    its column landed, so a collapsed default cost nobody anything they had. This one has been on
+    screen for every deck since 2026-08-14 with no way to hide it, so `DEFAULT 0` would not be a
+    default — it would be a feature silently removed from every deck in the database on upgrade.
+  - **The `<section>`, the rule above it and the disclosure are `DeckStats`' own**, where the
+    chrome used to be `DeckEditor`'s. A header that could be collapsed while the border and the
+    padding around it stayed in the host would be one control whose two halves live in two files.
+    `DeckTokensPanel` made the same call first and the two bands draw one grammar between them.
+  - **`shrink-0` is unchanged and is still the whole of why this editor scrolls** — it rides on
+    the component's own root now. So is the placement: below the price strip, below Tokens &
+    emblems, last on the page.
+  - **Nothing in the band is a control but the disclosure and the Collection card's three
+    presses.** The design it was built from makes every bar a button that narrows the deck list;
+    that is a cross-component feature reaching into all four views and is deliberately out of this
+    pass, which is why there is no filter chip beside the heading.
+
+  Three consequences, each measured in the shipped window and none of them visible to a test —
+  **and all three predate the redesign**, so they are the arithmetic of the band as four charts
+  on one line rather than as seven readouts in two columns. Nothing below has been re-measured:
   **(1)** the band sits **below the price strip**, because that strip is where the remove tray is
   drawn for the length of a drag (`-top-3` over the gap under the deck) and a band between them
   would put four charts between a card and the one drop that takes it out — and since 2026-09-08
@@ -1616,6 +1640,65 @@ price | type`). An **inactive category stays its own group in all three grouping
   224 to 208. Without it the panel railed at 1280 with a card pane open (**602 − 400 = 202**), and
   `scrollbar-width: thin` is not an answer: it costs 10px instead of 15 and lands on **207**, one
   pixel short.
+- **The band is seven bordered readouts in two wrapping columns, and `stats/` is where each one
+  lives** (2026-09-10, issue #389). `DeckStats.tsx` keeps `deckStats` — the arithmetic — and the
+  composition; `stats/StatsCard.tsx` is the shared furniture (`StatsCard`, `BarChart`, `Track`,
+  `percent`) and the other six files are one readout each. Everything below has a way of being
+  quietly wrong behind it.
+  - **Three vertical bar charts draw through one `BarChart`, and the rule it exists for is the
+    number's placement**: a count is printed **above** its fill where the empty track leaves it
+    room and **inside** the fill's top where it does not. Three copies of that arithmetic is three
+    chances for one chart to clip a count at some zoom nobody tested. The threshold is the count's
+    own line height plus its air (24px at `md`, 19 at `sm`); the fill carries a foreground colour
+    only because of the second case.
+  - **`max` is the caller's and is required.** The six colour curves are each read against **their
+    own** tallest bucket, never the deck's — normalise them against the largest and five of the
+    six are a flat line. Defaulting it to the bars' own maximum would make that the easy mistake.
+  - **Chart fills are `MANA_FILL` (`--color-mana-*`) and never the pie deeps.** `mana.ts` is where
+    that table now lives, which is [`src/CLAUDE.md`](../../CLAUDE.md)'s own "a third surface
+    filling by colour key is the point at which all of them want one home" cashed in: the two pips
+    bands, the six per-colour tracks and the six colour curves are that third surface several
+    times over. Everything that is not a colour is the accent.
+  - **`sourcesKnown` is a third state and the one most easily collapsed into the second.**
+    `sources` all zero is a real answer (a deck of pure spells makes no mana); `sourcesKnown ===
+    false` is *every counted row answered `null`*, which is a database that has not re-ingested
+    since the corpus grew `produced_mana`. The tile says the question is unanswered and **draws no
+    track at all** there — an empty track beside a filled Cost band *is* the row of zeroes, em dash
+    or not. Every existing install is in that state until its next sync, so this is the ordinary
+    case for a day rather than a corner.
+  - **The Sources caption says `N sources` and deliberately not `N sources · M cards`.** Scryfall's
+    `produced_mana` says *which* colours a card makes and never *how much*, so the two numbers are
+    identical by construction and printing both is one figure twice. The Cost caption's two terms
+    are real — a card asking `{B}{B}` is two pips on one card.
+  - **The `by` select drives the bars _and_ the odds table**, which is the one place this
+    implementation departs from the design it was built from: that spec wires the select to the
+    table alone and leaves the bars on card type, which reads as a control that does nothing to
+    the chart it is drawn inside. **The two still count different rows**: bars over `activeCards`,
+    odds over `sizedCards`, because a sideboard is cards you own and sleeve and is not in the
+    library the opening seven comes out of.
+  - **`foldBuckets` is what makes `by: Card name` usable** — the widest twelve **in the cut's own
+    order** plus a trailing `Other`. The order half is the part a "simplification" breaks: types
+    must stay in printed order and mana values ascending, and what the count decides is only
+    *which* survive. The odds table is deliberately not folded, because a table row is legible at
+    any length and a reader who chose that cut did it to find one card.
+  - **The odds are hypergeometric and the running-product `choose` is load-bearing.** A deck is
+    drawn from without replacement, and the three-factorial spelling overflows at deck scale —
+    `100!` is ~9.3e157 and every intermediate is past 2^53. `openingHand.ts` carries the whole
+    argument.
+  - **`Matches theory` is `theoryProgress`, at the _exact_ grain and clamped on both sides.** A
+    different printing of a planned card counts nothing toward it, which is the harsher of the two
+    readings and the one the plan actually made — the name tier exists so the *card* still marks
+    blue on the desk. The clamp is what stops a surplus in one card papering over a shortfall in
+    another and the figure reading `104 of 100`.
+  - **The Figures card's two money notes are a collection readout and go with `Owned` on a Virtual
+    deck.** `ownedPrice`/`missingPrice` price `owned` and `missing`, both of which are `0` and
+    *everything* respectively on a deck that owns no cardboard — true of the arithmetic, false
+    about the reader. Easy to miss, because the figure being refused is not the one the flag is
+    named after. The **total** stays: a price is a fact about the list.
+  - **The Collection card is gated on `missing > 0`**, and `Missing`'s `All N owned.` fallback was
+    deleted rather than moved. Every control in that card was already gated on the shortfall, so
+    without the gate it would be a heading over one sentence on every finished deck — and that
+    sentence is the Figures card's `every copy` note directly above it.
 - **The docked panel has two tabs and opens on _Collection_** (2026-08-23, spec §7.2). `Collection`
   searches the reader's own rows through `collection_list`; `All cards` is the card search this
   panel has always been. **Which one it opens on is the whole product decision**: a deck is built

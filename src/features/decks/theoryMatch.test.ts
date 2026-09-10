@@ -4,6 +4,7 @@ import {
   theoryMatchMark,
   theoryMatchPlan,
   theoryNameKey,
+  theoryProgress,
   theorySlot,
   type TheoryMarkSwitches,
 } from "./theoryMatch";
@@ -653,5 +654,172 @@ describe("no plan", () => {
   it("answers undefined for a deck that keeps no theory list", () => {
     expect(theoryMatchPlan(undefined, [], ALL)).toBeUndefined();
     expect(theoryMatchMark(undefined, card({ cardId: "x", finish: null, name: "X" }))).toBeNull();
+  });
+});
+
+/**
+ * The stats band's `Matches theory` figure — copies that match, over copies planned.
+ *
+ * It is the one number in the app that answers *is the deck I sleeved up the deck I designed*
+ * at a glance, and every rule below is a way it could be quietly and plausibly wrong: a name
+ * grain would read 100% over a deck full of stand-ins, an unclamped side would read `104 of
+ * 100`, and a live loop that forgot the switch would count a scratchpad as progress.
+ */
+describe("theoryProgress", () => {
+  it("answers null for a deck that keeps no plan, and zeroes for a plan that asks for nothing", () => {
+    // `0 of 0` reads as failure rather than as absence, which is the distinction `null` keeps.
+    expect(theoryProgress(undefined, [card({ cardId: "bolt-lea", quantity: 4 })])).toBeNull();
+    expect(theoryProgress([], [card({ cardId: "bolt-lea", quantity: 4 })])).toEqual({
+      have: 0,
+      want: 0,
+    });
+  });
+
+  it("counts the copies of a planned printing the live list holds", () => {
+    expect(
+      theoryProgress(
+        [slot("bolt-lea|", "Lightning Bolt", 4)],
+        [card({ cardId: "bolt-lea", name: "Lightning Bolt", quantity: 2 })],
+      ),
+    ).toEqual({ have: 2, want: 4 });
+  });
+
+  /**
+   * **The grain is `(cardId, finish)` and the harsh reading is the intended one.** A plan that
+   * names a printing is a plan for that cardboard, so a different Forest is a stand-in and reads
+   * as one — a figure on the name grain would say `100%` over a deck made entirely of them,
+   * which is the state a plan is kept in order to get out of. The blue *name* tier on the desk
+   * is where the softer answer belongs, and it is a per-card mark rather than this figure.
+   */
+  it("counts a different printing of a planned card as nothing at all", () => {
+    expect(
+      theoryProgress(
+        [slot("bolt-lea|", "Lightning Bolt", 4)],
+        [card({ cardId: "bolt-m10", name: "Lightning Bolt", quantity: 4 })],
+      ),
+    ).toEqual({ have: 0, want: 4 });
+  });
+
+  it("counts a different finish of a planned printing as nothing at all", () => {
+    const plan = [slot("sol-c21|foil", "Sol Ring", 1)];
+
+    expect(
+      theoryProgress(plan, [card({ cardId: "sol-c21", name: "Sol Ring", quantity: 1 })]),
+    ).toEqual({ have: 0, want: 1 });
+    expect(
+      theoryProgress(plan, [
+        card({ cardId: "sol-c21", finish: "foil", name: "Sol Ring", quantity: 1 }),
+      ]),
+    ).toEqual({ have: 1, want: 1 });
+  });
+
+  it("sums a planned printing across the piles the live list files it in", () => {
+    // Placement is not possession: four in Main deck and one in the Sideboard is five copies of
+    // the card the plan named, which is the same reading the marks take.
+    expect(
+      theoryProgress(
+        [slot("bolt-lea|", "Lightning Bolt", 5)],
+        [
+          card({ cardId: "bolt-lea", name: "Lightning Bolt", quantity: 4 }),
+          card({ cardId: "bolt-lea", name: "Lightning Bolt", quantity: 1 }),
+        ],
+      ),
+    ).toEqual({ have: 5, want: 5 });
+  });
+
+  /**
+   * **Each side is clamped at the other**, so six live copies of a planned four contribute four.
+   * Without the clamp a surplus in one card papers over a shortfall in another and the figure
+   * reads `104 of 100` — which is not something a percentage can mean.
+   */
+  it("clamps a surplus at what the plan asked for", () => {
+    expect(
+      theoryProgress(
+        [slot("bolt-lea|", "Lightning Bolt", 4)],
+        [card({ cardId: "bolt-lea", name: "Lightning Bolt", quantity: 6 })],
+      ),
+    ).toEqual({ have: 4, want: 4 });
+  });
+
+  it("does not let one card's surplus cover another card's shortfall", () => {
+    // Six of a planned four beside one of a planned four. Unclamped this is `7 of 8`; clamped it
+    // is `5 of 8`, which is the number that says a card is still missing.
+    expect(
+      theoryProgress(
+        [slot("bolt-lea|", "Lightning Bolt", 4), slot("swords-rev|", "Swords to Plowshares", 4)],
+        [
+          card({ cardId: "bolt-lea", name: "Lightning Bolt", quantity: 6 }),
+          card({ cardId: "swords-rev", name: "Swords to Plowshares", quantity: 1 }),
+        ],
+      ),
+    ).toEqual({ have: 5, want: 8 });
+  });
+
+  /**
+   * **Only active piles count on the live side** — the line `validateDeck` opens with. A card
+   * parked in the live Maybeboard is not something the deck has, and counting it would report
+   * progress a reader has explicitly said they are not making. The plan's side needs no such
+   * test: `deck_theory_slots` has already summed each slot over the active piles it filed
+   * copies in.
+   */
+  it("counts nothing out of a switched-off pile", () => {
+    expect(
+      theoryProgress(
+        [slot("bolt-lea|", "Lightning Bolt", 4)],
+        [
+          card({
+            cardId: "bolt-lea",
+            name: "Lightning Bolt",
+            quantity: 4,
+            categoryActive: false,
+          }),
+        ],
+      ),
+    ).toEqual({ have: 0, want: 4 });
+  });
+
+  it("counts the active pile of a card that is filed in both", () => {
+    expect(
+      theoryProgress(
+        [slot("bolt-lea|", "Lightning Bolt", 4)],
+        [
+          card({ cardId: "bolt-lea", name: "Lightning Bolt", quantity: 1 }),
+          card({
+            cardId: "bolt-lea",
+            name: "Lightning Bolt",
+            quantity: 3,
+            categoryActive: false,
+          }),
+        ],
+      ),
+    ).toEqual({ have: 1, want: 4 });
+  });
+
+  /**
+   * **Repeated slot keys are summed and never overwritten.** The command groups, so two slots of
+   * one key should not arrive — but a `Vec` is what crosses the boundary, and a last-one-wins
+   * assignment would silently halve a plan while still answering a plausible-looking pair of
+   * numbers. Both halves move here: assigning would read `3 of 2` rather than `3 of 4`, so the
+   * figure would also stop being a fraction of one.
+   */
+  it("sums two slots that name one key rather than letting the last win", () => {
+    expect(
+      theoryProgress(
+        [slot("bolt-lea|", "Lightning Bolt", 2), slot("bolt-lea|", "Lightning Bolt", 2)],
+        [card({ cardId: "bolt-lea", name: "Lightning Bolt", quantity: 3 })],
+      ),
+    ).toEqual({ have: 3, want: 4 });
+  });
+
+  it("ignores a live card the plan has no row for", () => {
+    expect(
+      theoryProgress(
+        [slot("bolt-lea|", "Lightning Bolt", 1)],
+        [
+          card({ cardId: "bolt-lea", name: "Lightning Bolt", quantity: 1 }),
+          card({ cardId: "brainstorm-ice", name: "Brainstorm", quantity: 4 }),
+        ],
+      ),
+    ).toEqual({ have: 1, want: 1 });
   });
 });
