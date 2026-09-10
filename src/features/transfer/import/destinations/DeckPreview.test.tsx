@@ -142,6 +142,10 @@ const DECK: DeckRow = {
   lastSortBy: "alphabetical",
   separateXGroup: false,
   tokensOpen: false,
+  // `true` where its neighbour above is `false` — `decks.stats_open` is `NOT NULL
+  // DEFAULT 1`, because every deck that exists today draws the Deck stats band and has
+  // no control to hide it.
+  statsOpen: true,
   defaultCategoryId: 0,
   bracket: 0,
   updatedAt: 1_800_000_000,
@@ -184,6 +188,10 @@ function deckCard(over: Partial<DeckCard> & { quantity: number }): DeckCard {
     oracleText: null,
     colors: null,
     colorIdentity: null,
+    // Concatenated letters like the two lines above, never JSON — and `"C"` because this row is
+    // a Sol Ring. `null` on this column is not "unknown": it means the row predates the column,
+    // which is a state this fixture is not about.
+    producedMana: "C",
     legalities: null,
     power: null,
     toughness: null,

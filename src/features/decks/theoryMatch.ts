@@ -390,3 +390,58 @@ export function theoryMatchMark(
   if (!plan.marks.name) return null;
   return byName === undefined ? null : { tier: "name", delta: byName };
 }
+
+/**
+ * How far the live list has got toward the plan: copies that match, over copies planned.
+ *
+ * `have` of `want`, both in **copies**, and it is the one figure in this app that answers *is the
+ * deck I sleeved up the deck I designed* as a single number. The per-card marks above answer it
+ * card by card and the Compare dialog answers it as a shopping list; neither is a thing a reader
+ * can watch move as they acquire cards, which is what the stats band's `Matches theory` is for.
+ *
+ * ## Three rules, and each is a way this could be quietly wrong
+ *
+ * **It is the `exact` grain — the printing and its finish — and never the name grain.** A plan
+ * that names a printing is a plan for that cardboard: `theorySlot` is the key on both sides, so a
+ * reader who has sleeved a different Forest reads as short of that Forest. That is the harsher of
+ * the two readings and it is the one the plan actually made; the name tier exists so the *card*
+ * still marks blue on the desk, which is where the softer answer belongs. A figure on the name
+ * grain would read `100%` over a deck full of stand-ins, which is the state a plan is kept in
+ * order to get out of.
+ *
+ * **Each side is clamped at the other**, so a live list holding six of a planned four contributes
+ * four. Without the clamp a surplus in one card papers over a shortfall in another and the figure
+ * can exceed the plan — `104 of 100` — which is not something a percentage can mean.
+ *
+ * **Only active piles count on the live side**, which is the line `validateDeck` opens with and
+ * the rows {@link theoryMatchPlan} counts. The plan's side needs no such test: `deck_theory_slots`
+ * has already summed each slot across the active piles it filed copies in.
+ *
+ * `undefined` in, `null` out — a deck with no plan has no progress toward one, and `0 of 0` reads
+ * as failure rather than as absence.
+ */
+export function theoryProgress(
+  slots: readonly TheorySlot[] | undefined,
+  live: readonly Pick<DeckCard, "cardId" | "finish" | "quantity" | "categoryActive">[],
+): { have: number; want: number } | null {
+  if (slots === undefined) return null;
+  const sleeved = new Map<string, number>();
+  for (const card of live) {
+    if (!card.categoryActive) continue;
+    const key = theorySlot(card);
+    sleeved.set(key, (sleeved.get(key) ?? 0) + card.quantity);
+  }
+  // Accumulated rather than assigned, for the reason `theoryMatchPlan` gives one function up: the
+  // command groups, so a repeated key should not arrive — but a `Vec` is what crosses the
+  // boundary, and a sum stays right where a last-one-wins assignment would silently halve a plan.
+  const planned = new Map<string, number>();
+  for (const slot of slots) planned.set(slot.key, (planned.get(slot.key) ?? 0) + slot.quantity);
+
+  let want = 0;
+  let have = 0;
+  for (const [key, wanted] of planned) {
+    want += wanted;
+    have += Math.min(sleeved.get(key) ?? 0, wanted);
+  }
+  return { have, want };
+}

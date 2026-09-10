@@ -1998,3 +1998,88 @@ Maybeboard likewise). That is `drawsWhenEmpty` behaving exactly as it does under
 rather than anything this chip introduced — a reader's own piles and the seeded zones stay on
 screen, and stay drop targets, while a filter is running. It is written down because it looks like
 a finding and is the documented rule.
+
+## The redesigned Deck stats band, driven 2026-09-10
+
+`npm run tauri dev`, a **debug** build, against a **copy of the main checkout's real database** —
+117 738 cards, five decks — opened on `Azula`, a 101-card Commander deck (Blue/Black/Red, +3
+sideboard, +24 in switched-off piles). Window sizes below are the OS window; the figures are the
+webview's own `clientWidth`, which is 16px smaller.
+
+### Both migrations proved on a real database, which a worktree can never show
+
+The copy arrived at **user schema 41 / corpus schema 2** and the launch took it to **42 / 3**.
+This is the half no fresh worktree can test, because a fresh worktree is a fresh install and the
+`create_*_schema` path builds head directly without ever running a rung.
+
+- `decks.stats_open` present, and **`1` on all five existing decks** — the `DEFAULT 1` doing the one
+  thing it is there for. A `DEFAULT 0` would have collapsed the band on every deck in the database
+  at the moment of upgrade.
+- `cards.produced_mana` present, and **`filled: 0` of `total: 117738`**. That is not a defect: the
+  column's only writer is the ingest, `raw` is a gzip BLOB that SQL cannot see into, and the next
+  sync rebuilds `cards` wholesale. **It is the state every existing install is in until then**, and
+  it is exactly what `DeckStatsSummary.sourcesKnown` exists to tell apart from *this deck makes no
+  mana*.
+
+**And the Sources half of the Mana pips tile was populated anyway**, which is
+`deck::fill_unknown_produced_mana` working end to end against a real corpus: `27 sources` black,
+`35 sources` red, and `9 sources` white on a deck that casts no white pip at all. None of that is
+visible from the column, and no unit test sees the corpus it gunzips.
+
+### It draws, at every width tried
+
+| Window | webview | band | column each | overflow (doc / main / band) |
+| --- | --- | --- | --- | --- |
+| 1936 × 1089 | 1920 | 1657 | ~822 | 0 / 0 / 0 |
+| 1280 × 800 | 1264 | 1001 | 495 | 0 / 0 / 0 |
+| 1024 × 700 | 1008 | **745** | **367** | 0 / 0 / 0 |
+
+745 is the floor a 1024 window gives, and the two columns still sit side by side there — their
+`min-w-[22rem]` (352) is just cleared. **The docked search panel does not narrow this band**: it is
+a sibling of the desk row, so the panel's width comes off the desk and not off the page.
+
+**The Mana pips figure track measures 64px at that floor**, inside a ~171px tile: the row is a 44px
+word, a 32px percentage and two 6px gaps, and the track is what is left. It was estimated at
+**31px** before the pass, from an assumption that the band would still be two columns at a 602px
+editor — it is not, because the columns wrap before they squeeze. A proportion bar with its own
+number printed beside it, at 64px, reads.
+
+### The disclosure
+
+`aria-expanded` `true` → `false` takes the band **1131px → 45px**. The `aria-controls` target
+**stays in the DOM and is empty** while shut, which is `DeckTokensPanel`'s arrangement and what
+keeps the attribute from pointing at nothing.
+
+The press wrote `decks.stats_open = 0` for that deck alone (the other four unchanged) and **wrote no
+`deck_audit` row** — that deck's drawer holds only the `quantity` edits this pass made. A reading
+preference is not an edit, which is `tokens_open`'s rule and now this column's too.
+
+### What it costs
+
+| Gesture | ms |
+| --- | --- |
+| Deck open → all seven readouts drawn | 532 / 488 / 466 |
+| Expand the band (render only, no IPC) | 433 / 331 / 318 |
+| A quantity edit → the Cards figure moves | 124 / 118 / 128 |
+
+**The first two are the same measurement twice**, and the useful part is the subtraction: the band's
+cold mount is ~330ms of the ~500ms, so the read-time `produced_mana` fill — running over **every**
+row of a 128-row deck with not one of them filled — is a small part of a number dominated by
+mounting ~100 bars. It gets cheaper after the first sync and cannot get worse.
+
+**The 120ms edit is the number that matters**, because the band recomputes on every deck edit and
+that is the gesture a reader repeats. It is a re-render rather than a mount, which is why it is a
+quarter of the cold figure.
+
+### One defect found, and only a live pass could have found it
+
+**`Curve by color`'s panel header used `justify-between`**, so each panel's `N spells` was pushed to
+its own right-hand edge — and with six panels drawn two to a row, that parked the count hard against
+the *next* panel's mana symbol. Read at 1657px: `☀ ......... 0 spells 💧 ......... 22 spells`, where
+the 22 belongs to blue and the eye pairs it with white. Fixed to a `gap-1.5` beside the symbol,
+which is what the design does and what the other five headers in the band already did.
+
+**Neither suite can see it.** jsdom lays nothing out, so the two elements are siblings in the right
+order in the DOM whatever flexbox does with them on screen, and every assertion about either one
+passes. It is this file's own centring rule in its general form: a pairing fault names **two**
+elements, and measuring either one of them reports nothing wrong.

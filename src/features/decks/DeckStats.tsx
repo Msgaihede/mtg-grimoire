@@ -1,78 +1,44 @@
 import { useEffect, useId, useMemo, useRef, useState, type RefObject } from "react";
 import { AnimatePresence, motion } from "motion/react";
+import { ChevronRight } from "lucide-react";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { useWishDestinationName, WishDestination } from "@/features/wishlist/WishDestination";
 import { count } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
 import { ipcError, type CategoryKind, type DeckCard } from "@/lib/ipc";
-import { hasVariableCost, MANA_LABEL, MANA_LINE_KEYS } from "@/lib/mana";
-import { statusLine } from "@/lib/motion";
+import type { Marketplace } from "@/lib/marketplace";
+import {
+  countPips,
+  emptyPips,
+  hasVariableCost,
+  MANA_KEYS,
+  producedKeys,
+  type ManaKey,
+  type PipCounts,
+} from "@/lib/mana";
+import { PRESS, statusLine } from "@/lib/motion";
 import { cn } from "@/lib/utils";
-import { manaValueOf, SIZE_KINDS } from "./validation/engine";
-
-/** The nine **numeric** curve buckets — 0 through 7 exactly, and 8 open-ended, which is the
- *  bucketing the mana-value filter chips and `grouping.ts`'s mana-value grouping already use.
- *  The X bar that can ride behind them is not one of these: see
- *  {@link DeckStatsSummary.variableCost}. */
-const CURVE_BUCKETS = 9;
-
-/**
- * The eight card types, in the order they are printed on the type line, and the word each bar
- * is named by.
- *
- * Order is the whole of the rule for a card with two types: an Artifact Creature is a creature
- * to everyone who has ever built a deck, and `Creature` comes first here. `Land` is last of the
- * eight for the same reason it is last in a decklist — it is where the counting ends.
- *
- * **Deliberately not `autoCategory.ts`'s list, though the eight words are the same.** That one
- * checks `Land` *first*, because it decides where a card is filed and Dryad Arbor
- * (`Land Creature — Forest Dryad`) belongs in the lands. These are bars over a curve, where the
- * question is what a card *does*: an artifact land heads up the Artifact bar and Urza's Saga the
- * Enchantment bar, which is the reading `isLand` below then contradicts on purpose for every
- * other chart. That disagreement is named in `isLand`'s doc and pinned by `a land that is not
- * filed under Land is still a land to every chart but the type bars` — folding the two orders
- * together breaks whichever job loses.
- *
- * This lived in `ZoneColumn.groupCards` while the deck list was a column of type headings.
- * Schema v8's rebuild draws its headings from `grouping.ts` instead, so this is now one
- * surface's own bucketing and lives with the surface.
- */
-const TYPE_BUCKETS = [
-  "Creature",
-  "Planeswalker",
-  "Instant",
-  "Sorcery",
-  "Artifact",
-  "Enchantment",
-  "Battle",
-  "Land",
-] as const;
-
-/** Where a token, a scheme, or a row whose printing has left the card database goes. */
-const OTHER = "Other";
-
-/** The five colours a pip can be, in the order symbols are printed. */
-type PipKey = (typeof MANA_LINE_KEYS)[number];
+import { cardManaValue, CURVE_BUCKETS, curveBucket, isLand } from "./deckBuckets";
+import { CardDistribution } from "./stats/CardDistribution";
+import { CurveByColor } from "./stats/CurveByColor";
+import { DeckFigures } from "./stats/DeckFigures";
+import { ManaCurveChart } from "./stats/ManaCurveChart";
+import { ManaPips } from "./stats/ManaPips";
+import { StatsCard } from "./stats/StatsCard";
+import { SIZE_KINDS } from "./validation/engine";
 
 /**
- * One wedge of a pie: what it is, how many copies are in it, and the fill that says which.
+ * The band's name, in one place because four things say it: the region's `aria-label`, the
+ * disclosure's visible text, `DeckEditor`'s own reference to it, and every test and story that
+ * addresses either.
  *
- * `color` is a token reference rather than a literal, so the charts and the identity pips can
- * never drift apart from the direction doc's pie deeps (`index.css`, `--color-pie-*`).
+ * `DeckTokensPanel` states its own heading the same way and for the same reason.
  */
-export interface Slice {
-  key: string;
-  label: string;
-  count: number;
-  color: string;
-}
+export const STATS_HEADING = "Deck stats";
 
-/** What one card type's bar draws. */
-export interface TypeCount {
-  key: string;
-  label: string;
-  count: number;
-}
+/** The one card in the band that holds controls rather than figures. Named here beside the band
+ *  so a test can address it without spelling the word a second time. */
+export const COLLECTION_HEADING = "Collection";
 
 /**
  * One category's copies.
@@ -152,6 +118,16 @@ export interface DeckStatsSummary {
    * neither number and is therefore not in here.
    */
   elsewhere: readonly CategoryCount[];
+  /**
+   * Copies in the piles the reader has switched **off** — counted toward nothing else here, and
+   * the second note under the Cards figure.
+   *
+   * **Not a subset of {@link byCategory}'s numbers and not derivable from them**: that field
+   * carries every pile including the switched-off ones, so subtracting is a caller applying the
+   * switch a second time. It is drawn precisely because the figure above it does not count it —
+   * `+3 inactive` is the sentence that stops a reader wondering where three cards went.
+   */
+  inactive: number;
   lands: number;
   nonlands: number;
   /** Nonland copies with no mana value anywhere — an orphaned row has neither a `cmc` nor a
@@ -181,18 +157,80 @@ export interface DeckStatsSummary {
    * it is drawn in.
    */
   variableCost: number | null;
-  /** Copies of each colour, counted **once per colour on the card** — a WU card feeds both W
-   *  and U. Overlapping on purpose: this is "what can this deck cast", which is a different
-   *  question from the colour pie's "what is this deck made of". */
-  pips: Record<PipKey, number>;
-  /** Nonlands in exactly one bucket each — mono, multicolour or colourless — so they sum to
-   *  {@link nonlands} and can therefore be a pie. */
-  colorDist: Slice[];
-  /** Lands by the basic land types on their front face, summing to {@link lands}. */
-  landDist: Slice[];
-  /** The deck list's own type buckets, in its own order — see `typeBucket` 130 lines above,
-   *  which is where this grouping lives now. */
-  typeDist: TypeCount[];
+  /**
+   * **Pips**, counted the way a card prints them: `{1}{B}{B}` is two black pips on one card, and
+   * four copies of it are eight. All six keys, colourless included.
+   *
+   * **This is a different number from the one this field used to hold, and the change is
+   * deliberate** (the redesign of 2026-09-10). It counted *copies of cards of that colour*, read
+   * off `colors` — which answered "what is this deck made of" while being called pips. What the
+   * Mana pips tile needs is the demand a manabase has to meet, and a card asking for `{B}{B}`
+   * makes twice the demand of one asking for `{B}`.
+   *
+   * Counted through `addPips`, so `{W/U}` is one pip of each half and `{2/W}` one white pip —
+   * that vocabulary is `src/lib/mana.ts`' over the one tokeniser this app parses every cost with,
+   * and a second spelling of it here is exactly how two counters come to disagree about a
+   * Phyrexian hybrid.
+   */
+  pips: PipCounts;
+  /**
+   * Copies whose printed cost asks for at least one pip of that colour — the `· N cards` half of
+   * a pip readout.
+   *
+   * **The cost and not `colors`**, though the two nearly always agree. Where they part is a card
+   * whose colour comes from something other than its cost: a colour indicator, a back face, a
+   * land type. Those are coloured cards that make no demand on a manabase, and this tile is
+   * entirely about demand.
+   */
+  pipCards: PipCounts;
+  /**
+   * Copies that can **produce** each colour — Scryfall's `produced_mana`, per
+   * {@link DeckCard.producedMana}.
+   *
+   * **A card is counted once in every colour it can make**, so a Command Tower is in all five and
+   * the sum across the six keys is larger than the number of mana sources in the deck. That is
+   * the honest denominator for "what share of my mana can pay for black": a dual land really is
+   * available to both halves of the cost.
+   *
+   * **Copies and not mana.** Scryfall says *which* colours a card produces and never *how much*,
+   * so a Sol Ring counts once for colourless exactly as an Ancient Tomb does. The reading is
+   * therefore "sources that can make this colour", and the tile words it that way rather than
+   * printing a mana count the data cannot support.
+   */
+  sources: PipCounts;
+  /**
+   * Whether the produced-mana question was answered at all — `false` when **every** counted row
+   * came back `null`, which is a database that has not re-ingested since the corpus grew the
+   * column.
+   *
+   * **Not `sources` being all zeroes**, which is a real and different answer: a deck of sixty
+   * spells and no lands produces nothing, and it should be told so rather than told the app does
+   * not know. The two states read identically in the arithmetic and must not read identically on
+   * screen, which is the whole reason this is a field rather than a derivation.
+   *
+   * `true` the moment one row answers, because one answer means the column is populated and the
+   * remaining nulls are orphans — rows whose printing has left the corpus, which have no answer
+   * to give and never will.
+   */
+  sourcesKnown: boolean;
+  /**
+   * Nine curve buckets per colour, over nonlands — the same bucketing {@link curve} uses.
+   *
+   * **A card is in every colour it is**, so a gold spell is drawn in two curves and the six
+   * curves sum to more than {@link nonlands}. Each is read on its own — "what does my red half
+   * cost" — and normalising them against each other would answer a question nobody asked.
+   *
+   * The `C` curve is a card with **no** colours at all, which is the one key that is a partition
+   * rather than a membership: a colourless card is in exactly one of the six.
+   *
+   * **`separateXGroup` deliberately does not reach here.** These are six small charts read for
+   * their shape, and a tenth bar on each that six decks in a hundred would use is a column of
+   * white space on the other ninety-four.
+   */
+  curveByColor: Record<ManaKey, number[]>;
+  /** Nonland copies in each colour's curve — the `N spells` caption over it, and the sum of that
+   *  colour's nine buckets. */
+  spellsByColor: Record<ManaKey, number>;
   /**
    * Over nonlands with a mana value, weighted by copies. `null` for a deck of nothing but
    * lands — an average of no numbers is not 0.
@@ -213,6 +251,20 @@ export interface DeckStatsSummary {
    * simply the sum of what arrived.
    */
   price: number | null;
+  /**
+   * {@link price}, split the way {@link owned} and {@link missing} split the copies: what the
+   * copies in hand are worth, and what the ones still to find would cost.
+   *
+   * Both are `null` exactly when {@link price} is, and never `0` in its place — a deck the
+   * marketplace quotes nothing for has no money to divide, and `$0.00 owned` under an em dash
+   * reads as *you own none of it* rather than as *nothing here is priced*.
+   *
+   * **They sum to {@link price} over the priced rows exactly**, which is what lets the Figures
+   * card write them as two lines under the total without a third saying what is missing from the
+   * arithmetic. The unpriced copies are outside all three and are {@link unpriced}'s to declare.
+   */
+  ownedPrice: number | null;
+  missingPrice: number | null;
   /** Copies the sum could not price, so a total that omits them does not lie by rounding
    *  down. **The holes are not the same at every marketplace** — a deck of etched printings is
    *  fully priced on TCGplayer and entirely unpriced on Cardmarket — so this number travels
@@ -234,113 +286,6 @@ export interface DeckStatsSummary {
   missing: number;
 }
 
-/** The basic land types, and the pie deep each is drawn in. Order is WUBRG, as printed. */
-const BASIC_TYPES: { type: string; color: string }[] = [
-  { type: "Plains", color: "var(--color-pie-w)" },
-  { type: "Island", color: "var(--color-pie-u)" },
-  { type: "Swamp", color: "var(--color-pie-b)" },
-  { type: "Mountain", color: "var(--color-pie-r)" },
-  { type: "Forest", color: "var(--color-pie-g)" },
-];
-
-/** The pie deep one colour letter is drawn in. */
-const PIP_COLOR: Record<PipKey, string> = {
-  W: "var(--color-pie-w)",
-  U: "var(--color-pie-u)",
-  B: "var(--color-pie-b)",
-  R: "var(--color-pie-r)",
-  G: "var(--color-pie-g)",
-};
-
-/** The two buckets that are not one of the five: gold for a card of several colours, the
- *  colourless grey for a card of none. */
-const GOLD = "var(--color-pie-gold)";
-const COLORLESS = "var(--color-pie-c)";
-
-/**
- * A row's own mana value: the synced column when there is one, the printed cost when there is
- * not, and `null` for a row that has neither.
- *
- * The same fallback `engine.ts` measures Tiny Leaders' ceiling with, through the same exported
- * arithmetic — two implementations of `{2/W}` would eventually disagree about a card.
- */
-function manaValue(card: DeckCard): number | null {
-  if (card.cmc !== null) return card.cmc;
-  return card.manaCost === null ? null : manaValueOf(card.manaCost);
-}
-
-/** The front face's type line. A modal double-faced card's back is routinely a land while its
- *  front is a spell, and a deck is cast from the front. */
-function front(typeLine: string | null): string {
-  return (typeLine ?? "").split("//")[0];
-}
-
-/**
- * Whether this row is a land — and it is the **type line** that decides, not the bucket the
- * deck list files it under.
- *
- * The two readings genuinely differ, and the difference is Urza's Saga (a Legendary Enchantment
- * Land), Tree of Tales (an Artifact Land) and Dryad Arbor (a Land Creature): `groupCards` files
- * a card under the *first* type printed on it, so all three head up the Enchantment, Artifact
- * and Creature bars — which is right for the bars, because those are the headings the reader
- * already sees over the rows.
- *
- * It is wrong everywhere else. A deckbuilder counts Urza's Saga among their lands, so a "Lands
- * 12" over a twenty-land Affinity deck is simply a false number; and all three cost nothing to
- * put onto the battlefield, so the curve would file them under 0 — which is the flood the curve
- * excludes lands to avoid in the first place. So the land/nonland split (the Lands figure, the
- * land pie, the curve, the average) asks the type line, the type bars keep the deck list's own
- * answer, and the one place they disagree is named here and pinned by
- * `a land that is not filed under Land is still a land to every chart but the type bars`.
- */
-function isLand(typeLine: string | null): boolean {
-  return front(typeLine).includes("Land");
-}
-
-/**
- * The type bars: one per bucket something is in, in {@link TYPE_BUCKETS}' order.
- *
- * Empty buckets are dropped rather than drawn — a deck with no planeswalkers has no
- * planeswalker bar — which is the same rule {@link drawable} applies to a pie, stated once for
- * each shape because they are counted differently (copies here, slices there).
- *
- * Exported for its test and for nothing else: it is `deckStats`' arithmetic, and a chart is only
- * as trustworthy as arithmetic somebody has checked.
- */
-export function typeCounts(cards: readonly DeckCard[]): TypeCount[] {
-  const order = new Map<string, number>();
-  const counts = new Map<string, TypeCount>();
-
-  for (const card of cards) {
-    // The **front** face decides: `type_line` carries both sides of a double-faced card
-    // separated by `//`, and the back of a modal DFC is routinely a land while its front is a
-    // spell. A deck's curve is cast from the front.
-    const label = TYPE_BUCKETS.find((bucket) => front(card.typeLine).includes(bucket)) ?? OTHER;
-    const at = TYPE_BUCKETS.indexOf(label as (typeof TYPE_BUCKETS)[number]);
-    const key = label.toLowerCase();
-
-    const seen = counts.get(key);
-    if (seen) seen.count += card.quantity;
-    else {
-      order.set(key, at < 0 ? TYPE_BUCKETS.length : at);
-      counts.set(key, { key, label, count: card.quantity });
-    }
-  }
-
-  return [...counts.values()].sort((a, b) => (order.get(a.key) ?? 0) - (order.get(b.key) ?? 0));
-}
-
-/**
- * The buckets a pie can draw: the ones with something in them.
- *
- * Dropped here rather than in the chart so that every distribution this module answers has the
- * same shape as `groupCards`' — a bucket nothing is in is not a bucket, and a legend row
- * reading 0 is a line that says nothing. The full list is what the caller sees dropped,
- * because a mono-red deck has one colour and not seven.
- */
-function drawable(slices: Slice[]): Slice[] {
-  return slices.filter((slice) => slice.count > 0);
-}
 
 /**
  * Every number the strip draws, from the rows the editor already has.
@@ -365,10 +310,9 @@ export function deckStats(cards: readonly DeckCard[], separateXGroup = false): D
   // kind it is.
   const counted = cards.filter((c) => c.categoryActive);
 
-  // The type bars, in this file's own bucketing — see {@link TYPE_BUCKETS} for why it is not
-  // the add path's, and `isLand` below for the one card the two answer differently about.
-  const typeDist = typeCounts(counted);
-  // Every other chart asks the type line instead; `isLand` is where that costs and buys.
+  // The Card distribution's bars are `deckBuckets.distribution` over these same rows, computed
+  // by the chart because the reader's `by` control chooses the cut. `isLand` is where the type
+  // line and the deck list's own filing disagree, and its doc says which job each answer serves.
   const lands = counted.filter((c) => isLand(c.typeLine));
   const nonlands = counted.filter((c) => !isLand(c.typeLine));
 
@@ -400,15 +344,36 @@ export function deckStats(cards: readonly DeckCard[], separateXGroup = false): D
   const sizes = (category: Tallied) => category.active && SIZE_KINDS.includes(category.kind);
 
   const curve = Array<number>(CURVE_BUCKETS).fill(0);
+  /**
+   * Nine buckets per colour, and the `C` arm is the one that is a partition rather than a
+   * membership — see {@link DeckStatsSummary.curveByColor}. Built up front so the one pass over
+   * the nonlands fills the deck's curve and the six colour curves together: they are the same
+   * cards bucketed the same way, and a second pass is a second chance to bucket them differently.
+   */
+  const curveByColor = emptyCurves();
+  const spellsByColor = emptyPips();
   let manaValued = 0;
   let manaValueTotal = 0;
   let unknownManaValue = 0;
   let variableCost = 0;
   for (const card of nonlands) {
-    const mv = manaValue(card);
+    const mv = cardManaValue(card);
     if (mv === null) {
       unknownManaValue += card.quantity;
       continue;
+    }
+    // Letters, never JSON: `colors` is `"WU"`, and `JSON.parse` throws on it. A gold spell is in
+    // every colour it is; a colourless one is in `C` and nowhere else, which is why this is a
+    // membership test for five keys and an emptiness test for the sixth.
+    const colors = card.colors ?? "";
+    for (const key of MANA_KEYS) {
+      const inIt = key === "C" ? colors.length === 0 : colors.includes(key);
+      if (!inIt) continue;
+      // **The numeric bucket, whatever `separateXGroup` says** — these six charts draw nine bars
+      // and never ten, so an X spell is drawn at what it costs with X at zero rather than
+      // dropped. See {@link DeckStatsSummary.curveByColor} for why the flag stops here.
+      curveByColor[key][curveBucket(mv)] += card.quantity;
+      spellsByColor[key] += card.quantity;
     }
     // **Before the bucketing and never instead of it**: an X spell costs what it costs with X
     // at zero (CR 202.3b), and the toggle above moves which bar it is drawn in rather than what
@@ -427,67 +392,59 @@ export function deckStats(cards: readonly DeckCard[], separateXGroup = false): D
     curve[Math.min(CURVE_BUCKETS - 1, Math.max(0, Math.floor(mv)))] += card.quantity;
   }
 
-  const pips: Record<PipKey, number> = { W: 0, U: 0, B: 0, R: 0, G: 0 };
+  // What the deck **asks for**, and what it can **make**. The two are set against each other by
+  // the Mana pips tile and by nothing else here; each is counted in its own vocabulary, and the
+  // reason they are not one loop is that one reads a cost and the other reads a column.
+  const pips = emptyPips();
+  const pipCards = emptyPips();
+  const sources = emptyPips();
+  let sourcesKnown = false;
   for (const card of counted) {
-    // Letters, never JSON: `colors` is `"WU"`, and `JSON.parse` throws on it.
-    for (const letter of card.colors ?? "") {
-      if (letter in pips) pips[letter as PipKey] += card.quantity;
+    // `addPips` over the one tokeniser this app parses every cost with — so `{W/U}` is one pip
+    // of each half and `{2/W}` one white pip, and no second spelling of that vocabulary can
+    // come to disagree with `deckPips.ts` about a Phyrexian hybrid.
+    const own = countPips(card.manaCost);
+    for (const key of MANA_KEYS) {
+      if (own[key] === 0) continue;
+      pips[key] += own[key] * card.quantity;
+      // The `· N cards` half: copies **asking** for this colour, however many pips each asks
+      // for. A card is counted once here and twice above if it prints `{B}{B}`.
+      pipCards[key] += card.quantity;
     }
-  }
 
-  const colorCounts = new Map<string, number>();
-  for (const card of nonlands) {
-    const colors = card.colors ?? "";
-    const key = colors.length === 0 ? "c" : colors.length === 1 ? colors : "gold";
-    colorCounts.set(key, (colorCounts.get(key) ?? 0) + card.quantity);
+    // `null` is *this row predates the column*; `""` is *this card makes no mana*. One row
+    // answering at all is enough to know the column is populated — what is left null after that
+    // is an orphan, which has no answer to give.
+    if (card.producedMana !== null) sourcesKnown = true;
+    for (const key of producedKeys(card.producedMana)) sources[key] += card.quantity;
   }
-  const colorDist: Slice[] = drawable([
-    ...MANA_LINE_KEYS.map((key) => ({
-      key,
-      label: MANA_LABEL[key],
-      count: colorCounts.get(key) ?? 0,
-      color: PIP_COLOR[key],
-    })),
-    { key: "gold", label: "Multicolor", count: colorCounts.get("gold") ?? 0, color: GOLD },
-    { key: "c", label: "Colorless", count: colorCounts.get("c") ?? 0, color: COLORLESS },
-  ]);
-
-  const landCounts = new Map<string, number>();
-  for (const card of lands) {
-    const line = front(card.typeLine);
-    const printed = BASIC_TYPES.filter((b) => line.includes(b.type));
-    const key = printed.length === 1 ? printed[0].type : printed.length > 1 ? "multi" : "other";
-    landCounts.set(key, (landCounts.get(key) ?? 0) + card.quantity);
-  }
-  const landDist: Slice[] = drawable([
-    ...BASIC_TYPES.map(({ type, color }) => ({
-      key: type,
-      label: type,
-      count: landCounts.get(type) ?? 0,
-      color,
-    })),
-    { key: "multi", label: "Multi-type", count: landCounts.get("multi") ?? 0, color: GOLD },
-    { key: "other", label: "Other lands", count: landCounts.get("other") ?? 0, color: COLORLESS },
-  ]);
 
   let price = 0;
   let priced = 0;
   let unpriced = 0;
   let owned = 0;
   let missing = 0;
+  let ownedPrice = 0;
+  let missingPrice = 0;
   for (const card of counted) {
+    // The row badge's own arithmetic, added up: a claim is clamped to what the row wants, and
+    // a deck cannot be more than fully covered.
+    const have = Math.min(card.ownedQuantity, card.quantity);
+    const short = card.quantity - have;
+    owned += have;
+    missing += short;
     // A copy the selected marketplace has never quoted is counted as unpriced, never charged
     // at another marketplace's rate — there is no other number on the row to charge it at.
     if (card.unitPrice === null) unpriced += card.quantity;
     else {
       price += card.unitPrice * card.quantity;
       priced += card.quantity;
+      // The same money split the way the shortfall is: what the copies in hand are worth, and
+      // what the ones still to find would cost. They sum to `price` over the priced rows
+      // exactly, which is what lets the Figures card write them under the total.
+      ownedPrice += card.unitPrice * have;
+      missingPrice += card.unitPrice * short;
     }
-    // The row badge's own arithmetic, added up: a claim is clamped to what the row wants, and
-    // a deck cannot be more than fully covered.
-    const have = Math.min(card.ownedQuantity, card.quantity);
-    owned += have;
-    missing += card.quantity - have;
   }
 
   return {
@@ -495,20 +452,42 @@ export function deckStats(cards: readonly DeckCard[], separateXGroup = false): D
     sized: categories.filter(sizes).reduce((n, category) => n + category.quantity, 0),
     byCategory: categories.map(counts),
     elsewhere: categories.filter((category) => category.active && !sizes(category)).map(counts),
+    inactive: cards
+      .filter((card) => !card.categoryActive)
+      .reduce((n, card) => n + card.quantity, 0),
     lands: copiesOf(lands),
     nonlands: copiesOf(nonlands),
     unknownManaValue,
     curve,
     variableCost: separateXGroup ? variableCost : null,
     pips,
-    colorDist,
-    landDist,
-    typeDist,
+    pipCards,
+    sources,
+    sourcesKnown,
+    curveByColor,
+    spellsByColor,
     averageManaValue: manaValued === 0 ? null : manaValueTotal / manaValued,
     price: priced === 0 ? null : price,
+    // `null` with the total, and for the total's reason: a deck nothing is priced at is a deck
+    // with no money to split, and `$0.00 owned` under an em dash is a figure the reader would
+    // read as *you own none of it* rather than as *this marketplace quotes none of it*.
+    ownedPrice: priced === 0 ? null : ownedPrice,
+    missingPrice: priced === 0 ? null : missingPrice,
     unpriced,
     owned,
     missing,
+  };
+}
+
+/** Six empty nine-bucket curves — one array per key, never one array shared six ways. */
+function emptyCurves(): Record<ManaKey, number[]> {
+  return {
+    W: Array<number>(CURVE_BUCKETS).fill(0),
+    U: Array<number>(CURVE_BUCKETS).fill(0),
+    B: Array<number>(CURVE_BUCKETS).fill(0),
+    R: Array<number>(CURVE_BUCKETS).fill(0),
+    G: Array<number>(CURVE_BUCKETS).fill(0),
+    C: Array<number>(CURVE_BUCKETS).fill(0),
   };
 }
 
@@ -548,20 +527,53 @@ export interface MissingWrite {
  * the arithmetic is a single pass over a few hundred rows and a stats block that lags the
  * stepper beside it is worse than one that costs a microsecond.
  *
- * Four charts and a pips row, and the four are the direction doc's sanctioned uses of colour
- * outside the mana line: a deck's colours *are* Magic meaning. Nothing here animates, nothing
- * here is a chart library, and every chart carries its numbers as text — the drawing is
- * `aria-hidden` and the words beside it are the whole accessible story.
+ * Nothing here animates, nothing here is a chart library, and every chart carries its numbers as
+ * text — the drawing is `aria-hidden` and the words beside it are the whole accessible story.
+ * Colour is used only where it carries Magic meaning, which for the charts means a colour's own
+ * `MANA_FILL`: a deck's colours *are* the game's vocabulary, and every other bar is the accent.
  *
- * **The four figures that headed this band are the header's ledger line now** (2026-08-24), and
- * the `marketplace` prop went with the one of them that quoted money. Cards, lands, average mana
- * value and price were drawn under two screens of deck, which is the wrong end of the page for
- * the numbers a reader edits *against*; `DeckLedger` draws them from a `deckStats` call of its
- * own over the same rows, so there is still one definition of each. What stays here is what
- * needs the room: the pips, the shortfall and the **three** presses that act on it, and the
- * charts. The second of those arrived with the pull (2026-09-03) and the third with the add
- * (2026-09-08) — they are `onPull` and `onAddMissing` below, the shortfall's other two answers,
- * and the argument for them living here rather than in the header is made on {@link Missing}.
+ * ## The redesign of 2026-09-10 — what it is now, and what it stopped being
+ *
+ * The band was a pips row and four charts laid across the page under the deck
+ * ([issue #389](https://github.com/Msgaihede/mtg-grimoire/issues/389)). It is **seven bordered
+ * readouts in two wrapping columns, behind a disclosure**:
+ *
+ * | Readout | Answers |
+ * | --- | --- |
+ * | Mana pips | what the deck's costs **ask for**, set against what its lands and rocks can **make** |
+ * | Card distribution | copies per bucket, cut four ways by one control |
+ * | Opening hand odds | the hypergeometric chance of meeting a bucket in an opening hand |
+ * | Mana curve | the nine buckets and the average |
+ * | Curve by color | the same nine, six times, one per colour |
+ * | Figures | Cards, Price, Owned, Matches theory |
+ * | Collection | the three presses that act on a shortfall |
+ *
+ * **The two pies are gone.** `Colors` and `Lands` answered *what is this deck made of* with two
+ * circles whose legends were the only readable part; the six colour curves answer the same
+ * question with the mana **value** attached, and the distribution's `by Types` bars carry the
+ * land count in a bar a reader can compare against the others. Nothing was lost that a bar did
+ * not say better, and `Slice`, `wedge` and `Pie` went with them.
+ *
+ * **A disclosure, which reverses "there is no control that hides them"** (2026-08-14 → now).
+ * That rule was written when the band was four charts on one line; seven readouts is two screens,
+ * and a finished deck is one a reader scrolls past every time they open it. `decks.stats_open`
+ * is `DEFAULT 1`, so this takes nothing away from any deck that exists — see the `open` prop.
+ *
+ * **Bars are not buttons.** The design this is built from makes every bar a control that narrows
+ * the deck list beneath it. That is a cross-component feature reaching into all four of the
+ * editor's views, and it is deliberately not in this pass — so there is no filter chip in the
+ * header and nothing in here is pressable but the disclosure and the Collection card's presses.
+ *
+ * **The five figures that headed this band are still the header's ledger line** (2026-08-24) and
+ * the Figures card does not take them back. `DeckLedger` draws Cards, lands, average mana value,
+ * price and owned from a `deckStats` call of its own over the same rows — the numbers a reader
+ * edits *against*, which belong above the deck rather than below two screens of it. What Figures
+ * adds is the **split**: what the price is owed against, what is still missing, and how far the
+ * list has got toward the plan, which is on no other surface in the app.
+ *
+ * The three shortfall presses arrived with the pull (2026-09-03), the add (2026-09-08) and the
+ * wishlist before both — they are `onPull` and `onAddMissing` below, and the argument for them
+ * living here rather than in the header is made on {@link Missing}.
  *
  * **The wishlist press gained a destination and the count of presses did not move** (issue #437,
  * 2026-09-09). `Send missing to wishlist` filed at the wishlist root and offered no choice; it
@@ -578,8 +590,9 @@ export interface MissingWrite {
  * shop for cards there is nothing to be short of. Absent rather than greyed, which is this
  * feature's standing answer (`DeckSettingsDialog.tsx`, `DeckEditor.tsx`) — and **the `All N owned.`
  * fallback goes with them**, because it is the same sentence read from the other end and the
- * worst of the two to show a reader who owns none of it. The charts and the pips are untouched: a
- * curve is a fact about the list, not about a binder.
+ * worst of the two to show a reader who owns none of it. It takes the Figures card's `Owned`
+ * entry with it now for the same reason. The charts and the pips are untouched: a curve is a fact
+ * about the list, not about a binder.
  */
 export function DeckStats({
   cards,
@@ -587,9 +600,56 @@ export function DeckStats({
   onPull,
   onAddMissing,
   tracksCollection,
+  marketplace,
+  theory,
+  open,
+  onToggle,
   separateXGroup = false,
 }: {
   cards: readonly DeckCard[];
+  /**
+   * The marketplace the deck was **read** at — what the Price figure's money is in.
+   *
+   * **It came back, and the reason it left is the reason it is here again.** The prop was dropped
+   * on 2026-08-24 when the four figures moved to `DeckLedger`, because nothing left in the band
+   * quoted money. The Figures card quotes three sums, so the band needs the currency once more —
+   * and it is a **prop rather than `useMarketplace()`** for the same reason `DeckLedger` takes
+   * one: this component is rendered in stories with a hand-rolled `send` precisely so it needs no
+   * `QueryClientProvider`, and a query hook here would take that back.
+   *
+   * The rows arrived priced by the backend at this marketplace, so nothing here chooses between
+   * two figures — it is the **currency** that is wanted, never a second lookup of a price.
+   */
+  marketplace: Marketplace;
+  /**
+   * How far the live list has got toward the deck's plan, or `null` where there is no plan —
+   * `theoryProgress` in `theoryMatch.ts`, answered by the host off the `theorySlots` query it is
+   * already making for the per-card marks.
+   *
+   * **Answered by the host and not asked for here**, which is this band's standing rule: a second
+   * read of the plan would be a second answer to *what does this deck need* that could disagree
+   * with the marks on the cards. `DeckEditor` holds the one query and both readers derive from it.
+   *
+   * `null` is a deck with no plan, and the Figures card draws no entry at all for it — `0 of 0`
+   * reads as failure where the honest statement is absence.
+   */
+  theory: { have: number; want: number } | null;
+  /**
+   * `decks.stats_open` — whether the band is expanded.
+   *
+   * **Open is what every existing deck is**, which is the one way this differs from
+   * `DeckTokensPanel`'s identical prop: the column defaults to `1` because this band has been on
+   * screen for every deck since 2026-08-14 with no control that hides it, so a collapsed default
+   * would be a feature silently removed on upgrade rather than a default. See
+   * `DeckRow.statsOpen`.
+   *
+   * **The arithmetic runs whether or not the charts are drawn**, and that is deliberate rather
+   * than an oversight: it is a single pass over a few hundred rows the editor already holds, and
+   * gating it on `open` would buy nothing measurable while making the first frame after a press
+   * the one that does the work.
+   */
+  open: boolean;
+  onToggle: (next: boolean) => void;
   /**
    * The wishlist write, narrowed — see {@link MissingWrite}.
    *
@@ -679,6 +739,7 @@ export function DeckStats({
   separateXGroup?: boolean;
 }) {
   const stats = useMemo(() => deckStats(cards, separateXGroup), [cards, separateXGroup]);
+  const bodyId = useId();
   const sendRef = useRef<HTMLButtonElement>(null);
   const wasPending = useRef(false);
   /**
@@ -770,93 +831,101 @@ export function DeckStats({
   const failure = send.isError ? ipcError(send.error) : null;
 
   return (
-    <div className="flex shrink-0 flex-col gap-3">
-
-      <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
-        <Pips pips={stats.pips} />
-        {/* **The whole shortfall half, or none of it** — the count, the three presses, the
-            `All N owned.` fallback and the two answer lines are one component precisely so that
-            a deck with no binder behind it can be given none of them in one place. A virtual
-            deck's rows are live rows with `ownedQuantity: 0`, so every one of those sentences
-            would be true of the arithmetic and false about the reader.
-
-            The pips stay: what colours a deck wants is a fact about the list, and this row is
-            the only line the two share. It is `flex-wrap`, so losing the second cluster costs
-            the first nothing. */}
-        {tracksCollection && (
-          <Missing
-            stats={stats}
-            pending={send.isPending}
-            spent={spent}
-            folderId={folderId}
-            onFolderChange={setFolderId}
-            onSend={() => {
-              setSentFor({ missing: stats.missing, folderId });
-              send.mutate(folderId);
-            }}
-            onPull={onPull}
-            onAddMissing={onAddMissing}
-            sendRef={sendRef}
-            added={added}
-            failure={failure}
+    <section
+      aria-label={STATS_HEADING}
+      className="flex shrink-0 flex-col gap-3 border-t border-border pt-3"
+    >
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-controls={bodyId}
+          onClick={() => onToggle(!open)}
+          className={cn("flex items-center gap-1.5 rounded-md text-sm", PRESS, FOCUS)}
+        >
+          {/* One glyph rotated, never two swapped: a different element in the same slot
+              teleports rather than turning. `SortableHeader`'s rule, and `DeckTokensPanel`
+              draws its own disclosure character for character the same way. */}
+          <ChevronRight
+            aria-hidden="true"
+            className={cn(
+              "size-4 shrink-0 transition-transform duration-[var(--duration-fast)] ease-standard",
+              "motion-reduce:transition-none",
+              open && "rotate-90",
+            )}
           />
-        )}
+          {STATS_HEADING}
+        </button>
       </div>
 
-      {stats.copies > 0 && (
-        // The clusters wrap rather than truncate: at 1024px with the card pane docked beside
-        // the editor this row is a few hundred pixels wide, and a chart whose numbers are cut
-        // off is a chart that has stopped being one.
-        <div className="flex flex-wrap items-start gap-x-6 gap-y-4">
-          <Curve
-            curve={stats.curve}
-            unknown={stats.unknownManaValue}
-            variable={stats.variableCost}
-          />
-          <Pie caption="Colors" slices={stats.colorDist} />
-          <Pie caption="Lands" slices={stats.landDist} />
-          <TypeBars types={stats.typeDist} />
-        </div>
-      )}
-    </div>
-  );
-}
+      {/* **Always in the tree, empty while shut**, so `aria-controls` always resolves — the
+          tokens band's own arrangement, and the reason a reader's screen reader is never told
+          about a region that is not there. */}
+      <div id={bodyId}>
+        {open &&
+          (stats.copies === 0 ? (
+            <p className="text-sm text-dim">
+              Nothing to measure yet — add a card and the charts fill in.
+            </p>
+          ) : (
+            // **Two columns that wrap rather than a container query**, which is a deliberate
+            // refusal: `container-type: inline-size` makes its box the containing block for
+            // every `fixed` descendant, and the Collection card below holds controls that open
+            // anchored layers. A wrap costs nothing and cannot reparent a scrim.
+            //
+            // The columns wrap rather than truncate for the reason the old band's clusters did:
+            // at 1024px with the card pane docked beside the editor this is a few hundred pixels
+            // wide, and a chart whose numbers are cut off is a chart that has stopped being one.
+            <div className="flex flex-wrap items-start gap-3">
+              <div className="flex min-w-[22rem] flex-1 flex-col gap-3">
+                <ManaPips stats={stats} />
+                <CardDistribution cards={cards} separateXGroup={separateXGroup} />
+              </div>
+              <div className="flex min-w-[22rem] flex-1 flex-col gap-3">
+                <ManaCurveChart stats={stats} />
+                <CurveByColor stats={stats} />
+                <DeckFigures
+                  stats={stats}
+                  marketplace={marketplace}
+                  tracksCollection={tracksCollection}
+                  theory={theory}
+                />
+                {/* **The whole shortfall half, or none of it** — the three presses, the
+                    destination picker and the two answer lines are one component precisely so
+                    that a deck with no binder behind it can be given none of them in one place.
+                    A virtual deck's rows are live rows with `ownedQuantity: 0`, so every one of
+                    those sentences would be true of the arithmetic and false about the reader.
 
-/**
- * The castability line: one dot per colour, in the pie deeps, with the copies behind it.
- *
- * All five are drawn whether or not the deck plays them — the row is a shape a reader learns
- * to read at a glance, and a row that changes width with the deck is one they have to read
- * again every time. A colour the deck has none of is dimmed rather than dropped.
- */
-function Pips({ pips }: { pips: Record<PipKey, number> }) {
-  const tip = useTooltip();
-  return (
-    <div
-      role="group"
-      aria-label="Color pips"
-      {...tip("Copies of each colour. A two-colour card counts in both.")}
-      className="flex items-center gap-3"
-    >
-      {MANA_LINE_KEYS.map((key) => (
-        <span key={key} className="flex items-center gap-1.5">
-          <span
-            aria-hidden="true"
-            className="size-3 rounded-full"
-            style={{ backgroundColor: PIP_COLOR[key], opacity: pips[key] > 0 ? 1 : 0.3 }}
-          />
-          <span className="sr-only">{MANA_LABEL[key]}</span>
-          <span
-            className={cn(
-              "font-mono text-xs tabular-nums",
-              pips[key] > 0 ? "text-text" : "text-dim",
-            )}
-          >
-            {pips[key]}
-          </span>
-        </span>
-      ))}
-    </div>
+                    **And nothing to be short of is nothing to draw**: every control in here is
+                    already gated on `missing > 0`, so without this test the card would be a
+                    heading over an empty box on every finished deck. What a reader gets instead
+                    is the Figures card's `every copy` note directly above — the same fact, said
+                    once, by the readout whose job is facts. */}
+                {tracksCollection && stats.missing > 0 && (
+                  <StatsCard title={COLLECTION_HEADING}>
+                    <Missing
+                      stats={stats}
+                      pending={send.isPending}
+                      spent={spent}
+                      folderId={folderId}
+                      onFolderChange={setFolderId}
+                      onSend={() => {
+                        setSentFor({ missing: stats.missing, folderId });
+                        send.mutate(folderId);
+                      }}
+                      onPull={onPull}
+                      onAddMissing={onAddMissing}
+                      sendRef={sendRef}
+                      added={added}
+                      failure={failure}
+                    />
+                  </StatsCard>
+                )}
+              </div>
+            </div>
+          ))}
+      </div>
+    </section>
   );
 }
 
@@ -886,8 +955,17 @@ function Pips({ pips }: { pips: Record<PipKey, number> }) {
  *
  * **Nothing here knows about a virtual deck, and that is deliberate**: `tracksCollection` is read
  * once at {@link DeckStats}, which draws this component or does not. A fourth arm inside these
- * hundred lines would be a fourth way for the count, the buttons and the `All N owned.` fallback
- * to come apart from each other — and the whole point is that they arrive and leave together.
+ * hundred lines would be a fourth way for the count, the buttons and the two answer lines to come
+ * apart from each other — and the whole point is that they arrive and leave together.
+ *
+ * **The `All N owned.` fallback is gone, and it was deleted rather than moved** (2026-09-10). It
+ * was the other arm of the count's ternary: nothing missing, so a dim line saying so where the
+ * three presses would be. The band draws this component inside its `Collection` card and gates
+ * that card on `missing > 0`, because every control in here is already gated on it — without the
+ * gate the card would be a heading over one sentence on every finished deck. That sentence is the
+ * Figures card's `every copy` note directly above, which is the same fact said by the readout
+ * whose job is facts. So the arm became unreachable and unreachable code that looks like a feature
+ * is worse than none.
  *
  * **The destination is a fourth control and emphatically not a fourth peer** (issue #437). The
  * three above are three *answers* to the shortfall and their class lists are identical character
@@ -1150,11 +1228,7 @@ function Missing({
             />
           </div>
         </>
-      ) : (
-        stats.copies > 0 && (
-          <p className="font-mono tabular-nums text-dim">All {count(stats.copies)} owned.</p>
-        )
-      )}
+      ) : null}
 
       {/* Mounted for the life of the strip and swapped into: a live region that appears
           together with its own text announces nothing, because there was no change for a
@@ -1209,256 +1283,6 @@ function Missing({
           </motion.p>
         )}
       </AnimatePresence>
-    </div>
-  );
-}
-
-/**
- * The curve: nine numeric buckets over the deck's nonlands, and a tenth `X` bar behind them
- * when the deck is splitting its `{X}` spells out.
- *
- * Data-quiet by the direction's own instruction — a surface track with an accent fill, no
- * five-colour anything, no motion. The whole axis is drawn even where a bucket is empty,
- * because a gap in a curve is a fact about the deck — and that holds for the X bar too: with
- * the toggle on and no X spells in the deck it draws at zero, which is the honest answer to
- * "where did my X spells go".
- *
- * **Every cell is 20px, including in the ten-bar arm, and it briefly was not.** While the stats
- * block was a 280px aside beside the deck it had **250px** of content (280 less `p-3.5` both
- * sides and a 1px border) and drew its own scrollbar: nine 20px cells at a 4px gap are 212, ten
- * would be 236, and 14px is not enough for a scrollbar the platform draws at roughly 15 — so the
- * ten-bar arm narrowed to 18px (`10 × 18 + 9 × 4 = 216`) rather than take 24px of width off the
- * deck column, which `DECK_FLOOR`'s table measured against that 280.
- *
- * **That constraint is gone and so is the compromise.** The block is a full-width band below the
- * deck now, and it no longer scrolls — `DeckEditor`'s section does. There is no 250px budget and
- * no scrollbar to leave room for, so a tenth bar costs nothing anybody was spending and the
- * chart goes back to one cell width in both arms. Kept here as history because the narrowing was
- * deliberate and correct for one afternoon, and a reader finding `w-5` in a doc that once
- * explained an 18px cell deserves to know which way it went.
- *
- * The **gap** is what has stayed put throughout: 4px is the whole of what makes two `bg-surface`
- * tracks read as two bars, and closing it to buy width would turn the chart into one block.
- */
-function Curve({
-  curve,
-  unknown,
-  variable,
-}: {
-  curve: number[];
-  unknown: number;
-  /** Copies with `{X}` in their cost, or `null` for a deck that is not splitting them out —
-   *  {@link DeckStatsSummary.variableCost}, drawn as this chart's last bar. */
-  variable: number | null;
-}) {
-  const id = useId();
-  const max = Math.max(...curve, variable ?? 0, 1);
-  // Written out whole rather than built from a number: Tailwind scans source text for class
-  // names, so a width assembled at runtime emits no rule at all.
-  const cell = "w-5";
-  return (
-    <div className="min-w-0">
-      <p id={id} className="text-xs text-dim">
-        Mana curve
-      </p>
-      <ul aria-labelledby={id} className="mt-1.5 flex items-end gap-1">
-        {curve.map((count, mv) => {
-          const last = mv === curve.length - 1;
-          return (
-            <Bar
-              key={mv}
-              cell={cell}
-              count={count}
-              max={max}
-              label={last ? `${mv}+` : `${mv}`}
-              // The one place the pair is spoken, so a screen reader hears "8 cards at mana
-              // value 1" rather than the two loose numbers the eye reads as a column.
-              said={`at mana value ${last ? `${mv} or more` : mv}`}
-            />
-          );
-        })}
-        {variable !== null && (
-          // Last, and behind the open-ended bucket: X is not a number, so it cannot sit on the
-          // axis anywhere the eye would read as a quantity. The word the sentence uses is the
-          // reader's own — "with X in their cost" — rather than the `{X}` the card prints,
-          // because braces are not something a screen reader says.
-          <Bar cell={cell} count={variable} max={max} label="X" said="with X in their cost" />
-        )}
-      </ul>
-      {unknown > 0 && (
-        <p className="mt-1 text-[0.7rem] text-dim">{unknown} with no mana value, not counted</p>
-      )}
-    </div>
-  );
-}
-
-/**
- * One column of the curve: a count, a track with a fill, and a label — all three `aria-hidden`,
- * with a single `sr-only` sentence carrying the pair.
- *
- * Its own component because the X bar has to be *the same bar* as the nine numbered ones rather
- * than a lookalike beside them: two spellings of a column is how one of them quietly loses its
- * sentence, and the sentence is the whole of what this chart says to a screen reader.
- */
-function Bar({
-  cell,
-  count,
-  max,
-  label,
-  said,
-}: {
-  /** The column width, as a whole Tailwind class — see {@link Curve} for the arithmetic. */
-  cell: string;
-  count: number;
-  max: number;
-  /** What the eye reads under the bar: `0`…`7`, `8+`, `X`. */
-  label: string;
-  /** The tail of the spoken sentence, after "3 cards". */
-  said: string;
-}) {
-  return (
-    <li className={cn("flex flex-col items-center gap-1", cell)}>
-      <span className="sr-only">
-        {count} {count === 1 ? "card" : "cards"} {said}
-      </span>
-      <span
-        aria-hidden="true"
-        className="font-mono text-[0.7rem] leading-none tabular-nums text-dim"
-      >
-        {count}
-      </span>
-      <span
-        aria-hidden="true"
-        className="flex h-10 w-full items-end overflow-hidden rounded-sm bg-surface"
-      >
-        <span
-          className="w-full rounded-sm bg-accent"
-          style={{ height: `${(count / max) * 100}%` }}
-        />
-      </span>
-      <span
-        aria-hidden="true"
-        className="font-mono text-[0.7rem] leading-none tabular-nums text-dim"
-      >
-        {label}
-      </span>
-    </li>
-  );
-}
-
-/**
- * One wedge, as an SVG path.
- *
- * Hand-rolled because the whole chart is four numbers and an arc, and a charting library would
- * be a dependency, a bundle and a runtime `<style>` the shipped CSP refuses. Angles are turns
- * from twelve o'clock, clockwise, which is the direction a pie is read in.
- */
-function wedge(from: number, to: number, cx: number, cy: number, r: number): string {
-  const at = (turn: number) => {
-    const angle = (turn - 0.25) * 2 * Math.PI;
-    return [cx + r * Math.cos(angle), cy + r * Math.sin(angle)].map((v) => v.toFixed(2));
-  };
-  const [x1, y1] = at(from);
-  const [x2, y2] = at(to);
-  return `M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 ${to - from > 0.5 ? 1 : 0} 1 ${x2} ${y2} Z`;
-}
-
-/**
- * A pie, in the direction doc's pie deeps, with the legend that is its accessible story.
- *
- * Every slice handed here has something in it — `deckStats` has already dropped the empty
- * buckets, because five legend rows reading 0 above a mono-red deck are four lines of nothing
- * — so a pie with nothing at all to draw is a chart that is simply not drawn. A pie with one
- * slice is a circle rather than an arc: a wedge whose start and end meet draws no area at all,
- * which is a blank chart nobody would think to test for.
- */
-function Pie({ caption, slices: drawn }: { caption: string; slices: Slice[] }) {
-  const id = useId();
-  const total = drawn.reduce((n, s) => n + s.count, 0);
-  if (total === 0) return null;
-
-  let at = 0;
-  return (
-    <div className="min-w-0">
-      <p id={id} className="text-xs text-dim">
-        {caption}
-      </p>
-      <div className="mt-1.5 flex items-center gap-3">
-        <svg aria-hidden="true" viewBox="0 0 64 64" className="size-14 shrink-0">
-          {drawn.length === 1 ? (
-            <circle cx="32" cy="32" r="31" style={{ fill: drawn[0].color }} />
-          ) : (
-            drawn.map((slice) => {
-              const from = at;
-              at += slice.count / total;
-              return (
-                <path
-                  key={slice.key}
-                  d={wedge(from, at, 32, 32, 31)}
-                  style={{ fill: slice.color }}
-                  // A hairline of the table felt between wedges, so two deeps that sit next to
-                  // each other (black and blue) read as two.
-                  stroke="var(--color-bg)"
-                  strokeWidth="0.75"
-                />
-              );
-            })
-          )}
-        </svg>
-        <ul aria-labelledby={id} className="min-w-0 space-y-0.5 text-xs">
-          {drawn.map((slice) => (
-            <li key={slice.key} className="flex items-center gap-1.5">
-              <span
-                aria-hidden="true"
-                className="size-2 shrink-0 rounded-full"
-                style={{ backgroundColor: slice.color }}
-              />
-              <span className="min-w-0">{slice.label}</span>
-              <span className="ml-auto pl-2 font-mono tabular-nums text-dim">{slice.count}</span>
-            </li>
-          ))}
-        </ul>
-      </div>
-    </div>
-  );
-}
-
-/**
- * The type counts, as horizontal bars.
- *
- * Bars rather than a third pie: eight nameable categories is past the point where a pie can be
- * read, and a bar chart is the one chart that stays legible when the labels are words. The
- * counts are the deck list's own headings, so a bar here and a heading in a column are the
- * same number by construction.
- */
-function TypeBars({ types }: { types: TypeCount[] }) {
-  const id = useId();
-  if (types.length === 0) return null;
-  const max = Math.max(...types.map((t) => t.count), 1);
-  return (
-    // The one cluster that flexes — but capped: a bar is read against its neighbours, and at
-    // a wide window an uncapped track turns three creatures into a metre of gold (measured at
-    // ~1900px, where the bars dwarfed every number beside them). 28rem keeps the longest
-    // label + track + count readable in one eye span; the counts sit at the end of the
-    // *track* rather than of the fill so a column of them lines up and can be read down.
-    <div className="min-w-[11rem] max-w-md flex-1">
-      <p id={id} className="text-xs text-dim">
-        Card types
-      </p>
-      <ul aria-labelledby={id} className="mt-1.5 space-y-1">
-        {types.map((type) => (
-          <li key={type.key} className="flex items-center gap-2 text-xs">
-            <span className="w-24 shrink-0">{type.label}</span>
-            <span aria-hidden="true" className="h-2 min-w-0 flex-1 rounded-sm bg-surface">
-              <span
-                className="block h-2 rounded-sm bg-accent"
-                style={{ width: `${(type.count / max) * 100}%` }}
-              />
-            </span>
-            <span className="shrink-0 font-mono tabular-nums text-dim">{type.count}</span>
-          </li>
-        ))}
-      </ul>
     </div>
   );
 }

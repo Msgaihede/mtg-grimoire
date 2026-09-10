@@ -1,13 +1,17 @@
+import type { ComponentProps } from "react";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import type { DeckCard } from "@/lib/ipc";
+import { MARKETPLACES } from "@/lib/marketplace";
+import { pickOption } from "@/test-dropdown";
 import { card, islands } from "./validation/fixtures";
 import {
+  COLLECTION_HEADING,
   DeckStats,
   deckStats,
-  typeCounts,
+  STATS_HEADING,
   type DeckStatsSummary,
   type MissingWrite,
 } from "./DeckStats";
@@ -119,74 +123,27 @@ function xSpell(name: string, overrides: Partial<DeckCard> = {}): DeckCard {
 }
 
 /**
- * The type bars' own bucketing.
+ * A land that taps for the colours `produced` names — the fixture the Sources half is measured
+ * over.
  *
- * These cases came here from `ZoneColumn.test.tsx` with the function they test. While the deck
- * list was a column of type headings, one derivation served both the headings and the bars —
- * "a bar and the heading over the rows it counts must never be two derivations of one thing".
- * Schema v8's rebuild draws headings from `grouping.ts` (whose type vocabulary checks `Land`
- * first, so that a card is *filed* where a decklist would put it), so this is now one surface's
- * arithmetic and belongs with the surface.
+ * **`producedMana` is concatenated letters and never JSON**, which is `colors`' encoding one
+ * field over: `["W","U"]` is `"WU"` and `JSON.parse` throws on it.
+ *
+ * It sets `manaCost: null` and `colors: null` on purpose, so a row here contributes to the
+ * Sources half and to nothing else: a land that also printed a coloured cost would make every
+ * `sources` assertion below readable as a `pips` one.
  */
-describe("typeCounts", () => {
-  /**
-   * The eight printed types in the order they are printed on a card, and the ninth bucket that
-   * is not a type: `Other` is where a token, a scheme or a row whose printing has left the card
-   * database lands, and it sorts last because it is a remainder rather than a kind.
-   */
-  it("buckets by the printed types, in printed order, dropping the empty ones", () => {
-    const bars = typeCounts([
-      card({ name: "Wastes", typeLine: "Basic Land" }),
-      card({ name: "Bolt", typeLine: "Instant" }),
-      card({ name: "Bear", typeLine: "Creature — Bear" }),
-      card({ name: "Relic", typeLine: "Artifact" }),
-    ]);
-
-    expect(bars.map((b) => b.label)).toEqual(["Creature", "Instant", "Artifact", "Land"]);
+function dual(name: string, produced: string, quantity = 1): DeckCard {
+  return card({
+    name,
+    typeLine: "Land",
+    manaCost: null,
+    cmc: 0,
+    colors: null,
+    producedMana: produced,
+    quantity,
   });
-
-  /** A card with two types is filed under the first one printed order names — an Artifact
-   *  Creature is a creature to everyone who has ever built a deck. */
-  it("files a card with two types under the earlier of them", () => {
-    expect(
-      typeCounts([card({ name: "Golem", typeLine: "Artifact Creature — Golem" })]).map(
-        (b) => b.label,
-      ),
-    ).toEqual(["Creature"]);
-  });
-
-  /** A double-faced card is what its front says it is: the back of a werewolf is still a
-   *  creature, but the back of an adventure or a modal DFC often is not. */
-  it("reads the front face's type line and nothing after the slashes", () => {
-    expect(
-      typeCounts([card({ name: "Trap", typeLine: "Land // Instant — Adventure" })]).map(
-        (b) => b.label,
-      ),
-    ).toEqual(["Land"]);
-  });
-
-  /** The orphan case: `deck_cards LEFT JOIN cards` answers a row with nulls, and it is still a
-   *  card in the deck. It is counted rather than dropped. */
-  it("puts a row with no type line in Other, last", () => {
-    expect(
-      typeCounts([
-        card({ name: "Ghost", typeLine: null }),
-        card({ name: "Bolt", typeLine: "Instant" }),
-      ]).map((b) => b.label),
-    ).toEqual(["Instant", "Other"]);
-  });
-
-  /** A count on a deck is copies, never rows — four Bolts are four cards. */
-  it("counts copies rather than rows", () => {
-    const bars = typeCounts([
-      card({ name: "Bolt", typeLine: "Instant", quantity: 4 }),
-      card({ name: "Bolt2", typeLine: "Instant", quantity: 2 }),
-    ]);
-
-    expect(bars).toHaveLength(1);
-    expect(bars[0].count).toBe(6);
-  });
-});
+}
 
 /**
  * `deckStats`, under the name the assertions below were written against.
@@ -194,7 +151,7 @@ describe("typeCounts", () => {
  * It took a currency while every row carried two prices; the rows carry one now, priced by the
  * backend at the marketplace the deck was read at, so there is nothing to pass. The alias
  * stays because it reads as "the ordinary case" at forty call sites that are about curves,
- * pies and sizes rather than about money.
+ * pips and sizes rather than about money.
  */
 const usdStats = (cards: readonly DeckCard[]) => deckStats(cards);
 
@@ -331,23 +288,89 @@ describe("deckStats", () => {
     expect(stats.variableCost).toBe(0);
   });
 
-  /** Pips, not cards: a WU card is white *and* blue, which is what makes this the "what can
-   *  this deck cast" measure rather than a second colour pie. */
-  it("counts pips per colour, so a two-colour card feeds both", () => {
+  /**
+   * **Pips as a card prints them, which is what this field stopped meaning something else on
+   * 2026-09-10.** It counted *copies of cards of that colour*, read off `colors`, so
+   * `{1}{B}{B}` on four copies was 4; it is the demand a manabase has to meet now, so it is 8.
+   *
+   * The fixture is deliberately the shape the two readings disagree about most: one card asking
+   * twice, four copies of it, beside a one-pip card at the same count. Under the old definition
+   * both rows read 4 and the assertion below fails on the black half alone — which is what makes
+   * this a claim about the change rather than about arithmetic that never moved.
+   *
+   * `C` is here for the second half of the same change: the old count was WUBRG and this one is
+   * all six keys, so a Sol Ring's `{1}` — generic, and **not** a pip — has to be told apart from
+   * an Eldrazi's `{C}`.
+   */
+  it("counts the pips a cost prints, twice over for a card that asks twice", () => {
     const stats = usdStats([
-      card({ name: "Fractured Identity", colors: "WU", quantity: 2 }),
-      card({ name: "Bolt", colors: "R", quantity: 4 }),
+      card({ name: "Bolas's Citadel", manaCost: "{1}{B}{B}", colors: "B", quantity: 4 }),
+      card({ name: "Bolt", manaCost: "{R}", colors: "R", quantity: 4 }),
+      card({ name: "Kozilek's Predator", manaCost: "{3}{C}{G}", colors: "G" }),
+      card({ name: "Sol Ring", manaCost: "{1}", colors: null, typeLine: "Artifact" }),
     ]);
 
-    expect(stats.pips).toEqual({ W: 2, U: 2, B: 0, R: 4, G: 0 });
+    expect(stats.pips).toEqual({ W: 0, U: 0, B: 8, R: 4, G: 1, C: 1 });
   });
 
-  /** `colors`, never `colorIdentity`: the curve strip describes what a card costs, and a
-   *  Kenrith in the command zone does not make the deck's spells five-coloured. */
-  it("takes the pips from a card's colours and not from its identity", () => {
-    const stats = usdStats([card({ name: "Ancestral", colors: "U", colorIdentity: "WUBRG" })]);
+  /**
+   * The `· N cards` half of a pip readout: copies **asking** for the colour, however many pips
+   * each asks for.
+   *
+   * It is the one number that separates *a deck of four double-black cards* from *a deck of
+   * eight single-black ones*, which read identically in {@link DeckStatsSummary.pips}. Both rows
+   * of the fixture are four copies, so a `pipCards` that had been left as a second alias for
+   * `pips` reads `8` on the black half.
+   */
+  it("counts the copies asking for a colour beside the pips they ask for", () => {
+    const stats = usdStats([
+      card({ name: "Bolas's Citadel", manaCost: "{1}{B}{B}", colors: "B", quantity: 4 }),
+      card({ name: "Bolt", manaCost: "{R}", colors: "R", quantity: 4 }),
+    ]);
 
-    expect(stats.pips).toEqual({ W: 0, U: 1, B: 0, R: 0, G: 0 });
+    expect(stats.pips).toEqual({ W: 0, U: 0, B: 8, R: 4, G: 0, C: 0 });
+    expect(stats.pipCards).toEqual({ W: 0, U: 0, B: 4, R: 4, G: 0, C: 0 });
+  });
+
+  /**
+   * **The cost and never `colors`**, which is where the two nearly always agree and the whole
+   * reason this field reads the printed string.
+   *
+   * A card whose colour comes from something other than its cost — a colour indicator, a back
+   * face, a land type — is a coloured card that makes no demand on a manabase at all, and this
+   * readout is entirely about demand. Ancestral Vision is the printing that says so: `{U}` in
+   * `colors`, no coloured symbol in its cost.
+   *
+   * `colorIdentity` is the second thing it is not, and for the older reason: a Kenrith in the
+   * command zone does not make the deck's spells five-coloured.
+   */
+  it("takes the pips from the printed cost and not from the card's colours", () => {
+    const stats = usdStats([
+      card({ name: "Ancestral Vision", manaCost: "{U}", colors: "U", colorIdentity: "WUBRG" }),
+      card({ name: "Suspended Vision", manaCost: "{0}", colors: "U", colorIdentity: "U" }),
+    ]);
+
+    expect(stats.pips).toEqual({ W: 0, U: 1, B: 0, R: 0, G: 0, C: 0 });
+    expect(stats.pipCards).toEqual({ W: 0, U: 1, B: 0, R: 0, G: 0, C: 0 });
+  });
+
+  /**
+   * A hybrid is one pip of each half and a twobrid is one pip of its colour — `addPips`' own
+   * vocabulary over the one tokeniser this app parses every cost with, reached from here rather
+   * than respelled.
+   *
+   * It is in this file because a second spelling of that vocabulary is exactly how two counters
+   * come to disagree about a Phyrexian hybrid, and `deckStats` is the counter the manabase
+   * readout is drawn from.
+   */
+  it("reads a hybrid as one pip of each half and a twobrid as one of its colour", () => {
+    const stats = usdStats([
+      card({ name: "Boros Charm", manaCost: "{R}{W}", colors: "RW" }),
+      card({ name: "Figure of Destiny", manaCost: "{R/W}", colors: "RW" }),
+      card({ name: "Beseech the Queen", manaCost: "{2/B}{2/B}{2/B}", colors: "B" }),
+    ]);
+
+    expect(stats.pips).toEqual({ W: 2, U: 0, B: 3, R: 2, G: 0, C: 0 });
   });
 
   it("averages mana value over nonlands only", () => {
@@ -425,45 +448,234 @@ describe("deckStats", () => {
     expect(stats.missing).toBe(3);
   });
 
-  /** Every nonland lands in exactly one bucket, so the buckets can be a pie. */
-  it("buckets nonlands into mono, multicolour and colourless", () => {
+  /**
+   * **A source is counted once in _every_ colour it makes**, which is what makes the six numbers
+   * an honest denominator for "what share of my mana can pay for black" and what stops them
+   * being a partition.
+   *
+   * The dual is the whole fixture: four copies, two colours, so the six keys sum to more copies
+   * than the deck holds sources. An implementation that filed a card under one colour — its
+   * first letter, say — reads `W 4, U 0` here and passes any test built out of monocoloured
+   * lands.
+   *
+   * **Copies and not mana.** Scryfall says *which* colours a card produces and never *how much*,
+   * so the Sol Ring below counts once for colourless exactly as a one-mana rock would.
+   */
+  it("counts a source once in every colour it makes", () => {
     const stats = usdStats([
-      card({ name: "Bolt", colors: "R", quantity: 4 }),
-      card({ name: "Duo", colors: "WU", quantity: 2 }),
-      card({ name: "Sol Ring", colors: null, typeLine: "Artifact" }),
-      islands(3),
+      dual("Hallowed Fountain", "WU", 4),
+      card({
+        name: "Sol Ring",
+        typeLine: "Artifact",
+        manaCost: "{1}",
+        cmc: 1,
+        colors: null,
+        producedMana: "C",
+      }),
     ]);
 
-    const counts = Object.fromEntries(stats.colorDist.map((s) => [s.label, s.count]));
-    expect(counts).toEqual({ Red: 4, Multicolor: 2, Colorless: 1 });
-    expect(stats.colorDist.reduce((n, s) => n + s.count, 0)).toBe(stats.nonlands);
-  });
-
-  /** And every land, by the basic types printed on its front face. */
-  it("buckets lands by their basic land types", () => {
-    const stats = usdStats([
-      islands(4),
-      card({ name: "Sacred Foundry", typeLine: "Land — Mountain Plains", quantity: 2 }),
-      card({ name: "Command Tower", typeLine: "Land", quantity: 1 }),
-      card({ name: "Mountain", typeLine: "Basic Land — Mountain", quantity: 3 }),
-    ]);
-
-    const counts = Object.fromEntries(stats.landDist.map((s) => [s.label, s.count]));
-    expect(counts).toEqual({ Island: 4, Mountain: 3, "Multi-type": 2, "Other lands": 1 });
-    expect(stats.landDist.reduce((n, s) => n + s.count, 0)).toBe(stats.lands);
+    expect(stats.sources).toEqual({ W: 4, U: 4, B: 0, R: 0, G: 0, C: 1 });
+    expect(stats.sourcesKnown).toBe(true);
+    // Five copies of cardboard against nine counted colours — said out loud, because it is the
+    // property that would look like a bug to anyone auditing the numbers against the deck.
+    expect(Object.values(stats.sources).reduce((n, count) => n + count, 0)).toBe(9);
   });
 
   /**
-   * The one card class where the two readings of "land" part company, and the reason each
-   * side is read the way it is.
+   * **The question has three answers and this is the third one.**
    *
-   * `typeCounts` files a card under the **first** type printed on it, so Urza's Saga heads up
-   * the Enchantment bar — which is right for the bars, because the question a bar answers is
-   * what a card *does*. Everywhere else the type line decides: a deckbuilder counts
-   * Urza's Saga among their lands, and it costs nothing to put onto the battlefield, so the
-   * curve would file it under 0 — the very flood the curve excludes lands to avoid.
+   * `sourcesKnown` is `false` only when *every* counted row came back `null` — a database that
+   * has not re-ingested since the corpus grew `produced_mana`, which is the state every existing
+   * install is in for up to a day. A deck of sixty spells and no lands is a real row of zeroes
+   * and must not read the same way, because the failure mode is a chart that is *confidently
+   * wrong* rather than one that is honestly absent.
+   *
+   * Both halves are asserted against the same six zeroes, which is the point: the arithmetic
+   * cannot tell them apart and this flag is the only thing that can.
    */
-  it("keeps a land that is not filed under Land a land to every chart but the type bars", () => {
+  it("says the sources question is unanswered when every row predates the column", () => {
+    const unsynced = usdStats([
+      card({ name: "Bolt", manaCost: "{R}", producedMana: null, quantity: 4 }),
+      card({
+        name: "Mountain",
+        typeLine: "Basic Land — Mountain",
+        manaCost: null,
+        cmc: 0,
+        colors: null,
+        producedMana: null,
+        quantity: 20,
+      }),
+    ]);
+
+    expect(unsynced.sourcesKnown).toBe(false);
+    expect(unsynced.sources).toEqual({ W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 });
+
+    // The same six zeroes, answered rather than unknown: sixty spells and no lands really do
+    // produce nothing, and a deck in that state is owed the chart rather than the apology.
+    const spellsOnly = usdStats([
+      card({ name: "Bolt", manaCost: "{R}", producedMana: "", quantity: 4 }),
+    ]);
+    expect(spellsOnly.sourcesKnown).toBe(true);
+    expect(spellsOnly.sources).toEqual({ W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 });
+  });
+
+  /**
+   * One row answering is enough, because one answer means the **column** is populated and what
+   * is left `null` after that is an orphan — a row whose printing has left the corpus, which has
+   * no answer to give and never will.
+   *
+   * Written as a pair with the row order reversed, so an implementation that latched on the
+   * *last* row it saw rather than on any of them fails one half of it.
+   */
+  it("counts the question answered as soon as one row answers", () => {
+    const orphan = card({ name: "Ghost", manaCost: null, typeLine: null, producedMana: null });
+    const island = dual("Island", "U", 1);
+
+    expect(usdStats([orphan, island]).sourcesKnown).toBe(true);
+    expect(usdStats([island, orphan]).sourcesKnown).toBe(true);
+    // …and the orphan contributes nothing to the counts either way.
+    expect(usdStats([orphan, island]).sources.U).toBe(1);
+  });
+
+  /**
+   * Six curves over the nonlands, and **a card is in every colour it is** — so a gold spell
+   * stands in two of them and the six sum to more than the nonland count.
+   *
+   * The `C` curve is the one key that partitions rather than overlaps: it is the cards with no
+   * colours at all, which is why it is an emptiness test rather than a membership one. Boros
+   * Charm is what separates the two readings — under a "file each card once" implementation the
+   * white curve reads 0 at mana value 2.
+   *
+   * **`colors` is letters and never JSON** (`"WU"`, on which `JSON.parse` throws), which this
+   * fixture would catch by drawing an empty curve for every coloured card.
+   */
+  it("draws a curve per colour, counting a gold spell in each of its own", () => {
+    const stats = usdStats([
+      card({ name: "Bolt", manaCost: "{R}", colors: "R", cmc: 1, quantity: 4 }),
+      card({ name: "Boros Charm", manaCost: "{R}{W}", colors: "RW", cmc: 2, quantity: 2 }),
+      card({
+        name: "Wastes Walker",
+        typeLine: "Creature — Eldrazi",
+        manaCost: "{3}",
+        colors: null,
+        cmc: 3,
+      }),
+      islands(10),
+    ]);
+
+    expect(stats.curveByColor.R[1]).toBe(4);
+    expect(stats.curveByColor.R[2]).toBe(2);
+    expect(stats.curveByColor.W[2]).toBe(2);
+    expect(stats.curveByColor.W[1]).toBe(0);
+    // Colourless is the partition: the Eldrazi is in `C` and in nothing else.
+    expect(stats.curveByColor.C[3]).toBe(1);
+    expect(stats.curveByColor.G).toEqual([0, 0, 0, 0, 0, 0, 0, 0, 0]);
+
+    // The caption over each curve, and the sum of that colour's own nine buckets.
+    expect(stats.spellsByColor).toEqual({ W: 2, U: 0, B: 0, R: 6, G: 0, C: 1 });
+    // Seven copies of nonland cardboard against nine counted spells — said out loud, because
+    // the overlap is exactly what a reader auditing these numbers against their deck would
+    // query. Boros Charm's two copies are in both the white curve and the red one.
+    expect(stats.nonlands).toBe(7);
+    expect(
+      Object.values(stats.spellsByColor).reduce((n, spells) => n + spells, 0),
+    ).toBeGreaterThan(stats.nonlands);
+  });
+
+  /**
+   * **`separateXGroup` deliberately does not reach the six colour curves**, which is the one
+   * place the flag stops. They are small charts read for their shape, and a tenth bar on each
+   * that six decks in a hundred would use is a column of white space on the other ninety-four.
+   *
+   * The deck's own curve is asserted beside it, so this is a claim about the two disagreeing on
+   * purpose rather than about the flag doing nothing at all.
+   */
+  it("leaves the colour curves alone when the deck splits its {X} spells out", () => {
+    const deck = [xSpell("Awakening", { colors: "B", quantity: 4 })];
+
+    expect(deckStats(deck, true).curve[3]).toBe(0);
+    expect(deckStats(deck, true).variableCost).toBe(4);
+    // Drawn at what it costs with X at zero, in both modes, in the black curve.
+    expect(deckStats(deck, true).curveByColor.B[3]).toBe(4);
+    expect(deckStats(deck).curveByColor.B[3]).toBe(4);
+  });
+
+  /**
+   * The copies in the piles the reader switched **off** — the second note under the Cards
+   * figure, and deliberately **not derivable** from the numbers beside it.
+   *
+   * `byCategory` carries every pile including the switched-off ones, so a caller subtracting to
+   * find this would be applying the switch a second time. The fixture holds all three classes at
+   * once — sized, elsewhere, switched off — so an implementation that counted `copies − sized`
+   * reads 12 rather than 9.
+   */
+  it("counts the copies in switched-off piles, apart from every other figure", () => {
+    const stats = usdStats([
+      spell("Bolt", 1, { quantity: 4 }),
+      spell("Pyroblast", 1, { categoryKind: "side", quantity: 3 }),
+      spell("Ghost", 5, { categoryKind: "maybe", quantity: 9 }),
+    ]);
+
+    expect(stats.inactive).toBe(9);
+    // In no other number: the headline counts 4, the copies counted anywhere count 7.
+    expect(stats.sized).toBe(4);
+    expect(stats.copies).toBe(7);
+  });
+
+  /**
+   * The total split the way the copies are: what the copies in hand are worth, and what the ones
+   * still to find would cost.
+   *
+   * **They sum to {@link DeckStatsSummary.price} over the priced rows exactly**, which is what
+   * lets the Figures card write them as two lines under the total with no third line accounting
+   * for the difference. The unpriced row is outside all three and is `unpriced`'s to declare.
+   *
+   * The fixture is short of copies of a row it is *partly* holding, because a split computed per
+   * **row** rather than per copy — all of a row's money on whichever side its first copy fell —
+   * reads `$20 / $0` here.
+   */
+  it("splits the price the way it splits the copies", () => {
+    const stats = usdStats([
+      spell("Bolt", 1, { quantity: 4, ownedQuantity: 1, unitPrice: 5 }),
+      spell("Bear", 2, { quantity: 2, ownedQuantity: 2, unitPrice: 3 }),
+      spell("Ghost", 3, { quantity: 2, ownedQuantity: 0, unitPrice: null }),
+    ]);
+
+    expect(stats.price).toBe(26);
+    expect(stats.ownedPrice).toBe(11);
+    expect(stats.missingPrice).toBe(15);
+    expect(stats.unpriced).toBe(2);
+    expect((stats.ownedPrice ?? 0) + (stats.missingPrice ?? 0)).toBe(stats.price);
+  });
+
+  /**
+   * **All three are `null` together, and never `0` in the total's place.** A deck this
+   * marketplace quotes nothing for has no money to divide, and `$0.00 owned` under an em dash
+   * reads as *you own none of it* rather than as *nothing here is priced*.
+   */
+  it("gives no owned or missing money for a deck nothing is priced at", () => {
+    const stats = usdStats([spell("Bolt", 1, { quantity: 4, ownedQuantity: 2, unitPrice: null })]);
+
+    expect(stats.price).toBeNull();
+    expect(stats.ownedPrice).toBeNull();
+    expect(stats.missingPrice).toBeNull();
+  });
+
+  /**
+   * The one card class where the two readings of "land" part company, and the reason `deckStats`
+   * reads the one it reads.
+   *
+   * A deckbuilder counts Urza's Saga among their lands, and it costs nothing to put onto the
+   * battlefield — so the curve would file all three of these under 0, which is the very flood
+   * the curve excludes lands to avoid. `isLand` reads the whole type line for that reason.
+   *
+   * **The other reading is the Card distribution's, and it is deliberately not asserted here any
+   * more**: its `by Types` cut files a card under the *first* type printed on it, so Urza's Saga
+   * heads up the Enchantment bar. That derivation moved to `deckBuckets.ts` with the chart in
+   * the 2026-09-10 redesign and is its module's to pin; what survives here is `deckStats`' own
+   * answer and the disagreement being on purpose.
+   */
+  it("keeps a land that is not filed under Land a land to the curve", () => {
     const stats = usdStats([
       card({ name: "Urza's Saga", typeLine: "Legendary Enchantment Land", cmc: 0, manaCost: null }),
       card({ name: "Tree of Tales", typeLine: "Artifact Land", cmc: 0, manaCost: null }),
@@ -474,16 +686,10 @@ describe("deckStats", () => {
     expect(stats.lands).toBe(3);
     expect(stats.nonlands).toBe(1);
     expect(stats.curve[0]).toBe(0);
-    expect(Object.fromEntries(stats.landDist.map((s) => [s.label, s.count]))).toEqual({
-      "Other lands": 3,
-    });
-    // The bars keep the deck list's answer, and the disagreement is deliberate.
-    expect(stats.typeDist.map((t) => t.label)).toEqual([
-      "Creature",
-      "Sorcery",
-      "Artifact",
-      "Enchantment",
-    ]);
+    // Nor in any colour's curve, which is the same rule read one field over: those six are over
+    // the nonlands, so a land drawn into one of them would be the flood in six charts instead.
+    expect(stats.curveByColor.C[0]).toBe(0);
+    expect(stats.spellsByColor.R).toBe(1);
   });
 
   /** The headline figure is the engine's `SIZE_KINDS` over the active categories, so the strip
@@ -514,22 +720,6 @@ describe("deckStats", () => {
     // Where the rest of the deck is — the active piles the size rule does not count, which is
     // the note under the headline figure and is not the switched-off Maybeboard.
     expect(stats.elsewhere.map((c) => c.name)).toEqual(["Sideboard", "Companion"]);
-  });
-
-  /** The type bars come from the deck list's own grouping, so a heading in a column and a
-   *  bar in the strip can never disagree. */
-  it("counts types in the deck list's own buckets", () => {
-    const stats = usdStats([
-      card({ name: "Bear", typeLine: "Creature — Bear", quantity: 2 }),
-      card({ name: "Bolt", typeLine: "Instant", quantity: 4 }),
-      islands(1),
-    ]);
-
-    expect(stats.typeDist).toEqual([
-      { key: "creature", label: "Creature", count: 2 },
-      { key: "instant", label: "Instant", count: 4 },
-      { key: "land", label: "Land", count: 1 },
-    ]);
   });
 
   /** The Maybeboard is the one predefined category seeded switched off, so it counts toward
@@ -618,18 +808,38 @@ describe("deckStats", () => {
 
 describe("DeckStats", () => {
   /**
-   * The strip, rendered.
+   * Everything the band needs that a given case is not about.
+   *
+   * **A builder rather than JSX repeated at every `rerender`**, which is what the 2026-09-10
+   * redesign forced: the band grew four required props (`marketplace`, `theory`, `open`,
+   * `onToggle`) and half the cases below re-render it two or three times. Spelled out at each
+   * site, a prop added later would be four edits per case and a case that quietly disagreed with
+   * its own first render.
    *
    * **`onPull` and `onAddMissing` both default to `null`**, which is the theory list's answer
-   * rather than the ordinary one — deliberately, because every case below this line is about the
-   * wishlist half, and either live callback would put another button into each of their queries
-   * for nothing. The cases that are about one of the other two presses pass it and say so.
+   * rather than the ordinary one — deliberately, because most cases below are about the wishlist
+   * half, and either live callback would put another button into each of their queries for
+   * nothing. The cases that are about one of the other two presses pass it and say so.
    *
-   * **`tracksCollection` defaults to `true`**, which is the ordinary deck and what every case
-   * above the virtual-deck block is a claim about — so those cases go on asserting the shortfall
-   * exactly as they did before the prop existed, which is the regression this change most needs
-   * to keep. The `false` arm is passed explicitly, and only there.
+   * **`tracksCollection` defaults to `true`**, the ordinary deck; **`open` defaults to `true`**,
+   * which is `decks.stats_open`'s own `DEFAULT 1` and therefore what every deck in the database
+   * is. Both `false` arms are passed explicitly, and only where they are the subject.
    */
+  type BandProps = ComponentProps<typeof DeckStats>;
+  const props = (over: Partial<BandProps> = {}): BandProps => ({
+    cards: [],
+    send: sender(),
+    onPull: null,
+    onAddMissing: null,
+    tracksCollection: true,
+    marketplace: MARKETPLACES.tcgplayer,
+    theory: null,
+    open: true,
+    onToggle: vi.fn(),
+    ...over,
+  });
+
+  /** The band, rendered. The positional arguments are the ones forty cases below already pass. */
   const strip = (
     cards: DeckCard[],
     send = sender(),
@@ -639,13 +849,7 @@ describe("DeckStats", () => {
   ) =>
     render(
       <TooltipProvider>
-        <DeckStats
-          tracksCollection={tracksCollection}
-          cards={cards}
-          send={send}
-          onPull={onPull}
-          onAddMissing={onAddMissing}
-        />
+        <DeckStats {...props({ cards, send, onPull, onAddMissing, tracksCollection })} />
       </TooltipProvider>,
     );
 
@@ -658,52 +862,277 @@ describe("DeckStats", () => {
    * *press* was made against, not off a mutation flag that stays true forever.
    */
   async function press(cards: DeckCard[], settled: MissingWrite) {
-    const view = render(
-      <DeckStats
-        tracksCollection
-        cards={cards}
-        send={sender()}
-        onPull={null}
-        onAddMissing={null}
-      />,
-    );
+    const view = render(<DeckStats {...props({ cards })} />);
     await userEvent.click(screen.getByRole("button", { name: "Send missing to wishlist" }));
-    view.rerender(
-      <DeckStats tracksCollection cards={cards} send={settled} onPull={null} onAddMissing={null} />,
-    );
+    view.rerender(<DeckStats {...props({ cards, send: settled })} />);
     return view;
   }
 
-  /** A 24-land Boros deck: every chart is checkable by hand, and every one of them shows
-   *  its numbers as text rather than only as a shape. */
+  /**
+   * A 24-land Boros deck: every readout is checkable by hand, and every one of them shows its
+   * numbers as text rather than only as a shape.
+   *
+   * **Every row names its own `manaCost` and every land its own `producedMana`**, which the
+   * fixture did not have to do before 2026-09-10 and now must. `card()` defaults a cost of
+   * `{R}`, so a fixture that left it alone would count twenty-four *lands* as twenty-four red
+   * pips — and a `producedMana` left at the fixture's `""` would leave the Sources half reading
+   * a real, answered row of zeroes over a deck with a full manabase.
+   */
   const boros = (): DeckCard[] => [
-    card({ name: "Bolt", typeLine: "Instant", colors: "R", cmc: 1, quantity: 4 }),
-    card({ name: "Lion", typeLine: "Creature — Cat", colors: "W", cmc: 1, quantity: 4 }),
-    card({ name: "Helix", typeLine: "Instant", colors: "WR", cmc: 2, quantity: 4 }),
+    card({
+      name: "Bolt",
+      typeLine: "Instant",
+      manaCost: "{R}",
+      colors: "R",
+      cmc: 1,
+      quantity: 4,
+    }),
+    card({
+      name: "Lion",
+      typeLine: "Creature — Cat",
+      manaCost: "{W}",
+      colors: "W",
+      cmc: 1,
+      quantity: 4,
+    }),
+    card({
+      name: "Helix",
+      typeLine: "Instant",
+      manaCost: "{R}{W}",
+      colors: "WR",
+      cmc: 2,
+      quantity: 4,
+    }),
     card({
       name: "Mountain",
       typeLine: "Basic Land — Mountain",
+      manaCost: null,
       cmc: 0,
       colors: null,
+      producedMana: "R",
       quantity: 12,
     }),
-    card({ name: "Plains", typeLine: "Basic Land — Plains", cmc: 0, colors: null, quantity: 12 }),
+    card({
+      name: "Plains",
+      typeLine: "Basic Land — Plains",
+      manaCost: null,
+      cmc: 0,
+      colors: null,
+      producedMana: "W",
+      quantity: 12,
+    }),
   ];
 
-  it("draws the pips row with a count for every colour", () => {
+  /**
+   * One readout of the band, by the heading `StatsCard` gives it.
+   *
+   * Every one is a `<section aria-labelledby>`, so it is a `region` with the heading as its
+   * accessible name — and addressing them this way rather than by a class or a test id is what
+   * makes an absence below (`queryCard`) a claim about the accessible tree rather than about
+   * the DOM.
+   */
+  const statsCard = (title: string) => screen.getByRole("region", { name: title });
+  const queryCard = (title: string) => screen.queryByRole("region", { name: title });
+
+  /** One colour's census tile in the Mana pips card, found by the `sr-only` word that names it —
+   *  the mana glyph beside it is a wire token ("W") and names nothing. */
+  const pipTile = (colour: string) =>
+    within(statsCard("Mana pips")).getByText(colour).closest("li");
+
+  /**
+   * The band's own disclosure — the one control it draws that is not in the Collection card.
+   *
+   * Asserted through `toHaveAccessibleName` wherever the name is the subject: the button holds a
+   * chevron beside its word, and a `gap` between two runs is what computes to `Missing2` one card
+   * over. Here the chevron is `aria-hidden`, so the name is the word alone — which is the claim.
+   */
+  const disclosure = () => screen.getByRole("button", { name: STATS_HEADING });
+
+  /**
+   * **The whole band is behind a disclosure since 2026-09-10**, which reverses the rule that
+   * stood from 2026-08-14: *there is no control that hides them*. That rule was written when the
+   * band was four charts on one line; seven readouts is two screens, and a finished deck is one
+   * a reader scrolls past every time they open it.
+   *
+   * The state is the deck's (`decks.stats_open`) rather than the component's, so the press
+   * **asks** for the other one and never sets it — a band that toggled itself would be a second
+   * answer to a question the deck row already holds, and the two would disagree for the length
+   * of the write.
+   */
+  it("tracks the deck's open flag and asks for the other one when pressed", async () => {
+    const onToggle = vi.fn();
+    const { rerender } = render(<DeckStats {...props({ cards: boros(), open: true, onToggle })} />);
+
+    expect(disclosure()).toHaveAccessibleName(STATS_HEADING);
+    expect(disclosure()).toHaveAttribute("aria-expanded", "true");
+
+    await userEvent.click(disclosure());
+    expect(onToggle).toHaveBeenLastCalledWith(false);
+
+    // Shut. The negation is asserted from both ends, so a press wired to a constant passes
+    // neither half — which is exactly what an `onToggle(false)` hard-coded to the commoner case
+    // would be.
+    rerender(<DeckStats {...props({ cards: boros(), open: false, onToggle })} />);
+    expect(disclosure()).toHaveAttribute("aria-expanded", "false");
+
+    await userEvent.click(disclosure());
+    expect(onToggle).toHaveBeenLastCalledWith(true);
+    expect(onToggle).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * **Shut, the body is empty and still in the tree** — `DeckTokensPanel`'s arrangement, copied
+   * character for character, and the reason is `aria-controls`: an attribute pointing at an id
+   * nothing carries is a promise the accessibility tree cannot keep, and a reader's screen
+   * reader is told about a region that is not there.
+   *
+   * Both halves are asserted because either alone passes over the wrong thing. An unmounted body
+   * satisfies "no readouts" while breaking the reference; a body that merely hid its contents
+   * with CSS satisfies "the id resolves" while leaving seven regions in the accessible tree for
+   * a screen reader to walk.
+   */
+  it("empties the disclosure's body while it is shut, and still resolves aria-controls", () => {
+    render(<DeckStats {...props({ cards: boros(), open: false })} />);
+
+    // Nothing of the band's own is in the accessible tree…
+    for (const title of ["Mana pips", "Card distribution", "Mana curve", "Curve by color"]) {
+      expect(queryCard(title)).not.toBeInTheDocument();
+    }
+    expect(screen.queryByText(/at mana value/)).not.toBeInTheDocument();
+
+    // …and the element the disclosure names is still there to be named.
+    const id = disclosure().getAttribute("aria-controls");
+    expect(id).toBeTruthy();
+    const body = document.getElementById(id ?? "");
+    expect(body).not.toBeNull();
+    expect(body).toBeEmptyDOMElement();
+  });
+
+  /**
+   * The pips card is a census of all six keys — a grid whose row count changed with the deck
+   * would be one the reader has to read from scratch after every edit — and each tile says what
+   * the costs **ask** of that colour in pips and in cards.
+   *
+   * A `{R}{W}` card feeds both halves, so white is 4 + 4 and red is 4 + 4: **pips, not copies**,
+   * which is what this field stopped meaning on 2026-09-10.
+   *
+   * The caption is asserted whole rather than as two numbers, because it is exactly the shape
+   * that concatenates: `8 pips` and `8 cards` are two runs with a separator between them, and a
+   * matcher that only looked for `8` would pass over both of them being the same number by
+   * accident.
+   */
+  it("draws a census tile per colour, with the pips and the copies asking for them", () => {
     strip(boros());
 
-    const pips = screen.getByRole("group", { name: /pips/i });
-    // A WR card feeds both, so white is 4 + 4 and red is 4 + 4 — pips, not cards.
-    expect(within(pips).getByText("White").parentElement).toHaveTextContent("8");
-    expect(within(pips).getByText("Red").parentElement).toHaveTextContent("8");
-    expect(within(pips).getByText("Blue").parentElement).toHaveTextContent("0");
+    expect(pipTile("White")).toHaveTextContent("8 pips · 8 cards");
+    expect(pipTile("Red")).toHaveTextContent("8 pips · 8 cards");
+    // Drawn and empty rather than dropped — the grid is a shape the reader learns the positions
+    // of, and "this deck casts nothing blue" is a real answer no absent tile can state.
+    expect(pipTile("Blue")).toHaveTextContent("no pips");
+    expect(pipTile("Colorless")).toHaveTextContent("no pips");
+  });
+
+  /**
+   * **The two halves of that caption are two different numbers, and the Boros deck above cannot
+   * say so** — no card in it asks twice, so `8 pips · 8 cards` reads the same under either of the
+   * two things `pips` has meant. Four copies of a `{1}{B}{B}` card is the smallest fixture where
+   * the demand and the copies making it come apart.
+   */
+  it("counts a double pip twice and the copy asking for it once", () => {
+    strip([card({ name: "Bolas's Citadel", manaCost: "{1}{B}{B}", colors: "B", quantity: 4 })]);
+
+    expect(pipTile("Black")).toHaveTextContent("8 pips · 4 cards");
+  });
+
+  /**
+   * The other half of the same card: what the deck's cards can **make**, set against what its
+   * costs ask for.
+   *
+   * A source is counted once in every colour it makes, and copies rather than mana — Scryfall
+   * says *which* colours a card produces and never *how much*.
+   */
+  it("draws the sources beside the pips, once per colour a card makes", () => {
+    strip([
+      card({
+        name: "Bolt",
+        typeLine: "Instant",
+        manaCost: "{R}",
+        colors: "R",
+        cmc: 1,
+        quantity: 4,
+      }),
+      dual("Hallowed Fountain", "WU", 4),
+      dual("Command Tower", "WUBRG", 1),
+    ]);
+
+    // Four duals and a Command Tower, so white and blue read 5 of the 9 counted colours.
+    expect(pipTile("White")).toHaveTextContent("5 sources");
+    expect(pipTile("Blue")).toHaveTextContent("5 sources");
+    expect(pipTile("Red")).toHaveTextContent("1 source");
+    // Singular, which nothing else in this suite would notice.
+    expect(pipTile("Green")).toHaveTextContent("1 source");
+    // The mix, said once as a phrase — the band's `sr-only` sentence, which is the only place a
+    // reader hears *which colours are in this deck at all* rather than six tiles one at a time.
+    expect(within(statsCard("Mana pips")).getByText(/^Sources:/)).toHaveTextContent(
+      "Sources: White 38%, Blue 38%, Black 8%, Red 8%, Green 8%.",
+    );
+  });
+
+  /**
+   * **The state every existing install is in for up to a day, and the one this readout must not
+   * draw as zeroes.**
+   *
+   * `sourcesKnown` is `false` only when every counted row came back `null` — a database that has
+   * not re-ingested since the corpus grew `produced_mana`. A row of zeroes is a real and
+   * different answer (sixty spells and no lands), and the two are indistinguishable in the
+   * arithmetic, so what tells them apart on screen is the whole of this case. The failure mode
+   * is a chart that is *confidently wrong* rather than one that is honestly absent.
+   *
+   * The Cost half is asserted present in the same breath: a band that drew neither would pass a
+   * bare "no sources chart" check while being broken for the question that *is* answered.
+   */
+  it("says the sources are unanswered rather than drawing a row of zeroes", () => {
+    strip([
+      card({
+        name: "Bolt",
+        typeLine: "Instant",
+        manaCost: "{R}",
+        colors: "R",
+        cmc: 1,
+        producedMana: null,
+        quantity: 4,
+      }),
+      card({
+        name: "Mountain",
+        typeLine: "Basic Land — Mountain",
+        manaCost: null,
+        cmc: 0,
+        colors: null,
+        producedMana: null,
+        quantity: 20,
+      }),
+    ]);
+
+    const pips = statsCard("Mana pips");
+    expect(
+      within(pips).getByText("Mana sources arrive with the next card sync"),
+    ).toBeInTheDocument();
+    // No `Sources:` band at all — an empty track beside a filled Cost one is the row of zeroes
+    // this state exists to refuse.
+    expect(within(pips).queryByText(/^Sources:/)).not.toBeInTheDocument();
+    // And the tile says so too, rather than `no sources`, which is the answered version of the
+    // same six zeroes.
+    expect(pipTile("Red")).toHaveTextContent("awaiting card sync");
+    expect(pipTile("Red")).not.toHaveTextContent("no sources");
+    // The half that says this is not simply a band that failed to draw.
+    expect(within(pips).getByText(/^Cost:/)).toBeInTheDocument();
+    expect(pipTile("Red")).toHaveTextContent("4 pips · 4 cards");
   });
 
   it("draws the mana curve with a count over every bucket", () => {
     strip(boros());
 
-    const curve = screen.getByRole("list", { name: "Mana curve" });
+    const curve = statsCard("Mana curve");
     expect(within(curve).getByText("8 cards at mana value 1")).toBeInTheDocument();
     expect(within(curve).getByText("4 cards at mana value 2")).toBeInTheDocument();
     // The axis is drawn whole: an empty bucket is a fact about the curve.
@@ -711,6 +1140,69 @@ describe("DeckStats", () => {
     // Nine bars, because this deck is not splitting its X spells out. The tenth is the next
     // test's, and its absence here is what makes that one a claim about the toggle.
     expect(within(curve).getAllByRole("listitem")).toHaveLength(9);
+  });
+
+  /**
+   * The average belongs to this curve and to nothing else on the band, which is why it is drawn
+   * on the card's own heading line rather than among the Figures.
+   *
+   * Two elements rather than one string, so the figure and the word stay two runs to read —
+   * `3.24average` is what one element's contents would compute to. The 1.33 is `(1×8 + 2×4)/12`.
+   */
+  it("prints the average mana value on the curve's own heading line", () => {
+    strip(boros());
+
+    const curve = statsCard("Mana curve");
+    expect(within(curve).getByText("1.33")).toBeInTheDocument();
+    expect(within(curve).getByText("average")).toBeInTheDocument();
+  });
+
+  /**
+   * Six curves, each read against **its own** tallest bucket, with the colour said as a heading
+   * over the panel rather than as a clause in each of its nine bars — nine sentences each ending
+   * "of white" is one fact repeated nine times.
+   *
+   * A `{R}{W}` card stands in two of them, which is the property that makes these six overlap
+   * rather than partition; the caption is the sum of that colour's own nine buckets.
+   */
+  it("draws a curve per colour, captioned with that colour's own spell count", () => {
+    strip(boros());
+
+    const curves = statsCard("Curve by color");
+    expect(within(curves).getByText("White — 8 spells")).toBeInTheDocument();
+    expect(within(curves).getByText("Red — 8 spells")).toBeInTheDocument();
+    // Drawn and empty rather than dropped, for the pips grid's reason.
+    expect(within(curves).getByText("Blue — 0 spells")).toBeInTheDocument();
+    // Singular, which nothing else here would notice.
+    expect(within(curves).getByText("Colorless — 0 spells")).toBeInTheDocument();
+  });
+
+  /**
+   * The bars a pie used to be: the deck cut four ways by one control, with the bucket named in
+   * each bar's own spoken sentence.
+   *
+   * **The select drives both halves of its card** — the bars above and the opening-hand odds
+   * below — which is a deliberate departure from the design it was built from, where it moved
+   * only the table. A control in a card's header that changes half of that card reads as broken.
+   */
+  it("cuts the distribution the way the reader asks, bars and odds together", async () => {
+    const user = userEvent.setup();
+    strip(boros());
+
+    const distribution = statsCard("Card distribution");
+    expect(within(distribution).getByText("8 cards of type Instant")).toBeInTheDocument();
+    expect(within(distribution).getByText("24 cards of type Land")).toBeInTheDocument();
+    expect(within(distribution).getByRole("columnheader", { name: "Type" })).toBeInTheDocument();
+
+    await pickOption(user, "Card distribution by", "Mana value");
+
+    // The bars followed the control…
+    expect(within(distribution).getByText("8 cards at mana value 1")).toBeInTheDocument();
+    expect(within(distribution).queryByText("8 cards of type Instant")).not.toBeInTheDocument();
+    // …and so did the table under them, which is the half the design got wrong.
+    expect(
+      within(distribution).getByRole("columnheader", { name: "Mana value" }),
+    ).toBeInTheDocument();
   });
 
   /**
@@ -726,20 +1218,11 @@ describe("DeckStats", () => {
     const deck = [xSpell("Awakening", { quantity: 4 }), spell("Bolt", 1, { quantity: 4 })];
     const { rerender } = strip(deck);
 
-    const curve = () => screen.getByRole("list", { name: "Mana curve" });
+    const curve = () => statsCard("Mana curve");
     expect(within(curve()).queryByText(/with X in their cost/)).not.toBeInTheDocument();
     expect(within(curve()).getByText("4 cards at mana value 3")).toBeInTheDocument();
 
-    rerender(
-      <DeckStats
-        tracksCollection
-        cards={deck}
-        send={sender()}
-        onPull={null}
-        onAddMissing={null}
-        separateXGroup
-      />,
-    );
+    rerender(<DeckStats {...props({ cards: deck, separateXGroup: true })} />);
 
     expect(within(curve()).getAllByRole("listitem")).toHaveLength(10);
     expect(within(curve()).getByText("4 cards with X in their cost")).toBeInTheDocument();
@@ -748,95 +1231,80 @@ describe("DeckStats", () => {
     expect(within(curve()).getByText("0 cards at mana value 3")).toBeInTheDocument();
   });
 
-  it("draws the colour pie with a legend that counts each segment", () => {
+  /**
+   * **The two pies are gone (2026-09-10) and this is what says so.**
+   *
+   * `Colors` answered *what is this deck made of* with a circle whose legend was the only
+   * readable part; the six colour curves answer the same question with the mana **value**
+   * attached, and the distribution's `by Types` bars carry the land count in a bar a reader can
+   * compare against the others. Nothing was lost that a bar did not say better.
+   *
+   * It is asserted as an absence beside the presences that replaced it, because a band that drew
+   * neither would pass a bare "no pies" check while being broken for every question they used to
+   * answer.
+   */
+  it("draws no pies, and answers their two questions in bars instead", () => {
     strip(boros());
 
-    const legend = screen.getByRole("list", { name: "Colors" });
-    expect(within(legend).getByText("White").closest("li")).toHaveTextContent("4");
-    expect(within(legend).getByText("Red").closest("li")).toHaveTextContent("4");
-    expect(within(legend).getByText("Multicolor").closest("li")).toHaveTextContent("4");
-  });
-
-  it("draws the land pie with a legend that counts each segment", () => {
-    strip(boros());
-
-    const legend = screen.getByRole("list", { name: "Lands" });
-    expect(within(legend).getByText("Mountain").closest("li")).toHaveTextContent("12");
-    expect(within(legend).getByText("Plains").closest("li")).toHaveTextContent("12");
-  });
-
-  it("draws a bar per card type with the count at its end", () => {
-    strip(boros());
-
-    const types = screen.getByRole("list", { name: "Card types" });
-    expect(within(types).getByText("Instant").closest("li")).toHaveTextContent("8");
-    expect(within(types).getByText("Creature").closest("li")).toHaveTextContent("4");
-    expect(within(types).getByText("Land").closest("li")).toHaveTextContent("24");
+    for (const gone of ["Colors", "Lands", "Card types"]) {
+      expect(screen.queryByRole("region", { name: gone })).not.toBeInTheDocument();
+      expect(screen.queryByRole("list", { name: gone })).not.toBeInTheDocument();
+    }
+    // Composition, with the mana value attached…
+    expect(within(statsCard("Curve by color")).getByText("Red — 8 spells")).toBeInTheDocument();
+    // …and the land count as a bar beside the others rather than as its own circle.
+    expect(
+      within(statsCard("Card distribution")).getByText("24 cards of type Land"),
+    ).toBeInTheDocument();
   });
 
   /**
-   * A pie with one slice is a **circle**, not an arc: a wedge whose start and end meet sweeps
-   * nothing at all, so the mono-coloured deck — the commonest deck there is — would draw a
-   * legend beside an empty frame.
+   * A deck with nothing in it draws **no readouts at all**, and one sentence instead.
+   *
+   * Every chart in the band would be honest about an empty deck and useless — nine empty tracks,
+   * six empty tracks six times, an odds table of noughts — so the band says what it has rather
+   * than drawing a shape that reads as a rendering fault.
+   *
+   * The disclosure stays, which is the half worth pinning: it is what a reader presses to put an
+   * empty band away, and a control that disappeared with its own contents would leave the header
+   * of a band nothing can close.
    */
-  it("draws a whole circle for a distribution with one bucket in it", () => {
-    const { container } = strip([
-      card({ name: "Bolt", typeLine: "Instant", colors: "R", quantity: 4 }),
-      card({ name: "Mountain", typeLine: "Basic Land — Mountain", colors: null, quantity: 24 }),
-    ]);
-
-    const [colors, lands] = [...container.querySelectorAll("svg")];
-    expect(colors.querySelector("circle")).toBeInTheDocument();
-    expect(colors.querySelector("path")).not.toBeInTheDocument();
-    expect(lands.querySelector("circle")).toBeInTheDocument();
-  });
-
-  /** And two buckets are two wedges, so the branch above is a special case rather than the
-   *  only case. */
-  it("draws a wedge per bucket once there are two", () => {
-    const { container } = strip(boros());
-
-    const [colors] = [...container.querySelectorAll("svg")];
-    expect(colors.querySelectorAll("path")).toHaveLength(3);
-    expect(colors.querySelector("circle")).not.toBeInTheDocument();
-  });
-
-  /** A pie of a mono-red deck is a red circle: five legend rows saying 0 would be four
-   *  lines of nothing. */
-  it("draws no legend row for a bucket nothing is in", () => {
-    strip([card({ name: "Bolt", typeLine: "Instant", colors: "R", quantity: 4 })]);
-
-    const legend = screen.getByRole("list", { name: "Colors" });
-    expect(within(legend).getByText("Red")).toBeInTheDocument();
-    expect(within(legend).queryByText("Blue")).not.toBeInTheDocument();
-    expect(within(legend).queryByText("Colorless")).not.toBeInTheDocument();
-  });
-
-  /** A deck with no lands has no land pie — an empty circle answers nothing. */
-  it("leaves out a chart with nothing to draw", () => {
-    strip([card({ name: "Bolt", typeLine: "Instant", colors: "R", quantity: 4 })]);
-
-    expect(screen.queryByRole("list", { name: "Lands" })).not.toBeInTheDocument();
-  });
-
-  /** The figures moved to the header's ledger on 2026-08-24, so an empty deck draws the pips
-   *  row and nothing else at all — see `DeckLedger.test.tsx` for the numbers. */
-  it("draws no chart at all for an empty deck", () => {
+  it("draws no readout at all for an empty deck, and says why", () => {
     strip([]);
 
-    expect(screen.queryByRole("list", { name: "Mana curve" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("list", { name: "Colors" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("list", { name: "Card types" })).not.toBeInTheDocument();
+    expect(screen.getByText(/Nothing to measure yet/)).toBeInTheDocument();
+    const readouts = ["Mana pips", "Card distribution", "Mana curve", "Curve by color", "Figures"];
+    for (const title of readouts) {
+      expect(queryCard(title)).not.toBeInTheDocument();
+    }
+    expect(disclosure()).toHaveAttribute("aria-expanded", "true");
   });
 
-  /** The chart is a shape; the words beside it are the story. A screen reader that read
-   *  both would hear the deck twice. */
-  it("hides every chart's drawing from the accessibility tree", () => {
-    const { container } = strip(boros());
+  /**
+   * **Every chart carries its numbers as text and the drawing is `aria-hidden`**, which is the
+   * band's standing rule and the reason it never needed a chart library. A screen reader that
+   * heard both would hear the deck twice.
+   *
+   * Swept over the bars a reader would actually be told about: each `<li>` of the curve holds one
+   * `sr-only` sentence, and everything else inside it is hidden. Asserted as *"every bar has a
+   * sentence and every drawn element is hidden"* rather than by counting elements, because a
+   * count is a fact about today's markup.
+   */
+  it("says every bar's numbers in words and hides the drawing", () => {
+    strip(boros());
 
-    const svgs = [...container.querySelectorAll("svg")];
-    expect(svgs.length).toBeGreaterThan(0);
-    for (const svg of svgs) expect(svg).toHaveAttribute("aria-hidden", "true");
+    const bars = within(statsCard("Mana curve")).getAllByRole("listitem");
+    expect(bars).toHaveLength(9);
+    for (const bar of bars) {
+      const spoken = bar.querySelector(".sr-only");
+      expect(spoken).not.toBeNull();
+      expect(spoken?.textContent).toMatch(/^\d+ cards? at mana value/);
+      // Everything the eye reads is hidden from the tree — the track, the fill, the count
+      // printed on it and the glyph under it.
+      for (const drawn of bar.querySelectorAll(":scope > span:not(.sr-only)")) {
+        expect(drawn).toHaveAttribute("aria-hidden", "true");
+      }
+    }
   });
 
   /** Spec §5: a price never appears without saying how old it is — and, now that a reader can
@@ -921,25 +1389,13 @@ describe("DeckStats", () => {
     const settled = sender({ isSuccess: true, data: 1 });
     const view = render(
       <TooltipProvider>
-        <DeckStats
-          tracksCollection
-          cards={short()}
-          send={sender()}
-          onPull={null}
-          onAddMissing={null}
-        />
+        <DeckStats {...props({ cards: short(), send: sender() })} />
       </TooltipProvider>,
     );
     await userEvent.click(screen.getByRole("button", { name: "Send missing to wishlist" }));
     view.rerender(
       <TooltipProvider>
-        <DeckStats
-          tracksCollection
-          cards={short()}
-          send={settled}
-          onPull={null}
-          onAddMissing={null}
-        />
+        <DeckStats {...props({ cards: short(), send: settled })} />
       </TooltipProvider>,
     );
 
@@ -965,11 +1421,10 @@ describe("DeckStats", () => {
 
     rerender(
       <DeckStats
-        tracksCollection
-        cards={[card({ name: "Bolt", quantity: 4, ownedQuantity: 1 }), card({ name: "Bear" })]}
-        send={sender({ isSuccess: true, data: 1 })}
-        onPull={null}
-        onAddMissing={null}
+        {...props({
+          cards: [card({ name: "Bolt", quantity: 4, ownedQuantity: 1 }), card({ name: "Bear" })],
+          send: sender({ isSuccess: true, data: 1 }),
+        })}
       />,
     );
 
@@ -996,16 +1451,15 @@ describe("DeckStats", () => {
     // Away…
     rerender(
       <DeckStats
-        tracksCollection
-        cards={[card({ name: "Bolt", quantity: 5, ownedQuantity: 1 })]}
-        send={settled}
-        onPull={null}
-        onAddMissing={null}
+        {...props({
+          cards: [card({ name: "Bolt", quantity: 5, ownedQuantity: 1 })],
+          send: settled,
+        })}
       />,
     );
     // …and back to exactly the number that was sent.
     rerender(
-      <DeckStats tracksCollection cards={deck} send={settled} onPull={null} onAddMissing={null} />,
+      <DeckStats {...props({ cards: deck, send: settled })} />,
     );
 
     expect(screen.getByRole("status")).toHaveTextContent("");
@@ -1027,15 +1481,88 @@ describe("DeckStats", () => {
     expect(button).not.toHaveAttribute("aria-disabled");
   });
 
-  /** A control that offers to do nothing is a control that teaches the reader to stop
-   *  looking at the row it is in. */
-  it("does not offer the wishlist when the deck is fully owned", () => {
+  /**
+   * A control that offers to do nothing is a control that teaches the reader to stop looking at
+   * the row it is in — so the press goes, and **the whole Collection card goes with it**
+   * (2026-09-10).
+   *
+   * Every control in that card is already gated on `missing > 0`, so without the card's own gate
+   * it would be a heading over an empty box on every finished deck. The `All N owned.` fallback
+   * that used to stand in the press's place was deleted rather than moved: it is the same fact
+   * said by the readout whose job is facts, one card up, and an arm that can no longer be
+   * reached is worse than none.
+   */
+  it("draws no Collection card at all when the deck is fully owned", () => {
     strip([card({ name: "Bolt", quantity: 4, ownedQuantity: 4 })]);
 
     expect(
       screen.queryByRole("button", { name: "Send missing to wishlist" }),
     ).not.toBeInTheDocument();
-    expect(screen.getByText(/all 4 owned/i)).toBeInTheDocument();
+    expect(queryCard(COLLECTION_HEADING)).not.toBeInTheDocument();
+    // The deleted sentence, asserted gone rather than merely unasserted: it read from the other
+    // end of the same count and is the worse of the two to leave standing.
+    expect(screen.queryByText(/all 4 owned/i)).not.toBeInTheDocument();
+    // What says it instead — the Figures card's own note under the Owned count.
+    const figures = statsCard("Figures");
+    expect(within(figures).getByText("Owned").closest("div")).toHaveTextContent("every copy");
+  });
+
+  /**
+   * The other side of the same gate: a deck that *is* short of something draws the card, and the
+   * Owned figure's note says how short rather than `every copy`.
+   *
+   * Both halves in one case, because an implementation that drew the card unconditionally passes
+   * the presence half of the case above's opposite and nothing else.
+   */
+  it("draws the Collection card and a shortfall note once the deck is short", () => {
+    strip(short());
+
+    expect(statsCard(COLLECTION_HEADING)).toBeInTheDocument();
+    const figures = statsCard("Figures");
+    expect(within(figures).getByText("Owned").closest("div")).toHaveTextContent("3 missing");
+    expect(within(figures).getByText("Owned").closest("div")).not.toHaveTextContent("every copy");
+  });
+
+  /**
+   * **How far the live list has got toward the plan, and `null` is absence rather than zero.**
+   *
+   * `theory` is answered by the host off the `theorySlots` query the editor already makes for the
+   * per-card marks — a second read of the plan here would be a second answer to *what does this
+   * deck need* that could disagree with the ticks on the cards.
+   *
+   * A deck with no plan draws **no entry at all**: `0 of 0` reads as failure where the honest
+   * statement is absence, and a dash already means *no number to give* elsewhere in this app.
+   */
+  it("draws the theory figure only for a deck that has a plan", () => {
+    const { rerender } = render(
+      <DeckStats {...props({ cards: short(), theory: { have: 62, want: 100 } })} />,
+    );
+
+    const figure = () => screen.queryByText("Matches theory")?.closest("div");
+    expect(figure()).toHaveTextContent("62 of 100");
+    // The percentage under it, which is the note rather than the figure.
+    expect(figure()).toHaveTextContent("62%");
+
+    rerender(<DeckStats {...props({ cards: short(), theory: null })} />);
+    expect(screen.queryByText("Matches theory")).not.toBeInTheDocument();
+  });
+
+  /**
+   * **A plan of nothing gets the figure and no percentage** — `0 of 0` is the honest statement
+   * and one the reader can act on by putting a card in the plan, where a percentage of an empty
+   * plan does not exist. `percent(null)`'s em dash is what this must not print: a dash in this
+   * app means *a number exists and is unknown*.
+   */
+  it("gives an empty plan its figure and no percentage", () => {
+    render(<DeckStats {...props({ cards: short(), theory: { have: 0, want: 0 } })} />);
+
+    const figure = screen.getByText("Matches theory").closest("div");
+    expect(figure).toHaveTextContent("0 of 0");
+    // **Any percentage at all**, not just the em dash: `0 / 0` is `NaN`, so a `theoryNotes` that
+    // dropped the guard prints `NaN%` rather than `—` and an assertion naming the dash alone
+    // would pass over exactly the defect it was written for.
+    expect(within(figure as HTMLElement).queryByText(/%/)).not.toBeInTheDocument();
+    expect(within(figure as HTMLElement).queryByText("—")).not.toBeInTheDocument();
   });
 
   /**
@@ -1109,13 +1636,7 @@ describe("DeckStats", () => {
     // In flight: `send` is really `disabled`, which is the browser's own "no".
     rerender(
       <TooltipProvider>
-        <DeckStats
-          tracksCollection
-          cards={short()}
-          send={sender({ isPending: true })}
-          onPull={onPull}
-          onAddMissing={null}
-        />
+        <DeckStats {...props({ cards: short(), send: sender({ isPending: true }), onPull })} />
       </TooltipProvider>,
     );
     expect(screen.getByRole("button", { name: "Send missing to wishlist" })).toBeDisabled();
@@ -1243,12 +1764,7 @@ describe("DeckStats", () => {
     render(
       <TooltipProvider>
         <DeckStats
-          tracksCollection
-          cards={short()}
-          send={sender({ isPending: true })}
-          onPull={null}
-          onAddMissing={onAddMissing}
-        />
+          {...props({ cards: short(), send: sender({ isPending: true }), onAddMissing })} />
       </TooltipProvider>,
     );
 
@@ -1280,25 +1796,13 @@ describe("DeckStats", () => {
     const settled = sender({ isSuccess: true, data: 1 });
     const view = render(
       <TooltipProvider>
-        <DeckStats
-          tracksCollection
-          cards={deck}
-          send={sender()}
-          onPull={null}
-          onAddMissing={onAddMissing}
-        />
+        <DeckStats {...props({ cards: deck, send: sender(), onAddMissing })} />
       </TooltipProvider>,
     );
     await userEvent.click(screen.getByRole("button", { name: "Send missing to wishlist" }));
     view.rerender(
       <TooltipProvider>
-        <DeckStats
-          tracksCollection
-          cards={deck}
-          send={settled}
-          onPull={null}
-          onAddMissing={onAddMissing}
-        />
+        <DeckStats {...props({ cards: deck, send: settled, onAddMissing })} />
       </TooltipProvider>,
     );
 
@@ -1328,7 +1832,7 @@ describe("DeckStats", () => {
   it("takes the caret back after the write it disabled itself for", async () => {
     const deck = short();
     const { rerender } = render(
-      <DeckStats tracksCollection cards={deck} send={sender()} onPull={null} onAddMissing={null} />,
+      <DeckStats {...props({ cards: deck, send: sender() })} />,
     );
     const button = screen.getByRole("button", { name: "Send missing to wishlist" });
     await userEvent.click(button);
@@ -1341,24 +1845,12 @@ describe("DeckStats", () => {
     // is the same one either way.
     button.blur();
     rerender(
-      <DeckStats
-        tracksCollection
-        cards={deck}
-        send={sender({ isPending: true })}
-        onPull={null}
-        onAddMissing={null}
-      />,
+      <DeckStats {...props({ cards: deck, send: sender({ isPending: true }) })} />,
     );
     expect(document.body).toHaveFocus();
 
     rerender(
-      <DeckStats
-        tracksCollection
-        cards={deck}
-        send={sender({ isSuccess: true, data: 3 })}
-        onPull={null}
-        onAddMissing={null}
-      />,
+      <DeckStats {...props({ cards: deck, send: sender({ isSuccess: true, data: 3 }) })} />,
     );
 
     expect(screen.getByRole("button", { name: "Send missing to wishlist" })).toHaveFocus();
@@ -1385,24 +1877,12 @@ describe("DeckStats", () => {
     async function pressAt(cards: DeckCard[], pick: string, settled: MissingWrite) {
       const idle = sender();
       const view = render(
-        <DeckStats
-          tracksCollection
-          cards={cards}
-          send={idle}
-          onPull={null}
-          onAddMissing={null}
-        />,
+        <DeckStats {...props({ cards, send: idle })} />,
       );
       await userEvent.click(screen.getByRole("button", { name: pick }));
       await userEvent.click(screen.getByRole("button", { name: "Send missing to wishlist" }));
       view.rerender(
-        <DeckStats
-          tracksCollection
-          cards={cards}
-          send={settled}
-          onPull={null}
-          onAddMissing={null}
-        />,
+        <DeckStats {...props({ cards, send: settled })} />,
       );
       return { ...view, idle };
     }
@@ -1636,14 +2116,18 @@ describe("DeckStats", () => {
    * **A Virtual deck (issue #401) — the whole shortfall half absent, and the charts untouched.**
    *
    * Every case above this block is a claim about `tracksCollection: true`, which is the
-   * regression these three are really guarding: this change touches the one line of the band a
-   * hundred existing decks read every time they are opened, and a fix that emptied it for
-   * everybody would pass a bare "the virtual deck draws nothing" check.
+   * regression these are really guarding: this change touches the one line of the band a hundred
+   * existing decks read every time they are opened, and a fix that emptied it for everybody
+   * would pass a bare "the virtual deck draws nothing" check.
    *
-   * The deck is short of three copies **and owns one**, so both of the block's two arms are
-   * reachable from these rows: the `N of M missing` sentence with its three presses, and — by
-   * owning the lot — the `All N owned.` fallback that replaces it. A fixture short of nothing
-   * would leave half of what has to disappear untested.
+   * **Two absences rather than one**, since the 2026-09-10 redesign moved the second: the whole
+   * `Collection` card, which is the count and its three presses, and the Figures card's own
+   * `Owned` entry. The `All N owned.` fallback this block used to name was the third and is
+   * **deleted outright** — the band gates the Collection card on `missing > 0`, so the arm it
+   * lived in became unreachable for every deck rather than for a virtual one.
+   *
+   * The default fixture is short of three copies and owns one; the `Owned` case owns the lot,
+   * which is the state its figure would be at its most plausible in.
    */
   describe("a deck that does not track a collection", () => {
     /** The `false` arm, at the ordinary shortfall. */
@@ -1661,7 +2145,8 @@ describe("DeckStats", () => {
     it("draws no shortfall line and none of the three presses", () => {
       virtualStrip();
 
-      expect(screen.queryByText(/missing/i)).not.toBeInTheDocument();
+      expect(screen.queryByText("3 of 4 missing")).not.toBeInTheDocument();
+      expect(queryCard(COLLECTION_HEADING)).not.toBeInTheDocument();
       for (const name of [
         "Pull from collection",
         "Add missing to collection",
@@ -1677,15 +2162,26 @@ describe("DeckStats", () => {
     });
 
     /**
-     * **The fallback goes too, and it is the sentence this rule exists for.** `All 4 owned.` over
-     * a deck the reader has said they own none of is the worst of the two things this line can
-     * say, so a fix that only hid the shortfall arm would have made the virtual deck read as
-     * fully owned. The fixture owns every copy, which is the one state that draws it.
+     * **The Figures card's `Owned` entry goes with the block, and it is the same argument one
+     * card up.** A count of the copies a reader owns, over a deck they have said they own none
+     * of, is arithmetic about a binder that is not there — and it would be the more believable
+     * of the two, because it is drawn among figures that are all true.
+     *
+     * The three figures beside it are asserted present, which is the half that makes this a
+     * claim about the prop: a band that drew no Figures card at all would pass a bare absence
+     * check while being broken for every deck.
+     *
+     * The fixture owns every copy, so under `tracksCollection` this deck would read `4` with
+     * `every copy` under it — the state the entry is at its most plausible in.
      */
-    it("draws no all-owned fallback either", () => {
+    it("draws no Owned figure either, and keeps the three beside it", () => {
       virtualStrip([card({ name: "Bolt", quantity: 4, ownedQuantity: 4 })]);
 
-      expect(screen.queryByText(/owned/i)).not.toBeInTheDocument();
+      const figures = statsCard("Figures");
+      expect(within(figures).queryByText("Owned")).not.toBeInTheDocument();
+      expect(within(figures).queryByText("every copy")).not.toBeInTheDocument();
+      expect(within(figures).getByText("Cards")).toBeInTheDocument();
+      expect(within(figures).getByText("Price")).toBeInTheDocument();
     });
 
     /** The live region and the refusal line are inside the same block, so a write that somehow
@@ -1698,16 +2194,15 @@ describe("DeckStats", () => {
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     });
 
-    /** What a deck wants and what a deck costs are facts about the *list*, so the pips and the
-     *  four charts are untouched. Half of this test is the point of the other half: an
-     *  implementation that hid the whole band would satisfy every absence above it. */
-    it("keeps the pips row and every chart", () => {
+    /** What a deck wants and what a deck costs are facts about the *list*, so the pips and every
+     *  chart are untouched. Half of this test is the point of the other half: an implementation
+     *  that hid the whole band would satisfy every absence above it. */
+    it("keeps the pips and every chart", () => {
       strip(boros(), sender(), vi.fn(), vi.fn(), false);
 
-      const pips = screen.getByRole("group", { name: /pips/i });
-      expect(within(pips).getByText("White").parentElement).toHaveTextContent("8");
-      for (const name of ["Mana curve", "Colors", "Lands", "Card types"]) {
-        expect(screen.getByRole("list", { name })).toBeInTheDocument();
+      expect(pipTile("White")).toHaveTextContent("8 pips · 8 cards");
+      for (const title of ["Mana pips", "Card distribution", "Mana curve", "Curve by color"]) {
+        expect(statsCard(title)).toBeInTheDocument();
       }
     });
   });

@@ -106,6 +106,7 @@ const DECK: DeckRow = {
   // asserted on.
   separateXGroup: false,
   tokensOpen: false,
+  statsOpen: true,
   defaultCategoryId: 0,
   bracket: 0,
 };
@@ -189,6 +190,7 @@ const BOLT: DeckCard = {
   oracleText: "Lightning Bolt deals 3 damage to any target.",
   colors: "R",
   colorIdentity: "R",
+  producedMana: "",
   legalities: '{"modern":"legal"}',
   power: null,
   toughness: null,

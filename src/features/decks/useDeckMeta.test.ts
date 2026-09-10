@@ -106,6 +106,7 @@ function card(over: Partial<DeckCard> & { cardId: string }): DeckCard {
     oracleText: null,
     colors: null,
     colorIdentity: null,
+    producedMana: null,
     legalities: null,
     power: null,
     toughness: null,

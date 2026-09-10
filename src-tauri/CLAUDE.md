@@ -37,6 +37,23 @@ both plus the frontend.
   does the latter, so it always needs one. A migration that only adds and fills unindexed
   columns does not (schema v2; `the_v2_backfill_leaves_the_search_index_answering` is the
   proof).
+- **`cards.produced_mana` is corpus schema 3, and NULL on it means one thing** — *this row
+  predates the column* — which is bought entirely by the ingest writing `Some("")` rather than
+  `None` for a card Scryfall publishes no `produced_mana` array for. Stored as **concatenated
+  single letters**, `colors`' form and never JSON (`"C"` is colourless and a rare `"2"` is
+  Ancient Tomb's kind; both are one character). Its rung is one schema-qualified `ALTER TABLE
+  {schema}.cards ADD COLUMN`, **gated on `PRAGMA {schema}.table_info(cards)` and not on the
+  version number** — `combos_are_at_head`'s argument verbatim, and its symptom one table over:
+  a version gate skips every converted database and every fresh install, and the next ingest
+  dies on `table cards_staging has no column named produced_mana`, because `create_staging`
+  derives staging's layout from the live table. It takes **no `CARDS_INDEXES` entry** (nothing
+  searches on it) and **no `cards_fts` rebuild** (an unindexed column, schema v2's precedent).
+  **A backfill is not merely skipped, it is impossible**: the letters live in `raw`, `raw` is a
+  gzip BLOB, and SQL cannot see into one — so `deck::fill_unknown_produced_mana` bridges the gap
+  at *read* time in Rust, one gunzip per distinct printing that is still NULL, and does nothing
+  at all once a sync has run. **The gate answers "is the ALTER owed" rather than "does the
+  column exist"**, and the difference is a corpus with no `cards` at all: it owes nothing, because
+  only an ingest can put that table back and `migrate_corpus` may stop a launch.
 - **The data folder holds two databases, and which one is `main` is the whole design**
   (schema 27). `data/user.db` is the reader's — the twenty-five tables in `schema::TABLES` marked
   `Side::User`, which nothing outside this app can produce again — and it is what
@@ -126,20 +143,22 @@ both plus the frontend.
   every upgraded one, and a fresh worktree is a fresh install, so nothing else here can see it.
   The single-file ladder is frozen at **v26** — `schema::migrate_single_file`
   climbs to `schema::LEGACY_SINGLE_FILE_VERSION` and stops, and the two files carry their own
-  numbers from there (`USER_SCHEMA_VERSION` **41** since the reader could publish a folder —
-  one rung above decks learning a third *kind*, which is one above the theory mark growing a
+  numbers from there (`USER_SCHEMA_VERSION` **42** since the editor's Deck stats band got a
+  disclosure — one rung above the reader being able to publish a folder, which is
+  one above decks learning a third *kind*, which is one above the theory mark growing a
   third tier, which is one above it growing a second,
   which is one above decks learning which tokens they make,
   which is one above a deck's group
   holding only copies its live list claims at `(card_id, finish)`, itself one above a
   condition learning to say nothing —
-  `CORPUS_SCHEMA_VERSION` **2** since 2026-09-08, deliberately
+  `CORPUS_SCHEMA_VERSION` **3** since 2026-09-10, deliberately
   incomparable and **not to be subtracted from the other**: a user version is "what has been done
   to rows that exist nowhere else", a corpus version is "is this file's shape what this build
   expects". The corpus number stood at 1 from the split until the combo feed's four prose columns
-  landed, which is the corpus ladder's first rung ever and the only one it has — **and it is
-  gated on the table's shape rather than on this number**, for a reason that catches every fresh
-  install and is written up under *Commander Spellbook* below.
+  landed, which is the corpus ladder's first rung ever; **2 is that one and 3 is
+  `cards.produced_mana`** (2026-09-10) — **and *both* are gated on the table's shape rather than
+  on this number**, for a reason that catches every fresh install and is written up under
+  *Commander Spellbook* below and under the `produced_mana` bullet beside it.
   This line read **v25** while that was head, and
   [the ladder's history](../docs/reference/data-and-sync.md) is the story. (This line read
   **v18** for two whole rungs, then **v20** for two more, then **v23** for one and **v24** for
@@ -240,6 +259,22 @@ both plus the frontend.
   reasoned about — the column form was written first, and let the second row straight in.
   The whole record is
   [collection-sharing.md](../docs/reference/collection-sharing.md).
+  **v42** (2026-09-10) adds `decks.stats_open` — whether the editor's **Deck stats** band is
+  expanded. It is v37's `tokens_open` one column along and shares every one of its rules: per-deck
+  reading state, on `capture::TABLES`' hand-written `decks` spec, on no history row and no
+  `deck_undo::DECK_FIELDS`, not carried by `duplicate_deck`.
+  ⚠️ **`NOT NULL DEFAULT 1`, and that is the one place it parts company with the rung it copies.**
+  v37's band was *new*, so a collapsed default cost nobody anything; this band is on screen for
+  every deck on every disk today with no control to hide it, so `DEFAULT 0` would be a rung taking
+  a band away from readers who never asked. That is v38's argument (*the default is what the
+  reader gets*) rather than v40's (*a kind is what a deck is*), and which one applies turns on
+  whether the upgrade changes what is on screen. The one consequence worth naming: `duplicate_deck`
+  leaves the column off its INSERT the way it leaves `tokens_open` off, so a copy takes the
+  **default** — open — where a copy's tokens band comes back collapsed. Both answers are right,
+  and they differ only because the two `DEFAULT`s do. `deck::IMAGE_COL` moves 26 → 27 with it, the
+  positional trap paid a sixth time, and the column it most reads like a neighbour of is the
+  *other* disclosure: an index that landed on `tokens_open` would swap which band the reader had
+  open for which other band they had open, both fields still holding a `0` or a `1`.
   **v35, v36, v37 and v38 all landed within days of each other from four branches; the token rung
   was renumbered twice on its way in and the theory rung three times** — written as 35, moved to
   36 when the sixth grade landed, to 37 when the deck-group sweep did, and to 38 when the token
@@ -449,7 +484,8 @@ shared_cell` walks both into two databases and compares them column by column.
   **no row** rather than a zero.
 - **Commander Spellbook's combos are a fourth optional bulk download and live in `combos` /
   `combo_cards` / `combo_meta`** — created by schema v26 and **brought to head by corpus schema
-  2**, which is the corpus ladder's first and only rung. `src/combos.rs` is the only writer, and
+  2**, which is the corpus ladder's first rung (schema 3 is `cards.produced_mana`, one table over
+  and on the same shape gate). `src/combos.rs` is the only writer, and
   it is modelled on `marketplace_feed.rs` and **not** on `tags/` — this is not Scryfall, so it
   gets its **own `reqwest` client**, its own timeouts, no share of Scryfall's pacing budget and no
   place in its 429 lockout. What binds every part of it, each rule a way this feed is allowed to fail:
@@ -1879,9 +1915,11 @@ viewState)` — absent field means "leave it". It moves **no `updated_at`**, rec
   not `variant` and deliberately not `card_id`, and `state = 'auto'` with no printing and no
   quantity is deleted rather than written because it carries nothing. **A stored zero is not that
   case.** `decks.tokens_open` is the panel's disclosure, on the `decks` capture `Spec` beside
-  `separate_x_group`, the last **named** column of `DECK_SELECT` for `deck_row`'s positional
-  reason — which moved its `IMAGE_COL` from 21 to 22 — and on no history row and no
-  `deck_undo::DECK_FIELDS`. The four commands, the tie-break, the sync
+  `separate_x_group`, the last **named** column of `DECK_SELECT` when it landed for `deck_row`'s
+  positional reason — which moved its `IMAGE_COL` from 21 to 22 — and on no history row and no
+  `deck_undo::DECK_FIELDS`. **It is not the last named column any more** (v42's `stats_open` is,
+  at 26, with `IMAGE_COL` at 27), and it is not the only disclosure either: read both numbers off
+  `deck_row` and never off this page. The four commands, the tie-break, the sync
   registrations and every measurement:
   [decks-storage.md](../docs/reference/decks-storage.md).
 

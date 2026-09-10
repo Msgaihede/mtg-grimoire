@@ -137,6 +137,10 @@ const DECK_ROW: DeckRow = {
   lastSortBy: "alphabetical",
   separateXGroup: false,
   tokensOpen: false,
+  // `true` where its neighbour above is `false` — `decks.stats_open` is `NOT NULL
+  // DEFAULT 1`, because every deck that exists today draws the Deck stats band and has
+  // no control to hide it.
+  statsOpen: true,
   defaultCategoryId: 0,
   bracket: 0,
 };
@@ -178,6 +182,10 @@ function deckCard(over: Partial<DeckCard> & { cardId: string }): DeckCard {
     oracleText: null,
     colors: null,
     colorIdentity: null,
+    // `""` and not `null`: Swords to Plowshares makes no mana, and `null` on this column means
+    // only that the row predates it — a database that has not re-synced since the column landed.
+    // The two are different sentences and the stats band has a fence for the second.
+    producedMana: "",
     legalities: null,
     power: null,
     toughness: null,

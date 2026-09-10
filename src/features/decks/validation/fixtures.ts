@@ -349,6 +349,7 @@ export function card(overrides: Partial<CardFacts> = {}): CardFacts {
     oracleText: null,
     colors: "R",
     colorIdentity: "R",
+    producedMana: "",
     legalities: LEGAL,
     power: null,
     toughness: null,

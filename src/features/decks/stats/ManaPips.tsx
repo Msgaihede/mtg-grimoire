@@ -1,0 +1,318 @@
+/**
+ * What the deck's costs **ask for** and what its cards can **make**, side by side.
+ *
+ * The two halves are deliberately not one number. A pip is a demand — `{B}{B}` on four copies is
+ * eight black pips whatever the manabase looks like — and a source is a supply, counted in
+ * copies because Scryfall says *which* colours a card produces and never how much. Drawing them
+ * as one figure would be this app inventing a ratio the data cannot support; drawing them as two
+ * tracks in one tile lets the reader make the comparison themselves, which is the only place it
+ * can honestly be made.
+ *
+ * **Two bands, then six tiles, and the two are different readings rather than a summary and its
+ * detail.** A band is the deck's *shape* — present colours only, in `MANA_KEYS` order, one strip
+ * the eye takes in at a glance — and it is the one place in this readout where a colour the deck
+ * has nothing of draws nothing. The tiles are the *census*, and there all six are always drawn,
+ * because a grid that changed its row count with the deck is one the reader has to read again
+ * from scratch every time they edit.
+ */
+import type { CSSProperties, JSX, ReactNode } from "react";
+import { ManaText } from "@/components/ManaText";
+import { useTooltip } from "@/components/tooltip/useTooltip";
+import { plural } from "@/lib/counts";
+import { MANA_FILL, MANA_KEYS, MANA_LABEL, type ManaKey, type PipCounts } from "@/lib/mana";
+import { cn } from "@/lib/utils";
+import type { DeckStatsSummary } from "../DeckStats";
+import { percent, StatsCard, Track } from "./StatsCard";
+
+/**
+ * The sentence the Sources half says when the corpus has never answered the question.
+ *
+ * **This is a third state and it must never be allowed to read as the second one.**
+ * `DeckStatsSummary.sourcesKnown` is `false` only when *every* counted row came back `null` — a
+ * database that has not re-ingested since the corpus grew `produced_mana` — where a genuine row
+ * of zeroes is a real answer about a deck of sixty spells. Drawing zeroes for the unknown case
+ * would tell every reader with a stale database that none of their decks makes any mana, which is
+ * a chart that is confidently wrong rather than one that is honestly absent.
+ */
+const SOURCES_UNKNOWN = "Mana sources arrive with the next card sync";
+
+/** The short form of {@link SOURCES_UNKNOWN} for a tile, which has no room for a sentence. The
+ *  long one rides along as the tile's hint so the two cannot come to say different things. */
+const SOURCES_UNKNOWN_SHORT = "awaiting card sync";
+
+const COST_HINT =
+  "Coloured pips this deck's costs ask for. A hybrid counts once in each of its halves, and generic mana is not a pip.";
+
+const SOURCES_HINT =
+  "Copies that can produce each colour. A dual land counts in every colour it makes, so these add up to more than the number of mana sources in the deck.";
+
+/** The band's own label column. Fixed, so `Cost` and `Sources` start their tracks at one x. */
+const BAND_LABEL = "w-[4.5rem] shrink-0 text-[0.9375rem] font-medium text-text";
+
+export function ManaPips({ stats }: { stats: DeckStatsSummary }): JSX.Element {
+  const { pips, pipCards, sources, sourcesKnown } = stats;
+
+  const costTotal = total(pips);
+  const sourceTotal = total(sources);
+
+  // The union, so the two bands are segmented alike and a colour that only *appears* on one side
+  // still holds its place on the other — a band whose segments moved between its two rows would
+  // read as two different decks rather than as two facts about one.
+  const present = MANA_KEYS.filter((key) => pips[key] > 0 || sources[key] > 0);
+
+  return (
+    <StatsCard title="Mana pips">
+      <div className="flex flex-col gap-2">
+        <Band label="Cost" keys={present} counts={pips} total={costTotal} hint={COST_HINT} />
+        {sourcesKnown ? (
+          <Band
+            label="Sources"
+            keys={present}
+            counts={sources}
+            total={sourceTotal}
+            hint={SOURCES_HINT}
+          />
+        ) : (
+          <div className="flex items-center gap-2">
+            <span className={BAND_LABEL}>Sources</span>
+            {/* No track at all rather than an empty one: an empty `bg-surface` strip beside a
+                filled Cost band is exactly the row of zeroes this state exists to refuse, and a
+                sentence in its place is the only thing that reads as a question nobody has
+                answered yet. The height matches a band's so the pair stays a pair. */}
+            <span className="flex h-8 min-w-0 flex-1 items-center text-[0.8125rem] text-dim">
+              {SOURCES_UNKNOWN}
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* Two columns whatever the deck is. See this file's header for why all six are drawn. */}
+      <ul className="grid grid-cols-2 gap-2">
+        {MANA_KEYS.map((key) => (
+          <ColorTile
+            key={key}
+            colour={key}
+            pips={pips[key]}
+            pipCards={pipCards[key]}
+            sources={sources[key]}
+            sourcesKnown={sourcesKnown}
+            costTotal={costTotal}
+            sourceTotal={sourceTotal}
+          />
+        ))}
+      </ul>
+    </StatsCard>
+  );
+}
+
+/** The six keys summed — the denominator a share is taken against. */
+function total(counts: PipCounts): number {
+  return MANA_KEYS.reduce((sum, key) => sum + counts[key], 0);
+}
+
+/**
+ * One colour's share of a total, or `null` where there is nothing to take a share **of**.
+ *
+ * `null` and not `0`, because `percent` draws the two differently on purpose: an em dash says
+ * *this colour is not in the question* where `0%` says *it is, and it rounds to nothing*.
+ */
+function shareOf(count: number, whole: number): number | null {
+  return count > 0 && whole > 0 ? count / whole : null;
+}
+
+/**
+ * One full-width segmented strip: the deck's colour mix in one line.
+ *
+ * The whole drawing is `aria-hidden` and the strip carries an `sr-only` sentence of its own. That
+ * sentence does restate percentages the tiles below print again, and it is worth the repetition:
+ * what a band says is the *mix* — which colours are in this deck at all, and in what proportion,
+ * read as one phrase — and that is not something a reader can assemble from six tiles heard one
+ * at a time.
+ */
+function Band({
+  label,
+  keys,
+  counts,
+  total: whole,
+  hint,
+}: {
+  label: string;
+  /** Which colours get a segment — the union of the two halves, computed once by the caller. */
+  keys: readonly ManaKey[];
+  counts: PipCounts;
+  total: number;
+  hint: ReactNode;
+}): JSX.Element {
+  const tip = useTooltip();
+  const named = keys.filter((key) => counts[key] > 0);
+  const spoken =
+    named.length === 0
+      ? `${label}: none.`
+      : `${label}: ${named
+          .map((key) => `${MANA_LABEL[key]} ${percent(shareOf(counts[key], whole))}`)
+          .join(", ")}.`;
+
+  return (
+    <div className="flex items-center gap-2" {...tip(hint)}>
+      <span className={BAND_LABEL}>{label}</span>
+      <span className="sr-only">{spoken}</span>
+      <span
+        aria-hidden="true"
+        className="flex h-8 min-w-0 flex-1 overflow-hidden rounded-md bg-surface"
+      >
+        {keys.map((key) => (
+          <span
+            key={key}
+            className="flex items-center justify-center"
+            style={{
+              width: `${(shareOf(counts[key], whole) ?? 0) * 100}%`,
+              background: MANA_FILL[key],
+              // A flex item's automatic minimum size is its content, so without these two a
+              // segment standing for 2% of the deck would be held open by the glyph inside it
+              // and every segment after it would be pushed off the strip. The glyph is
+              // decoration — every number it stands for is printed in the tiles below — so
+              // clipping it is the right failure.
+              minWidth: 0,
+              overflow: "hidden",
+              // The seam. `--color-bg` rather than a border, because a border is part of the box
+              // and would be subtracted from the share the segment is drawn to stand for. On the
+              // last segment it lands inside the strip's own rounded edge, where it reads as the
+              // band's rim rather than as a seam.
+              boxShadow: "inset -1px 0 0 var(--color-bg)",
+            }}
+          >
+            <ManaText source={`{${key}}`} className="text-[0.6875rem]" />
+          </span>
+        ))}
+      </span>
+    </div>
+  );
+}
+
+/** One colour's census tile: what the costs ask of it, and what the deck can make of it. */
+function ColorTile({
+  colour,
+  pips,
+  pipCards,
+  sources,
+  sourcesKnown,
+  costTotal,
+  sourceTotal,
+}: {
+  colour: ManaKey;
+  pips: number;
+  pipCards: number;
+  sources: number;
+  sourcesKnown: boolean;
+  costTotal: number;
+  sourceTotal: number;
+}): JSX.Element {
+  // With the sources unknown every key's `sources` is 0, so this reduces to "no pips of this
+  // colour" — which is the honest reading: the cost half is answered for every colour, and the
+  // source half is unanswered for every colour equally and so cannot tell one tile from another.
+  const idle = pips === 0 && sources === 0;
+
+  return (
+    <li
+      className={cn(
+        "flex min-w-0 flex-col gap-1.5 rounded-md border border-border p-2",
+        // Dimmed rather than dropped — the grid is a shape the reader learns the positions of.
+        idle && "opacity-45",
+      )}
+    >
+      <span aria-hidden="true">
+        <ManaText source={`{${colour}}`} className="text-[0.875rem]" />
+      </span>
+      {/* `ManaText` spells its own token — "W" — which is a wire format rather than a word. */}
+      <span className="sr-only">{MANA_LABEL[colour]}</span>
+
+      <Figure
+        word="Cost"
+        share={shareOf(pips, costTotal)}
+        fill={MANA_FILL[colour]}
+        caption={pips > 0 ? `${plural(pips, "pip")} · ${plural(pipCards, "card")}` : "no pips"}
+      />
+
+      {sourcesKnown ? (
+        <Figure
+          word="Sources"
+          share={shareOf(sources, sourceTotal)}
+          fill={MANA_FILL[colour]}
+          // The two halves of one colour are one hue at two weights: the supply is the fainter
+          // of the pair, so a tile reads as one colour answering two questions rather than as
+          // two colours that happen to sit together.
+          fillStyle={{ opacity: 0.55 }}
+          // **`N sources`, and deliberately not `N sources · M cards`.** The design spells a
+          // two-term caption here, mirroring the cost's, and it cannot be honest: Scryfall's
+          // `produced_mana` says *which* colours a card makes and never *how much*, so a source
+          // is a copy — "sources" and "cards that are sources" are the same number by
+          // construction, and printing both would be one figure twice with a `·` between them
+          // implying it is two.
+          caption={sources > 0 ? plural(sources, "source") : "no sources"}
+        />
+      ) : (
+        <Figure
+          word="Sources"
+          share={null}
+          fill={MANA_FILL[colour]}
+          // No track: see {@link SOURCES_UNKNOWN}. An empty track under an em dash still reads as
+          // a measured zero to anyone glancing at the grid.
+          drawTrack={false}
+          caption={SOURCES_UNKNOWN_SHORT}
+          hint={SOURCES_UNKNOWN}
+        />
+      )}
+    </li>
+  );
+}
+
+/**
+ * One line of a tile: the word, the track, the percentage, and the caption under them.
+ *
+ * The word and the percentage take fixed columns so the six tiles' tracks start and end at the
+ * same two x positions — six bars that each began where their own label happened to end would be
+ * six charts rather than one grid. What that costs is the track itself at the narrowest useful
+ * width: at the app's 1280×800 with the card pane docked the editor column is ~602px, so a
+ * two-column band gives this card ~271px of content, a tile ~131px, and a tile's content box
+ * ~115px — of which the two fixed columns and the gaps take 84, leaving the track ~31px. It is a
+ * proportion bar rather than something anybody measures off, and the percentage beside it is the
+ * number, so a short track is a legible failure; the alternative — a track on a line of its own —
+ * spends a third line per figure and six lines per card.
+ */
+function Figure({
+  word,
+  share,
+  fill,
+  fillStyle,
+  caption,
+  drawTrack = true,
+  hint,
+}: {
+  word: string;
+  /** `null` where there is nothing to take a share of — drawn as an em dash, never `0%`. */
+  share: number | null;
+  fill: string;
+  /** Spread onto the fill itself, which is what `Track` does with its `style`. */
+  fillStyle?: CSSProperties;
+  caption: string;
+  drawTrack?: boolean;
+  hint?: ReactNode;
+}): JSX.Element {
+  const tip = useTooltip();
+  return (
+    <div className="flex min-w-0 flex-col gap-0.5" {...tip(hint)}>
+      <div className="flex items-center gap-1">
+        <span className="w-11 shrink-0 text-[0.625rem] font-medium text-text">{word}</span>
+        {drawTrack ? (
+          <Track share={share ?? 0} fill={fill} style={fillStyle} />
+        ) : (
+          <span className="min-w-0 flex-1" />
+        )}
+        <span className="w-8 shrink-0 text-right font-mono text-[0.625rem] tabular-nums text-text">
+          {percent(share)}
+        </span>
+      </div>
+      <span className="font-mono text-[0.625rem] text-dim">{caption}</span>
+    </div>
+  );
+}

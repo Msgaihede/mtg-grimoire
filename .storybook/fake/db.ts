@@ -101,7 +101,13 @@
 import { CARDS, type FakeCard } from "./cards";
 import type { CommandHandler } from "./core";
 import { emitFake } from "./event";
-import { CURRENT_VERSION, NEXT_VERSION, release, releaseHistory } from "./fixtures";
+import {
+  CURRENT_VERSION,
+  NEXT_VERSION,
+  producedManaOf,
+  release,
+  releaseHistory,
+} from "./fixtures";
 import {
   DEFAULT_PRINTING_GROUP_BY,
   PRINTING_GROUP_BY_OPTIONS,
@@ -603,6 +609,23 @@ export interface FakeDeck {
    * writes over a deck's whole life.
    */
   tokensOpen?: boolean;
+  /**
+   * `decks.stats_open`: whether the editor's **Deck stats** band is expanded.
+   *
+   * **{@link tokensOpen}'s twin in every respect but the default, and the difference is the
+   * whole of what has to be got right here.** `tokens_open` is `NOT NULL DEFAULT 0` because that
+   * band was new when it shipped and a deck that had never seen it had it shut; this column is
+   * `NOT NULL DEFAULT 1`, because the stats band is on screen for every existing deck today with
+   * no control to hide it — defaulting it shut would silently take it away from every reader on
+   * the first launch of the new build. {@link toDeckRow} resolves the absence to **`true`**, and
+   * a `?? false` there would story the editor against a state the app cannot produce.
+   *
+   * A **reading** preference like the two above it, riding the ordinary `deck_update` rather
+   * than `deck_set_view_state` for `tokensOpen`'s reason: a disclosure a reader opens once and
+   * leaves open is a handful of writes over a deck's whole life, where the tab, the grouping and
+   * the sort move on every press.
+   */
+  statsOpen?: boolean;
   /**
    * `decks.default_category_id` (schema v16): which of this deck's categories an add that names
    * no pile lands in, and `AUTO_CATEGORY` (`0`) for "by what the card does".
@@ -6223,6 +6246,13 @@ function toDeckRow(db: FakeDb, d: FakeDeck): DeckRow {
     // been opened is a deck whose Tokens & emblems area is collapsed, which is the state every
     // existing deck is in.
     tokensOpen: d.tokensOpen ?? false,
+    // Its twin one column over, and **`?? true` rather than `?? false`** — the one line in this
+    // group where reading the neighbour above and copying it is the bug. `stats_open` is
+    // `NOT NULL DEFAULT 1`: the Deck stats band is on screen for every deck that exists today
+    // with no control to hide it, so the migration's default has to leave it open or the new
+    // build takes it away from everybody. A `?? false` here would draw a collapsed band in a
+    // story for a deck the app would draw expanded, which is a state the backend cannot produce.
+    statsOpen: d.statsOpen ?? true,
     // v16's, and the same shape of answer: absent is `AUTO_CATEGORY`, which is what the column's
     // `DEFAULT 0` says about a deck nobody has asked.
     defaultCategoryId: d.defaultCategoryId ?? 0,
@@ -6819,6 +6849,22 @@ function toDeckCard(
     oracleText: card?.oracleText ?? null,
     colors: card?.colors ?? null,
     colorIdentity: card?.colorIdentity ?? null,
+    // `cards.produced_mana`, in the same concatenated-letter encoding as the two lines above it
+    // — `["W","U"]` is `"WU"`, and `JSON.parse` throws on it.
+    //
+    // **Not a column of the generated corpus, and it must not become one.** `cards.ts` is
+    // written wholesale by `scripts/gen-storybook-cards.mjs`, so the truth table lives in
+    // `fixtures.ts` and {@link producedManaOf} is the read. What that buys is the one thing the
+    // fence downstream needs: a printing this fake holds always answers a **letter set or
+    // `""`**, never `null`.
+    //
+    // **The `?? null` is doing real work here where its neighbours' merely mirror a LEFT JOIN.**
+    // On this column `null` carries a second meaning — a row written before the column existed,
+    // which a database that has not re-synced reads for every card — and the deck stats have a
+    // fence for exactly that. An orphan is the only way to reach it from here, which is what
+    // makes it storyable: `""` for a card that has gone would claim a vanished printing is
+    // *known* to make no mana, and the two are not the same sentence.
+    producedMana: card ? producedManaOf(card) : null,
     legalities: card?.legalities ?? null,
     // No `fill_unknown_power_toughness` pass: the generator read a synced database, so
     // `power`/`toughness` are already the `cards` columns the repair exists to recover.
@@ -13813,6 +13859,11 @@ export function writeHandlers(db: FakeDb) {
         // collapsed, which is what `tokens_open INTEGER NOT NULL DEFAULT 0` says and what makes
         // a deck made *here* open the way a deck made in the app does.
         tokensOpen: false,
+        // Spelled out beside it and **`true`**, which is the one place in this block where the
+        // neighbour above is the wrong model: `stats_open INTEGER NOT NULL DEFAULT 1`, so a deck
+        // being born opens with its Deck stats band showing, exactly as every deck that already
+        // existed does on the first launch of the build that added the column.
+        statsOpen: true,
         updatedAt: stamp(db),
       };
       db.decks.push(row);
@@ -13966,21 +14017,32 @@ export function writeHandlers(db: FakeDb) {
       if (patch.separateXGroup !== undefined && patch.separateXGroup !== separateXWas) {
         field("xGroup", separateXWas, patch.separateXGroup);
       }
-      // v35's, on `separateXGroup`'s footing exactly: an absent column is the DDL's `0`, so a
-      // deck that has never been opened and a deck whose area was collapsed are one state.
+      // **`tokensOpen` and `statsOpen` have no arm here, deliberately, and that absence is the
+      // mirror rather than a gap in it.** Both columns ride this patch and both are written
+      // above — the two disclosures are the only fields `deck_update` moves without recording
+      // anything.
       //
-      // **The word is a guess and is flagged rather than asserted.** `deck.rs` does not carry
-      // `tokens_open` in `record_deck_edit` yet, so there is no spelling to mirror; `tokensOpen`
-      // follows the two multi-word names already in that switch (`xGroup`, `defaultCategory`).
-      // Nothing goes red if it is wrong — `auditText.ts`' `default` arm answers an unrecognised
-      // field with "Changed the deck", which is true of every deck edit — and that is exactly the
-      // silent drift the `xGroup` arm documents. Recording *something* is the important half:
-      // {@link journalled} keys an undo step on the last history row a write produced, so a
-      // handler that recorded nothing would leave this press outside Ctrl+Z.
-      const tokensOpenWas = before.tokensOpen ?? false;
-      if (patch.tokensOpen !== undefined && patch.tokensOpen !== tokensOpenWas) {
-        field("tokensOpen", tokensOpenWas, patch.tokensOpen);
-      }
+      // This used to carry a `field("tokensOpen", …)` arm under a comment saying the word was a
+      // guess because `deck.rs` did "not carry `tokens_open` in `record_deck_edit` **yet**".
+      // That premise was wrong in both halves: the crate has no arm and is not waiting to grow
+      // one — `DeckPatch::tokens_open`'s own doc says **No arm in `record_deck_edit`**, "which
+      // is the one place this is *not* like `separate_x_group`" — and the reason it gives is
+      // about the *record*, not about a missing spelling. `auditText.ts` words a history row
+      // from its field name and answers an unrecognised one with **Changed the deck**, which is
+      // true of every deck edit and therefore never wrong and never useful; a drawer line saying
+      // that because somebody opened a disclosure is noise in a record read months later.
+      //
+      // **What the arm cost was a state the app cannot produce**: Storybook's history drawer
+      // grew a row for opening the token band, and {@link journalled} — which keys its one step
+      // on the last history row a write produced — then filed a Ctrl+Z for it. The window does
+      // neither, because `record_step` there sits inside `if let Some(audit_id)` and a patch
+      // that recorded nothing recorded no id. Recording *something* is the important half only
+      // where the crate records something; here the fake was one press ahead of it.
+      //
+      // A **reading preference is not an audited edit** is the rule the two of them are the
+      // instances of. A third such column gets no arm either, and gets it for this paragraph's
+      // reason rather than by copying the two above.
+      //
       // v38's pair and v39's third, on `separateXGroup`'s footing with the default the other way
       // round: an absent column is the DDL's `1`, so a deck that has never been asked and a deck
       // switched *on* are one state, and switching off is one change from either.
@@ -14137,6 +14199,14 @@ export function writeHandlers(db: FakeDb) {
       // list the area draws is derived on every read, so opening or closing it writes one column
       // and changes no answer about the deck.
       deck.tokensOpen = patch.tokensOpen ?? deck.tokensOpen;
+      // `coalesce(?n, stats_open)`, and **nothing else happens** for the same reason again: the
+      // figures the band draws are computed in TypeScript on every read, so opening or closing
+      // it writes one column and changes no answer about the deck. `??` against the *stored*
+      // value and not against `true`, so an absent field means "leave it" here exactly as
+      // `coalesce(?n, column)` does in the crate — the column's `DEFAULT 1` is what a row that
+      // was never written reads, which is a different question from what a patch that says
+      // nothing does to a row that was.
+      deck.statsOpen = patch.statsOpen ?? deck.statsOpen;
       // `coalesce(?16, ?17, ?18, …)` — three reading preferences, and **nothing else happens**
       // for `separateXGroup`'s reason: which of the three tiers a deck marks changes what is
       // drawn over its live rows and moves not one `deck_cards` row. `??` against the *stored*

@@ -455,6 +455,20 @@ pub struct DeckPatch {
     /// edit and therefore never wrong and never useful. A drawer line saying that, because
     /// somebody opened a disclosure, is noise in a record read months later.
     pub tokens_open: Option<bool>,
+    /// Whether the editor's **Deck stats** band is expanded — schema v42.
+    ///
+    /// [`Self::tokens_open`]'s twin and every one of its rules: storage only on this side, on
+    /// this patch rather than on [`DeckViewState`] because a disclosure a reader opens once is
+    /// worth an `updated_at` where a tab, a grouping and a sort are not, and **no arm in
+    /// [`record_deck_edit`]** — `auditText.ts`'s `default` arm would word it *Changed the deck*,
+    /// which is true of every edit and therefore never wrong and never useful.
+    ///
+    /// ⚠️ **The column's `DEFAULT` is `1` where `tokens_open`'s is `0`, and that difference is
+    /// the rung's rather than this field's.** A patch says nothing about defaults: absent still
+    /// means "leave it". What it changes is what an *unpatched* deck reads — open — because the
+    /// stats band has been on screen for every existing deck since before it had a control, and
+    /// a rung may not take a band away from a reader who did not ask.
+    pub stats_open: Option<bool>,
     /// Which of this deck's categories an add that names none lands in — the editor's "Add to"
     /// answer, asked in the deck's settings.
     ///
@@ -686,6 +700,23 @@ pub struct DeckRow {
     /// **[`duplicate_deck`] deliberately does not carry it**, which is where it parts company with
     /// `separate_x_group`: a copy starts collapsed, the way it starts on the Live tab.
     pub tokens_open: bool,
+    /// Whether the editor's **Deck stats** band is expanded — schema v42.
+    ///
+    /// [`Self::tokens_open`]'s twin one column along and every one of its rules: read here as
+    /// well as written through [`DeckPatch`], because a switch the app can set and never see is
+    /// a switch nothing can draw; per deck, because it is an answer about how *this* list is
+    /// read rather than about where the reader's cursor was.
+    ///
+    /// ⚠️ **Every existing deck is *expanded*, which is the column's `DEFAULT 1` and the
+    /// opposite of the line above.** The tokens band was new when it landed, so collapsed cost
+    /// nobody anything; this band has been drawn for every deck on every disk since before
+    /// there was a control for it, and defaulting it shut would have been the rung closing it
+    /// under readers who never asked.
+    ///
+    /// **[`duplicate_deck`] deliberately does not carry it**, `tokens_open`'s note — so a copy
+    /// takes the column default, which here is *open*. That is the right answer rather than an
+    /// accident of the DDL: a copy shows its stats, exactly as the original does.
+    pub stats_open: bool,
     /// Which of this deck's categories an add that names none lands in — schema v16, and `0`
     /// for **Auto**, where the card's own text decides.
     ///
@@ -1002,7 +1033,7 @@ static DECK_SELECT: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
             d.last_variant, d.last_group_by, d.last_sort_by, d.separate_x_group,
             d.default_category_id, d.game_key, d.bracket, d.tokens_open,
             d.theory_mark_exact, d.theory_mark_name, d.theory_mark_unplanned,
-            d.virtual_only,
+            d.virtual_only, d.stats_open,
             {images}
        FROM decks d
        LEFT JOIN format_specs fs ON fs.key = d.format_key
@@ -1012,18 +1043,19 @@ static DECK_SELECT: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
 });
 
 fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
-    /// Where `DECK_SELECT`'s image columns start — one past `d.virtual_only`, the
+    /// Where `DECK_SELECT`'s image columns start — one past `d.stats_open`, the
     /// last named column. Named rather than inlined for `deck_card_select`'s reason: the
     /// pairing arithmetic below is `front_face_map`'s and only the *offset* is this function's.
     ///
     /// **It moves with every column added to the end of the named list**, and it has moved
-    /// four times in a week: it read 21 until schema v37 put `tokens_open` there, 22 until v38
-    /// appended the first two theory marks, 24 until v39 appended the third, and 25 until v40
-    /// appended the deck kind. Forgetting to move it is not silent for `tokens_open`'s
+    /// five times in a week: it read 21 until schema v37 put `tokens_open` there, 22 until v38
+    /// appended the first two theory marks, 24 until v39 appended the third, 25 until v40
+    /// appended the deck kind, and 26 until v42 appended the stats disclosure. Forgetting to
+    /// move it is not silent for `tokens_open`'s
     /// kind of column — the image reads are `Option<String>` and an `INTEGER` beside them makes
     /// rusqlite refuse the conversion rather than answer a plausible URL — but it *is* silent
     /// the other way round, which is what the comment on the image read itself describes.
-    const IMAGE_COL: usize = 26;
+    const IMAGE_COL: usize = 27;
     Ok(DeckRow {
         id: r.get(0)?,
         name: r.get(1)?,
@@ -1108,12 +1140,22 @@ fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
         // still holding a `0` or a `1`, and the three kinds this pair spells all still looking
         // like answers.
         virtual_only: r.get(25)?,
-        // **From 26**, last of all, for the reason written nine comments up — the
+        // 26, at the end of the list, for the reason written nine comments up — and the tenth
+        // proof of it. Schema v42's disclosure is a `bool` over an `INTEGER` column like the
+        // five before it, and the one it most reads like a neighbour of is `tokens_open` at 21
+        // — the *other* disclosure on this row, the two of them a pair of bands in one editor.
+        // An index that landed there would swap which area the reader had open for which other
+        // area they had open, both fields still holding a `0` or a `1`, and the two switches
+        // still looking like answers. **The declaration order is no help here either**: this
+        // field is declared beside `tokens_open` on the struct and read six positions away
+        // from it, which is the theory-mark pair's own note read one column further.
+        stats_open: r.get(26)?,
+        // **From 27**, last of all, for the reason written ten comments up — the
         // `crate::image_uri::FRONT_FACE_COLUMNS` expressions `front_face_selects` appended, in
         // the (top-level, face) pairs `front_face_map` folds back up, one pair per variant.
         //
-        // This read carries a failure the twenty-six above it do not. Every one of those is caught
-        // by a value of the wrong *kind* turning up in a field; here the pair is
+        // This read carries a failure the twenty-seven above it do not. Every one of those is
+        // caught by a value of the wrong *kind* turning up in a field; here the pair is
         // (top-level, face) and `for_face` prefers the face, so a read one column out still
         // answers a perfectly real URL — the right picture from the wrong slot, or the crop
         // where the card belongs. No fixture carrying a single column can tell the two apart;
@@ -2012,6 +2054,11 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 -- fence decorative on exactly the path it exists for — `bracket`'s note eight
                 -- lines up, read for a rule about a *pair* rather than about a range.
                 virtual_only = coalesce(?19, virtual_only),
+                -- `?20`, the next number at the **end**, same rule one rung later — and
+                -- `?15`'s trap read one disclosure further: `tokens_open` is the hole this
+                -- most reads like a neighbour of, both are `Option<bool>`, and a crossed
+                -- number is an UPDATE that succeeds and opens the wrong band.
+                stats_open = coalesce(?20, stats_open),
                 updated_at = unixepoch()
               WHERE id = ?1",
             params![
@@ -2036,6 +2083,7 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 patch.theory_mark_name,
                 patch.theory_mark_unplanned,
                 virtual_only,
+                patch.stats_open,
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -4466,6 +4514,23 @@ pub struct DeckCardRow {
     /// stored finish rather than from the printing, so a plain copy of a Surge Foil printing
     /// is still drawn plain. `None` for an orphan, whose card has left `cards`.
     pub promo_types: Option<String>,
+    /// Which colours of mana this card can **make** — corpus schema 3, and the deck stats
+    /// band's own column.
+    ///
+    /// **Concatenated single letters, `"WU"`, exactly as [`Self::colors`] and
+    /// [`Self::color_identity`] are — this is not JSON.** `"C"` is colourless and a rare `"2"`
+    /// is Ancient Tomb's kind; both are one character, so the letter form carries the whole
+    /// vocabulary. Parsing it as an array on the way out would be a second shape for one fact,
+    /// which is the argument [`Self::colors`] makes one field up.
+    ///
+    /// ⚠️ **Three answers, not two.** `Some("WU")` is *makes white and blue*; `Some("")` is
+    /// *makes no mana at all*, which is what [`crate::card_row::CardRow::produced_mana`] writes
+    /// for the key Scryfall omits on Lightning Bolt; and `None` means **this `cards` row
+    /// predates the column** — a database that has not synced since corpus schema 3 — or that
+    /// the row is an orphan with no `cards` row behind it at all.
+    /// [`fill_unknown_produced_mana`] is what makes the first of those two temporary: it fills
+    /// from `raw` at read time, and once a sync has run there is nothing left for it to do.
+    pub produced_mana: Option<String>,
     /// Printed at uncommon on **any** printing of this oracle card. Computed, not read: a
     /// Pauper Commander commander is eligible for having been uncommon *somewhere*, and the
     /// `paupercommander` legality key answers a different question (the 99).
@@ -4636,7 +4701,16 @@ fn deck_card_select(marketplace: crate::sorting::Marketplace) -> String {
             -- beside `c.finishes` at 30, where it would have handed a printing's finishes to
             -- its treatments and a set name to its finishes, both still plausible strings.
             c.promo_types,
-            -- From 36, last of all, for the reason written above `dc.finish`: this read is
+            -- 36, after `c.promo_types`, for the reason written above `dc.finish` — and this
+            -- one is that rule's fifth proof, from the sharpest end yet: `produced_mana` is
+            -- TEXT holding concatenated colour letters, and so are `c.colors` at 21 and
+            -- `c.color_identity` at 22, which is exactly where it reads like it belongs. A
+            -- column landing there would hand a card's identity to the mana it makes and back
+            -- — a Sol Ring reading as colourless-identity, a Bolt's R reading as a mana source
+            -- — with every field still holding a string of legal colour letters and nothing
+            -- anywhere going red.
+            c.produced_mana,
+            -- From 37, last of all, for the reason written above `dc.finish`: this read is
             -- positional and a column added anywhere else shifts every index after it into a
             -- field of the same SQLite type, silently. As many columns as
             -- `image_uri::FRONT_FACE_COLUMNS` says — two per variant a list row carries.
@@ -4691,6 +4765,9 @@ pub fn get_deck(
     };
     let mut cards = read_deck_cards(conn, id, variant, marketplace)?;
     fill_unknown_power_toughness(conn, &mut cards)?;
+    // Corpus schema 3's read-time bridge, beside the v5 column's. Both are no-ops on a
+    // database that has synced since the rung that owns them.
+    fill_unknown_produced_mana(conn, &mut cards)?;
     // **The variant picks the pool, and this line is the whole of that decision** (2026-09-09).
     // A live row is answered by the cardboard in the deck's own box; a theory row is answered by
     // every copy the reader could *put* in that box. See [`available_by_printing`].
@@ -4729,7 +4806,7 @@ fn read_deck_cards(
     // Where the image pair begins — the count of every column before it, which is what makes
     // it last. Written down rather than spelled inside the closure, for the reason
     // `deck_card_select`'s own comment gives.
-    const IMAGE_COL: usize = 36;
+    const IMAGE_COL: usize = 37;
 
     let sql = deck_card_select(marketplace);
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
@@ -4774,7 +4851,11 @@ fn read_deck_cards(
                 finish: r.get(34)?,
                 // 35, after it, for the same reason.
                 promo_types: r.get(35)?,
-                // From 36 — the (top-level, face) pairs `front_face_selects` added, one per
+                // 36, after it, for the same reason — and the one on this list where the
+                // wrong index is hardest to see, because `colors` at 21 and `color_identity`
+                // at 22 hold strings of the same letters. See the column's own comment.
+                produced_mana: r.get(36)?,
+                // From 37 — the (top-level, face) pairs `front_face_selects` added, one per
                 // variant, folded back up by the module that added them, face-first precedence
                 // and `soon.jpg` fence included.
                 image_uris: crate::image_uri::front_face_map(|i| {
@@ -4872,6 +4953,94 @@ fn may_have_a_power_toughness_box(type_line: Option<&str>) -> bool {
             .iter()
             .any(|k| t.contains(k)),
     }
+}
+
+/// Recover a `produced_mana` that the `cards` column does not have yet.
+///
+/// [`fill_unknown_power_toughness`]'s twin, one column over and with one difference that is the
+/// whole of why it is a separate function: **NULL here means exactly one thing.**
+///
+/// Corpus schema 3 added `cards.produced_mana`, and the ingest writes `Some("")` — never
+/// `None` — for a card Scryfall publishes no `produced_mana` array for
+/// ([`crate::card_row::CardRow::produced_mana`] is where that is decided and why). So a row
+/// that has been through an ingest on this build *always* carries a string, and a NULL is not
+/// "this card makes no mana" but "this row predates the column". That is the fence this fill
+/// stands on, and it is what the P/T fill next door does not have: there, NULL is ambiguous
+/// between *unknown* and *no P/T box*, so that one needs [`may_have_a_power_toughness_box`] to
+/// tell the two apart and pays a type-line test per row for ever. Here the `is_none()` test is
+/// already the complete gate, and it is **self-extinguishing**: after the reader's next full
+/// sync — which drops and recreates `cards` outright — no row is NULL any more and this
+/// function does nothing at all, for nothing, on every deck open from then on.
+///
+/// **A backfill in SQL is not available and this is not a preference.** `raw` is a gzip BLOB
+/// from schema v3 on, `json_extract` over one is a hard `malformed JSON` error rather than a
+/// NULL (`src-tauri/CLAUDE.md`), and there is nowhere else the letters are written down. So the
+/// rung adds the column empty and the gap is bridged *here*, at read time, in Rust, through
+/// [`crate::card_row::raw_json`] over `CAST(raw AS BLOB)` — one gunzip per **distinct printing**
+/// that is missing it, ids sorted and deduped exactly as the P/T fill does, because a deck lists
+/// the same printing in more than one pile all the time. Scryfall regenerates the bulk file
+/// daily, so the window this covers is at most a day wide for a reader who syncs.
+///
+/// **An orphan keeps its `None`**, and that is honest rather than a gap: there is no `cards`
+/// row to read a `raw` out of, and nothing about a printing that has left the corpus is
+/// recoverable.
+fn fill_unknown_produced_mana(conn: &Connection, rows: &mut [DeckCardRow]) -> Result<(), String> {
+    let unknown: Vec<String> = {
+        let mut ids: Vec<String> = rows
+            .iter()
+            .filter(|r| r.produced_mana.is_none())
+            .map(|r| r.card_id.clone())
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+        ids
+    };
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    let mut stmt = conn
+        .prepare("SELECT CAST(raw AS BLOB) FROM cards WHERE id = ?1")
+        .map_err(|e| e.to_string())?;
+    let mut made: HashMap<String, String> = HashMap::new();
+    for card_id in unknown {
+        let stored: Option<Vec<u8>> = stmt
+            .query_row(params![card_id], |r| r.get(0))
+            .optional()
+            .map_err(|e| e.to_string())?;
+        // An orphan has no `raw` to read, and `None` is the honest answer for it too.
+        let Some(json) = stored.as_deref().and_then(crate::card_row::raw_json) else {
+            continue;
+        };
+        made.insert(card_id, produced_mana_letters(&json));
+    }
+    for row in rows.iter_mut() {
+        if let Some(letters) = made.get(&row.card_id) {
+            row.produced_mana = Some(letters.clone());
+        }
+    }
+    Ok(())
+}
+
+/// A bulk line's `produced_mana`, in the stored letter form.
+///
+/// **The same rule [`crate::card_row::CardRow::produced_mana`] applies to the ingest, spelled
+/// once more because the two paths must not disagree**: a missing key is `""` and never a
+/// refusal, so a row filled from `raw` is the row the next ingest would have written. A line
+/// that will not parse is `""` too — the same answer the ingest would reach for a card with no
+/// array, and the alternative is leaving the row NULL and gunzipping it again on every open.
+fn produced_mana_letters(json: &str) -> String {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
+        return String::new();
+    };
+    value
+        .get("produced_mana")
+        .and_then(serde_json::Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(serde_json::Value::as_str)
+                .collect::<String>()
+        })
+        .unwrap_or_default()
 }
 
 /// A bulk line's printed P/T: top level, then the front face — [`crate::card_row`]'s own
@@ -9630,6 +9799,11 @@ mod tests {
             // carries today, so a field that never left Rust would read correct on every deck
             // the app has ever made.
             virtual_only: true,
+            // **`false` rather than the column's `DEFAULT 1`**, the same rule as the five above
+            // it and the only field here that has to be spelled the *other* way round to obey
+            // it: this column defaults open, so `true` is what every deck in every database
+            // carries and a field that never left Rust would read correct on all of them.
+            stats_open: false,
             // Two keys, both real URLs, because this is the one field on the row whose *shape*
             // crosses the boundary rather than a scalar: `Option<BTreeMap>` has to reach
             // TypeScript as an object of variant keys and not as a list or a bare string, and
@@ -9691,6 +9865,13 @@ mod tests {
                 // those call sites — which is falsy, so every virtual deck would silently draw
                 // as an ordinary one with no type error anywhere.
                 "virtualOnly": true,
+                // Schema v42, and `statsOpen` rather than `stats_open`, `tokensOpen`'s reason
+                // four keys up — the stats band reads this to know whether to draw itself
+                // open. **`false` here where `tokensOpen` is `true`**, which is what pins that
+                // the two disclosures are two fields: a positional read that crossed them
+                // would swap two bools of the same type in one editor and change nothing about
+                // the shape of this object.
+                "statsOpen": false,
                 // The cover printing's picture, spelled out key by key: this is the deck
                 // gallery's only way to draw a cover on web and on the phone, and it is a map
                 // rather than a URL because `LIST_VARIANTS` decides what a row carries.
@@ -10025,6 +10206,149 @@ mod tests {
                 json!({ "field": "xGroup", "from": false, "to": true }),
             ],
             "newest first, two presses, and the no-op patch between them recorded nothing"
+        );
+    }
+
+    /// The Deck stats disclosure, end to end — and **`true` on a new deck is the assertion**.
+    ///
+    /// `the_x_group_switch_round_trips_and_is_recorded_once`'s job for schema v42, with the
+    /// starting value the other way round. `stats_open` is the one flag on this row whose
+    /// column defaults **1**, because the band has been on screen for every deck in every
+    /// database since before there was a control for it: a rung or a DDL that defaulted it off
+    /// would take that band away from every existing deck, and a `create_deck` that read a
+    /// Rust fallback instead of the column would do the same to every new one.
+    ///
+    /// **Both disclosures are moved in the same test, in opposite directions**, which is what
+    /// no assertion about one of them alone can do: `tokens_open` and `stats_open` are two
+    /// `bool`s over two `INTEGER` columns, adjacent in `DeckPatch`, in `DeckRow` and in the
+    /// table, read six positions apart by `deck_row`, and bound to two `?` holes five apart in
+    /// `update_deck`. Every one of those is a place a crossed pair succeeds silently.
+    ///
+    /// **No history row, which is the other half of `tokens_open`'s rule**: a disclosure is
+    /// not an audited edit, `record_deck_edit` has no arm for either flag, and `auditText.ts`'
+    /// `default` arm would word one *Changed the deck* — true of every edit, so never wrong and
+    /// never useful in a drawer read months later.
+    #[test]
+    fn the_stats_disclosure_round_trips_and_is_not_recorded() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        assert!(
+            deck.stats_open,
+            "a new deck shows its stats — the column's own DEFAULT 1, never a Rust fallback"
+        );
+        assert!(
+            !deck.tokens_open,
+            "and the other disclosure starts closed, which is what makes the pair tellable apart"
+        );
+
+        let patched = update_deck(
+            &conn,
+            deck.id,
+            &DeckPatch {
+                stats_open: Some(false),
+                tokens_open: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(!patched.stats_open, "the readback is the write");
+        assert!(
+            patched.tokens_open,
+            "and the neighbour moved the other way, so neither `?` hole can be the other's"
+        );
+
+        let read = read_deck(&conn, deck.id).unwrap().unwrap();
+        assert!(
+            !read.stats_open,
+            "…including through `DECK_SELECT`'s positional reads, which is where a column \
+             added anywhere but the end goes wrong silently"
+        );
+        assert!(read.tokens_open);
+
+        // Absent means "leave it", the `coalesce(?n, column)` contract — and the fence against
+        // a mis-numbered `?` hole writing over the neighbour.
+        let after = update_deck(&conn, deck.id, &DeckPatch::default()).unwrap();
+        assert!(!after.stats_open, "an absent field means leave it");
+        assert!(after.tokens_open);
+        assert_eq!(after.name, "Burn");
+
+        assert!(
+            update_deck(
+                &conn,
+                deck.id,
+                &DeckPatch {
+                    stats_open: Some(true),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .stats_open
+        );
+
+        // **A real edit first, so the absence below is an absence and not an empty list.** A
+        // deck that had only ever had its disclosures poked has no `deck` audit rows at all,
+        // and an assertion over nothing passes whatever `record_deck_edit` does.
+        update_deck(
+            &conn,
+            deck.id,
+            &DeckPatch {
+                name: Some("Burn II".to_owned()),
+                stats_open: Some(false),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        // A disclosure is not an audited edit, `tokens_open`'s rule.
+        let words: Vec<String> = crate::deck_audit::list(&conn, deck.id, 20)
+            .unwrap()
+            .iter()
+            .filter(|r| r.kind == crate::deck_audit::DECK)
+            .map(|r| r.payload.clone())
+            .collect();
+        assert!(
+            words.iter().any(|p| p.contains("name")),
+            "the drawer has to be reachable for the next assertion to mean anything: {words:?}"
+        );
+        assert!(
+            !words.iter().any(|p| p.contains("statsOpen")),
+            "opening a band is not an edit anybody reads a drawer for: {words:?}"
+        );
+    }
+
+    /// A copy shows its stats, because [`duplicate_deck`] does not carry the column and the
+    /// column's own `DEFAULT` is open.
+    ///
+    /// **The default doing the work is the point rather than an oversight.** `tokens_open` is
+    /// left off that INSERT so a copy starts collapsed the way it starts on the Live tab; this
+    /// column is left off the same INSERT and the answer comes out the other way, because the
+    /// two `DEFAULT`s differ — and *open* is what a copy should show, exactly as its original
+    /// does. The original is patched shut first, so the assertion is about the default and not
+    /// about a value that happened to travel.
+    #[test]
+    fn a_duplicate_shows_its_stats_even_when_the_original_is_collapsed() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        update_deck(
+            &conn,
+            deck.id,
+            &DeckPatch {
+                stats_open: Some(false),
+                tokens_open: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let copy = duplicate_deck(&conn, deck.id).unwrap();
+        assert!(
+            copy.stats_open,
+            "a copy shows its stats, which is the column's DEFAULT 1 rather than the \
+             original's answer"
+        );
+        assert!(
+            !copy.tokens_open,
+            "and the other disclosure is not carried either, which is its DEFAULT 0"
         );
     }
 
@@ -12396,6 +12720,84 @@ mod tests {
         );
     }
 
+    /// **NULL `produced_mana` means one thing and one thing only — this row predates corpus
+    /// schema 3 — and the read repairs it out of `raw`.**
+    ///
+    /// The rung adds the column empty and no SQL backfill is possible: `raw` is a gzip BLOB
+    /// and `json_extract` over one is a hard error, so only Rust can look. Every deck row on
+    /// every existing install therefore reads NULL until the reader's next full sync, which is
+    /// the window [`fill_unknown_produced_mana`] covers.
+    ///
+    /// ⚠️ **The third card is the assertion the other two cannot make.** Its column is already
+    /// filled *and its blob disagrees with it* — the only shape in which "a row that has been
+    /// through an ingest is not reopened" is observable at all. A fixture whose blob agreed
+    /// would pass over a fill that gunzipped every card in the deck on every open.
+    ///
+    /// The second is the empty-string half: Scryfall omits the key for a card that makes
+    /// nothing, and the fill has to answer `""` there rather than leaving the row NULL — the
+    /// same rule the ingest follows, because a row filled here has to be the row the next
+    /// ingest would have written. Left NULL, that card would be reopened on every read for ever.
+    #[test]
+    fn an_unknown_produced_mana_is_recovered_from_the_raw_blob() {
+        let conn = seeded();
+        // Column NULL, blob carrying the array.
+        let forest = r#"{"object":"card","name":"Forest","produced_mana":["G"]}"#;
+        // Column NULL, blob carrying no array at all — the ordinary spell.
+        let shock = r#"{"object":"card","name":"Shock"}"#;
+        // Column already filled, blob deliberately disagreeing.
+        let ring = r#"{"object":"card","name":"Sol Ring","produced_mana":["W","U","B","R","G"]}"#;
+        for (id, oracle, name, cn, stored, raw) in [
+            ("forest", "o7", "Forest", "1", None, forest),
+            ("shock", "o8", "Shock", "2", None, shock),
+            ("solring", "o9", "Sol Ring", "3", Some("C"), ring),
+        ] {
+            conn.execute(
+                "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
+                    rarity,type_line,produced_mana,raw)
+                 VALUES (?1,?2,?3,'x',?4,'en','normal','common','Land',?5,?6)",
+                params![id, oracle, name, cn, stored, crate::card_row::gzip_raw(raw)],
+            )
+            .unwrap();
+        }
+        let deck = create_deck(&conn, &input("Ramp", "commander")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "forest", main, 10);
+        add(&conn, deck.id, "shock", main, 1);
+        add(&conn, deck.id, "solring", main, 1);
+
+        let unset: Option<String> = conn
+            .query_row(
+                "SELECT produced_mana FROM cards WHERE id = 'forest'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            unset.is_none(),
+            "the column is empty until the next sync — that is the case under test"
+        );
+
+        let detail = get_deck(&conn, deck.id, LIVE, ANY_MARKET).unwrap().unwrap();
+
+        assert_eq!(
+            card_row(&detail, "forest", main).produced_mana.as_deref(),
+            Some("G"),
+            "a row that predates the column is repaired from its own bulk line"
+        );
+        assert_eq!(
+            card_row(&detail, "shock", main).produced_mana.as_deref(),
+            Some(""),
+            "a card that makes nothing is repaired to the empty string, not left NULL — or it \
+             is gunzipped again on every open, for ever"
+        );
+        assert_eq!(
+            card_row(&detail, "solring", main).produced_mana.as_deref(),
+            Some("C"),
+            "a row that already has the column is never reopened, and the blob disagreeing is \
+             the only way to see it"
+        );
+    }
+
     /// `live_shortfall`: a switched-off pile is short of nothing, and the same printing in one
     /// is not a second row either.
     ///
@@ -13082,6 +13484,10 @@ mod tests {
             // The printing's, not the row's: this deck sleeves the foil copy, and the column
             // beside it is what names which foil that is.
             promo_types: Some(r#"["surgefoil"]"#.to_owned()),
+            // **The empty string rather than `None`**, and that is the assertion: a Bolt makes
+            // no mana, so the wire has to carry `""` where an un-migrated row carries `null`.
+            // A `None` here would pin the key's spelling and nothing about the three states.
+            produced_mana: Some(String::new()),
             owned_quantity: 3,
             image_uris: Some(BTreeMap::from([(
                 crate::image_uri::LIST_VARIANT.to_owned(),
@@ -13105,6 +13511,7 @@ mod tests {
                 "gameChanger": false, "finishes": "[\"nonfoil\",\"foil\"]",
                 "everUncommon": false, "unitPrice": 400.0, "finish": "foil",
                 "promoTypes": "[\"surgefoil\"]",
+                "producedMana": "",
                 "ownedQuantity": 3,
                 "imageUris": {
                     "display": "https://cards.scryfall.io/display/front/0/0/x.webp?17"
