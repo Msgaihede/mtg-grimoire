@@ -31,6 +31,12 @@ describe("DeckLedger", () => {
           marketplace={MARKETPLACES.tcgplayer}
           formatName="Commander"
           gameChangers={0}
+          // The chip's own gate, and deliberately not the count above it. Off by default, so a
+          // case that wants the chip says so — and so the deck with none goes on asserting that
+          // nothing at all is drawn.
+          hasGameChangers={false}
+          gameChangersOnly={false}
+          onGameChangersOnlyToggle={() => {}}
           tight={false}
           // The ordinary deck, which is what every case above the virtual block is a claim
           // about — so the `Owned` term goes on being asserted exactly as it was before the prop
@@ -186,90 +192,120 @@ describe("DeckLedger", () => {
    * reads "4 issues" would invent four problems.
    */
   it("counts the game changers", () => {
-    ledger([card({ name: "Bolt" })], { gameChangers: 2 });
+    ledger([card({ name: "Bolt" })], { gameChangers: 2, hasGameChangers: true });
 
-    expect(screen.getByText("2 game changers")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "2 game changers" })).toBeInTheDocument();
   });
 
   it("counts one game changer in the singular", () => {
-    ledger([card({ name: "Bolt" })], { gameChangers: 1 });
+    ledger([card({ name: "Bolt" })], { gameChangers: 1, hasGameChangers: true });
 
-    expect(screen.getByText("1 game changer")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "1 game changer" })).toBeInTheDocument();
   });
 
-  /** A readout of `0 game changers` points at cards to go and find where there are none to find,
-   *  so the figure is drawn only for a deck that plays one. Nothing else gates it: with the
-   *  spotlight gone there is no latch left that could outlive its own control. */
-  it("draws nothing at all for a deck that plays none", () => {
+  /** Nothing at all for a deck that draws none — no chip to press and no words. The gate is
+   *  `hasGameChangers` rather than the count, which is the case below. */
+  it("draws nothing at all for a deck that draws none", () => {
     ledger([card({ name: "Bolt" })]);
 
-    expect(screen.queryByText(/game changer/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/game changer/i)).not.toBeInTheDocument();
     expect(screen.queryByRole("button")).toBeNull();
   });
 
   /**
-   * Abbreviated on a narrow column, with the words kept for a screen reader — and since
-   * 2026-09-09 that `sr-only` twin is the whole of what names this figure.
+   * **The chip is gated on what is on the desk and the count on what the format will judge**, so
+   * a game changer parked in a switched-off pile draws the chip with no number: that pile counts
+   * toward nothing, and `0 game changers` would point at cards to go and find that are right
+   * there. The caption falls back to the chip's bare words.
+   */
+  it("draws the chip with no count for a game changer the count does not reach", () => {
+    ledger([card({ name: "Bolt" })], { gameChangers: 0, hasGameChangers: true });
+
+    expect(screen.getByRole("button", { name: "Game Changers" })).toBeInTheDocument();
+    expect(screen.queryByText(/0 game changers/)).not.toBeInTheDocument();
+  });
+
+  /**
+   * Abbreviated on a narrow column, with the words kept for a screen reader — and that `sr-only`
+   * twin is the whole of what names the chip at this width.
    *
-   * While the count was a press it carried an `aria-label`, and a label **replaces** an element's
-   * contents for naming, so the twin was announced to nobody. The label went with the press. The
-   * role is asserted absent at this width too, because `tight` is a second render path through
-   * the same element and a figure that grew a button back at 761px would be one only the narrow
-   * window had.
+   * It is load-bearing rather than a courtesy: an `aria-label` **replaces** an element's contents
+   * for naming, so one here would announce the abbreviation to nobody. The chip is a press again
+   * since 2026-09-10 and still carries no label, which is what keeps these two strings the name —
+   * asserted through `getByRole` at this width, because `tight` is a second render path through
+   * the same element.
    */
   it("abbreviates the game-changer count when the column is tight", () => {
-    ledger([card({ name: "Bolt" })], { gameChangers: 6, tight: true });
+    ledger([card({ name: "Bolt" })], { gameChangers: 6, hasGameChangers: true, tight: true });
 
     expect(screen.getByText("6 GC")).toHaveAttribute("aria-hidden", "true");
     expect(screen.getByText("6 game changers")).toHaveClass("sr-only");
-    expect(screen.queryByRole("button", { name: /game changer/i })).toBeNull();
+    expect(screen.getByRole("button", { name: "6 game changers" })).toBeInTheDocument();
   });
 
   /**
-   * ## The count is a readout again (2026-09-09)
+   * ## The count and the filter are one control (2026-09-10)
    *
-   * It was a **press** for one day. From 2026-09-08 hovering it, or latching it with a click,
-   * faded every card in the deck that is not a game changer to a quarter — and on a hundred-card
-   * deck a hundred stacked quarter-opacity cards is a blur rather than an answer, so *which ones*
-   * is a `Game Changers` chip in the toolbar's label-filter row now: it narrows the deck to those
-   * cards and leaves everything that survives drawn exactly as it was.
+   * The chip spent a day as a bare span while the filter lived in the toolbar's label-filter row,
+   * and the border went with the handlers then for a reason worth keeping: an edge is what says
+   * *pressable*, so a bordered span standing between two real buttons goes on making an offer
+   * nothing behind it can keep. Both are back together — there is something to press again.
    *
-   * What has to stay true here is that nothing about this figure offers a press — no role, no
-   * pressed state, no name of its own beyond the words it draws, no crown, and no edge. The
-   * border is the half a later edit is likeliest to put back by taste, because it is what said
-   * *pressable* and a bordered span between two real buttons goes on saying it; it is pinned as
-   * the absence of any `border*` utility rather than as a class string, which is a claim about
-   * the token and not about the spelling.
+   * The press is `aria-pressed` and never a name that changes with it, and the crown is drawn in
+   * **both** states, because here it is the chip's identity rather than its state.
    */
-  it("draws the game-changer count as a readout with nothing to press", () => {
-    ledger([card({ name: "Bolt" })], { gameChangers: 6 });
+  it("presses the game-changer chip as a toggle, and never in the accent", () => {
+    const presses: number[] = [];
+    ledger([card({ name: "Bolt" })], {
+      gameChangers: 6,
+      hasGameChangers: true,
+      onGameChangersOnlyToggle: () => presses.push(1),
+    });
 
-    expect(screen.queryByRole("button", { name: /game changer/i })).toBeNull();
+    const chip = screen.getByRole("button", { name: "6 game changers" });
+    expect(chip).toHaveAttribute("aria-pressed", "false");
+    expect(chip.querySelector("svg")).not.toBeNull();
+    // Never the accent's edge or words, which on this line already mean *a reading you can go and
+    // look at* — `FOCUS`'s `outline-accent` is the app's one focus ring and is not this chip's
+    // colour, which is why the claim names the two properties rather than the token.
+    expect(chip.className).toContain("border-border");
+    expect(chip.className).not.toContain("border-accent");
+    expect(chip.className).not.toContain("text-accent");
 
-    const readout = screen.getByText("6 game changers");
-    expect(readout).not.toHaveAttribute("aria-pressed");
-    expect(readout).not.toHaveAttribute("aria-label");
-    // The crown went with the latch it marked: it was the mark the cards being lit up wore, and
-    // nothing is being lit up.
-    expect(readout.querySelector("svg")).toBeNull();
-    expect([...readout.classList].some((name) => name.startsWith("border"))).toBe(false);
+    fireEvent.click(chip);
+    expect(presses).toHaveLength(1);
+  });
+
+  /** Pressed: the same name, the same crown, and the gold the cards themselves wear. */
+  it("wears pie-gold when it is pressed, and says so through aria-pressed", () => {
+    ledger([card({ name: "Bolt" })], {
+      gameChangers: 6,
+      hasGameChangers: true,
+      gameChangersOnly: true,
+    });
+
+    const chip = screen.getByRole("button", { name: "6 game changers" });
+    expect(chip).toHaveAttribute("aria-pressed", "true");
+    expect(chip).not.toHaveAttribute("aria-label");
+    expect(chip.className).toContain("border-pie-gold");
+    expect(chip.querySelector("svg")).not.toBeNull();
   });
 
   /**
-   * The two controls at the right end are the caller's and the count sits between them, in the
-   * order the design draws them: what is wrong, what is powerful, and the bracket the two add up
-   * to. The middle one is the only one of the three this component draws, and it is the only one
-   * that is not a press — the query takes `span` as well as `button` for that reason.
+   * The two layer-opening controls are the caller's and the game-changer chip sits between them,
+   * in the order the design draws them: what is wrong, what is powerful, and the bracket the two
+   * add up to. The middle one is the only one of the three this component draws itself.
    */
-  it("slots the check and the bracket around the game-changer count", () => {
+  it("slots the check and the bracket around the game-changer chip", () => {
     ledger([card({ name: "Bolt" })], {
       gameChangers: 2,
+      hasGameChangers: true,
       check: <button type="button">2 issues</button>,
       bracket: <button type="button">Bracket ~4</button>,
     });
 
     const wanted = ["2 issues", "2 game changers", "Bracket ~4"];
-    const drawn = [...document.querySelectorAll("dl button, dl span")]
+    const drawn = [...document.querySelectorAll("dl button")]
       .map((el) => el.textContent ?? "")
       .filter((text) => wanted.includes(text));
     expect(drawn).toEqual(wanted);
@@ -346,6 +382,7 @@ describe("DeckLedger", () => {
     it("keeps the other four terms and the controls beside them", () => {
       virtual({
         gameChangers: 2,
+        hasGameChangers: true,
         check: <button type="button">2 issues</button>,
         bracket: <button type="button">Bracket ~4</button>,
       });
@@ -354,7 +391,7 @@ describe("DeckLedger", () => {
         expect(screen.getByText(label, { selector: "dt" })).toBeInTheDocument();
       }
       expect(screen.getByText("2 issues")).toBeInTheDocument();
-      expect(screen.getByText("2 game changers")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "2 game changers" })).toBeInTheDocument();
       expect(screen.getByText("Bracket ~4")).toBeInTheDocument();
     });
 

@@ -1544,7 +1544,8 @@ describe("CardGrid", () => {
     expect(row()).toHaveStyle({ height: "262px" });
 
     // Twice the card is twice the chin: 476 of art and 56 of chin, less the same 4. The rise does
-    // **not** scale — it is derived from a Tailwind corner radius, which is 7px at every stop.
+    // **not** scale — the corner it hides the seam of is a Tailwind class at a fixed pixel count
+    // at every stop.
     act(() => setZoom("search", 2));
     expect(row()).toHaveStyle({ height: "528px" });
 

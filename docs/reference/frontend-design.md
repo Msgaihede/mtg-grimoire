@@ -484,14 +484,21 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     transparent cards give a blur effect."* No other opacity is the fix, which is why the gesture
     went rather than the number.
 
-  **What replaced it narrows instead of dimming**: a `Game Changers` chip in the deck toolbar's
-  label-filter row, pressed and pressed again like the label chips beside it, joining their OR,
-  drawn only where the deck has a game changer, and lit `pie-gold` with a crown rather than the
-  accent — because that is the gold the crowns on the cards themselves wear. **It draws nothing on
-  any card**, which is the drawing decision this whole entry turns into: a card that survives the
-  filter looks exactly as it looks unfiltered, so there is no class to spread across four views, no
-  container attribute to arm and no drag to exempt. Its rules are in
-  [`src/features/decks/CLAUDE.md`](../../src/features/decks/CLAUDE.md).
+  **What replaced it narrows instead of dimming**: a `Game Changers` chip pressed and pressed
+  again like a label chip, joining the label chips' OR, drawn only where the deck has a game
+  changer, and lit `pie-gold` with a crown rather than the accent — because that is the gold the
+  crowns on the cards themselves wear. **It draws nothing on any card**, which is the drawing
+  decision this whole entry turns into: a card that survives the filter looks exactly as it looks
+  unfiltered, so there is no class to spread across four views, no container attribute to arm and
+  no drag to exempt.
+  **Where that chip _is_ moved once and the second answer is the count itself** (2026-09-10). It
+  spent a day in the deck toolbar's label-filter row and is the ledger's game-changer readout now
+  — one control, between the format check and the bracket, in the place the count has held since
+  2026-08-24. The row it left is the reader's own arbitrary label strings and nothing else; what
+  the merge buys is that the number and the press that acts on it are the same object, and what it
+  costs is a chip whose caption has two spellings (`2 game changers`, and the bare `Game Changers`
+  for a game changer parked in a switched-off pile, where the rules readout counts nothing). Its
+  rules are in [`src/features/decks/CLAUDE.md`](../../src/features/decks/CLAUDE.md).
   **Two findings the deleted rule leaves behind, both still true of anything shaped like it.** The
   **dimmed** state was what carried the class, because the inverse spelling is
   `[data-gc-spotlight] *:not(.deck-gc-lit)` — a `:not()` over a **broad subject**, evaluated
@@ -659,8 +666,11 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
     what enforces it: it is _in flow_, and a transform changes no layout, so scaled text would grow
     straight out of the strip the virtualiser sized its rows from.
   - **What does not scale, and why**: hairline borders (1px is a hairline at every size),
-    `CardArt`'s `rounded-lg` and the stack's 7px corner (Tailwind classes that do not scale — which
-    is also why `STACK_DATA_RISE` stays 4px, since it hides the seam under that corner), the
+    `CardArt`'s `rounded-lg` and the deck card face's `FACE_RADIUS` (Tailwind classes at fixed
+    pixel counts, which do not scale — which is also why `STACK_DATA_RISE` stays 4px, since it
+    hides the seam under that corner; that radius went 7px → **9** on 2026-09-10 and the rise was
+    re-measured against it and did not move — see *The face was two pixels wide of its own box*
+    below), the
     stack's `STACK_LIFTED_MARGIN` (a gap saying "this card is out of the pile", not part of the
     card), and the gutters `CardGrid` splits either side of a row. **A sixth entry read "the
     banner's drop shadow" and went with the banner on 2026-09-08** — `GameChangerBanner` is
@@ -2353,9 +2363,12 @@ backed out through `element.style` in the same session so the two states are one
   `right-[calc(5px*var(--mark-scale,1))]` "to keep the strip off the card's own clipped corner",
   written when the strip's marks were drawn on the **right** and that corner held a `RULE BREAK`
   box with a hairline border. The marks went left on 2026-08-13 and the inset stayed. It is
-  `inset-x-0` now: the face is `overflow-hidden rounded-[7px]`, so the tick gets the same clipped
-  corner the quantity tag has always had at `left-0` — measured `border-radius: 7px`,
-  `overflow: hidden`, and both gaps **0**. Bookends in radius as well as in slant.
+  `inset-x-0` now: the face is `overflow-hidden` at `FACE_RADIUS`, so the tick gets the same
+  clipped corner the quantity tag has always had at `left-0` — measured `border-radius: 7px`,
+  `overflow: hidden`, and both gaps **0**. Bookends in radius as well as in slant. (**That 7px
+  reading is the value of the day and the corner was two pixels too tight**; it is 9 since
+  2026-09-10 and the two marks are still bookends, because both read the same constant. What the
+  correction moved is where they stop — see *The face was two pixels wide of its own box*.)
 
 ### And the sixth, off the same corner and reported the next day (issue #182)
 
@@ -3970,6 +3983,58 @@ scroller inside a `tabIndex={-1}` panel): focus landed on the panel, not on `<bo
 each that shape and none of them registers a scroll listener at all, so the bug was `Dropdown`'s
 alone.
 
+## The trigger draws the picked row's glyph, and what that exposed about the chevron
+
+**2026-09-10.** `<Dropdown>`'s rows have carried an `icon` since the set picker landed; the closed
+trigger drew `picked.label` and nothing else. So a control whose rows say what they *are* with a
+glyph — the card modal's label swatch, the wishlist's destination kind — said it only while open,
+which is the state a reader is in for about a second at a time. The trigger draws the picked row's
+glyph now: `picked.triggerIcon ?? picked.icon`, and nothing at all for a placeholder, which stands
+for a value the list does not hold and so has no row whose glyph it could borrow. `<MultiDropdown>`
+is untouched — its trigger says a count, and a count is not any one row's to illustrate.
+
+**`triggerIcon` exists for one caller and one reason: two sizes of one glyph.** The card modal's
+label picker draws a **10px** `LabelSwatch` (`rounded-[2px]`) in a list row and a **16px** one
+(`rounded-[4px]`) on the trigger. The list is showing every colour at once, so a row's job is to be
+told apart from the row above it; the closed trigger is the only place a reader reads a label's
+colour with nothing beside it to compare against. Everywhere the two sizes agree — the wishlist's
+`Heart`/`Folder`/`FolderPlus`, the set picker's keyrune — the field stays `undefined` and the row's
+own icon is what the trigger draws.
+
+**Measured over the built stylesheet, headless Edge, 2026-09-10, at the card modal's own 15rem
+(240px) controls column.** A `file://` harness carrying the real markup dumped out of a throwaway
+vitest — so the classes are `twMerge`'s own answer (`shrink-0 size-4 rounded-[4px]`, with
+`size-2.5` and `rounded-[2px]` gone) rather than a hand-written guess.
+
+| Trigger | Label | Swatch | Text | Chevron | Box |
+| --- | --- | --- | --- | --- | --- |
+| `h-9`, short label | `Removal` | 16×16 at x 35, `4px` radius, `rgb(211,32,42)` | 52.8px at x 59 | **14px** at x 239 | 240×36, no overflow |
+| `h-9`, 35-char label | `Removal — sweepers and edicts, long` | 16×16 | 182.8px, ellipsed | **11.3px** | 240×36, no overflow |
+| `h-11` (phone rung) | `Removal` | 16×16, centred | 52.8px | **14px** | 240×44 |
+| No label | — | none | — | 14px | 240×36 |
+
+**The chevron squashing is the arrow's own bug and it predates this.** A `size-3.5` is a *request*,
+not a floor: the chevron is a flex item beside content as long as a reader's own category name, and
+a flex item's default `flex-shrink` is 1. The same 35-character label on the **old** bare-string
+trigger squashed it to **12.3px** — and worse, the bare string had no `truncate`, so it wrapped to
+two lines inside a fixed 36px box and hung out of it. The swatch's 24px makes the squash 1px worse
+(11.3), which is how it was found rather than what caused it. `shrink-0` on the `ChevronDown` is
+the fix: same row, same label, the arrow back at **14px** and the label ellipsing at **180px**.
+
+**The truncation is the other half and it is new.** With `fill` the trigger is a `justify-between`
+flex row, and a bare text node in one is an *anonymous* flex item that cannot be given `min-w-0` —
+which is why the old long label wrapped rather than ellipsed. The glyph branch wraps both in
+`flex min-w-0 items-center gap-2` with `min-w-0 truncate` on the label, so the trigger finally
+clips the way `CardModalControls`' own comment had assumed it already did ("in a column where the
+pickers below it truncate"). The no-glyph branch still renders the bare string, so every dropdown
+in the app that has never had an icon draws exactly what it always did.
+
+**jsdom sees none of the geometry** — no layout engine, so every rectangle is 0 and the wrap, the
+ellipsis and the squashed arrow are all invisible to the suite. What the suite pins is the
+*structure*: the picked row's glyph on the trigger, `triggerIcon` beating `icon`, no glyph for a
+placeholder, none on a `<MultiDropdown>`, and the label swatch carrying the stored hex rather than
+`labelColorCss`'s fallback grey.
+
 ## The card's chin, and the one foot under every card in the app
 
 `src/components/CardChin.tsx`, 2026-08-26. Three surfaces drew a foot under a card and each held
@@ -4044,7 +4109,7 @@ nothing.
 
 **The sentence above named `views.test.tsx` as pinning "the deck grid's own bottom edge", and
 there is no bottom edge there to pin since 2026-09-08.** That tile passes `seam="card"`, where it
-passed `"art"`: the face inside its button clips its own corners at `rounded-[7px]` and the tile
+passed `"art"`: the face inside its button clips its own corners at `FACE_RADIUS` and the tile
 itself carries the `rounded-lg border`, so the chin draws `border-x` only and rides onto the card's
 own border exactly as a stacked card's does. `"art"` is what a bare `CardArt` frame needs and there
 is no longer one on that wall. The lesson the sentence was carrying is untouched and is why it is
@@ -4078,8 +4143,63 @@ is still a ring on the `<li>`, still painted outside the border box, so a picked
 breaks a rule still wears gold around red.) The one artifact is at the
 seam itself and is about a pixel: the frame's `rounded-lg` corner curves inward over the 4px the
 chin rides up, so the outline pinches ~1px before the bar's straight edge resumes. `CHIN_RISE` was
-derived from the stack's 7px face radius, where the same excursion is 0.68px; at the art's 10px it
-is 2px, of which the bar covers all but the top hairline.
+derived from the stack's face radius when that radius was 7px, where the same excursion is
+0.68px; at the art's 10px it is 2px, of which the bar covers all but the top hairline. (**The face
+is 9px since 2026-09-10** and the rise was re-measured rather than re-derived — the bottom corners
+came back pixel for pixel identical, because the bar covers them whichever curve the face took. The
+excursion it *did* expose was two pixels of desk immediately above the bar, closed by the card's own
+`bg-surface` rather than by a taller rise. Next section.)
+
+### The face was two pixels wide of its own box, and the card's edge lost its corners (2026-09-10)
+
+Reported as *the rule break border is cut off by the badges*, with a screenshot of a stacked
+Valakut Awakening whose destructive edge simply stopped where the green quantity tag and the plan's
+tick met it.
+
+**The root cause is one number and it had been wrong since the face was written.** A bordered box
+has two curves — the border box's, and the padding box's one border width tighter — and
+`DeckCardFace`'s face fills the padding box exactly. `src/index.css` sets `--radius: 0.625rem` and
+`--radius-lg: var(--radius)`, so a deck card's `rounded-lg` outer corner is **10px** here rather
+than Tailwind's stock 8, and the padding box's is **9**. The face clipped at `rounded-[7px]`, which
+is the stock-8 arithmetic. Everything between the two arcs is *border*, and a face that clips 2px
+wide of it has a background, a picture and three marks to paint over the card's own edge with.
+
+**Measured over the dev server** (headless Edge against Storybook, `Decks/CardStack`'s
+`RuleBreakAndGameChanger` and `Decks/Views/GridView`'s `Default`, pixels read out of the CDP
+screenshot rather than eyeballed). The stacked card's box: `border-radius: 10px`,
+`border-width: 1px`, `border-color: oklch(0.704 0.191 22.216)`, rect `16,16 224×319`; the face
+inside it `border-radius: 7px`, `overflow: hidden`, rect `17,17 222×293` — the padding box, whose
+corner is 9.
+
+| Corner, at 7px | Corner, at 9px |
+| --- | --- |
+| Top-left rows y=17..23 carry **no destructive pixel at all** — `C8C4BF`, the printed card's own title bar, where the arc belongs | A continuous ramp from the top edge round to the side: `BF4D51` at (21,17), `D0565B` at (20,18), `C85658` at (18,20), `BF4D51` at (17,21), full `FF6467` from y=26 |
+| Top-right the same, four rows of the card's black border where the arc belongs | `BC4C50` at (234,17) through `BB4C4F` at (238,21) into the straight edge |
+
+The same reading on the Grid tile (`182,328 150×235`), which draws the same component. **Only the
+*top* two corners ever showed it**, and that is `CardChin`'s doing rather than luck: the chin is
+`-mx-px border-x` in the card's own `tone`, so it redraws the bottom two over whatever the face did
+to them — the bottom-left corner is byte-identical at both radii.
+
+**Two things were settled by experiment rather than by argument.**
+
+- **The chin's `rounded-b-[7px]` is not this number and was left alone.** Patched to 9px live on
+  the same tile, the bar's own border curve left the card's and the bottom corner read as a **4px
+  smear of two arcs** (y=556 `733135`+`CF5458`, y=561 four red pixels wide) where 7px reads as one
+  clean 1–2px arc. Its box is the *border* box across and the padding box down, so it is neither of
+  the card's two curves and there is nothing for it to match.
+- **The card wrapper gained `bg-surface`.** A face flush with its padding box curves away in the
+  *middle* of the card at the bottom corners, where what is behind it is the `<li>` rather than the
+  border — and the `<li>` painted nothing, so the desk showed through: **two pixels** at (183,532)
+  and (183,533), `0F0F15` and `0B0C11` against the art's `16181E`. An opaque card closes it
+  (`13151B`, a sub-pixel blend) and costs nothing anywhere else, the face and the chin both being
+  `bg-surface` already. The alternative was raising `CHIN_RISE` from 4 to 6, which moves every
+  card's height and the row pitch of a wall with nothing wrong with it.
+
+**`CHIN_RISE` is therefore a measured number and no longer a derived one.** Its doc said "that
+radius less its own border", which was arithmetic about a radius that was wrong — and 7 less 1 was
+never 4 anyway. It stays at 4 because the bottom corners came back identical, not because the
+derivation still runs.
 
 **`tone` is the other half of the same join, and the deck stack was its one caller until the deck's
 grid became the same card on 2026-09-08 — two now, and they are two drawings of one object rather
