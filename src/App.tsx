@@ -32,6 +32,11 @@ import { FeedDownloadProvider } from "@/pwa/FeedDownloadProvider";
 function ActiveView({ update }: { update: Update }) {
   const activeView = useAppStore((s) => s.activeView);
   const openDeckId = useAppStore((s) => s.openDeckId);
+  // **The app opens on Home and swaps to the reader's stored view ~93 ms later, and that is
+  // deliberate — the obvious fix was built, measured and backed out.** `useStartViewHydration`
+  // carries the numbers and the reasoning; the short version is that gating this area on the read
+  // trades a bounded flicker for an unbounded blank, because the client retries a failed query
+  // and a view that is *waiting* looks exactly like a view that is broken.
   // First, because it is the view the app opens on — `store.ts`'s `activeView` starts here, and
   // `useStartView` is the only thing that moves it before the reader has pressed anything. The
   // arms are in `NAV`'s order, so the first arm and the first rail row are the same decision.
