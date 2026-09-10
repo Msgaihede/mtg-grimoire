@@ -38,6 +38,7 @@ import {
   type DeckCard,
   type DeckCategory,
   type DeckFinish,
+  type DeckNote,
   type DeckPullRow,
   type DeckQuickAddWish,
   type DeckVariant,
@@ -76,7 +77,7 @@ import { DeckNameField } from "./DeckNameField";
 // `React.lazy`, so Tiptap's 141.5 kB gzip stays out of this chunk — an import of that module
 // anywhere on this path would put it back with nothing going red. `DeckNotesPanel.test.tsx`
 // sweeps `src/` for exactly that.
-import { DeckNotesPanel } from "./DeckNotesPanel";
+import { DeckNotesPanel, type DeckNoteRequest } from "./DeckNotesPanel";
 import { notedOracleIds } from "./deckNotes";
 import { useDeckNotes } from "./useDeckNotes";
 import { DeckSearchPanel, MIN_PANEL_WIDTH_PX } from "./DeckSearchPanel";
@@ -2869,6 +2870,79 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   );
 
   /**
+   * Every oracle id a deck note names — the per-card note mark, in every view at once.
+   *
+   * **There is no *"which cards in this deck have notes"* command and there must not be one.**
+   * The band below already holds every note and every note holds its oracle ids, so this is a
+   * `Set` built in TypeScript from a read the page has already made — the boundary this repo
+   * keeps, and the same call `Empty a list` makes for its two counts. A second command would be
+   * a second source of truth for a fact already in hand, free to disagree with the band a reader
+   * is looking at.
+   *
+   * **The same hook the band mounts, and that costs one cache read rather than a round trip**:
+   * `useDeckNotes` keys on `["decks", "notes", deckId]`, so the two observers share one query.
+   * Reading it here rather than lifting it out of the band is what keeps the band's own props
+   * the four the plan gives it.
+   *
+   * `undefined` never reaches a view — an empty set is what a deck with no notes answers, and
+   * `deckCardNoted` treats the two alike.
+   *
+   * **It is read here, above the card menu, rather than beside the marks it feeds.** The menu's
+   * `Notes ▸` is built from `notes.notes`, so that list is a dependency of `deckCardMenu`'s
+   * `useCallback` — and a dependency array is evaluated during the render that declares it, so a
+   * hook called two hundred lines below would be a temporal-dead-zone `ReferenceError` on the
+   * first paint of every deck rather than anything the type checker would name.
+   */
+  const notes = useDeckNotes(deckId);
+  const noted = useMemo(() => notedOracleIds(notes.notes), [notes.notes]);
+
+  /**
+   * **A note act the card menu asked for, parked until the band can honour it** (issue #447).
+   *
+   * `quickCategory`'s arrangement one union over, and its reason: a menu row is a bare callback
+   * that runs as the panel closes, and what these two rows ask for — create a note, open one for
+   * reading — belongs to the band, which owns the notes query, the five writes and the
+   * one-panel-per-row state. Holding the *request* here is what lets the row stay a callback and
+   * keeps every note write in one observer.
+   *
+   * **Not a `Layer` arm**, though it looks like one: nothing is drawn over the deck, the band is
+   * always mounted, and this state is cleared on the render after the band takes it rather than
+   * living as long as a surface is up.
+   */
+  const [noteRequest, setNoteRequest] = useState<DeckNoteRequest | null>(null);
+  const clearNoteRequest = useCallback(() => setNoteRequest(null), []);
+
+  /**
+   * **Add note…** — the card menu's first note row.
+   *
+   * It writes nothing here: the band makes the note, so the create, its refusal line and the
+   * editor that opens on it are all one observer's. `addLabel`'s split exactly.
+   *
+   * ⚠️ **A card with no oracle id never reaches this**, and the fence is at the build site rather
+   * than in here: `deckCardMenu` passes `addNote: undefined` for an orphan printing, and
+   * `noteItems`' all-or-none guard then drops the whole block — which costs that card nothing it
+   * could have used, since `notesForCard` answers `[]` for a missing id and `Notes ▸` would never
+   * have been drawn. **Absent rather than greyed** is this menu's own precedent for a row that
+   * can only be refused (`zoneItem`), and it is the honest shape here: a note attaches by oracle
+   * id and by nothing else, so a note made from such a card would name nothing and turn up under
+   * no card's submenu ever again — a write with no way back to it. The narrowing below is what
+   * makes {@link DeckNoteRequest}'s own `oracleId: string` true without a cast, and it is
+   * unreachable in the app.
+   */
+  const addNote = useCallback((card: DeckCard) => {
+    const { oracleId, name } = card;
+    if (oracleId === null) return;
+    setNoteRequest({ kind: "add", card: { oracleId, name } });
+  }, []);
+
+  /** **Notes ▸ <title>** — the card menu's second note row. The note itself rather than its id,
+   *  because the row already holds the whole thing; only the id survives the trip, since the band
+   *  reads the same query and would rather point at its own row than hold a frozen copy. */
+  const openNote = useCallback((note: DeckNote) => {
+    setNoteRequest({ kind: "open", noteId: note.id });
+  }, []);
+
+  /**
    * One deck card's right-click, **built here and handed to the four views as one function**.
    *
    * A view that assembled its own would be four copies of one rule, and the rule reads three
@@ -2939,6 +3013,22 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           quickAdd: tracks ? quickAdd : undefined,
           quickAddAndUnwish: tracks ? quickAddAndUnwish : undefined,
           pullCard: tracks ? pullCard : undefined,
+          // **The two note rows** (2026-09-10, issue #447). `deckCardNoteRows` was built, tested
+          // and reachable from nothing until this: `noteItems`' all-or-none guard drops the whole
+          // block — separator included — unless both callbacks arrive, so a builder handed
+          // neither drew a menu with no mention of notes at all and every test in
+          // `deckCardMenu.test.tsx` went on passing about a function the app never called.
+          //
+          // The list is **unfiltered**, which is what `DeckCardMenuDeps.notes` asks for: *which
+          // notes name this card* is `notesForCard`'s question and is answered in the builder, so
+          // filtering here would put that predicate at every call site and hand this menu a list
+          // that disagrees with the band on the same screen.
+          notes: notes.notes,
+          // ⚠️ **`undefined` for an orphan printing, which takes `Notes ▸` with it** — see
+          // `addNote` for the argument. `openNote` is passed unconditionally because it is
+          // structurally fine on any card; the guard is on the half that would write.
+          addNote: card.oracleId === null ? undefined : addNote,
+          openNote,
           // **Only when this card is in the set** — `dragsWholeSelection`'s rule for a press
           // instead of a drag. A right-click on a card the reader has not picked is about that
           // card, so `[]` goes over and the menu is the singular one it has always been.
@@ -2971,6 +3061,13 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       quickAdd,
       quickAddAndUnwish,
       pullCard,
+      // **The notes themselves and not just the two callbacks.** `Notes ▸` is built from this
+      // list at the moment the menu is opened, so a missing dependency here is a menu built from
+      // the notebook as it was when this callback was last made — a note written in the band
+      // would not be offered on the card it names until something else moved.
+      notes.notes,
+      addNote,
+      openNote,
       pickedCards,
     ],
   );
@@ -3507,27 +3604,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     () => (spec ? violationsByCard(validateForMarks([...deck.cards], spec)) : undefined),
     [deck.cards, spec],
   );
-
-  /**
-   * Every oracle id a deck note names — the per-card note mark, in every view at once.
-   *
-   * **There is no *"which cards in this deck have notes"* command and there must not be one.**
-   * The band below already holds every note and every note holds its oracle ids, so this is a
-   * `Set` built in TypeScript from a read the page has already made — the boundary this repo
-   * keeps, and the same call `Empty a list` makes for its two counts. A second command would be
-   * a second source of truth for a fact already in hand, free to disagree with the band a reader
-   * is looking at.
-   *
-   * **The same hook the band mounts, and that costs one cache read rather than a round trip**:
-   * `useDeckNotes` keys on `["decks", "notes", deckId]`, so the two observers share one query.
-   * Reading it here rather than lifting it out of the band is what keeps the band's own props
-   * the four the plan gives it.
-   *
-   * `undefined` never reaches a view — an empty set is what a deck with no notes answers, and
-   * `deckCardNoted` treats the two alike.
-   */
-  const notes = useDeckNotes(deckId);
-  const noted = useMemo(() => notedOracleIds(notes.notes), [notes.notes]);
 
   /** Copies of the cards the format calls game changers, over the piles that count — the second
    *  half of the header's rules readout, beside the check chip's own count. */
@@ -4910,6 +4986,11 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           cards={deck.cards}
           open={row.notesOpen}
           onToggle={(next) => deck.update.mutate({ notesOpen: next })}
+          // The card menu's two rows, honoured here — see `addNote` above. The band clears the
+          // request as it takes it, which is what stops a standing instruction being re-run on
+          // every render of a deck the reader is editing.
+          request={noteRequest}
+          onRequestHandled={clearNoteRequest}
         />
       )}
 

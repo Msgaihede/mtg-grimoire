@@ -151,6 +151,10 @@ const cardDetail = vi.hoisted(() => vi.fn());
  *  the one of the six a test in this file configures: which cards a note names is what puts the
  *  note glyph on a card in all four views. */
 const deckNotes = vi.hoisted(() => vi.fn());
+/** The Notes band's create — hoisted beside the read since 2026-09-10, because the card menu's
+ *  `Add note…` is a press *this* file drives: the row parks a request, the band writes, and what
+ *  a test here asserts is the argument this command was handed. */
+const deckNoteCreate = vi.hoisted(() => vi.fn());
 const collectionList = vi.hoisted(() => vi.fn());
 const collectionToDeck = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
@@ -194,7 +198,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     // writes are here for the same reason: a press that reached an undefined function would fail
     // as a write refusal rather than as the missing double it is.
     deckNotes,
-    deckNoteCreate: vi.fn().mockResolvedValue(undefined),
+    deckNoteCreate,
     deckNoteUpdate: vi.fn().mockResolvedValue(undefined),
     deckNoteDelete: vi.fn().mockResolvedValue(undefined),
     deckNoteAttach: vi.fn().mockResolvedValue(undefined),
@@ -831,6 +835,10 @@ beforeEach(() => {
   // No notes unless a test says otherwise — which is what keeps the band silent and, since
   // 2026-09-10, keeps the note glyph off every card in every other case here.
   deckNotes.mockReset().mockResolvedValue([]);
+  // **The whole note back, never `undefined`.** The band chains the created note's *id* off this
+  // answer — it is the only place that id ever arrives — so a stub resolving nothing is a
+  // TypeError inside a mutation callback, reported against whichever test ran next.
+  deckNoteCreate.mockReset().mockResolvedValue(noteRow({ id: 9, title: "Lightning Bolt" }));
   deckSetCardQuantity.mockReset().mockResolvedValue({ id: 1, quantity: 0, removed: true });
   // What a cut gave back: the row in `Recently removed` the copies landed in, and how many.
   // `deckCardId` is `null` from this direction by design — the caller handed the id in, and a
@@ -5751,6 +5759,143 @@ describe("DeckEditor — a card's menu", () => {
     await waitFor(() =>
       expect(deckCardSetLabel).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, "live", null, 8),
     );
+  });
+
+  /**
+   * ⚠️ **The assertion whose absence let `deckCardNoteRows` ship unreachable** (issue #447).
+   *
+   * That builder was written, exported and covered by 66 passing tests, and **the app never called
+   * it**: `noteItems` drops the whole block — separator included — unless both of its callbacks
+   * arrive, and this editor passed neither, so the shipped menu read
+   * `… Label card, Remove card` with nothing about notes anywhere in it. Every one of those 66
+   * tests went on passing, because each of them hands the builder its own dependencies.
+   *
+   * That is the general shape rather than a one-off: **a builder tested against arguments a test
+   * supplies proves nothing about the arguments the app supplies.** The fence is an assertion
+   * that the menu the *editor* builds **contains** the row, and it belongs here, in the file whose
+   * whole subject is the wiring.
+   */
+  it("offers Add note… on an ordinary deck card", async () => {
+    await open();
+    await rightClickCard("Lightning Bolt");
+
+    expect(screen.getByRole("menuitem", { name: "Add note…" })).toBeInTheDocument();
+  });
+
+  /**
+   * **`Notes ▸` is conditional where `Add note…` is not, and both halves are asserted on one
+   * deck.**
+   *
+   * A card can always be written about, so the add is on every card; a card that is named by
+   * nothing has no list, and an **absent** row is the answer rather than a greyed one — a greyed
+   * row's accessible name in this app carries its reason, so `Notes (no notes name this card)`
+   * would be a sentence read out on the great majority of a deck's cards to say that nothing has
+   * happened.
+   *
+   * The two cards are the point: one note, naming Lightning Bolt and not Bear, so the submenu's
+   * presence and its absence are the same fixture read twice. Waiting on the band's own count
+   * first is what makes that honest — a menu built before `deck_notes` answered would draw no
+   * submenu for a reason that has nothing to do with the rule.
+   */
+  it("draws the Notes submenu only on the card a note names", async () => {
+    deckNotes.mockResolvedValue([
+      noteRow({
+        id: 3,
+        title: "Why four",
+        cards: [{ oracleId: "o-Lightning Bolt", name: "Lightning Bolt" }],
+      }),
+    ]);
+    await open();
+    // The read has landed: the band's header says so, and the menu is built from the same list.
+    await screen.findByText("1 note");
+
+    await rightClickCard("Lightning Bolt");
+    await expand(/^Notes$/);
+    expect(await screen.findByRole("menuitem", { name: "Why four" })).toBeInTheDocument();
+
+    await userEvent.keyboard("{Escape}");
+    await rightClickCard("Bear");
+    expect(screen.getByRole("menuitem", { name: "Add note…" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: /^Notes$/ })).not.toBeInTheDocument();
+  });
+
+  /**
+   * **The press reaches the band, and the band is what writes.**
+   *
+   * `addNote` is a callback and never a mutation — `deckCardMenu.tsx`'s contract, and here it is
+   * load-bearing rather than ceremonial: a `mutate`-scoped `onSuccess` belongs to the *observer*,
+   * and a menu has closed by the time a create answers. So the row parks a request, the band takes
+   * it, and one observer owns the write, its refusal line and the editor that opens on it.
+   *
+   * Three facts in one press, because the interesting failure is any one of them alone: the note
+   * is **titled** with the card (a blank one reads `Untitled note` in the band and in this same
+   * submenu the moment it appears), it **names** the card in the same transaction (so it is in
+   * `Notes ▸` on the next read with no attach step to lose), and the band is **opened** (a note a
+   * reader was sent to write is one they cannot write behind a shut disclosure).
+   */
+  it("sends Add note… to the band, naming the card the reader right-clicked", async () => {
+    await open();
+    await rightClickCard("Lightning Bolt");
+    await userEvent.click(screen.getByRole("menuitem", { name: "Add note…" }));
+
+    await waitFor(() =>
+      expect(deckNoteCreate).toHaveBeenCalledWith(4, "Lightning Bolt", "", ["o-Lightning Bolt"]),
+    );
+    // …and exactly once. The band takes a request by object identity and its effect re-runs the
+    // moment `open` changes, which is the very thing it changes first — so a guard written any
+    // other way is two notes for one press.
+    expect(deckNoteCreate).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { notesOpen: true }));
+  });
+
+  /**
+   * **`Notes ▸` is a read, so it opens the band and writes nothing.**
+   *
+   * The split the two rows make: `Add note…` ends in a body the reader is about to type, and this
+   * ends in one they came to read. A row that created anything here would put a second, empty note
+   * under a card every time somebody looked at the first one.
+   */
+  it("opens the band on a note the reader picked, and creates nothing", async () => {
+    deckNotes.mockResolvedValue([
+      noteRow({
+        id: 3,
+        title: "Why four",
+        cards: [{ oracleId: "o-Lightning Bolt", name: "Lightning Bolt" }],
+      }),
+    ]);
+    await open();
+    await screen.findByText("1 note");
+
+    await rightClickCard("Lightning Bolt");
+    await expand(/^Notes$/);
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Why four" }));
+
+    await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { notesOpen: true }));
+    expect(deckNoteCreate).not.toHaveBeenCalled();
+  });
+
+  /**
+   * ⚠️ **An orphan printing cannot be named, so the whole block is absent rather than refused.**
+   *
+   * A note attaches by **oracle id** and by nothing else, so a note made from a card whose row the
+   * corpus no longer carries would name nothing and turn up under no card's submenu ever again — a
+   * write with no way back to it. `DeckEditor` passes `addNote: undefined` for such a card and
+   * `noteItems`' all-or-none guard drops the pair; `Notes ▸` costs that card nothing, since
+   * `notesForCard` answers `[]` for a missing id and it would never have been drawn.
+   *
+   * **Absent rather than greyed** is this menu's own precedent for a row that can only be refused
+   * (`zoneItem`). `Remove card` is asserted beside it because dropping a block must not drop the
+   * rows below it — a separator taken out with its neighbours is exactly how one of these guards
+   * goes wrong.
+   */
+  it("offers no note rows on a card with no oracle id", async () => {
+    deckGet.mockResolvedValue(detail({}, [bolt({ name: "Ghost", oracleId: null, quantity: 1 })]));
+    await open();
+    await rightClickCard("Ghost");
+
+    expect(screen.queryByRole("menuitem", { name: "Add note…" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: /^Notes$/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Remove card" })).toBeInTheDocument();
   });
 
   /**
