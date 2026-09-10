@@ -76,6 +76,43 @@ export function cardFaceHeight(width: number): number {
 }
 
 /**
+ * The face's own corner: **the card's `rounded-lg` less the 1px border the face sits inside.**
+ *
+ * A bordered box has two curves, not one — the border box's, and the padding box's one border
+ * width tighter — and the face fills the padding box exactly, so this number is the second of
+ * them or it is wrong. `src/index.css` sets `--radius: 0.625rem` and `--radius-lg: var(--radius)`,
+ * so the card's outer corner is **10px** here rather than Tailwind's stock 8, and the padding
+ * box's is **9**.
+ *
+ * **It was `rounded-[7px]` until 2026-09-10, which is the stock-8 arithmetic**, and 2px too tight
+ * is not a rounding preference: everything between the two arcs is *border*, and a face that
+ * clips 2px wide of it has a background and a picture and marks to paint over the card's own edge
+ * with. So the edge lost its corners — the arc simply did not draw between the top edge and the
+ * side edge — and it lost them on every card in both deck views, in whatever colour that card's
+ * edge was.
+ *
+ * **A rule break is where it was reported, because that edge is the one a reader is meant to
+ * read.** Driven in Storybook over the dev server (headless Edge, 2026-09-10, `Decks/CardStack`'s
+ * `RuleBreakAndGameChanger` and `Decks/Views/GridView`'s `Default`): at 7px the destructive arc
+ * was **missing from four pixel rows at each top corner**, with the quantity tag's fill standing
+ * in its place — which is exactly what the screenshot that opened the issue shows. At 9px the arc
+ * is continuous from the top edge round to the side at both corners, both views, unchanged
+ * everywhere else.
+ *
+ * **Only the *top* two corners ever showed it**, and that is `CardChin`'s doing rather than luck:
+ * the chin is `-mx-px border-x` in the card's own `tone`, so it redraws the bottom two corners
+ * over whatever the face did to them. **The chin's own `rounded-b-[7px]` is therefore not this
+ * number and must not be changed to it** — its box is the *border* box horizontally and the
+ * padding box vertically, so it is neither curve; patched to 9px live on the same tile, its
+ * border left the card's and the bottom corner read as a 4px smear of two arcs where 7px reads as
+ * one. Measured, not reasoned.
+ *
+ * Written out as a whole class name and never assembled, because Tailwind scans source text: a
+ * computed one emits no rule at all and the face would silently have no corner.
+ */
+const FACE_RADIUS = "rounded-[9px]";
+
+/**
  * The one strip of a collapsed card the reader can see — its printed title bar — as the box the
  * app's own marks are laid over.
  *
@@ -106,9 +143,12 @@ const CARD_MARKS_STRIP = cn(
   // really would have clipped a side off. The marks went left in 2026-08-13 and the inset stayed,
   // so the only thing left at that end was {@link TheoryMatchMark}: a filled banner, standing 5px
   // short of an edge its opposite number sits flush against, with a square corner floating where
-  // the card's is round. The face is `overflow-hidden rounded-[7px]`, so `right-0` gets that mark
-  // the same clipped corner {@link QuantityTag} has always had at `left-0` — the two are bookends
-  // now in radius as well as in slant.
+  // the card's is round. The face is `overflow-hidden` at {@link FACE_RADIUS}, so `right-0` gets
+  // that mark the same clipped corner {@link QuantityTag} has always had at `left-0` — the two are
+  // bookends now in radius as well as in slant. **That clip is what the card's own edge depends
+  // on**: these two marks are the brightest things in the strip and the corners are where they
+  // meet the border, so the radius being one border-width off is the whole of what that constant
+  // is about.
   "absolute inset-x-0 top-0 flex items-start",
   // 27px is the printed title bar's height **on a card at 100% zoom**. It scales with the card:
   // the strip is a scrim over a band of the picture, so a fixed 27px is most of a halved card's
@@ -166,6 +206,18 @@ export interface DeckCardFaceProps {
    *  a card the plan does not ask for; otherwise the tier it is in and how far the live list is
    *  from the plan **at that tier's own grain**, where `0` is the card the plan asks for exactly. */
   theoryMark: TheoryMark | null;
+  /**
+   * Whether a deck note names this card — resolved by the caller through
+   * `cardControl.ts`'s `deckCardNoted`, so the face is handed an answer rather than a set to look
+   * itself up in. That is {@link theoryMark}'s arrangement above, and its reason: an orphan
+   * printing has no oracle id, and the guard that keeps such a card unmarked belongs in one place
+   * rather than at each of the four views.
+   *
+   * **Optional and defaulting to `false`, where the two marks above it are required** — see
+   * `QuantityTag.noted`, whose asymmetry this mirrors: an unmarked card is one whose note the
+   * reader finds a press away in the Notes band, not a card quietly claimed to be ordinary.
+   */
+  noted?: boolean;
   /** The nonce this card's last add was given, or `undefined` for a card that did not just arrive
    *  — passed through as the mark's `key`, so a second add replays it. */
   landedKey: number | undefined;
@@ -184,6 +236,7 @@ export function DeckCardFace({
   width,
   ruleBreakText,
   theoryMark,
+  noted = false,
   landedKey,
   className,
 }: DeckCardFaceProps) {
@@ -227,7 +280,7 @@ export function DeckCardFace({
        silently have no height. */
     <span
       style={{ height: cardFaceHeight(width) }}
-      className={cn("relative block overflow-hidden rounded-[7px] bg-surface", className)}
+      className={cn("relative block overflow-hidden bg-surface", FACE_RADIUS, className)}
     >
       {/* **The frame under the picture, drawn whether or not there is one.**
 
@@ -360,6 +413,11 @@ export function DeckCardFace({
           // corpus says nothing either way — so the coercion is what keeps a `null` off a prop
           // whose two states are *crowned* and *not*.
           gameChanger={card.gameChanger === true}
+          // The fifth per-card fact, folded into this tag rather than drawn beside it — there was
+          // no corner left, and `CardMarks.tsx`'s census and its 11px overflow measurement are
+          // the argument. A card that is both a game changer and noted draws both glyphs and the
+          // number; the words for both are `deckCardName`'s, since this tag is `aria-hidden`.
+          noted={noted}
         />
         {/* The plan's tick, at the far end of the same strip the quantity tag opens.
             **In the strip rather than absolutely positioned beside it**, which is what makes it
@@ -423,9 +481,11 @@ export function DeckCardFace({
           behind it, and it is the one place to look first if the quantity tag ever stops reading
           during an add. See {@link LandedMark}.
 
-          `rounded-[7px]` is the face's own corner, spelled again because the mark cannot inherit it
-          — {@link LandedMark} has why. */}
-      {landedKey !== undefined && <LandedMark key={landedKey} className="rounded-[7px]" />}
+          {@link FACE_RADIUS} is the face's own corner, handed over rather than spelled again
+          because the mark cannot inherit it — {@link LandedMark} has why, and the shared constant
+          is what stops the mark's gold hairline drawing a tighter arc than the face it is inside
+          the moment one of the two is corrected. */}
+      {landedKey !== undefined && <LandedMark key={landedKey} className={FACE_RADIUS} />}
     </span>
   );
 }

@@ -2962,12 +2962,16 @@ describe("GridView tiles", () => {
    * was `components/CardArt`, whose edge stops where the chin begins rather than enclosing it, so
    * the chin had to supply all three of its own for the two to read as one outline. The premise is
    * gone rather than overruled — the tile is `rounded-lg border` around a `DeckCardFace` inset at
-   * `rounded-[7px]`, which is the stacked card exactly, so this is a bordered card now and
+   * `FACE_RADIUS`, which is the stacked card exactly, so this is a bordered card now and
    * `CardChin`'s `seam` doc says what that costs: **no `border-b`**, because the card's border
    * already is the bottom edge and a second one sits 1px *above* it — a card with a 2px foot under
    * a 1px everything-else. What replaces it is the other half of the same join: `-mx-px`, which
    * rides the bar's side edges onto the card's own so the two are one line rather than two, and
-   * `rounded-b-[7px]`, the face's own corner rather than the art frame's `lg`.
+   * `rounded-b-[7px]` — **which is the bar's own corner and no longer the face's**: `FACE_RADIUS`
+   * went to 9px on 2026-09-10 and this one was measured against it and left at 7, because the
+   * chin's box is the *border* box across and the padding box down and is therefore neither of
+   * the card's two curves. What the assertion pins is the number, and the reason it is not
+   * `rounded-b-lg` is unchanged.
    *
    * **The `"art"` spellings are asserted absent rather than left unsaid**, because a `seam` flipped
    * back would put `rounded-b-lg border-b` here and every positive assertion above it would still
@@ -3096,9 +3100,12 @@ describe("GridView tiles", () => {
     // **The face is identified before it is asserted about**, because an absence read off the
     // wrong element passes for free: a wrapper slipped between the button and the face would
     // carry no classes at all and this would go green over a ring that was still there.
-    // `rounded-[7px]` is the face's own clipped corner and nothing else here has it.
+    // `DeckCardFace`'s `FACE_RADIUS` is the face's own clipped corner and nothing else here has
+    // it — the card's `rounded-lg` less the 1px border the face sits inside, which is **9px**
+    // here and was `rounded-[7px]` until 2026-09-10 (that constant's own doc has why, and what
+    // the two missing pixels were doing to the card's edge).
     const face = tile().querySelector("button")!.firstElementChild as HTMLElement;
-    expect(face.classList.contains("rounded-[7px]")).toBe(true);
+    expect(face.classList.contains("rounded-[9px]")).toBe(true);
     expect(face.className.split(" ").filter((c) => c.startsWith("ring-"))).toEqual([]);
   });
 });

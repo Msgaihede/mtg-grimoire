@@ -89,7 +89,7 @@ const DECK: DeckRow = {
   // deck they built becomes the plan rather than being duplicated into two lists that drift.
   coverKind: "card_art",
   folderId: null,
-  notes: null,
+  notesOpen: false,
   theoryEnabled: false,
   virtualOnly: false,
   theoryMarkExact: true,

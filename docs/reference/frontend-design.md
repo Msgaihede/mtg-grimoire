@@ -371,6 +371,30 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   its own in that strip for the chip's absence to be about — and one surviving `mark={false}` here
   would be the *third* crown on the card, the tag under it already wearing one. The bullet below
   is where that is settled and measured.
+- **A note's mark is folded in beside the crown, and it is the second fact to take that route**
+  (2026-09-10, issue #447). A deck card whose deck holds a note naming it draws an 11px
+  `StickyNote` inside `CountTag`, after the crown and before the number, in the tag's own
+  foreground — so a card that is both a Game Changer and noted shows **both glyphs and the
+  quantity** in one box. On the two row views it is `CardMarks`' `NoteMark`, a 12px stroked glyph
+  beside `LabelDot`.
+  **It went there because there is no corner left**, which the section below already argued for the
+  crown and which a measurement settled: the marks strip is `overflow-hidden` and was measured
+  overflowing a 165px tile by 11px, top-left is the quantity tag's, top-right the theory mark's,
+  bottom-left the rule-break box's. `crowned` is the precedent — a fifth fact folded *into* an
+  existing mark at a cost of 14px rather than drawn beside it — and this is the sixth, at the same
+  14px, moving no padding for the same reason (`COUNT_TAG_BOX`'s `pl − pr = 5px` is a derivation
+  the content width cancels out of).
+  **It takes no colour of its own**, which is the rule below read once more: the `--color-pie-*`
+  deeps are spoken for by labels and gold is spoken for by selection, so the glyph is
+  `currentColor` and inherits whatever the label already decided. Against `LabelDot` it separates
+  by **shape** — a stroked outline against an 8px filled square — because separating by colour
+  there would be a seventh thing colour means.
+  **The tag is `aria-hidden`, so the words are owed twice**: `NOTE_MARK_LABEL` (`"Has a note"`) in
+  the tag's tooltip phrase and again in `cardControl.ts`'s `deckCardName`, or the fact reaches a
+  sighted reader and nobody else. Asserting it wants an anchored regex on the **tooltip**, not
+  `toHaveAccessibleName` on the tag — an `aria-hidden` element has no accessible name, so that
+  assertion would pass against `""` whatever the mark drew, which is a fence reporting success by
+  construction.
 - **One game changer, one glyph — and what differs is what it is printed _on_** (2026-09-08). It
   is a crown everywhere. On the deck's **two card-face views** it is printed inside
   `CardMarks`' `QuantityTag`, before the number, in the tag's own foreground colour. On the deck's
@@ -666,8 +690,11 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
     what enforces it: it is _in flow_, and a transform changes no layout, so scaled text would grow
     straight out of the strip the virtualiser sized its rows from.
   - **What does not scale, and why**: hairline borders (1px is a hairline at every size),
-    `CardArt`'s `rounded-lg` and the stack's 7px corner (Tailwind classes that do not scale — which
-    is also why `STACK_DATA_RISE` stays 4px, since it hides the seam under that corner), the
+    `CardArt`'s `rounded-lg` and the deck card face's `FACE_RADIUS` (Tailwind classes at fixed
+    pixel counts, which do not scale — which is also why `STACK_DATA_RISE` stays 4px, since it
+    hides the seam under that corner; that radius went 7px → **9** on 2026-09-10 and the rise was
+    re-measured against it and did not move — see *The face was two pixels wide of its own box*
+    below), the
     stack's `STACK_LIFTED_MARGIN` (a gap saying "this card is out of the pile", not part of the
     card), and the gutters `CardGrid` splits either side of a row. **A sixth entry read "the
     banner's drop shadow" and went with the banner on 2026-09-08** — `GameChangerBanner` is
@@ -2360,9 +2387,12 @@ backed out through `element.style` in the same session so the two states are one
   `right-[calc(5px*var(--mark-scale,1))]` "to keep the strip off the card's own clipped corner",
   written when the strip's marks were drawn on the **right** and that corner held a `RULE BREAK`
   box with a hairline border. The marks went left on 2026-08-13 and the inset stayed. It is
-  `inset-x-0` now: the face is `overflow-hidden rounded-[7px]`, so the tick gets the same clipped
-  corner the quantity tag has always had at `left-0` — measured `border-radius: 7px`,
-  `overflow: hidden`, and both gaps **0**. Bookends in radius as well as in slant.
+  `inset-x-0` now: the face is `overflow-hidden` at `FACE_RADIUS`, so the tick gets the same
+  clipped corner the quantity tag has always had at `left-0` — measured `border-radius: 7px`,
+  `overflow: hidden`, and both gaps **0**. Bookends in radius as well as in slant. (**That 7px
+  reading is the value of the day and the corner was two pixels too tight**; it is 9 since
+  2026-09-10 and the two marks are still bookends, because both read the same constant. What the
+  correction moved is where they stop — see *The face was two pixels wide of its own box*.)
 
 ### And the sixth, off the same corner and reported the next day (issue #182)
 
@@ -4103,7 +4133,7 @@ nothing.
 
 **The sentence above named `views.test.tsx` as pinning "the deck grid's own bottom edge", and
 there is no bottom edge there to pin since 2026-09-08.** That tile passes `seam="card"`, where it
-passed `"art"`: the face inside its button clips its own corners at `rounded-[7px]` and the tile
+passed `"art"`: the face inside its button clips its own corners at `FACE_RADIUS` and the tile
 itself carries the `rounded-lg border`, so the chin draws `border-x` only and rides onto the card's
 own border exactly as a stacked card's does. `"art"` is what a bare `CardArt` frame needs and there
 is no longer one on that wall. The lesson the sentence was carrying is untouched and is why it is
@@ -4137,8 +4167,63 @@ is still a ring on the `<li>`, still painted outside the border box, so a picked
 breaks a rule still wears gold around red.) The one artifact is at the
 seam itself and is about a pixel: the frame's `rounded-lg` corner curves inward over the 4px the
 chin rides up, so the outline pinches ~1px before the bar's straight edge resumes. `CHIN_RISE` was
-derived from the stack's 7px face radius, where the same excursion is 0.68px; at the art's 10px it
-is 2px, of which the bar covers all but the top hairline.
+derived from the stack's face radius when that radius was 7px, where the same excursion is
+0.68px; at the art's 10px it is 2px, of which the bar covers all but the top hairline. (**The face
+is 9px since 2026-09-10** and the rise was re-measured rather than re-derived — the bottom corners
+came back pixel for pixel identical, because the bar covers them whichever curve the face took. The
+excursion it *did* expose was two pixels of desk immediately above the bar, closed by the card's own
+`bg-surface` rather than by a taller rise. Next section.)
+
+### The face was two pixels wide of its own box, and the card's edge lost its corners (2026-09-10)
+
+Reported as *the rule break border is cut off by the badges*, with a screenshot of a stacked
+Valakut Awakening whose destructive edge simply stopped where the green quantity tag and the plan's
+tick met it.
+
+**The root cause is one number and it had been wrong since the face was written.** A bordered box
+has two curves — the border box's, and the padding box's one border width tighter — and
+`DeckCardFace`'s face fills the padding box exactly. `src/index.css` sets `--radius: 0.625rem` and
+`--radius-lg: var(--radius)`, so a deck card's `rounded-lg` outer corner is **10px** here rather
+than Tailwind's stock 8, and the padding box's is **9**. The face clipped at `rounded-[7px]`, which
+is the stock-8 arithmetic. Everything between the two arcs is *border*, and a face that clips 2px
+wide of it has a background, a picture and three marks to paint over the card's own edge with.
+
+**Measured over the dev server** (headless Edge against Storybook, `Decks/CardStack`'s
+`RuleBreakAndGameChanger` and `Decks/Views/GridView`'s `Default`, pixels read out of the CDP
+screenshot rather than eyeballed). The stacked card's box: `border-radius: 10px`,
+`border-width: 1px`, `border-color: oklch(0.704 0.191 22.216)`, rect `16,16 224×319`; the face
+inside it `border-radius: 7px`, `overflow: hidden`, rect `17,17 222×293` — the padding box, whose
+corner is 9.
+
+| Corner, at 7px | Corner, at 9px |
+| --- | --- |
+| Top-left rows y=17..23 carry **no destructive pixel at all** — `C8C4BF`, the printed card's own title bar, where the arc belongs | A continuous ramp from the top edge round to the side: `BF4D51` at (21,17), `D0565B` at (20,18), `C85658` at (18,20), `BF4D51` at (17,21), full `FF6467` from y=26 |
+| Top-right the same, four rows of the card's black border where the arc belongs | `BC4C50` at (234,17) through `BB4C4F` at (238,21) into the straight edge |
+
+The same reading on the Grid tile (`182,328 150×235`), which draws the same component. **Only the
+*top* two corners ever showed it**, and that is `CardChin`'s doing rather than luck: the chin is
+`-mx-px border-x` in the card's own `tone`, so it redraws the bottom two over whatever the face did
+to them — the bottom-left corner is byte-identical at both radii.
+
+**Two things were settled by experiment rather than by argument.**
+
+- **The chin's `rounded-b-[7px]` is not this number and was left alone.** Patched to 9px live on
+  the same tile, the bar's own border curve left the card's and the bottom corner read as a **4px
+  smear of two arcs** (y=556 `733135`+`CF5458`, y=561 four red pixels wide) where 7px reads as one
+  clean 1–2px arc. Its box is the *border* box across and the padding box down, so it is neither of
+  the card's two curves and there is nothing for it to match.
+- **The card wrapper gained `bg-surface`.** A face flush with its padding box curves away in the
+  *middle* of the card at the bottom corners, where what is behind it is the `<li>` rather than the
+  border — and the `<li>` painted nothing, so the desk showed through: **two pixels** at (183,532)
+  and (183,533), `0F0F15` and `0B0C11` against the art's `16181E`. An opaque card closes it
+  (`13151B`, a sub-pixel blend) and costs nothing anywhere else, the face and the chin both being
+  `bg-surface` already. The alternative was raising `CHIN_RISE` from 4 to 6, which moves every
+  card's height and the row pitch of a wall with nothing wrong with it.
+
+**`CHIN_RISE` is therefore a measured number and no longer a derived one.** Its doc said "that
+radius less its own border", which was arithmetic about a radius that was wrong — and 7 less 1 was
+never 4 anyway. It stays at 4 because the bottom corners came back identical, not because the
+derivation still runs.
 
 **`tone` is the other half of the same join, and the deck stack was its one caller until the deck's
 grid became the same card on 2026-09-08 — two now, and they are two drawings of one object rather

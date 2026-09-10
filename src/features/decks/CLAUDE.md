@@ -231,7 +231,7 @@ Full record, with every measurement and the provenance of each rung:
 
 ## Deck settings, and the two surfaces that draw them
 
-Everything a deck carries that is not a card in it — name, format, description, notes, cover,
+Everything a deck carries that is not a card in it — name, format, description, cover,
 folder, its **kind**, and **where an unfiled add lands** — is **one component, `DeckSettingsForm`,
 drawn by two hosts** (2026-08-14). The "New deck" dialog used to ask two questions and leave the
 reader to configure the deck they had just made; it now asks all of them.
@@ -326,9 +326,9 @@ reader to configure the deck they had just made; it now asks all of them.
   `theoryEnabled` is `false` on a virtual deck by construction, and a second guard here would read
   as though the two facts were independent, which is the misreading `deckKind.ts` exists to stop.
 - **Two callbacks, because the two hosts commit differently.** `onChange` fires for every change
-  including each keystroke; `onCommit` fires only for the three text fields, when the reader is
+  including each keystroke; `onCommit` fires only for the two text fields, when the reader is
   finished with one. `DeckSettingsDialog` writes on `onChange` for the controls that settle in a
-  single act (format, theory, folder, cover) and on `onCommit` for name/description/notes — which
+  single act (format, theory, folder, cover) and on `onCommit` for name/description — which
   is exactly its old behaviour, **no Save button and not meant to have one**.
   `CreateDeckDialog` merges `onChange` into a draft and **does not pass `onCommit` at all**:
   there is nothing to write until Create.
@@ -1240,7 +1240,7 @@ layer.
   from a dozen `onSuccess` callbacks in two hooks, so a write added to that array is covered for
   free — which is also why `Write` grew an `isSuccess`.
 - **`Ctrl+Z`, `Ctrl+Shift+Z` and `Ctrl+Y`, and the handler yields inside a text field.** That
-  carve-out is the whole of what keeps the quick-add box, the deck name and the notes usable:
+  carve-out is the whole of what keeps the quick-add box, the deck name and a note body usable:
   those get the browser's own undo, which this cannot replace and must not swallow. The predicate
   is **`isTextField` from `useContextMenu.ts`** — the same one the native-context-menu carve-out
   turns on, never a second spelling. Both redo spellings are live because both are what a reader's
@@ -1681,6 +1681,21 @@ price | type`). An **inactive category stays its own group in all three grouping
     filling by colour key is the point at which all of them want one home" cashed in: the two pips
     bands, the six per-colour tracks and the six colour curves are that third surface several
     times over. Everything that is not a colour is the accent.
+  - **A symbol printed _on_ one of those fills is the bare glyph, never `ManaText`** (2026-09-10).
+    `ManaText` always adds `ms-cost`, the font's own pill — an opaque disc in `mana-font`'s
+    palette (`#aca29a` for black, `#db8664` for red) with the glyph knocked out of it — which is
+    the printed article everywhere a symbol sits on a surface that is *not* already the colour:
+    the census tiles, `CurveByColor`, a cost in a table row. On a `MANA_FILL` field it lands as a
+    second, slightly-off disc behind the pip and reads as a smudge, which is what a reader
+    reported of the two pips bands. So a field with a symbol on it draws
+    `manaSymbolClass(key)` in `text-black` — `DeckColorBar`'s arrangement, and now `ManaPips`'
+    `Band`'s, so the tile's band and the editor's are one drawing. **The size goes on the field
+    and not on the `<i>`**: `.ms` declares `font-size: inherit` at a Tailwind utility's own
+    specificity and `mana.css` is imported last, so a `text-[…]` on the glyph is in the markup,
+    in the stylesheet and inert. Both bands and the reference band were photographed side by side
+    over the built stylesheet (headless Edge, 2026-09-10, app lock held elsewhere): the pill's
+    glyph computed **9.35px inside a 12.1px disc**, the bare one **14px**, so the mark keeps its
+    weight in the 32px band and loses only the disc.
   - **`sourcesKnown` is a third state and the one most easily collapsed into the second.**
     `sources` all zero is a real answer (a deck of pure spells makes no mana); `sourcesKnown ===
     false` is *every counted row answered `null`*, which is a database that has not re-ingested
@@ -2316,7 +2331,7 @@ price | type`). An **inactive category stays its own group in all three grouping
     border box, so a picked card that also breaks a rule wears a gold ring around a red card.
   - **The chin's seam is `"card"` and the tile's `<img>` has no `alt`.** `seam="art"` is what a
     bare `CardArt` frame needs — three edges of its own under a frame that stops where the bar
-    begins — and there is no such frame here: the face clips its own corners at `rounded-[7px]`
+    begins — and there is no such frame here: the face clips its own corners at `FACE_RADIUS`
     inside the wrapper's border, so the chin draws sides only and rides onto that border. The `alt`
     was the card's own name while the picture was `CardArt`'s; inside `DeckCardFace` it is `""`,
     because the button around the face already says the whole sentence through `deckCardName` and
@@ -3464,7 +3479,14 @@ price | type`). An **inactive category stays its own group in all three grouping
   `GridView`'s caption and `CardGrid`'s caption strip went the same way and for the same reason;
   `atLeast` survives in `GridView` for the **gutter alone**, which is space *between* cards rather
   than chrome on one. `STACK_DATA_RISE` is the kind that never moved — 4px at every zoom, because
-  the 7px corner radius it hides the seam of is a Tailwind class that does not scale either.
+  the corner radius it hides the seam of is a Tailwind class at a fixed pixel count, which does
+  not scale either. **That count is not the face's own any more** — `DeckCardFace`'s
+  `FACE_RADIUS` was corrected from 7px to **9** on 2026-09-10 (the card's `rounded-lg` is 10 here,
+  not Tailwind's stock 8, so the padding box the face fills curves at 9) and the rise was
+  re-measured against it and left at 4, the bottom corners coming back pixel for pixel identical.
+  A 7px face was 2px wide of its own box, and everything in it — the picture, the printed frame,
+  the quantity tag, the plan's tick — painted over the card's own edge in all four corners, which
+  is what a reader reported as the rule break's red border being cut off by the badges.
 - **The column is derived from the card, not the other way round** (it used to be: 14rem minus
   padding). `stackColumnWidth(zoom) = stackCardWidth(zoom) + padding + border`, with the chrome
   **added and never multiplied** — 6px of padding is 6px at every zoom, because padding is not part

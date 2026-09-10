@@ -825,7 +825,10 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
     after) stays green.
 - **`deck_create` makes a whole deck in one INSERT, not a name to be configured afterwards**
   (changed 2026-08-14). `DeckInput` carries `name`, `formatKey`, `gameKey`, `description`,
-  `notes`, `coverCardId`, `folderId`, `theoryEnabled` and — since schema v40 — `virtualOnly`,
+  `coverCardId`, `folderId`, `theoryEnabled` and — since schema v40 — `virtualOnly`,
+  (**`notes` was on this list until user schema v43**, which replaced the one column with a table
+  — see *Notes* at the foot of this page; a deck is still born with none, and now that is a fact
+  about a list rather than a `NULL`),
   because the "New deck" dialog now hosts the same
   settings form the settings dialog does and would otherwise be create-then-patch-then-setFolder:
   three transactions, and a half-made deck to roll back by hand the way
@@ -3046,3 +3049,161 @@ copying the line above it is the bug.
 `default_cards` holds nothing for them". **Measured false on 2026-09-07**: `set_type = 'token'`
 joins **2 950** card rows and `memorabilia` **5 847**. It is not this feature's to fix and nothing
 here depends on it being right; it is recorded so the next reader does not trust it.
+
+---
+
+## Notes: many to a deck, each naming any number of cards
+
+User schema **v43**, 2026-09-10, [issue #447](https://github.com/Msgaihede/mtg-grimoire/issues/447),
+reported through Discord. The design is
+[the deck-notes spec](../superpowers/specs/2026-09-10-deck-notes-design.md).
+
+**`decks.notes` is gone.** It was one `TEXT` column added at v8, drawn as a single `<textarea>` in
+Deck settings, and it is replaced by `deck_notes` — many rows to a deck, each with a title, a
+CommonMark body and a sort order — plus `deck_note_cards`, one row per card a note names.
+
+### A card reference is a pointer the note holds, never a place the note lives
+
+That is the issue's own sentence — *"the card should only serve as a reference"* — and it is what
+decides the schema. Attachments hang off the **note**, so the notes list is the complete list by
+construction and a note cannot become invisible by acquiring a card. The alternative shape, a note
+filed under a card, makes the issue's requirement an extra rule to remember rather than a property
+of the tables.
+
+### A note names a card by `oracle_id`, never by `card_id`
+
+`deck_tokens`' argument verbatim: a printing id means nothing on the far device's shelf while an
+oracle id is Scryfall's and is the same everywhere. Three things follow, and each is a feature
+rather than a consequence — a note survives the reader swapping printings; a note written against
+the Theory list shows on the Live list and the other way round, because both hold the same oracle
+id; and one note naming Lightning Bolt names it once, however many copies or finishes the deck
+holds.
+
+### The two tables, and why only one has a grain
+
+`deck_notes` is **uid-only**, joining `decks`, the three folder tables and `deck_audit`. Two
+devices each typing a note about the mana base must stay two notes, and there is no column pair
+that could tell an accidental duplicate from a deliberate one — a title grain would silently fold
+two readers' separate thoughts into whichever arrived second.
+
+`deck_note_cards` carries `idx_deck_note_cards_grain` on `(note_id, oracle_id)` for the opposite
+reason: two devices attaching Lightning Bolt to the same note describe **one** fact, and without
+the grain both rows land and the card modal reads two notes where there is one. Its parent on the
+wire is the **note**, not the deck, which is why its `apply::Meta` rank is 14 and sorts after the
+note's 13.
+
+### `decks.notes_open`, and why its default is v37's answer and not v42's
+
+`DEFAULT 0` — the band opens shut. The two rungs asked the same question and answered it opposite
+ways, and which one applies turns on whether the upgrade changes what is on screen. v42 gave
+`stats_open` a `DEFAULT 1` because the stats band was already on screen for every deck on every
+disk, so a `0` would have closed a band the reader had been reading for months. The Notes band is
+new: no deck has ever shown one, so a collapsed default takes nothing from anybody, and
+`tokens_open` at v37 is the precedent character for character.
+
+### ⚠️ The rung has to drop three triggers before it drops the column
+
+Capture triggers are **persistent** objects — the sync engine writes real `CREATE TRIGGER`s, not
+temp ones — and `sync_upd_decks` is `AFTER UPDATE OF …` with `notes` in its list. SQLite refuses
+`DROP COLUMN` on a column a trigger references, so the rung drops `sync_ins_decks`,
+`sync_upd_decks` and `sync_del_decks` first and `prepare_database` reinstalls them on the very
+next line. That is **v33's** move rather than a new one, and it is invisible in any test that
+starts from a fresh database: a fresh file has no triggers yet, so only a real upgraded file
+fails.
+
+### ⚠️ `IMAGE_COL` stays at 27, and every read between 12 and 26 moved
+
+`DECK_SELECT` maps by position. Removing `notes` at column 12 shifts fourteen reads in `deck_row`
+and nine in the before-image mapper down by one, and moves `update_deck`'s `?9`–`?20` — including
+`cover_kind`'s `ELSE ?10`. But appending `notes_open` puts the last column back where it was, so
+`IMAGE_COL` reads **27** before and after. The one constant a reader would check to decide whether
+the read had moved is the one number that did not.
+
+### The eight commands
+
+| Command | Answers |
+| --- | --- |
+| `deck_notes(deckId)` | every note on the deck in `sort_order`, each with the oracle ids it names and a card name for each |
+| `deck_note_create(deckId, title, body, oracleIds)` | the new row |
+| `deck_note_update(deckId, id, title?, body?)` | the updated row |
+| `deck_note_delete(deckId, id)` | — |
+| `deck_note_attach(deckId, noteId, oracleId)` | the updated row |
+| `deck_note_detach(deckId, noteId, oracleId)` | the updated row |
+| `deck_note_reorder(deckId, ids)` | — |
+| `card_notes(oracleId)` | every note in **every** deck naming this card, each carrying its deck's id and name |
+
+⚠️ **`deck_note_reorder` has no caller, and that is a stated gap rather than an oversight**
+(2026-09-10). The command is complete on every layer the rest of them reach — the Rust write, its
+history row, its undo step, the `COMMANDS` entry and both routes, the `ipc.ts` wrapper and the
+Storybook fake — and **no surface presses it**: the band draws its notes in `sort_order` and offers
+no way to change that order. The issue asked for notes that can be added, managed and deleted
+independently, and reordering was this plan's own addition rather than a request. It is left in
+because deleting a working capability across seven layers to remove one unpressed button is the
+worse trade, and it is written down here because an unwired command is exactly the kind of thing a
+green build never mentions. Wiring it is two `RowAction`s in `DeckNotesPanel`, on `CategoryRow`'s
+up/down arrangement.
+
+`card_notes` is the one read that is not deck-scoped, and it is what the card modal's `Notes` row
+asks. A card opened from the collection, from search or from another deck still answers *what have
+I written about this card*, which is the question that modal exists to answer completely.
+
+**No command answers "which cards in this deck have notes".** The band already holds every note
+and every note holds its oracle ids, so the marks are a `Set` built in TypeScript from a read the
+page has already made. A second command would be a second source of truth for a fact in hand —
+`Empty a list`'s rule for its two counts, one screen over.
+
+**`deck_notes` reads in two statements, never N+1**: one over `deck_notes`, one `LEFT JOIN` from
+`deck_note_cards` to `cards` across the deck's note ids, zipped in Rust. Where a `cards` row is
+missing — an oracle id the corpus has never seen — the name answers as the oracle id rather than
+failing the read.
+
+### History rides the `deck` kind, and `AUDIT_KINDS` stays at nine
+
+The payload is `{"field": "note", "action": …, "note": <title>, "card": <name or null>}` with
+`action` one of `create | edit | delete | attach | detach | reorder`. **Six, and the sixth was not
+in the design** — a reorder is a deck write and `deck_audit`'s rule is that every deck write
+records a row, so `deck_note_reorder` records one with `note` and `card` both `null`. Its sentence
+is `Reordered the notes`, which is `categoryLine`'s `reorder` arm word for word: the two lists
+behave alike, so they read alike, and both name nothing because a reorder is about the list rather
+than about any one row. **A tenth audit kind was refused**, and
+not on taste: the vocabulary is inside a `CHECK`, SQLite has no `ALTER … CHECK`, so a new word
+costs a full `deck_audit` rebuild — which under `foreign_keys=ON` fires `deck_undo`'s
+`ON DELETE CASCADE` and silently empties the undo stack on every real launch while leaving it
+intact in every test. v33 paid that price for a rename that had no alternative. A note does not
+need to.
+
+**⚠️ `auditText.ts`'s `case "notes"` stays in the file for good**, beside the new `case "note"`.
+Audit rows are durable: every history row written before v43 still carries `field: "notes"`, and
+deleting the arm would silently demote years of a reader's history to the default
+`Changed the deck`. Neither arm ever prints the body — a note is a paragraph nobody wants in a
+one-line history, which is what the old field's arm already said.
+
+### Undo is a fifth `Op`
+
+`deck_undo::Op::Notes { restore, patch, delete, attachments }`, mirroring `Op::Labels` field for
+field. `restore` and `patch` are two lists for `Categories`' reason, and it transfers with full
+force: `deck_notes.id` is a rowid alias, so deleting the highest-numbered note and writing a new
+one reuses the number, and one list deciding by *is there a row at this id* would overwrite the
+reader's newest note with the one they deleted. `attachments` rebuilds the whole set for the notes
+in the step rather than a diff — the rows cascade away with the note, so an undo has to rebuild
+them — and lands through `INSERT OR IGNORE` so a replay is idempotent. **No `#[serde(alias)]`**:
+the aliases on `Op::Labels` exist only because v33 renamed something already written to disk, and
+`Notes` has never had another spelling.
+
+### The old paragraph is discarded, and that is a decision rather than an oversight
+
+Nothing migrates `decks.notes` into a first `deck_notes` row. Decided by the repository owner on
+2026-09-10 with the alternative on the table. What it costs is stated rather than hidden: a reader
+who used the old field loses it, with no undo, at the upgrade.
+
+### Dropping a synced column costs nothing on the wire
+
+This is the first rung on either ladder to take a column off a capture spec, and the direction had
+no rule written down. It turns out to need none. `apply::updates()` iterates the **local** spec's
+field list and looks each name up in the incoming op, so a field a v42 peer goes on sending and a
+v43 build no longer has is never visited — not an error, not a failed row, not a rolled-back
+savepoint. Unlike an unknown *table*, a dropped *column* cannot stall that peer's stream.
+`a_field_this_build_no_longer_syncs_is_skipped_rather_than_stalling` is that paragraph made
+checkable, and it splices the field into a **real captured op** rather than hand-writing one,
+because a v43 build emits no `notes` and a test that merely hoped the field was present would pass
+while proving nothing. [sync.md](sync.md) carries the rest.

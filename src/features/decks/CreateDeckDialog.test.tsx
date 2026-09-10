@@ -61,7 +61,7 @@ const MADE: DeckRow = {
   formatKey: "modern",
   formatName: "Modern",
   description: null,
-  notes: null,
+  notesOpen: false,
   coverCardId: null,
   coverKind: "card_art",
   coverArtist: null,
@@ -292,11 +292,6 @@ describe("the create deck dialog", () => {
     await userEvent.type(screen.getByLabelText("Description"), "Twenty damage, quickly.", {
       delay: null,
     });
-    await userEvent.type(
-      screen.getByLabelText("Notes"),
-      "Sideboard plan lives in the maybeboard.",
-      { delay: null },
-    );
     // The kind group, which replaced the `Theory deck` switch when `virtual` became the third
     // kind. One press, and the payload below carries **both** columns because `deckKindPatch`
     // does.
@@ -322,7 +317,6 @@ describe("the create deck dialog", () => {
         // remembered value to start from, unlike the format.
         gameKey: "any",
         description: "Twenty damage, quickly.",
-        notes: "Sideboard plan lives in the maybeboard.",
         coverCardId: "s-Shivan Dragon",
         folderId: 2,
         theoryEnabled: true,
@@ -459,7 +453,6 @@ describe("the create deck dialog", () => {
     const sent = deckCreate.mock.calls[0][0] as Record<string, unknown>;
     expect(sent.name).toBe("Sunday burn");
     expect(sent.description).toBeUndefined();
-    expect(sent.notes).toBeUndefined();
     expect(sent.coverCardId).toBeUndefined();
     expect(sent.folderId).toBeUndefined();
     // The wire, and not just the object: `invoke` serialises with JSON, which drops an
@@ -539,19 +532,19 @@ describe("the create deck dialog", () => {
   /**
    * **And from nowhere else on the panel**, which is the half a `<form>` could not have given.
    *
-   * The notes want the newline — a form that made the deck on the reader's first line break
-   * would be unusable for the one field it offers six rows of — and the cover search box means
-   * "I have finished typing a card name", never "make the deck", which is a real risk at
-   * exactly the moment a reader is halfway through one.
+   * The description wants the newline — a form that made the deck on the reader's first line
+   * break would be unusable for the one field it offers more than a row of — and the cover
+   * search box means "I have finished typing a card name", never "make the deck", which is a
+   * real risk at exactly the moment a reader is halfway through one.
    */
-  it("does not create the deck on Enter in the notes or in the cover search", async () => {
+  it("does not create the deck on Enter in the description or in the cover search", async () => {
     wrap(<Harness />);
 
     await userEvent.type(await screen.findByLabelText("Name"), "Sunday burn");
 
-    const notes = screen.getByLabelText("Notes");
-    await userEvent.type(notes, "Bring the burn.{Enter}Cut the sideboard.");
-    expect(notes).toHaveValue("Bring the burn.\nCut the sideboard.");
+    const description = screen.getByLabelText("Description");
+    await userEvent.type(description, "Bring the burn.{Enter}Cut the sideboard.");
+    expect(description).toHaveValue("Bring the burn.\nCut the sideboard.");
 
     await userEvent.type(screen.getByLabelText("Search every card"), "drag");
     await userEvent.keyboard("{Enter}");
@@ -696,7 +689,7 @@ describe("the create deck dialog", () => {
     wrap(<Harness />);
 
     await userEvent.type(await screen.findByLabelText("Name"), "Sunday burn");
-    await userEvent.type(screen.getByLabelText("Notes"), "Bring the burn.");
+    await userEvent.type(screen.getByLabelText("Description"), "Bring the burn.");
     await userEvent.click(submitButton());
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
@@ -704,7 +697,7 @@ describe("the create deck dialog", () => {
     );
     // Still open, still holding every answer: the reader presses again rather than retyping.
     expect(screen.getByLabelText("Name")).toHaveValue("Sunday burn");
-    expect(screen.getByLabelText("Notes")).toHaveValue("Bring the burn.");
+    expect(screen.getByLabelText("Description")).toHaveValue("Bring the burn.");
     expect(onDismiss).not.toHaveBeenCalled();
   });
 
@@ -763,7 +756,7 @@ describe("the create deck dialog", () => {
   /**
    * `onMouseDown` rather than `onClick`, and the target compared with the current target:
    * a click fires on the nearest common ancestor of press and release, so a drag that starts
-   * in the notes textarea and ends past the panel's edge is a "click" on the scrim — and the
+   * in the description textarea and ends past the panel's edge is a "click" on the scrim — and the
    * dialog would vanish under a reader who was selecting the words they had just typed.
    *
    * **The scrim calls `onClose`, never `onDismiss`.** Escape is the reader saying "put me
@@ -776,7 +769,7 @@ describe("the create deck dialog", () => {
     const dialog = await panel();
 
     fireEvent.mouseDown(dialog);
-    fireEvent.mouseDown(within(dialog).getByLabelText("Notes"));
+    fireEvent.mouseDown(within(dialog).getByLabelText("Description"));
     expect(onClose).not.toHaveBeenCalled();
 
     fireEvent.mouseDown(dialog.parentElement as HTMLElement);

@@ -67,6 +67,12 @@ pub mod deck;
 pub mod deck_audit;
 pub mod deck_meta;
 pub mod deck_missing;
+/// **A deck's notebook** — user schema v43, issue #447. Two tables, eight commands and no
+/// renderer: a note's body is CommonMark stored as text, because a markdown reader in this crate
+/// would be a second implementation of the TypeScript one and `src/features/transfer/__golden__`
+/// is the fence that exists to make exactly that pair go red. Nothing in it reaches a filesystem
+/// or a network, so it sits on the every-target half of this map like the eleven around it.
+pub mod deck_notes;
 pub mod deck_pull;
 pub mod deck_quick_add;
 pub mod deck_theory;

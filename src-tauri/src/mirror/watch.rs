@@ -101,9 +101,13 @@ pub fn surface_of(table: &str) -> Option<Dirty> {
         // as that stays true, and `None` is the arm a *reader* would have to remember to move
         // the day a format grows a token line. Being wrong this way costs a render; being wrong
         // the other way costs a file that never catches up.
-        "deck_cards" | "deck_categories" | "deck_labels" | "deck_folders" | "deck_tokens" => {
-            Some(DECKS_ONLY)
-        }
+        // **`deck_notes` and `deck_note_cards` join on exactly that argument** (user schema
+        // v43). No mirrored file names a note either — the deck-notes spec's §10 puts an export
+        // channel for deck-level prose out of scope — so a write here costs one pass that
+        // renders identical bytes, and `None` would be the arm a reader has to remember to move
+        // the day a format grows a notes section.
+        "deck_cards" | "deck_categories" | "deck_labels" | "deck_folders" | "deck_tokens"
+        | "deck_notes" | "deck_note_cards" => Some(DECKS_ONLY),
         // Both, and the over-approximation is deliberate: a deck's name titles its group
         // folder in the cabinet, so a rename that only marked decks would leave the folder
         // named after the old one until something else touched the collection. Being wrong
@@ -261,7 +265,7 @@ pub fn install_hook(
         // commit hook per connection, so a second installer would take this one off.
         //
         // A commit, not a row: `update_hook` does not fire for `WITHOUT ROWID` tables, and two
-        // of the thirteen synced tables are exactly that (`muted_tags`, and `device_names`
+        // of the fifteen synced tables are exactly that (`muted_tags`, and `device_names`
         // since user schema v31). A row-level wake would silently never sync a mute or a
         // rename.
         //
@@ -846,7 +850,7 @@ mod tests {
             .map(String::as_str)
             .partition(|t| surface_of(t).is_some());
 
-        // The ten that reach the mirror.
+        // The twelve that reach the mirror.
         assert_eq!(
             mapped,
             [
@@ -856,6 +860,8 @@ mod tests {
                 "deck_categories",
                 "deck_folders",
                 "deck_labels",
+                "deck_note_cards",
+                "deck_notes",
                 "deck_tokens",
                 "decks",
                 "wishlist_entries",
@@ -962,6 +968,10 @@ mod tests {
         assert!(surface_of("deck_labels").unwrap().decks);
         assert!(surface_of("deck_tokens").unwrap().decks);
         assert!(!surface_of("deck_tokens").unwrap().collection);
+        assert!(surface_of("deck_notes").unwrap().decks);
+        assert!(!surface_of("deck_notes").unwrap().collection);
+        assert!(surface_of("deck_note_cards").unwrap().decks);
+        assert!(!surface_of("deck_note_cards").unwrap().collection);
         assert!(surface_of("deck_folders").unwrap().decks);
         assert!(surface_of("wishlist_entries").unwrap().wishlist);
         assert!(surface_of("wishlist_folders").unwrap().wishlist);

@@ -75,6 +75,13 @@ pub const COMMANDS: &[&str] = &[
     // reaches nothing a browser lacks: it inflates `cards.raw` and walks `all_parts`, which is
     // `card_meld_parts`' trick and compiles on every target for the same reason.
     "deck_tokens",
+    // The Notes band's read, and the one note read that is not deck-scoped at all: every note in
+    // **every** deck naming one card, which is what the card modal's `Notes` row asks. Both are
+    // pure reads over two user tables with one `LEFT JOIN` into the corpus for a card's name, so
+    // neither reaches anything a browser lacks. `card_notes` sits here rather than with the card
+    // arms below because the rows it answers are a deck's.
+    "deck_notes",
+    "card_notes",
     // Decks, write path. **Complete since 2026-08-31.** One name was permanently missing from
     // it — `deck_set_cover_image`, the eleventh on §6.3's desktop-only list, which wrote a file
     // into a covers directory and did not compile for wasm at all — and it is missing now
@@ -118,6 +125,15 @@ pub const COMMANDS: &[&str] = &[
     "deck_token_set",
     "deck_token_clear",
     "deck_token_add",
+    // The six note writes. Plain `sync::with_write` on the other side, for the token writes'
+    // reason: a note names a card by oracle id and moves no copy anywhere, so none of these is
+    // one of the writes that owe `collection_source::with_write_owned`.
+    "deck_note_create",
+    "deck_note_update",
+    "deck_note_delete",
+    "deck_note_attach",
+    "deck_note_detach",
+    "deck_note_reorder",
     // The Collection destination, and the pair that moves a row across the deck boundary.
     "collection_list",
     "collection_summary",
@@ -1153,6 +1169,127 @@ pub fn call(
                 command,
                 crate::sync::with_write(state, |c| {
                     crate::deck_tokens::add_token(c, deck_id, &card_id)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        // ── The deck's notebook ─────────────────────────────────────────────────────
+        //
+        // The read and the six writes follow the token cluster above them: nothing here touches
+        // the filesystem, the network or a marketplace, and every write is plain
+        // `sync::with_write` because a note moves no copy across the collection boundary.
+        //
+        // **`title`, `body` and both card lists are the wire's camelCase**, read off the
+        // `#[tauri::command]` wrappers rather than chosen here — `invoke` matches a Rust
+        // command's parameters by name, so `oracle_ids` spelled that way in this file would be a
+        // `RouteError::Args` at run time that reads exactly like a bug in the page.
+        "deck_notes" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::deck_notes::list_notes(&conn, deck_id).map_err(RouteError::Failed)?,
+            )
+        }
+
+        // No deck id at all — see `deck_notes::notes_for_card`, which answers across every deck.
+        "card_notes" => {
+            let oracle_id: String = field(command, args, "oracleId")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::deck_notes::notes_for_card(&conn, &oracle_id).map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_note_create" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let title: String = field(command, args, "title")?;
+            let body: String = field(command, args, "body")?;
+            // **`field` and not `optional`, because the wrapper declares a bare `Vec<String>`.**
+            // A note made with no card attached sends `[]`, which is a value; `optional` here
+            // would accept a call the desktop refuses, and the two ends answering differently to
+            // one payload is the whole thing this file's "every arm is its wrapper" rule is for.
+            let oracle_ids: Vec<String> = field(command, args, "oracleIds")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::deck_notes::create_note(c, deck_id, &title, &body, &oracle_ids)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_note_update" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let id: i64 = field(command, args, "id")?;
+            // **`optional` for both, and an absent one means *leave it*** — the web mirror of
+            // Tauri filling a missing `Option` argument with `None`. An explicit `""` is a value
+            // and really empties the column, which is the one thing the old `decks.notes` could
+            // never do.
+            let title: Option<String> = optional(command, args, "title")?;
+            let body: Option<String> = optional(command, args, "body")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::deck_notes::update_note(
+                        c,
+                        deck_id,
+                        id,
+                        title.as_deref(),
+                        body.as_deref(),
+                    )
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_note_delete" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let id: i64 = field(command, args, "id")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| crate::deck_notes::delete_note(c, deck_id, id))
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        // `noteId` and not `id`: the note is not the subject of this write, the pair is — see the
+        // wrapper's own parameter names.
+        "deck_note_attach" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let note_id: i64 = field(command, args, "noteId")?;
+            let oracle_id: String = field(command, args, "oracleId")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::deck_notes::attach_card(c, deck_id, note_id, &oracle_id)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_note_detach" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let note_id: i64 = field(command, args, "noteId")?;
+            let oracle_id: String = field(command, args, "oracleId")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::deck_notes::detach_card(c, deck_id, note_id, &oracle_id)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_note_reorder" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let ids: Vec<i64> = field(command, args, "ids")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::deck_notes::reorder_notes(c, deck_id, &ids)
                 })
                 .map_err(RouteError::Failed)?,
             )
@@ -3277,6 +3414,111 @@ mod tests {
         }
     }
 
+    /// **The deck's notebook, routed and advertised — and the other half of the drift
+    /// `COMMANDS` cannot see on its own.**
+    ///
+    /// [`every_advertised_command_is_actually_routed`] walks the list and catches a name with no
+    /// arm. It cannot catch the reverse: an arm added here and left out of `COMMANDS` answers a
+    /// [`call`] perfectly well and is still invisible to the page, which reads that list to
+    /// decide what a browser can do. So membership is asserted here, beside the wire names each
+    /// arm reads its arguments by.
+    #[test]
+    fn the_note_commands_are_both_routed_and_advertised() {
+        let s = state("web-route-deck-notes");
+        for name in [
+            "deck_notes",
+            "card_notes",
+            "deck_note_create",
+            "deck_note_update",
+            "deck_note_delete",
+            "deck_note_attach",
+            "deck_note_detach",
+            "deck_note_reorder",
+        ] {
+            assert!(
+                COMMANDS.contains(&name),
+                "`{name}` is an arm the page is never told about"
+            );
+        }
+
+        let id = make_deck(&s, "Notes");
+
+        // A note made with no card attached sends an **empty list** rather than omitting the key:
+        // the wrapper declares a bare `Vec<String>`, so this arm is `field` and the desktop would
+        // refuse the omission too.
+        let made = call(
+            &s,
+            "deck_note_create",
+            &json!({ "deckId": id, "title": "Mana", "body": "Fourteen sources.",
+                     "oracleIds": [] }),
+        )
+        .unwrap();
+        let note_id = made["id"].as_i64().unwrap();
+        assert_eq!(made["deckId"], json!(id));
+        assert_eq!(made["sortOrder"], json!(0));
+        assert_eq!(made["cards"], json!([]));
+
+        let attached = call(
+            &s,
+            "deck_note_attach",
+            &json!({ "deckId": id, "noteId": note_id, "oracleId": "o-bolt" }),
+        )
+        .unwrap();
+        assert_eq!(attached["cards"][0]["oracleId"], json!("o-bolt"));
+        // The fixture's four printings carry no `oracle_id`, so nothing resolves — and an
+        // unresolved attachment is named by **its own id** rather than by nothing. The soft
+        // reference, from the read side.
+        assert_eq!(attached["cards"][0]["name"], json!("o-bolt"));
+
+        // The card side answers across every deck and names the deck it found the note in.
+        let mine = call(&s, "card_notes", &json!({ "oracleId": "o-bolt" })).unwrap();
+        assert_eq!(mine.as_array().unwrap().len(), 1);
+        assert_eq!(mine[0]["deckName"], json!("Notes"));
+        assert_eq!(mine[0]["title"], json!("Mana"));
+
+        // An explicit `""` is a value and really empties the column; an absent `body` is
+        // *leave it alone*. Both halves in one call, because they are one `optional` rule.
+        let edited = call(
+            &s,
+            "deck_note_update",
+            &json!({ "deckId": id, "id": note_id, "title": "" }),
+        )
+        .unwrap();
+        assert_eq!(edited["title"], json!(""));
+        assert_eq!(edited["body"], json!("Fourteen sources."));
+
+        call(
+            &s,
+            "deck_note_detach",
+            &json!({ "deckId": id, "noteId": note_id, "oracleId": "o-bolt" }),
+        )
+        .unwrap();
+        call(
+            &s,
+            "deck_note_reorder",
+            &json!({ "deckId": id, "ids": [note_id] }),
+        )
+        .unwrap();
+
+        let listed = call(&s, "deck_notes", &json!({ "deckId": id })).unwrap();
+        assert_eq!(listed.as_array().unwrap().len(), 1);
+        assert_eq!(listed[0]["cards"], json!([]), "the detach really landed");
+
+        // camelCase on the wire, the way `deck_bracket_reads` pins `deckIds`: the Rust
+        // parameter is `deck_id` and nothing may reach this arm spelling it that way.
+        let err = call(&s, "deck_notes", &json!({ "deck_id": id })).unwrap_err();
+        assert!(matches!(&err, RouteError::Args { .. }), "got {err:?}");
+
+        call(
+            &s,
+            "deck_note_delete",
+            &json!({ "deckId": id, "id": note_id }),
+        )
+        .unwrap();
+        let gone = call(&s, "deck_notes", &json!({ "deckId": id })).unwrap();
+        assert_eq!(gone, json!([]));
+    }
+
     /// **The list and the table must not drift.** `COMMANDS` is what the frontend and the
     /// docs read; the `match` is what actually answers. A name in one and not the other is
     /// exactly the silent `undefined` this whole module exists in-tree to prevent.
@@ -3337,13 +3579,16 @@ mod tests {
         // **149 since `card_tcgplayer_ids`**, counted off the merged array with the `awk` the
         // paragraph five above asks for and not by adding one to 148.
         //
-        // **158 since the home page**, which routed nine at once — the two settings pairs, the
-        // three money reads, the deck values and the activity feed. Counted with the same `awk`
-        // over the array literal and not by adding nine to 149; the arithmetic agrees, which is
-        // the point of counting rather than a reason not to.
+        // **166 since two branches landed together**, and this line is the reason the paragraphs
+        // above ask for a count rather than an addition. The deck's notebook routed eight
+        // (`deck_notes`, one read, one card-side read and six writes) and the home page routed
+        // nine (the two settings pairs, the three money reads, the deck values and the activity
+        // feed) — each branch wrote its own number against a shared 149, and **both were right on
+        // their own branch and wrong in the merge**, which is exactly what a number derived by
+        // adding cannot survive. 166 is `awk`'s answer over the merged array literal.
         assert_eq!(
             COMMANDS.len(),
-            158,
+            166,
             "update this number when a command is added"
         );
     }

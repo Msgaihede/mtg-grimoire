@@ -2885,10 +2885,20 @@ export interface DeckAuditEntry {
    * are narrower than they look — a category `reorder` emits `{ action }` alone, because every
    * pile moved and there is no one pile to name — and the writer is still growing: this build
    * may be older *or* newer than the one that wrote a row, since a database outlives the app.
-   * `deck.field` today is `name | format | cover | notes | built | theory | description |
+   * `deck.field` today is `name | format | cover | notes | note | built | theory | description |
    * archived`, and `cover` records the literal `"custom"` for an uploaded image rather than a
    * card id. Parse defensively and be total over unknowns, which is what `auditText.ts` does
    * and why nothing in it throws.
+   *
+   * **`notes` and `note` are two different words and neither may be folded into the other.**
+   * `notes` is the v8 column, written until schema v43 and **still on that list although
+   * nothing writes it any more** — audit rows are durable, so every history row from before v43
+   * still says it, and dropping the word would demote years of history to a default sentence.
+   * `note` is one row of the notes band ({@link DeckNote}), and its payload carries two keys the
+   * others do not: an `action` (`create | edit | delete | attach | detach`) and the note's
+   * `note` title, plus a `card` name on the two attachment actions and `null` otherwise. The
+   * body is never recorded, for the reason the old field's sentence gave: a note is a paragraph
+   * nobody wants in a one-line history.
    *
    * Values are recorded **as stored**: a set code inside a `swap` is the lowercase
    * `cards.set_code` it came from, not the capitals a tile draws. Casing is the renderer's.
@@ -3008,13 +3018,18 @@ export interface DeckInput {
    * the game narrows a *picker* and never the deck.
    */
   gameKey?: DeckGame;
-  /** The one-line blurb the gallery tile shows — **not** {@link DeckInput.notes}. Two fields
-   *  because they are two things: a caption and a notebook. The "New deck" dialog fills this
-   *  now that it hosts the whole settings form; before that it sent name and format alone, and
-   *  a blurb could only arrive afterwards through {@link ipc.deckUpdate}. */
+  /**
+   * The one-line blurb the gallery tile shows — **a caption, and the only prose a create
+   * carries**. The "New deck" dialog fills this now that it hosts the whole settings form;
+   * before that it sent name and format alone, and a blurb could only arrive afterwards
+   * through {@link ipc.deckUpdate}.
+   *
+   * **It used to be half a pair, and the other half is gone from here.** `decks.notes` was the
+   * deck's notebook and this its caption; schema v43 replaced that one column with rows —
+   * {@link DeckNote} — and no create can carry one. A note is written *after* the deck exists,
+   * one at a time, through {@link ipc.deckNoteCreate}; the deck's birth stays one INSERT.
+   */
   description?: string;
-  /** The deck's long-form notes — the v8 column, and not {@link DeckInput.description}. */
-  notes?: string;
   /**
    * Point the new deck's cover at a printing's art crop — **the whole of what a cover is**.
    *
@@ -3106,8 +3121,9 @@ export interface DeckPatch {
    *  one — absent still means "leave it", which is why the column is not nullable. Setting it
    *  moves no format, and setting a format moves no game. */
   gameKey?: DeckGame;
-  /** The one-line blurb the gallery tile shows — **not** {@link DeckPatch.notes}. Two fields
-   *  because they are two things: a caption and a notebook. Both dialogs write it now: the
+  /** The one-line blurb the gallery tile shows — a caption, and since schema v43 the **only**
+   *  prose on this patch: the deck's notebook is rows now ({@link DeckNote}) and is written
+   *  through the eight note commands rather than through here. Both dialogs write this one: the
    *  "New deck" one through {@link DeckInput.description} at birth, the settings one through
    *  here. */
   description?: string;
@@ -3125,8 +3141,6 @@ export interface DeckPatch {
    * means "leave it". {@link ipc.deckSetFolder} is the command that reaches the root.
    */
   folderId?: number;
-  /** The deck's long-form notes — the v8 column, and not {@link DeckPatch.description}. */
-  notes?: string;
   /**
    * Whether this deck keeps a theory list beside its live one.
    *
@@ -3219,6 +3233,20 @@ export interface DeckPatch {
    * life, where a tab or a sort is written on every press.
    */
   statsOpen?: boolean;
+  /**
+   * Whether the editor's **Notes** band is expanded. See {@link DeckRow.notesOpen} — a per-deck
+   * reading preference, so switching it writes one column and touches neither a `deck_cards`
+   * row nor a `deck_notes` one.
+   *
+   * **It rides this patch and not {@link ipc.deckSetViewState}**, for the argument spelled out
+   * on {@link tokensOpen} two fields up, and it is the third disclosure to take that answer.
+   *
+   * **Opening the band is not reading the notes and writing one is not opening the band.** This
+   * boolean says whether the section is unfolded; the notes themselves are rows, written by the
+   * eight `deckNote*` commands and never by a patch. A caller that reached for this to save a
+   * note is reaching for {@link ipc.deckNoteCreate}.
+   */
+  notesOpen?: boolean;
   /**
    * Which of this deck's categories an add that names none lands in. See
    * {@link DeckRow.defaultCategoryId} — `0` is `AUTO_CATEGORY` and is a **value**, not an
@@ -3407,8 +3435,6 @@ export interface DeckRow {
   /** Which folder the deck is filed in, or `null` for the root of the tree. Filing is
    *  {@link ipc.deckSetFolder}, which is the only write that can put it back at `null`. */
   folderId: number | null;
-  /** The deck's long-form notes — the v8 column, not {@link DeckRow.description}. */
-  notes: string | null;
   /**
    * Whether this deck keeps a theory list beside its live one.
    *
@@ -3597,6 +3623,30 @@ export interface DeckRow {
    * never see is a setting nothing can draw.
    */
   statsOpen: boolean;
+  /**
+   * Whether the editor's **Notes** band is expanded — `decks.notes_open INTEGER NOT NULL
+   * DEFAULT 0`, schema v43, and `false` on every deck that predates it, which is the state
+   * every existing deck is in.
+   *
+   * **The default is v37's answer and not v42's, and the two rungs asked the same question.**
+   * {@link statsOpen} above took `DEFAULT 1` because the stats band was already on screen for
+   * every deck on every disk, so a `0` would have hidden something a reader had been looking at
+   * for months. The Notes band is **new** — no deck has ever drawn one — so a collapsed default
+   * takes nothing from anybody, and {@link tokensOpen} is the precedent character for
+   * character.
+   *
+   * **Per deck rather than app-wide**, for {@link tokensOpen}'s reason two columns over:
+   * whether a reader wants a deck's prose in front of them is an answer about a particular deck.
+   *
+   * Read on the row as well as written through {@link DeckPatch}: a setting the app can write
+   * and never see is a setting nothing can draw.
+   *
+   * **This is the whole of what `decks` still says about notes.** The v8 `notes` column is gone
+   * at v43 and its paragraph was discarded rather than migrated — the notes themselves are rows
+   * now ({@link DeckNote}), read with {@link ipc.deckNotes} and never carried on this row,
+   * because a deck's tile and its gallery read want a row and not a notebook.
+   */
+  notesOpen: boolean;
   /**
    * Which of this deck's categories an add that names no pile lands in — `decks.default_category_id`,
    * schema v16, and **`AUTO_CATEGORY` (`0`) for "let the card's own text decide"**.
@@ -4244,6 +4294,119 @@ export interface DeckTokenRow {
    * field-name pin is the only fence.
    */
   imageUris?: Partial<Record<ImageVariant, string>> | null;
+}
+
+/**
+ * One of a deck's notes — schema v43, and the row that replaced the single `decks.notes`
+ * column.
+ *
+ * **A note belongs to a *deck*, and a card it names is a pointer it holds rather than a place it
+ * lives.** That is the whole shape and it is what the issue asked for: attachments hang off the
+ * note, so {@link ipc.deckNotes} is the complete list by construction and a note cannot become
+ * invisible by acquiring a card. There is no per-card notes table to go looking for, and
+ * {@link ipc.cardNotes} answers the card's question by reading these same rows from the other
+ * end.
+ *
+ * **Attachments are by `oracleId`, never by a printing id** — `deck_tokens`' argument verbatim: a
+ * printing id means nothing on the far device's shelf and an oracle id is Scryfall's. So a note
+ * survives the reader swapping printings, a note written against the Theory list shows on the
+ * Live one, and one note naming Lightning Bolt names it once however many copies the deck holds.
+ *
+ * Not on {@link DeckDetail} and not on {@link DeckRow}: a deck's read carries its cards, its
+ * categories and its labels, and a notebook is neither a card fact nor something a gallery tile
+ * draws.
+ */
+export interface DeckNote {
+  id: number;
+  /** The deck this note belongs to. `deck_notes.deck_id`, `ON DELETE CASCADE` — deleting a deck
+   *  takes its notes and their attachments with it. */
+  deckId: number;
+  /**
+   * The note's own heading, as the reader typed it — **one line, and legally empty**.
+   *
+   * Not to be confused with {@link DeckNote.body} below: this is what the band's row, the card
+   * menu's submenu and the card modal's list can print without rendering anything, and it is
+   * the *stored* string rather than the one drawn. **A blank title is an ordinary state**, and
+   * what a reader sees for one is `noteTitle`'s conclusion in
+   * `features/decks/deckNotes.ts` — the body's first line, or `Untitled note`. That derivation
+   * is computed at render and stored nowhere: a stored one would go stale the moment the body
+   * was edited, with no writer able to notice.
+   */
+  title: string;
+  /**
+   * The note itself — **CommonMark text**, in the narrowed dialect `features/decks/noteMarkdown.ts`
+   * pins. Never HTML and never ProseMirror JSON.
+   *
+   * Not to be confused with {@link DeckNote.title} above: that is a line, this is the prose, and
+   * nothing derives one from the other on this side of the wire. **It arrives as source, never
+   * as markup** — the shipped CSP is `script-src 'self'` with no `dangerouslySetInnerHTML`
+   * anywhere in `src/`, so a renderer that answered an HTML string could not be used at all.
+   * `parseNoteBody` reads it into blocks for the three read-only surfaces, and the editor is
+   * the only thing in the app that writes it.
+   */
+  body: string;
+  /** Where the note sits in its deck's list. The reader's own arrangement, written by
+   *  {@link ipc.deckNoteReorder} — {@link ipc.deckNotes} answers in this order, so no caller
+   *  sorts. */
+  sortOrder: number;
+  /**
+   * The cards this note names, each with the name to print — so a submenu or a chip needs no
+   * second round trip for a word.
+   *
+   * **Empty is the ordinary case and says nothing is attached**, never that the read failed: a
+   * note about the mana base names no card at all, which is exactly the note this feature exists
+   * for. The marks a deck draws are `notedOracleIds`' `Set` built from these lists in
+   * TypeScript, because the band already holds every note and a second command would be a
+   * second source of truth for a fact already in hand.
+   */
+  cards: DeckNoteCard[];
+  /** Unix seconds. */
+  createdAt: number;
+  /** Unix seconds. Moves on an edit, an attach and a detach alike. */
+  updatedAt: number;
+}
+
+/**
+ * One card a note names: the identity, and the word to print for it.
+ *
+ * `oracleId` is the card **across every printing of it**, which is what a note attaches by —
+ * see {@link DeckNote}. `name` is a convenience the backend joins from `cards`, and **it falls
+ * back to the oracle id itself** where the corpus has no row for one: a note must not disappear
+ * from a deck because a card left the reader's copy of Scryfall's data.
+ */
+export interface DeckNoteCard {
+  oracleId: string;
+  name: string;
+}
+
+/**
+ * A note seen **from a card**, rather than from the deck that owns it — what
+ * {@link ipc.cardNotes} answers.
+ *
+ * **The same rows as {@link DeckNote}, asking the opposite question.** A `DeckNote` answers
+ * *what has this deck written*, and carries the cards it names; a `CardNote` answers *what has
+ * been written about this card, anywhere*, and carries the **deck** it was found in instead —
+ * which is the field that would otherwise be missing, since a card opened from the collection or
+ * from search has no deck in hand at all. Nothing about the note differs between the two shapes;
+ * what differs is which end of the join the caller already holds.
+ *
+ * It carries no `cards`, deliberately: the caller asked about one card and already knows which.
+ * And no `sortOrder` — an order within one deck is meaningless in a list spanning several.
+ */
+export interface CardNote {
+  id: number;
+  /** The deck the note belongs to — the row the card modal's list opens. */
+  deckId: number;
+  /** That deck's name at the time of the read. The one field {@link DeckNote} has no use for,
+   *  and the whole reason this is a second shape: a card can be in five decks and a bare id
+   *  names none of them to a reader. */
+  deckName: string;
+  /** The stored heading, blank included — {@link DeckNote.title}'s rules and `noteTitle`'s
+   *  fallback apply unchanged. */
+  title: string;
+  /** The CommonMark source — {@link DeckNote.body}'s rules apply unchanged, `parseNoteBody`
+   *  included. */
+  body: string;
 }
 
 /**
@@ -7063,6 +7226,101 @@ export const ipc = {
    */
   deckTokenAdd: (deckId: number, cardId: string) =>
     invoke<void>("deck_token_add", { deckId, cardId }),
+  /**
+   * Every note on the deck, in the reader's own order, each with the cards it names.
+   *
+   * **The complete list, and that is the feature rather than an implementation detail.** A note
+   * that names a card is still one of these rows — attachments hang off the note, so acquiring a
+   * card cannot file a note away somewhere the band does not look. See {@link DeckNote}.
+   *
+   * **`[]` is an answer and never a failure**: a deck nobody has written about yet. It is also
+   * the state this screen is hardest for, which is why the band puts its add field first.
+   *
+   * **Not scoped by {@link DeckVariant}**, unlike every other deck read here. A note attaches by
+   * `oracleId`, and the Live list and the Theory list hold the same oracle ids — so a note
+   * written against the plan is a note about the deck, and scoping it would make the same
+   * sentence appear and disappear as the reader flipped a toggle.
+   */
+  deckNotes: (deckId: number) => invoke<DeckNote[]>("deck_notes", { deckId }),
+  /**
+   * Write a new note, with however many cards it names — **in one transaction**, so a note is
+   * never briefly in the list without the card it was written about.
+   *
+   * `oracleIds` travels as an explicit key even when empty, `deckIdsPlaying`'s rule: Tauri fills
+   * parameters by name and an absent one is a refusal rather than a default. An empty array is
+   * the ordinary case — a note about the mana base names no card.
+   *
+   * Both strings may be `""`. A blank `title` is legal and is what the reader gets when they
+   * type a body and no heading; what is *drawn* for one is `noteTitle`'s conclusion, never a
+   * value stored here. See {@link DeckNote.title}.
+   */
+  deckNoteCreate: (deckId: number, title: string, body: string, oracleIds: string[]) =>
+    invoke<DeckNote>("deck_note_create", { deckId, title, body, oracleIds }),
+  /**
+   * Edit a note's heading, its prose, or both — and **absent means "leave it"**, which is
+   * {@link DeckPatch}'s rule one table over.
+   *
+   * **Both keys travel on every call, `null` included**, for {@link ipc.deckTokenSet}'s reason:
+   * Tauri fills parameters by name, so `undefined` is folded to `null` here — with `??` and
+   * never `||`, because `""` is a **title the reader deliberately cleared** and `||` would send
+   * it as "leave it alone". That is this command's `quantity: 0`.
+   *
+   * It does not touch the note's cards. Attaching and detaching are the two commands below,
+   * because a set has no patch shape and a caller changing one card would otherwise have to
+   * send the rest back unchanged.
+   */
+  deckNoteUpdate: (deckId: number, id: number, patch: { title?: string; body?: string }) =>
+    invoke<DeckNote>("deck_note_update", {
+      deckId,
+      id,
+      title: patch.title ?? null,
+      body: patch.body ?? null,
+    }),
+  /** **This one really deletes** — the note and its attachments, by cascade. There is no
+   *  archive here and no `coalesce` to hide behind: the old `decks.notes` column could never be
+   *  emptied by a patch at all, so a multi-note model owns this path itself. The press is a
+   *  destructive confirm, and the step is on the deck's undo stack. */
+  deckNoteDelete: (deckId: number, id: number) =>
+    invoke<void>("deck_note_delete", { deckId, id }),
+  /**
+   * Name one more card on a note. Answers the **whole updated note**, so the band redraws from
+   * one round trip.
+   *
+   * **Attaching a card the note already names is a success that adds no row** —
+   * `idx_deck_note_cards_grain` is `(note_id, oracle_id)`, and the caller wanted that card
+   * named. Two devices doing it converge on one row for the same reason.
+   *
+   * `oracleId` and not a printing id: see {@link DeckNote}. The picker offers the deck's own
+   * cards, and the row **survives the card leaving the deck**, which is deliberate — a note
+   * about a card you cut is the note most worth keeping.
+   */
+  deckNoteAttach: (deckId: number, noteId: number, oracleId: string) =>
+    invoke<DeckNote>("deck_note_attach", { deckId, noteId, oracleId }),
+  /** Stop naming a card on a note — the row goes, **the note stays**. That is the issue's
+   *  central sentence read from the other end: a card is a pointer the note holds, so taking the
+   *  last one away leaves an ordinary note with no cards rather than nothing. An oracle id the
+   *  note does not name is a success: the caller wanted it unnamed. */
+  deckNoteDetach: (deckId: number, noteId: number, oracleId: string) =>
+    invoke<DeckNote>("deck_note_detach", { deckId, noteId, oracleId }),
+  /** Rearrange the deck's notes: `ids` is the whole list in the order the reader put it, and
+   *  `sort_order` is rewritten to match. Answers nothing — the caller has the order, since it is
+   *  what it just sent. */
+  deckNoteReorder: (deckId: number, ids: number[]) =>
+    invoke<void>("deck_note_reorder", { deckId, ids }),
+  /**
+   * Every note naming this card, **in every deck** — the card modal's `Notes` row.
+   *
+   * **The one note read that is not deck-scoped**, and that is what it is for: a card opened
+   * from the collection, from search or from another deck still answers *what have I written
+   * about this card*, which is the question the modal exists to answer completely. Each row
+   * carries the deck it was found in — see {@link CardNote}, and note that it is a different
+   * shape from {@link DeckNote} rather than the same one twice.
+   *
+   * **`[]` is an answer and not a failure, and a caller may not draw it as silence.** No notes
+   * for this card, the read in flight and the read *failed* are three different states that all
+   * look like an empty list, which is `combosForCard`'s rule beside it on the same rail.
+   */
+  cardNotes: (oracleId: string) => invoke<CardNote[]>("card_notes", { oracleId }),
   /**
    * The format the last deck made on this install was given — or `null` where no deck has ever
    * been made.

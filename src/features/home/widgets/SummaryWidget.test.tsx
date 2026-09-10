@@ -45,7 +45,7 @@ function deck(name: string, over: Partial<DeckRow> = {}): DeckRow {
     cardCount: 100,
     updatedAt: 1_800_000_000,
     folderId: null,
-    notes: null,
+    notesOpen: false,
     theoryEnabled: false,
     virtualOnly: false,
     theoryMarkExact: true,

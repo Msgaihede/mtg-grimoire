@@ -126,7 +126,7 @@ const DECK_ROW: DeckRow = {
   cardCount: 21,
   updatedAt: 0,
   folderId: null,
-  notes: null,
+  notesOpen: false,
   theoryEnabled: false,
   virtualOnly: false,
   theoryMarkExact: true,

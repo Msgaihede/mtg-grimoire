@@ -331,7 +331,9 @@ describe("CardStack geometry at a zoom", () => {
       expect(stackDataHeight(zoom)).toBe(scaled(STACK_DATA_HEIGHT, zoom));
       expect(stackDataHeight(zoom)).toBeGreaterThan(STACK_DATA_HEIGHT);
     }
-    // The rise never moves: it hides the seam under a 7px corner that is a Tailwind class.
+    // The rise never moves: the corner it hides the seam under is a Tailwind class at a fixed
+    // pixel count, whatever that count is. Four is a measured number rather than a derived one —
+    // see `CHIN_RISE`, which was re-measured against the face's 9px corner on 2026-09-10.
     expect(STACK_DATA_RISE).toBe(4);
   });
 
@@ -1567,9 +1569,11 @@ describe("CardStack marks", () => {
     );
 
     // And the strip it rides is flush to **both** of the card's edges, so the face's own
-    // `rounded-[7px]` clips this mark's corner exactly as it has always clipped the quantity
-    // tag's at the other end. A `right-` inset here is the defect: it leaves a square corner
-    // floating 5px inside a round one.
+    // `FACE_RADIUS` clips this mark's corner exactly as it has always clipped the quantity tag's
+    // at the other end. A `right-` inset here is the defect: it leaves a square corner floating
+    // 5px inside a round one. **That clip is also what keeps this mark off the card's border**:
+    // it is the padding box's own curve, so a mark flush into the corner stops exactly where the
+    // border begins — which is what it did not do while the radius was 2px too tight.
     const strip = ticks[0].parentElement as HTMLElement;
     expect(strip.className).toContain("inset-x-0");
     expect(strip.className).not.toContain("right-[");

@@ -135,6 +135,7 @@ import type {
   CardFace,
   CardFilters,
   CardHoldings,
+  CardNote,
   CardSummary,
   CardTags,
   CategoryKind,
@@ -167,6 +168,8 @@ import type {
   DeckMissingOutcome,
   DeckMissingPick,
   DeckMissingRow,
+  DeckNote,
+  DeckNoteCard,
   DeckPatch,
   DeckPullCandidate,
   DeckPullOutcome,
@@ -506,9 +509,6 @@ export interface FakeDeck {
   /** `ON DELETE SET NULL`: deleting a folder surfaces its decks at the root rather than
    *  taking them with it. `null` **is** the root, and {@link FakeDb.deckFolders} is flat. */
   folderId: number | null;
-  /** The long-form notebook, and **not** {@link description} — that is the one-line blurb the
-   *  gallery tile shows. Two columns because they are two things. */
-  notes: string | null;
   /** Whether this deck keeps a `theory` list beside its `live` one. Read on the row as well as
    *  written, because the editor's Theory/Live control *is* this boolean — a switch the app
    *  can set and never see is a switch nothing can draw. */
@@ -627,6 +627,23 @@ export interface FakeDeck {
    */
   statsOpen?: boolean;
   /**
+   * `decks.notes_open` (schema v43): whether the editor's **Notes** band is expanded.
+   *
+   * **{@link tokensOpen}'s default rather than {@link statsOpen}'s, and the two lines above are
+   * exactly why this one needs an argument of its own.** `stats_open` is `NOT NULL DEFAULT 1`
+   * because that band was already on screen for every deck on every disk, so a `0` would have
+   * shut something readers had been reading for months; `tokens_open` is `DEFAULT 0` because
+   * that area was new when it shipped. This band is newer still — **no deck has ever drawn
+   * one** — so a collapsed default takes nothing from anybody, and {@link toDeckRow} resolves
+   * the absence to `false`.
+   *
+   * Optional for {@link separateXGroup}'s reason like the three columns above it, and a
+   * **reading** preference like all three: it rides the ordinary `deck_update` rather than
+   * `deck_set_view_state`, because a disclosure a reader opens once and leaves open is a
+   * handful of audited writes over a deck's whole life.
+   */
+  notesOpen?: boolean;
+  /**
    * `decks.default_category_id` (schema v16): which of this deck's categories an add that names
    * no pile lands in, and `AUTO_CATEGORY` (`0`) for "by what the card does".
    *
@@ -659,6 +676,82 @@ export interface FakeDeck {
    */
   bracket?: number;
   updatedAt: number;
+}
+
+/**
+ * One row of `deck_notes` (user schema v43): one note the reader wrote about this deck.
+ *
+ * **It replaced a column, and that is the whole of the feature.** `decks.notes` was a single
+ * `TEXT` cell reached from one textarea in a dialog most readers never opened — one notebook
+ * per deck, which could be edited but never emptied and never split. Issue #447 asked for notes
+ * a reader can add, manage and delete independently, so a note is a **row** and a deck holds any
+ * number of them.
+ *
+ * **A note belongs to a deck; the cards it names are a pointer it holds.** The attachments hang
+ * off the note ({@link FakeDeckNoteCard}) and never the other way round, which is what makes
+ * {@link readHandlers.deck_notes} the complete list *by construction*: a note cannot become
+ * invisible by acquiring a card, which is the issue's central requirement and the one property
+ * a "notes live on cards" schema could not have.
+ *
+ * **No grain and no unique index**, deliberately mirroring the DDL — and the opposite call from
+ * the table below, which is where the pair is worth reading together. Two devices each typing a
+ * note about the mana base must stay two notes: there is no column pair that could tell an
+ * accidental duplicate from a deliberate one, and inventing one (a title grain, say) would fold
+ * two readers' separate thoughts into whichever arrived second.
+ */
+export interface FakeDeckNote {
+  id: number;
+  /** `ON DELETE CASCADE`: deleting the deck takes its notes, and their attachments after them. */
+  deckId: number;
+  /**
+   * What the band's list, the card menu's submenu and the card modal's row print in one line —
+   * **and it may be empty**, which is a state rather than a missing value.
+   *
+   * A blank title reads as the body's first line, computed at render by
+   * `features/decks/deckNotes.ts` and stored nowhere: a stored derivation would go stale the
+   * moment the body was edited and there is no writer that could notice. So this is `string`
+   * and not `string | null`, exactly as the column is `TEXT NOT NULL DEFAULT ''`.
+   */
+  title: string;
+  /** CommonMark, in the narrowed dialect `features/decks/noteMarkdown.ts` pins. Never HTML and
+   *  never ProseMirror JSON — a body that is plain text is what keeps a renderer out of the
+   *  crate, and out of `src-tauri/src/transfer/`'s golden fence with it. */
+  body: string;
+  sortOrder: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * One row of `deck_note_cards` (user schema v43): one card a note names.
+ *
+ * **Keyed by `oracleId` and never by a printing id**, which is `deck_tokens`' argument verbatim:
+ * a printing id means nothing on the far device's shelf, while an oracle id is Scryfall's and is
+ * the same everywhere. Three things follow and each is a feature rather than a consequence — a
+ * note survives the reader swapping to a different printing, a note written against the Theory
+ * list shows on the Live list and the other way round because both hold the same oracle id, and
+ * one note naming Lightning Bolt names it once however many copies or finishes the deck holds.
+ *
+ * **This table has a grain where {@link FakeDeckNote} deliberately has none**, and the two are
+ * the same reasoning read from opposite ends: two devices attaching Lightning Bolt to one note
+ * describe *one* fact, so `(note_id, oracle_id)` is unique and
+ * {@link writeHandlers.deck_note_attach} folds a second attach into nothing rather than
+ * refusing it. Without that the far op would be an insert that hits nothing, both rows would
+ * land, and the card modal would read two notes for one note.
+ *
+ * A **soft** reference like every card id in a user table: nothing checks the oracle id is in
+ * `cards`, and {@link cardNameOfOracle} answers the id itself for a name it cannot resolve.
+ *
+ * **No `createdAt`/`updatedAt` here where the note above carries both**, which is
+ * {@link FakeDeckCard}'s own arrangement and made for its reason: nothing reads an attachment's
+ * timestamps, and a column no reader has is a column this store does not need.
+ */
+export interface FakeDeckNoteCard {
+  id: number;
+  /** `ON DELETE CASCADE` on the **note** and not on the deck — the row hangs off the note,
+   *  which is why `apply::META` sorts this table after `deck_notes` rather than after `decks`. */
+  noteId: number;
+  oracleId: string;
 }
 
 /**
@@ -766,6 +859,20 @@ export interface FakeDeckState {
   cards: FakeDeckCard[];
   categories: FakeDeckCategory[];
   labels: FakeDeckLabel[];
+  /**
+   * The deck's notes, and the cards they name — **both, because an attachment cascades away
+   * with its note**: an undo that put the note back without them would restore half a row.
+   *
+   * They are here where `deck_tokens` is not, and the split is the crate's own rather than this
+   * fake's taste. `deck_undo::Op` grew a fifth arm for notes and has none for tokens, so a note
+   * write really is reversible in the app and a token write really is not — which is why the
+   * three token writes are on {@link NO_UNDO_STEP} and the note writes are not. A snapshot that
+   * skipped these two lists would file a step for every note write that restored nothing: a
+   * Ctrl+Z that appears to do nothing while spending the reader's one press, which is a state
+   * the backend cannot produce.
+   */
+  notes: FakeDeckNote[];
+  noteCards: FakeDeckNoteCard[];
 }
 
 /**
@@ -967,6 +1074,17 @@ export interface FakeUpdate {
  * those are the deck, and a screen that could not read the deck would not be showing a panel
  * about it.
  *
+ * **`deckNotes` is the second read failure and is deliberately not part of the first.**
+ * `deck_notes` and `card_notes` are `deck_notes.rs`' own reads on `lock_db_read`, not
+ * `deck_meta.rs`'s five satellites, so folding them into `deckMeta` would make one fault stand
+ * for two modules and let a story that meant to fail the notes read fail the folder tree beside
+ * it. What it is *for* is the state that has no other spelling: **an empty list and a failed
+ * read look identical on screen and mean opposite things.** The band draws its own refusal line
+ * where a deck with no notes draws an add field, and the card modal's `Notes` overlay has four
+ * arms rather than three for exactly this — notes for this card, no notes for this card, the
+ * read in flight, and the read failed. Silence may never imply the second, which is `Combos`'
+ * `ComboState` rule one rail over and the reason both reads honour this rather than one.
+ *
  * **`feedFetchError`** is the network at the other end of a price feed. `marketplace_feed_refresh`
  * refuses, and — the whole point — **the rows already in `marketplace_prices` stay**, because a
  * failed fetch leaves the previous prices in place and writes the reason to `error_log`. It is
@@ -1147,6 +1265,7 @@ export type Fault =
   | "gone"
   | "indexCold"
   | "deckMeta"
+  | "deckNotes"
   | "updateAvailable"
   | "updateError"
   | "errorLog"
@@ -1322,6 +1441,17 @@ export interface FakeDb {
    * full panel. See {@link FakeDeckToken} for why an empty override is not representable.
    */
   deckTokens: FakeDeckToken[];
+  /**
+   * `deck_notes` — the reader's notes, one row each, and **the complete list of them**.
+   *
+   * Nothing about this table is derived, which is the difference from {@link FakeDb.deckTokens}
+   * directly above: a token list is computed from the deck's cards on every read and this one is
+   * only ever what somebody typed. An empty table is a deck nobody has written about.
+   */
+  deckNotes: FakeDeckNote[];
+  /** `deck_note_cards` — which cards each note names, by `oracle_id`. Keyed to the **note**,
+   *  so a row here is found through {@link FakeDb.deckNotes} and never through the deck. */
+  deckNoteCards: FakeDeckNoteCard[];
   deckAudit: FakeDeckAudit[];
   /** `deck_undo` — one step per deck write, keyed to the history row it reverses. */
   deckUndo: FakeDeckUndo[];
@@ -2381,6 +2511,11 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // touched the panel has no rows at all and still sees every token their deck makes. The
     // derived side comes off {@link TOKEN_PARTS} and needs nothing here.
     deckTokens: [],
+    // Empty, and here the emptiness is the ordinary state rather than a shortcut: a note is
+    // something a reader wrote, so a world with none is every deck nobody has written about.
+    // The seeds that want one say so — `starter`'s deck 4 carries two.
+    deckNotes: [],
+    deckNoteCards: [],
     deckAudit: [],
     // Never seeded, always earned: a step exists only where a *write* made one, so a story's
     // Undo button is about the edit that story made rather than about a fixture.
@@ -6210,10 +6345,12 @@ function toDeckRow(db: FakeDb, d: FakeDeck): DeckRow {
       })
       .reduce((n, dc) => n + dc.quantity, 0),
     updatedAt: d.updatedAt,
-    // The four v8 deck columns, read off the row now that a deck stores them.
+    // The v8 deck columns still on the row, read off it now that a deck stores them. There
+    // were four until user schema v43: `notes` is gone, and what replaced it is rows rather than
+    // a column — {@link readHandlers.deck_notes} is where a deck's notes are now read, and no
+    // field of this DTO carries prose any more except `description`, which is a caption.
     coverKind: d.coverKind,
     folderId: d.folderId,
-    notes: d.notes,
     theoryEnabled: d.theoryEnabled,
     // v40's, and read straight off the row with **no `?? false`** beside it, which is the one
     // thing worth saying here: it is required on {@link FakeDeck} rather than defaulted, because
@@ -6253,6 +6390,13 @@ function toDeckRow(db: FakeDb, d: FakeDeck): DeckRow {
     // build takes it away from everybody. A `?? false` here would draw a collapsed band in a
     // story for a deck the app would draw expanded, which is a state the backend cannot produce.
     statsOpen: d.statsOpen ?? true,
+    // v43's, and **`?? false` rather than `?? true`** — the line directly above is the one in
+    // this group where reading the neighbour and copying it is the bug, and this is the line
+    // most likely to copy it. `notes_open` is `NOT NULL DEFAULT 0`: no deck has ever drawn a
+    // Notes band, so the migration's default takes nothing from anybody, where `stats_open`'s
+    // `1` was protecting a band already on every screen. `tokensOpen` two lines up is the
+    // precedent character for character.
+    notesOpen: d.notesOpen ?? false,
     // v16's, and the same shape of answer: absent is `AUTO_CATEGORY`, which is what the column's
     // `DEFAULT 0` says about a deck nobody has asked.
     defaultCategoryId: d.defaultCategoryId ?? 0,
@@ -6266,6 +6410,56 @@ function toDeckRow(db: FakeDb, d: FakeDeck): DeckRow {
     // because the crate's reads are positional; here it is last for the same reason read as a
     // habit rather than a requirement.
     bracket: d.bracket ?? AUTO_BRACKET,
+  };
+}
+
+/**
+ * The card's name for an oracle id, or **the id itself** when `cards` has no row for it.
+ *
+ * Resolved off any printing, because a name is a fact about the *card*: every printing of
+ * Lightning Bolt is called Lightning Bolt. The fallback is what makes an attachment a soft
+ * reference like every other card reference in a user table — a note about a card whose
+ * printings all left the database still draws a row the reader can read and detach, where an
+ * empty string would draw a blank chip and a refusal would take the whole note off the screen.
+ */
+function cardNameOfOracle(db: FakeDb, oracleId: string): string {
+  return db.cards.find((c) => c.oracleId === oracleId)?.name ?? oracleId;
+}
+
+/**
+ * `deck_notes::note_cards` — the cards one note names, each with its name resolved.
+ *
+ * **The name is joined here rather than left to the caller**, which is the whole reason
+ * {@link DeckNote} carries a list of pairs instead of a list of ids: a note that names four
+ * cards is four names the read already has, so a card menu's submenu and the modal's row draw
+ * with no second round trip. `list_notes` does it in two statements over the whole deck rather
+ * than N+1; here it is a filter, which is simplification 10's shape — the fixture is small
+ * enough that the scan is the cheap thing and the index would be the fiction.
+ *
+ * Ordered by name then oracle id, which is a *stable* order and not the panel's —
+ * {@link readHandlers.deck_tokens}' rule, and the same division of labour: Rust supplies facts,
+ * TypeScript draws the order.
+ */
+function noteCardsOf(db: FakeDb, noteId: number): DeckNoteCard[] {
+  return db.deckNoteCards
+    .filter((c) => c.noteId === noteId)
+    .map((c) => ({ oracleId: c.oracleId, name: cardNameOfOracle(db, c.oracleId) }))
+    .sort((a, b) => cmp(a.name, b.name) || cmp(a.oracleId, b.oracleId));
+}
+
+/** `deck_notes::note_row` — one stored note with the cards it names joined on, copied for
+ *  {@link toDeckFolder}'s reason: a caller must not be able to mutate the store through a value
+ *  it was handed back. */
+function toDeckNote(db: FakeDb, n: FakeDeckNote): DeckNote {
+  return {
+    id: n.id,
+    deckId: n.deckId,
+    title: n.title,
+    body: n.body,
+    sortOrder: n.sortOrder,
+    cards: noteCardsOf(db, n.id),
+    createdAt: n.createdAt,
+    updatedAt: n.updatedAt,
   };
 }
 
@@ -8612,6 +8806,97 @@ export function readHandlers(db: FakeDb) {
     },
 
     /**
+     * `deck_notes::list_notes` — every note on this deck in `sort_order`, each with the cards
+     * it names.
+     *
+     * **The complete list, and that is the issue's central requirement rather than an
+     * implementation detail.** A note that names a card is still a note on the deck, because an
+     * attachment hangs off the note and never the other way round — so there is no state in
+     * which a reader's note has disappeared into a card.
+     *
+     * **There is deliberately no command answering "which cards in this deck have notes".** The
+     * band already holds every note and every note holds its oracle ids, so the marks on the
+     * card tiles are a `Set` built in TypeScript from *this* read (`notedOracleIds` in
+     * `features/decks/deckNotes.ts`). A second command would be a second source of truth for a
+     * fact already in hand, which is the rule `Empty a list` follows for its two counts.
+     *
+     * **A deck that is not there answers `[]`**, like {@link deck_tokens} above: this is a read
+     * and a refusal here would be a band able to stop a deck screen from drawing at all.
+     *
+     * **It honours the `deckNotes` fault and not `deckMeta`.** That one is `deck_meta.rs`'s
+     * five satellite reads and this is `deck_notes.rs`' own, so they are two faults rather than
+     * a wider one — a story failing the notes read must not also fail the folder tree beside
+     * it. The refusal is what the band draws its own line from, and it is the only way to reach
+     * the state an empty list is otherwise indistinguishable from.
+     */
+    deck_notes: (args: { deckId: number }): DeckNote[] => {
+      refuseIfNotesUnreadable(db, NOTES_UNREADABLE);
+      return db.deckNotes
+        .filter((n) => n.deckId === args.deckId)
+        // `sort_order, id` — the id is the second term rather than a tie-break nobody hits:
+        // {@link writeHandlers.deck_note_reorder} is the only writer of `sortOrder`, so two notes
+        // created and never dragged both sit at the end and the id is what orders them.
+        .sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id)
+        .map((n) => toDeckNote(db, n));
+    },
+
+    /**
+     * `deck_notes::notes_for_card` — every note in **every** deck naming this card, carrying
+     * the deck's id and name.
+     *
+     * **The one read in this feature that is not deck-scoped, and that is the whole of what it
+     * is for.** {@link deck_notes} asks *which notes does this pile hold*; this asks *which
+     * notes name this card*, which is the question the card modal exists to answer completely —
+     * a card opened from the collection, from search or from another deck still answers it. The
+     * two are two questions and never one statement, which is `combos`' own split one feature
+     * over since 2026-09-08.
+     *
+     * **A blank oracle id answers `[]` and never everything.** An orphan printing has no oracle
+     * id, and a handler that let one through would match every note whose attachment list
+     * happened to be empty — `combos_for_card` makes the same call, and `notesForCard`'s own
+     * test in `features/decks/deckNotes.test.ts` pins the TypeScript half of it.
+     *
+     * The order is the deck's name, then the note's own place in that deck: a *stable* order and
+     * not the modal's, which is {@link deck_tokens}' rule and the same division of labour.
+     */
+    card_notes: (args: { oracleId: string }): CardNote[] => {
+      // **Before the blank-id arm**, so a card with no oracle id in a failed world still says the
+      // read failed rather than "no notes". Those are the overlay's second and fourth states and
+      // they render as the same empty list — an ordering that answered `[]` first would make the
+      // fault unreachable for exactly the card most likely to be opened in it.
+      refuseIfNotesUnreadable(db, CARD_NOTES_UNREADABLE);
+      if (args.oracleId === "") return [];
+      const named = new Set(
+        db.deckNoteCards.filter((c) => c.oracleId === args.oracleId).map((c) => c.noteId),
+      );
+      return db.deckNotes
+        .filter((n) => named.has(n.id))
+        // A note whose deck has gone cannot survive the cascade, so this drops nothing in a world
+        // the writes made — it is what stops a hand-written one drawing a note under a blank
+        // heading, which is `deck_tokens`' `flatMap` and its argument.
+        .flatMap((note) => {
+          const deck = db.decks.find((d) => d.id === note.deckId);
+          return deck === undefined ? [] : [{ note, deck }];
+        })
+        .sort(
+          (a, b) =>
+            cmp(a.deck.name, b.deck.name) ||
+            a.note.sortOrder - b.note.sortOrder ||
+            a.note.id - b.note.id,
+        )
+        .map(({ note, deck }) => ({
+          id: note.id,
+          deckId: deck.id,
+          // Denormalised at read time and not at write time, unlike `deck_audit`'s `cardName`:
+          // there is nothing durable about this row — it is a join, made fresh on every call —
+          // so a deck renamed while the modal is shut reads its new name the next time it opens.
+          deckName: deck.name,
+          title: note.title,
+          body: note.body,
+        }));
+    },
+
+    /**
      * `deck::played_keys` — every card this deck's **live** list plays, as the keys a folder
      * rule names cards by. See {@link playedKeys} for the variant, the key, the `DISTINCT` and
      * the order.
@@ -9904,6 +10189,36 @@ const LABEL_NAME_TAKEN =
 /** `deck_meta::CARD_NOT_IN_CATEGORY` — `deck::card_gone` generalised, for the stale editor
  *  pointing at a row that has since moved, folded or been stepped to zero. */
 const CARD_NOT_IN_CATEGORY = "That card is not in this deck's category any more.";
+/**
+ * `deck_notes::NOTE_GONE` and `NOTE_WRONG_DECK` — {@link CATEGORY_GONE}'s pair one table over,
+ * and two sentences for its reason: "gone" and "not yours" are different things to tell a stale
+ * editor, and nothing in the DDL stops a `note_id` naming another deck's note.
+ *
+ * The **read** side has no refusal at all to pair with these — `deck_notes` answers `[]` for a
+ * deck that is not there, and `card_notes` answers `[]` for a blank oracle id. A note is a band
+ * at the bottom of a page, and a band must never be able to stop a deck from drawing.
+ */
+const NOTE_GONE = "That note is not there any more.";
+const NOTE_WRONG_DECK = "That note belongs to a different deck.";
+/**
+ * `deck_notes::NO_ORACLE_ID` — the module's third refusal, and the only one about an *argument*
+ * rather than about a row.
+ *
+ * **It guards the two paths that would write a row and neither of the two that would not**,
+ * which is the split worth stating because the same blank string reaches all four. A **create**
+ * validates every id in `oracleIds` and an **attach** validates its one, because both would
+ * otherwise store a permanent attachment to no card — a row nothing could then name in order to
+ * remove. A **detach** folds into nothing, since detaching a card the note does not name is a
+ * success either way; and `card_notes` is a **read** that answers `[]`, because an orphan
+ * printing genuinely has no oracle id and a modal opened on one has to draw something.
+ *
+ * **On the create it is checked before anything is written**, which is the half that decides
+ * what survives a refusal rather than merely whether one happens: the crate validates the whole
+ * list before it opens the transaction, so a blank id leaves no note, no attachment, no history
+ * row and no undo step. A fake that made the note and then choked on its second attachment would
+ * refuse in the same words and leave a different database behind.
+ */
+const NO_ORACLE_ID = "A note attaches to a card, so it needs one.";
 /** `deck_tokens`' one refusal about a row: an `add` naming a printing `cards` has no token row
  *  for. Every *other* way this feature fails is an empty list rather than an error — a deck must
  *  not fail to open over an area most decks use lightly. */
@@ -10127,6 +10442,17 @@ const HISTORY_UNREADABLE = "the deck's history could not be read: database is lo
  *  made from a dialog that is already open over a deck the screen read fine. */
 const THEORY_UNREADABLE = "the theory list could not be read: database is locked";
 /**
+ * `deck_notes`' two, which the `deckNotes` **fault** produces — the six above are `deckMeta`'s
+ * and these are not, for the reason that fault's own paragraph gives.
+ *
+ * Two sentences because there are two reads and they are two questions: the band asks what this
+ * *pile* holds, the card modal's overlay asks what has been written about this *card* in any
+ * deck. A single sentence would put "the deck's notes" in front of a reader looking at a card
+ * opened from their collection, with no deck on screen for it to name.
+ */
+const NOTES_UNREADABLE = "the deck's notes could not be read: database is locked";
+const CARD_NOTES_UNREADABLE = "the notes for this card could not be read: database is locked";
+/**
  * `export::write_export`'s refusal, in its own shape — `could not write {path}: {e}`, where the
  * tail is `std::io::Error`'s own words.
  *
@@ -10275,6 +10601,43 @@ function record(
  *  whole of what differs between the six writes that emit one. */
 function recordCategory(db: FakeDb, deckId: number, payload: Record<string, unknown>): void {
   record(db, deckId, DECK_LEVEL, "category", null, payload, 0);
+}
+
+/**
+ * A `deck`-kind row about a **note** — and not a tenth audit kind, which is the one decision in
+ * this payload worth the paragraph.
+ *
+ * `deck_audit.kind` carries a `CHECK` and SQLite has no `ALTER … CHECK`, so a tenth word costs
+ * a full `deck_audit` rebuild — which would in turn fire `deck_undo`'s `ON DELETE CASCADE` and
+ * silently empty the undo stack on every real launch while leaving it intact in every test.
+ * Schema v33 paid that price for a rename that had no alternative; a note does not need to. So
+ * notes ride the existing `deck` kind and **`field: "note"` is what tells them from the deck's
+ * own columns**, which is the same discrimination `auditText.ts` already makes for every other
+ * value of that field.
+ *
+ * `card` is the card's **name** for the two attachment actions and `null` otherwise, which is
+ * {@link recordFiled}'s rule one payload over: an oracle id in a history row is a string no
+ * reader could resolve, and a name is true at the moment it is written.
+ *
+ * **The title is carried for every action including `edit`, and is not printed for one.** That
+ * is `auditText.ts`'s side of the split — `Edited a note` and never the paragraph, which is
+ * `Edited the deck notes`' rule inherited whole: a note is prose nobody wants in a one-line
+ * history. A payload records what happened; what is drawn is decided one layer up.
+ *
+ * **`reorder` is the one action whose title is `null`, and that is a fact rather than an
+ * omission**: every note in the deck moved, so there is no note the row is about — the same
+ * reason `deck_category_reorder`'s payload names no category. `auditText.ts` reads it as
+ * `Reordered the notes` with no detail, which is why the vocabulary is six words and not the
+ * five the four row-level verbs would suggest.
+ */
+function recordNote(
+  db: FakeDb,
+  deckId: number,
+  action: "create" | "edit" | "delete" | "attach" | "detach" | "reorder",
+  title: string | null,
+  card: string | null,
+): void {
+  record(db, deckId, DECK_LEVEL, "deck", null, { field: "note", action, note: title, card }, 0);
 }
 
 /** A `label`-kind row **about the label itself** — created, renamed or deleted. The card-side
@@ -10496,6 +10859,20 @@ function validMetaName(name: string, what: string): string {
   throw refuse(`${what} needs a name.`);
 }
 
+/**
+ * `deck_notes::valid_oracle_id` — non-empty, and **nothing more**.
+ *
+ * Not trimmed, unlike {@link validMetaName} beside it, and not checked against `cards`: an
+ * oracle id is Scryfall's own string rather than something a person typed, so there is no stray
+ * whitespace to be forgiving about — and it is a **soft** reference like every other card id in
+ * a user table, so an id this database has no row for is a note about a printing that left,
+ * which {@link cardNameOfOracle} draws rather than refuses.
+ */
+function validOracleId(oracleId: string): string {
+  if (oracleId !== "") return oracleId;
+  throw refuse(NO_ORACLE_ID);
+}
+
 /** `deck_meta::valid_color` — non-empty, and **nothing more**. `deck_labels.color` carries no
  *  CHECK: it holds `#rrggbb` (a palette token, before 2026-08-20), and deciding what a colour
  *  *is* is the webview's job (`features/decks/labelColors.ts`), not the backend's. The seeds below
@@ -10511,6 +10888,14 @@ function validColor(color: string): string {
  *  call site passes its own module's sentence, because a panel prints whichever it got. */
 function refuseIfMetaUnreadable(db: FakeDb, message: string): void {
   if (db.fault === "deckMeta") throw refuse(message);
+}
+
+/** The `deckNotes` fault, which the two `deck_notes.rs` reads honour and no other read does —
+ *  {@link refuseIfMetaUnreadable}'s shape one module over, and separate from it for the reason
+ *  that fault's paragraph gives. Each call site passes its own sentence, because a band and an
+ *  overlay are asking two different questions and print whichever they got. */
+function refuseIfNotesUnreadable(db: FakeDb, message: string): void {
+  if (db.fault === "deckNotes") throw refuse(message);
 }
 
 /**
@@ -10825,6 +11210,30 @@ function requireCategory(db: FakeDb, id: number): FakeDeckCategory {
   const category = categoryById(db, id);
   if (!category) throw refuse(CATEGORY_GONE);
   return category;
+}
+
+/**
+ * The note a write is about — **checked for existing and for belonging to this deck**.
+ *
+ * {@link requireCategory} plus {@link CATEGORY_WRONG_DECK}'s check folded into one call, because
+ * every note write takes both a `deckId` and a note id and every one of them owes both fences.
+ * The deck id is the one the editor is standing in, so a note that has been deleted on another
+ * device and a note id typed against the wrong deck are two different sentences.
+ */
+function requireNote(db: FakeDb, deckId: number, id: number): FakeDeckNote {
+  const note = db.deckNotes.find((n) => n.id === id);
+  if (!note) throw refuse(NOTE_GONE);
+  if (note.deckId !== deckId) throw refuse(NOTE_WRONG_DECK);
+  return note;
+}
+
+/** `coalesce(max(sort_order), -1) + 1` over one deck's notes — where the next one goes.
+ *  {@link nextSortOrder}'s twin one table over, and a new note goes at the **end**: the list is
+ *  the reader's own order, so an arrival must not push what they arranged down the page. */
+function nextNoteSortOrder(db: FakeDb, deckId: number): number {
+  return db.deckNotes
+    .filter((n) => n.deckId === deckId)
+    .reduce((n, r) => Math.max(n, r.sortOrder + 1), 0);
 }
 
 /** `deck_meta::rename_category`/`delete_category`'s kind check. Never reached by
@@ -13831,7 +14240,6 @@ export function writeHandlers(db: FakeDb) {
         coverKind: COVER_CARD_ART,
         archived: false,
         folderId: args.deck.folderId ?? null,
-        notes: args.deck.notes ?? null,
         theoryEnabled: args.deck.theoryEnabled ?? false,
         // v40's, and **the column is set here while nothing is released**, which is
         // `theoryEnabled`'s arrangement one line up read one field over: a deck being born holds
@@ -13864,6 +14272,11 @@ export function writeHandlers(db: FakeDb) {
         // being born opens with its Deck stats band showing, exactly as every deck that already
         // existed does on the first launch of the build that added the column.
         statsOpen: true,
+        // Spelled out beside it and **`false`**, which is the neighbour above read the other
+        // way: `notes_open INTEGER NOT NULL DEFAULT 0`, so a deck being born has its Notes band
+        // shut. It holds no notes to draw — `DeckInput` carries no prose at all any more, and a
+        // note is written *after* the deck exists, one at a time, through `deck_note_create`.
+        notesOpen: false,
         updatedAt: stamp(db),
       };
       db.decks.push(row);
@@ -13897,7 +14310,7 @@ export function writeHandlers(db: FakeDb) {
     },
 
     /**
-     * `deck::update_deck` — rename, re-format, cover, notes, archive, the theory switch, the
+     * `deck::update_deck` — rename, re-format, cover, archive, the theory switch, the
      * X-group switch and the Commander bracket all arrive here. There is no Built toggle any
      * more: schema v25 dropped `decks.is_built` along with the allocator it meant something to.
      *
@@ -13969,9 +14382,6 @@ export function writeHandlers(db: FakeDb) {
       }
       if (patch.archived !== undefined && patch.archived !== before.archived) {
         field("archived", before.archived, patch.archived);
-      }
-      if (patch.notes !== undefined && patch.notes !== before.notes) {
-        field("notes", before.notes, patch.notes);
       }
       // One row, whether or not the live list moved below: the move is part of switching the
       // list on rather than a second edit, and N `add` rows for one press would read as a deck
@@ -14124,7 +14534,6 @@ export function writeHandlers(db: FakeDb) {
       }
       deck.archived = patch.archived ?? deck.archived;
       deck.folderId = patch.folderId ?? deck.folderId;
-      deck.notes = patch.notes ?? deck.notes;
       // **The resolved half throughout, never `patch.theoryEnabled`** — {@link deckKind}'s
       // paragraph on exactly this. The condition is the same one for every press that already
       // moved the live list, and it is *narrower* for one that did not exist before schema v40:
@@ -14207,6 +14616,14 @@ export function writeHandlers(db: FakeDb) {
       // was never written reads, which is a different question from what a patch that says
       // nothing does to a row that was.
       deck.statsOpen = patch.statsOpen ?? deck.statsOpen;
+      // `coalesce(?n, notes_open)`, and **nothing else happens** for the reason above it a third
+      // time: the notes the band draws are read by a command of their own, so opening or closing
+      // it writes one column and changes no answer about the deck. `??` against the *stored*
+      // value rather than against `false`, so an absent field means "leave it" here exactly as
+      // `coalesce(?n, column)` does in the crate — the column's `DEFAULT 0` is what a row that
+      // was never written reads, which is a different question from what a patch that says
+      // nothing does to a row that was.
+      deck.notesOpen = patch.notesOpen ?? deck.notesOpen;
       // `coalesce(?16, ?17, ?18, …)` — three reading preferences, and **nothing else happens**
       // for `separateXGroup`'s reason: which of the three tiers a deck marks changes what is
       // drawn over its live rows and moves not one `deck_cards` row. `??` against the *stored*
@@ -14326,6 +14743,17 @@ export function writeHandlers(db: FakeDb) {
       // nothing else has to happen, because the *list* was never stored: it was derived from
       // cards that have just gone.
       db.deckTokens = db.deckTokens.filter((t) => t.deckId !== args.id);
+      // `deck_notes.deck_id` is `ON DELETE CASCADE` and `deck_note_cards.note_id` cascades after
+      // it, so the notes go with the deck and the attachments go with the notes — **two hops,
+      // and the order is what makes the second one possible**: an attachment names a note and
+      // never a deck, so the note ids have to be read before the notes are dropped or there is
+      // nothing left to match them against. SQLite needs no help with this; a store of arrays
+      // does.
+      const orphanedNotes = new Set(
+        db.deckNotes.filter((n) => n.deckId === args.id).map((n) => n.id),
+      );
+      db.deckNotes = db.deckNotes.filter((n) => n.deckId !== args.id);
+      db.deckNoteCards = db.deckNoteCards.filter((c) => !orphanedNotes.has(c.noteId));
       // **The labels stay**, since schema v21: a label belongs to no deck, so deleting the deck
       // it was first typed in must not take it off the others wearing it. Only `reset_decks`,
       // which is every deck at once, sweeps the table.
@@ -14390,6 +14818,12 @@ export function writeHandlers(db: FakeDb) {
       // `separateXGroup`'s footing rather than the three view-state columns' — so this `if` is
       // the whole of what the kind costs here.
       if (!copy.virtualOnly) createDeckGroup(db, copy.id, copy.name);
+      // **The notes are not copied**, which is `duplicate_deck` naming the columns it copies read
+      // one table over: it copies the deck's row, its categories and its cards, and `deck_notes`
+      // is none of those. It is also the right answer for what a note *is* — the reader's own
+      // writing about a specific pile, where a duplicate is a draft nobody has opened yet. The
+      // spread above carried `notesOpen`, which is a reading preference and belongs with
+      // `separateXGroup` rather than with the three view-state columns.
       const categoryMap = new Map<number, number>();
       for (const c of db.deckCategories.filter((row) => row.deckId === source.id)) {
         const made: FakeDeckCategory = { ...c, id: nextId(db.deckCategories), deckId: copy.id };
@@ -15617,6 +16051,244 @@ export function writeHandlers(db: FakeDb) {
       });
     },
 
+    /* -------------------------------------------------------------------- notes ---- */
+
+    /**
+     * `deck_notes::create_note` — a new note at the end of this deck's list, naming any number
+     * of cards, including none.
+     *
+     * **None is the ordinary case.** A note is a thing a reader wrote about the deck; naming a
+     * card is something some of them additionally do, which is why the attachments hang off the
+     * note and why an empty `oracleIds` is not a degenerate call.
+     *
+     * **The cards arrive with the create rather than through N follow-up attaches**, which is
+     * `deck_create`'s own call about the deck's fields and made for its reason: `Add note…` on a
+     * card menu opens the editor with that card already named, and a create-then-attach pair
+     * would leave a note with no card behind when the second call failed.
+     *
+     * The ids are **validated and deduped on the way in, before one row is written** — one loop
+     * over the list, exactly where the crate puts its own: ahead of the transaction. Deduping is
+     * because `(note_id, oracle_id)` is unique, so a caller naming one card twice describes one
+     * fact and must fold rather than hit the grain, which is {@link deck_note_attach}'s answer to
+     * the same press. Validating there rather than inside the loop that inserts is what decides
+     * **what survives the refusal**: a blank id leaves no note, no attachment, no history row and
+     * no undo step, where a check made per insert would refuse in the same words and leave a
+     * half-made note standing.
+     *
+     * **Nothing here refuses an empty title or an empty body.** A blank title is legal and reads
+     * as the body's first line at render; a blank body is a note that is only a heading. Both
+     * are states the app draws, so neither is a refusal to invent — which is the contrast that
+     * makes {@link NO_ORACLE_ID} worth having: two of this command's three strings mean
+     * something empty and the third cannot.
+     */
+    deck_note_create: (args: {
+      deckId: number;
+      title: string;
+      body: string;
+      oracleIds: string[];
+    }): DeckNote => {
+      refuseIfBusy(db);
+      // **Every id, before the deck is even looked up** — the crate's own order: the whole list
+      // is validated ahead of the transaction, so a refusal here has written nothing and does not
+      // depend on which deck it was aimed at. The `Set` is the dedupe half of the same pass.
+      const oracleIds = new Set(args.oracleIds.map(validOracleId));
+      const deck = requireDeck(db, args.deckId);
+      // One instant for the row's two timestamps and the deck's bump alike — `touch_deck` and
+      // the INSERT are in one transaction in the crate, so a note whose `created_at` differed
+      // from the deck's `updated_at` would be recording two moments that were one.
+      const at = stamp(db);
+      const note: FakeDeckNote = {
+        id: nextId(db.deckNotes),
+        deckId: deck.id,
+        title: args.title,
+        body: args.body,
+        sortOrder: nextNoteSortOrder(db, deck.id),
+        createdAt: at,
+        updatedAt: at,
+      };
+      db.deckNotes.push(note);
+      for (const oracleId of oracleIds) {
+        db.deckNoteCards.push({ id: nextId(db.deckNoteCards), noteId: note.id, oracleId });
+      }
+      recordNote(db, deck.id, "create", note.title, null);
+      deck.updatedAt = at;
+      return toDeckNote(db, note);
+    },
+
+    /**
+     * `deck_notes::update_note` — the title, the body, or both.
+     *
+     * **Absent means "leave it", per field**, which is {@link DeckPatch}'s convention — but
+     * unlike a patch there is no field here that cannot be *cleared*: `title: ""` really does
+     * empty the title, because an empty title is a state the app has a rendering for. That is
+     * worth saying out loud, because the column this feature replaced could never be emptied at
+     * all: `update_deck` writes `coalesce(?n, notes)`, so only an undo could ever put a NULL
+     * back. A multi-note model needs real edits and a real delete, and there was no precedent
+     * here to copy.
+     *
+     * **One history row whether one field moved or both**, where {@link deck_update} writes one
+     * per changed field: editing a note is one event, and a reader who typed in two boxes and
+     * pressed Save once made one edit. And **no row at all when nothing moved**, which is that
+     * handler's rule rather than a difference from it — a form saved untouched must not fill
+     * the drawer with edits nobody made, and here it would also spend a Ctrl+Z on nothing.
+     *
+     * **Both keys are nullable, and `null` is how "leave it" arrives on the wire** —
+     * `deck_token_set`'s shape and made for its reason: Tauri fills parameters by name, so
+     * `ipc.deckNoteUpdate` folds an absent field to `null` and sends it. `??` and never `||` on
+     * the way back out, because `""` is a title the reader **deliberately cleared** and a
+     * truthiness test would read it as no change at all — this command's `quantity: 0`.
+     */
+    deck_note_update: (args: {
+      deckId: number;
+      id: number;
+      title?: string | null;
+      body?: string | null;
+    }): DeckNote => {
+      refuseIfBusy(db);
+      const note = requireNote(db, args.deckId, args.id);
+      const deck = requireDeck(db, args.deckId);
+      const at = stamp(db);
+      const was = { title: note.title, body: note.body };
+      note.title = args.title ?? note.title;
+      note.body = args.body ?? note.body;
+      if (note.title !== was.title || note.body !== was.body) {
+        note.updatedAt = at;
+        recordNote(db, deck.id, "edit", note.title, null);
+      }
+      // The deck's own stamp moves either way, which is `deck_update`'s arrangement: `touch_deck`
+      // runs before the write rather than after the comparison, so a Save of an untouched form
+      // still resorts the gallery. The history is what is guarded, not the clock.
+      deck.updatedAt = at;
+      return toDeckNote(db, note);
+    },
+
+    /**
+     * `deck_notes::delete_note` — the note, and by cascade every card it named.
+     *
+     * **A real delete, and the deck's own columns had no precedent for one.** Every field of
+     * {@link DeckPatch} is `coalesce(?n, column)`, so no patch has ever been able to empty one
+     * and the only path that could write `decks.notes` back to NULL was `deck_undo::apply`. A
+     * note a reader is finished with has to go, so this command owns that path itself.
+     *
+     * **The attachments come back with the note on an undo**, which is what {@link deckState}
+     * recording both tables is for: a restored note that had lost the four cards it named would
+     * be a Ctrl+Z that gave back half of what it took.
+     */
+    deck_note_delete: (args: { deckId: number; id: number }): void => {
+      refuseIfBusy(db);
+      const note = requireNote(db, args.deckId, args.id);
+      const deck = requireDeck(db, args.deckId);
+      db.deckNotes = db.deckNotes.filter((n) => n.id !== note.id);
+      db.deckNoteCards = db.deckNoteCards.filter((c) => c.noteId !== note.id);
+      recordNote(db, deck.id, "delete", note.title, null);
+      deck.updatedAt = stamp(db);
+    },
+
+    /**
+     * `deck_notes::attach_card` — name one more card on a note.
+     *
+     * **Attaching a card the note already names is not an error and adds no row.** That is
+     * `idx_deck_note_cards_grain` and not a convenience this fake invented: two devices
+     * attaching Lightning Bolt to one note describe *one* fact, so the far op resolves onto the
+     * local row instead of landing beside it — without which the card modal would read two
+     * notes for one note. The second press folds into nothing, answers the same row, and
+     * **records no history and files no undo step**, because a press that changed nothing must
+     * not spend the reader's one Ctrl+Z.
+     *
+     * **The card is not checked against the deck's list**, deliberately. The picker offers the
+     * deck's own cards, so the fence is where the reader is; the *row* is allowed to outlive the
+     * card leaving the deck, which is the point — a note about a card you cut is the note most
+     * worth keeping.
+     *
+     * **Nor is the oracle id checked against `cards`.** It is a soft reference like every other
+     * card reference in a user table, and {@link cardNameOfOracle} answers the id itself for one
+     * it cannot resolve. What it *is* checked for is being **blank** — {@link NO_ORACLE_ID},
+     * this module's one refusal about an argument, and the second of the two paths where an
+     * empty string would write a row rather than match none. {@link deck_note_create} is the
+     * other, and validates its whole list for the same reason.
+     */
+    deck_note_attach: (args: { deckId: number; noteId: number; oracleId: string }): DeckNote => {
+      refuseIfBusy(db);
+      // Before the note is looked up, as the crate validates before it resolves: a refusal about
+      // the argument does not depend on which note it was aimed at.
+      const oracleId = validOracleId(args.oracleId);
+      const note = requireNote(db, args.deckId, args.noteId);
+      const deck = requireDeck(db, args.deckId);
+      const already = db.deckNoteCards.some(
+        (c) => c.noteId === note.id && c.oracleId === oracleId,
+      );
+      if (!already) {
+        db.deckNoteCards.push({ id: nextId(db.deckNoteCards), noteId: note.id, oracleId });
+        const at = stamp(db);
+        note.updatedAt = at;
+        recordNote(db, deck.id, "attach", note.title, cardNameOfOracle(db, oracleId));
+        deck.updatedAt = at;
+      }
+      return toDeckNote(db, note);
+    },
+
+    /**
+     * `deck_notes::detach_card` — stop naming one card on a note.
+     *
+     * **Detaching a card the note does not name is not an error either**, which is the attach
+     * above read backwards: the grain makes both idempotent, and a stale menu is the ordinary
+     * way either gets pressed twice. Nothing changes, so nothing is recorded and no step is
+     * filed.
+     *
+     * **The note stays, whatever it is left naming.** That is the issue's central sentence —
+     * *the card should only serve as a reference* — and the whole reason attachments hang off
+     * the note: a note cannot be deleted by losing its last card, because it never lived there.
+     * A reader who wants the note gone presses {@link deck_note_delete}.
+     */
+    deck_note_detach: (args: { deckId: number; noteId: number; oracleId: string }): DeckNote => {
+      refuseIfBusy(db);
+      const note = requireNote(db, args.deckId, args.noteId);
+      const deck = requireDeck(db, args.deckId);
+      const held = db.deckNoteCards.find(
+        (c) => c.noteId === note.id && c.oracleId === args.oracleId,
+      );
+      if (held) {
+        db.deckNoteCards = db.deckNoteCards.filter((c) => c !== held);
+        const at = stamp(db);
+        note.updatedAt = at;
+        recordNote(db, deck.id, "detach", note.title, cardNameOfOracle(db, args.oracleId));
+        deck.updatedAt = at;
+      }
+      return toDeckNote(db, note);
+    },
+
+    /**
+     * `deck_notes::reorder_notes` — `sortOrder` from position in `ids`.
+     *
+     * An id that is not this deck's — stale, or gone — matches no row and is **silently
+     * skipped** rather than failing the reorder over one entry, which is
+     * {@link deck_category_reorder}'s rule one table over. Send every id: this is the order, not
+     * a move.
+     *
+     * **It records a history row like every other deck write**, and the payload names no note:
+     * `deck_audit.rs`'s rule is that a deck write leaves exactly one row, and every note in the
+     * deck moved, so there is no `from` and no `to` that is about one of them —
+     * {@link deck_category_reorder}'s reasoning, and `auditText.ts` prints `Reordered the notes`
+     * with no detail. Listing the whole order in the payload would be storing the *state*
+     * instead of the change.
+     *
+     * That row is also what puts the press on the deck's undo stack: {@link journalled} keys a
+     * step to the last history row a call wrote, and {@link deckState} records every note's
+     * `sortOrder`, so a Ctrl+Z after a drag puts the reader's old order back. A handler that
+     * recorded nothing here would leave a Storybook reorder unreversible where the real one is
+     * not — a difference no story could see and every reader could.
+     */
+    deck_note_reorder: (args: { deckId: number; ids: number[] }): void => {
+      refuseIfBusy(db);
+      const deck = requireDeck(db, args.deckId);
+      args.ids.forEach((id, at) => {
+        const note = db.deckNotes.find((n) => n.id === id && n.deckId === deck.id);
+        if (note) note.sortOrder = at;
+      });
+      recordNote(db, deck.id, "reorder", null, null);
+      deck.updatedAt = stamp(db);
+    },
+
     /**
      * `deck_meta::create_folder` — at the root with `parentId: null`, or inside another one.
      *
@@ -15987,6 +16659,12 @@ export function writeHandlers(db: FakeDb) {
       db.deckCategories = [];
       db.deckLabels = [];
       db.deckTokens = [];
+      // Both note tables, and they are one line each here because there is no deck left for
+      // either to hang off: `deck_notes.deck_id` CASCADEs from the rows above and
+      // `deck_note_cards.note_id` CASCADEs from those. The two-hop dance
+      // {@link writeHandlers.deck_delete} has to do is only needed when *some* decks survive.
+      db.deckNotes = [];
+      db.deckNoteCards = [];
       db.deckAudit = [];
       db.deckUndo = [];
       return { decks, folders };
@@ -18493,6 +19171,9 @@ function deckOf(db: FakeDb, name: string, args: Record<string, unknown>): number
 function deckState(db: FakeDb, deckId: number): FakeDeckState | null {
   const deck = db.decks.find((d) => d.id === deckId);
   if (!deck) return null;
+  // The deck's own note ids, read once: an attachment names a note and never a deck, so this is
+  // the only way to ask which of them are this deck's.
+  const noteIds = new Set(db.deckNotes.filter((n) => n.deckId === deckId).map((n) => n.id));
   return {
     deck: { ...deck },
     cards: db.deckCards.filter((c) => c.deckId === deckId).map((c) => ({ ...c })),
@@ -18501,6 +19182,8 @@ function deckState(db: FakeDb, deckId: number): FakeDeckState | null {
     // write is app-wide. A snapshot narrowed to one deck would let an undo leave another deck's
     // label renamed and call the deck restored.
     labels: db.deckLabels.map((l) => ({ ...l })),
+    notes: db.deckNotes.filter((n) => n.deckId === deckId).map((n) => ({ ...n })),
+    noteCards: db.deckNoteCards.filter((c) => noteIds.has(c.noteId)).map((c) => ({ ...c })),
   };
 }
 
@@ -18518,6 +19201,19 @@ function restoreDeck(db: FakeDb, deckId: number, state: FakeDeckState): void {
   ];
   // The whole table, for the reason `deckState` records the whole table.
   db.deckLabels = state.labels.map((l) => ({ ...l }));
+  // The notes, and the attachments after them. The attachments are filtered by the ids this deck
+  // holds **now** rather than by the ids the snapshot recorded, which is the half that is easy to
+  // get wrong: a note written since the step was filed is about to be dropped by the line above,
+  // and its attachments have to go with it or they outlive the note they name.
+  const held = new Set(db.deckNotes.filter((n) => n.deckId === deckId).map((n) => n.id));
+  db.deckNotes = [
+    ...db.deckNotes.filter((n) => n.deckId !== deckId),
+    ...state.notes.map((n) => ({ ...n })),
+  ];
+  db.deckNoteCards = [
+    ...db.deckNoteCards.filter((c) => !held.has(c.noteId)),
+    ...state.noteCards.map((c) => ({ ...c })),
+  ];
 }
 
 /**

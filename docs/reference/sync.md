@@ -846,15 +846,15 @@ Spec §7.2 (what syncs), §7.3 (conflict semantics), §7.4 (what the reader sees
 
 ---
 
-## What syncs: thirteen tables, and the spec's twelfth still does not exist
+## What syncs: fifteen tables, and the spec's twelfth still does not exist
 
 `schema::SYNCED_TABLES`:
 
 `collection_entries` · `collection_folders` · `deck_audit` · `deck_cards` · `deck_categories` ·
-`deck_folders` · `deck_labels` · `deck_tokens` · `decks` · `device_names` · `muted_tags` ·
-`wishlist_entries` · `wishlist_folders`
+`deck_folders` · `deck_labels` · `deck_note_cards` · `deck_notes` · `deck_tokens` · `decks` ·
+`device_names` · `muted_tags` · `wishlist_entries` · `wishlist_folders`
 
-**Thirteen, and not for the reason the spec's own count would suggest.** The spec's list names
+**Fifteen, and not for the reason the spec's own count would suggest.** The spec's list names
 `deck_allocations`, which **schema v25 dropped** — which deck holds a card is now which folder
 its row sits in, so the work that table did is inside `collection_folders`, which is on the
 list. A table that does not exist cannot be synced, and that argument has not changed: it is
@@ -866,6 +866,37 @@ gone for good, this tree's is real and the spec never spoke of it. The count mov
 intent behind the first move did not. **The thirteenth is `deck_tokens`, at user schema v37** —
 one row per token a deck's reader has deviated on, holding the art they picked, how many copies
 they want and whether the row is dismissed or hand-added.
+
+**The fourteenth and fifteenth are `deck_notes` and `deck_note_cards`, at user schema v43**
+(2026-09-10, issue #447) — many notes to a deck where there used to be one `decks.notes` column,
+and one row per card a note names. **They are the first rung to take a column *off* the census
+as well as putting tables on it**, and the two halves are worth separating. Putting a table on is
+the ordinary ten-site job below. Taking `decks.notes` off is the direction nothing had a rule
+for, and the rule turns out to be that there is nothing to do: `apply::updates()` iterates the
+**local** spec's field list and looks each name up in the incoming op, so a field a peer still
+sends and this build no longer has is never visited. It is not an error, it does not fail the
+row and it does not roll the group's savepoint back — so unlike an unknown *table*, a dropped
+*column* cannot stall that peer's stream. A v42 device keeps sending `notes` and keeps its own
+dead paragraph; a v43 device ignores it and both go on syncing decks in both directions.
+`a_field_this_build_no_longer_syncs_is_skipped_rather_than_stalling` is that paragraph made
+checkable, and it splices the field into a real captured op rather than hand-writing one —
+because a v43 build emits no `notes`, so a test that only *hoped* the field was there would pass
+while proving nothing.
+
+**`deck_notes` is the fifth table on this census with no grain at all**, joining `decks`, the
+three folder tables and `deck_audit`. Two devices each typing a note about the mana base must
+stay two notes, and there is no column pair that could tell an accidental duplicate from a
+deliberate one — a title grain would silently fold two readers' separate thoughts into whichever
+arrived second. **`deck_note_cards` needs one for the opposite reason**: two devices attaching
+Lightning Bolt to the same note describe *one* fact, and without `idx_deck_note_cards_grain`
+both rows land and the card modal reads two notes where there is one. Its grain is
+`(note_id, oracle_id)` with the parent resolved through `deck_notes` rather than `decks`, which
+is why its `apply::Meta` rank is 14 and sorts after the note's 13.
+
+**A note names a card by `oracle_id` and never by `card_id`**, which is `deck_tokens`' argument
+verbatim: a printing id means nothing on the far device's shelf. What it buys beyond sync is that
+a note survives the reader swapping printings, and shows on the Live list and the Theory list
+alike, because both hold the same oracle id.
 
 **`deck_tokens.quantity` travels as a `field` and not as a `counter`, and it is the first column
 on this census where the distinction had to be argued.** Mechanically the column is nullable, so
@@ -997,9 +1028,11 @@ applier resolves by grain first, uid second, with a `min(uid)` tiebreak.**
 | `deck_cards` | `deck_uid, variant, category_uid, card_id, finish` (**five** — `finish` joined at v19) |
 | `deck_categories` | `deck_uid, name` |
 | `deck_labels` | `name_key` |
+| `deck_note_cards` | `note_uid, oracle_id` (the parent is the **note**, not the deck) |
 | `muted_tags` | `namespace, tag_id` |
 
-`decks`, `deck_folders`, `wishlist_folders` and `deck_audit` have no grain and are uid-only.
+`decks`, `deck_folders`, `wishlist_folders`, `deck_audit` and `deck_notes` have no grain and are
+uid-only.
 
 **A table can have more than one grain, and three of them are PARTIAL indexes** — which the
 plan's table misses entirely, and one of them matters from the first minute a group exists:
@@ -1023,10 +1056,10 @@ while every count still reads one.
 **A sparse update op cannot describe a grain and does not need to** — the row it edits is found
 by uid. An *insert* op carries every field, which is what makes the grain rule work at all.
 
-**The row handle in `apply` is the uid and never the rowid.** Eleven of the thirteen tables have an
+**The row handle in `apply` is the uid and never the rowid.** Thirteen of the fifteen tables have an
 `INTEGER PRIMARY KEY`; two have none at all — `muted_tags` is `WITHOUT ROWID` on
 `(namespace, tag_id)` and `device_names` on `device_id` alone. Addressing by `sync_uid` is one
-spelling for all thirteen.
+spelling for all fifteen.
 
 **Minting takes three sites, not one**, and only one of them is the ladder:
 
@@ -1847,7 +1880,7 @@ of the two ways it happens:
 
 | Object | What it is |
 | --- | --- |
-| `sync_uid TEXT` + `idx_<table>_uid` on every synced table | a name every device agrees on. **Eleven** through this rung's `ALTER TABLE`s; each table added since carries the pair in its own `CREATE TABLE`, so the census is **thirteen** at v37 |
+| `sync_uid TEXT` + `idx_<table>_uid` on every synced table | a name every device agrees on. **Eleven** through this rung's `ALTER TABLE`s; each table added since carries the pair in its own `CREATE TABLE`, so the census is **thirteen** at v37 and **fifteen** at v43 |
 | `device_names` (v31) | `device_id` → `name`, and nothing else. **The twelfth synced table**, so a rename reaches the group and a joiner stops reading "Paired device". `sync_devices` stays unsynced beside it, because it holds keys |
 | `needs_review TEXT` on `deck_folders`, `wishlist_folders`, `collection_folders` | §7.4's second surfaced outcome had nowhere to go |
 | `sync_ops` | the op log: `tbl`, `uid`, `kind`, `fields`, `counters`, `parents`, the stamp, `pushed_at` |

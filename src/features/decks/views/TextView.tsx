@@ -13,12 +13,13 @@ import { FOCUS } from "@/lib/focus";
 import type { DeckCard } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
 import { cn } from "@/lib/utils";
-import { DeckFinishMark, LabelDot, rowMarkColor, TheoryMatchBadge } from "../CardMarks";
+import { DeckFinishMark, LabelDot, NoteMark, rowMarkColor, TheoryMatchBadge } from "../CardMarks";
 import {
   deckCardBodyProps,
   deckCardName,
   deckCardMenuProps,
   deckCardMarked,
+  deckCardNoted,
   deckCardPress,
   deckCardProps,
   deckCardSelectedProps,
@@ -94,6 +95,7 @@ export function TextView({
   tracksCollection,
   violations,
   theoryPlan,
+  noted,
   onSelect,
   actions,
   selectedSlot,
@@ -126,6 +128,21 @@ export function TextView({
   /** The deck's plan — `theoryMatch.ts`'s two lookups and the deck's own two mark switches,
    *  handed down whole like `violations` beside it. `undefined` for a deck with no plan. */
   theoryPlan?: TheoryPlan;
+  /**
+   * Every oracle id a deck note names — `deckNotes.ts`' `notedOracleIds` over the notes the
+   * editor already holds, handed down whole like `violations` beside it.
+   *
+   * `undefined` draws no note glyph anywhere, which is a surface that has not heard of notes and
+   * is also the state before the read lands. The per-line question is `cardControl.ts`'s
+   * `deckCardNoted`, so the guard keeping an **orphan** printing unmarked — it carries no oracle
+   * id, and a note attaches by nothing else — is written once for all four views.
+   *
+   * **The line draws {@link NoteMark} beside {@link LabelDot} and `deckCardName` says it in
+   * words**, which is one fact reaching a reader twice on purpose: this line is a button with an
+   * explicit `aria-label`, and an `aria-label` replaces an element's content for naming — so the
+   * glyph's own name is announced to nobody and the clause is the only route it has.
+   */
+  noted?: ReadonlySet<string>;
   onSelect?: (card: DeckCard) => void;
   /** What may be done to a card here — see {@link DeckCardActions}. */
   actions?: DeckCardActions;
@@ -243,6 +260,7 @@ export function TextView({
                 marketplace={marketplace}
                 violations={violations}
                 theoryPlan={theoryPlan}
+                noted={noted}
                 tracksCollection={tracksCollection}
                 onSelect={onSelect}
                 actions={actions}
@@ -289,6 +307,7 @@ export function TextView({
               marketplace={marketplace}
               violations={violations}
               theoryPlan={theoryPlan}
+              noted={noted}
               tracksCollection={tracksCollection}
               onSelect={onSelect}
               actions={actions}
@@ -309,6 +328,7 @@ function TextGroup({
   marketplace,
   violations,
   theoryPlan,
+  noted,
   tracksCollection,
   onSelect,
   actions,
@@ -321,6 +341,8 @@ function TextGroup({
   /** The deck's plan — `theoryMatch.ts`'s two lookups and the deck's own two mark switches,
    *  handed down whole like `violations` beside it. `undefined` for a deck with no plan. */
   theoryPlan?: TheoryPlan;
+  /** Handed through to the lines — see {@link TextView}'s own props. */
+  noted?: ReadonlySet<string>;
   /** Handed through to the lines — see {@link TextView}'s own props. **Required here where the
    *  view's is optional**: this group is module-private, so a hop that forgets to forward it is a
    *  red build rather than a line that goes on announcing a shortage nobody has. */
@@ -366,6 +388,7 @@ function TextGroup({
               card={card}
               ruleBreakText={ruleBreak(violations?.get(card.cardId))}
               theoryMark={theoryMatchMark(theoryPlan, card)}
+              noted={deckCardNoted(card, noted)}
               tracksCollection={tracksCollection}
               onSelect={onSelect}
               actions={actions}
@@ -416,6 +439,7 @@ function TextRow({
   card,
   ruleBreakText,
   theoryMark,
+  noted,
   tracksCollection,
   onSelect,
   actions,
@@ -434,6 +458,9 @@ function TextRow({
    *  does not ask for; otherwise the tier it is in and the difference at that tier's own grain,
    *  where `0` is the card the plan asks for exactly. */
   theoryMark: TheoryMark | null;
+  /** Whether a deck note names this card — `deckCardNoted`'s answer, resolved by the group for
+   *  {@link theoryMark}'s reason, and required here for {@link TextGroup}'s. */
+  noted: boolean;
   /** This is the card the pane is open on. */
   selected: boolean;
   /** The nonce this line's last add was given, or `undefined`. The mark's `key`, so a second
@@ -471,7 +498,7 @@ function TextRow({
         type="button"
         // The stripe is the only mark this row has room for, so the name is where the words
         // are — `deckCardName` is the one definition, shared with the stack and the grid.
-        aria-label={deckCardName(card, ruleBreakText, theoryMark, tracksCollection)}
+        aria-label={deckCardName(card, ruleBreakText, theoryMark, tracksCollection, noted)}
         // `describes: false` — `deckCardName` already folds the rule-break sentence into the
         // accessible name above, so a default binding would describe it twice.
         {...tip(ruleBreakText ?? undefined, { describes: false })}
@@ -527,6 +554,12 @@ function TextRow({
           <TheoryMatchBadge tier={theoryMark.tier} delta={theoryMark.delta} />
         )}
         {card.labelName !== null && <LabelDot name={card.labelName} color={card.labelColor} />}
+        {/* Beside the dot, and separating from it by **shape** rather than by colour — a stroked
+            glyph against an 8px filled square. The `--color-pie-*` deeps are spoken for by
+            labels and gold is spoken for by selection, so there was no colour left for a fifth
+            mark to take. Decoration like every other mark on this line: the words are
+            `deckCardName`'s, since an `aria-label` replaces an element's content for naming. */}
+        {noted && <NoteMark />}
         <ManaText source={card.manaCost} className="shrink-0 text-[0.625rem]" />
       </button>
 

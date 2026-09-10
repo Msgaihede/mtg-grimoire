@@ -44,7 +44,7 @@ const BURN: DeckRow = {
   // "leave it" and so cannot reach the root of the tree.
   coverKind: "card_art",
   folderId: null,
-  notes: null,
+  notesOpen: false,
   theoryEnabled: false,
   virtualOnly: false,
   theoryMarkExact: true,

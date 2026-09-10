@@ -125,7 +125,7 @@ const DECK: DeckRow = {
   formatKey: "commander",
   formatName: "Commander",
   description: null,
-  notes: null,
+  notesOpen: false,
   coverCardId: null,
   coverKind: "card_art",
   coverArtist: null,
