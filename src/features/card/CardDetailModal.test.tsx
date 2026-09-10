@@ -1149,9 +1149,16 @@ it("keeps its place in the list when another printing of the same card is opened
 });
 
 /** A card opened out of the deck row above, which is the only surface that draws the two
- *  pickers — `scope.deckControls`, resolved from `paneDeckContext`. */
-async function renderFromDeck() {
-  deckGet.mockResolvedValue(deckDetail());
+ *  pickers — `scope.deckControls`, resolved from `paneDeckContext`. `wearing` is the label the
+ *  deck row has on, since the fixture's card wears none and the picker's *closed* state is the
+ *  only thing that can be asserted about a label already applied. */
+async function renderFromDeck({ wearing }: { wearing?: number } = {}) {
+  const fixture = deckDetail();
+  deckGet.mockResolvedValue(
+    wearing === undefined
+      ? fixture
+      : { ...fixture, cards: fixture.cards.map((c) => ({ ...c, labelId: wearing })) },
+  );
   useAppStore.setState({ activeView: "decks" });
   useAppStore.getState().openCardFromDeck(deckRow);
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -1198,6 +1205,37 @@ it("offers every label the reader has, not only the ones this deck's list wears"
   // deck test already exists to catch.
   await userEvent.click(screen.getByRole("option", { name: "Cut candidate" }));
   await waitFor(() => expect(deckCardSetLabel).toHaveBeenCalledWith(1, "c1", 2, "live", null, 8));
+});
+
+it("draws the worn label's own colour on the closed picker", async () => {
+  // **The gap this closes.** The rows have always carried a swatch; the trigger drew the name
+  // alone — so the state a reader spends all their time in, the picker *closed*, was the one
+  // place in the app where a label was only a word. Colour is how two labels are told apart
+  // everywhere else.
+  deckLabelAll.mockResolvedValue([
+    { id: 7, name: "Needs testing", color: "#d9b95c", cardCount: 4, deckCount: 1 },
+  ]);
+  await renderFromDeck({ wearing: 7 });
+
+  const trigger = screen.getByRole("button", { name: "Label" });
+  await waitFor(() => expect(trigger).toHaveTextContent("Needs testing"));
+  // `span[aria-hidden]` rather than `[aria-hidden]`: the chevron is aria-hidden too, and a
+  // selector that matched either would go green on the arrow if the swatch never drew.
+  const swatch = trigger.querySelector("span[aria-hidden='true']");
+  // The stored hex, not merely *a* colour. `labelColorCss` answers a fallback grey for anything
+  // it cannot read, so a presence check would pass while the picker told the reader the wrong
+  // thing. jsdom normalises an inline hex to `rgb()`, which is `CardStack.test.tsx`'s spelling.
+  expect(swatch?.getAttribute("style")).toContain("background-color: rgb(217, 185, 92)");
+});
+
+it("draws no swatch on the closed picker when the card wears no label", async () => {
+  // Why the "No label" row carries no icon at all: an unset picker draws its words alone rather
+  // than a swatch of some colour standing for the absence of one.
+  await renderFromDeck();
+
+  const trigger = screen.getByRole("button", { name: "Label" });
+  await waitFor(() => expect(trigger).toHaveTextContent("No label"));
+  expect(trigger.querySelector("span[aria-hidden='true']")).toBeNull();
 });
 
 it("asks for the app-wide label list only where the pickers are drawn", async () => {

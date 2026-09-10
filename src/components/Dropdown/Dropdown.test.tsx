@@ -189,6 +189,70 @@ describe("Dropdown", () => {
     expect(within(option).getByTestId("glyph")).toBeInTheDocument();
   });
 
+  it("draws the picked option's icon on the closed trigger", () => {
+    // A row that says what it is with a glyph — a label's colour, a destination's kind — said it
+    // in the list and nowhere else, so the state the reader is in for all but a second at a time
+    // was the one state that dropped the fact. The trigger draws the *picked* row's glyph, which
+    // is why this asserts on a two-row list rather than a one-row one.
+    render(
+      <Dropdown
+        label="Set"
+        value="leb"
+        onChange={vi.fn()}
+        options={[
+          { value: "lea", label: "Limited Edition Alpha", icon: <span data-testid="alpha" /> },
+          { value: "leb", label: "Limited Edition Beta", icon: <span data-testid="beta" /> },
+        ]}
+      />,
+    );
+    const trigger = screen.getByRole("button", { name: "Set" });
+    expect(within(trigger).getByTestId("beta")).toBeInTheDocument();
+    expect(within(trigger).queryByTestId("alpha")).toBeNull();
+  });
+
+  it("prefers a picked option's triggerIcon to its icon, and falls back when there is none", () => {
+    // Two sizes of one glyph — the card modal's label swatch is 10px in a row and 16px on the
+    // trigger, because the list shows every colour at once and the trigger shows one alone.
+    // The fallback is what keeps every other caller from having to say the same thing twice.
+    render(
+      <Dropdown
+        label="Set"
+        value="lea"
+        onChange={vi.fn()}
+        options={[
+          {
+            value: "lea",
+            label: "Limited Edition Alpha",
+            icon: <span data-testid="row-glyph" />,
+            triggerIcon: <span data-testid="trigger-glyph" />,
+          },
+        ]}
+      />,
+    );
+    const trigger = screen.getByRole("button", { name: "Set" });
+    expect(within(trigger).getByTestId("trigger-glyph")).toBeInTheDocument();
+    expect(within(trigger).queryByTestId("row-glyph")).toBeNull();
+  });
+
+  it("draws no icon on the trigger when the value matches no option", () => {
+    // A placeholder stands for a value the list does not hold, so there is no row whose glyph it
+    // could be — and borrowing one would be the control illustrating a state it is not in.
+    render(
+      <Dropdown
+        label="Set"
+        value="mmq"
+        onChange={vi.fn()}
+        options={[
+          { value: "lea", label: "Limited Edition Alpha", icon: <span data-testid="glyph" /> },
+        ]}
+        placeholder="Any set"
+      />,
+    );
+    const trigger = screen.getByRole("button", { name: "Set" });
+    expect(trigger).toHaveTextContent("Any set");
+    expect(within(trigger).queryByTestId("glyph")).toBeNull();
+  });
+
   it("calls onReachEnd when ArrowDown cannot move past the last enabled row", async () => {
     const user = userEvent.setup();
     const onReachEnd = vi.fn();
@@ -551,6 +615,31 @@ describe("MultiDropdown", () => {
     await user.click(trigger);
     await user.click(screen.getByRole("option", { name: "Commander" }));
     expect(trigger).toHaveTextContent("2 formats");
+  });
+
+  it("draws no option's icon on the trigger, however many are picked", async () => {
+    // The half `<Dropdown>`'s trigger glyph must not reach. A count is not any one row's to
+    // illustrate, and the set picker — the only caller with icons — would otherwise open with a
+    // keyrune beside "2 sets" naming whichever set happened to sort first.
+    const user = userEvent.setup();
+    const withIcons: DropdownOption[] = FORMATS.map((o) => ({
+      ...o,
+      icon: <span data-testid={`glyph-${o.value}`} />,
+    }));
+    render(
+      <MultiDropdown
+        label="Format"
+        triggerLabel="1 format"
+        selected={["modern"]}
+        onToggle={vi.fn()}
+        options={withIcons}
+      />,
+    );
+    const trigger = screen.getByRole("button", { name: "Format" });
+    expect(within(trigger).queryByTestId("glyph-modern")).toBeNull();
+    // And the rows still draw theirs — an absence proved against an empty tree proves nothing.
+    await user.click(trigger);
+    expect(screen.getByTestId("glyph-modern")).toBeInTheDocument();
   });
 
   /**
