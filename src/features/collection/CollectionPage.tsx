@@ -699,6 +699,49 @@ export function CollectionPage() {
   const folders = useCollectionFolders();
 
   /**
+   * **The folder another surface asked this page to open on its way in** — `store.ts`'s
+   * `pendingFolder`, whose only writer today is the home page's folder shortcuts.
+   *
+   * Read here rather than in {@link useCollection} because the question a hand-off has to answer
+   * is *is that drawer still there*, and the census that knows is this page's — the hook holds
+   * only where the reader is standing.
+   *
+   * **A render-phase adjustment rather than a mount effect, and both halves of that are
+   * deliberate.** React's own answer to "state that has to follow something upstream" is to make
+   * the change while rendering: React throws this render away and restarts it before committing,
+   * so the drawer is on screen in one pass with no flash of the root — `DecksPage` opens the
+   * folder a returning deck is filed in exactly this way. It is also the only shape available:
+   * `setFolderId` called from inside a `useEffect` body is a lint failure (cascading renders),
+   * which this project has paid for twice. And reading it *as it renders* rather than only as it
+   * mounts is what makes the widget's two store writes safe to land in either one commit or two.
+   *
+   * **It waits for the census** — `is that folder still there` cannot be asked of a list that has
+   * not answered — and once the list is in, a hand-off naming a folder this cabinet no longer
+   * carries is dropped in **silence**: a drawer another surface deleted between the press and the
+   * arrival is a race rather than an error, and the root is where its cards have just gone. The
+   * effect below spends the hand-off either way, so a folder that is gone cannot leave one
+   * pending forever.
+   *
+   * **And it is spent, which is the whole of what "one-shot" means.** A hand-off that survived
+   * its read would drop the reader back into that drawer the next time they opened this page,
+   * which is the folder-restored-at-launch behaviour `useCollection` refuses in words.
+   */
+  const pendingFolder = useAppStore((s) => s.pendingFolder);
+  const clearPendingFolder = useAppStore((s) => s.clearPendingFolder);
+  const pendingHere =
+    pendingFolder !== null && pendingFolder.scope === "collection" && !folders.query.isPending
+      ? pendingFolder.id
+      : null;
+  if (pendingHere !== null && folderId !== pendingHere) {
+    if (folders.folders.some((folder) => folder.id === pendingHere)) {
+      collection.openFolder(pendingHere);
+    }
+  }
+  useEffect(() => {
+    if (pendingHere !== null) clearPendingFolder();
+  }, [pendingHere, clearPendingFolder]);
+
+  /**
    * Which folder layer is open, and what the caret goes back to when it closes.
    *
    * **The opener is a ref rather than a piece of `Panel`** for the reason `DecksPage` gives: the

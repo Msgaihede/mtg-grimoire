@@ -564,6 +564,11 @@ beforeEach(() => {
     // Written out rather than left to the default, so the leak cannot come back through a
     // default that moves the way the collection's just did.
     wishlistFlattened: false,
+    // **The folder hand-off, which this page *consumes*** — so a case that left one written would
+    // open the next case inside a drawer nothing asked for. Store state outlives `cleanup()`,
+    // exactly as `wishlistFlattened` above does, and the block near the end writes one in every
+    // case.
+    pendingFolder: null,
   });
 });
 
@@ -2928,6 +2933,78 @@ describe("the folders", () => {
     await screen.findByRole("button", { name: /^Ordered folder/ });
     expect(screen.queryByText(/Nothing on your wishlist yet/)).not.toBeInTheDocument();
     expect(screen.queryByText("Nothing filed here yet.")).not.toBeInTheDocument();
+  });
+
+  /**
+   * **A drawer another page asked this one to open** — `store.ts`'s `pendingFolder`, whose only
+   * writer today is the home page's folder shortcuts, and `CollectionPage.test.tsx`'s block on
+   * the other cabinet.
+   *
+   * Where the reader is standing stays `useWishlist`'s own `useState`, so what arrives is a
+   * **one-shot hand-off** rather than a restored folder: read once as this page renders, spent as
+   * it is read, remembered by nothing. Three of the four ways it could be quietly wrong look
+   * identical on screen to the behaviour that was here before the door existed — the reader lands
+   * on the right page, at the root — which is why each case asserts the *query* and the *field*
+   * rather than only what is drawn.
+   */
+  describe("a folder another page asked for", () => {
+    it("opens the drawer it names, and spends the hand-off doing it", async () => {
+      useAppStore.setState({ pendingFolder: { scope: "wishlist", id: 1 } });
+      wrap(<WishlistPage />);
+
+      await waitFor(() => expect(lastQuery().folderId).toBe(1));
+      expect(await screen.findByText("Rhystic Study")).toBeInTheDocument();
+      expect(within(crumbs()).getByText("Ordered")).toHaveAttribute("aria-current", "page");
+      await waitFor(() => expect(useAppStore.getState().pendingFolder).toBeNull());
+    });
+
+    /**
+     * **A folder that is gone is not an error — it is a folder that was deleted**, so the reader
+     * lands at the root, which is where its wishes have just gone. The hand-off is spent anyway:
+     * a drawer this cabinet no longer carries must not leave one pending forever, waiting to fire
+     * at a folder that never comes back.
+     */
+    it("lands at the root when the folder it names is gone, and refuses nothing", async () => {
+      useAppStore.setState({ pendingFolder: { scope: "wishlist", id: 404 } });
+      wrap(<WishlistPage />);
+
+      expect(await screen.findByText("Lightning Bolt")).toBeInTheDocument();
+      expect(lastQuery().folderId).toBeUndefined();
+      await waitFor(() => expect(useAppStore.getState().pendingFolder).toBeNull());
+    });
+
+    /**
+     * **The one that makes it a hand-off rather than a memory.** A field that survived its read
+     * would drop the reader into that drawer every later time they opened this page — precisely
+     * the folder-restored-at-launch behaviour `useWishlist`'s own comment refuses, arriving
+     * through the back door.
+     */
+    it("does not survive to a second visit", async () => {
+      useAppStore.setState({ pendingFolder: { scope: "wishlist", id: 1 } });
+      const first = wrap(<WishlistPage />);
+      await waitFor(() => expect(lastQuery().folderId).toBe(1));
+
+      first.unmount();
+      wrap(<WishlistPage />);
+
+      expect(await screen.findByText("Lightning Bolt")).toBeInTheDocument();
+      await waitFor(() => expect(lastQuery().folderId).toBeUndefined());
+    });
+
+    /**
+     * **One field serves both cabinets, so the check is "is there one for me" rather than "is
+     * there one".** Without the `scope`, a press on a *collection* shortcut would open whichever
+     * wishlist folder happened to share that id — the two cabinets number their drawers
+     * independently — and the collection would then find its own post already opened and spent.
+     */
+    it("leaves the collection's hand-off untouched", async () => {
+      useAppStore.setState({ pendingFolder: { scope: "collection", id: 1 } });
+      wrap(<WishlistPage />);
+
+      expect(await screen.findByText("Lightning Bolt")).toBeInTheDocument();
+      expect(lastQuery().folderId).toBeUndefined();
+      expect(useAppStore.getState().pendingFolder).toEqual({ scope: "collection", id: 1 });
+    });
   });
 });
 

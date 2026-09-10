@@ -824,16 +824,23 @@ export interface AuditDay {
  * Built by hand rather than by slicing `toISOString()`, which is **UTC** — a change made at
  * 23:30 local would file itself under tomorrow for half the world, and the dialog would show
  * a "Today" section containing nothing that happened today.
+ *
+ * **Exported for `features/home/activityText.ts`**, which groups the home page's activity feed
+ * by the same rule over a different row type. That file may not re-derive this: the 23:30
+ * regression is one this repo has already shipped once, and two spellings of a calendar day is
+ * how it comes back on the surface nobody re-checked.
  */
-function localDay(at: number): string {
+export function localDay(at: number): string {
   const d = new Date(at * 1000);
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 /** "Saturday, August 9" — with the year when it is not this one, because a bare weekday and
- *  month is a date the reader would place in the wrong twelvemonth. */
-function longDay(at: number, thisYear: number): string {
+ *  month is a date the reader would place in the wrong twelvemonth. Exported beside
+ *  {@link localDay} and for its reason: the day *key* and the day *header* are one rule, and a
+ *  second surface that borrowed only the key would write its own "Today". */
+export function longDay(at: number, thisYear: number): string {
   const d = new Date(at * 1000);
   return new Intl.DateTimeFormat("en-US", {
     weekday: "long",

@@ -5446,10 +5446,12 @@ pub fn live_shortfall(conn: &Connection, deck_id: i64) -> Result<Vec<ShortfallRo
 /// **theory** list is not read at all — a card the user has not decided to play is not a card
 /// they need to buy, whether the undecidedness is a switched-off category or a whole plan.
 ///
-/// Written *through* [`crate::wishlist::add_wish`] rather than into `wishlist_entries`: the
-/// grain, the canonicalisation and the fold all live there, and a second write path is a
+/// Written *through* [`crate::wishlist::add_wish_silent`] rather than into `wishlist_entries`:
+/// the grain, the canonicalisation and the fold all live there, and a second write path is a
 /// second set of rules to keep in step. Clicking twice therefore raises the quantity of one
-/// line rather than making two, which is `add_wish`'s contract and not this function's.
+/// line rather than making two, which is that module's contract and not this function's. **The
+/// quiet door and not [`crate::wishlist::add_wish`]**, and only the feed row is different: the
+/// two are one write and the loud one records a line per card, which is the paragraph below.
 ///
 /// **`folder_id` says where the wishes are filed, and `None` is the root** (2026-09-09,
 /// [issue #437](https://github.com/Msgaihede/mtg-grimoire/issues/437)). **Send missing to
@@ -5467,8 +5469,8 @@ pub fn live_shortfall(conn: &Connection, deck_id: i64) -> Result<Vec<ShortfallRo
 /// shopping — where moving a wish between folders is its own explicit act
 /// ([`crate::wishlist_folders::set_wish_folder`]).
 ///
-/// **The folder is looked up once, up front, and [`crate::wishlist::add_wish`]'s per-row check
-/// is not a substitute for it.** A deck that is short of nothing never reaches `add_wish` at
+/// **The folder is looked up once, up front, and [`crate::wishlist::add_wish_silent`]'s per-row
+/// check is not a substitute for it.** A deck that is short of nothing never reaches that door at
 /// all, so a reader who picked a folder another window had just deleted would be told the press
 /// touched **0 wishes** by a command that never got far enough to notice. It sits *inside* the
 /// transaction, where the [`VIRTUAL_HOLDS_NOTHING`] refusal below is deliberately outside one:
@@ -5496,6 +5498,15 @@ pub fn live_shortfall(conn: &Connection, deck_id: i64) -> Result<Vec<ShortfallRo
 /// *"it rewrites this deck's claims"* four lines under the paragraph saying nothing is
 /// reallocated; there are no claims to rewrite since schema v25, and this command writes no
 /// deck table at all.)
+///
+/// **It records one [`crate::activity`] line, and one is the whole point.** No `deck_audit` row
+/// means nothing to suppress against, so the loop below went through
+/// [`crate::wishlist::add_wish`] and wrote a feed line per card until 2026-09-10 — a deck short
+/// of forty cards filling the feed the reader opened this button to check. It goes through
+/// [`crate::wishlist::add_wish_silent`] now and calls
+/// [`crate::wishlist::record_wishes_added`] once afterwards, **only where something was added**:
+/// a bulk operation records one row carrying its count, and a press that changed nothing records
+/// none at all.
 pub fn missing_to_wishlist(
     conn: &Connection,
     deck_id: i64,
@@ -5514,8 +5525,8 @@ pub fn missing_to_wishlist(
     }
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
 
-    // **The folder, before the shortfall is walked.** [`crate::wishlist::add_wish`] fences this
-    // column too, but per row — and a deck that is short of nothing calls it not once, so
+    // **The folder, before the shortfall is walked.** [`crate::wishlist::add_wish_silent`]
+    // fences this column too, but per row — and a deck short of nothing calls it not once, so
     // without this line naming a folder another window had just deleted would answer "0 wishes"
     // rather than "That folder is not there any more." Those are two different things to be
     // told and only one of them would have been true. Inside the transaction, unlike the deck
@@ -5542,8 +5553,13 @@ pub fn missing_to_wishlist(
     }
 
     let touched = missing.len();
+    let mut copies = 0i64;
     for (oracle_id, (name, quantity)) in missing {
-        crate::wishlist::add_wish(
+        // **The quiet door**, and the loop is exactly why. `add_wish` records a feed line of its
+        // own, so a deck short of forty cards wrote forty of them from one press until
+        // 2026-09-10 — the one line the reader wants to read straight after this button, said
+        // forty times. The run is recorded once, below.
+        crate::wishlist::add_wish_silent(
             &tx,
             &crate::wishlist::WishInput {
                 oracle_id: Some(oracle_id),
@@ -5559,6 +5575,16 @@ pub fn missing_to_wishlist(
                 ..Default::default()
             },
         )?;
+        // `max(1)` is [`crate::wishlist::add_wish`]'s own normalisation restated rather than
+        // read back out of the write: a wish for no copies is a wish for one, there and here, and
+        // the feed line's count has to be the number that actually landed on the wishlist.
+        copies += quantity.max(1);
+    }
+    // **One line for the press.** Only where something was actually added: a deck short of
+    // nothing has changed neither list, and a feed row saying `Added 0 cards to your wishlist`
+    // is a press the reader never made. The folder is the one the whole run was filed into.
+    if touched > 0 {
+        crate::wishlist::record_wishes_added(&tx, touched as i64, copies, folder_id)?;
     }
     tx.commit().map_err(|e| e.to_string())?;
     Ok(touched)
@@ -6302,6 +6328,124 @@ pub async fn deck_set_card_finish(
     })
     .await
     .map_err(unfinished)?
+}
+
+/// One deck's live list, valued — the home page's deck tile, and the figure `deck_list` has
+/// never carried.
+///
+/// **Every deck gets one of these**, a deck holding no cards and an archived deck included, so
+/// a caller can index the answer by `deck_id` with no missing-key branch and decide for itself
+/// what to draw. That is [`deck_values_for`]'s join shape rather than a promise made in prose:
+/// the read starts at `decks` and everything below it is a `LEFT JOIN`.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeckValue {
+    pub deck_id: i64,
+    /// What the deck's live list is worth at the marketplace the caller named:
+    /// `sum(quantity × unit price)` over [`crate::sorting::deck_card_price_expr`], which is
+    /// [`DeckCardRow::unit_price`]'s own expression and not a second one — so a tile and the
+    /// deck it opens can never quote one pile at two prices. Never `cards.price_usd`, which is
+    /// a display/sort fallback chain: summing it is what this crate forbids everywhere.
+    ///
+    /// **`None` rather than `0.0` when the marketplace prices nothing in the deck**, which is
+    /// [`crate::collection_folders::CollectionFolderSummary::value`]'s rule and for its reason:
+    /// a tile is a small number beside a name and has no room for the collection header's
+    /// "n unpriced" note, so a deck of cards the feed has never heard of would otherwise read
+    /// as a deck worth nothing. `None` draws an em dash, which is this app's answer for a price
+    /// it does not have.
+    pub value: Option<f64>,
+    /// Copies **in that same pile** the marketplace has no price for — the note a widget prints
+    /// beside the figure, [`crate::collection::CollectionSummary::unpriced`]'s job on a smaller
+    /// surface. Copies rather than rows, because the total it qualifies is copies too, and the
+    /// number moves with the marketplace, which is the whole point of showing it.
+    pub unpriced: i64,
+}
+
+/// Every deck's live list valued at one marketplace — one round trip for the whole wall.
+///
+/// **The pile is [`DeckRow::card_count`]'s, term for term**: `variant = 'live'`,
+/// `cat.is_active = 1`, `cat.kind IN ('main','commander','maybe')`, copied off
+/// [`DECK_SELECT`]'s correlated subquery rather than re-derived — [`PIP_COSTS_SQL`]'s
+/// arrangement, and for its reason. A tile draws this number directly under that count, so a
+/// value covering a different pile than the count covers is a tile disagreeing with itself,
+/// and nothing on the screen would say which half to believe. Sideboard and companion are
+/// played *beside* the deck and are outside the count; they are therefore outside the value.
+/// `the_gallery_count_reads_only_live_rows_in_active_categories` pins the count's literals and
+/// `a_decks_value_counts_the_same_cards_its_card_count_does` pins these against them.
+///
+/// **A theory row is never counted.** `'live'` is spelled out rather than interpolated from
+/// [`LIVE`] because there is nothing to interpolate with inside a `format!` already spending
+/// its braces on the price — the same trade `DECK_SELECT` makes one screen up.
+///
+/// **The category filter sits in the join's `ON` and not in a `WHERE`**, which is the one thing
+/// here that a reader has to get right: a `WHERE` over a LEFT JOIN drops the deck rows this
+/// query exists to keep, and a category predicate written below the join would let a sideboard
+/// row through with `cat` NULL and its quantity still in the sum. Chaining `decks → the
+/// categories that count → their live cards → the printing` puts every term where it filters
+/// what it names.
+///
+/// **No `GROUP BY` arm for the empty cases.** A deck with no counted category, or with one
+/// holding no cards, groups to a single row whose `dc` columns are NULL: `sum()` over nothing
+/// is NULL — which is exactly [`DeckValue::value`]'s "nothing priced" — and the `coalesce` on
+/// the unpriced count turns the same NULL into `0`.
+pub fn deck_values_for(
+    conn: &Connection,
+    marketplace: crate::sorting::Marketplace,
+) -> Result<Vec<DeckValue>, String> {
+    let price = crate::sorting::deck_card_price_expr(marketplace);
+    let sql = format!(
+        "SELECT d.id,
+                sum(dc.quantity * ({price})),
+                coalesce(sum(CASE WHEN dc.id IS NOT NULL AND ({price}) IS NULL
+                                  THEN dc.quantity ELSE 0 END), 0)
+           FROM decks d
+           LEFT JOIN deck_categories cat
+                  ON cat.deck_id = d.id
+                 AND cat.is_active = 1
+                 AND cat.kind IN ('main','commander','maybe')
+           LEFT JOIN deck_cards dc
+                  ON dc.category_id = cat.id
+                 AND dc.deck_id = d.id
+                 AND dc.variant = 'live'
+           LEFT JOIN cards c ON c.id = dc.card_id
+          GROUP BY d.id
+          ORDER BY d.id"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(DeckValue {
+                deck_id: r.get(0)?,
+                value: r.get(1)?,
+                unpriced: r.get(2)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())
+}
+
+/// Every deck's value, for the home page's tiles. **Read-only** connection, blocking pool — as
+/// every read in this app is, so a home page never queues behind a sync.
+///
+/// **No arguments but the shop**, [`deck_pip_costs`]'s reasoning: the page draws whichever decks
+/// its widgets pin and there is nothing to narrow by, since an archived deck is a tile too. And
+/// anything the app does not recognise is TCGplayer — [`crate::sorting::Marketplace::from_opt`]'s
+/// rule for every list query, so a marketplace this build has never heard of costs a fallback
+/// rather than a failed page.
+#[cfg(not(target_family = "wasm"))]
+#[tauri::command]
+pub async fn deck_values(
+    state: tauri::State<'_, Arc<AppState>>,
+    marketplace: Option<String>,
+) -> Result<Vec<DeckValue>, String> {
+    let state = state.inner().clone();
+    let marketplace = crate::sorting::Marketplace::from_opt(marketplace.as_deref());
+    tauri::async_runtime::spawn_blocking(move || {
+        deck_values_for(&crate::sync::lock_db_read(&state), marketplace)
+    })
+    .await
+    .map_err(|e| format!("the deck values could not be read: {e}"))?
 }
 
 #[cfg(test)]
@@ -13271,8 +13415,8 @@ mod tests {
     /// **A folder that is not there is refused by name, before anything is written** — and the
     /// second deck is the half only the up-front check can answer.
     ///
-    /// [`crate::wishlist::add_wish`] fences this column too, but **per row**, and a deck short
-    /// of nothing never reaches it: without the lookup at the top of the transaction the reader
+    /// [`crate::wishlist::add_wish_silent`] fences this column too, but **per row**, and a deck
+    /// short of nothing never reaches it: without the lookup at the top of the transaction the reader
     /// would be told the press touched `0` wishes, with nothing anywhere to say that the folder
     /// they had picked was gone. "There was nothing to buy" and "that folder is not there any
     /// more" are different answers and only one of them would have been true.
@@ -13288,8 +13432,8 @@ mod tests {
 
         // A deck holding every copy it plays. The premise is asserted as the press itself
         // rather than as an empty [`live_shortfall`], because what the case turns on is that
-        // this press reaches [`crate::wishlist::add_wish`] **not once** — and a `0` from a
-        // successful press is exactly the answer a deleted folder must not be able to hide
+        // this press reaches [`crate::wishlist::add_wish_silent`] **not once** — and a `0` from
+        // a successful press is exactly the answer a deleted folder must not be able to hide
         // behind three lines further down.
         let settled = create_deck(&conn, &input("Settled", "modern")).unwrap().id;
         file_into_group(&conn, settled, "serra-lea", 2);
@@ -13367,6 +13511,107 @@ mod tests {
             ],
             "the root's wish doubled on the repeat and the folder's was not touched"
         );
+    }
+
+    /* ---------------------------------------------------------------------------------- *
+     * What the press says in the activity feed. **One line, whatever it bought.**
+     * ---------------------------------------------------------------------------------- */
+
+    /// The wishlist lines in the feed, newest first.
+    ///
+    /// Filtered, because [`crate::activity::recent`] is a `UNION ALL` over `deck_audit` as well
+    /// and every press that builds the fixture writes a deck row. An unfiltered `len()` here
+    /// would be counting the fixture.
+    fn wishlist_feed(conn: &Connection) -> Vec<crate::activity::ActivityEntry> {
+        crate::activity::recent(conn, crate::activity::MAX_LIMIT)
+            .unwrap()
+            .into_iter()
+            .filter(|r| r.scope == crate::activity::WISHLIST)
+            .collect()
+    }
+
+    /// **A deck short of three cards writes one feed line, not three.**
+    ///
+    /// This press records no `deck_audit` row — nothing about the deck changed — so there was
+    /// nothing to suppress against and the loop wrote one `activity` row per card until
+    /// 2026-09-10. Every one of them was true, and between them they were the whole of the feed
+    /// the reader had just pressed the button to check.
+    ///
+    /// **The two shortfalls are deliberately unequal**, because the payload's numbers are
+    /// different units and a fixture where they coincide cannot tell them apart: two oracle cards
+    /// short by four copies and one is `rows: 2` against `cards: 5`.
+    #[test]
+    fn missing_to_wishlist_records_one_activity_row_for_the_whole_press() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "bolt-lea", main, 4);
+        add(&conn, deck.id, "serra-lea", main, 1);
+
+        let touched = missing_to_wishlist(&conn, deck.id, None).unwrap();
+
+        assert_eq!(touched, 2, "two cards are short");
+        let rows = wishlist_feed(&conn);
+        assert_eq!(rows.len(), 1, "and the press is one line, not two");
+        assert_eq!(
+            rows[0].kind,
+            crate::activity::ADD,
+            "an `add`: the reader put cards on a list, they did not import a file"
+        );
+        assert_eq!(rows[0].card_name, None, "a run names no one card");
+        assert_eq!(rows[0].delta, 5);
+        let payload: serde_json::Value = serde_json::from_str(&rows[0].payload).unwrap();
+        assert_eq!(payload["rows"], 2, "two wishes");
+        assert_eq!(payload["cards"], 5, "five copies across them");
+        assert_eq!(payload["folder"], serde_json::Value::Null);
+    }
+
+    /// The folder the run was filed into is the one clause the line borrows from a single add.
+    #[test]
+    fn the_press_names_the_folder_its_run_was_filed_into() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let ordered = wish_folder(&conn, "Ordered");
+        add(&conn, deck.id, "bolt-lea", main_of(&conn, deck.id), 4);
+
+        missing_to_wishlist(&conn, deck.id, Some(ordered)).unwrap();
+
+        // The `add`, not the `folder` row `wish_folder` wrote making the drawer — both are
+        // wishlist-scoped, and the run is the one this case is about.
+        let run = wishlist_feed(&conn)
+            .into_iter()
+            .find(|r| r.kind == crate::activity::ADD)
+            .expect("the run is in the feed");
+        let payload: serde_json::Value = serde_json::from_str(&run.payload).unwrap();
+        assert_eq!(payload["folder"], "Ordered");
+    }
+
+    /// **A deck short of nothing writes no line at all.**
+    ///
+    /// The other half of the rule, and the one a guard on the recording door alone would get
+    /// wrong: the press succeeds, answers `0`, and has changed neither list — so *Added 0 cards
+    /// to your wishlist* would be a feed row for a press the reader never made.
+    ///
+    /// The comparison is against a deck that *is* short in the same database, so "no line" cannot
+    /// be read as the feed answering nothing whatever.
+    #[test]
+    fn a_deck_short_of_nothing_writes_no_activity_row() {
+        let conn = seeded();
+        let settled = create_deck(&conn, &input("Settled", "modern")).unwrap().id;
+        file_into_group(&conn, settled, "serra-lea", 2);
+        add(&conn, settled, "serra-lea", main_of(&conn, settled), 2);
+
+        assert_eq!(missing_to_wishlist(&conn, settled, None).unwrap(), 0);
+        assert!(
+            wishlist_feed(&conn).is_empty(),
+            "a press that bought nothing says nothing"
+        );
+
+        // And the feed is not simply mute: a deck that really is short writes its one line.
+        let short = create_deck(&conn, &input("Burn", "modern")).unwrap().id;
+        add(&conn, short, "bolt-lea", main_of(&conn, short), 4);
+        assert_eq!(missing_to_wishlist(&conn, short, None).unwrap(), 1);
+        assert_eq!(wishlist_feed(&conn).len(), 1);
     }
 
     /// The rules as data, all the way out to the frontend: the nullable cells are the ones
@@ -14407,6 +14652,189 @@ mod tests {
         assert!(
             !is_virtual(&conn, 9_999).unwrap(),
             "a stale id is not this function's refusal to make"
+        );
+    }
+
+    /// **The tile's two numbers describe one pile**, which is the whole of [`deck_values_for`]'s
+    /// contract: `variant = 'live'`, an active category, and one of the three kinds
+    /// [`DeckRow::card_count`] counts. The deck below holds a copy of every case at once —
+    /// main, commander, an active Maybeboard, the two kinds played *beside* the deck, and a
+    /// category of the reader's own switched off — so a filter written one term short is a
+    /// wrong number here rather than a case nobody seeded.
+    ///
+    /// The prices are picked so each excluded pile would be *visible* if it leaked: the
+    /// sideboard's four Serra Angels and the companion's would add $5 to a $921.50 deck, and a
+    /// switched-off pile would add $360. A fixture priced flat would let three of the five
+    /// terms be dropped with the assertion still passing.
+    #[test]
+    fn a_decks_value_counts_the_same_cards_its_card_count_does() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "commander")).unwrap();
+        let main = main_of(&conn, deck.id);
+        let commander = kind_of(&conn, deck.id, "commander");
+        let maybe = kind_of(&conn, deck.id, "maybe");
+        let bench = crate::deck_meta::category_for_name(&conn, deck.id, "Bench").unwrap();
+
+        add(&conn, deck.id, "bolt-lea", main, 2); // 2 × 400.00 = 800.00
+        add(&conn, deck.id, "serra-lea", commander, 1); // 1 × 120.00 = 120.00
+        crate::deck_meta::set_category_active(&conn, maybe, true).unwrap();
+        add(&conn, deck.id, "bolt-m10", maybe, 1); // 1 ×   1.50 =   1.50
+
+        // Played beside the deck rather than in it — CR 100.4a for the sideboard and EDH's
+        // "effectively a 101st card" for the companion. Both are outside `card_count`, so both
+        // are outside the value.
+        add(
+            &conn,
+            deck.id,
+            "serra-8ed",
+            kind_of(&conn, deck.id, "side"),
+            4,
+        );
+        add(
+            &conn,
+            deck.id,
+            "serra-8ed",
+            kind_of(&conn, deck.id, "companion"),
+            1,
+        );
+        // And a category switched off counts toward nothing, kind or no kind.
+        add(&conn, deck.id, "serra-lea", bench, 3);
+        crate::deck_meta::set_category_active(&conn, bench, false).unwrap();
+
+        let rows = deck_values_for(&conn, ANY_MARKET).unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].deck_id, deck.id);
+        assert_eq!(
+            rows[0].value,
+            Some(921.50),
+            "the two piles beside the deck and the pile switched off are worth nothing here"
+        );
+        assert_eq!(rows[0].unpriced, 0);
+        assert_eq!(
+            read_deck(&conn, deck.id).unwrap().unwrap().card_count,
+            4,
+            "and the count over the same rows is the four copies the value is made of"
+        );
+    }
+
+    /// **A plan holds no cards**, so it is worth nothing on a tile — [`LIVE`]'s rule, which
+    /// [`DeckRow::card_count`] already states and this number has to state the same way. The
+    /// theory row is deliberately the expensive one: a query that summed both variants would
+    /// read $880 over a deck the gallery captions as holding one card.
+    #[test]
+    fn a_theory_row_is_not_counted() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "bolt-lea", main, 1);
+        add_card(
+            &conn,
+            deck.id,
+            "serra-lea",
+            Some(main),
+            None,
+            THEORY,
+            None,
+            4,
+        )
+        .unwrap();
+
+        let rows = deck_values_for(&conn, ANY_MARKET).unwrap();
+
+        assert_eq!(
+            rows[0].value,
+            Some(400.00),
+            "the plan's four Angels are not the deck's"
+        );
+        assert_eq!(
+            rows[0].unpriced, 0,
+            "and a theory row is not an unpriced copy either — it is not a copy at all"
+        );
+    }
+
+    /// **`None`, never `Some(0.0)`** — [`DeckValue::value`]'s rule and
+    /// [`crate::collection_folders::CollectionFolderSummary::value`]'s reason: a tile has no
+    /// room for the collection header's "n unpriced" note, so a deck of cards the feed has
+    /// never heard of would otherwise read as a deck worth nothing rather than as a deck this
+    /// marketplace cannot price.
+    ///
+    /// `bolt-jp` is the fixture's unpriced printing — its `prices` blob is NULL, which is what
+    /// "in `cards` and absent from the feed" looks like from a price expression.
+    #[test]
+    fn a_deck_with_nothing_priced_answers_null_and_not_zero() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Untranslated", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "bolt-jp", main, 3);
+
+        let rows = deck_values_for(&conn, ANY_MARKET).unwrap();
+        assert_eq!(rows[0].value, None, "no price is not a price of zero");
+        assert_eq!(rows[0].unpriced, 3, "copies, not rows");
+
+        // And an unpriced copy beside a priced one is still counted rather than folded into the
+        // total at zero — the point of shipping the two numbers together.
+        add(&conn, deck.id, "bolt-lea", main, 1);
+        let rows = deck_values_for(&conn, ANY_MARKET).unwrap();
+        assert_eq!(rows[0].value, Some(400.00));
+        assert_eq!(rows[0].unpriced, 3);
+    }
+
+    /// **Every deck gets a row**, so the caller can index by id with no missing-key branch. A
+    /// deck with nothing in it is a deck the reader just made, and a home page that drew no
+    /// tile for it would be answering a question nobody asked.
+    #[test]
+    fn a_deck_with_no_cards_still_gets_a_row() {
+        let conn = seeded();
+        let empty = create_deck(&conn, &input("Nothing Yet", "modern")).unwrap();
+        let stocked = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        add(&conn, stocked.id, "bolt-lea", main_of(&conn, stocked.id), 1);
+
+        let rows = deck_values_for(&conn, ANY_MARKET).unwrap();
+
+        assert_eq!(
+            rows.len(),
+            2,
+            "both decks, and the empty one is not an omission"
+        );
+        let row = rows.iter().find(|r| r.deck_id == empty.id).unwrap();
+        assert_eq!(
+            row.value, None,
+            "a deck holding nothing is worth nothing sayable"
+        );
+        assert_eq!(
+            row.unpriced, 0,
+            "and there are no copies to be unable to price"
+        );
+    }
+
+    /// **An archived deck gets a row too** — what to draw is the caller's decision, not this
+    /// query's. `deck_list` ships archived decks for the same reason and lets the UI separate
+    /// them; a read that filtered here would make a pinned archived deck's tile read as a
+    /// missing key instead of as an archived deck.
+    #[test]
+    fn an_archived_deck_gets_a_row_too() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Old Standard", "standard")).unwrap();
+        add(&conn, deck.id, "bolt-lea", main_of(&conn, deck.id), 2);
+        update_deck(
+            &conn,
+            deck.id,
+            &DeckPatch {
+                archived: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let rows = deck_values_for(&conn, ANY_MARKET).unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].deck_id, deck.id);
+        assert_eq!(
+            rows[0].value,
+            Some(800.00),
+            "archiving a deck does not spend what is in it"
         );
     }
 }

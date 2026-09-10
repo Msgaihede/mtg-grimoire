@@ -16,12 +16,12 @@
 // move a move: not one path below changed.
 use crate::sync::AppState;
 use crate::{
-    camera, card, collection, collection_alloc, collection_folders, combos, db, deck, deck_audit,
-    deck_meta, deck_missing, deck_notes, deck_pull, deck_quick_add, deck_theory, deck_tokens,
-    deck_undo, deckpane, decksort, errors, export, flatten, images, import, index, listview,
-    markcolors, marketplace, marketplace_feed, mirror, nav, paths, reset, scanner, schema,
-    scryfall, search, searchopen, share, sync, sync_engine, sync_pair, tags, update, wishlist,
-    wishlist_folders, wishlist_optimize, zoom,
+    activity, camera, card, collection, collection_alloc, collection_folders, combos, db, deck,
+    deck_audit, deck_meta, deck_missing, deck_notes, deck_pull, deck_quick_add, deck_theory,
+    deck_tokens, deck_undo, deckpane, decksort, errors, export, flatten, home, images, import,
+    index, listview, markcolors, marketplace, marketplace_feed, mirror, nav, paths, reset, scanner,
+    schema, scryfall, search, searchopen, share, startview, sync, sync_engine, sync_pair, tags,
+    update, wishlist, wishlist_folders, wishlist_optimize, zoom,
 };
 // **Not in the list above, because this file compiles for Android too.** Its name says
 // `desktop`, but its gate is `cfg(not(target_family = "wasm"))` — desktop *and* mobile — while
@@ -375,6 +375,9 @@ pub fn run() {
             collection::collection_remove,
             collection::collection_list,
             collection::collection_summary,
+            // The home page's value widget: the same money as `collection_summary`, one
+            // dimension at a time. A read like its neighbour, so it sits with it.
+            collection::collection_breakdown,
             collection::collection_import_commit,
             collection_folders::collection_folder_list,
             collection_folders::collection_folder_create,
@@ -424,6 +427,10 @@ pub fn run() {
             wishlist::wishlist_set_quantity,
             wishlist::wishlist_remove,
             wishlist::wishlist_list,
+            // The home page's wishlist widget — the header figures, and the same money one
+            // dimension at a time. Both are reads, so they sit with `wishlist_list`.
+            wishlist::wishlist_summary,
+            wishlist::wishlist_breakdown,
             wishlist::wishlist_import_commit,
             wishlist::wishlist_set_printing,
             wishlist_optimize::wishlist_optimize_plan,
@@ -449,6 +456,10 @@ pub fn run() {
             // writes below.
             deck::deck_pip_costs,
             deck::deck_bracket_reads,
+            // The home page's deck tiles — every deck's value at one shop, in one read. A
+            // third gallery-wide read, so it sits with the two above rather than with the
+            // card writes below.
+            deck::deck_values,
             deck::deck_get,
             // The two reads a folder rule is answered from: what one deck's live list plays,
             // and which decks play a given set of cards. Both are reads and take `db_read`,
@@ -488,6 +499,9 @@ pub fn run() {
             deck_meta::deck_folder_reorder,
             deck_meta::deck_folder_delete,
             deck_audit::deck_audit_list,
+            // The collection's and the wishlist's history, read beside the deck's own — see
+            // `activity`'s doc in `lib.rs`. The home page's Recent widget is its one caller.
+            activity::activity_recent,
             deck_undo::deck_undo_state,
             deck_undo::deck_undo_apply,
             deck_undo::deck_redo_apply,
@@ -540,6 +554,13 @@ pub fn run() {
             deckpane::set_deck_folder_pane,
             flatten::flatten_state,
             flatten::set_flatten_state,
+            // The home page's own two pairs, beside the other `app_meta` view state: which
+            // widgets the reader has and how they are arranged, and which view the app opens
+            // on. Both reads are infallible by signature — see each module's doc.
+            home::home_layout,
+            home::set_home_layout,
+            startview::start_view,
+            startview::set_start_view,
             marketplace_feed::marketplace_feed_refresh,
             marketplace_feed::marketplace_feed_status,
             combos::combos_status,

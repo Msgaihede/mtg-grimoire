@@ -141,6 +141,12 @@ export function useWishlist() {
   // "nothing chosen yet". Deliberately outside `WishlistFilterState`: it is navigation, not
   // something the reader narrowed, so `activeFilterCount` never sees it and `resetAll` leaves
   // it alone, the same reason `sort` does.
+  //
+  // **`useState` and not the store, which is `useCollection`'s rule and its reason**: a folder
+  // restored at launch would open the app somewhere the reader did not navigate to. `store.ts`'s
+  // `pendingFolder` is not that rule bending — it is a one-shot hand-off that `WishlistPage`
+  // reads once as it renders and spends, so what arrives through it is a press made a moment ago
+  // on another page rather than a memory.
   const [folderId, setFolderId] = useState<number | null>(null);
   /**
    * `true` ignores `folderId` and answers every wish wherever it is filed. Also navigation

@@ -357,19 +357,52 @@ pub fn create_folder(
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
+    record_folder(conn, "create", name, None)?;
     read_folder(conn, id)?.ok_or_else(|| FOLDER_GONE.to_owned())
+}
+
+/// One `folder` line in the feed, for the three acts that change what drawers exist.
+///
+/// **`card_id` and `card_name` are `None` and `delta` is `0`**: a folder is not a card and no
+/// copies came or went, so a day's `+7 / −6` roll-up must not move for one. `action` is the key
+/// `activityText.ts` switches on and `from` is the previous name, which only a rename carries.
+///
+/// **`move_folder`, `reorder_folders` and `set_folder_locked` deliberately do not call this.**
+/// They rearrange a cabinet rather than change what is in it, and a feed that reported every
+/// drag of a drawer would bury the card lines the page exists to show — the plan's payload table
+/// names exactly these three actions.
+fn record_folder(
+    conn: &Connection,
+    action: &str,
+    name: &str,
+    previous: Option<&str>,
+) -> Result<(), String> {
+    crate::activity::record(
+        conn,
+        crate::activity::COLLECTION,
+        crate::activity::FOLDER,
+        None,
+        None,
+        &serde_json::json!({ "action": action, "name": name, "from": previous }),
+        0,
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// Rename a folder the reader made. A deck's folder is named after its deck and the
 /// removed-cards folder after what it is for, so neither is [`FOLDER_NOT_YOURS`] by accident.
 pub fn rename_folder(conn: &Connection, id: i64, name: &str) -> Result<CollectionFolder, String> {
     let name = valid_name(name)?;
-    user_folder(conn, id)?;
+    // The fence already reads the row, so the previous name costs nothing — and it has to be
+    // taken from here rather than after the `UPDATE`, which is what makes the line say what the
+    // drawer used to be called.
+    let before = user_folder(conn, id)?;
     conn.execute(
         "UPDATE collection_folders SET name = ?2, updated_at = unixepoch() WHERE id = ?1",
         params![id, name],
     )
     .map_err(|e| e.to_string())?;
+    record_folder(conn, "rename", name, Some(&before.name))?;
     read_folder(conn, id)?.ok_or_else(|| FOLDER_GONE.to_owned())
 }
 
@@ -390,6 +423,9 @@ pub fn rename_folder(conn: &Connection, id: i64, name: &str) -> Result<Collectio
 ///
 /// **`bool` at the boundary, `INTEGER` in the table** — rusqlite binds it as 0 or 1, so this
 /// write can never be the source of the hand-edited 2 [`folder_row`] reads for.
+///
+/// **Writes no [`crate::activity`] row** — see [`record_folder`]: a lock changes what the app
+/// offers from a drawer, not what drawers exist or what is in them.
 pub fn set_folder_locked(
     conn: &Connection,
     id: i64,
@@ -508,6 +544,9 @@ fn refuse_cycle(conn: &Connection, id: i64, start: i64) -> Result<(), String> {
 /// hang this one command — it would deadlock every write in the app for the life of the
 /// process. Exceeding the budget is answered as a cycle, which is the only thing a chain that
 /// long can be.
+///
+/// **Writes no [`crate::activity`] row** — see [`record_folder`]: re-parenting a drawer changes
+/// no card and no folder's existence.
 pub fn move_folder(
     conn: &Connection,
     id: i64,
@@ -561,6 +600,10 @@ pub fn move_folder(
 /// [`crate::schema::COLLECTION_GRAIN`], which is why [`delete_folder`] has to re-file by hand —
 /// but this write moves no entry between folders, only folders between folders, so no grain
 /// moves and there is nothing to merge.
+///
+/// **And so it writes no [`crate::activity`] row either** — see [`record_folder`]. This is the
+/// clearest case of the three: a drag over a tree can renumber every sibling in it, and a feed
+/// line per folder moved would be the whole day's page.
 pub fn reorder_folders(
     conn: &Connection,
     parent_id: Option<i64>,
@@ -648,7 +691,11 @@ pub fn delete_folder(conn: &Connection, id: i64) -> Result<(), String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     // Not [`user_folder`]: an id that is not there is a **success** here, so the two halves of
     // that helper come apart. Only a folder that exists and is the app's is refused.
-    if let Some(folder) = read_folder(&tx, id)? {
+    //
+    // The name is kept for the feed row at the bottom, and `None` is what makes an id nobody
+    // answers to record nothing: a delete that found no folder deleted no folder.
+    let deleted = read_folder(&tx, id)?;
+    if let Some(folder) = &deleted {
         if folder.kind != USER_KIND {
             return Err(FOLDER_NOT_YOURS.to_owned());
         }
@@ -691,6 +738,12 @@ pub fn delete_folder(conn: &Connection, id: i64) -> Result<(), String> {
     }
     tx.execute("DELETE FROM collection_folders WHERE id = ?1", params![id])
         .map_err(|e| e.to_string())?;
+    // **One line for the press, not one per card it re-filed.** The re-filing above is a
+    // consequence of this delete — [`refile_entry`] records nothing — so a folder holding four
+    // hundred cards is still one sentence in the feed.
+    if let Some(folder) = deleted {
+        record_folder(&tx, "delete", &folder.name, None)?;
+    }
     tx.commit().map_err(|e| e.to_string())
 }
 
@@ -738,6 +791,13 @@ pub fn set_entry_folder(
     folder_id: Option<i64>,
 ) -> Result<EntryChange, String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    // The card and the drawer it is leaving, read before the move — the row may be folded into
+    // another and stop existing, and its folder is the very thing about to change.
+    let facts = crate::collection::entry_facts(&tx, id)?;
+    // `None` is the **root** and not an absence — `activityText.ts` reads a present-but-null
+    // `to` as the cabinet's own name and a missing key as "we do not know", so both ends of a
+    // move are always written.
+    let mut destination: Option<String> = None;
     if let Some(folder) = folder_id {
         // **A locked folder gains nothing here, on either side, and that is the requirement
         // rather than an omission.** Issue #365 asks that copies can always be moved into and
@@ -748,7 +808,10 @@ pub fn set_entry_folder(
         // it is a confirmation on a *drag* (a rectangle a pointer lands on by accident) rather
         // than on a menu pick the reader just named. Nothing about the destination's lock is
         // asked below, and nothing about the source's is either.
-        user_folder(&tx, folder)?;
+        //
+        // The name comes off the row this fence already read — the destination end of the feed
+        // line, which cannot be looked up afterwards on the folding path.
+        destination = Some(user_folder(&tx, folder)?.name);
     }
     // `optional()`, and a `None` falls through on purpose: it is the root, an entry that is not
     // there, or a folder that has gone between two reads. The first is the ordinary case and the
@@ -768,6 +831,20 @@ pub fn set_entry_folder(
         return Err(ENTRY_IN_A_DECK.to_owned());
     }
     refile_entry(&tx, id, folder_id).and_then(|change| {
+        // **`delta` is 0**: a move changes no count, and a day roll-up that added a move would
+        // double every card that only ever changed drawer.
+        if let Some(facts) = facts {
+            crate::activity::record(
+                &tx,
+                crate::activity::COLLECTION,
+                crate::activity::MOVE,
+                facts.card_id.as_deref(),
+                facts.card_name.as_deref(),
+                &serde_json::json!({ "from": facts.folder, "to": destination }),
+                0,
+            )
+            .map_err(|e| e.to_string())?;
+        }
         tx.commit().map_err(|e| e.to_string())?;
         Ok(change)
     })
@@ -812,6 +889,12 @@ struct EntryGrain {
 /// command's fence and this function's absence of one.
 ///
 /// [`set_entry_folder`] is where the rule is argued; the paragraph above it is the one to read.
+///
+/// **It records no [`crate::activity`] row**, which is the same split as the fence: every one of
+/// its callers is either the press that records itself ([`set_entry_folder`]'s `move`,
+/// [`delete_folder`]'s one `folder` line) or a deck-boundary write that logs a `deck_audit` row
+/// instead ([`take_copies`], `collection_alloc`'s pair, `deck::delete_deck`) — and one event is
+/// one line.
 pub(crate) fn refile_entry(
     tx: &Connection,
     id: i64,
@@ -954,6 +1037,9 @@ pub(crate) fn refile_entry(
 /// either changes, and this rule moves the reader's cards — so the twin was deleted at fan-in and
 /// both of those commands call this. It belongs here, beside the merge it is built on and the
 /// fence-free refile it extends.
+///
+/// **Records no [`crate::activity`] row**: both callers are deck-boundary writes that record a
+/// `deck_audit` row for the same press, and one event is one line.
 pub(crate) fn take_copies(
     tx: &Connection,
     id: i64,
@@ -1031,6 +1117,9 @@ pub(crate) fn take_copies(
 /// The wrapper stays because this module's callers are `Result<_, String>` throughout while
 /// `fold_entry` answers `rusqlite::Result` for the reconciler's sake — one `map_err` here rather
 /// than one per call site, and one name for the folder tree's own vocabulary.
+///
+/// **Records no [`crate::activity`] row**, [`crate::collection::fold_entry`]'s rule: a fold is a
+/// consequence of the filing above it, and the press that caused it is already one line.
 fn merge_entry(tx: &Connection, target: i64, source: i64) -> Result<(), String> {
     crate::collection::fold_entry(tx, target, source).map_err(|e| e.to_string())
 }
@@ -2485,5 +2574,184 @@ mod tests {
         let shelf = create_folder(&conn, None, "Shelf").unwrap();
         let err = reorder_folders(&conn, Some(999_999), &[shelf.id]).unwrap_err();
         assert_eq!(err, FOLDER_GONE);
+    }
+
+    /* ---------------------------------------------------------------------------------- *
+     * The activity feed — this cabinet's four recording sites, the three arrangement writes
+     * that deliberately record nothing, and the spec's first rule.
+     * ---------------------------------------------------------------------------------- */
+
+    /// The whole feed, newest first.
+    fn feed(conn: &Connection) -> Vec<crate::activity::ActivityEntry> {
+        crate::activity::recent(conn, crate::activity::MAX_LIMIT).unwrap()
+    }
+
+    fn payload(entry: &crate::activity::ActivityEntry) -> serde_json::Value {
+        serde_json::from_str(&entry.payload).unwrap()
+    }
+
+    #[test]
+    fn making_a_folder_records_one_activity_row() {
+        let conn = open();
+        create_folder(&conn, None, "Binder A").unwrap();
+
+        let rows = feed(&conn);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].scope, crate::activity::COLLECTION);
+        assert_eq!(rows[0].kind, crate::activity::FOLDER);
+        assert_eq!(rows[0].delta, 0, "a folder is not copies");
+        assert_eq!(rows[0].card_id, None);
+        assert_eq!(payload(&rows[0])["action"], "create");
+        assert_eq!(payload(&rows[0])["name"], "Binder A");
+    }
+
+    /// A rename names **both** ends, which is the whole of what the line is for.
+    #[test]
+    fn renaming_a_folder_records_the_name_it_had() {
+        let conn = open();
+        let shelf = create_folder(&conn, None, "Shelf").unwrap();
+        rename_folder(&conn, shelf.id, "Trade box").unwrap();
+
+        let rows = feed(&conn);
+        assert_eq!(payload(&rows[0])["action"], "rename");
+        assert_eq!(payload(&rows[0])["from"], "Shelf");
+        assert_eq!(payload(&rows[0])["name"], "Trade box");
+    }
+
+    /// **One line for the press**, however many cards the delete had to re-file.
+    #[test]
+    fn deleting_a_folder_holding_cards_records_one_row() {
+        let conn = open();
+        let shelf = create_folder(&conn, None, "Shelf").unwrap();
+        for card in ["bolt", "sol", "path"] {
+            priced_card(&conn, card, "1.00");
+            insert_entry(&conn, card, Some(shelf.id), 4);
+        }
+        delete_folder(&conn, shelf.id).unwrap();
+
+        let folder_rows: Vec<_> = feed(&conn)
+            .into_iter()
+            .filter(|r| r.kind == crate::activity::FOLDER)
+            .collect();
+        assert_eq!(folder_rows.len(), 2, "the create and the delete");
+        assert_eq!(payload(&folder_rows[0])["action"], "delete");
+        assert_eq!(payload(&folder_rows[0])["name"], "Shelf");
+        assert!(
+            feed(&conn)
+                .iter()
+                .all(|r| r.kind == crate::activity::FOLDER),
+            "the three re-filings are consequences and record nothing of their own"
+        );
+    }
+
+    /// Deleting nothing records nothing — this command has never refused a stale id.
+    #[test]
+    fn deleting_a_folder_that_is_not_there_records_nothing() {
+        let conn = open();
+        delete_folder(&conn, 999_999).unwrap();
+        assert!(feed(&conn).is_empty());
+    }
+
+    /// A move names both ends by name, and `null` is the root rather than a missing key —
+    /// `activityText.ts` tells the two apart and draws the cabinet's own name for the first.
+    #[test]
+    fn filing_a_card_records_both_ends_of_the_move() {
+        let conn = open();
+        priced_card(&conn, "bolt", "1.00");
+        let shelf = create_folder(&conn, None, "Shelf").unwrap();
+        let entry = insert_entry(&conn, "bolt", None, 2);
+        set_entry_folder(&conn, entry, Some(shelf.id)).unwrap();
+
+        let rows = feed(&conn);
+        assert_eq!(rows[0].kind, crate::activity::MOVE);
+        assert_eq!(rows[0].delta, 0, "a move changes no count");
+        assert_eq!(rows[0].card_id.as_deref(), Some("bolt"));
+        assert_eq!(rows[0].card_name.as_deref(), Some("Lightning Bolt"));
+        assert_eq!(payload(&rows[0])["from"], serde_json::Value::Null);
+        assert_eq!(payload(&rows[0])["to"], "Shelf");
+
+        // …and back out again, which is the other direction of the same claim.
+        set_entry_folder(&conn, entry, None).unwrap();
+        let rows = feed(&conn);
+        assert_eq!(payload(&rows[0])["from"], "Shelf");
+        assert_eq!(payload(&rows[0])["to"], serde_json::Value::Null);
+        assert!(
+            payload(&rows[0]).get("to").is_some(),
+            "the key is present and null — a missing one would read as \"we do not know\""
+        );
+    }
+
+    /// Rearranging the cabinet is not a change to what is in it.
+    #[test]
+    fn moving_locking_and_reordering_folders_record_nothing() {
+        let conn = open();
+        let a = create_folder(&conn, None, "A").unwrap();
+        let b = create_folder(&conn, None, "B").unwrap();
+        let before = feed(&conn).len();
+        assert_eq!(before, 2, "the two creates, and this is the baseline");
+
+        move_folder(&conn, b.id, Some(a.id)).unwrap();
+        set_folder_locked(&conn, a.id, true).unwrap();
+        reorder_folders(&conn, Some(a.id), &[b.id]).unwrap();
+
+        assert_eq!(
+            feed(&conn).len(),
+            before,
+            "three arrangement writes and not one line between them"
+        );
+    }
+
+    /// **The spec's first rule.** A change that already writes a `deck_audit` row writes no
+    /// `activity` row — one event, one line — and `activity_recent` reads the deck side out of
+    /// that table, so the press is still in the feed exactly once.
+    #[test]
+    fn a_move_across_the_deck_boundary_records_no_activity_row() {
+        let conn = open();
+        crate::schema::tests::seed_card(&conn, "bolt", "lea", "161");
+        let deck = crate::schema::tests::deck(&conn, "Burn");
+        let category = crate::schema::tests::category(&conn, deck, "main", "Main deck");
+        let group = insert_system_folder(&conn, "deck", "Burn");
+        conn.execute(
+            "UPDATE collection_folders SET deck_id = ?2 WHERE id = ?1",
+            params![group, deck],
+        )
+        .unwrap();
+        // The deck has to already play the card: `collection_to_deck` refuses a filing into a
+        // list that does not list it.
+        conn.execute(
+            "INSERT INTO deck_cards
+                 (deck_id, category_id, variant, card_id, set_code, collector_number, lang,
+                  name, quantity, created_at, updated_at)
+             VALUES (?1, ?2, 'live', 'bolt', 'lea', '161', 'en', 'Lightning Bolt', 4,
+                     unixepoch(), unixepoch())",
+            params![deck, category],
+        )
+        .unwrap();
+        let entry = insert_entry(&conn, "bolt", None, 4);
+
+        crate::collection_alloc::collection_to_deck(
+            &conn,
+            entry,
+            deck,
+            crate::collection_alloc::Pile::Id(category),
+            2,
+        )
+        .unwrap();
+
+        let rows = feed(&conn);
+        assert!(
+            rows.iter().all(|r| r.scope == crate::activity::SCOPE_DECK),
+            "every line the press wrote came out of `deck_audit`, not out of `activity`"
+        );
+        assert!(
+            !rows.is_empty(),
+            "and the press really is in the feed — an assertion over an empty list is vacuous"
+        );
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM activity", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            0,
+            "the collection log itself is untouched"
+        );
     }
 }

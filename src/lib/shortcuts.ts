@@ -95,21 +95,39 @@ export const SHORTCUTS: Record<ShortcutScope, readonly Shortcut[]> = {
        * `CHORD_NAV` and activates its `i`th entry, so the rail's own order stays the single list
        * rather than being restated as a second copy here.
        *
-       * **Nine is the ceiling this spelling has**, and the tenth destination arrived on
-       * 2026-09-08: `Ctrl+0` is not a tenth step of this run — it reads as zero and sits at the
-       * wrong end of the keyboard — so one entry has to go without.
+       * **Nine is the ceiling this spelling has**: `Ctrl+0` is not a tenth step of this run — it
+       * reads as zero and sits at the wrong end of the keyboard — so a rail longer than nine has
+       * to leave rows off. `NAV` reached ten on 2026-09-08 and eleven when the home page landed,
+       * so **two destinations go without a chord, and the two reasons are different**. Reading
+       * them as one rule is how a later edit puts the wrong one back.
        *
-       * **The one that goes without is `shared`, and the reason is that it is the one row the
-       * rail does not always draw.** A chord's whole value is that it does not move; a digit
-       * bound to a row that appears and disappears would mean two things to two readers, which
-       * is the same argument that made these bind against a *list* rather than against what is
-       * on screen. So `CHORD_NAV` is `NAV` minus that entry, and the nine digits are the nine
-       * unconditional destinations — `Ctrl+9` is Settings for every reader, always.
+       * **`shared` goes without because its row is _conditional_.** A chord's whole value is that
+       * it does not move; a digit bound to a row that appears and disappears would mean two
+       * things to two readers, which is the same argument that made these bind against a *list*
+       * rather than against what is on screen. That is a reason no amount of room would change —
+       * a twelfth digit would not buy this entry a chord.
        *
-       * ⚠️ **This reverses the `Ctrl+6` the shared view shipped with on 2026-09-08**, and the
-       * reversal is what the entry point bought: that chord existed because *nothing else
-       * reached the view*, and `features/collection/ShareFolderMenu.tsx` now draws **Open a
-       * shared collection** beside the Share control. A signpost where there was only a key.
+       * **`settings` goes without because the run ends before it.** Eleven rows against nine
+       * digits, and Home belongs at the top: it is the page the app opens on, and a reader reads
+       * a column downward, so a landing page anywhere but the first row is a page the reader is
+       * standing on and cannot find. Something at the far end had to fall off, and Settings is
+       * the row that costs least — it is drawn on every screen at a fixed place, where `shared`
+       * can be absent altogether. Pure arithmetic plus reading order: give this run a tenth digit
+       * and Settings takes it back.
+       *
+       * ⚠️ **`Ctrl+9` no longer opens Settings.** It was Settings from 2026-09-08 until the home
+       * page shipped; it is **Playtesting** now, and every digit moved one row down the rail —
+       * `Ctrl+1` is Home, `Ctrl+2` is Search, `Ctrl+3` is Tagger, `Ctrl+4` is Decks. That is a
+       * break in a
+       * binding readers have in their fingers, taken deliberately rather than by arithmetic
+       * nobody noticed: `nav.test.ts` pins the ninth entry and the absence of `settings` from the
+       * run, so a merge cannot quietly put the old numbering back.
+       * `docs/reference/keyboard-shortcuts.md` carries the record of both renumberings.
+       *
+       * ⚠️ **The shared view's `Ctrl+6` was reversed on 2026-09-08**, and the reversal is what the
+       * entry point bought: that chord existed because *nothing else reached the view*, and
+       * `features/collection/ShareFolderMenu.tsx` now draws **Open a shared collection** beside
+       * the Share control. A signpost where there was only a key.
        */
       chords: [
         { key: "1", ctrl: true },
@@ -153,6 +171,10 @@ export const SHORTCUTS: Record<ShortcutScope, readonly Shortcut[]> = {
       ],
     },
   ],
+  // The home page binds nothing of its own: its widget reorder is a drag and the keyboard's
+  // equivalent lives on the card's own controls, which is a focused button rather than a chord
+  // live across the view.
+  home: [],
   search: [],
   tags: [],
   decks: [],

@@ -212,6 +212,12 @@ export function useCollection() {
    * `collectionFlattened`, which starts `true`. `folderId` deliberately did not follow: a folder
    * restored at launch would open the app somewhere the reader did not navigate to.
    *
+   * **`store.ts`'s `pendingFolder` is not that rule bending, and the distinction is the point.**
+   * It is a *one-shot hand-off* — one surface names a drawer, `CollectionPage` reads it once as
+   * it renders and spends it, and nothing survives to the next visit or the next launch. This
+   * state is still the whole of where the reader is standing; what arrives through that field is
+   * a press, made a moment ago on another page, rather than a memory.
+   *
    * **Two selectors, never one object literal.** A selector returning a fresh `{ flatten, toggle }`
    * is a new reference on every store write, so this hook — and the whole collection view under
    * it — would re-render on a card zoom or a view switch. `FilterBar`'s `ViewToggle` reads its

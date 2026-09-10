@@ -224,6 +224,63 @@ describe("the deck a reader parked on their way out", () => {
 });
 
 /**
+ * **The folder a shortcut on one page asks another page to open** — a one-shot hand-off, and
+ * every case here is one of the three ways it could stop being one.
+ *
+ * The field's whole subtlety is that it is *cleared by a view change* while being *written
+ * immediately before one*. Which side of `setActiveView` the write lands on is therefore the
+ * difference between the feature working and the feature erasing itself, and neither half is
+ * visible from a call site that only reads the field.
+ */
+describe("the folder a page was asked to open", () => {
+  /** Nobody has pressed a shortcut, so no page is being sent anywhere. */
+  it("starts empty", () => {
+    expect(useAppStore.getState().pendingFolder).toBeNull();
+  });
+
+  it("names a folder and a cabinet, and is spent by whoever read it", () => {
+    useAppStore.getState().setPendingFolder({ scope: "wishlist", id: 12 });
+    expect(useAppStore.getState().pendingFolder).toEqual({ scope: "wishlist", id: 12 });
+
+    useAppStore.getState().clearPendingFolder();
+    expect(useAppStore.getState().pendingFolder).toBeNull();
+  });
+
+  /**
+   * **A hand-off nobody read does not outlive the navigation it was made for.**
+   *
+   * This is the half that keeps the field one-shot rather than a preference. Without it, a
+   * hand-off the destination page never got to (the reader changed their mind, the folder census
+   * never answered) would sit in the store until they next happened to open that page — and then
+   * open a drawer they asked for one navigation, or one afternoon, ago.
+   */
+  it("is spent by a view change, read or not", () => {
+    useAppStore.getState().setPendingFolder({ scope: "collection", id: 3 });
+
+    useAppStore.getState().setActiveView("decks");
+
+    expect(useAppStore.getState().pendingFolder).toBeNull();
+  });
+
+  /**
+   * **…and the press that makes one is written the other way round, so the clear above cannot
+   * eat it.** The view first, the folder second — `FoldersWidget`'s `openFolder`, in the order
+   * that file spells out.
+   *
+   * The inverse is the whole reason this case exists: `setPendingFolder` then `setActiveView`
+   * type-checks, reads correctly, and leaves the store holding **nothing** — a shortcut that
+   * lands the reader on the right page at the root, every time, with no error anywhere.
+   */
+  it("survives the view change that carries it, when the view is written first", () => {
+    useAppStore.getState().setActiveView("collection");
+    useAppStore.getState().setPendingFolder({ scope: "collection", id: 3 });
+
+    expect(useAppStore.getState().activeView).toBe("collection");
+    expect(useAppStore.getState().pendingFolder).toEqual({ scope: "collection", id: 3 });
+  });
+});
+
+/**
  * Which deck row the open card came from — the whole of what the pane's "Use this printing"
  * needs, and the one piece of app state that is about *two* views at once.
  *
@@ -766,6 +823,59 @@ describe("the four result layouts", () => {
  * The `list_view` row arriving at launch. It is the reader's memory rather than an authority, so
  * everything it cannot say is a list left on the default this file built it with.
  */
+/**
+ * Where the app opens, and the one thing that may move it before the reader has pressed anything.
+ *
+ * The stored word is `useStartView`'s `app_meta` row and the narrowing is that module's — by the
+ * time it reaches here it is a {@link import("@/lib/store").ViewId}, so what is left to get wrong
+ * is the race, which is the whole of what this block is about.
+ */
+describe("the view the app opens on", () => {
+  it("starts on Home", () => {
+    // Literal rather than read back off `getInitialState()`, which would be the constant compared
+    // with itself.
+    expect(useAppStore.getState().activeView).toBe("home");
+    expect(useAppStore.getState().viewPulse).toBe(0);
+  });
+
+  it("lands on the stored view", () => {
+    useAppStore.getState().hydrateStartView("collection");
+
+    expect(useAppStore.getState().activeView).toBe("collection");
+    // **And it was not a press.** A seed that bumped the pulse would make the guard below true
+    // against its own arrival, which is what StrictMode's double mount would then trip over.
+    expect(useAppStore.getState().viewPulse).toBe(0);
+  });
+
+  /**
+   * **The race the guard exists for.** The read is a round trip and on a launch that is also a
+   * first sync it queues behind one, so a reader who has already reached for the rail would
+   * otherwise be yanked off the page they asked for and onto last session's, a beat later, with
+   * nothing on screen explaining it.
+   */
+  it("leaves a view the reader has already pressed alone", () => {
+    useAppStore.getState().setActiveView("wishlist");
+
+    useAppStore.getState().hydrateStartView("collection");
+
+    expect(useAppStore.getState().activeView).toBe("wishlist");
+  });
+
+  /**
+   * ⚠️ **The case a comparison against `"home"` could not answer, and the reason the guard is a
+   * counter.** Pressing the entry you are already standing on moves nothing, so a store that
+   * asked "is the view still Home?" would read a deliberate press as no press at all and
+   * overwrite it a beat later with last session's page.
+   */
+  it("leaves Home alone when the reader is the one who asked for it", () => {
+    useAppStore.getState().setActiveView("home");
+
+    useAppStore.getState().hydrateStartView("settings");
+
+    expect(useAppStore.getState().activeView).toBe("home");
+  });
+});
+
 describe("hydrating the stored layouts", () => {
   it("seeds only the lists the row names", () => {
     useAppStore.getState().hydrateListViews({ collection: "table" });

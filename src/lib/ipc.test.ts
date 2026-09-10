@@ -16,6 +16,7 @@ vi.mock("@/lib/platform", () => ({ isAndroid: vi.fn(() => false) }));
 // compares the hand-written mirror below with the crate it mirrors. `viewports.test.ts`
 // reads `tauri.conf.json` the same way, for the same reason — Rust owns the fact and
 // TypeScript only quotes it, so the quote is what can rot.
+import activityRs from "../../src-tauri/src/activity.rs?raw";
 import cardRs from "../../src-tauri/src/card.rs?raw";
 import collectionRs from "../../src-tauri/src/collection.rs?raw";
 import collectionFoldersRs from "../../src-tauri/src/collection_folders.rs?raw";
@@ -30,10 +31,12 @@ import deckPullRs from "../../src-tauri/src/deck_pull.rs?raw";
 import deckQuickAddRs from "../../src-tauri/src/deck_quick_add.rs?raw";
 import deckTheoryRs from "../../src-tauri/src/deck_theory.rs?raw";
 import deckTokensRs from "../../src-tauri/src/deck_tokens.rs?raw";
+import homeRs from "../../src-tauri/src/home.rs?raw";
 import markcolorsRs from "../../src-tauri/src/markcolors.rs?raw";
 import resetRs from "../../src-tauri/src/reset.rs?raw";
 import searchRs from "../../src-tauri/src/search.rs?raw";
 import shareRs from "../../src-tauri/src/share/commands.rs?raw";
+import startviewRs from "../../src-tauri/src/startview.rs?raw";
 import syncCommandsRs from "../../src-tauri/src/sync_engine/commands.rs?raw";
 import syncLiveRs from "../../src-tauri/src/sync_engine/live.rs?raw";
 import wishlistFoldersRs from "../../src-tauri/src/wishlist_folders.rs?raw";
@@ -445,6 +448,73 @@ describe("ipc argument names match the Rust command signatures", () => {
     expect(invoke).toHaveBeenCalledWith("wishlist_list", {
       query: { needsReview: false, limit: 100, offset: 0 },
     });
+  });
+
+  /**
+   * **The home page's five reads, pinned on the day they were written** — `wishlist_summary`,
+   * `collection_breakdown`, `wishlist_breakdown`, `deck_values` and `activity_recent`. They are
+   * one case rather than five because they are one page's worth of wire, and because three of the
+   * five are the same two-argument shape.
+   *
+   * That shape is the trap, and neither compiler can see it: `dimension` and `marketplace` are two
+   * bare strings side by side, so a wrapper that swapped them type-checks perfectly, and the
+   * command answers a refusal in words about a dimension nobody asked for. `activity_recent` is
+   * the other one — its neighbour `deck_audit_list` takes `deckId` **first**, so a wrapper copied
+   * from that line would send a deck id where a row count goes and read as an empty feed.
+   *
+   * The crate is read for each command's own declaration rather than trusted — `deck_folder_pane`'s
+   * rule below, and by *name* rather than by type for its reason. A regex over the signature
+   * rather than `commandParams`, because a read in this crate is as likely to be
+   * `#[tauri::command(async)] pub fn` as `pub async fn` (`nav.rs` writes one of each, and says
+   * why), and a fence that knew only one of those spellings would go red for a command that is
+   * perfectly correct — which is worse than the drift, since it trains a reader to disbelieve it.
+   */
+  it("sends the home page's five reads under the names their commands declare", async () => {
+    // A pass must never be able to mean "the crate was never read".
+    for (const [name, src] of [
+      ["collection.rs", collectionRs],
+      ["wishlist.rs", wishlistRs],
+      ["deck.rs", deckRs],
+      ["activity.rs", activityRs],
+    ] as const) {
+      expect(src.length, `${name} was not read`).toBeGreaterThan(1_000);
+    }
+
+    invoke.mockResolvedValue({ wishes: 3, copies: 5, cost: 12.5, unpriced: 1 });
+    await ipc.wishlistSummary("cardkingdom");
+    expect(invoke).toHaveBeenCalledWith("wishlist_summary", { marketplace: "cardkingdom" });
+
+    invoke.mockResolvedValue([]);
+    await ipc.collectionBreakdown("rarity", "cardkingdom");
+    expect(invoke).toHaveBeenCalledWith("collection_breakdown", {
+      dimension: "rarity",
+      marketplace: "cardkingdom",
+    });
+
+    await ipc.wishlistBreakdown("set", "manapool");
+    expect(invoke).toHaveBeenCalledWith("wishlist_breakdown", {
+      dimension: "set",
+      marketplace: "manapool",
+    });
+
+    await ipc.deckValues("manapool");
+    expect(invoke).toHaveBeenCalledWith("deck_values", { marketplace: "manapool" });
+
+    await ipc.activityRecent(50);
+    expect(invoke).toHaveBeenCalledWith("activity_recent", { limit: 50 });
+
+    const declares = (src: string, command: string, param: string) =>
+      expect(src, `\`${command}\` declares no \`${param}\``).toMatch(
+        new RegExp(`fn ${command}\\([^)]*\\b${param}\\s*:`, "s"),
+      );
+
+    declares(wishlistRs, "wishlist_summary", "marketplace");
+    declares(collectionRs, "collection_breakdown", "dimension");
+    declares(collectionRs, "collection_breakdown", "marketplace");
+    declares(wishlistRs, "wishlist_breakdown", "dimension");
+    declares(wishlistRs, "wishlist_breakdown", "marketplace");
+    declares(deckRs, "deck_values", "marketplace");
+    declares(activityRs, "activity_recent", "limit");
   });
 
   it("sends a prefetch batch under `cardIds` and `variant`", async () => {
@@ -2647,6 +2717,55 @@ describe("ipc argument names match the Rust command signatures", () => {
     expect(await ipc.deckFolderPane()).toEqual({ width: null, collapsed: false });
   });
 
+  /**
+   * The home page's two stored settings — the **eleventh and twelfth** `app_meta` rows, and the
+   * one above's traps arriving in a second family.
+   *
+   * Both reads take **no arguments at all**, which is `prewarm_collection`'s trap: an argument
+   * object sent to a command that declares only the managed state is a deserialization error and
+   * not a type error. Both writes take exactly one, and each is a name a wrapper could plausibly
+   * get wrong from its own side of the wire — `set_home_layout` carries the *document* the read
+   * answers with, so `{ home: … }`, `{ widgets: … }` and `{ value: … }` all read perfectly at the
+   * call site and are all a parameter Tauri cannot fill.
+   *
+   * **`startView` is typed `string` and that is the assertion, not an oversight.** The vocabulary
+   * of views is TypeScript's — `startview.rs` refuses a blank and validates nothing else — so a
+   * word a *newer* build wrote has to reach this side as itself and degrade to the default in
+   * `features/home`, where a union here would have made it unparseable instead.
+   */
+  it("reads both home settings with no arguments and writes each under its own name", async () => {
+    // A pass must never be able to mean "the crate was never read".
+    expect(homeRs.length, "home.rs was not read").toBeGreaterThan(1_000);
+    expect(startviewRs.length, "startview.rs was not read").toBeGreaterThan(1_000);
+
+    // An unknown `kind` and an opaque `config`, deliberately: what a build cannot draw it must
+    // still hand back, so the round trip below is the one this pair exists to keep honest.
+    const layout = {
+      version: 1,
+      widgets: [{ id: "w1", kind: "somethingFromTheFuture", span: 2, config: { keep: [1, 2, 3] } }],
+    };
+    invoke.mockResolvedValue(layout);
+    expect(await ipc.homeLayout()).toEqual(layout);
+    expect(invoke).toHaveBeenCalledWith("home_layout");
+    expect(homeRs).toContain("fn home_layout(");
+
+    invoke.mockResolvedValue(undefined);
+    await ipc.setHomeLayout(layout);
+    expect(invoke).toHaveBeenCalledWith("set_home_layout", { layout });
+    expect(homeRs).toMatch(/fn set_home_layout\([^)]*\blayout\s*:/s);
+
+    invoke.mockResolvedValue("someViewFromTheFuture");
+    const view = await ipc.startView();
+    expect(invoke).toHaveBeenCalledWith("start_view");
+    expect(view).toBe("someViewFromTheFuture");
+    expect(startviewRs).toContain("fn start_view(");
+
+    invoke.mockResolvedValue(undefined);
+    await ipc.setStartView("decks");
+    expect(invoke).toHaveBeenCalledWith("set_start_view", { view: "decks" });
+    expect(startviewRs).toMatch(/fn set_start_view\([^)]*\bview\s*:/s);
+  });
+
   it("reads the error log with a limit and clears it with nothing", async () => {
     invoke.mockResolvedValue([]);
     await ipc.errorLogList(50);
@@ -4032,6 +4151,36 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     // printing's TCGplayer product ids under `id`"* above: this row compares struct fields and
     // would say nothing about either.
     ["TcgplayerIds", cardRs, "TcgplayerIds"],
+    // **The home page's six, added with the feature** (2026-09-10). None is a card wall's row and
+    // none carries a picture, so they are here rather than on `mirrors` above for `DecksCleared`'s
+    // reason — and the smallest of them, `HomeLayout`, is two fields.
+    //
+    // Every one of them is a **figure** rather than a control, which is the flavour of drift this
+    // table is worst at being noticed without. A renamed `unpriced` on either summary reads
+    // `undefined`, and the caption that says how much of a total the marketplace could not price
+    // is the one thing on the page that would have admitted something was wrong — so the page
+    // quietly starts claiming a number it has just been told is incomplete. A renamed `value` on
+    // `BreakdownRow` is the same failure with the em-dash rule inverted: `undefined` is not
+    // `null`, so a bucket the feed priced at nothing and a bucket it could not price at all become
+    // indistinguishable to the renderer that draws one as `0.00` and the other as a dash.
+    //
+    // `ActivityEntry` earns its row for a different reason and the sharpest one here: its `deckId`
+    // is the field that decides whether a feed line is *clickable*, and it is `null` on every
+    // `activity` row by design. A rename reads `undefined`, `undefined` is falsy, and every deck
+    // line silently stops linking anywhere — which looks exactly like the design working.
+    //
+    // `HomeWidget` is the row this table can say least about, deliberately: `kind` is a word this
+    // side invents and `config` is opaque to both sides, so parity over the four names is the
+    // whole of what is checkable and the round trip is pinned in the settings case above instead.
+    ["HomeWidget", homeRs, "HomeWidget"],
+    ["HomeLayout", homeRs, "HomeLayout"],
+    ["WishlistSummary", wishlistRs, "WishlistSummary"],
+    // Defined in `collection.rs` and imported by `wishlist.rs` — one struct for two commands, so
+    // one row here rather than two, and a second definition in the wishlist would be the drift
+    // this row is meant to catch.
+    ["BreakdownRow", collectionRs, "BreakdownRow"],
+    ["DeckValue", deckRs, "DeckValue"],
+    ["ActivityEntry", activityRs, "ActivityEntry"],
     // **The notes feature's three, added with it** (2026-09-10, issue #447) — three rows for two
     // commands, because `DeckNoteCard` is **nested** and that is `OptimizePrinting`'s reason at
     // the scale it bites hardest: a note's `cards` list is the whole content of a submenu, a

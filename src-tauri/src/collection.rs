@@ -433,6 +433,74 @@ fn printing_of(conn: &Connection, card_id: &str) -> Result<(String, String, Stri
     .ok_or_else(|| format!("no card with the id `{card_id}` is in the card database"))
 }
 
+/// What a [`crate::activity`] row says about one entry, read **before** the write changes it.
+///
+/// Every recording site in this module wants the same four facts and three of them stop being
+/// answerable afterwards: the quantity and the folder are what the write is about to change, and
+/// the row itself may not survive it. One `SELECT` rather than one per site, and `None` for an
+/// id nothing answers to — which every caller here already has a refusal for.
+///
+/// `card_name` is denormalised into the feed for `activity.card_name`'s stated reason: a line
+/// that can only say `bolt-lea` once the printing leaves `cards` is not a line. It is `None`
+/// when the join finds nothing, which the sentence degrades over rather than guessing at.
+pub(crate) struct EntryFacts {
+    pub(crate) card_id: Option<String>,
+    pub(crate) card_name: Option<String>,
+    pub(crate) quantity: i64,
+    pub(crate) folder: Option<String>,
+}
+
+/// [`EntryFacts`] for one entry, or `None` when there is no such row.
+///
+/// The `cards` join is `from_sql`'s in shape and a `LEFT JOIN` for its reason — an entry whose
+/// printing has left the corpus is exactly the row the denormalised name exists for.
+pub(crate) fn entry_facts(conn: &Connection, id: i64) -> Result<Option<EntryFacts>, String> {
+    conn.query_row(
+        "SELECT e.card_id, c.name, e.quantity, f.name
+           FROM collection_entries e
+           LEFT JOIN cards c ON c.id = e.card_id
+           LEFT JOIN collection_folders f ON f.id = e.folder_id
+          WHERE e.id = ?1",
+        params![id],
+        |r| {
+            Ok(EntryFacts {
+                card_id: r.get(0)?,
+                card_name: r.get(1)?,
+                quantity: r.get(2)?,
+                folder: r.get(3)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(|e| e.to_string())
+}
+
+/// The drawer's name for a feed payload — `None` for the root, which is a **place** and not an
+/// absence (`activityText.ts` draws no clause for it rather than naming it).
+fn folder_name(conn: &Connection, folder_id: Option<i64>) -> Result<Option<String>, String> {
+    let Some(id) = folder_id else {
+        return Ok(None);
+    };
+    conn.query_row(
+        "SELECT name FROM collection_folders WHERE id = ?1",
+        params![id],
+        |r| r.get(0),
+    )
+    .optional()
+    .map_err(|e| e.to_string())
+}
+
+/// The card's name, for the one site that has an id and no row to read it off.
+fn card_name_of(conn: &Connection, card_id: &str) -> Result<Option<String>, String> {
+    conn.query_row(
+        "SELECT name FROM cards WHERE id = ?1",
+        params![card_id],
+        |r| r.get(0),
+    )
+    .optional()
+    .map_err(|e| e.to_string())
+}
+
 /// Add copies, folding into the row that already holds this grain.
 ///
 /// **The grain includes the folder since schema v24**, which is what makes "Add to → Binder" an
@@ -441,8 +509,32 @@ fn printing_of(conn: &Connection, card_id: &str) -> Result<(String, String, Stri
 /// field, `None` is the root, and the column has to be written by this statement rather than by
 /// a follow-up move — the conflict target is `COLLECTION_GRAIN` verbatim, so the column that
 /// decides which row is folded into must be set before the conflict is resolved.
+///
+/// **This is where the reader's own add is recorded in [`crate::activity`], and
+/// [`add_entry_filed`] deliberately is not.** The two callers that reach past this door are a
+/// bulk import — which records one row carrying its count — and `deck_quick_add::quick_add`,
+/// which writes a `deck_audit` row and by the feed's first rule must not write a second line
+/// about the same press. Both production callers of *this* function (`collection_add` and the
+/// web target's route) are the reader's own gesture, which is what makes this the right rung.
 pub fn add_entry(conn: &Connection, input: &EntryInput) -> Result<EntryChange, String> {
-    add_entry_filed(conn, input, READER_FOLDERS)
+    let change = add_entry_filed(conn, input, READER_FOLDERS)?;
+    // Inside whatever transaction the caller holds, and never one of its own — see
+    // [`crate::activity::record`]. The folder is read back by name because the feed outlives the
+    // folder, exactly as `card_name` outlives the printing.
+    crate::activity::record(
+        conn,
+        crate::activity::COLLECTION,
+        crate::activity::ADD,
+        Some(&input.card_id),
+        card_name_of(conn, &input.card_id)?.as_deref(),
+        &serde_json::json!({
+            "folder": folder_name(conn, input.folder_id)?,
+            "finish": input.finish,
+        }),
+        input.quantity,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(change)
 }
 
 /// [`add_entry`] with the folder fence handed in, for the two callers that file into a folder no
@@ -459,6 +551,11 @@ pub fn add_entry(conn: &Connection, input: &EntryInput) -> Result<EntryChange, S
 /// **`pub(crate)` and not `pub`.** `collection_add` refuses a `deck` folder outright and must go
 /// on refusing; this door is reachable from inside the crate, where a caller can be held to
 /// answering for the `deck_cards` row behind the copies, and from nowhere else.
+///
+/// **It writes no [`crate::activity`] row**, and neither do its two callers per line:
+/// [`commit_import`] records one row carrying its count, and `deck_quick_add::quick_add` writes
+/// a `deck_audit` row instead (one event, one line). [`add_entry`] is where the reader's own add
+/// is recorded.
 pub(crate) fn add_entry_filed(
     conn: &Connection,
     input: &EntryInput,
@@ -635,6 +732,9 @@ pub struct ImportCommitOutcome {
 /// tradelist outlive the very quantity that bounds it.
 /// `folders` is [`add_entry_filed`]'s parameter for [`add_entry_filed`]'s reason. This function
 /// has exactly one caller, so it takes the fence directly rather than through a door of its own.
+///
+/// **Records no [`crate::activity`] row**: it is a consequence of [`commit_import`], which
+/// records one row for the whole file.
 fn set_entry(
     conn: &Connection,
     input: &EntryInput,
@@ -759,8 +859,16 @@ pub(crate) fn commit_import(
     // id asked about *here* is a sentence rather than a rollback, which is what the mode check
     // above is buying too.
     folder_named(conn, folder_id, DECK_WRITE_FOLDERS)?;
-    let before: i64 = conn
-        .query_row("SELECT count(*) FROM collection_entries", [], |r| r.get(0))
+    // Both totals in one statement: the row count the outcome is built from, and the copies the
+    // feed's `delta` is. The second is not derivable from the first — a `set` file can lower a
+    // quantity without deleting a row — and a day header that added an import's copies without
+    // subtracting what it wrote away would be arithmetic the reader can check and catch.
+    let (before, copies_before): (i64, i64) = conn
+        .query_row(
+            "SELECT count(*), coalesce(sum(quantity), 0) FROM collection_entries",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
         .map_err(|e| e.to_string())?;
 
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
@@ -804,22 +912,55 @@ pub(crate) fn commit_import(
         } else {
             let change = set_entry(&tx, &input, DECK_WRITE_FOLDERS)?;
             if change.quantity == 0 {
-                remove_entry(&tx, change.id)?;
+                // [`delete_entry`] and not [`remove_entry`]: the recording door would write one
+                // feed line per zeroed line of the file, which is the bulk rule broken by the
+                // one arm of this loop that reaches a public write.
+                delete_entry(&tx, change.id)?;
                 removed += 1;
             }
         }
     }
-    tx.commit().map_err(|e| e.to_string())?;
 
-    let after: i64 = conn
-        .query_row("SELECT count(*) FROM collection_entries", [], |r| r.get(0))
+    // The counts are read **inside** the transaction rather than after the commit, and the
+    // values are identical — the same connection sees its own uncommitted writes. It is done
+    // here so the arithmetic below exists once: the feed's payload wants the same three numbers
+    // the outcome does, and computing them twice on either side of a `commit` is two answers to
+    // keep in step.
+    let (after, copies_after): (i64, i64) = tx
+        .query_row(
+            "SELECT count(*), coalesce(sum(quantity), 0) FROM collection_entries",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
         .map_err(|e| e.to_string())?;
     let added = after - before + removed;
+    // `.max(0)` for the one line that is counted in two of the three — see this function's
+    // doc. Every other file shape makes this subtraction exact.
+    let updated = (items.len() as i64 - added - removed).max(0);
+
+    // **One row for the whole file**, the feed's second rule: an import of 5 000 cards must not
+    // be 5 000 lines. `cards` is what the *file* said — the copies it named, which is the number
+    // the reader recognises — and `rows` is the collection lines it landed on, which is the unit
+    // somebody who wants to go and find them counts. `delta` is neither: it is the net copies
+    // the collection gained, which a `set` file can make negative.
+    crate::activity::record(
+        &tx,
+        crate::activity::COLLECTION,
+        crate::activity::IMPORT,
+        None,
+        None,
+        &serde_json::json!({
+            "cards": items.iter().map(|i| i.quantity).sum::<i64>(),
+            "rows": added + updated + removed,
+        }),
+        copies_after - copies_before,
+    )
+    .map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())?;
+
     Ok(ImportCommitOutcome {
         added,
-        // `.max(0)` for the one line that is counted in two of the three — see this function's
-        // doc. Every other file shape makes this subtraction exact.
-        updated: (items.len() as i64 - added - removed).max(0),
+        updated,
         removed,
     })
 }
@@ -847,6 +988,11 @@ pub(crate) fn commit_import(
 /// exception, and its own doc says why.
 pub fn set_quantity(conn: &Connection, id: i64, quantity: i64) -> Result<EntryChange, String> {
     valid_quantity(quantity, "collection quantity")?;
+    // Read before the write, because the write is what makes them unanswerable — and a `None`
+    // here is the same [`GONE`] both arms below answer, asked one statement earlier.
+    let Some(facts) = entry_facts(conn, id)? else {
+        return Err(GONE.to_owned());
+    };
     if quantity == 0 {
         let gone = conn
             .execute("DELETE FROM collection_entries WHERE id = ?1", params![id])
@@ -854,6 +1000,19 @@ pub fn set_quantity(conn: &Connection, id: i64, quantity: i64) -> Result<EntryCh
         if gone == 0 {
             return Err(GONE.to_owned());
         }
+        // **A stepper taken to zero is a `remove` and not a `quantity` change**, because the row
+        // is gone and its whole story with it — the sentence a reader needs is "Removed 2 ×
+        // Lightning Bolt", not "changed it from 2 to 0" about a row they can no longer open.
+        crate::activity::record(
+            conn,
+            crate::activity::COLLECTION,
+            crate::activity::REMOVE,
+            facts.card_id.as_deref(),
+            facts.card_name.as_deref(),
+            &serde_json::json!({ "folder": facts.folder }),
+            -facts.quantity,
+        )
+        .map_err(|e| e.to_string())?;
         return Ok(EntryChange {
             id,
             quantity: 0,
@@ -875,6 +1034,16 @@ pub fn set_quantity(conn: &Connection, id: i64, quantity: i64) -> Result<EntryCh
     if changed == 0 {
         return Err(GONE.to_owned());
     }
+    crate::activity::record(
+        conn,
+        crate::activity::COLLECTION,
+        crate::activity::QUANTITY,
+        facts.card_id.as_deref(),
+        facts.card_name.as_deref(),
+        &serde_json::json!({ "from": facts.quantity, "to": quantity }),
+        quantity - facts.quantity,
+    )
+    .map_err(|e| e.to_string())?;
     Ok(EntryChange {
         id,
         quantity,
@@ -964,6 +1133,39 @@ const PATCH_SQL: &str = "UPDATE OR IGNORE collection_entries SET
 /// door**: that one probes for a target using the row's grain *as stored*, so it can express
 /// "this row moved onto a folder that is taken" and cannot express "this row was edited onto a
 /// grain that is taken" — the ten non-folder terms differ at the moment it would have to look.
+/// The fields an [`EntryPatch`] actually names, in the spelling the wire uses.
+///
+/// **camelCase and not the column names**, because `activityText.ts` turns `purchasePrice` into
+/// *purchase price* by splitting on case — a transformation rather than a table, so a column
+/// added later needs no second list over there. The order is the struct's, which is the order
+/// the editor draws them in.
+fn patched_fields(patch: &EntryPatch) -> Vec<&'static str> {
+    let mut fields = Vec::new();
+    let mut named = |present: bool, name: &'static str| {
+        if present {
+            fields.push(name);
+        }
+    };
+    named(patch.finish.is_some(), "finish");
+    named(patch.condition.is_some(), "condition");
+    named(patch.condition_original.is_some(), "conditionOriginal");
+    named(patch.quantity.is_some(), "quantity");
+    named(patch.tradelist_quantity.is_some(), "tradelistQuantity");
+    named(patch.purchase_price.is_some(), "purchasePrice");
+    named(patch.purchase_currency.is_some(), "purchaseCurrency");
+    named(patch.acquired_at.is_some(), "acquiredAt");
+    named(patch.acquisition_source.is_some(), "acquisitionSource");
+    named(patch.serial_number.is_some(), "serialNumber");
+    named(patch.altered.is_some(), "altered");
+    named(patch.signed.is_some(), "signed");
+    named(patch.proxy.is_some(), "proxy");
+    named(patch.misprint.is_some(), "misprint");
+    named(patch.grading.is_some(), "grading");
+    named(patch.tags.is_some(), "tags");
+    named(patch.notes.is_some(), "notes");
+    fields
+}
+
 pub fn update_entry(conn: &Connection, id: i64, patch: &EntryPatch) -> Result<EntryChange, String> {
     if let Some(f) = patch.finish.as_deref() {
         valid_finish(f)?;
@@ -984,6 +1186,10 @@ pub fn update_entry(conn: &Connection, id: i64, patch: &EntryPatch) -> Result<En
     }
     let grading = canonical_grading(patch.grading.as_deref())?;
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    // Read inside the transaction and before the patch, for [`entry_facts`]' reason: the edit is
+    // free to change the card's folder-less half of the grain, and on the folding path the row
+    // this id names is about to stop existing.
+    let facts = entry_facts(&tx, id)?;
 
     let applied: Option<i64> = tx
         .query_row(
@@ -1013,6 +1219,7 @@ pub fn update_entry(conn: &Connection, id: i64, patch: &EntryPatch) -> Result<En
         .optional()
         .map_err(|e| e.to_string())?;
     if let Some(quantity) = applied {
+        record_edit(&tx, facts.as_ref(), patch)?;
         tx.commit().map_err(|e| e.to_string())?;
         return Ok(EntryChange {
             id,
@@ -1102,12 +1309,44 @@ pub fn update_entry(conn: &Connection, id: i64, patch: &EntryPatch) -> Result<En
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
+    // **One line for the fold too, and it is still an `edit`.** The reader pressed Save on a
+    // form; that the two rows turned out to be one row is the app's answer to what they typed,
+    // not a second thing that happened to them.
+    record_edit(&tx, facts.as_ref(), patch)?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(EntryChange {
         id: target,
         quantity,
         removed: false,
     })
+}
+
+/// [`update_entry`]'s feed row, written on both of that function's two success paths.
+///
+/// **`delta` is `0` even when the patch names a quantity**, which is the plan's rule and worth
+/// the sentence: an edit form is not a stepper, the day header's `+7 / −6` is about copies coming
+/// and going, and a correction typed into a number field beside seven others is neither.
+///
+/// A `None` facts is a row that was not there when the transaction opened — nothing to name, and
+/// the statement that follows answers [`GONE`] anyway.
+fn record_edit(
+    tx: &Connection,
+    facts: Option<&EntryFacts>,
+    patch: &EntryPatch,
+) -> Result<(), String> {
+    let Some(facts) = facts else {
+        return Ok(());
+    };
+    crate::activity::record(
+        tx,
+        crate::activity::COLLECTION,
+        crate::activity::EDIT,
+        facts.card_id.as_deref(),
+        facts.card_name.as_deref(),
+        &serde_json::json!({ "fields": patched_fields(patch) }),
+        0,
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// Delete the row outright — the **unconditional** delete, where [`set_quantity`]'s zero and
@@ -1120,7 +1359,35 @@ pub fn update_entry(conn: &Connection, id: i64, patch: &EntryPatch) -> Result<En
 /// already has what it wanted. The caller that sends a stale id here is a list still holding a
 /// row something else removed, and telling it the row it wants gone is gone is not
 /// information — it is an error dialog over a success.
+///
+/// **The reader's own delete, and the one that records it.** [`delete_entry`] is the same
+/// statement without the feed row, for [`commit_import`]'s per-line zeroes — see there.
 pub fn remove_entry(conn: &Connection, id: i64) -> Result<EntryChange, String> {
+    // Before the delete, and `None` is not a refusal here: an id that resolves to nothing is a
+    // success (see above), and there is no change to record because there was no change.
+    let facts = entry_facts(conn, id)?;
+    let change = delete_entry(conn, id)?;
+    if let Some(facts) = facts {
+        crate::activity::record(
+            conn,
+            crate::activity::COLLECTION,
+            crate::activity::REMOVE,
+            facts.card_id.as_deref(),
+            facts.card_name.as_deref(),
+            &serde_json::json!({ "folder": facts.folder }),
+            -facts.quantity,
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(change)
+}
+
+/// [`remove_entry`] with no feed row — the statement, and none of the history.
+///
+/// **`pub(crate)` and one caller**: [`commit_import`]'s `set` mode deletes a row per line of the
+/// file that named zero copies, and a bulk press records **one** row carrying its count. Going
+/// through the public door there would put a line in the feed per line of a file.
+pub(crate) fn delete_entry(conn: &Connection, id: i64) -> Result<EntryChange, String> {
     conn.execute("DELETE FROM collection_entries WHERE id = ?1", params![id])
         .map_err(|e| e.to_string())?;
     Ok(EntryChange {
@@ -1181,6 +1448,12 @@ pub fn remove_entry(conn: &Connection, id: i64) -> Result<EntryChange, String> {
 ///
 /// Every statement is inside the caller's transaction, so a pass that fails takes the whole
 /// fold back with it.
+///
+/// **It records no [`crate::activity`] row**, and none of its three callers would want it to: a
+/// fold is a *consequence* of the write that made two rows one, and each of those records the
+/// press that caused it — [`update_entry`] an `edit`, `collection_folders::merge_entry` the
+/// `move` or the folder delete above it, and `reconcile::fold_into_existing` an upstream id
+/// merge nobody pressed at all.
 pub(crate) fn fold_entry(tx: &Connection, target: i64, source: i64) -> rusqlite::Result<()> {
     tx.execute(
         "UPDATE collection_entries AS t SET
@@ -2069,6 +2342,174 @@ pub async fn collection_summary(
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         summarise(&crate::sync::lock_db_read(&state), &query)
+    })
+    .await
+    .map_err(|e| format!("the collection could not be read: {e}"))?
+}
+
+/// One bucket of a breakdown — a key, a name for it when the key is not its own name, the
+/// copies in it and what they are worth.
+///
+/// **`value` is `Option<f64>`, and a bucket the marketplace prices nothing in answers `None`
+/// rather than `Some(0.0)`.** That is
+/// [`crate::collection_folders::CollectionFolderSummary::value`]'s rule, and it parts company
+/// with [`CollectionSummary::value`]'s `coalesce(…, 0.0)` for that field's own reason: a bar
+/// in a widget is a small number beside a label and has no room for the header's "n unpriced"
+/// note, so a bucket full of cards the feed has never heard of would otherwise read as a
+/// bucket worth nothing. `None` draws an em dash, which is this app's answer for a price it
+/// does not have.
+///
+/// **The consequence is worth writing down, because it is the one place the two spellings
+/// meet:** a caller adding these rows up lands on the header's figure only if it reads `None`
+/// as zero. `every_dimension_sums_to_the_summary_total` is that caller, and it does exactly
+/// that — the rows sum to [`summarise`]'s `value` because a `None` bucket contributed nothing
+/// to the header either.
+///
+/// `name` is `Some` on the `set` dimension and nowhere else: a set key is a code, and only the
+/// corpus knows that `isd` is called *Innistrad*. Every other dimension's key is its own name
+/// as far as this file is concerned — the vocabulary that turns `multi` or `mythic` into a word
+/// on screen is TypeScript's, which is this crate's boundary and not a gap here.
+///
+/// Shared with [`crate::wishlist`], which returns the same shape from the same question asked
+/// of the other list. One struct rather than two, so the widget that draws both draws one.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BreakdownRow {
+    pub key: String,
+    pub name: Option<String>,
+    pub cards: i64,
+    pub value: Option<f64>,
+}
+
+/// The refusal for a dimension this file has no column for. A sentence, because it reaches a
+/// reader through the same channel every other refusal does.
+const NOT_A_DIMENSION: &str = "That is not a way to break down a collection.";
+
+/// The two SQL fragments a dimension names: what to group by, and what to call the group.
+///
+/// **Four arms and no fallthrough.** A `&str` off the wire never reaches the statement — every
+/// fragment returned here is a literal in this file, which is the fence
+/// [`crate::sorting::price_expr`] puts around a marketplace id and for the same reason.
+///
+/// **Every arm produces a non-NULL key, and that is what makes the dimensions partition.** A
+/// breakdown whose buckets do not add up to the header above them is worse than no breakdown,
+/// so nothing is allowed to fall out of one:
+///
+/// * `rarity` — `c.rarity` is NULL on an orphan, whose printing has left `cards`; it is bucketed
+///   as `unknown` rather than dropped. No Scryfall rarity is spelled that way, so the bucket
+///   cannot collide with a real one.
+/// * `color` — `c.color_identity` is **concatenated letters** (`"WU"`), not a JSON array: that
+///   is what [`crate::card_row`] stores and what `filters.rs` reads with `instr`. Three cases,
+///   which between them cover every row: one letter keys on that letter, two or more key
+///   `multi`, and *none* — `''` for a colourless card, NULL for an orphan — keys `c`. The two
+///   special keys are lowercase where a colour key is the stored uppercase letter; that is the
+///   wire the plan fixed, and TypeScript maps all six.
+/// * `set` — `c.set_code`, falling back to the entry's own `set_code`, which is `NOT NULL`. That
+///   fallback is [`scope`]'s, spelled there as the `Some("e")` a set *filter* reads through: the
+///   entry records what the reader owns in the terms printed on the card, so an orphan still
+///   files under the set it came from rather than under a hole. `c.set_name` rides along as the
+///   name, and is `None` for exactly those orphans.
+/// * `finish` — `e.finish`, `TEXT NOT NULL` with a `CHECK`, so there is nothing to bucket.
+fn breakdown_columns(dimension: &str) -> Result<(&'static str, &'static str), String> {
+    match dimension {
+        "rarity" => Ok(("coalesce(c.rarity, 'unknown')", "NULL")),
+        "color" => Ok((
+            "CASE WHEN coalesce(c.color_identity, '') = '' THEN 'c'
+                  WHEN length(c.color_identity) > 1 THEN 'multi'
+                  ELSE c.color_identity END",
+            "NULL",
+        )),
+        "set" => Ok(("coalesce(c.set_code, e.set_code)", "c.set_name")),
+        "finish" => Ok(("e.finish", "NULL")),
+        _ => Err(NOT_A_DIMENSION.to_owned()),
+    }
+}
+
+/// The whole collection, cut one way — the rows a value widget draws its bars from.
+///
+/// **It groups over [`crate::sorting::price_expr`] at [`ENTRY_FINISH`], which is the *same*
+/// fragment [`summarise`] sums**, so a breakdown can never disagree with the total printed
+/// above it. Two implementations of one figure disagree the first time either changes; this is
+/// the argument [`crate::collection_folders::folder_summary`] makes about a tile, applied to a
+/// bar.
+///
+/// **The whole collection, and not a scope.** It takes a marketplace and nothing else: the
+/// widget it feeds is a picture of what the reader has, not of what a filtered list is showing,
+/// so there is no [`CollectionQuery`] to narrow it and no `WHERE` but the one below.
+///
+/// **A row at quantity zero contributes nothing — no copies, and no bucket of its own.** Schema
+/// v24 lets an entry sit at zero, keeping its condition, its price and its acquisition story
+/// while the reader owns none of that printing today, so every aggregate over this table has to
+/// decide deliberately what such a row means. This one counts *copies*, which is
+/// [`CollectionSummary::total_cards`]' arithmetic: a zero row adds zero to the header, and
+/// `WHERE e.quantity > 0` is what keeps it from conjuring an otherwise-empty bar out of a
+/// printing the reader no longer holds.
+///
+/// **The price is evaluated once per row, in the inner `SELECT`.** Card Kingdom and Mana Pool
+/// price through a correlated subquery over `marketplace_prices`, and naming that expression
+/// three times in one aggregate — the sum, and either of the counts — is three lookups per row
+/// for one number. The outer statement aggregates a column instead.
+///
+/// The join is [`from_sql`]'s, `LEFT` for its reason: an entry whose printing is gone is still a
+/// card the reader owns, and an inner join would delete exactly those rows from a picture of
+/// their collection.
+pub fn breakdown(
+    conn: &Connection,
+    dimension: &str,
+    marketplace: crate::sorting::Marketplace,
+) -> Result<Vec<BreakdownRow>, String> {
+    let (key, label) = breakdown_columns(dimension)?;
+    let sql = format!(
+        "SELECT b.bucket,
+                max(b.label),
+                coalesce(sum(b.copies), 0),
+                sum(b.copies * b.unit)
+           FROM (SELECT {key} AS bucket,
+                        {label} AS label,
+                        e.quantity AS copies,
+                        {price} AS unit
+                   FROM {from}
+                  WHERE e.quantity > 0) b
+          GROUP BY b.bucket
+          ORDER BY b.bucket",
+        from = from_sql(),
+        price = crate::sorting::price_expr(marketplace, ENTRY_FINISH)
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(BreakdownRow {
+                key: r.get(0)?,
+                name: r.get(1)?,
+                cards: r.get(2)?,
+                // `sum()` over a bucket whose every unit price is NULL is NULL, which is the
+                // answer this field wants and the reason it is not `coalesce`d. A bucket with
+                // *some* prices sums the ones it has, exactly as the header does.
+                value: r.get(3)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())
+}
+
+/// **Read-only** connection, like every list in the app.
+///
+/// `Option<String>` for the marketplace rather than the enum, which is
+/// [`crate::collection_folders::collection_folder_summary`]'s spelling for the same argument:
+/// an id this build does not know lands on TCGplayer through
+/// [`crate::sorting::Marketplace::from_opt`] rather than failing the whole request.
+#[cfg(not(target_family = "wasm"))]
+#[tauri::command]
+pub async fn collection_breakdown(
+    state: tauri::State<'_, Arc<AppState>>,
+    dimension: String,
+    marketplace: Option<String>,
+) -> Result<Vec<BreakdownRow>, String> {
+    let state = state.inner().clone();
+    let marketplace = crate::sorting::Marketplace::from_opt(marketplace.as_deref());
+    tauri::async_runtime::spawn_blocking(move || {
+        breakdown(&crate::sync::lock_db_read(&state), &dimension, marketplace)
     })
     .await
     .map_err(|e| format!("the collection could not be read: {e}"))?
@@ -5407,5 +5848,619 @@ mod tests {
         let binder = folder(&conn, "user", "Binder");
         commit_import(&conn, &line, "add", Some(binder)).unwrap();
         assert_eq!(entry_count(&conn), 1);
+    }
+
+    // -----------------------------------------------------------------------------------
+    // `breakdown` — the four dimensions a value widget cuts the collection by
+    // -----------------------------------------------------------------------------------
+
+    /// The marketplace every breakdown test quotes, named once so the seed's arithmetic below
+    /// and [`CollectionQuery::default`]'s own marketplace cannot drift apart: the sum test
+    /// compares a breakdown against a summary, and two different marketplaces would make that
+    /// comparison meaningless rather than red.
+    const TCG: crate::sorting::Marketplace = crate::sorting::Marketplace::Tcgplayer;
+
+    /// Five printings and six entries, chosen so **each of the four dimensions splits the same
+    /// sixteen copies a different way** — which is the only kind of seed a sum test can say
+    /// anything on.
+    ///
+    /// | entry | set | rarity | identity | copies | worth |
+    /// | --- | --- | --- | --- | --- | --- |
+    /// | `r1` nonfoil | `lea` | common | `R` | 2 | 4.00 |
+    /// | `r1` foil | `lea` | common | `R` | 1 | 10.00 |
+    /// | `wu1` | `isd` | rare | `WU` | 3 | 15.00 |
+    /// | `l1` (a land) | `isd` | uncommon | none | 4 | 2.00 |
+    /// | `a1` (an artifact) | `isd` | uncommon | none | 1 | 0.25 |
+    /// | `x1` | `ody` | special | `G` | 5 | — |
+    ///
+    /// Sixteen copies, **31.25** at TCGplayer. `x1` carries an empty `prices` object and is
+    /// quoted by nobody, which is what makes a nullable `value` worth testing; `r1`'s two
+    /// entries are one printing at two prices, which is what makes [`ENTRY_FINISH`]
+    /// load-bearing rather than decorative.
+    fn breakdown_seeded() -> Connection {
+        let conn = crate::schema::memory_pair();
+        conn.execute_batch(
+            r#"INSERT INTO cards
+                 (id,oracle_id,name,set_code,set_name,collector_number,lang,layout,
+                  rarity,color_identity,finishes,prices,raw)
+               VALUES
+                 ('r1','o1','Mono Red','lea','Limited Edition Alpha','1','en','normal',
+                  'common','R','["nonfoil","foil"]','{"usd":"2.00","usd_foil":"10.00"}','{}'),
+                 ('wu1','o2','Two Colours','isd','Innistrad','2','en','normal',
+                  'rare','WU','["nonfoil"]','{"usd":"5.00"}','{}'),
+                 ('l1','o3','A Land','isd','Innistrad','3','en','normal',
+                  'uncommon','','["nonfoil"]','{"usd":"0.50"}','{}'),
+                 ('a1','o4','An Artifact','isd','Innistrad','4','en','normal',
+                  'uncommon','','["nonfoil"]','{"usd":"0.25"}','{}'),
+                 ('x1','o5','Nobody Quotes This','ody','Odyssey','5','en','normal',
+                  'special','G','["nonfoil"]','{}','{}');"#,
+        )
+        .unwrap();
+
+        add_entry(&conn, &input("r1", "nonfoil", 2)).unwrap();
+        add_entry(&conn, &input("r1", "foil", 1)).unwrap();
+        add_entry(&conn, &input("wu1", "nonfoil", 3)).unwrap();
+        add_entry(&conn, &input("l1", "nonfoil", 4)).unwrap();
+        add_entry(&conn, &input("a1", "nonfoil", 1)).unwrap();
+        add_entry(&conn, &input("x1", "nonfoil", 5)).unwrap();
+        conn
+    }
+
+    /// The whole point of the command: **a bar chart cannot disagree with the total printed
+    /// above it.**
+    ///
+    /// Both figures, on every dimension. `cards` sums to [`CollectionSummary::total_cards`] and
+    /// `value` sums to [`CollectionSummary::value`], because the breakdown groups over the
+    /// *same* [`crate::sorting::price_expr`] fragment [`summarise`] sums rather than over a
+    /// second spelling of it.
+    ///
+    /// **`None` is read as zero here, and this is the only place the two spellings meet.**
+    /// [`BreakdownRow::value`] answers `None` where the header answers `0.0`, and the two
+    /// arithmetics land on one number precisely because a bucket that priced nothing
+    /// contributed nothing to the header either.
+    ///
+    /// **Then again with an orphan**, which is where a partition breaks if it is going to: a row
+    /// whose printing has left `cards` reads NULL for its rarity, its colour identity and its
+    /// set code all at once, so a `GROUP BY` that dropped such a row — or handed back a NULL
+    /// key — would fail this on three dimensions at once. Deleting `x1`'s card row moves no
+    /// money, because `x1` was never priced.
+    #[test]
+    fn every_dimension_sums_to_the_summary_total() {
+        let conn = breakdown_seeded();
+        let query = CollectionQuery {
+            marketplace: TCG,
+            ..Default::default()
+        };
+
+        for pass in ["whole", "with an orphan"] {
+            let total = summarise(&conn, &query).unwrap();
+            // Neither assertion below can pass vacuously.
+            assert_eq!(total.total_cards, 16, "{pass}");
+            assert!(
+                (total.value - 31.25).abs() < 1e-9,
+                "{pass}: {}",
+                total.value
+            );
+
+            for dimension in ["rarity", "color", "set", "finish"] {
+                let rows = breakdown(&conn, dimension, TCG).unwrap();
+                assert!(
+                    rows.len() > 1,
+                    "{pass}/{dimension}: a dimension that does not split is not a breakdown"
+                );
+                let cards: i64 = rows.iter().map(|r| r.cards).sum();
+                let value: f64 = rows.iter().map(|r| r.value.unwrap_or(0.0)).sum();
+                assert_eq!(cards, total.total_cards, "{pass}/{dimension}");
+                assert!(
+                    (value - total.value).abs() < 1e-9,
+                    "{pass}/{dimension}: {value} vs {}",
+                    total.value
+                );
+                assert!(
+                    rows.iter().all(|r| !r.key.is_empty()),
+                    "{pass}/{dimension}: every bucket is named"
+                );
+            }
+
+            conn.execute("DELETE FROM cards WHERE id = 'x1'", [])
+                .unwrap();
+        }
+    }
+
+    /// **A copy the marketplace cannot price counts in `cards` and leaves `value` NULL** —
+    /// `None`, never `Some(0.0)`, which is [`BreakdownRow::value`]'s whole rule.
+    ///
+    /// And the case that proves it is a `sum()` rather than a flag: a bucket holding priced
+    /// *and* unpriced copies is worth what it can price, exactly as the header is.
+    #[test]
+    fn an_unpriced_copy_counts_in_cards_and_leaves_value_null() {
+        let conn = breakdown_seeded();
+
+        let rarities = breakdown(&conn, "rarity", TCG).unwrap();
+        let special = rarities
+            .iter()
+            .find(|r| r.key == "special")
+            .expect("the unpriced card's own bucket");
+        assert_eq!(
+            special.cards, 5,
+            "the copies are the reader's whether or not a feed quotes them"
+        );
+        assert_eq!(
+            special.value, None,
+            "an unpriced bucket is an em dash, not a zero"
+        );
+
+        // The same statement through a second dimension, so it is a fact about the query
+        // rather than about one column.
+        let sets = breakdown(&conn, "set", TCG).unwrap();
+        assert_eq!(sets.iter().find(|r| r.key == "ody").unwrap().value, None);
+
+        // A mixed bucket: fifteen nonfoil copies, five of which nobody quotes.
+        let finishes = breakdown(&conn, "finish", TCG).unwrap();
+        let nonfoil = finishes.iter().find(|r| r.key == "nonfoil").unwrap();
+        assert_eq!(nonfoil.cards, 15);
+        assert!(
+            (nonfoil.value.unwrap() - 21.25).abs() < 1e-9,
+            "{:?}",
+            nonfoil.value
+        );
+    }
+
+    /// **The `set` dimension is the one that carries a `name`**, because a set key is a code and
+    /// only the corpus knows that `isd` is called *Innistrad*.
+    ///
+    /// The orphan half is the other side of that sentence, and is why the key falls back to the
+    /// entry's own `set_code` — [`scope`]'s `Some("e")`, for that term's reason. A printing that
+    /// has left `cards` takes its *name* with it and leaves behind the code the reader recorded
+    /// owning, so the copies file under `ody` with no name rather than under a hole.
+    #[test]
+    fn the_set_dimension_returns_the_set_name_beside_the_code() {
+        let conn = breakdown_seeded();
+
+        let rows = breakdown(&conn, "set", TCG).unwrap();
+        let isd = rows
+            .iter()
+            .find(|r| r.key == "isd")
+            .expect("three printings share it");
+        assert_eq!(isd.name.as_deref(), Some("Innistrad"));
+        assert_eq!(isd.cards, 8);
+        assert_eq!(
+            rows.iter()
+                .find(|r| r.key == "lea")
+                .unwrap()
+                .name
+                .as_deref(),
+            Some("Limited Edition Alpha")
+        );
+
+        // No other dimension invents one: the key is its own name, and the word that reaches a
+        // screen is TypeScript's.
+        for dimension in ["rarity", "color", "finish"] {
+            assert!(
+                breakdown(&conn, dimension, TCG)
+                    .unwrap()
+                    .iter()
+                    .all(|r| r.name.is_none()),
+                "{dimension} carried a name"
+            );
+        }
+
+        conn.execute("DELETE FROM cards WHERE id = 'x1'", [])
+            .unwrap();
+        let orphaned = breakdown(&conn, "set", TCG).unwrap();
+        let ody = orphaned
+            .iter()
+            .find(|r| r.key == "ody")
+            .expect("the entry still records the set the copies were bought in");
+        assert_eq!(ody.name, None, "the name left with the printing");
+        assert_eq!(ody.cards, 5);
+        // …and the same row is bucketed rather than dropped on a dimension whose column has
+        // gone NULL with it.
+        assert_eq!(
+            breakdown(&conn, "rarity", TCG)
+                .unwrap()
+                .iter()
+                .find(|r| r.key == "unknown")
+                .map(|r| r.cards),
+            Some(5)
+        );
+    }
+
+    /// **A card with no colours is a bucket, not a gap.** The land and the artifact both land
+    /// under `c`, the two-colour card under `multi`, and a mono-coloured card under its own
+    /// stored letter — four keys that between them cover every row, which is what lets
+    /// `every_dimension_sums_to_the_summary_total` hold on this dimension at all.
+    ///
+    /// `c.color_identity` is **concatenated letters and not a JSON array** (`crate::card_row`
+    /// stores `"WU"`), so the bucket is a `length()` and never a `json_array_length`: read as
+    /// JSON the column answers NULL on every row, and the whole collection would arrive in one
+    /// bucket with the sums still adding up.
+    #[test]
+    fn the_colour_dimension_buckets_a_colourless_card_rather_than_dropping_it() {
+        let conn = breakdown_seeded();
+        let rows = breakdown(&conn, "color", TCG).unwrap();
+
+        let colourless = rows
+            .iter()
+            .find(|r| r.key == "c")
+            .expect("the land and the artifact are somewhere");
+        assert_eq!(
+            colourless.cards, 5,
+            "four of the land and one of the artifact, in one bucket"
+        );
+        assert!((colourless.value.unwrap() - 2.25).abs() < 1e-9);
+
+        let of = |key: &str| rows.iter().find(|r| r.key == key).map(|r| r.cards);
+        assert_eq!(of("R"), Some(3), "one colour keys on that colour");
+        assert_eq!(of("multi"), Some(3), "two or more do not");
+        assert_eq!(of("G"), Some(5));
+
+        let mut keys: Vec<&str> = rows.iter().map(|r| r.key.as_str()).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            ["G", "R", "c", "multi"],
+            "no fifth bucket, and no empty key"
+        );
+    }
+
+    /// **A row holding no copies contributes nothing — not to a bucket, and not *as* one.**
+    ///
+    /// Schema v24 lets an entry sit at zero, keeping its condition, its price and its
+    /// acquisition story while the reader owns none of that printing today, so every aggregate
+    /// over this table has to decide deliberately what such a row means. This one counts copies,
+    /// which is [`CollectionSummary::total_cards`]' arithmetic — and a bar labelled *The List*
+    /// over a card the reader traded away is worse than a missing bar, so the row does not
+    /// conjure its own bucket either.
+    ///
+    /// The zero row is a printing that shares no bucket with anything in the seed on any of the
+    /// four dimensions, and it is listed at 99.00 — so a query counting rows, or summing prices
+    /// without the quantity beside them, would be red four ways over.
+    #[test]
+    fn a_zero_quantity_row_contributes_nothing() {
+        let conn = breakdown_seeded();
+        conn.execute_batch(
+            r#"INSERT INTO cards
+                 (id,oracle_id,name,set_code,set_name,collector_number,lang,layout,
+                  rarity,color_identity,finishes,prices,raw)
+               VALUES ('z1','o9','Traded Away','plst','The List','9','en','normal',
+                       'bonus','B','["etched"]','{"usd_etched":"99.00"}','{}');"#,
+        )
+        .unwrap();
+        let id = add_entry(&conn, &input("z1", "etched", 3)).unwrap().id;
+        update_entry(
+            &conn,
+            id,
+            &EntryPatch {
+                quantity: Some(0),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            entry_count(&conn),
+            7,
+            "the row is still standing — which is what makes this test worth writing"
+        );
+
+        for (dimension, key) in [
+            ("rarity", "bonus"),
+            ("color", "B"),
+            ("set", "plst"),
+            ("finish", "etched"),
+        ] {
+            let rows = breakdown(&conn, dimension, TCG).unwrap();
+            assert!(
+                rows.iter().all(|r| r.key != key),
+                "{dimension} conjured a {key} bucket out of a row holding no copies"
+            );
+            assert_eq!(
+                rows.iter().map(|r| r.cards).sum::<i64>(),
+                16,
+                "{dimension}: the copies are the sixteen the reader owns"
+            );
+            assert!(
+                (rows.iter().map(|r| r.value.unwrap_or(0.0)).sum::<f64>() - 31.25).abs() < 1e-9,
+                "{dimension}: a copy nobody owns is worth nothing, whatever it is listed at"
+            );
+        }
+    }
+
+    /// **Four dimensions and no fifth.** The `&str` comes off the wire, and the only thing
+    /// between it and the statement is that `match` — so a name it does not know is a sentence
+    /// rather than an interpolation.
+    #[test]
+    fn an_unknown_dimension_is_refused() {
+        let conn = breakdown_seeded();
+        assert_eq!(
+            breakdown(&conn, "sideboard", TCG).unwrap_err(),
+            NOT_A_DIMENSION
+        );
+        for bad in [
+            "",
+            "colour",
+            "RARITY",
+            "c.rarity",
+            "rarity; DROP TABLE collection_entries",
+        ] {
+            assert!(breakdown(&conn, bad, TCG).is_err(), "accepted {bad:?}");
+        }
+        // …and all four it does know are answerable, so the fence is a fence and not a wall.
+        for good in ["rarity", "color", "set", "finish"] {
+            assert!(breakdown(&conn, good, TCG).is_ok(), "refused {good}");
+        }
+    }
+
+    /* ---------------------------------------------------------------------------------- *
+     * The activity feed. One test per recording site, plus two of the three rules the spec
+     * names — the deck-boundary one lives in `collection_folders`, beside the write it is
+     * about.
+     * ---------------------------------------------------------------------------------- */
+
+    /// The whole feed, newest first — `MAX_LIMIT` so no assertion below can be true only
+    /// because a row fell off the end of a short read.
+    fn feed(conn: &Connection) -> Vec<crate::activity::ActivityEntry> {
+        crate::activity::recent(conn, crate::activity::MAX_LIMIT).unwrap()
+    }
+
+    /// One feed row's payload as JSON. `activityText.ts` is the only *shipped* reader of a
+    /// payload; these assertions are the contract it is written against.
+    fn payload(entry: &crate::activity::ActivityEntry) -> serde_json::Value {
+        serde_json::from_str(&entry.payload).unwrap()
+    }
+
+    #[test]
+    fn adding_a_card_records_one_activity_row() {
+        let conn = seeded();
+        add_entry(&conn, &input("bolt-lea", "nonfoil", 3)).unwrap();
+
+        let rows = feed(&conn);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].scope, crate::activity::COLLECTION);
+        assert_eq!(rows[0].kind, crate::activity::ADD);
+        assert_eq!(rows[0].delta, 3);
+        assert_eq!(rows[0].card_id.as_deref(), Some("bolt-lea"));
+        assert_eq!(rows[0].card_name.as_deref(), Some("Lightning Bolt"));
+        assert_eq!(
+            payload(&rows[0])["folder"],
+            serde_json::Value::Null,
+            "the root is a null folder, which draws no clause"
+        );
+        assert_eq!(payload(&rows[0])["finish"], "nonfoil");
+    }
+
+    /// The drawer is named by **name** rather than by id, because the feed outlives the folder.
+    #[test]
+    fn an_add_into_a_folder_names_the_folder() {
+        let conn = seeded();
+        let binder = crate::collection_folders::create_folder(&conn, None, "Binder A")
+            .unwrap()
+            .id;
+        add_entry(
+            &conn,
+            &EntryInput {
+                folder_id: Some(binder),
+                ..input("bolt-jp", "foil", 1)
+            },
+        )
+        .unwrap();
+
+        let rows = feed(&conn);
+        let add = rows
+            .iter()
+            .find(|r| r.kind == crate::activity::ADD)
+            .expect("the add is in the feed");
+        assert_eq!(payload(add)["folder"], "Binder A");
+        assert_eq!(payload(add)["finish"], "foil");
+    }
+
+    #[test]
+    fn a_quantity_change_records_the_two_numbers() {
+        let conn = seeded();
+        let added = add_entry(&conn, &input("bolt-lea", "nonfoil", 4)).unwrap();
+        set_quantity(&conn, added.id, 1).unwrap();
+
+        let rows = feed(&conn);
+        assert_eq!(rows.len(), 2, "the add and the change, and nothing else");
+        assert_eq!(rows[0].kind, crate::activity::QUANTITY);
+        assert_eq!(rows[0].delta, -3, "signed copies, not the new total");
+        assert_eq!(payload(&rows[0])["from"], 4);
+        assert_eq!(payload(&rows[0])["to"], 1);
+    }
+
+    /// A stepper taken to zero deletes the row, so the honest line is a **removal** — the
+    /// reader cannot open a row to see that it went from 2 to 0.
+    #[test]
+    fn a_stepper_taken_to_zero_records_a_removal_and_not_a_quantity_change() {
+        let conn = seeded();
+        let added = add_entry(&conn, &input("bolt-lea", "nonfoil", 2)).unwrap();
+        set_quantity(&conn, added.id, 0).unwrap();
+
+        let rows = feed(&conn);
+        assert_eq!(rows[0].kind, crate::activity::REMOVE);
+        assert_eq!(rows[0].delta, -2);
+        assert_eq!(rows[0].card_name.as_deref(), Some("Lightning Bolt"));
+    }
+
+    #[test]
+    fn removing_a_row_records_the_copies_that_left_and_the_drawer_they_left() {
+        let conn = seeded();
+        let binder = crate::collection_folders::create_folder(&conn, None, "Trade box")
+            .unwrap()
+            .id;
+        let added = add_entry(
+            &conn,
+            &EntryInput {
+                folder_id: Some(binder),
+                ..input("bolt-lea", "nonfoil", 5)
+            },
+        )
+        .unwrap();
+        remove_entry(&conn, added.id).unwrap();
+
+        let rows = feed(&conn);
+        assert_eq!(rows[0].kind, crate::activity::REMOVE);
+        assert_eq!(rows[0].delta, -5);
+        assert_eq!(payload(&rows[0])["folder"], "Trade box");
+    }
+
+    /// An id that resolves to nothing is a success **and records nothing** — a delete that
+    /// found no row deleted no row.
+    #[test]
+    fn removing_a_row_that_is_not_there_records_nothing() {
+        let conn = seeded();
+        remove_entry(&conn, 4242).unwrap();
+        assert!(feed(&conn).is_empty());
+    }
+
+    #[test]
+    fn an_edit_records_the_fields_it_named_and_no_copies() {
+        let conn = seeded();
+        let added = add_entry(&conn, &input("bolt-lea", "nonfoil", 2)).unwrap();
+        update_entry(
+            &conn,
+            added.id,
+            &EntryPatch {
+                condition: Some("LP".into()),
+                notes: Some("bought at the prerelease".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let rows = feed(&conn);
+        assert_eq!(rows[0].kind, crate::activity::EDIT);
+        assert_eq!(rows[0].delta, 0, "an edit is not about copies");
+        assert_eq!(
+            payload(&rows[0])["fields"],
+            serde_json::json!(["condition", "notes"]),
+            "camelCase, in the struct's own order — `activityText.ts` words them by splitting \
+             on case rather than from a table"
+        );
+    }
+
+    /// An edit onto a grain the collection already holds folds the two rows into one, and that
+    /// is still **one** line: the reader pressed Save once.
+    #[test]
+    fn an_edit_that_folds_two_rows_records_one_edit() {
+        let conn = seeded();
+        add_entry(
+            &conn,
+            &EntryInput {
+                condition: Some("NM".into()),
+                ..input("bolt-lea", "nonfoil", 1)
+            },
+        )
+        .unwrap();
+        let lp = add_entry(
+            &conn,
+            &EntryInput {
+                condition: Some("LP".into()),
+                ..input("bolt-lea", "nonfoil", 2)
+            },
+        )
+        .unwrap();
+        update_entry(
+            &conn,
+            lp.id,
+            &EntryPatch {
+                condition: Some("NM".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let edits: Vec<_> = feed(&conn)
+            .into_iter()
+            .filter(|r| r.kind == crate::activity::EDIT)
+            .collect();
+        assert_eq!(edits.len(), 1);
+        assert_eq!(edits[0].card_name.as_deref(), Some("Lightning Bolt"));
+    }
+
+    /// **The spec's second rule.** A bulk operation records one row carrying its count — 40
+    /// cards over 3 lines is one sentence, not three and certainly not forty.
+    #[test]
+    fn an_import_records_one_row_carrying_its_count() {
+        let conn = seeded();
+        let items = vec![
+            item("bolt-lea", 20, "nonfoil"),
+            item("bolt-jp", 15, "foil"),
+            item("card-1", 5, "nonfoil"),
+        ];
+        commit_import(&conn, &items, "add", None).unwrap();
+
+        let rows = feed(&conn);
+        assert_eq!(rows.len(), 1, "one row for the whole file");
+        assert_eq!(rows[0].kind, crate::activity::IMPORT);
+        assert_eq!(rows[0].card_id, None, "an import is about no one card");
+        assert_eq!(rows[0].card_name, None);
+        assert_eq!(payload(&rows[0])["cards"], 40, "the copies the file named");
+        assert_eq!(
+            payload(&rows[0])["rows"],
+            3,
+            "the collection lines it wrote"
+        );
+        assert_eq!(rows[0].delta, 40, "and the copies the collection gained");
+    }
+
+    /// A `set` file that lowers a quantity is still one row, and its `delta` goes **down** —
+    /// which is what a count of the rows it wrote could never say.
+    #[test]
+    fn a_set_import_that_lowers_a_quantity_records_a_negative_delta() {
+        let conn = seeded();
+        add_entry(&conn, &input("bolt-lea", "nonfoil", 10)).unwrap();
+        commit_import(&conn, &[item("bolt-lea", 4, "nonfoil")], "set", None).unwrap();
+
+        let import = feed(&conn)
+            .into_iter()
+            .find(|r| r.kind == crate::activity::IMPORT)
+            .expect("the import row is in the feed");
+        assert_eq!(payload(&import)["cards"], 4, "what the file said");
+        assert_eq!(import.delta, -6, "what the collection actually lost");
+    }
+
+    /// A whole-collection wipe is one line too, and it does **not** clear the feed: history is
+    /// not a card.
+    #[test]
+    fn clearing_the_collection_records_one_row_and_leaves_the_feed_standing() {
+        let conn = seeded();
+        add_entry(&conn, &input("bolt-lea", "nonfoil", 7)).unwrap();
+        add_entry(&conn, &input("bolt-jp", "foil", 2)).unwrap();
+        crate::reset::clear_collection(&conn).unwrap();
+
+        let rows = feed(&conn);
+        assert_eq!(rows.len(), 3, "two adds and one clear");
+        assert_eq!(rows[0].kind, crate::activity::CLEAR);
+        assert_eq!(payload(&rows[0])["cards"], 2, "two rows went");
+        assert_eq!(rows[0].delta, -9, "and nine copies with them");
+    }
+
+    /// **The spec's third rule.** `record` never opens a transaction of its own, so a change
+    /// that rolls back takes its history with it — the one direction a reader cannot check,
+    /// because the row a lying line names is not there to disagree with it.
+    #[test]
+    fn a_rolled_back_change_leaves_no_activity_row() {
+        let conn = seeded();
+        let tx = conn.unchecked_transaction().unwrap();
+        add_entry(&tx, &input("bolt-lea", "nonfoil", 3)).unwrap();
+        assert_eq!(
+            crate::activity::recent(&tx, 10).unwrap().len(),
+            1,
+            "the row is there inside the transaction"
+        );
+        drop(tx); // rusqlite rolls back a `Transaction` that is not committed.
+
+        assert!(
+            feed(&conn).is_empty(),
+            "and it is gone with the change it described"
+        );
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM collection_entries", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0,
+            "which is the same rollback, seen from the other table"
+        );
     }
 }

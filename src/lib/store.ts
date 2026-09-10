@@ -15,15 +15,23 @@ import type { ExportFormat } from "@/features/transfer/formats";
 import type { DeckFinish, DeckVariant } from "./ipc";
 
 /**
- * The ten top-level destinations in the sidebar.
+ * The eleven top-level destinations in the sidebar.
+ *
+ * **`home` is first, and first is the whole of what makes it home.** It is the page the app opens
+ * on — {@link AppState.activeView} starts here and `useStartView` is what may move it — and the
+ * rail draws it at the top in reading order, above the two ways into the corpus.
  *
  * **`shared` is the one the rail does not always draw.** It is somebody else's collection, opened
  * from a link, and a reader who never opens one never sees the row — `AppShell` filters `NAV` on
  * {@link AppState.openedShares}, so `nav.ts` stays the whole set and `nav.test.ts` goes on
- * asserting it literally. It is also the one destination with no chord, and the two facts are the
- * same fact: see `lib/shortcuts.ts`'s `switchView`.
+ * asserting it literally.
+ *
+ * **Two of the eleven have no chord and the reasons are different**, which is the thing to carry
+ * away rather than the count: `shared` because its row is conditional, `settings` because the run
+ * of digits is nine long and this list is eleven. `lib/shortcuts.ts`'s `switchView` argues both.
  */
 export type ViewId =
+  | "home"
   | "search"
   | "tags"
   | "collection"
@@ -239,8 +247,48 @@ export interface ExportPrefs {
 }
 
 interface AppState {
+  /** Where the reader is. Starts at `"home"`, which is the page this app opens on — see the
+   *  initial state, and {@link AppState.hydrateStartView} for how a reader's own choice replaces
+   *  it. Not to be confused with the *stored* start view, which is `useStartView`'s `app_meta`
+   *  row: that is where the app **starts**, this is where the reader **is**. */
   activeView: ViewId;
   setActiveView: (view: ViewId) => void;
+  /**
+   * How many times a reader has asked for a view — **that a press happened**, as distinct from
+   * where it landed.
+   *
+   * {@link AppState.zoomPulse}'s shape and its reason, for {@link AppState.hydrateStartView}'s
+   * guard. A value-watcher on `activeView` would be wrong in both directions here: a launch read
+   * answering `"home"` moves nothing and would look like no press at all, and a reader who pressed
+   * Home during the read moved nothing either — two states a counter tells apart and a comparison
+   * cannot.
+   *
+   * Bumped by {@link AppState.setActiveView} alone, which is the only writer of `activeView` in
+   * this file. A `setState` from a test or a story therefore leaves it at zero, which is what
+   * makes a seeded view still hydratable.
+   */
+  viewPulse: number;
+  /**
+   * Land the app on the reader's stored start view — **once, at launch**, from
+   * `useStartViewHydration`.
+   *
+   * **A press already made wins**, which is what `viewPulse !== 0` buys — {@link
+   * hydrateCardZoom}'s guard verbatim. The read is a round trip and on a launch that is also a
+   * first sync it queues behind one, so a reader who has already reached for the rail would
+   * otherwise be yanked off the page they asked for and onto last session's, a beat later, with
+   * nothing on screen explaining it.
+   *
+   * **It goes through this action rather than through `setActiveView`, and that is the whole
+   * reason it exists** — a seed is a value arriving, not a reader navigating, so it must not bump
+   * the pulse (a seed that counted as a press would make the guard true against itself under
+   * StrictMode's double mount) and it must not park or hand back an open deck. There is no deck to
+   * park at launch, and `setActiveView`'s two Decks clauses reading a store nobody has touched
+   * would be arithmetic over an empty room.
+   *
+   * The word is narrowed before it gets here: `useStartView` owns the vocabulary check, because
+   * which pages exist is a fact about this app's router rather than about the row Rust stored.
+   */
+  hydrateStartView: (view: ViewId) => void;
   /**
    * The shared collections this reader has opened, **most recent first**, as their links.
    *
@@ -719,6 +767,39 @@ interface AppState {
   returnToDeckId: number | null;
   clearReturnToDeck: () => void;
   /**
+   * **The folder a press somewhere else asked a page to open, waiting for that page to read it.**
+   * Written by the home page's folder shortcuts, consumed by `CollectionPage` and `WishlistPage`,
+   * and touched by nothing else.
+   *
+   * **It is not "the open folder, moved to the store", and the difference is the whole design.**
+   * Which drawer a reader is standing in stays `useCollection`'s and `useWishlist`'s own
+   * `useState` — deliberately, and both hooks say so at their own sites: a folder that outlived
+   * the session would open the app somewhere nobody navigated to. This is a **one-shot
+   * hand-off**, which is {@link returnToDeckId}'s shape one cabinet over — one surface names a
+   * folder, the page that answers reads it once and spends it, and nothing is remembered.
+   *
+   * **{@link setActiveView} clears it, and that is what makes it one-shot rather than a
+   * preference.** A field outside that block outlives every navigation the reader makes and fires
+   * the next time they happen to open that page, which is exactly the folder-restored-at-launch
+   * behaviour the two hooks refuse. Inside it, a hand-off lives for the length of one view change:
+   * the one that carries it. The cost is an **order** on the two writes a press makes — the view
+   * first, the folder second — and it is stated where the press is written rather than left to be
+   * rediscovered.
+   *
+   * **A folder that is no longer there is dropped in silence**, at each page's own consume site
+   * rather than here: another surface deleting a drawer between the press and the arrival is a
+   * race rather than a mistake, and the page the reader lands on is the root, which is where a
+   * deleted folder's cards have just gone.
+   */
+  pendingFolder: PendingFolder | null;
+  /** Ask a page to open a folder on its way in. **Call {@link setActiveView} before this, never
+   *  after** — see {@link pendingFolder} for what the other order costs. */
+  setPendingFolder: (folder: PendingFolder) => void;
+  /** Spend it — the page that answered it, on the commit it read it. There is no "consume"
+   *  action that also reports the value: a hand-off is read through the field like every other
+   *  piece of state here, and this is only the half that says it has been used. */
+  clearPendingFolder: () => void;
+  /**
    * The card a reader asked to see every printing of, and the deck slot they asked from.
    *
    * **One field, written by one action that touches nothing else.** What this replaced —
@@ -890,6 +971,32 @@ interface AppState {
 export type CardOverlay = "legality" | "oracleTags" | "cardText" | "combos" | "notes";
 
 /**
+ * A folder for a page to open on its way in — see {@link AppState.pendingFolder}, the only field
+ * of this shape and where every part of it is argued.
+ *
+ * **The two scopes are spelled out here rather than borrowed from {@link FlattenSection}**, which
+ * is the same two words about a different question — which pages remember a Flatten switch. They
+ * agree today because both lists are "the pages with a cabinet", and that agreement is a
+ * coincidence of the app having two: a page that filed cards without remembering a switch would
+ * have to join one list and not the other, and a union shared between them would make that a
+ * choice nobody got to make. `LIST_SECTIONS`' own argument about not being derived from
+ * {@link ViewId}, one field over.
+ */
+export interface PendingFolder {
+  scope: "collection" | "wishlist";
+  /**
+   * `collection_folders.id` or `wishlist_folders.id` — an `INTEGER PRIMARY KEY`, so a number all
+   * the way to the page.
+   *
+   * **Never `null`, where every other folder field in this app spells the root that way.** A page
+   * opens at its root already, so a hand-off naming it would be a hand-off asking for nothing —
+   * and `null` here would then have to mean either "go to the root" or "no hand-off", which is
+   * the job `pendingFolder`'s own `| null` already does.
+   */
+  id: number;
+}
+
+/**
  * The question the printings modal is open on — see {@link AppState.printingsRequest}, which is
  * the only field of this shape and where every part of it is argued.
  *
@@ -989,7 +1096,15 @@ const NO_WALK: CardWalk = { label: "", stops: [] };
  * job and `useSync`'s.
  */
 export const useAppStore = create<AppState>((set) => ({
-  activeView: "search",
+  // **Home, and this is where the app opens.** It is the one page built to be landed on: every
+  // other view answers a question the reader has not asked yet, and `home.rs` seeds a page for a
+  // reader who has never customised anything. A reader who wants to land somewhere else says so in
+  // Settings, and `hydrateStartView` below is how that answer arrives — a round trip later, which
+  // is why this constant has to be a page worth looking at rather than a placeholder.
+  activeView: "home",
+  // No press has been made. See the interface for why this is a counter and not a comparison
+  // against the line above.
+  viewPulse: 0,
   // Leaving the view closes the card: the detail pane belongs to the list that opened it,
   // and a card sitting beside the Decks placeholder is a pane with nothing to be next to.
   // The open deck goes with it, for the same reason read the other way round: an editor is
@@ -1016,6 +1131,11 @@ export const useAppStore = create<AppState>((set) => ({
       const isDecks = activeView === "decks";
       return {
         activeView,
+        // **Outside any comparison with the view it replaces**, which is `zoomCards`' argument one
+        // floor down: a reader who presses the entry they are already standing on has still made a
+        // press, and `hydrateStartView` must not overwrite the page they just asked for merely
+        // because asking for it moved nothing.
+        viewPulse: s.viewPulse + 1,
         selectedCardId: null,
         // And whatever the card modal had open over itself. It is a question *about* the card on
         // the line above, so it cannot outlive it — a legality grid left standing over an empty
@@ -1046,6 +1166,14 @@ export const useAppStore = create<AppState>((set) => ({
         // this is a note for the *gallery* about which tile deserves the caret, and a return that
         // re-opens the editor never draws one. See `returnToDeckId`.
         returnToDeckId: null,
+        // **A folder hand-off nobody read is spent here too, and it is the one field in this block
+        // whose clear has to be argued in both directions.** Left out, an unconsumed hand-off
+        // would sit in the store until the reader next happened to open that page, and then open
+        // a drawer they asked for one navigation — or one afternoon — ago. Left in, it wipes the
+        // hand-off a press has just made, because the press *is* a view change: so the two writes
+        // are ordered, `setActiveView` first and `setPendingFolder` second, and `FoldersWidget`'s
+        // `openFolder` is the one place that ordering is spelled out. See `pendingFolder`.
+        pendingFolder: null,
       };
     }),
   // Nothing until a reader pastes a link, which is what keeps the rail row off the screen of
@@ -1218,6 +1346,11 @@ export const useAppStore = create<AppState>((set) => ({
       }
       return { cardZoom };
     }),
+  // No pulse, for the reason on the line above read one field along: this is a value arriving,
+  // not a reader navigating. Writing `activeView` bare rather than calling `setActiveView` is the
+  // other half of that — see the interface for why a seed must not park a deck it cannot have.
+  hydrateStartView: (view) =>
+    set((s) => (s.viewPulse !== 0 ? {} : { activeView: view })),
   selectedCardId: null,
   // **And forgets which deck row the last card came from.** Every surface in the app that
   // opens a card goes through here — search tiles, collection rows, wishlist rows, the docked
@@ -1324,6 +1457,14 @@ export const useAppStore = create<AppState>((set) => ({
   parkedDeckId: null,
   returnToDeckId: null,
   clearReturnToDeck: () => set({ returnToDeckId: null }),
+  // Nothing pending until a shortcut somewhere else names a folder, and never again after the
+  // page that answered it has read it — every launch starts on a page nobody was sent to. Both
+  // actions write one field and have no opinion about the view, which is `openAllPrintings`'
+  // shape below and deliberately *not* `setActiveView`'s: a hand-off that navigated on its own
+  // would make the order this field depends on unstateable.
+  pendingFolder: null,
+  setPendingFolder: (pendingFolder) => set({ pendingFolder }),
+  clearPendingFolder: () => set({ pendingFolder: null }),
   printingsRequest: null,
   // One field, and that is the whole point — see the interface. Its predecessor wrote six in
   // this `set` because it was a navigation; a modal drawn over the app is not one, so nothing

@@ -55,7 +55,7 @@ both plus the frontend.
   column exist"**, and the difference is a corpus with no `cards` at all: it owes nothing, because
   only an ingest can put that table back and `migrate_corpus` may stop a launch.
 - **The data folder holds two databases, and which one is `main` is the whole design**
-  (schema 27). `data/user.db` is the reader's — the twenty-seven tables in `schema::TABLES` marked
+  (schema 27). `data/user.db` is the reader's — the twenty-eight tables in `schema::TABLES` marked
   `Side::User`, which nothing outside this app can produce again — and it is what
   `Connection::open` names. `data/corpus.db` is everything a feed or this app's own ladder can
   rebuild, and it is **`ATTACH`ed as `corpus`**, because *you cannot `DETACH main`*: discarding
@@ -143,8 +143,11 @@ both plus the frontend.
   every upgraded one, and a fresh worktree is a fresh install, so nothing else here can see it.
   The single-file ladder is frozen at **v26** — `schema::migrate_single_file`
   climbs to `schema::LEGACY_SINGLE_FILE_VERSION` and stops, and the two files carry their own
-  numbers from there (`USER_SCHEMA_VERSION` **43** since a deck got many notes where it had one
-  column — one rung above the editor's Deck stats band getting a
+  numbers from there (`USER_SCHEMA_VERSION` **44** since the collection and the wishlist got a
+  history — `activity`, the twenty-eighth user table and the first with a pruner, **not** synced
+  where `deck_audit` is; it was written as v43 and renumbered the same day because a deck getting
+  many notes where it had one column landed on `main` first, which is one rung above
+  the editor's Deck stats band getting a
   disclosure, which is one above the reader being able to publish a folder, which is
   one above decks learning a third *kind*, which is one above the theory mark growing a
   third tier, which is one above it growing a second,
@@ -2323,8 +2326,9 @@ The whole record, including the pipeline the crate implements:
 | [commander-brackets.md](../docs/reference/commander-brackets.md) | `combos.rs`, the v26 rung and **corpus schema 2** — the feed measured end to end, what is kept and what is skipped, **both** match queries and the card side's three statements, the shape gate and why a version gate skips every fresh install, the launch gate and the clear, and `decks.bracket` |
 | [wishlist-folders.md](../docs/reference/wishlist-folders.md) | The wishlist's cabinet (v23) — the four-term grain, the merge rule, the root-add duplicate |
 | [collection-folders.md](../docs/reference/collection-folders.md) | The collection's cabinet (v24–v25) — the eleventh grain term, the deck groups and `Recently removed`, the conversion that made them, what a zero quantity now costs |
+| [home-page.md](../docs/reference/home-page.md) | `home.rs`, `startview.rs` and `activity.rs` (v44) — the layout document whose vocabulary is TypeScript's and what keeps its round trip, why an empty widget list is a layout, the activity log's three rules and the write-site census, why `activity` is not synced where `deck_audit` is, and the nine commands routed on both targets |
 | [collection-sharing.md](../docs/reference/collection-sharing.md) | `share/` and the second Worker (v41) — the snapshot format and its six absences, the size measured, the two `collection.rs` traps the publisher exists to avoid, the two-step upload, both partial indexes and the one that refused nothing, the `live`/`lapsed`/`revoked` pass, and what is not deployed |
-| [sync.md](../docs/reference/sync.md) | `sync_pair/`, `sync_engine/` and the user-schema rungs sync owns, v29 to v31 — the pairing protocol step by step and the six digits; then the thirteen synced tables, how a row is named across devices, the three SQLite facts the capture triggers' shape follows from, §7.3's five rules against the test that proves each, the envelope measured, the relay's endpoints, and what is not built |
+| [sync.md](../docs/reference/sync.md) | `sync_pair/`, `sync_engine/` and the user-schema rungs sync owns, v29 to v31 — the pairing protocol step by step and the six digits; then the fifteen synced tables, how a row is named across devices, the three SQLite facts the capture triggers' shape follows from, §7.3's five rules against the test that proves each, the envelope measured, the relay's endpoints, and what is not built |
 | [web-target.md](../docs/reference/web-target.md) | The browser build — the module map, the OPFS pair, the measured browse and facet, and the first run's open memory failure |
 | [text-mirror.md](../docs/reference/text-mirror.md) | `mirror/` — the layout, the dirty map, why the pruner reads a manifest instead of guessing, what a pass costs measured, and the bugs still open |
 | [card-scanner.md](../docs/reference/card-scanner.md) | `scanner.rs` and the crate behind it — the pipeline and every measurement, the three evidence tiers and their weights, both tracker verdicts, the debug server, and §9's four commands, two body shapes and lazy asset load |

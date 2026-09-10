@@ -241,6 +241,15 @@ const REMOVED_KIND: &str = crate::schema::COLLECTION_FOLDER_KINDS[2];
 /// The rebuilt rows are not in it either — they are the cabinet, not what was in it.
 pub fn clear_collection(conn: &Connection) -> Result<CollectionCleared, String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    // The copies, before the sweep takes them — the `DELETE` answers **rows**, and the feed's
+    // signed `delta` is copies. The two differ by every playset the reader owned.
+    let copies: i64 = tx
+        .query_row(
+            "SELECT coalesce(sum(quantity), 0) FROM collection_entries",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
     let entries = tx
         .execute("DELETE FROM collection_entries", [])
         .map_err(|e| e.to_string())?;
@@ -274,6 +283,21 @@ pub fn clear_collection(conn: &Connection) -> Result<CollectionCleared, String> 
         rusqlite::params![DECK_KIND],
     )
     .map_err(|e| e.to_string())?;
+    // **One row for the whole wipe**, the feed's bulk rule at its extreme: this press can delete
+    // tens of thousands of rows and it is one sentence. `cards` is the count this command
+    // answers — the rows, which is what the Settings sentence promises and calls cards — and the
+    // folders swept and rebuilt below it are the cabinet rather than what was in it, so they get
+    // no `folder` lines of their own. **The feed itself is not cleared**: history is not a card.
+    crate::activity::record(
+        &tx,
+        crate::activity::COLLECTION,
+        crate::activity::CLEAR,
+        None,
+        None,
+        &serde_json::json!({ "cards": entries as i64 }),
+        -copies,
+    )
+    .map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(CollectionCleared {
         entries: entries as i64,
@@ -298,11 +322,30 @@ pub fn clear_collection(conn: &Connection) -> Result<CollectionCleared, String> 
 /// true the day the folders landed.
 pub fn clear_wishlist(conn: &Connection) -> Result<i64, String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    // The copies, before the sweep — [`clear_collection`]'s reason one table over.
+    let copies: i64 = tx
+        .query_row(
+            "SELECT coalesce(sum(quantity), 0) FROM wishlist_entries",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
     let entries = tx
         .execute("DELETE FROM wishlist_entries", [])
         .map_err(|e| e.to_string())?;
     tx.execute("DELETE FROM wishlist_folders", [])
         .map_err(|e| e.to_string())?;
+    // One row for the whole wipe, and the folders swept beside it get none of their own.
+    crate::activity::record(
+        &tx,
+        crate::activity::WISHLIST,
+        crate::activity::CLEAR,
+        None,
+        None,
+        &serde_json::json!({ "cards": entries as i64 }),
+        -copies,
+    )
+    .map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(entries as i64)
 }
