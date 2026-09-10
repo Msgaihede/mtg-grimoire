@@ -285,6 +285,29 @@ function importLine(p: Record<string, unknown>, cabinet: Cabinet): ActivityLine 
   };
 }
 
+/**
+ * The one row a **bulk add** writes — *send this deck's missing cards to my wishlist*, and
+ * anything later shaped like it.
+ *
+ * {@link importLine}'s rule read from the other end. That one words a file the reader chose; this
+ * words a run of ordinary adds the app made on their behalf, and **the kind stored is `add`
+ * rather than `import`** — a reader who pressed a deck's shopping-list button did not import
+ * anything, and a feed telling them they had would be describing a press nobody made. The count
+ * is what makes it one line; the kind stays what actually happened.
+ *
+ * `cards` is the copies and `rows` the wishlist lines they landed on — {@link importLine}'s pair
+ * and its units, so forty copies over twelve wishes is one press said two ways. `rows` is drawn
+ * only above zero, that function's `labelsCreated` rule, and the folder clause is the single
+ * add's own: one drawer for the whole run, named once.
+ */
+function bulkAddLine(p: Record<string, unknown>, cabinet: Cabinet): ActivityLine {
+  const rows = numberField(p.rows);
+  return {
+    text: `Added ${counted(numberField(p.cards), "card")} to ${cabinet.place}`,
+    detail: line(rows > 0 ? `across ${counted(rows, "row")}` : null, folderClause("in", p.folder)),
+  };
+}
+
 /** The one row a clear writes — `reset::clear_collection` and `clear_wishlist`, which are the
  *  other half of the bulk rule above. */
 function clearLine(p: Record<string, unknown>, cabinet: Cabinet): ActivityLine {
@@ -366,6 +389,11 @@ function collectionLine(entry: ActivityEntry): ActivityLine {
  * list where the line above it says the same thing about a binder is a line a reader has to look
  * up. The phrasing is the app's own — *Add to wishlist*, *Remove … from your wishlist* and
  * *Edit … on your wishlist* are all strings already on screen elsewhere.
+ *
+ * **The `add` arm words two things and is the only one that does**: a card, and a *run* of cards
+ * — {@link bulkAddLine}. That is not a seventeenth act, it is the same act at a different grain,
+ * which is why it shares the kind rather than taking one of its own; the sixteen are still eight
+ * kinds said about two cabinets, and the test that walks them drives every row with a card name.
  */
 function wishlistLine(entry: ActivityEntry): ActivityLine {
   const p = facts(entry.payload);
@@ -374,6 +402,12 @@ function wishlistLine(entry: ActivityEntry): ActivityLine {
 
   switch (entry.kind) {
     case "add": {
+      // **A row that names no card and carries a card count is a run**, not a card —
+      // {@link bulkAddLine}. The two absences are different and the payload is the whole of what
+      // tells them apart: a single add whose printing has left `cards` carries no `cards` key at
+      // all, so it falls straight through to {@link cardName}'s `a card` below rather than being
+      // worded as a bulk press of nothing.
+      if (entry.cardName === null && numberField(p.cards) > 0) return bulkAddLine(p, WISHLIST);
       const n = copies(entry);
       return {
         text: n > 1 ? `Added ${count(n)} × ${name} to ${place}` : `Added ${name} to ${place}`,

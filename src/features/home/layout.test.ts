@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { HomeLayout } from "@/lib/ipc";
+import type { HomeLayout, HomeWidget } from "@/lib/ipc";
 
 import {
   addWidget,
@@ -11,6 +11,7 @@ import {
   setConfig,
   setSpan,
   widgetConfig,
+  widgetSpan,
 } from "./layout";
 import { DEFAULT_LAYOUT } from "./widgets";
 
@@ -245,6 +246,34 @@ describe("setSpan", () => {
     const before = three();
     setSpan(before, "b", 2);
     expect(before.widgets[1].span).toBe(1);
+  });
+});
+
+/**
+ * The loose-to-narrow boundary, crossed in one place.
+ *
+ * `HomeWidget.span` is a bare `number` on the wire and `WidgetCardProps.span` is `1 | 2`. Every
+ * value below is reachable — `parseLayout` clamps, but a widget can be handed an entry that never
+ * went through it, and every case that is not the wide span has to land on the narrow one rather
+ * than on a width the grid does not hold.
+ */
+describe("widgetSpan", () => {
+  const at = (span: number): HomeWidget => ({ id: "a", kind: "summary", span, config: null });
+
+  it("answers the wide span for two", () => {
+    expect(widgetSpan(at(2))).toBe(2);
+  });
+
+  it("answers the narrow span for one", () => {
+    expect(widgetSpan(at(1))).toBe(1);
+  });
+
+  // The safe half of the pair. A card drawn at a width the grid does not hold is a broken row;
+  // a card drawn narrow is merely a card.
+  it("answers the narrow span for every width that is not two", () => {
+    for (const span of [0, -1, 3, 1.5, 2.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(widgetSpan(at(span))).toBe(1);
+    }
   });
 });
 

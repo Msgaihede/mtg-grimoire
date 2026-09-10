@@ -349,7 +349,165 @@ const UNIT_PRICE_ALIAS: &str = "unit_price";
 /// over an entry's.
 pub const WISH_PREFERRED_FINISH: &str = "w.preferred_finish";
 
+/// What a [`crate::activity`] row says about one wish, read **before** the write changes it.
+///
+/// [`crate::collection::EntryFacts`] one table over, and simpler by one join: `wishlist_entries`
+/// denormalises the card's `name` itself, so nothing here has to reach into the corpus and a
+/// wish for a printing that has left `cards` still names its card.
+pub(crate) struct WishFacts {
+    pub(crate) card_id: Option<String>,
+    pub(crate) name: String,
+    quantity: i64,
+    pub(crate) folder: Option<String>,
+}
+
+/// [`WishFacts`] for one wish, or `None` when there is no such row.
+pub(crate) fn wish_facts(conn: &Connection, id: i64) -> Result<Option<WishFacts>, String> {
+    conn.query_row(
+        "SELECT w.card_id, w.name, w.quantity, f.name
+           FROM wishlist_entries w
+           LEFT JOIN wishlist_folders f ON f.id = w.folder_id
+          WHERE w.id = ?1",
+        params![id],
+        |r| {
+            Ok(WishFacts {
+                card_id: r.get(0)?,
+                name: r.get(1)?,
+                quantity: r.get(2)?,
+                folder: r.get(3)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(|e| e.to_string())
+}
+
+/// The drawer's name for a feed payload — `None` is the root, which draws no clause.
+fn wish_folder_name(conn: &Connection, folder_id: Option<i64>) -> Result<Option<String>, String> {
+    let Some(id) = folder_id else {
+        return Ok(None);
+    };
+    conn.query_row(
+        "SELECT name FROM wishlist_folders WHERE id = ?1",
+        params![id],
+        |r| r.get(0),
+    )
+    .optional()
+    .map_err(|e| e.to_string())
+}
+
+/// The reader's own add, **and the one that records it**.
+///
+/// [`insert_wish`] is the same write with no feed row — [`commit_import`] reaches it directly,
+/// because a file's line is an `import` rather than an `add`, and [`add_wish_silent`] is the
+/// public door onto it for a caller whose line is an `add` about a whole *run*.
+///
+/// ⚠️ **This is the single-press door, and nothing may loop over it.**
+/// `deck::missing_to_wishlist` and `deck_theory::missing_to_wishlist` did until 2026-09-10, so a
+/// deck short of forty cards wrote forty feed lines from one press — every one of them true, and
+/// between them the whole of the feed the reader most wants to read straight afterwards. Both are
+/// deliberately history-free on the *deck* side (nothing about the deck changed), so there was no
+/// `deck_audit` row to suppress against and nothing anywhere went red. What closed it is
+/// [`add_wish_silent`] plus [`record_wishes_added`]: **a bulk operation records one row carrying
+/// its count in the payload**, which is [`crate::activity`]'s second rule and the spec's.
 pub fn add_wish(conn: &Connection, input: &WishInput) -> Result<EntryChange, String> {
+    let (change, card_id, name) = insert_wish(conn, input)?;
+    crate::activity::record(
+        conn,
+        crate::activity::WISHLIST,
+        crate::activity::ADD,
+        card_id.as_deref(),
+        Some(&name),
+        &serde_json::json!({
+            "folder": wish_folder_name(conn, input.folder_id)?,
+            "finish": input.preferred_finish,
+        }),
+        // The copies the *press* asked for, not the row's new total — a second add of a card
+        // already wished for is `+1`, and the day header sums presses. The `<= 0` arm is
+        // [`insert_wish`]'s own normalisation restated rather than threaded back out of it: a
+        // wish for no copies is a wish for one, there and here.
+        if input.quantity <= 0 {
+            1
+        } else {
+            input.quantity
+        },
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(change)
+}
+
+/// [`add_wish`]'s write with **no feed row**, for a caller that records the whole run itself.
+///
+/// The quiet half of the bulk pair: a press that puts a deck's worth of cards on the shopping
+/// list calls this once per card and [`record_wishes_added`] once, so forty wishes are one feed
+/// line rather than forty. `deck::missing_to_wishlist` and `deck_theory::missing_to_wishlist` are
+/// the two callers, and [`commit_import`] is deliberately not one — its line is an `import`, so
+/// it reaches [`insert_wish`] directly and there is no `add` door for it to want.
+///
+/// `&Connection` rather than `&Transaction`, [`crate::activity::record`]'s rule at one remove:
+/// both halves of the pair land inside the caller's own transaction, so a run that rolls back
+/// leaves neither the wishes nor the line that describes them.
+///
+/// It answers the [`EntryChange`] and drops [`insert_wish`]'s other two facts, which exist for
+/// [`add_wish`]'s per-card payload and mean nothing to a line about a run.
+pub fn add_wish_silent(conn: &Connection, input: &WishInput) -> Result<EntryChange, String> {
+    let (change, _, _) = insert_wish(conn, input)?;
+    Ok(change)
+}
+
+/// One feed line for a run of [`add_wish_silent`] calls — the recording half of the bulk pair.
+///
+/// **The kind is [`ADD`](crate::activity::ADD) and deliberately never
+/// [`IMPORT`](crate::activity::IMPORT).** A reader who pressed *send this deck's missing cards to
+/// my wishlist* did not import a file, and `import`'s sentence tells them they did — the kind is
+/// *what happened* and the payload is *how much of it*, so borrowing a kind to get a count is
+/// borrowing the wrong half.
+///
+/// **`card_name` is `None`, because a run is about no one card.** That is
+/// [`crate::activity::ActivityEntry::card_name`]'s own rule for a bulk row, and it is also the
+/// signal: `activityText.ts` reads a nameless `add` carrying a card count as a run and everything
+/// else as a card.
+///
+/// `wishes` is the wishlist **rows** the run wrote or folded into and `copies` the copies asked
+/// for across them — different units, neither answering for the other, which is
+/// [`commit_import`]'s `rows`/`cards` pair one press over and the same two payload keys. `delta`
+/// is the copies, signed, because the day header sums presses rather than rows.
+///
+/// **A run of nothing records nothing, and that is the caller's line to write rather than this
+/// one's.** A deck short of nothing has made no change at all, and *Added 0 cards to your
+/// wishlist* is a press the reader never made; guarding it here instead would be a function
+/// called `record_…` that sometimes does not, which is worse than the same `if` at two call
+/// sites that each have their own count in hand.
+pub fn record_wishes_added(
+    conn: &Connection,
+    wishes: i64,
+    copies: i64,
+    folder_id: Option<i64>,
+) -> Result<(), String> {
+    crate::activity::record(
+        conn,
+        crate::activity::WISHLIST,
+        crate::activity::ADD,
+        None,
+        None,
+        &serde_json::json!({
+            "cards": copies,
+            "rows": wishes,
+            // The drawer the whole run was filed into — [`add_wish`]'s own key, because the
+            // sentence is the same clause: one folder for the press, named once.
+            "folder": wish_folder_name(conn, folder_id)?,
+        }),
+        copies,
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// [`add_wish`] with no feed row, answering the two facts its recording door needs: the printing
+/// the wish names (`None` for an any-printing wish) and the card's name as this write stored it.
+fn insert_wish(
+    conn: &Connection,
+    input: &WishInput,
+) -> Result<(EntryChange, Option<String>, String), String> {
     if let Some(f) = input.preferred_finish.as_deref() {
         if !FINISHES.contains(&f) {
             return Err(format!(
@@ -476,11 +634,15 @@ pub fn add_wish(conn: &Connection, input: &WishInput) -> Result<EntryChange, Str
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .map_err(|e| e.to_string())?;
-    Ok(EntryChange {
-        id,
-        quantity,
-        removed: false,
-    })
+    Ok((
+        EntryChange {
+            id,
+            quantity,
+            removed: false,
+        },
+        card_id,
+        name,
+    ))
 }
 
 /// The oracle card's name, read from **any** printing of it.
@@ -541,8 +703,15 @@ pub(crate) fn commit_import(
             "`{mode}` is not an import mode. Use `add` or `set`."
         ));
     }
-    let before: i64 = conn
-        .query_row("SELECT count(*) FROM wishlist_entries", [], |r| r.get(0))
+    // Both totals in one statement, `collection::commit_import`'s shape and for its reason: the
+    // row count the outcome is built from, and the copies the feed's `delta` is. A `set` file can
+    // lower a quantity without deleting a row, so neither number answers for the other.
+    let (before, copies_before): (i64, i64) = conn
+        .query_row(
+            "SELECT count(*), coalesce(sum(quantity), 0) FROM wishlist_entries",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
         .map_err(|e| e.to_string())?;
     let mut removed = 0i64;
 
@@ -565,28 +734,54 @@ pub(crate) fn commit_import(
             // *second* root row, which [`WishRow::elsewhere`] is what tells the reader about.
             folder_id: None,
         };
+        // [`insert_wish`] and [`write_wish_quantity`], never their recording doors: a file of
+        // five hundred lines is **one** feed row, written below.
         if mode == "add" {
-            add_wish(&tx, &input)?;
+            insert_wish(&tx, &input)?;
             continue;
         }
         // `set`: find the row on the grain the add would have folded into, then write the
         // file's number onto it. `set_quantity` deletes at 0, which is what makes a file
         // saying `0 Sol Ring` remove that wish.
-        let change = add_wish(&tx, &input)?;
-        let after = set_wish_quantity(&tx, change.id, item.quantity)?;
+        let (change, _, _) = insert_wish(&tx, &input)?;
+        let after = write_wish_quantity(&tx, change.id, item.quantity)?;
         if after.removed {
             removed += 1;
         }
     }
-    tx.commit().map_err(|e| e.to_string())?;
 
-    let after: i64 = conn
-        .query_row("SELECT count(*) FROM wishlist_entries", [], |r| r.get(0))
+    // Read inside the transaction rather than after the commit — the same values, and the
+    // arithmetic the outcome and the payload share then exists once.
+    let (after, copies_after): (i64, i64) = tx
+        .query_row(
+            "SELECT count(*), coalesce(sum(quantity), 0) FROM wishlist_entries",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
         .map_err(|e| e.to_string())?;
     let added = (after - before) + removed;
+    let updated = items.len() as i64 - added - removed;
+
+    // **One row for the whole file** — `cards` is what the file said, `rows` the wishlist lines
+    // it landed on, and `delta` the net copies wished for, which a `set` file can make negative.
+    crate::activity::record(
+        &tx,
+        crate::activity::WISHLIST,
+        crate::activity::IMPORT,
+        None,
+        None,
+        &serde_json::json!({
+            "cards": items.iter().map(|i| i.quantity).sum::<i64>(),
+            "rows": added + updated + removed,
+        }),
+        copies_after - copies_before,
+    )
+    .map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())?;
+
     Ok(crate::collection::ImportCommitOutcome {
         added,
-        updated: items.len() as i64 - added - removed,
+        updated,
         removed,
     })
 }
@@ -610,8 +805,39 @@ pub(crate) fn commit_import(
 /// refusal" is the claim — a second copy of the sentence is a second thing to drift.
 pub fn set_wish_quantity(conn: &Connection, id: i64, quantity: i64) -> Result<EntryChange, String> {
     valid_quantity(quantity, "wishlist quantity")?;
+    // Read before the write and **never used as a refusal**: a zero on an id nobody answers to
+    // is still a success here, exactly as it was before this line existed.
+    let facts = wish_facts(conn, id)?;
+    let change = write_wish_quantity(conn, id, quantity)?;
+    if let Some(facts) = facts {
+        if change.removed {
+            // **A stepper taken to zero is a `remove`**, not a change from 2 to 0 about a row
+            // the reader can no longer open — `collection::set_quantity`'s rule one table over.
+            record_wish_removal(conn, &facts)?;
+        } else {
+            crate::activity::record(
+                conn,
+                crate::activity::WISHLIST,
+                crate::activity::QUANTITY,
+                facts.card_id.as_deref(),
+                Some(&facts.name),
+                &serde_json::json!({ "from": facts.quantity, "to": quantity }),
+                quantity - facts.quantity,
+            )
+            .map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(change)
+}
+
+/// [`set_wish_quantity`] with no feed row — the statement and the zero rule, none of the history.
+///
+/// **`pub(crate)` for nobody and private on purpose**: its one caller besides the door above is
+/// [`commit_import`], which records a single row for the file it wrote.
+fn write_wish_quantity(conn: &Connection, id: i64, quantity: i64) -> Result<EntryChange, String> {
+    valid_quantity(quantity, "wishlist quantity")?;
     if quantity == 0 {
-        return remove_wish(conn, id);
+        return delete_wish(conn, id);
     }
     let changed = conn
         .execute(
@@ -631,7 +857,21 @@ pub fn set_wish_quantity(conn: &Connection, id: i64, quantity: i64) -> Result<En
 
 /// Delete the row. Like [`crate::collection::remove_entry`], an id that resolves to nothing
 /// is a success: the caller wanted that row gone, and it is gone.
+///
+/// **The reader's own delete, and the one that records it** — [`delete_wish`] is the statement
+/// without the feed row.
 pub fn remove_wish(conn: &Connection, id: i64) -> Result<EntryChange, String> {
+    let facts = wish_facts(conn, id)?;
+    let change = delete_wish(conn, id)?;
+    if let Some(facts) = facts {
+        record_wish_removal(conn, &facts)?;
+    }
+    Ok(change)
+}
+
+/// [`remove_wish`] with no feed row — reached by [`write_wish_quantity`]'s zero and so by an
+/// import's `0 Sol Ring` line, which is counted in that press's one `import` row instead.
+fn delete_wish(conn: &Connection, id: i64) -> Result<EntryChange, String> {
     conn.execute("DELETE FROM wishlist_entries WHERE id = ?1", params![id])
         .map_err(|e| e.to_string())?;
     Ok(EntryChange {
@@ -639,6 +879,20 @@ pub fn remove_wish(conn: &Connection, id: i64) -> Result<EntryChange, String> {
         quantity: 0,
         removed: true,
     })
+}
+
+/// The one `remove` line, from the two doors that delete a wish the reader pointed at.
+fn record_wish_removal(conn: &Connection, facts: &WishFacts) -> Result<(), String> {
+    crate::activity::record(
+        conn,
+        crate::activity::WISHLIST,
+        crate::activity::REMOVE,
+        facts.card_id.as_deref(),
+        Some(&facts.name),
+        &serde_json::json!({ "folder": facts.folder }),
+        -facts.quantity,
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// Change which printing a wish is for — or take it back to **any printing**.
@@ -704,13 +958,34 @@ pub fn remove_wish(conn: &Connection, id: i64) -> Result<EntryChange, String> {
 /// **The transaction is all this wrapper is**, and the split is [`set_printing_inner`]'s doc:
 /// `wishlist_optimize::apply` repoints a whole ticked batch inside *its* transaction, and
 /// rusqlite cannot nest one.
+///
+/// **This wrapper is also where the feed row is written, and [`set_printing_inner`] is
+/// deliberately silent**: `wishlist_optimize::apply` repoints a whole ticked batch through that
+/// function, and one line per wish is the bulk rule broken.
 pub fn set_wish_printing(
     conn: &Connection,
     id: i64,
     card_id: Option<String>,
 ) -> Result<EntryChange, String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    // Before the write: the repoint can fold this wish into another and take the row with it.
+    let facts = wish_facts(&tx, id)?;
     let change = set_printing_inner(&tx, id, card_id)?;
+    if let Some(facts) = facts {
+        // `["printing"]`, the payload table's own word — `activityText.ts` prints the field
+        // names as prose, so this reads *Edited Sol Ring on your wishlist · printing*. `delta`
+        // is 0: which printing a wish names is not a count.
+        crate::activity::record(
+            &tx,
+            crate::activity::WISHLIST,
+            crate::activity::EDIT,
+            facts.card_id.as_deref(),
+            Some(&facts.name),
+            &serde_json::json!({ "fields": ["printing"] }),
+            0,
+        )
+        .map_err(|e| e.to_string())?;
+    }
     tx.commit().map_err(|e| e.to_string())?;
     Ok(change)
 }
@@ -4166,5 +4441,370 @@ mod tests {
                 "{dimension:?}"
             );
         }
+    }
+
+    /* ---------------------------------------------------------------------------------- *
+     * The activity feed — this list's five recording sites.
+     * ---------------------------------------------------------------------------------- */
+
+    /// The whole feed, newest first.
+    fn feed(conn: &Connection) -> Vec<crate::activity::ActivityEntry> {
+        crate::activity::recent(conn, crate::activity::MAX_LIMIT).unwrap()
+    }
+
+    fn payload(entry: &crate::activity::ActivityEntry) -> serde_json::Value {
+        serde_json::from_str(&entry.payload).unwrap()
+    }
+
+    #[test]
+    fn adding_a_wish_records_one_activity_row() {
+        let conn = seeded();
+        add_wish(
+            &conn,
+            &WishInput {
+                card_id: Some("bolt-lea".into()),
+                quantity: 3,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let rows = feed(&conn);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].scope, crate::activity::WISHLIST);
+        assert_eq!(rows[0].kind, crate::activity::ADD);
+        assert_eq!(rows[0].delta, 3);
+        assert_eq!(rows[0].card_id.as_deref(), Some("bolt-lea"));
+        assert_eq!(rows[0].card_name.as_deref(), Some("Lightning Bolt"));
+        assert_eq!(payload(&rows[0])["folder"], serde_json::Value::Null);
+        assert_eq!(payload(&rows[0])["finish"], serde_json::Value::Null);
+    }
+
+    /// A second add of a card already wished for is **`+1`**, not the row's new total — the day
+    /// header sums presses, and `add_wish` folds on the grain.
+    #[test]
+    fn a_second_add_records_the_copies_the_press_asked_for() {
+        let conn = seeded();
+        let wish = || WishInput {
+            card_id: Some("bolt-lea".into()),
+            quantity: 2,
+            ..Default::default()
+        };
+        add_wish(&conn, &wish()).unwrap();
+        let second = add_wish(&conn, &wish()).unwrap();
+
+        assert_eq!(second.quantity, 4, "the row really did fold");
+        assert_eq!(feed(&conn)[0].delta, 2, "and the line is about the press");
+    }
+
+    #[test]
+    fn a_wish_filed_into_a_folder_names_the_folder_and_the_finish() {
+        let conn = seeded();
+        let ordered = crate::wishlist_folders::create_folder(&conn, None, "Ordered")
+            .unwrap()
+            .id;
+        add_wish(
+            &conn,
+            &WishInput {
+                card_id: Some("bolt-lea".into()),
+                quantity: 1,
+                preferred_finish: Some("foil".into()),
+                folder_id: Some(ordered),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let add = feed(&conn)
+            .into_iter()
+            .find(|r| r.kind == crate::activity::ADD)
+            .expect("the add is in the feed");
+        assert_eq!(payload(&add)["folder"], "Ordered");
+        assert_eq!(payload(&add)["finish"], "foil");
+    }
+
+    /// **The quiet door is quiet and the loud one is not**, which is the whole of the bulk pair's
+    /// premise — asserted as one comparison rather than two separate claims, because a `feed` that
+    /// answered nothing at all would satisfy either half on its own.
+    #[test]
+    fn the_quiet_door_records_nothing_where_add_wish_records_one() {
+        let conn = seeded();
+        let wish = |id: &str| WishInput {
+            card_id: Some(id.into()),
+            quantity: 2,
+            ..Default::default()
+        };
+
+        let quiet = add_wish_silent(&conn, &wish("bolt-lea")).unwrap();
+        let after_quiet = feed(&conn).len();
+        let loud = add_wish(&conn, &wish("card-1")).unwrap();
+        let after_loud = feed(&conn).len();
+
+        assert_eq!(after_quiet, 0, "`add_wish_silent` writes no feed row");
+        assert_eq!(
+            after_loud - after_quiet,
+            1,
+            "and `add_wish` still writes exactly one: forty call sites rely on it"
+        );
+        // Both really wrote a wish — a quiet door that wrote nothing at all would pass the
+        // assertions above and fail the feature.
+        assert_eq!((quiet.quantity, loud.quantity), (2, 2));
+        assert_eq!(
+            wish_rows_and_copies(&conn),
+            (2, 4),
+            "two rows, four copies, whichever door wrote them"
+        );
+    }
+
+    /// One line for a run, and the three facts `activityText.ts` reads off it: the kind, the
+    /// absent card, and the two counts.
+    #[test]
+    fn the_bulk_door_records_one_row_carrying_its_counts() {
+        let conn = seeded();
+        for card in ["bolt-lea", "card-1"] {
+            add_wish_silent(
+                &conn,
+                &WishInput {
+                    card_id: Some(card.into()),
+                    quantity: 2,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        }
+
+        record_wishes_added(&conn, 2, 4, None).unwrap();
+
+        let rows = feed(&conn);
+        assert_eq!(rows.len(), 1, "one press, one line");
+        assert_eq!(rows[0].scope, crate::activity::WISHLIST);
+        assert_eq!(
+            rows[0].kind,
+            crate::activity::ADD,
+            "an `add`, never an `import`: nobody chose a file"
+        );
+        assert_eq!(rows[0].card_id, None);
+        assert_eq!(rows[0].card_name, None, "a run is about no one card");
+        assert_eq!(rows[0].delta, 4, "the copies, signed, for the day header");
+        assert_eq!(payload(&rows[0])["cards"], 4);
+        assert_eq!(payload(&rows[0])["rows"], 2);
+        assert_eq!(payload(&rows[0])["folder"], serde_json::Value::Null);
+        assert_eq!(
+            wish_rows_and_copies(&conn),
+            (2, 4),
+            "and the wishes are really there"
+        );
+    }
+
+    /// The bulk line names the drawer the whole run was filed into, exactly as a single add names
+    /// the one it landed in — which is what lets one sentence read *… · in Ordered*.
+    #[test]
+    fn the_bulk_door_names_the_folder_the_run_was_filed_into() {
+        let conn = seeded();
+        let ordered = crate::wishlist_folders::create_folder(&conn, None, "Ordered")
+            .unwrap()
+            .id;
+
+        record_wishes_added(&conn, 3, 7, Some(ordered)).unwrap();
+
+        let add = feed(&conn)
+            .into_iter()
+            .find(|r| r.kind == crate::activity::ADD)
+            .expect("the run is in the feed");
+        assert_eq!(payload(&add)["folder"], "Ordered");
+        assert_eq!(payload(&add)["rows"], 3);
+        assert_eq!(payload(&add)["cards"], 7);
+    }
+
+    /// Every wish there is, as `(rows, copies)` — the two units the bulk payload keeps apart.
+    /// Its neighbour [`wish_count`] answers the rows alone and predates the pair.
+    fn wish_rows_and_copies(conn: &Connection) -> (i64, i64) {
+        conn.query_row(
+            "SELECT count(*), coalesce(sum(quantity), 0) FROM wishlist_entries",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn changing_a_wish_quantity_records_the_two_numbers() {
+        let conn = seeded();
+        let added = add_wish(
+            &conn,
+            &WishInput {
+                card_id: Some("bolt-lea".into()),
+                quantity: 4,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        set_wish_quantity(&conn, added.id, 1).unwrap();
+
+        let rows = feed(&conn);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].kind, crate::activity::QUANTITY);
+        assert_eq!(rows[0].delta, -3);
+        assert_eq!(payload(&rows[0])["from"], 4);
+        assert_eq!(payload(&rows[0])["to"], 1);
+    }
+
+    /// Zero deletes the wish, so the line is a **removal** rather than a change to nothing —
+    /// and there is exactly one of them, not one from each of the two doors involved.
+    #[test]
+    fn a_wish_stepper_taken_to_zero_records_one_removal() {
+        let conn = seeded();
+        let added = add_wish(
+            &conn,
+            &WishInput {
+                card_id: Some("bolt-lea".into()),
+                quantity: 2,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        set_wish_quantity(&conn, added.id, 0).unwrap();
+
+        let removals: Vec<_> = feed(&conn)
+            .into_iter()
+            .filter(|r| r.kind == crate::activity::REMOVE)
+            .collect();
+        assert_eq!(removals.len(), 1);
+        assert_eq!(removals[0].delta, -2);
+        assert_eq!(removals[0].card_name.as_deref(), Some("Lightning Bolt"));
+    }
+
+    #[test]
+    fn removing_a_wish_records_the_copies_that_left_and_the_drawer_they_left() {
+        let conn = seeded();
+        let ordered = crate::wishlist_folders::create_folder(&conn, None, "Ordered")
+            .unwrap()
+            .id;
+        let added = add_wish(
+            &conn,
+            &WishInput {
+                card_id: Some("bolt-lea".into()),
+                quantity: 5,
+                folder_id: Some(ordered),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        remove_wish(&conn, added.id).unwrap();
+
+        let rows = feed(&conn);
+        assert_eq!(rows[0].kind, crate::activity::REMOVE);
+        assert_eq!(rows[0].delta, -5);
+        assert_eq!(payload(&rows[0])["folder"], "Ordered");
+    }
+
+    /// An id that resolves to nothing is a success and records nothing.
+    #[test]
+    fn removing_a_wish_that_is_not_there_records_nothing() {
+        let conn = seeded();
+        remove_wish(&conn, 4242).unwrap();
+        assert!(feed(&conn).is_empty());
+    }
+
+    #[test]
+    fn repointing_a_wish_records_an_edit_naming_the_printing() {
+        let conn = seeded();
+        let added = add_wish(
+            &conn,
+            &WishInput {
+                card_id: Some("bolt-lea".into()),
+                quantity: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        set_wish_printing(&conn, added.id, Some("bolt-2ed".into())).unwrap();
+
+        let rows = feed(&conn);
+        assert_eq!(rows[0].kind, crate::activity::EDIT);
+        assert_eq!(rows[0].delta, 0, "which printing is not a count");
+        assert_eq!(
+            payload(&rows[0])["fields"],
+            serde_json::json!(["printing"]),
+            "the payload table's own word"
+        );
+    }
+
+    /// The bulk rule, one list over: a file of three lines is **one** row carrying its counts.
+    #[test]
+    fn a_wishlist_import_records_one_row_carrying_its_count() {
+        let conn = seeded();
+        let items = vec![
+            wish("o1", 20),
+            pinned_wish("o1", "bolt-2ed", 15),
+            wish("oracle-1", 5),
+        ];
+        commit_import(&conn, &items, "add").unwrap();
+
+        let rows = feed(&conn);
+        assert_eq!(rows.len(), 1, "one row for the whole file");
+        assert_eq!(rows[0].scope, crate::activity::WISHLIST);
+        assert_eq!(rows[0].kind, crate::activity::IMPORT);
+        assert_eq!(rows[0].card_id, None);
+        assert_eq!(payload(&rows[0])["cards"], 40, "the copies the file named");
+        assert_eq!(payload(&rows[0])["rows"], 3, "the wishlist lines it wrote");
+        assert_eq!(rows[0].delta, 40);
+    }
+
+    /// A `set` file that lowers a quantity still records one row, and its `delta` goes down.
+    #[test]
+    fn a_set_wishlist_import_that_lowers_a_quantity_records_a_negative_delta() {
+        let conn = seeded();
+        commit_import(&conn, &[wish("o1", 10)], "add").unwrap();
+        commit_import(&conn, &[wish("o1", 4)], "set").unwrap();
+
+        let imports: Vec<_> = feed(&conn)
+            .into_iter()
+            .filter(|r| r.kind == crate::activity::IMPORT)
+            .collect();
+        assert_eq!(imports.len(), 2);
+        assert_eq!(imports[0].delta, -6, "what the list actually lost");
+        assert_eq!(payload(&imports[0])["cards"], 4, "what the file said");
+    }
+
+    /// A whole-list wipe is one line, and it does not clear the feed.
+    #[test]
+    fn clearing_the_wishlist_records_one_row() {
+        let conn = seeded();
+        commit_import(&conn, &[wish("o1", 7), wish("oracle-1", 2)], "add").unwrap();
+        crate::reset::clear_wishlist(&conn).unwrap();
+
+        let rows = feed(&conn);
+        assert_eq!(rows[0].scope, crate::activity::WISHLIST);
+        assert_eq!(rows[0].kind, crate::activity::CLEAR);
+        assert_eq!(payload(&rows[0])["cards"], 2, "two wishes went");
+        assert_eq!(rows[0].delta, -9, "and nine copies with them");
+    }
+
+    /// The rollback rule, from the wishlist's side: `record` is written on the caller's handle,
+    /// so a transaction that never commits leaves no history behind.
+    #[test]
+    fn a_rolled_back_wish_leaves_no_activity_row() {
+        let conn = seeded();
+        let tx = conn.unchecked_transaction().unwrap();
+        add_wish(
+            &tx,
+            &WishInput {
+                card_id: Some("bolt-lea".into()),
+                quantity: 2,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(crate::activity::recent(&tx, 10).unwrap().len(), 1);
+        drop(tx);
+
+        assert!(feed(&conn).is_empty());
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM wishlist_entries", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
     }
 }

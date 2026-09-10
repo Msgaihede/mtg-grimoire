@@ -371,3 +371,14 @@ where the rail is a bottom tab bar. Driven over CDP per `docs/reference/live-ui-
 * **No deck-folder shortcuts.** There is no `deck_folder_summary` command and deck folders carry no
   counts; the `decks` widget pins decks, which is what the issue asks for.
 * **`StatsCard` does not move to `src/components/`.** §5.
+* **The deck cover rule is a third copy and stays one.** `hasCover(deck)` is
+  `deck.coverCardId !== null && deck.coverArtist !== null`, and `DeckTile.tsx:197` already carries
+  a note asking for a shared home for it — the `decks` widget makes it three. It is two lines and
+  a comment rather than a figure, so the cost of the duplication is style drift and not a number
+  that can disagree with itself; hoisting it belongs with the `StatsCard` move, in the pass that
+  is not racing four other branches through the deck files.
+* **Neither value widget uses `BarChart`.** Both draw with `Track` and `percent` from the same
+  file, because `BarChart` prints an integer count on each bar and hardcodes its spoken noun to
+  *"n cards"* — and these bars are money. The two widgets were written by different agents that
+  reached that conclusion independently and landed on the same import, which is the outcome the
+  shared primitives exist to produce.

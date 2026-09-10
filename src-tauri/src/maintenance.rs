@@ -283,6 +283,26 @@ pub fn reclaim_freed_pages(
     Ok(())
 }
 
+/// Trim the home page's activity feed to the newest [`crate::activity::KEEP`] rows, at launch.
+///
+/// **The launch's third housekeeping job, beside the FTS rebuild an interrupted compaction owed
+/// and the staging table an interrupted ingest left** — and, like both of those, it is
+/// *logged and left owing* rather than fatal: only the two migrations may stop a launch, and a
+/// feed a few thousand rows longer than it should be is a database that works perfectly.
+///
+/// **It is the user file's, where the rest of this module is the corpus'**, so it takes a
+/// `&Connection` and no schema argument: `activity` is unqualified and resolves into `main`,
+/// which is exactly where it lives. Nothing here is a pragma, which is why it needs none of the
+/// `{schema}` care every other function in this file carries.
+///
+/// **Once per launch and never on a timer.** `deck_audit` has never needed a pruner because a
+/// deck a person has actually built is hundreds of rows; this log grows with every press for as
+/// long as the app is used, and a launch is both often enough to bound it and the one moment
+/// when nothing is waiting on the write connection.
+pub fn prune_activity_log(conn: &Connection) -> rusqlite::Result<usize> {
+    crate::activity::prune(conn)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -862,6 +882,56 @@ mod tests {
             "and it stays that way"
         );
         drop(reopened);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **A launch trims the activity log**, which is the whole of what bounds it: the table is
+    /// append-only and grows with every press the reader makes.
+    ///
+    /// Driven through `schema::prepare_database` rather than through
+    /// [`prune_activity_log`] directly, for the reason
+    /// `a_kill_between_the_vacuum_and_the_rebuild_is_repaired_at_the_next_launch` is written the
+    /// same way: what is being asserted is that the *launch* does it, and a test that called the
+    /// helper would go on passing the day the call in `prepare_database` was tidied out.
+    #[test]
+    fn a_launch_trims_the_activity_log_to_its_ceiling() {
+        let dir = scratch("prune-activity");
+        crate::split::convert(&dir).unwrap();
+        let conn = crate::db::open_write(&dir).unwrap();
+
+        let over = crate::activity::KEEP as i64 + 120;
+        let tx = conn.unchecked_transaction().unwrap();
+        for at in 1..=over {
+            tx.execute(
+                "INSERT INTO activity (at, scope, kind, card_id, card_name, payload, delta)
+                 VALUES (?1, 'collection', 'add', 'bolt-lea', 'Lightning Bolt', '{}', 1)",
+                rusqlite::params![at],
+            )
+            .unwrap();
+        }
+        tx.commit().unwrap();
+
+        crate::schema::prepare_database(&conn).unwrap();
+
+        let left: i64 = conn
+            .query_row("SELECT count(*) FROM activity", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(left, crate::activity::KEEP as i64);
+        let oldest: i64 = conn
+            .query_row("SELECT min(at) FROM activity", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(oldest, 121, "and it is the newest that survived");
+
+        // A second launch on a log under the ceiling loses nothing — the trim is idempotent,
+        // which is what makes it safe to run on every start.
+        crate::schema::prepare_database(&conn).unwrap();
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM activity", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            crate::activity::KEEP as i64
+        );
+
+        drop(conn);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

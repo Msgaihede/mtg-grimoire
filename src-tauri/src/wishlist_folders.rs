@@ -204,11 +204,39 @@ pub fn create_folder(
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
+    record_folder(conn, "create", name, None)?;
     read_folder(conn, id)?.ok_or_else(|| FOLDER_GONE.to_owned())
+}
+
+/// One `folder` line in the feed, for the three acts that change what drawers exist.
+///
+/// [`crate::collection_folders`]' helper of the same name, over the wishlist's scope — and with
+/// the same three absences: [`move_folder`], [`reorder_folders`] and nothing else call it,
+/// because rearranging a cabinet changes no wish and a drag over a tree renumbers every sibling
+/// in it. `card_id`, `card_name` and `delta` are all empty: a folder is not a card.
+fn record_folder(
+    conn: &Connection,
+    action: &str,
+    name: &str,
+    previous: Option<&str>,
+) -> Result<(), String> {
+    crate::activity::record(
+        conn,
+        crate::activity::WISHLIST,
+        crate::activity::FOLDER,
+        None,
+        None,
+        &serde_json::json!({ "action": action, "name": name, "from": previous }),
+        0,
+    )
+    .map_err(|e| e.to_string())
 }
 
 pub fn rename_folder(conn: &Connection, id: i64, name: &str) -> Result<WishlistFolder, String> {
     let name = valid_name(name)?;
+    // The previous name, read before the write — it is the half of the sentence that says what
+    // the drawer used to be called, and one statement later there is nothing to read it off.
+    let before = read_folder(conn, id)?.ok_or_else(|| FOLDER_GONE.to_owned())?;
     let changed = conn
         .execute(
             "UPDATE wishlist_folders SET name = ?2, updated_at = unixepoch() WHERE id = ?1",
@@ -218,6 +246,7 @@ pub fn rename_folder(conn: &Connection, id: i64, name: &str) -> Result<WishlistF
     if changed == 0 {
         return Err(FOLDER_GONE.to_owned());
     }
+    record_folder(conn, "rename", name, Some(&before.name))?;
     read_folder(conn, id)?.ok_or_else(|| FOLDER_GONE.to_owned())
 }
 
@@ -330,6 +359,9 @@ fn refuse_cycle(conn: &Connection, id: i64, start: i64) -> Result<(), String> {
 /// hang this one command — it would deadlock every write in the app for the life of the
 /// process. Exceeding the budget is answered as a cycle, which is the only thing a chain that
 /// long can be.
+///
+/// **Writes no [`crate::activity`] row** — see [`record_folder`]: re-parenting a drawer changes
+/// no wish and no folder's existence.
 pub fn move_folder(
     conn: &Connection,
     id: i64,
@@ -382,6 +414,9 @@ pub fn move_folder(
 /// [`crate::schema::WISHLIST_GRAIN`], which is why [`delete_folder`] has to re-file by hand — but
 /// this write moves no wish between folders, only folders between folders, so no grain moves and
 /// there is nothing to merge.
+///
+/// **And so it writes no [`crate::activity`] row either** — see [`record_folder`]. One drag can
+/// renumber every sibling in a tree, and a line per folder moved would be the whole day's page.
 pub fn reorder_folders(
     conn: &Connection,
     parent_id: Option<i64>,
@@ -462,6 +497,10 @@ pub fn reorder_folders(
 /// wishes are all re-filed and the folder is gone, or none of it happened.
 pub fn delete_folder(conn: &Connection, id: i64) -> Result<(), String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    // The name, for the feed row at the bottom, and `None` is what makes an id nobody answers
+    // to record nothing: a delete that found no folder deleted no folder. This function has
+    // never refused a stale id and does not start now.
+    let deleted = read_folder(&tx, id)?;
     // The sub-tree, in the database rather than in a Rust walk, because the cascade this
     // stands in front of is itself recursive and the two must agree about which folders are
     // doomed. **`UNION` and never `UNION ALL`**: a `parent_id` cycle that arrived some other
@@ -497,6 +536,11 @@ pub fn delete_folder(conn: &Connection, id: i64) -> Result<(), String> {
     }
     tx.execute("DELETE FROM wishlist_folders WHERE id = ?1", params![id])
         .map_err(|e| e.to_string())?;
+    // **One line for the press, not one per wish it re-filed** — [`refile_wish`] records
+    // nothing, so a drawer holding two hundred wishes is still one sentence.
+    if let Some(folder) = deleted {
+        record_folder(&tx, "delete", &folder.name, None)?;
+    }
     tx.commit().map_err(|e| e.to_string())
 }
 
@@ -531,6 +575,12 @@ pub fn set_wish_folder(
     folder_id: Option<i64>,
 ) -> Result<EntryChange, String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    // The wish and the drawer it is leaving, read before the move: the row may be folded into
+    // another and stop existing, and its folder is the very thing about to change. **`None` is
+    // the root and not an absence** — `activityText.ts` reads a present-but-null end as the
+    // cabinet's own name and a missing key as "we do not know", so both ends are always written.
+    let facts = crate::wishlist::wish_facts(&tx, id)?;
+    let mut destination: Option<String> = None;
     // Validated in words rather than left to the foreign key, [`crate::deck::set_folder`]'s
     // reasoning verbatim: `wishlist_entries.folder_id` does declare
     // `REFERENCES wishlist_folders(id)`, but `PRAGMA foreign_keys` is a per-connection setting
@@ -541,8 +591,23 @@ pub fn set_wish_folder(
     // nothing this function opened survives its own `Err`.
     if let Some(folder) = folder_id {
         require_folder(&tx, folder)?;
+        destination = read_folder(&tx, folder)?.map(|f| f.name);
     }
     refile_wish(&tx, id, folder_id).and_then(|change| {
+        // **`delta` is 0**: a move changes no count, and a roll-up that counted one would
+        // double every card that only ever changed drawer.
+        if let Some(facts) = facts {
+            crate::activity::record(
+                &tx,
+                crate::activity::WISHLIST,
+                crate::activity::MOVE,
+                facts.card_id.as_deref(),
+                Some(&facts.name),
+                &serde_json::json!({ "from": facts.folder, "to": destination }),
+                0,
+            )
+            .map_err(|e| e.to_string())?;
+        }
         tx.commit().map_err(|e| e.to_string())?;
         Ok(change)
     })
@@ -559,6 +624,10 @@ pub fn set_wish_folder(
 /// delete run this once per wish in a sub-tree and still be one press.
 ///
 /// [`set_wish_folder`] is where the rule is argued; the paragraph above it is the one to read.
+///
+/// **It records no [`crate::activity`] row**: its two callers are [`set_wish_folder`], which
+/// records the `move` itself, and [`delete_folder`], which records one `folder` line for the
+/// whole press rather than one per wish it re-filed.
 fn refile_wish(tx: &Connection, id: i64, folder_id: Option<i64>) -> Result<EntryChange, String> {
     // The three grain terms this write does *not* touch, plus the quantity the merge moves.
     // Read before anything is decided, because "is that wish still there?" is answered by the
@@ -1601,5 +1670,110 @@ mod tests {
         let shopping = create_folder(&conn, None, "Shopping").unwrap();
         let err = reorder_folders(&conn, Some(999_999), &[shopping.id]).unwrap_err();
         assert_eq!(err, FOLDER_GONE);
+    }
+
+    /* ---------------------------------------------------------------------------------- *
+     * The activity feed — this cabinet's four recording sites and its two silent ones.
+     * ---------------------------------------------------------------------------------- */
+
+    fn feed(conn: &Connection) -> Vec<crate::activity::ActivityEntry> {
+        crate::activity::recent(conn, crate::activity::MAX_LIMIT).unwrap()
+    }
+
+    fn payload(entry: &crate::activity::ActivityEntry) -> serde_json::Value {
+        serde_json::from_str(&entry.payload).unwrap()
+    }
+
+    #[test]
+    fn making_a_wishlist_folder_records_one_activity_row() {
+        let conn = conn();
+        create_folder(&conn, None, "Ordered").unwrap();
+
+        let rows = feed(&conn);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].scope,
+            crate::activity::WISHLIST,
+            "the wishlist's cabinet, not the collection's — a feed mixes both"
+        );
+        assert_eq!(rows[0].kind, crate::activity::FOLDER);
+        assert_eq!(rows[0].delta, 0);
+        assert_eq!(payload(&rows[0])["action"], "create");
+        assert_eq!(payload(&rows[0])["name"], "Ordered");
+    }
+
+    #[test]
+    fn renaming_a_wishlist_folder_records_the_name_it_had() {
+        let conn = conn();
+        let shopping = create_folder(&conn, None, "Shopping").unwrap();
+        rename_folder(&conn, shopping.id, "Ordered").unwrap();
+
+        let rows = feed(&conn);
+        assert_eq!(payload(&rows[0])["action"], "rename");
+        assert_eq!(payload(&rows[0])["from"], "Shopping");
+        assert_eq!(payload(&rows[0])["name"], "Ordered");
+    }
+
+    /// One line for the press, however many wishes it had to re-file.
+    #[test]
+    fn deleting_a_wishlist_folder_holding_wishes_records_one_row() {
+        let conn = conn();
+        let shopping = create_folder(&conn, None, "Shopping").unwrap();
+        for oracle in ["o1", "o2", "o3"] {
+            wish(&conn, oracle, 2, Some(shopping.id));
+        }
+        delete_folder(&conn, shopping.id).unwrap();
+
+        let rows = feed(&conn);
+        assert_eq!(rows.len(), 2, "the create and the delete, and nothing else");
+        assert_eq!(payload(&rows[0])["action"], "delete");
+        assert_eq!(payload(&rows[0])["name"], "Shopping");
+    }
+
+    #[test]
+    fn deleting_a_wishlist_folder_that_is_not_there_records_nothing() {
+        let conn = conn();
+        delete_folder(&conn, 999_999).unwrap();
+        assert!(feed(&conn).is_empty());
+    }
+
+    #[test]
+    fn filing_a_wish_records_both_ends_of_the_move() {
+        let conn = conn();
+        let shopping = create_folder(&conn, None, "Shopping").unwrap();
+        let id = wish(&conn, "o1", 3, None);
+        set_wish_folder(&conn, id, Some(shopping.id)).unwrap();
+
+        let rows = feed(&conn);
+        assert_eq!(rows[0].scope, crate::activity::WISHLIST);
+        assert_eq!(rows[0].kind, crate::activity::MOVE);
+        assert_eq!(rows[0].delta, 0, "a move changes no count");
+        assert_eq!(rows[0].card_name.as_deref(), Some("Lightning Bolt"));
+        assert_eq!(payload(&rows[0])["from"], serde_json::Value::Null);
+        assert_eq!(payload(&rows[0])["to"], "Shopping");
+
+        set_wish_folder(&conn, id, None).unwrap();
+        let rows = feed(&conn);
+        assert_eq!(payload(&rows[0])["from"], "Shopping");
+        assert_eq!(payload(&rows[0])["to"], serde_json::Value::Null);
+        assert!(
+            payload(&rows[0]).get("to").is_some(),
+            "the key is present and null — a missing one would read as \"we do not know\""
+        );
+    }
+
+    /// Rearranging the cabinet is not a change to what is in it.
+    #[test]
+    fn moving_and_reordering_wishlist_folders_record_nothing() {
+        let conn = conn();
+        let a = create_folder(&conn, None, "A").unwrap();
+        let b = create_folder(&conn, None, "B").unwrap();
+        let before = feed(&conn).len();
+        assert_eq!(before, 2, "the two creates, and this is the baseline");
+
+        move_folder(&conn, b.id, Some(a.id)).unwrap();
+        reorder_folders(&conn, Some(a.id), &[b.id]).unwrap();
+
+        assert_eq!(feed(&conn).len(), before);
     }
 }

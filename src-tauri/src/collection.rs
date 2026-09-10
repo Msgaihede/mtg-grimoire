@@ -433,6 +433,74 @@ fn printing_of(conn: &Connection, card_id: &str) -> Result<(String, String, Stri
     .ok_or_else(|| format!("no card with the id `{card_id}` is in the card database"))
 }
 
+/// What a [`crate::activity`] row says about one entry, read **before** the write changes it.
+///
+/// Every recording site in this module wants the same four facts and three of them stop being
+/// answerable afterwards: the quantity and the folder are what the write is about to change, and
+/// the row itself may not survive it. One `SELECT` rather than one per site, and `None` for an
+/// id nothing answers to — which every caller here already has a refusal for.
+///
+/// `card_name` is denormalised into the feed for `activity.card_name`'s stated reason: a line
+/// that can only say `bolt-lea` once the printing leaves `cards` is not a line. It is `None`
+/// when the join finds nothing, which the sentence degrades over rather than guessing at.
+pub(crate) struct EntryFacts {
+    pub(crate) card_id: Option<String>,
+    pub(crate) card_name: Option<String>,
+    pub(crate) quantity: i64,
+    pub(crate) folder: Option<String>,
+}
+
+/// [`EntryFacts`] for one entry, or `None` when there is no such row.
+///
+/// The `cards` join is `from_sql`'s in shape and a `LEFT JOIN` for its reason — an entry whose
+/// printing has left the corpus is exactly the row the denormalised name exists for.
+pub(crate) fn entry_facts(conn: &Connection, id: i64) -> Result<Option<EntryFacts>, String> {
+    conn.query_row(
+        "SELECT e.card_id, c.name, e.quantity, f.name
+           FROM collection_entries e
+           LEFT JOIN cards c ON c.id = e.card_id
+           LEFT JOIN collection_folders f ON f.id = e.folder_id
+          WHERE e.id = ?1",
+        params![id],
+        |r| {
+            Ok(EntryFacts {
+                card_id: r.get(0)?,
+                card_name: r.get(1)?,
+                quantity: r.get(2)?,
+                folder: r.get(3)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(|e| e.to_string())
+}
+
+/// The drawer's name for a feed payload — `None` for the root, which is a **place** and not an
+/// absence (`activityText.ts` draws no clause for it rather than naming it).
+fn folder_name(conn: &Connection, folder_id: Option<i64>) -> Result<Option<String>, String> {
+    let Some(id) = folder_id else {
+        return Ok(None);
+    };
+    conn.query_row(
+        "SELECT name FROM collection_folders WHERE id = ?1",
+        params![id],
+        |r| r.get(0),
+    )
+    .optional()
+    .map_err(|e| e.to_string())
+}
+
+/// The card's name, for the one site that has an id and no row to read it off.
+fn card_name_of(conn: &Connection, card_id: &str) -> Result<Option<String>, String> {
+    conn.query_row(
+        "SELECT name FROM cards WHERE id = ?1",
+        params![card_id],
+        |r| r.get(0),
+    )
+    .optional()
+    .map_err(|e| e.to_string())
+}
+
 /// Add copies, folding into the row that already holds this grain.
 ///
 /// **The grain includes the folder since schema v24**, which is what makes "Add to → Binder" an
@@ -441,8 +509,32 @@ fn printing_of(conn: &Connection, card_id: &str) -> Result<(String, String, Stri
 /// field, `None` is the root, and the column has to be written by this statement rather than by
 /// a follow-up move — the conflict target is `COLLECTION_GRAIN` verbatim, so the column that
 /// decides which row is folded into must be set before the conflict is resolved.
+///
+/// **This is where the reader's own add is recorded in [`crate::activity`], and
+/// [`add_entry_filed`] deliberately is not.** The two callers that reach past this door are a
+/// bulk import — which records one row carrying its count — and `deck_quick_add::quick_add`,
+/// which writes a `deck_audit` row and by the feed's first rule must not write a second line
+/// about the same press. Both production callers of *this* function (`collection_add` and the
+/// web target's route) are the reader's own gesture, which is what makes this the right rung.
 pub fn add_entry(conn: &Connection, input: &EntryInput) -> Result<EntryChange, String> {
-    add_entry_filed(conn, input, READER_FOLDERS)
+    let change = add_entry_filed(conn, input, READER_FOLDERS)?;
+    // Inside whatever transaction the caller holds, and never one of its own — see
+    // [`crate::activity::record`]. The folder is read back by name because the feed outlives the
+    // folder, exactly as `card_name` outlives the printing.
+    crate::activity::record(
+        conn,
+        crate::activity::COLLECTION,
+        crate::activity::ADD,
+        Some(&input.card_id),
+        card_name_of(conn, &input.card_id)?.as_deref(),
+        &serde_json::json!({
+            "folder": folder_name(conn, input.folder_id)?,
+            "finish": input.finish,
+        }),
+        input.quantity,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(change)
 }
 
 /// [`add_entry`] with the folder fence handed in, for the two callers that file into a folder no
@@ -459,6 +551,11 @@ pub fn add_entry(conn: &Connection, input: &EntryInput) -> Result<EntryChange, S
 /// **`pub(crate)` and not `pub`.** `collection_add` refuses a `deck` folder outright and must go
 /// on refusing; this door is reachable from inside the crate, where a caller can be held to
 /// answering for the `deck_cards` row behind the copies, and from nowhere else.
+///
+/// **It writes no [`crate::activity`] row**, and neither do its two callers per line:
+/// [`commit_import`] records one row carrying its count, and `deck_quick_add::quick_add` writes
+/// a `deck_audit` row instead (one event, one line). [`add_entry`] is where the reader's own add
+/// is recorded.
 pub(crate) fn add_entry_filed(
     conn: &Connection,
     input: &EntryInput,
@@ -635,6 +732,9 @@ pub struct ImportCommitOutcome {
 /// tradelist outlive the very quantity that bounds it.
 /// `folders` is [`add_entry_filed`]'s parameter for [`add_entry_filed`]'s reason. This function
 /// has exactly one caller, so it takes the fence directly rather than through a door of its own.
+///
+/// **Records no [`crate::activity`] row**: it is a consequence of [`commit_import`], which
+/// records one row for the whole file.
 fn set_entry(
     conn: &Connection,
     input: &EntryInput,
@@ -759,8 +859,16 @@ pub(crate) fn commit_import(
     // id asked about *here* is a sentence rather than a rollback, which is what the mode check
     // above is buying too.
     folder_named(conn, folder_id, DECK_WRITE_FOLDERS)?;
-    let before: i64 = conn
-        .query_row("SELECT count(*) FROM collection_entries", [], |r| r.get(0))
+    // Both totals in one statement: the row count the outcome is built from, and the copies the
+    // feed's `delta` is. The second is not derivable from the first — a `set` file can lower a
+    // quantity without deleting a row — and a day header that added an import's copies without
+    // subtracting what it wrote away would be arithmetic the reader can check and catch.
+    let (before, copies_before): (i64, i64) = conn
+        .query_row(
+            "SELECT count(*), coalesce(sum(quantity), 0) FROM collection_entries",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
         .map_err(|e| e.to_string())?;
 
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
@@ -804,22 +912,55 @@ pub(crate) fn commit_import(
         } else {
             let change = set_entry(&tx, &input, DECK_WRITE_FOLDERS)?;
             if change.quantity == 0 {
-                remove_entry(&tx, change.id)?;
+                // [`delete_entry`] and not [`remove_entry`]: the recording door would write one
+                // feed line per zeroed line of the file, which is the bulk rule broken by the
+                // one arm of this loop that reaches a public write.
+                delete_entry(&tx, change.id)?;
                 removed += 1;
             }
         }
     }
-    tx.commit().map_err(|e| e.to_string())?;
 
-    let after: i64 = conn
-        .query_row("SELECT count(*) FROM collection_entries", [], |r| r.get(0))
+    // The counts are read **inside** the transaction rather than after the commit, and the
+    // values are identical — the same connection sees its own uncommitted writes. It is done
+    // here so the arithmetic below exists once: the feed's payload wants the same three numbers
+    // the outcome does, and computing them twice on either side of a `commit` is two answers to
+    // keep in step.
+    let (after, copies_after): (i64, i64) = tx
+        .query_row(
+            "SELECT count(*), coalesce(sum(quantity), 0) FROM collection_entries",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
         .map_err(|e| e.to_string())?;
     let added = after - before + removed;
+    // `.max(0)` for the one line that is counted in two of the three — see this function's
+    // doc. Every other file shape makes this subtraction exact.
+    let updated = (items.len() as i64 - added - removed).max(0);
+
+    // **One row for the whole file**, the feed's second rule: an import of 5 000 cards must not
+    // be 5 000 lines. `cards` is what the *file* said — the copies it named, which is the number
+    // the reader recognises — and `rows` is the collection lines it landed on, which is the unit
+    // somebody who wants to go and find them counts. `delta` is neither: it is the net copies
+    // the collection gained, which a `set` file can make negative.
+    crate::activity::record(
+        &tx,
+        crate::activity::COLLECTION,
+        crate::activity::IMPORT,
+        None,
+        None,
+        &serde_json::json!({
+            "cards": items.iter().map(|i| i.quantity).sum::<i64>(),
+            "rows": added + updated + removed,
+        }),
+        copies_after - copies_before,
+    )
+    .map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())?;
+
     Ok(ImportCommitOutcome {
         added,
-        // `.max(0)` for the one line that is counted in two of the three — see this function's
-        // doc. Every other file shape makes this subtraction exact.
-        updated: (items.len() as i64 - added - removed).max(0),
+        updated,
         removed,
     })
 }
@@ -847,6 +988,11 @@ pub(crate) fn commit_import(
 /// exception, and its own doc says why.
 pub fn set_quantity(conn: &Connection, id: i64, quantity: i64) -> Result<EntryChange, String> {
     valid_quantity(quantity, "collection quantity")?;
+    // Read before the write, because the write is what makes them unanswerable — and a `None`
+    // here is the same [`GONE`] both arms below answer, asked one statement earlier.
+    let Some(facts) = entry_facts(conn, id)? else {
+        return Err(GONE.to_owned());
+    };
     if quantity == 0 {
         let gone = conn
             .execute("DELETE FROM collection_entries WHERE id = ?1", params![id])
@@ -854,6 +1000,19 @@ pub fn set_quantity(conn: &Connection, id: i64, quantity: i64) -> Result<EntryCh
         if gone == 0 {
             return Err(GONE.to_owned());
         }
+        // **A stepper taken to zero is a `remove` and not a `quantity` change**, because the row
+        // is gone and its whole story with it — the sentence a reader needs is "Removed 2 ×
+        // Lightning Bolt", not "changed it from 2 to 0" about a row they can no longer open.
+        crate::activity::record(
+            conn,
+            crate::activity::COLLECTION,
+            crate::activity::REMOVE,
+            facts.card_id.as_deref(),
+            facts.card_name.as_deref(),
+            &serde_json::json!({ "folder": facts.folder }),
+            -facts.quantity,
+        )
+        .map_err(|e| e.to_string())?;
         return Ok(EntryChange {
             id,
             quantity: 0,
@@ -875,6 +1034,16 @@ pub fn set_quantity(conn: &Connection, id: i64, quantity: i64) -> Result<EntryCh
     if changed == 0 {
         return Err(GONE.to_owned());
     }
+    crate::activity::record(
+        conn,
+        crate::activity::COLLECTION,
+        crate::activity::QUANTITY,
+        facts.card_id.as_deref(),
+        facts.card_name.as_deref(),
+        &serde_json::json!({ "from": facts.quantity, "to": quantity }),
+        quantity - facts.quantity,
+    )
+    .map_err(|e| e.to_string())?;
     Ok(EntryChange {
         id,
         quantity,
@@ -964,6 +1133,39 @@ const PATCH_SQL: &str = "UPDATE OR IGNORE collection_entries SET
 /// door**: that one probes for a target using the row's grain *as stored*, so it can express
 /// "this row moved onto a folder that is taken" and cannot express "this row was edited onto a
 /// grain that is taken" — the ten non-folder terms differ at the moment it would have to look.
+/// The fields an [`EntryPatch`] actually names, in the spelling the wire uses.
+///
+/// **camelCase and not the column names**, because `activityText.ts` turns `purchasePrice` into
+/// *purchase price* by splitting on case — a transformation rather than a table, so a column
+/// added later needs no second list over there. The order is the struct's, which is the order
+/// the editor draws them in.
+fn patched_fields(patch: &EntryPatch) -> Vec<&'static str> {
+    let mut fields = Vec::new();
+    let mut named = |present: bool, name: &'static str| {
+        if present {
+            fields.push(name);
+        }
+    };
+    named(patch.finish.is_some(), "finish");
+    named(patch.condition.is_some(), "condition");
+    named(patch.condition_original.is_some(), "conditionOriginal");
+    named(patch.quantity.is_some(), "quantity");
+    named(patch.tradelist_quantity.is_some(), "tradelistQuantity");
+    named(patch.purchase_price.is_some(), "purchasePrice");
+    named(patch.purchase_currency.is_some(), "purchaseCurrency");
+    named(patch.acquired_at.is_some(), "acquiredAt");
+    named(patch.acquisition_source.is_some(), "acquisitionSource");
+    named(patch.serial_number.is_some(), "serialNumber");
+    named(patch.altered.is_some(), "altered");
+    named(patch.signed.is_some(), "signed");
+    named(patch.proxy.is_some(), "proxy");
+    named(patch.misprint.is_some(), "misprint");
+    named(patch.grading.is_some(), "grading");
+    named(patch.tags.is_some(), "tags");
+    named(patch.notes.is_some(), "notes");
+    fields
+}
+
 pub fn update_entry(conn: &Connection, id: i64, patch: &EntryPatch) -> Result<EntryChange, String> {
     if let Some(f) = patch.finish.as_deref() {
         valid_finish(f)?;
@@ -984,6 +1186,10 @@ pub fn update_entry(conn: &Connection, id: i64, patch: &EntryPatch) -> Result<En
     }
     let grading = canonical_grading(patch.grading.as_deref())?;
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    // Read inside the transaction and before the patch, for [`entry_facts`]' reason: the edit is
+    // free to change the card's folder-less half of the grain, and on the folding path the row
+    // this id names is about to stop existing.
+    let facts = entry_facts(&tx, id)?;
 
     let applied: Option<i64> = tx
         .query_row(
@@ -1013,6 +1219,7 @@ pub fn update_entry(conn: &Connection, id: i64, patch: &EntryPatch) -> Result<En
         .optional()
         .map_err(|e| e.to_string())?;
     if let Some(quantity) = applied {
+        record_edit(&tx, facts.as_ref(), patch)?;
         tx.commit().map_err(|e| e.to_string())?;
         return Ok(EntryChange {
             id,
@@ -1102,12 +1309,44 @@ pub fn update_entry(conn: &Connection, id: i64, patch: &EntryPatch) -> Result<En
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
+    // **One line for the fold too, and it is still an `edit`.** The reader pressed Save on a
+    // form; that the two rows turned out to be one row is the app's answer to what they typed,
+    // not a second thing that happened to them.
+    record_edit(&tx, facts.as_ref(), patch)?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(EntryChange {
         id: target,
         quantity,
         removed: false,
     })
+}
+
+/// [`update_entry`]'s feed row, written on both of that function's two success paths.
+///
+/// **`delta` is `0` even when the patch names a quantity**, which is the plan's rule and worth
+/// the sentence: an edit form is not a stepper, the day header's `+7 / −6` is about copies coming
+/// and going, and a correction typed into a number field beside seven others is neither.
+///
+/// A `None` facts is a row that was not there when the transaction opened — nothing to name, and
+/// the statement that follows answers [`GONE`] anyway.
+fn record_edit(
+    tx: &Connection,
+    facts: Option<&EntryFacts>,
+    patch: &EntryPatch,
+) -> Result<(), String> {
+    let Some(facts) = facts else {
+        return Ok(());
+    };
+    crate::activity::record(
+        tx,
+        crate::activity::COLLECTION,
+        crate::activity::EDIT,
+        facts.card_id.as_deref(),
+        facts.card_name.as_deref(),
+        &serde_json::json!({ "fields": patched_fields(patch) }),
+        0,
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// Delete the row outright — the **unconditional** delete, where [`set_quantity`]'s zero and
@@ -1120,7 +1359,35 @@ pub fn update_entry(conn: &Connection, id: i64, patch: &EntryPatch) -> Result<En
 /// already has what it wanted. The caller that sends a stale id here is a list still holding a
 /// row something else removed, and telling it the row it wants gone is gone is not
 /// information — it is an error dialog over a success.
+///
+/// **The reader's own delete, and the one that records it.** [`delete_entry`] is the same
+/// statement without the feed row, for [`commit_import`]'s per-line zeroes — see there.
 pub fn remove_entry(conn: &Connection, id: i64) -> Result<EntryChange, String> {
+    // Before the delete, and `None` is not a refusal here: an id that resolves to nothing is a
+    // success (see above), and there is no change to record because there was no change.
+    let facts = entry_facts(conn, id)?;
+    let change = delete_entry(conn, id)?;
+    if let Some(facts) = facts {
+        crate::activity::record(
+            conn,
+            crate::activity::COLLECTION,
+            crate::activity::REMOVE,
+            facts.card_id.as_deref(),
+            facts.card_name.as_deref(),
+            &serde_json::json!({ "folder": facts.folder }),
+            -facts.quantity,
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(change)
+}
+
+/// [`remove_entry`] with no feed row — the statement, and none of the history.
+///
+/// **`pub(crate)` and one caller**: [`commit_import`]'s `set` mode deletes a row per line of the
+/// file that named zero copies, and a bulk press records **one** row carrying its count. Going
+/// through the public door there would put a line in the feed per line of a file.
+pub(crate) fn delete_entry(conn: &Connection, id: i64) -> Result<EntryChange, String> {
     conn.execute("DELETE FROM collection_entries WHERE id = ?1", params![id])
         .map_err(|e| e.to_string())?;
     Ok(EntryChange {
@@ -1181,6 +1448,12 @@ pub fn remove_entry(conn: &Connection, id: i64) -> Result<EntryChange, String> {
 ///
 /// Every statement is inside the caller's transaction, so a pass that fails takes the whole
 /// fold back with it.
+///
+/// **It records no [`crate::activity`] row**, and none of its three callers would want it to: a
+/// fold is a *consequence* of the write that made two rows one, and each of those records the
+/// press that caused it — [`update_entry`] an `edit`, `collection_folders::merge_entry` the
+/// `move` or the folder delete above it, and `reconcile::fold_into_existing` an upstream id
+/// merge nobody pressed at all.
 pub(crate) fn fold_entry(tx: &Connection, target: i64, source: i64) -> rusqlite::Result<()> {
     tx.execute(
         "UPDATE collection_entries AS t SET
@@ -5916,5 +6189,278 @@ mod tests {
         for good in ["rarity", "color", "set", "finish"] {
             assert!(breakdown(&conn, good, TCG).is_ok(), "refused {good}");
         }
+    }
+
+    /* ---------------------------------------------------------------------------------- *
+     * The activity feed. One test per recording site, plus two of the three rules the spec
+     * names — the deck-boundary one lives in `collection_folders`, beside the write it is
+     * about.
+     * ---------------------------------------------------------------------------------- */
+
+    /// The whole feed, newest first — `MAX_LIMIT` so no assertion below can be true only
+    /// because a row fell off the end of a short read.
+    fn feed(conn: &Connection) -> Vec<crate::activity::ActivityEntry> {
+        crate::activity::recent(conn, crate::activity::MAX_LIMIT).unwrap()
+    }
+
+    /// One feed row's payload as JSON. `activityText.ts` is the only *shipped* reader of a
+    /// payload; these assertions are the contract it is written against.
+    fn payload(entry: &crate::activity::ActivityEntry) -> serde_json::Value {
+        serde_json::from_str(&entry.payload).unwrap()
+    }
+
+    #[test]
+    fn adding_a_card_records_one_activity_row() {
+        let conn = seeded();
+        add_entry(&conn, &input("bolt-lea", "nonfoil", 3)).unwrap();
+
+        let rows = feed(&conn);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].scope, crate::activity::COLLECTION);
+        assert_eq!(rows[0].kind, crate::activity::ADD);
+        assert_eq!(rows[0].delta, 3);
+        assert_eq!(rows[0].card_id.as_deref(), Some("bolt-lea"));
+        assert_eq!(rows[0].card_name.as_deref(), Some("Lightning Bolt"));
+        assert_eq!(
+            payload(&rows[0])["folder"],
+            serde_json::Value::Null,
+            "the root is a null folder, which draws no clause"
+        );
+        assert_eq!(payload(&rows[0])["finish"], "nonfoil");
+    }
+
+    /// The drawer is named by **name** rather than by id, because the feed outlives the folder.
+    #[test]
+    fn an_add_into_a_folder_names_the_folder() {
+        let conn = seeded();
+        let binder = crate::collection_folders::create_folder(&conn, None, "Binder A")
+            .unwrap()
+            .id;
+        add_entry(
+            &conn,
+            &EntryInput {
+                folder_id: Some(binder),
+                ..input("bolt-jp", "foil", 1)
+            },
+        )
+        .unwrap();
+
+        let rows = feed(&conn);
+        let add = rows
+            .iter()
+            .find(|r| r.kind == crate::activity::ADD)
+            .expect("the add is in the feed");
+        assert_eq!(payload(add)["folder"], "Binder A");
+        assert_eq!(payload(add)["finish"], "foil");
+    }
+
+    #[test]
+    fn a_quantity_change_records_the_two_numbers() {
+        let conn = seeded();
+        let added = add_entry(&conn, &input("bolt-lea", "nonfoil", 4)).unwrap();
+        set_quantity(&conn, added.id, 1).unwrap();
+
+        let rows = feed(&conn);
+        assert_eq!(rows.len(), 2, "the add and the change, and nothing else");
+        assert_eq!(rows[0].kind, crate::activity::QUANTITY);
+        assert_eq!(rows[0].delta, -3, "signed copies, not the new total");
+        assert_eq!(payload(&rows[0])["from"], 4);
+        assert_eq!(payload(&rows[0])["to"], 1);
+    }
+
+    /// A stepper taken to zero deletes the row, so the honest line is a **removal** — the
+    /// reader cannot open a row to see that it went from 2 to 0.
+    #[test]
+    fn a_stepper_taken_to_zero_records_a_removal_and_not_a_quantity_change() {
+        let conn = seeded();
+        let added = add_entry(&conn, &input("bolt-lea", "nonfoil", 2)).unwrap();
+        set_quantity(&conn, added.id, 0).unwrap();
+
+        let rows = feed(&conn);
+        assert_eq!(rows[0].kind, crate::activity::REMOVE);
+        assert_eq!(rows[0].delta, -2);
+        assert_eq!(rows[0].card_name.as_deref(), Some("Lightning Bolt"));
+    }
+
+    #[test]
+    fn removing_a_row_records_the_copies_that_left_and_the_drawer_they_left() {
+        let conn = seeded();
+        let binder = crate::collection_folders::create_folder(&conn, None, "Trade box")
+            .unwrap()
+            .id;
+        let added = add_entry(
+            &conn,
+            &EntryInput {
+                folder_id: Some(binder),
+                ..input("bolt-lea", "nonfoil", 5)
+            },
+        )
+        .unwrap();
+        remove_entry(&conn, added.id).unwrap();
+
+        let rows = feed(&conn);
+        assert_eq!(rows[0].kind, crate::activity::REMOVE);
+        assert_eq!(rows[0].delta, -5);
+        assert_eq!(payload(&rows[0])["folder"], "Trade box");
+    }
+
+    /// An id that resolves to nothing is a success **and records nothing** — a delete that
+    /// found no row deleted no row.
+    #[test]
+    fn removing_a_row_that_is_not_there_records_nothing() {
+        let conn = seeded();
+        remove_entry(&conn, 4242).unwrap();
+        assert!(feed(&conn).is_empty());
+    }
+
+    #[test]
+    fn an_edit_records_the_fields_it_named_and_no_copies() {
+        let conn = seeded();
+        let added = add_entry(&conn, &input("bolt-lea", "nonfoil", 2)).unwrap();
+        update_entry(
+            &conn,
+            added.id,
+            &EntryPatch {
+                condition: Some("LP".into()),
+                notes: Some("bought at the prerelease".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let rows = feed(&conn);
+        assert_eq!(rows[0].kind, crate::activity::EDIT);
+        assert_eq!(rows[0].delta, 0, "an edit is not about copies");
+        assert_eq!(
+            payload(&rows[0])["fields"],
+            serde_json::json!(["condition", "notes"]),
+            "camelCase, in the struct's own order — `activityText.ts` words them by splitting \
+             on case rather than from a table"
+        );
+    }
+
+    /// An edit onto a grain the collection already holds folds the two rows into one, and that
+    /// is still **one** line: the reader pressed Save once.
+    #[test]
+    fn an_edit_that_folds_two_rows_records_one_edit() {
+        let conn = seeded();
+        add_entry(
+            &conn,
+            &EntryInput {
+                condition: Some("NM".into()),
+                ..input("bolt-lea", "nonfoil", 1)
+            },
+        )
+        .unwrap();
+        let lp = add_entry(
+            &conn,
+            &EntryInput {
+                condition: Some("LP".into()),
+                ..input("bolt-lea", "nonfoil", 2)
+            },
+        )
+        .unwrap();
+        update_entry(
+            &conn,
+            lp.id,
+            &EntryPatch {
+                condition: Some("NM".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let edits: Vec<_> = feed(&conn)
+            .into_iter()
+            .filter(|r| r.kind == crate::activity::EDIT)
+            .collect();
+        assert_eq!(edits.len(), 1);
+        assert_eq!(edits[0].card_name.as_deref(), Some("Lightning Bolt"));
+    }
+
+    /// **The spec's second rule.** A bulk operation records one row carrying its count — 40
+    /// cards over 3 lines is one sentence, not three and certainly not forty.
+    #[test]
+    fn an_import_records_one_row_carrying_its_count() {
+        let conn = seeded();
+        let items = vec![
+            item("bolt-lea", 20, "nonfoil"),
+            item("bolt-jp", 15, "foil"),
+            item("card-1", 5, "nonfoil"),
+        ];
+        commit_import(&conn, &items, "add", None).unwrap();
+
+        let rows = feed(&conn);
+        assert_eq!(rows.len(), 1, "one row for the whole file");
+        assert_eq!(rows[0].kind, crate::activity::IMPORT);
+        assert_eq!(rows[0].card_id, None, "an import is about no one card");
+        assert_eq!(rows[0].card_name, None);
+        assert_eq!(payload(&rows[0])["cards"], 40, "the copies the file named");
+        assert_eq!(
+            payload(&rows[0])["rows"],
+            3,
+            "the collection lines it wrote"
+        );
+        assert_eq!(rows[0].delta, 40, "and the copies the collection gained");
+    }
+
+    /// A `set` file that lowers a quantity is still one row, and its `delta` goes **down** —
+    /// which is what a count of the rows it wrote could never say.
+    #[test]
+    fn a_set_import_that_lowers_a_quantity_records_a_negative_delta() {
+        let conn = seeded();
+        add_entry(&conn, &input("bolt-lea", "nonfoil", 10)).unwrap();
+        commit_import(&conn, &[item("bolt-lea", 4, "nonfoil")], "set", None).unwrap();
+
+        let import = feed(&conn)
+            .into_iter()
+            .find(|r| r.kind == crate::activity::IMPORT)
+            .expect("the import row is in the feed");
+        assert_eq!(payload(&import)["cards"], 4, "what the file said");
+        assert_eq!(import.delta, -6, "what the collection actually lost");
+    }
+
+    /// A whole-collection wipe is one line too, and it does **not** clear the feed: history is
+    /// not a card.
+    #[test]
+    fn clearing_the_collection_records_one_row_and_leaves_the_feed_standing() {
+        let conn = seeded();
+        add_entry(&conn, &input("bolt-lea", "nonfoil", 7)).unwrap();
+        add_entry(&conn, &input("bolt-jp", "foil", 2)).unwrap();
+        crate::reset::clear_collection(&conn).unwrap();
+
+        let rows = feed(&conn);
+        assert_eq!(rows.len(), 3, "two adds and one clear");
+        assert_eq!(rows[0].kind, crate::activity::CLEAR);
+        assert_eq!(payload(&rows[0])["cards"], 2, "two rows went");
+        assert_eq!(rows[0].delta, -9, "and nine copies with them");
+    }
+
+    /// **The spec's third rule.** `record` never opens a transaction of its own, so a change
+    /// that rolls back takes its history with it — the one direction a reader cannot check,
+    /// because the row a lying line names is not there to disagree with it.
+    #[test]
+    fn a_rolled_back_change_leaves_no_activity_row() {
+        let conn = seeded();
+        let tx = conn.unchecked_transaction().unwrap();
+        add_entry(&tx, &input("bolt-lea", "nonfoil", 3)).unwrap();
+        assert_eq!(
+            crate::activity::recent(&tx, 10).unwrap().len(),
+            1,
+            "the row is there inside the transaction"
+        );
+        drop(tx); // rusqlite rolls back a `Transaction` that is not committed.
+
+        assert!(
+            feed(&conn).is_empty(),
+            "and it is gone with the change it described"
+        );
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM collection_entries", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0,
+            "which is the same rollback, seen from the other table"
+        );
     }
 }

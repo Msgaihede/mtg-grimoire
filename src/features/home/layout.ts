@@ -192,6 +192,28 @@ export function setSpan(layout: HomeLayout, id: string, width: 1 | 2): HomeLayou
 }
 
 /**
+ * A stored width, narrowed to the two a card can actually be drawn at.
+ *
+ * **`HomeWidget.span` is a bare `number` and that is deliberate** — the stored document is loose
+ * so a newer build's widget survives a round trip through this one, which is the same argument
+ * `widgetConfig` makes about settings. `WidgetCardProps.span` is `1 | 2`, because a card is drawn
+ * at one of two widths and there is no third. Somebody has to cross between them.
+ *
+ * This is the one place that crossing happens. It was six places: every widget spelled
+ * `widget.span === 2 ? 2 : 1` for itself, six copies of one decision that agreed by luck, and the
+ * sixth only agreed because `tsc` caught it handing the raw `number` through. A named function is
+ * one place to read the rule and one place to change it.
+ *
+ * **Anything that is not the wide span is the narrow one**, which is the safe half of the pair:
+ * {@link parseLayout} already clamps a stored width into `1..=2` and `home::MAX_SPAN` bounds the
+ * write, but neither is something the compiler can see, and a card drawn at a width the grid does
+ * not hold is a broken row where a card drawn narrow is merely a card.
+ */
+export function widgetSpan(widget: HomeWidget): 1 | 2 {
+  return widget.span === 2 ? 2 : 1;
+}
+
+/**
  * The same layout with one widget's settings replaced.
  *
  * **Replaced and not merged**, because the caller is the widget itself and it holds the whole of

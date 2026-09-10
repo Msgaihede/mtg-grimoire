@@ -5366,10 +5366,12 @@ pub fn live_shortfall(conn: &Connection, deck_id: i64) -> Result<Vec<ShortfallRo
 /// **theory** list is not read at all — a card the user has not decided to play is not a card
 /// they need to buy, whether the undecidedness is a switched-off category or a whole plan.
 ///
-/// Written *through* [`crate::wishlist::add_wish`] rather than into `wishlist_entries`: the
-/// grain, the canonicalisation and the fold all live there, and a second write path is a
+/// Written *through* [`crate::wishlist::add_wish_silent`] rather than into `wishlist_entries`:
+/// the grain, the canonicalisation and the fold all live there, and a second write path is a
 /// second set of rules to keep in step. Clicking twice therefore raises the quantity of one
-/// line rather than making two, which is `add_wish`'s contract and not this function's.
+/// line rather than making two, which is that module's contract and not this function's. **The
+/// quiet door and not [`crate::wishlist::add_wish`]**, and only the feed row is different: the
+/// two are one write and the loud one records a line per card, which is the paragraph below.
 ///
 /// **`folder_id` says where the wishes are filed, and `None` is the root** (2026-09-09,
 /// [issue #437](https://github.com/Msgaihede/mtg-grimoire/issues/437)). **Send missing to
@@ -5387,8 +5389,8 @@ pub fn live_shortfall(conn: &Connection, deck_id: i64) -> Result<Vec<ShortfallRo
 /// shopping — where moving a wish between folders is its own explicit act
 /// ([`crate::wishlist_folders::set_wish_folder`]).
 ///
-/// **The folder is looked up once, up front, and [`crate::wishlist::add_wish`]'s per-row check
-/// is not a substitute for it.** A deck that is short of nothing never reaches `add_wish` at
+/// **The folder is looked up once, up front, and [`crate::wishlist::add_wish_silent`]'s per-row
+/// check is not a substitute for it.** A deck that is short of nothing never reaches that door at
 /// all, so a reader who picked a folder another window had just deleted would be told the press
 /// touched **0 wishes** by a command that never got far enough to notice. It sits *inside* the
 /// transaction, where the [`VIRTUAL_HOLDS_NOTHING`] refusal below is deliberately outside one:
@@ -5416,6 +5418,15 @@ pub fn live_shortfall(conn: &Connection, deck_id: i64) -> Result<Vec<ShortfallRo
 /// *"it rewrites this deck's claims"* four lines under the paragraph saying nothing is
 /// reallocated; there are no claims to rewrite since schema v25, and this command writes no
 /// deck table at all.)
+///
+/// **It records one [`crate::activity`] line, and one is the whole point.** No `deck_audit` row
+/// means nothing to suppress against, so the loop below went through
+/// [`crate::wishlist::add_wish`] and wrote a feed line per card until 2026-09-10 — a deck short
+/// of forty cards filling the feed the reader opened this button to check. It goes through
+/// [`crate::wishlist::add_wish_silent`] now and calls
+/// [`crate::wishlist::record_wishes_added`] once afterwards, **only where something was added**:
+/// a bulk operation records one row carrying its count, and a press that changed nothing records
+/// none at all.
 pub fn missing_to_wishlist(
     conn: &Connection,
     deck_id: i64,
@@ -5434,8 +5445,8 @@ pub fn missing_to_wishlist(
     }
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
 
-    // **The folder, before the shortfall is walked.** [`crate::wishlist::add_wish`] fences this
-    // column too, but per row — and a deck that is short of nothing calls it not once, so
+    // **The folder, before the shortfall is walked.** [`crate::wishlist::add_wish_silent`]
+    // fences this column too, but per row — and a deck short of nothing calls it not once, so
     // without this line naming a folder another window had just deleted would answer "0 wishes"
     // rather than "That folder is not there any more." Those are two different things to be
     // told and only one of them would have been true. Inside the transaction, unlike the deck
@@ -5462,8 +5473,13 @@ pub fn missing_to_wishlist(
     }
 
     let touched = missing.len();
+    let mut copies = 0i64;
     for (oracle_id, (name, quantity)) in missing {
-        crate::wishlist::add_wish(
+        // **The quiet door**, and the loop is exactly why. `add_wish` records a feed line of its
+        // own, so a deck short of forty cards wrote forty of them from one press until
+        // 2026-09-10 — the one line the reader wants to read straight after this button, said
+        // forty times. The run is recorded once, below.
+        crate::wishlist::add_wish_silent(
             &tx,
             &crate::wishlist::WishInput {
                 oracle_id: Some(oracle_id),
@@ -5479,6 +5495,16 @@ pub fn missing_to_wishlist(
                 ..Default::default()
             },
         )?;
+        // `max(1)` is [`crate::wishlist::add_wish`]'s own normalisation restated rather than
+        // read back out of the write: a wish for no copies is a wish for one, there and here, and
+        // the feed line's count has to be the number that actually landed on the wishlist.
+        copies += quantity.max(1);
+    }
+    // **One line for the press.** Only where something was actually added: a deck short of
+    // nothing has changed neither list, and a feed row saying `Added 0 cards to your wishlist`
+    // is a press the reader never made. The folder is the one the whole run was filed into.
+    if touched > 0 {
+        crate::wishlist::record_wishes_added(&tx, touched as i64, copies, folder_id)?;
     }
     tx.commit().map_err(|e| e.to_string())?;
     Ok(touched)
@@ -13184,8 +13210,8 @@ mod tests {
     /// **A folder that is not there is refused by name, before anything is written** — and the
     /// second deck is the half only the up-front check can answer.
     ///
-    /// [`crate::wishlist::add_wish`] fences this column too, but **per row**, and a deck short
-    /// of nothing never reaches it: without the lookup at the top of the transaction the reader
+    /// [`crate::wishlist::add_wish_silent`] fences this column too, but **per row**, and a deck
+    /// short of nothing never reaches it: without the lookup at the top of the transaction the reader
     /// would be told the press touched `0` wishes, with nothing anywhere to say that the folder
     /// they had picked was gone. "There was nothing to buy" and "that folder is not there any
     /// more" are different answers and only one of them would have been true.
@@ -13201,8 +13227,8 @@ mod tests {
 
         // A deck holding every copy it plays. The premise is asserted as the press itself
         // rather than as an empty [`live_shortfall`], because what the case turns on is that
-        // this press reaches [`crate::wishlist::add_wish`] **not once** — and a `0` from a
-        // successful press is exactly the answer a deleted folder must not be able to hide
+        // this press reaches [`crate::wishlist::add_wish_silent`] **not once** — and a `0` from
+        // a successful press is exactly the answer a deleted folder must not be able to hide
         // behind three lines further down.
         let settled = create_deck(&conn, &input("Settled", "modern")).unwrap().id;
         file_into_group(&conn, settled, "serra-lea", 2);
@@ -13280,6 +13306,107 @@ mod tests {
             ],
             "the root's wish doubled on the repeat and the folder's was not touched"
         );
+    }
+
+    /* ---------------------------------------------------------------------------------- *
+     * What the press says in the activity feed. **One line, whatever it bought.**
+     * ---------------------------------------------------------------------------------- */
+
+    /// The wishlist lines in the feed, newest first.
+    ///
+    /// Filtered, because [`crate::activity::recent`] is a `UNION ALL` over `deck_audit` as well
+    /// and every press that builds the fixture writes a deck row. An unfiltered `len()` here
+    /// would be counting the fixture.
+    fn wishlist_feed(conn: &Connection) -> Vec<crate::activity::ActivityEntry> {
+        crate::activity::recent(conn, crate::activity::MAX_LIMIT)
+            .unwrap()
+            .into_iter()
+            .filter(|r| r.scope == crate::activity::WISHLIST)
+            .collect()
+    }
+
+    /// **A deck short of three cards writes one feed line, not three.**
+    ///
+    /// This press records no `deck_audit` row — nothing about the deck changed — so there was
+    /// nothing to suppress against and the loop wrote one `activity` row per card until
+    /// 2026-09-10. Every one of them was true, and between them they were the whole of the feed
+    /// the reader had just pressed the button to check.
+    ///
+    /// **The two shortfalls are deliberately unequal**, because the payload's numbers are
+    /// different units and a fixture where they coincide cannot tell them apart: two oracle cards
+    /// short by four copies and one is `rows: 2` against `cards: 5`.
+    #[test]
+    fn missing_to_wishlist_records_one_activity_row_for_the_whole_press() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "bolt-lea", main, 4);
+        add(&conn, deck.id, "serra-lea", main, 1);
+
+        let touched = missing_to_wishlist(&conn, deck.id, None).unwrap();
+
+        assert_eq!(touched, 2, "two cards are short");
+        let rows = wishlist_feed(&conn);
+        assert_eq!(rows.len(), 1, "and the press is one line, not two");
+        assert_eq!(
+            rows[0].kind,
+            crate::activity::ADD,
+            "an `add`: the reader put cards on a list, they did not import a file"
+        );
+        assert_eq!(rows[0].card_name, None, "a run names no one card");
+        assert_eq!(rows[0].delta, 5);
+        let payload: serde_json::Value = serde_json::from_str(&rows[0].payload).unwrap();
+        assert_eq!(payload["rows"], 2, "two wishes");
+        assert_eq!(payload["cards"], 5, "five copies across them");
+        assert_eq!(payload["folder"], serde_json::Value::Null);
+    }
+
+    /// The folder the run was filed into is the one clause the line borrows from a single add.
+    #[test]
+    fn the_press_names_the_folder_its_run_was_filed_into() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let ordered = wish_folder(&conn, "Ordered");
+        add(&conn, deck.id, "bolt-lea", main_of(&conn, deck.id), 4);
+
+        missing_to_wishlist(&conn, deck.id, Some(ordered)).unwrap();
+
+        // The `add`, not the `folder` row `wish_folder` wrote making the drawer — both are
+        // wishlist-scoped, and the run is the one this case is about.
+        let run = wishlist_feed(&conn)
+            .into_iter()
+            .find(|r| r.kind == crate::activity::ADD)
+            .expect("the run is in the feed");
+        let payload: serde_json::Value = serde_json::from_str(&run.payload).unwrap();
+        assert_eq!(payload["folder"], "Ordered");
+    }
+
+    /// **A deck short of nothing writes no line at all.**
+    ///
+    /// The other half of the rule, and the one a guard on the recording door alone would get
+    /// wrong: the press succeeds, answers `0`, and has changed neither list — so *Added 0 cards
+    /// to your wishlist* would be a feed row for a press the reader never made.
+    ///
+    /// The comparison is against a deck that *is* short in the same database, so "no line" cannot
+    /// be read as the feed answering nothing whatever.
+    #[test]
+    fn a_deck_short_of_nothing_writes_no_activity_row() {
+        let conn = seeded();
+        let settled = create_deck(&conn, &input("Settled", "modern")).unwrap().id;
+        file_into_group(&conn, settled, "serra-lea", 2);
+        add(&conn, settled, "serra-lea", main_of(&conn, settled), 2);
+
+        assert_eq!(missing_to_wishlist(&conn, settled, None).unwrap(), 0);
+        assert!(
+            wishlist_feed(&conn).is_empty(),
+            "a press that bought nothing says nothing"
+        );
+
+        // And the feed is not simply mute: a deck that really is short writes its one line.
+        let short = create_deck(&conn, &input("Burn", "modern")).unwrap().id;
+        add(&conn, short, "bolt-lea", main_of(&conn, short), 4);
+        assert_eq!(missing_to_wishlist(&conn, short, None).unwrap(), 1);
+        assert_eq!(wishlist_feed(&conn).len(), 1);
     }
 
     /// The rules as data, all the way out to the frontend: the nullable cells are the ones

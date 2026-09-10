@@ -47,6 +47,11 @@ pub const COMMANDS: &[&str] = &[
     // desktop that has both.
     "deck_pip_costs",
     "deck_bracket_reads",
+    // The home page's deck tiles: every deck's value at one shop, in one read. A third
+    // gallery-wide read beside the two above, and routed with them for their reason — a web
+    // build without it draws a home page whose deck widget has em dashes where a desktop has
+    // money.
+    "deck_values",
     "deck_get",
     "deck_folder_list",
     "deck_category_list",
@@ -55,6 +60,10 @@ pub const COMMANDS: &[&str] = &[
     "format_specs_list",
     "deck_last_format",
     "deck_audit_list",
+    // The collection's and the wishlist's history, read beside the deck's own above. One
+    // `SELECT` over two tables and no clock of its own — `activity` counts time in SQLite's
+    // `unixepoch()`, which is why it compiles here at all.
+    "activity_recent",
     "deck_theory_slots",
     "deck_theory_diff",
     "deck_undo_state",
@@ -112,6 +121,9 @@ pub const COMMANDS: &[&str] = &[
     // The Collection destination, and the pair that moves a row across the deck boundary.
     "collection_list",
     "collection_summary",
+    // The same money as `collection_summary`, one dimension at a time — the home page's value
+    // widget. Routed with its neighbour because it is that read with a `GROUP BY` on it.
+    "collection_breakdown",
     "collection_add",
     "collection_set_quantity",
     "collection_update",
@@ -158,6 +170,11 @@ pub const COMMANDS: &[&str] = &[
     "deck_missing_to_collection",
     // The Wishlist destination.
     "wishlist_list",
+    // The home page's wishlist widget: the header figures, and the same money one dimension at
+    // a time. Reads, so they sit with `wishlist_list` — and both take the marketplace as the
+    // enum rather than as an `Option<String>`, which is what their arms read off the wrappers.
+    "wishlist_summary",
+    "wishlist_breakdown",
     "wishlist_add",
     "wishlist_set_quantity",
     "wishlist_remove",
@@ -221,6 +238,16 @@ pub const COMMANDS: &[&str] = &[
     "set_deck_folder_pane",
     "flatten_state",
     "set_flatten_state",
+    // **The home page's own two pairs, and both halves of each for `deck_sort`'s reason.** A
+    // browser that could read the arrangement and not write it would open every session on the
+    // layout the desktop was last left with and never record a drag of its own; a browser that
+    // could read the starting view and not write it would strand the reader on whichever page
+    // another device chose. The two reads are infallible on this side too — an unreadable row
+    // draws the default layout and opens on Home rather than failing to draw the page.
+    "home_layout",
+    "set_home_layout",
+    "start_view",
+    "set_start_view",
     // **The three docked search columns' shared row**, and both halves for `deck_sort`'s reason.
     // These two replaced `deck_search_open` / `set_deck_search_open`, which sat up in the deck
     // cluster while the setting was the deck editor's alone; the map is the collection's and the
@@ -413,6 +440,21 @@ pub fn call(
             )
         }
 
+        // The home page's deck tiles. **No arguments but the shop**, `deck_pip_costs`' shape:
+        // the page draws whichever decks its widgets pin, and an archived deck is a tile too.
+        // `Option<String>` through `Marketplace::from_opt` because that is what the wrapper
+        // takes — a marketplace this build has never heard of costs a fallback to TCGplayer
+        // rather than a failed page.
+        "deck_values" => {
+            let marketplace: Option<String> = optional(command, args, "marketplace")?;
+            let marketplace = crate::sorting::Marketplace::from_opt(marketplace.as_deref());
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::deck::deck_values_for(&conn, marketplace).map_err(RouteError::Failed)?,
+            )
+        }
+
         "deck_get" => {
             let id: i64 = field(command, args, "id")?;
             let variant: String = field(command, args, "variant")?;
@@ -488,6 +530,18 @@ pub fn call(
             encode(
                 command,
                 crate::deck_audit::list(&conn, deck_id, limit).map_err(RouteError::Failed)?,
+            )
+        }
+
+        // The collection's and the wishlist's history, beside the deck's own above. `u32` and
+        // not `i64` — the wrapper's type, and `recent` clamps it to `MAX_LIMIT` itself, so the
+        // arm passes it through rather than making a second decision about it here.
+        "activity_recent" => {
+            let limit: u32 = field(command, args, "limit")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::activity::recent(&conn, limit).map_err(RouteError::Failed)?,
             )
         }
 
@@ -1135,6 +1189,24 @@ pub fn call(
             )
         }
 
+        // The home page's value widget: `collection_summary`'s money with a `GROUP BY` on it.
+        // `collection_folder_summary`'s marketplace spelling, and the wrapper's — an
+        // `Option<String>` through `Marketplace::from_opt`, so an id this build does not know
+        // lands on TCGplayer rather than failing the request. **`dimension` is required**: a
+        // breakdown of nothing in particular is not a question, and `breakdown` answers a
+        // sentence for a dimension it does not recognise.
+        "collection_breakdown" => {
+            let dimension: String = field(command, args, "dimension")?;
+            let marketplace: Option<String> = optional(command, args, "marketplace")?;
+            let marketplace = crate::sorting::Marketplace::from_opt(marketplace.as_deref());
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::collection::breakdown(&conn, &dimension, marketplace)
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
         "collection_add" => {
             let entry: crate::collection::EntryInput = field(command, args, "entry")?;
             encode(
@@ -1460,6 +1532,34 @@ pub fn call(
             encode(
                 command,
                 crate::wishlist::list_wishes(&conn, &query).map_err(RouteError::Failed)?,
+            )
+        }
+
+        // **The two wishlist reads whose marketplace is the enum and not an `Option<String>`**,
+        // which is the wrappers' own spelling and therefore this arm's. `field` rather than
+        // `optional` for the same reason: the desktop command refuses a call that names no
+        // marketplace, and `ipc.ts` never makes one — `Marketplace`'s own `Deserialize` already
+        // answers TCGplayer for anything it cannot read, so a *malformed* value still lands on
+        // the default here exactly as it does there. The collection's pair above converts
+        // instead, and the difference is a fact about the wrappers rather than about this file.
+        "wishlist_summary" => {
+            let marketplace: crate::sorting::Marketplace = field(command, args, "marketplace")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::wishlist::summarise_wishlist(&conn, marketplace)
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "wishlist_breakdown" => {
+            let dimension: String = field(command, args, "dimension")?;
+            let marketplace: crate::sorting::Marketplace = field(command, args, "marketplace")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::wishlist::breakdown(&conn, &dimension, marketplace)
+                    .map_err(RouteError::Failed)?,
             )
         }
 
@@ -1971,6 +2071,45 @@ pub fn call(
             encode(
                 command,
                 crate::sync::with_write(state, |c| crate::flatten::store(c, &section, flattened))
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        // ── The home page's two pairs ───────────────────────────────────────────────
+        //
+        // `nav_collapsed`'s shape twice over, and both reads are infallible on this side too
+        // for its reason: a browser that cannot parse the row draws the default arrangement and
+        // opens on Home rather than failing to draw the page at all.
+        //
+        // **The writes are `field` and refuse in words.** `home::store` validates a document's
+        // *shape* — version, blank ids, spans, size — and never its vocabulary, so a widget kind
+        // this build has never heard of survives the round trip here exactly as it does on the
+        // desktop; `startview::store` validates only that the word is non-empty, because which
+        // views exist is TypeScript's.
+        "home_layout" => {
+            let conn = crate::sync::lock_db_read(state);
+            encode(command, crate::home::stored(&conn))
+        }
+
+        "set_home_layout" => {
+            let layout: crate::home::HomeLayout = field(command, args, "layout")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| crate::home::store(c, &layout))
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "start_view" => {
+            let conn = crate::sync::lock_db_read(state);
+            encode(command, crate::startview::stored(&conn))
+        }
+
+        "set_start_view" => {
+            let view: String = field(command, args, "view")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| crate::startview::store(c, &view))
                     .map_err(RouteError::Failed)?,
             )
         }
@@ -3197,9 +3336,14 @@ mod tests {
         //
         // **149 since `card_tcgplayer_ids`**, counted off the merged array with the `awk` the
         // paragraph five above asks for and not by adding one to 148.
+        //
+        // **158 since the home page**, which routed nine at once — the two settings pairs, the
+        // three money reads, the deck values and the activity feed. Counted with the same `awk`
+        // over the array literal and not by adding nine to 149; the arithmetic agrees, which is
+        // the point of counting rather than a reason not to.
         assert_eq!(
             COMMANDS.len(),
-            149,
+            158,
             "update this number when a command is added"
         );
     }

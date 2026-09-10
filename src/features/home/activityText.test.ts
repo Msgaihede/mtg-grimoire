@@ -202,6 +202,71 @@ describe("activityLine — the wishlist's eight", () => {
     });
   });
 
+  /**
+   * **One press, one line.** *Send this deck's missing cards to my wishlist* writes forty wishes
+   * and a single feed row — the spec's second rule, and the whole reason
+   * `deck::missing_to_wishlist` stopped calling `add_wish` in a loop. The row names no card, so
+   * the sentence is about the run rather than about a card.
+   */
+  it("says what a bulk add put on the wishlist, in one line", () => {
+    expect(
+      entryLine("wishlist", "add", { cards: 40, rows: 12, folder: "Ordered" }, 40, {
+        cardId: null,
+        cardName: null,
+      }),
+    ).toEqual({
+      text: "Added 40 cards to your wishlist",
+      detail: "across 12 rows · in Ordered",
+    });
+  });
+
+  /**
+   * **And it is never the import's sentence.** The bulk row carries the kind `add` precisely so
+   * this stays true: a reader who pressed a deck's shopping-list button did not import a file.
+   * The two payloads here are identical, which is what makes comparing the two *produced*
+   * sentences the test rather than comparing two spellings of one constant.
+   */
+  it("never words a bulk add as an import", () => {
+    const facts = { cards: 40, rows: 12 };
+    const bulk = entryLine("wishlist", "add", facts, 40, { cardId: null, cardName: null });
+    const imported = entryLine("wishlist", "import", facts, 40);
+    expect(bulk.text).not.toBe(imported.text);
+    expect(bulk.text).not.toContain("Imported");
+    expect(imported.text).toContain("Imported");
+  });
+
+  /** The bulk branch is fenced on the row naming **no** card, so a wish that names one is worded
+   *  as a card however many counts a newer build put in its payload. */
+  it("still words a named wish as a card, counts in the payload or not", () => {
+    expect(entryLine("wishlist", "add", { folder: "Staples", cards: 40, rows: 12 }, 3)).toEqual({
+      text: "Added 3 × Lightning Bolt to your wishlist",
+      detail: "in Staples",
+    });
+  });
+
+  /** The other half of that fence: a nameless add carrying no card count is a printing whose name
+   *  the backend could not denormalize, and it is one card's line rather than a run of nothing. */
+  it("reads a nameless add with no count as one card, not as a run", () => {
+    expect(entryLine("wishlist", "add", {}, 1, { cardId: null, cardName: null }).text).toBe(
+      "Added a card to your wishlist",
+    );
+    expect(activityLine(raw("wishlist", "add", '{"rows":12}', { cardName: null })).text).toBe(
+      "Added a card to your wishlist",
+    );
+  });
+
+  /** Nothing in this file throws, and a bulk-shaped row is no exception — a count that is not a
+   *  number reads as absent, exactly as every other field does. */
+  it("never throws on a bulk row whose counts it cannot read", () => {
+    const payloads = ['{"cards":"lots"}', '{"cards":40,"rows":"twelve"}', '{"cards":40,"folder":7}'];
+    for (const p of payloads) {
+      expect(() => activityLine(raw("wishlist", "add", p, { cardName: null }))).not.toThrow();
+    }
+    expect(
+      activityLine(raw("wishlist", "add", '{"cards":40,"rows":"twelve"}', { cardName: null })),
+    ).toEqual({ text: "Added 40 cards to your wishlist", detail: null });
+  });
+
   it("says both numbers on a wish's quantity change", () => {
     expect(entryLine("wishlist", "quantity", { from: 2, to: 1 }, -1)).toEqual({
       text: "Changed Lightning Bolt on your wishlist from 2 to 1",

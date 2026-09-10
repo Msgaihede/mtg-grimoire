@@ -925,6 +925,13 @@ fn label_for_name(
 ///   every other deck. Wrong the other way is
 ///   [issue #336](https://github.com/Msgaihede/mtg-grimoire/issues/336), which is how this arm
 ///   behaved until it was closed.
+///
+/// **This is a *deck* import and writes no [`crate::activity`] row** — one event, one line: it
+/// records `deck_audit` rows, which `activity::recent` reads straight out of that table and puts
+/// in the same feed. The `collection_entries` writes it can reach are
+/// [`crate::deck::release_live_copies`]', a consequence of the clear this press already logged.
+/// A **collection** or **wishlist** file goes to `collection::commit_import` /
+/// `wishlist::commit_import` instead, and each of those records its own single `import` row.
 pub fn commit_import(
     conn: &Connection,
     deck_id: i64,

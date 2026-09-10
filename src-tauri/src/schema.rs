@@ -4600,6 +4600,15 @@ pub fn prepare_database(conn: &Connection) -> rusqlite::Result<()> {
              the next sync reuses it."
         );
     }
+    // Logged and left owing, like the two repairs above it and unlike the two migrations: a feed
+    // longer than its ceiling is a database that works perfectly, and nothing a reader could act
+    // on would be gained by refusing to start over one.
+    if let Err(e) = crate::maintenance::prune_activity_log(conn) {
+        eprintln!(
+            "the home page's activity log could not be trimmed at launch: {e}\nIt will be \
+             trimmed at the next launch; nothing else is affected."
+        );
+    }
     Ok(())
 }
 
