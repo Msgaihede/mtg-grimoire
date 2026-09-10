@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, userEvent, within } from "storybook/test";
+import { expect, fn, userEvent, within } from "storybook/test";
 import { TOOLTIP_OPEN_MS } from "@/components/tooltip/TooltipProvider";
 import type { DeckCard } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
@@ -39,6 +39,12 @@ const meta = {
     marketplace: MARKETPLACES.tcgplayer,
     formatName: "Modern",
     gameChangers: 0,
+    // The chip's own gate, and deliberately not the count above it — a deck whose only game
+    // changer sits in a switched-off pile draws the chip and no number. Off here, so the stories
+    // that want it say so.
+    hasGameChangers: false,
+    gameChangersOnly: false,
+    onGameChangersOnlyToggle: fn(),
     tight: false,
     // The ordinary deck, and what every story on this page but {@link OnAVirtualDeck} draws.
     // `false` takes the `Owned` term and the hairline in front of it away; it is written once, in
@@ -73,20 +79,21 @@ const meta = {
           "baseline with a hairline between neighbours, which is a quarter of the height a " +
           "stacked `Figure` takes and the reason all five fit on a line the action row can " +
           "spare.\n\n" +
-          "**Two controls at the right end, with a figure between them** — the format check and " +
-          "the bracket estimate are each a press with a layer behind them, slotted in whole " +
-          "because this component owns nothing about what they open, and the stories below " +
-          "stand plain buttons in for them. Between them sits the game-changer count, which is " +
-          "drawn here and is not a control: dim mono, no edge, nothing to press.\n\n" +
-          "**It was a press for one day** (2026-09-09). From 2026-09-08 the chip armed a " +
-          "*spotlight* — hovering it, or latching it with a click, faded every card in the deck " +
-          "that is not a game changer to a quarter. It answered *which ones* by making " +
-          "everything else dimmer, and on a hundred-card deck a hundred stacked " +
-          "quarter-opacity cards is a blur rather than an answer. The question moved to a " +
-          "**Game Changers** chip in the toolbar's label-filter row, which narrows the deck to " +
-          "those cards and leaves every card that survives drawn exactly as it was — a shorter " +
-          "list rather than a dimmer one. What is left here is the count, in the place it has " +
-          "held since 2026-08-24 and in the words it has used throughout.",
+          "**Three controls at the right end, and the middle one is a readout that is also a " +
+          "press** — the format check and the bracket estimate each open a layer this component " +
+          "owns nothing about, and the stories below stand plain buttons in for them. Between " +
+          "them sits the game-changer chip: the count, wearing the crown the cards it counts " +
+          "wear, and pressing it narrows the deck to exactly those cards.\n\n" +
+          "**The count and the filter are one control again** (2026-09-10). From 2026-09-08 the " +
+          "press armed a *spotlight* — hover or latch, and every card that is not a game " +
+          "changer faded to a quarter — which answered *which ones* by making everything else " +
+          "dimmer, and a hundred stacked quarter-opacity cards is a blur rather than an answer. " +
+          "So on 2026-09-09 the question moved to a `Game Changers` chip in the toolbar's " +
+          "label-filter row and the count here went back to a bare span. That fixed the blur " +
+          "and cost something else: the number and the way to act on it sat two lines apart, in " +
+          "a row of the reader's own arbitrary label strings. Now the number *is* the button — " +
+          "same place, same words, and the narrowing the chip did, which leaves every card that " +
+          "survives drawn exactly as it was.",
       },
     },
   },
@@ -127,6 +134,7 @@ export const Everything: Story = {
   args: {
     cards: modern(deckCard(printing("apc", "128"), { categoryKind: "side", quantity: 4 })),
     gameChangers: 2,
+    hasGameChangers: true,
     check,
     bracket,
   },
@@ -144,10 +152,68 @@ export const Everything: Story = {
     // The sideboard is counted by the price, the shortfall and every chart — it is only the size
     // rule that leaves it out.
     await expect(term("Owned")).toHaveTextContent("64");
-    await expect(canvas.getByText("2 game changers")).toBeInTheDocument();
-    // A readout and nothing more: the two presses on this line are the caller's, and the count
-    // between them offers none. It was a toggle for one day — see the docs above.
-    await expect(canvas.queryByRole("button", { name: /game changer/i })).toBeNull();
+    // The count is the chip's own caption, and the chip is a toggle standing at rest.
+    await expect(canvas.getByRole("button", { name: "2 game changers" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+  },
+};
+
+/**
+ * The chip pressed — the deck on screen behind this line is narrowed to its game changers.
+ *
+ * `aria-pressed` is what says so; the gold edge and the gold words are the sighted half of that
+ * same sentence, and they are `pie-gold` rather than the accent because that is the colour the
+ * crowns and banners on the cards themselves are drawn in. The accent on this very line already
+ * means something else — `DeckBracket`'s edge says *a reading you can go and look at*.
+ *
+ * The crown does not move between the two states: here it is the chip's identity rather than its
+ * state, so a press changes the colour and never the width.
+ */
+export const GameChangersFilterOn: Story = {
+  args: {
+    cards: modern(deckCard(printing("apc", "128"), { categoryKind: "side", quantity: 4 })),
+    gameChangers: 2,
+    hasGameChangers: true,
+    gameChangersOnly: true,
+    check,
+    bracket,
+  },
+  play: async ({ args, canvasElement }) => {
+    const canvas = within(canvasElement);
+    const chip = canvas.getByRole("button", { name: "2 game changers" });
+
+    await expect(chip).toHaveAttribute("aria-pressed", "true");
+    // The name is the chip's own contents and does not change with the press — the words a test
+    // and a screen reader address it by are the same at rest and pressed.
+    await userEvent.click(chip);
+    await expect(args.onGameChangersOnlyToggle).toHaveBeenCalled();
+  },
+};
+
+/**
+ * A deck whose only game changer is parked in a switched-off pile: the chip, and no number.
+ *
+ * The gate is `hasGameChangers` — what is on the desk — and the count is copies over the piles
+ * that count, which is the number the format will judge. A card in a Maybeboard is exactly a card
+ * a reader wants to press this chip about, and `0 game changers` beside it would point at cards to
+ * go and find where there are none to find. So the caption falls back to the chip's bare words and
+ * the control keeps only the half that is still true.
+ */
+export const GameChangersParked: Story = {
+  args: {
+    cards: modern(),
+    gameChangers: 0,
+    hasGameChangers: true,
+    check,
+    bracket,
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await expect(canvas.getByRole("button", { name: "Game Changers" })).toBeInTheDocument();
+    await expect(canvas.queryByText(/0 game changers/)).toBeNull();
   },
 };
 
@@ -214,6 +280,7 @@ export const Tight: Story = {
       deckCard(printing("lea", "288"), { quantity: 56, ownedQuantity: 56 }),
     ],
     gameChangers: 6,
+    hasGameChangers: true,
     tight: true,
     check,
     bracket,
@@ -233,12 +300,12 @@ export const Tight: Story = {
     await expect(canvas.getByText("−3")).toHaveAttribute("aria-hidden", "true");
     await expect(canvas.getByText("3 missing")).toHaveClass("sr-only");
     await expect(canvas.getByText("6 GC")).toHaveAttribute("aria-hidden", "true");
-    // The twin is the whole of what names this figure at this width, and that is newer than it
-    // looks: while the count was a press it carried an `aria-label`, and a label replaces an
-    // element's contents for naming, so the twin was announced to nobody. The label went with
-    // the press on 2026-09-09.
+    // The twin is the whole of what names the chip at this width, and it is load-bearing rather
+    // than a courtesy: the name is computed from the chip's own contents, so an `aria-label` here
+    // would replace them and announce the abbreviation to nobody. The chip is a press again since
+    // 2026-09-10 and still carries no label, which is what keeps these two strings the name.
     await expect(canvas.getByText("6 game changers")).toHaveClass("sr-only");
-    await expect(canvas.queryByRole("button", { name: /game changer/i })).toBeNull();
+    await expect(canvas.getByRole("button", { name: "6 game changers" })).toBeInTheDocument();
   },
 };
 
@@ -287,6 +354,7 @@ export const OnAVirtualDeck: Story = {
       deckCard(printing("lea", "288"), { quantity: 56, ownedQuantity: 56 }),
     ],
     gameChangers: 2,
+    hasGameChangers: true,
     check,
     bracket,
   },
@@ -302,6 +370,6 @@ export const OnAVirtualDeck: Story = {
     for (const label of ["Format", "Cards", "Lands", "Avg. mana", "Price"]) {
       await expect(canvas.getByText(label, { selector: "dt" })).toBeInTheDocument();
     }
-    await expect(canvas.getByText("2 game changers")).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: "2 game changers" })).toBeInTheDocument();
   },
 };

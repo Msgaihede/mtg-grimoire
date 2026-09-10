@@ -1,6 +1,8 @@
 import { useMemo, type ReactNode } from "react";
+import { Crown } from "lucide-react";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { count } from "@/lib/counts";
+import { FOCUS } from "@/lib/focus";
 import type { DeckCard } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
@@ -24,22 +26,29 @@ import { deckStats } from "./DeckStats";
  * drawn, and the separators are `div`s rather than the design's `span`s so the list stays a valid
  * one.
  *
- * **Two controls at the right end, with a figure between them.** What the rules make of the deck
- * ({@link check}) and the bracket the deck reads as ({@link bracket}) are each a press with a
- * layer behind it, and both are slotted in whole because this component owns nothing about what
- * they open. Between them sits the game-changer count, which is drawn here and is not a control
- * at all: a readout in the dim mono voice the rest of this line reads in, with no edge, no ring
- * and nothing to press.
+ * **Three controls at the right end, and the middle one is a readout that is also a press.** What
+ * the rules make of the deck ({@link check}) and the bracket the deck reads as ({@link bracket})
+ * are slotted in whole, because this component owns nothing about the layers they open. Between
+ * them sits the game-changer chip: the count in the words it has used since 2026-08-24, wearing
+ * the crown the cards it counts wear, and pressing it narrows the deck to exactly those cards.
  *
- * **It was a press for one day, and the day is worth writing down** (2026-09-09). From
- * 2026-09-08 the chip armed a *spotlight* — hovering it, or latching it with a click, faded every
- * card in the deck that is not a game changer to a quarter. It answered *which ones* by making
- * everything else dimmer, and on a hundred-card desk a hundred stacked quarter-opacity cards is a
- * blur rather than an answer: the deck the reader was reading the answer out of had stopped being
- * legible. The question moved to a **Game Changers** chip in the toolbar's label-filter row, which
- * narrows the deck to those cards and leaves every card that survives looking exactly as it looked
- * unfiltered — a shorter list rather than a dimmer one. What is left here is the count, in the
- * place it has held since 2026-08-24 and in the words it has used throughout.
+ * **The count and the filter are one control again** (2026-09-10, the reader's call). The history
+ * is worth keeping because two of the three arrangements are wrong in ways that are not obvious.
+ * From 2026-09-08 the press armed a *spotlight* — hover or latch, and every card that is not a
+ * game changer faded to a quarter — which answered *which ones* by making everything else dimmer,
+ * and a hundred stacked quarter-opacity cards is a blur rather than an answer. So on 2026-09-09
+ * the question moved to a `Game Changers` chip in the toolbar's label-filter row and the count
+ * here went back to a bare span. That fixed the blur and cost something else: the number and the
+ * way to act on it sat two lines apart, in a row of the reader's own arbitrary label strings,
+ * where the app's one fixed chip is the odd one out. Now the number *is* the button — same place,
+ * same words, and the narrowing the chip did, which leaves every card that survives looking
+ * exactly as it looks unfiltered.
+ *
+ * **The crown is drawn always rather than only when pressed**, because here it is the chip's
+ * *identity* and not its state: `aria-pressed` says whether the filter is on, and the gold edge
+ * is the sighted half of that same sentence. A bare lucide glyph and never `GameChangerMark` —
+ * that component names itself and binds a tooltip of its own, which inside a control that already
+ * has both would be a second name and a second hint on one button.
  *
  * **Five figures on a regular deck and four on a virtual one** (2026-09-08, issue #401). A Virtual
  * deck is one the reader tracks without owning the cardboard, so `Owned` would read `0` beside a
@@ -54,6 +63,9 @@ export function DeckLedger({
   marketplace,
   formatName,
   gameChangers,
+  hasGameChangers,
+  gameChangersOnly,
+  onGameChangersOnlyToggle,
   tight,
   tracksCollection,
   check,
@@ -77,10 +89,40 @@ export function DeckLedger({
    * the condition on the line rather than a figure in it.
    */
   formatName: string | null;
-  /** Copies of the cards the format calls game changers, over the piles that count. Nothing is
-   *  drawn for a deck with none — `0 game changers` is a readout pointing at cards to go and find
-   *  where there are none to find, and the words are the whole of what this figure is. */
+  /**
+   * Copies of the cards the format calls game changers, over the piles that count — the figure
+   * half of the chip. **Never drawn as `0`**: a readout of `0 game changers` points at cards to
+   * go and find where there are none to find, so a zero falls back to the chip's bare caption and
+   * the control keeps only the half that is still true.
+   */
   gameChangers: number;
+  /**
+   * Whether the deck **draws** a game changer at all — the chip's own gate, and deliberately not
+   * {@link gameChangers} above.
+   *
+   * The count is a *rules* readout: copies over the piles that count, which is the number the
+   * format will judge. The gate is a question about what is on the desk. A game changer parked in
+   * a switched-off Maybeboard is exactly a card a reader wants to press this chip about — it is
+   * still in front of them — so the chip is drawn for it and the filter matches it, and the
+   * count beside it stays silent because that pile counts toward nothing. That is the same split
+   * `validateForMarks` and `validateDeck` make one screen over (issue #134): a claim about the
+   * deck, and an answer about each card drawn.
+   *
+   * **The two arms are why the caption has two spellings**, and the odd-looking one is the honest
+   * one: `Game Changers` with no number is a deck whose only powerful cards are parked.
+   */
+  hasGameChangers: boolean;
+  /**
+   * Whether the chip is pressed — the filter as the deck is actually being drawn under it, not
+   * the editor's stored flag. See `DeckEditor`'s `gcFilter` for why those are two things.
+   */
+  gameChangersOnly: boolean;
+  /**
+   * A press: narrow the deck to the game changers, or give the rest of it back. The chip is told
+   * nothing about which — it reports the gesture and the editor holds the state, for the reason
+   * every other control on this line reports rather than decides.
+   */
+  onGameChangersOnlyToggle: () => void;
   /**
    * The narrowest editor column this header reasons about, where the two counted figures that
    * carry a sentence say it in a number instead.
@@ -244,27 +286,59 @@ export function DeckLedger({
 
       <div className="ml-auto flex shrink-0 items-center gap-1.5">
         {check}
-        {gameChangers > 0 && (
+        {hasGameChangers && (
           // Beside the check rather than inside it, because the two answer different questions:
           // the check counts what is *wrong* and this counts what is *powerful*. A game changer
           // is legal by definition — it is the bracket conversation, not the legality one — so
           // folding the number into a chip that reads "4 issues" would invent four problems.
           //
-          // **A `span` with no edge, because the edge is what said "pressable"** (2026-09-09).
-          // This was a bordered readout from 2026-08-24 and a bordered *button* for the day the
-          // game-changer spotlight lasted — see the component's doc block for what that press did
-          // and why it went. A bordered span left standing between two real buttons would go on
-          // making the offer the press used to keep, so the border went with the handlers and what
-          // is left is dim mono: the voice every other figure on this line reads in, which is what
-          // this is.
-          <span className="inline-flex h-7 shrink-0 items-center whitespace-nowrap font-mono text-[0.6875rem] tabular-nums text-dim">
-            {/* The narrow arm is exactly what it was and its `sr-only` twin is **load-bearing
-                again**: while the count was a press it carried an `aria-label`, and a label
-                *replaces* an element's contents for naming, so the twin was announced to nobody.
-                The label went with the press, so at this width these two spans are the whole of
-                what names the figure — the words for a screen reader, the abbreviation for the
-                eye — and they stay one string split at a space rather than two free to drift. */}
-            {tight ? (
+          // **The edge is back because there is something to press again** (2026-09-10). It was a
+          // bordered readout from 2026-08-24, a bordered button for the day the spotlight lasted,
+          // and a bare span for the day the filter lived in the toolbar — and a bordered span
+          // between two real buttons was the one arrangement that lied, which is why the border
+          // went when the handlers did. Both are back together.
+          //
+          // Off is the line's own dim mono with the border every control on it wears; on takes
+          // `text-pie-gold` and the edge with it. That gold is what the crowns and banners on the
+          // cards themselves are drawn in, so the chip and what it narrows to say one fact in one
+          // colour — deliberately not the accent, which on this very line already means something
+          // else: `DeckBracket`'s accent edge says *a reading you can go and look at*.
+          <button
+            type="button"
+            // A toggle, so the press is `aria-pressed` and the name never changes with it. The
+            // name is the chip's own contents rather than an `aria-label`, which would replace
+            // them — and would silence the `sr-only` twin the narrow arm is named by.
+            aria-pressed={gameChangersOnly}
+            // The action, for the pointer and for the caret alike: `describes` is left on, so the
+            // sentence the visible words cannot say is wired to `aria-describedby` rather than
+            // being a hint only a mouse ever gets. Nothing here binds focus handlers of its own,
+            // so the spread is the whole binding.
+            {...tip(
+              gameChangersOnly
+                ? "Showing only the game changers. Press to show the whole deck."
+                : "Show only the game changers.",
+            )}
+            onClick={onGameChangersOnlyToggle}
+            className={cn(
+              "inline-flex h-7 shrink-0 items-center gap-1 whitespace-nowrap rounded-md",
+              "border px-2 font-mono text-[0.6875rem] tabular-nums",
+              "transition-colors duration-150 motion-reduce:transition-none",
+              gameChangersOnly
+                ? "border-pie-gold text-pie-gold"
+                : "border-border text-dim hover:text-pie-gold focus-visible:text-pie-gold",
+              FOCUS,
+            )}
+          >
+            <Crown className="size-3 shrink-0" aria-hidden="true" />
+            {/* Three spellings and each is the widest true thing at its size. The count is the
+                figure this chip has always carried; `hasGameChangers` without one is a deck whose
+                only game changers are parked in a switched-off pile, where a `0` would point at
+                cards to go and find that are right there. The narrow arm keeps the words for a
+                screen reader and abbreviates for the eye — one string split at a space rather
+                than two spellings free to drift. */}
+            {gameChangers === 0 ? (
+              "Game Changers"
+            ) : tight ? (
               <>
                 <span className="sr-only">{gameChangerWords(gameChangers)}</span>
                 <span aria-hidden="true">{count(gameChangers)} GC</span>
@@ -272,7 +346,7 @@ export function DeckLedger({
             ) : (
               gameChangerWords(gameChangers)
             )}
-          </span>
+          </button>
         )}
         {bracket}
       </div>

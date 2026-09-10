@@ -484,14 +484,21 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     transparent cards give a blur effect."* No other opacity is the fix, which is why the gesture
     went rather than the number.
 
-  **What replaced it narrows instead of dimming**: a `Game Changers` chip in the deck toolbar's
-  label-filter row, pressed and pressed again like the label chips beside it, joining their OR,
-  drawn only where the deck has a game changer, and lit `pie-gold` with a crown rather than the
-  accent — because that is the gold the crowns on the cards themselves wear. **It draws nothing on
-  any card**, which is the drawing decision this whole entry turns into: a card that survives the
-  filter looks exactly as it looks unfiltered, so there is no class to spread across four views, no
-  container attribute to arm and no drag to exempt. Its rules are in
-  [`src/features/decks/CLAUDE.md`](../../src/features/decks/CLAUDE.md).
+  **What replaced it narrows instead of dimming**: a `Game Changers` chip pressed and pressed
+  again like a label chip, joining the label chips' OR, drawn only where the deck has a game
+  changer, and lit `pie-gold` with a crown rather than the accent — because that is the gold the
+  crowns on the cards themselves wear. **It draws nothing on any card**, which is the drawing
+  decision this whole entry turns into: a card that survives the filter looks exactly as it looks
+  unfiltered, so there is no class to spread across four views, no container attribute to arm and
+  no drag to exempt.
+  **Where that chip _is_ moved once and the second answer is the count itself** (2026-09-10). It
+  spent a day in the deck toolbar's label-filter row and is the ledger's game-changer readout now
+  — one control, between the format check and the bracket, in the place the count has held since
+  2026-08-24. The row it left is the reader's own arbitrary label strings and nothing else; what
+  the merge buys is that the number and the press that acts on it are the same object, and what it
+  costs is a chip whose caption has two spellings (`2 game changers`, and the bare `Game Changers`
+  for a game changer parked in a switched-off pile, where the rules readout counts nothing). Its
+  rules are in [`src/features/decks/CLAUDE.md`](../../src/features/decks/CLAUDE.md).
   **Two findings the deleted rule leaves behind, both still true of anything shaped like it.** The
   **dimmed** state was what carried the class, because the inverse spelling is
   `[data-gc-spotlight] *:not(.deck-gc-lit)` — a `:not()` over a **broad subject**, evaluated
