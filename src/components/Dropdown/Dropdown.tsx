@@ -240,9 +240,9 @@ type ShellProps = SharedProps & {
   /** Whether this opening is a multi-select. Drives `aria-multiselectable`, the Space decision
    *  in `onListKeyDown` below, and whether activating a row closes the panel. */
   multi: boolean;
-  /** The trigger's own content — `<Dropdown>` computes a picked label or its placeholder,
-   *  `<MultiDropdown>` passes `triggerLabel` straight through. The shell draws it verbatim and
-   *  never inspects it. */
+  /** The trigger's own content — `<Dropdown>` computes a picked label, with the picked row's own
+   *  glyph beside it where there is one, or its placeholder; `<MultiDropdown>` passes
+   *  `triggerLabel` straight through. The shell draws it verbatim and never inspects it. */
   triggerContent: ReactNode;
   /** Whether one option's value counts as picked — `aria-selected` and the row's tick. */
   isPicked: (value: string) => boolean;
@@ -651,7 +651,15 @@ function DropdownShell(props: ShellProps) {
         )}
       >
         {triggerContent}
-        <ChevronDown className="size-3.5" aria-hidden="true" />
+        {/* **`shrink-0`, because a `size-3.5` is a request and not a floor.** The chevron is a
+            flex item beside content that can be as long as a reader's own category name, and a
+            flex item's default `shrink` is 1 — so the arrow gave up its own width to make room
+            for type it was never competing with. Measured over the built stylesheet at the card
+            modal's 15rem column, headless Edge 2026-09-10: a 35-character label squashed it to
+            **11.3px**, and to **12.3px** on the bare-string trigger this predates — so it is the
+            arrow's bug rather than the swatch's, made 1px worse by the 24px the swatch adds. With
+            this, the arrow holds 14px and the label ellipses at 180px instead. */}
+        <ChevronDown className="size-3.5 shrink-0" aria-hidden="true" />
       </button>
 
       <AnimatePresence>
@@ -763,7 +771,30 @@ export function Dropdown(
 ) {
   const { value, onChange, placeholder, options, ...shared } = props;
   const picked = options.find((o) => o.value === value);
-  const content = picked ? picked.label : (placeholder ?? DEFAULT_PLACEHOLDER);
+  const text = picked ? picked.label : (placeholder ?? DEFAULT_PLACEHOLDER);
+  // **The picked row's glyph, on the closed trigger.** A row that draws a swatch or a symbol says
+  // what it *is* with it — so a trigger drawing the word alone is the one place in the control
+  // where that fact is only reachable by opening something. `triggerIcon` is the escape for the
+  // one caller whose two sizes differ; see {@link DropdownOption}.
+  //
+  // A placeholder never carries one: it stands for a value the list does not hold, so there is no
+  // row whose glyph it could be.
+  const glyph = picked === undefined ? undefined : (picked.triggerIcon ?? picked.icon);
+  // Wrapped only where there is a glyph to wrap, so every dropdown in the app that has never had
+  // one draws the same bare string it always did. The wrapper is also where the label finally
+  // truncates, which is a fix rather than a side effect: `fill` makes the trigger a
+  // `justify-between` flex row, and a bare text node in one is an *anonymous* flex item that
+  // cannot be given `min-w-0` — so it wrapped to a second line inside a fixed `h-9` and hung out
+  // of the box. Measured at the card modal's 15rem column, headless Edge 2026-09-10.
+  const content =
+    glyph === undefined ? (
+      text
+    ) : (
+      <span className="flex min-w-0 items-center gap-2">
+        {glyph}
+        <span className="min-w-0 truncate">{text}</span>
+      </span>
+    );
   return (
     <DropdownShell
       {...shared}

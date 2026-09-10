@@ -3970,6 +3970,58 @@ scroller inside a `tabIndex={-1}` panel): focus landed on the panel, not on `<bo
 each that shape and none of them registers a scroll listener at all, so the bug was `Dropdown`'s
 alone.
 
+## The trigger draws the picked row's glyph, and what that exposed about the chevron
+
+**2026-09-10.** `<Dropdown>`'s rows have carried an `icon` since the set picker landed; the closed
+trigger drew `picked.label` and nothing else. So a control whose rows say what they *are* with a
+glyph — the card modal's label swatch, the wishlist's destination kind — said it only while open,
+which is the state a reader is in for about a second at a time. The trigger draws the picked row's
+glyph now: `picked.triggerIcon ?? picked.icon`, and nothing at all for a placeholder, which stands
+for a value the list does not hold and so has no row whose glyph it could borrow. `<MultiDropdown>`
+is untouched — its trigger says a count, and a count is not any one row's to illustrate.
+
+**`triggerIcon` exists for one caller and one reason: two sizes of one glyph.** The card modal's
+label picker draws a **10px** `LabelSwatch` (`rounded-[2px]`) in a list row and a **16px** one
+(`rounded-[4px]`) on the trigger. The list is showing every colour at once, so a row's job is to be
+told apart from the row above it; the closed trigger is the only place a reader reads a label's
+colour with nothing beside it to compare against. Everywhere the two sizes agree — the wishlist's
+`Heart`/`Folder`/`FolderPlus`, the set picker's keyrune — the field stays `undefined` and the row's
+own icon is what the trigger draws.
+
+**Measured over the built stylesheet, headless Edge, 2026-09-10, at the card modal's own 15rem
+(240px) controls column.** A `file://` harness carrying the real markup dumped out of a throwaway
+vitest — so the classes are `twMerge`'s own answer (`shrink-0 size-4 rounded-[4px]`, with
+`size-2.5` and `rounded-[2px]` gone) rather than a hand-written guess.
+
+| Trigger | Label | Swatch | Text | Chevron | Box |
+| --- | --- | --- | --- | --- | --- |
+| `h-9`, short label | `Removal` | 16×16 at x 35, `4px` radius, `rgb(211,32,42)` | 52.8px at x 59 | **14px** at x 239 | 240×36, no overflow |
+| `h-9`, 35-char label | `Removal — sweepers and edicts, long` | 16×16 | 182.8px, ellipsed | **11.3px** | 240×36, no overflow |
+| `h-11` (phone rung) | `Removal` | 16×16, centred | 52.8px | **14px** | 240×44 |
+| No label | — | none | — | 14px | 240×36 |
+
+**The chevron squashing is the arrow's own bug and it predates this.** A `size-3.5` is a *request*,
+not a floor: the chevron is a flex item beside content as long as a reader's own category name, and
+a flex item's default `flex-shrink` is 1. The same 35-character label on the **old** bare-string
+trigger squashed it to **12.3px** — and worse, the bare string had no `truncate`, so it wrapped to
+two lines inside a fixed 36px box and hung out of it. The swatch's 24px makes the squash 1px worse
+(11.3), which is how it was found rather than what caused it. `shrink-0` on the `ChevronDown` is
+the fix: same row, same label, the arrow back at **14px** and the label ellipsing at **180px**.
+
+**The truncation is the other half and it is new.** With `fill` the trigger is a `justify-between`
+flex row, and a bare text node in one is an *anonymous* flex item that cannot be given `min-w-0` —
+which is why the old long label wrapped rather than ellipsed. The glyph branch wraps both in
+`flex min-w-0 items-center gap-2` with `min-w-0 truncate` on the label, so the trigger finally
+clips the way `CardModalControls`' own comment had assumed it already did ("in a column where the
+pickers below it truncate"). The no-glyph branch still renders the bare string, so every dropdown
+in the app that has never had an icon draws exactly what it always did.
+
+**jsdom sees none of the geometry** — no layout engine, so every rectangle is 0 and the wrap, the
+ellipsis and the squashed arrow are all invisible to the suite. What the suite pins is the
+*structure*: the picked row's glyph on the trigger, `triggerIcon` beating `icon`, no glyph for a
+placeholder, none on a `<MultiDropdown>`, and the label swatch carrying the stored hex rather than
+`labelColorCss`'s fallback grey.
+
 ## The card's chin, and the one foot under every card in the app
 
 `src/components/CardChin.tsx`, 2026-08-26. Three surfaces drew a foot under a card and each held
