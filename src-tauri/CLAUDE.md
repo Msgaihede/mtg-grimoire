@@ -55,7 +55,7 @@ both plus the frontend.
   column exist"**, and the difference is a corpus with no `cards` at all: it owes nothing, because
   only an ingest can put that table back and `migrate_corpus` may stop a launch.
 - **The data folder holds two databases, and which one is `main` is the whole design**
-  (schema 27). `data/user.db` is the reader's — the twenty-five tables in `schema::TABLES` marked
+  (schema 27). `data/user.db` is the reader's — the twenty-seven tables in `schema::TABLES` marked
   `Side::User`, which nothing outside this app can produce again — and it is what
   `Connection::open` names. `data/corpus.db` is everything a feed or this app's own ladder can
   rebuild, and it is **`ATTACH`ed as `corpus`**, because *you cannot `DETACH main`*: discarding
@@ -143,8 +143,9 @@ both plus the frontend.
   every upgraded one, and a fresh worktree is a fresh install, so nothing else here can see it.
   The single-file ladder is frozen at **v26** — `schema::migrate_single_file`
   climbs to `schema::LEGACY_SINGLE_FILE_VERSION` and stops, and the two files carry their own
-  numbers from there (`USER_SCHEMA_VERSION` **42** since the editor's Deck stats band got a
-  disclosure — one rung above the reader being able to publish a folder, which is
+  numbers from there (`USER_SCHEMA_VERSION` **43** since a deck got many notes where it had one
+  column — one rung above the editor's Deck stats band getting a
+  disclosure, which is one above the reader being able to publish a folder, which is
   one above decks learning a third *kind*, which is one above the theory mark growing a
   third tier, which is one above it growing a second,
   which is one above decks learning which tokens they make,
@@ -1314,14 +1315,21 @@ record, with every measurement, is
   landed, and there is no such setting any more**: `sync_relay_set_url` and `valid_relay_url` are
   deleted, `RelayStatus` no longer carries a `relayUrl`, and what the panel draws in its place is
   `sync_supporter_status`'s answer.
-- **Thirteen tables sync and `schema::SYNCED_TABLES` is the census.** ⚠️ **This line said *eleven*
+- **Fifteen tables sync and `schema::SYNCED_TABLES` is the census.** ⚠️ **This line said *eleven*
   from schema v25 until 2026-08-31**, on the argument that the spec's twelfth was
   `deck_allocations`, which v25 dropped — true when written, and made wrong by v31 adding
   `device_names` back to twelve without this page moving. **v37 makes it thirteen**: `deck_tokens`,
   one row per token a reader has deviated on, and the first table on the census whose
   `quantity` is a **field** rather than a counter — nullable, so there is no `NEW - OLD` to
   carry, and last-write-wins is what a *setting* wants where two devices each sleeving a copy
-  means two copies. `capture::TABLES` is held to that constant by a
+  means two copies. **v43 makes it fifteen**: `deck_notes` and `deck_note_cards`, and that rung is
+  the first on either ladder to take a column **off** a spec as well as putting tables on one —
+  `decks.notes` is gone. The two directions cost very differently. Adding a table is the ten-site
+  job [sync.md](../docs/reference/sync.md) lists; dropping a synced *column* costs nothing on the
+  wire at all, because `apply::updates()` walks the **local** spec's field list and looks each
+  name up in the incoming op, so a field a v42 peer goes on sending is skipped rather than
+  deferred. An unknown *table* stalls that peer's whole stream; an unknown *field* does not.
+  `capture::TABLES` is held to that constant by a
   test, and a second test asserts every column a capture spec names exists on its table — a
   misspelt column is not a compile error and not a runtime error either until the trigger fires,
   at which point it is a *write* that starts failing for the reader in a command that has nothing
@@ -1917,9 +1925,15 @@ viewState)` — absent field means "leave it". It moves **no `updated_at`**, rec
   case.** `decks.tokens_open` is the panel's disclosure, on the `decks` capture `Spec` beside
   `separate_x_group`, the last **named** column of `DECK_SELECT` when it landed for `deck_row`'s
   positional reason — which moved its `IMAGE_COL` from 21 to 22 — and on no history row and no
-  `deck_undo::DECK_FIELDS`. **It is not the last named column any more** (v42's `stats_open` is,
+  `deck_undo::DECK_FIELDS`. **It is not the last named column any more** (v43's `notes_open` is,
   at 26, with `IMAGE_COL` at 27), and it is not the only disclosure either: read both numbers off
-  `deck_row` and never off this page. The four commands, the tie-break, the sync
+  `deck_row` and never off this page.
+  ⚠️ **v43 is why this page insists on that**, and it is the sharpest case the ladder has produced:
+  the rung removed `decks.notes` at column 12 *and* appended `notes_open`, so fourteen reads in
+  `deck_row` and nine in the before-image mapper each shifted down by one — and `IMAGE_COL` came
+  out at **27 both before and after**, because the two edits cancel at the end of the row and
+  nowhere in the middle of it. The one number a reader would check to decide whether the read had
+  moved is the one number that did not. The four commands, the tie-break, the sync
   registrations and every measurement:
   [decks-storage.md](../docs/reference/decks-storage.md).
 

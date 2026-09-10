@@ -190,7 +190,24 @@ pub struct DeckAuditEntry {
 /// * **`deck.field` gains `description` and `archived`.** Both are editable today
 ///   ([`crate::deck::DeckPatch`]) and both are deck writes, so the alternative was a write that
 ///   records nothing — the one thing this table exists to prevent. `description` is the v5
-///   column the "New deck" dialog fills; `notes` is the separate v8 one.
+///   column the "New deck" dialog fills; `notes` was the separate v8 one.
+///
+/// **`notes` is a third value nothing writes any more and the renderer must keep reading**,
+/// `built`'s rule exactly. User schema v43 dropped `decks.notes` — one paragraph became
+/// `deck_notes`, many rows each able to name any number of cards — so
+/// [`crate::deck::record_deck_edit`] no longer has an arm for it and no new row can carry it.
+/// Every row a reader wrote before that rung still does, and `auditText.ts`'s `case "notes"`
+/// stays in the file for good: without it, years of *Edited the deck notes* would silently
+/// become the default *Changed the deck*. The table above is the vocabulary this column has
+/// **held**, not the vocabulary it can still be given.
+///
+/// What writes about a note now is `deck_notes.rs`, under the same `deck` kind and a `field` of
+/// **`note`** — singular, a different word on purpose — with an `action` of
+/// `create` | `edit` | `delete` | `attach` | `detach` beside it, because a note is five events
+/// where the column was one. `AUDIT_KINDS` stays at nine for that: the vocabulary is inside a
+/// `CHECK`, SQLite has no `ALTER … CHECK`, and a tenth word costs a full `deck_audit` rebuild
+/// which would fire `deck_undo`'s `ON DELETE CASCADE` and empty the undo stack on every real
+/// launch while leaving it intact in every test.
 ///
 /// # An import is `add` and `remove` with an `import` payload
 ///
@@ -1320,20 +1337,14 @@ mod tests {
             json!({ "field": "cover", "from": null, "to": "serra-lea" })
         );
 
-        crate::deck::update_deck(
-            &conn,
-            id,
-            &DeckPatch {
-                notes: Some("Needs a second Bolt.".to_owned()),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let (_, payload) = newest(&conn, id);
-        assert_eq!(
-            payload,
-            json!({ "field": "notes", "from": null, "to": "Needs a second Bolt." })
-        );
+        // **A `notes` row stood here until user schema v43.** `decks.notes` is gone and
+        // `DeckPatch` no longer carries the field, so there is no longer a write that produces
+        // one — which is a *writer* being removed and not a value leaving the vocabulary. The
+        // spelling stays in this module's payload table above and in `auditText.ts`'s
+        // `case "notes"`, because every history row a reader wrote before v43 still says it and
+        // deleting the arm would demote years of drawer lines to the default *Changed the
+        // deck*. What replaces the write is `deck_notes.rs`'s own `field: "note"` rows, which
+        // carry an `action` because a note is five events where the column was one.
 
         crate::deck::update_deck(
             &conn,

@@ -348,6 +348,7 @@ export function StackView({
   tracksCollection,
   violations,
   theoryPlan,
+  noted,
   onSelect,
   actions,
   selectedSlot,
@@ -387,6 +388,17 @@ export function StackView({
   /** The deck's plan — `theoryMatch.ts`'s two lookups and the deck's own two mark switches,
    *  handed down whole like `violations` beside it. `undefined` for a deck with no plan. */
   theoryPlan?: TheoryPlan;
+  /**
+   * Every oracle id a deck note names — `deckNotes.ts`' `notedOracleIds` over the notes the
+   * editor already holds, handed down whole like `violations` beside it.
+   *
+   * `undefined` draws no note glyph anywhere, which is a surface that has not heard of notes and
+   * is also the state before the read lands. The per-card question is `cardControl.ts`'s
+   * `deckCardNoted`, asked at the bottom of the chain so the guard keeping an **orphan** printing
+   * unmarked — it carries no oracle id, and a note attaches by nothing else — is written once for
+   * all four views.
+   */
+  noted?: ReadonlySet<string>;
   onSelect?: (card: DeckCard) => void;
   /** What may be done to a card here, and where a dropped one lands. See
    *  {@link DeckCardActions}; omitted, this view is exactly what it always was. */
@@ -749,6 +761,7 @@ export function StackView({
             marketplace={marketplace}
             violations={violations}
             theoryPlan={theoryPlan}
+            noted={noted}
             tracksCollection={tracksCollection}
             onSelect={selectCard}
             actions={actions}
@@ -765,6 +778,7 @@ export function StackView({
             marketplace={marketplace}
             violations={violations}
             theoryPlan={theoryPlan}
+            noted={noted}
             tracksCollection={tracksCollection}
             onSelect={selectCard}
             actions={actions}
@@ -830,6 +844,7 @@ export function StackView({
               marketplace={marketplace}
               violations={violations}
               theoryPlan={theoryPlan}
+              noted={noted}
               tracksCollection={tracksCollection}
               onSelect={selectCard}
               actions={actions}
@@ -894,6 +909,7 @@ function CommandZone({
   marketplace,
   violations,
   theoryPlan,
+  noted,
   tracksCollection,
   onSelect,
   actions,
@@ -923,6 +939,8 @@ function CommandZone({
    * this box is a card in the deck like any other.
    */
   theoryPlan?: TheoryPlan;
+  /** Handed through to the piles — see {@link StackView}'s own props. */
+  noted?: ReadonlySet<string>;
   /**
    * Whether the deck reads the collection at all — see {@link StackView}'s own props.
    *
@@ -981,6 +999,7 @@ function CommandZone({
           marketplace={marketplace}
           violations={violations}
           theoryPlan={theoryPlan}
+          noted={noted}
           tracksCollection={tracksCollection}
           onSelect={onSelect}
           actions={actions}
@@ -1005,6 +1024,7 @@ function StackGroup({
   marketplace,
   violations,
   theoryPlan,
+  noted,
   tracksCollection,
   onSelect,
   actions,
@@ -1020,6 +1040,8 @@ function StackGroup({
   /** The deck's plan — `theoryMatch.ts`'s two lookups and the deck's own two mark switches,
    *  handed down whole like `violations` beside it. `undefined` for a deck with no plan. */
   theoryPlan?: TheoryPlan;
+  /** Handed through to the stack — see {@link StackView}'s own props. */
+  noted?: ReadonlySet<string>;
   /** Whether the deck reads the collection at all — see {@link StackView}'s own props. Required
    *  here for {@link CommandZone}'s reason: this pile is reached from three different call sites
    *  in this file, and a `boolean` with no default is what stops one of the three drifting. */
@@ -1212,6 +1234,7 @@ function StackGroup({
             currency={marketplace.currency}
             violations={violations}
             theoryPlan={theoryPlan}
+            noted={noted}
             tracksCollection={tracksCollection}
             onSelect={onSelect}
             actions={actions}

@@ -231,7 +231,7 @@ Full record, with every measurement and the provenance of each rung:
 
 ## Deck settings, and the two surfaces that draw them
 
-Everything a deck carries that is not a card in it — name, format, description, notes, cover,
+Everything a deck carries that is not a card in it — name, format, description, cover,
 folder, its **kind**, and **where an unfiled add lands** — is **one component, `DeckSettingsForm`,
 drawn by two hosts** (2026-08-14). The "New deck" dialog used to ask two questions and leave the
 reader to configure the deck they had just made; it now asks all of them.
@@ -326,9 +326,9 @@ reader to configure the deck they had just made; it now asks all of them.
   `theoryEnabled` is `false` on a virtual deck by construction, and a second guard here would read
   as though the two facts were independent, which is the misreading `deckKind.ts` exists to stop.
 - **Two callbacks, because the two hosts commit differently.** `onChange` fires for every change
-  including each keystroke; `onCommit` fires only for the three text fields, when the reader is
+  including each keystroke; `onCommit` fires only for the two text fields, when the reader is
   finished with one. `DeckSettingsDialog` writes on `onChange` for the controls that settle in a
-  single act (format, theory, folder, cover) and on `onCommit` for name/description/notes — which
+  single act (format, theory, folder, cover) and on `onCommit` for name/description — which
   is exactly its old behaviour, **no Save button and not meant to have one**.
   `CreateDeckDialog` merges `onChange` into a draft and **does not pass `onCommit` at all**:
   there is nothing to write until Create.
@@ -1240,7 +1240,7 @@ layer.
   from a dozen `onSuccess` callbacks in two hooks, so a write added to that array is covered for
   free — which is also why `Write` grew an `isSuccess`.
 - **`Ctrl+Z`, `Ctrl+Shift+Z` and `Ctrl+Y`, and the handler yields inside a text field.** That
-  carve-out is the whole of what keeps the quick-add box, the deck name and the notes usable:
+  carve-out is the whole of what keeps the quick-add box, the deck name and a note body usable:
   those get the browser's own undo, which this cannot replace and must not swallow. The predicate
   is **`isTextField` from `useContextMenu.ts`** — the same one the native-context-menu carve-out
   turns on, never a second spelling. Both redo spellings are live because both are what a reader's

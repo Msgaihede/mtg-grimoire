@@ -61,7 +61,7 @@ const BURN: DeckRow = {
   cardCount: 60,
   updatedAt: 1_800_000_000,
   folderId: null,
-  notes: "Sideboard plan lives in the Maybeboard.",
+  notesOpen: false,
   theoryEnabled: false,
   virtualOnly: false,
   theoryMarkExact: true,
@@ -565,8 +565,13 @@ describe("DeckSettingsDialog", () => {
 
   /**
    * Every other control in this dialog has already written by the time the reader reaches for
-   * the scrim, so the text fields commit on the way out too — a notes paragraph thrown away by
-   * a click outside would be the one destructive thing on the screen.
+   * the scrim, so the text fields commit on the way out too — a half-typed paragraph thrown
+   * away by a click outside would be the one destructive thing on the screen.
+   *
+   * **It was the `Notes` textarea on trial here until user schema v43**, which replaced the
+   * deck's single `notes` column with the Notes band's many notes. The property was never
+   * about that field, so it moved to `Description`, which is the long field this panel still
+   * draws — deleting the case outright would have taken the paragraph below with it.
    *
    * **The case the extraction could have broken in silence.** `useDeckField` writes on
    * `useIsPresent()` going false, which is a React context `AnimatePresence` provides; `Settings`
@@ -576,11 +581,11 @@ describe("DeckSettingsDialog", () => {
    * second later and racing the editor's teardown. `Dialog.test.tsx`'s presence case is what
    * separates the two; this one is the behaviour that depends on it.
    */
-  it("commits a half-typed notes draft when the dialog closes", async () => {
+  it("commits a half-typed draft when the dialog closes", async () => {
     const { rerender, onDismiss, onClose } = open();
     await loaded();
 
-    await userEvent.type(screen.getByLabelText("Notes"), " Cut Avacyn.");
+    await userEvent.type(screen.getByLabelText("Description"), " Cut Avacyn.");
     expect(deckUpdate).not.toHaveBeenCalled();
 
     rerender(
@@ -591,13 +596,13 @@ describe("DeckSettingsDialog", () => {
 
     await waitFor(() =>
       expect(deckUpdate).toHaveBeenCalledWith(4, {
-        notes: "Sideboard plan lives in the Maybeboard. Cut Avacyn.",
+        description: "Twenty damage, quickly. Cut Avacyn.",
       }),
     );
   });
 
-  /** The description and the notes are two columns, and a form that wrote one into the other
-   *  would be invisible until the gallery tile changed. */
+  /** The description names itself on the way out, so a host that wrote it into some other
+   *  column would be invisible until the gallery tile changed. */
   it("writes the description to the description", async () => {
     open();
     await loaded();

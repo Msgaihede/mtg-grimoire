@@ -50,7 +50,7 @@ export interface DeckSettingsDialogProps {
  * the editor's own name field uses. The one consequence worth stating out loud is at the other
  * end: closing the dialog **commits** whatever is half-typed in a text field rather than
  * discarding it (see {@link useDeckField}), because in a form where every other control has
- * already written, a notes paragraph silently thrown away by a click on the scrim would be the
+ * already written, a half-typed description thrown away by a click on the scrim would be the
  * only destructive thing on the screen. That commit rides `useIsPresent()` inside `Settings`,
  * which works because the shell renders `children` inside its own presence subtree — the one
  * thing about this arrangement that a careless edit could break without anything going red.
@@ -310,10 +310,9 @@ function Settings({ deckId }: { deckId: number }) {
   const update = deck.update.mutate;
   const writeName = useCallback((value: string) => update({ name: value }), [update]);
   const writeDescription = useCallback((value: string) => update({ description: value }), [update]);
-  const writeNotes = useCallback((value: string) => update({ notes: value }), [update]);
 
   /**
-   * The three drafts, and they are the whole of what this host adds to the form's `value`.
+   * The two drafts, and they are the whole of what this host adds to the form's `value`.
    *
    * **Held out here rather than inside the `row &&` branch below**, because a hook cannot be
    * conditional and because a draft that unmounted when the deck's read blinked would be a
@@ -323,13 +322,12 @@ function Settings({ deckId }: { deckId: number }) {
    *
    * Each of them holds its own `useIsPresent()`, which is the shell's presence rather than this
    * component's: `Settings` is rendered as `Dialog`'s `children`, inside the same
-   * `AnimatePresence` child as the panel, so "the dialog is closing" reaches these three hooks
+   * `AnimatePresence` child as the panel, so "the dialog is closing" reaches both hooks
    * and the half-typed paragraph is written on the *close* rather than on the unmount a fifth of
    * a second later.
    */
   const name = useDeckField(row?.name ?? "", writeName, { blankIsNoop: true });
   const description = useDeckField(row?.description ?? "", writeDescription);
-  const notes = useDeckField(row?.notes ?? "", writeNotes);
 
   const formatKey = row?.formatKey ?? null;
   const formatName = row?.formatName ?? null;
@@ -359,7 +357,7 @@ function Settings({ deckId }: { deckId: number }) {
   /**
    * Every change, live — and **which control it came from decides whether it writes now**.
    *
-   * A select, a switch and a folder move each settle in one act, so each writes here; the three
+   * A select, a switch and a folder move each settle in one act, so each writes here; the two
    * text fields feed their draft instead and write on {@link commit}. That split is the whole of
    * the difference between this host and the create dialog, which merges every patch into a
    * draft and writes nothing until Create.
@@ -367,7 +365,6 @@ function Settings({ deckId }: { deckId: number }) {
   const change = (patch: Partial<DeckSettingsValue>) => {
     if (patch.name !== undefined) name.onChange(patch.name);
     if (patch.description !== undefined) description.onChange(patch.description);
-    if (patch.notes !== undefined) notes.onChange(patch.notes);
     if (patch.formatKey !== undefined) update({ formatKey: patch.formatKey });
     // One write and one field: the game narrows the format list on the next render and touches
     // `format_key` neither here nor in Rust.
@@ -422,7 +419,6 @@ function Settings({ deckId }: { deckId: number }) {
   const commit = (patch: Partial<DeckSettingsValue>) => {
     if (patch.name !== undefined) name.onBlur();
     if (patch.description !== undefined) description.onBlur();
-    if (patch.notes !== undefined) notes.onBlur();
   };
 
   return (
@@ -449,7 +445,6 @@ function Settings({ deckId }: { deckId: number }) {
               formatKey: row.formatKey,
               gameKey: row.gameKey,
               description: description.value,
-              notes: notes.value,
               theoryEnabled: row.theoryEnabled,
               // The other half of the kind. Passed even though this host reads it only through
               // {@link collects}: the value shape is the *form's*, one shape for both hosts,

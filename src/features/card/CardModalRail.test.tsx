@@ -212,8 +212,8 @@ describe("the card modal's options rail", () => {
   /**
    * The rail is a list rather than a fixed set of slots — spec §7 — so the count of entries is a
    * property of the surface and not of this file. A component with seven named slots plus an
-   * "extras" hole would draw the deck editor's eight and the search wall's seven differently;
-   * this draws one list and the surface says how long it is — **nine** below, because the fixture
+   * "extras" hole would draw the deck editor's nine and the search wall's eight differently;
+   * this draws one list and the surface says how long it is — **ten** below, because the fixture
    * hands it two actions where the editor hands one (`CardDetailModal`'s `railActions`).
    *
    * **The order is asserted whole, and that is what places `Combos` rather than merely finding
@@ -222,7 +222,7 @@ describe("the card modal's options rail", () => {
    * it draws. `toEqual` against the full list is the only assertion here that goes red for a row
    * that is present and in the wrong block.
    */
-  it("appends the surface's own entries after the seven every surface has", async () => {
+  it("appends the surface's own entries after the eight every surface has", async () => {
     const setCommander = vi.fn();
     const user = userEvent.setup();
     renderRail({
@@ -239,6 +239,7 @@ describe("the card modal's options rail", () => {
       "Oracle tags",
       "Card text",
       "Combos",
+      "Notes",
       "Open on Scryfall",
       "Open on EDHREC",
       "Open on TCGplayer",

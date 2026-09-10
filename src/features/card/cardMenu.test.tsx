@@ -904,7 +904,7 @@ const deck = (over: Partial<DeckRow> & { id: number; name: string }): DeckRow =>
   cardCount: 0,
   updatedAt: 0,
   folderId: null,
-  notes: null,
+  notesOpen: false,
   theoryEnabled: false,
   virtualOnly: false,
   theoryMarkExact: true,

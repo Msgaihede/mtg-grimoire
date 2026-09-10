@@ -1036,7 +1036,7 @@ fn a_whole_deck_crosses_intact() {
     )
     .unwrap();
     a.execute(
-        "INSERT INTO decks (name, format_key, folder_id, notes, created_at, updated_at)
+        "INSERT INTO decks (name, format_key, folder_id, description, created_at, updated_at)
          VALUES ('Atraxa', 'commander', 1, 'a plan', unixepoch(), unixepoch())",
         [],
     )
@@ -1088,6 +1088,101 @@ fn a_whole_deck_crosses_intact() {
         )
         .unwrap();
     assert_eq!((card.as_str(), pile.as_str()), ("Sol Ring", "Ramp"));
+}
+
+/// **A field this build no longer syncs is skipped rather than stalling the peer that sends
+/// it** — the property that made dropping a synced column affordable at all.
+///
+/// A device still on user schema v42 goes on emitting `decks` ops carrying `notes`. This build's
+/// `decks` spec has no such field: v43 dropped the column and put `deck_notes` /
+/// `deck_note_cards` in its place. The op must **apply**. A deferral here would hold that
+/// device's watermark and stop its whole stream — which is what an unknown *table* costs and
+/// what a dropped *column* must not.
+///
+/// The mechanism is `super::updates` and `super::creations`, which walk the **local**
+/// spec's field list and look each name up in the incoming op, so a field the op carries and
+/// the spec does not is never visited. Both halves are driven, because they fail differently:
+/// an **insert** carrying `notes` beside fields the spec does know, and a **sparse update**
+/// carrying `notes` and nothing else — which is exactly what a v42 device's update trigger
+/// emits for an edit to that one column, and the case where the applier is left with no column
+/// to write at all.
+#[test]
+fn a_field_this_build_no_longer_syncs_is_skipped_rather_than_stalling() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let mut ma = 0;
+    a.execute(
+        "INSERT INTO decks (name, format_key, created_at, updated_at)
+         VALUES ('Atraxa', 'commander', unixepoch(), unixepoch())",
+        [],
+    )
+    .unwrap();
+    let mut insert = since(&a, &mut ma);
+    assert_eq!(insert.len(), 1);
+    // Splicing the field in is what makes this a test of the *receiving* side. Nothing in this
+    // build emits it any more, which the assertion above the splice is there to keep true.
+    assert!(
+        !insert[0].fields.contains_key("notes"),
+        "this build must no longer put `notes` on the wire: {:?}",
+        insert[0].fields
+    );
+    insert[0]
+        .fields
+        .insert("notes".to_owned(), serde_json::json!("a plan"));
+    let uid = insert[0].uid.clone();
+
+    let report = apply(&b, &insert).unwrap();
+    assert_eq!(report.deferred, 0, "a dropped column deferred the op");
+    assert_eq!(report.applied, 1);
+    let name: String = b
+        .query_row("SELECT name FROM decks WHERE sync_uid = ?1", [&uid], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(name, "Atraxa", "the deck did not land");
+
+    // ...and the watermark followed it, which is the other half of what a deferral costs: the
+    // sending device would be stalled at this op for ever.
+    let mark: (i64, i64) = b
+        .query_row(
+            "SELECT last_ms, last_ctr FROM sync_peers WHERE device_id = 'dev-a'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    let last = insert.last().unwrap();
+    assert_eq!(mark, (last.at.ms, last.at.ctr), "dev-a's stream stalled");
+
+    // The sparse case. `description` is captured, so this produces a real one-field update op;
+    // renaming its key is a v42 device editing the notes and nothing else.
+    a.execute("UPDATE decks SET description = 'a plan'", [])
+        .unwrap();
+    let mut edit = since(&a, &mut ma);
+    assert_eq!(edit.len(), 1);
+    let value = edit[0]
+        .fields
+        .remove("description")
+        .expect("an update carries only what moved");
+    assert!(edit[0].fields.is_empty(), "the op was not sparse: {edit:?}");
+    edit[0].fields.insert("notes".to_owned(), value);
+
+    let report = apply(&b, &edit).unwrap();
+    assert_eq!(
+        report.deferred, 0,
+        "an op naming nothing but a dropped column deferred"
+    );
+    assert_eq!(report.applied, 1);
+    let (name, description): (String, Option<String>) = b
+        .query_row(
+            "SELECT name, description FROM decks WHERE sync_uid = ?1",
+            [&uid],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(name, "Atraxa");
+    assert_eq!(
+        description, None,
+        "a field this spec does not name must write no column"
+    );
 }
 
 /// **"Clear collection" crosses, and it is the sharpest ordering case there is.**
@@ -1352,6 +1447,12 @@ fn every_unique_index_on_a_synced_table_has_been_decided_about() {
             "deck_categories.idx_deck_categories_kind",
             // `DECK_LABEL_GRAIN` — one app-wide list since v21.
             "deck_labels.idx_deck_labels_grain",
+            // `DECK_NOTE_CARD_GRAIN` — one row per card per note since v43. **`deck_notes`
+            // itself is absent from this list on purpose**: it carries only its `_uid` index,
+            // which the loop above skips by name, because two devices each typing a note about
+            // the mana base must stay two notes and no column pair could tell an accidental
+            // duplicate from a deliberate one.
+            "deck_note_cards.idx_deck_note_cards_grain",
             // `DECK_TOKEN_GRAIN` — one row per token per deck since v37, and deliberately not
             // per variant.
             "deck_tokens.idx_deck_tokens_grain",

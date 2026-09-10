@@ -42,7 +42,7 @@ import { finishTreatments, treatmentName } from "@/lib/treatment";
 import type { ImageVariant } from "@/lib/images";
 import type { DeckCard } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
-import { theoryMatchLabel } from "./CardMarks";
+import { NOTE_MARK_LABEL, theoryMatchLabel } from "./CardMarks";
 import type { TheoryMark } from "./theoryMatch";
 import {
   cardDraggable,
@@ -365,6 +365,28 @@ export function deckCardShort(card: DeckCard, tracksCollection: boolean): boolea
 }
 
 /**
+ * Whether a **deck note** names this card — the note glyph's predicate, in one place.
+ *
+ * The set is `deckNotes.ts`'s `notedOracleIds` over the notes the editor already holds; there is
+ * no *"which cards in this deck have notes"* command and there must not be one, because the band
+ * holds every note and every note holds its oracle ids.
+ *
+ * ⚠️ **A card with no `oracleId` is never noted, and that is the whole reason this is a function.**
+ * An orphan printing — one whose card has left the corpus — carries `oracleId: null`, and a note
+ * attaches by oracle id and by nothing else. `noted.has(card.oracleId!)` would be a type error and
+ * `noted.has(card.oracleId as string)` would ask a `Set<string>` about `null`, which answers
+ * `false` today and would answer `true` the moment anything ever put an empty id in that set. It
+ * is asked once here so that the four views cannot each get it slightly differently — the same
+ * argument {@link deckCardShort} above makes about its three guards.
+ *
+ * `undefined` is a surface that has not heard of notes and draws none, which is what keeps this
+ * from being a flag day: it is the value every view sees before the read lands.
+ */
+export function deckCardNoted(card: DeckCard, noted: ReadonlySet<string> | undefined): boolean {
+  return card.oracleId !== null && noted !== undefined && noted.has(card.oracleId);
+}
+
+/**
  * What a deck card's control is called.
  *
  * It begins with the card's **name**, which is the visible label — WCAG 2.5.3 asks that of any
@@ -419,6 +441,26 @@ export function deckCardName(
    * defaulted parameter before a required one costs is that it cannot exist at all.
    */
   tracksCollection: boolean,
+  /**
+   * Whether a deck note names this card — {@link deckCardNoted}'s answer (2026-09-10, issue #447).
+   *
+   * **This is the whole of how that fact reaches a keyboard reader on these three views.** The
+   * glyph is drawn inside `QuantityTag`, which is `aria-hidden`, and an `aria-label` replaces an
+   * element's content for naming purposes — so without this clause "has a note" is a mark only a
+   * sighted reader ever gets, with nothing anywhere going red. The constant is imported rather
+   * than respelled, because `CardMarks.tsx` owns the words and two spellings of one fact is how a
+   * mark and its sentence come to disagree.
+   *
+   * **Optional and defaulting to `false`, where {@link tracksCollection} above is required**, and
+   * the asymmetry is `QuantityTag.noted`'s: both of *that* one's defaults are unsafe, where an
+   * unmarked card is simply a card whose note the reader finds one press away in the band. A
+   * surface that has not heard of notes goes on saying what it always said.
+   *
+   * Last, and after the game changer clause, because the list runs from what the card *is* to
+   * what is wrong with it — and because a pointer resting on the tag reads its two glyphs left to
+   * right, crown then note, which is the order `QuantityTag` builds its own sentence in.
+   */
+  noted = false,
 ): string {
   // All three of {@link deckCardShort}'s guards, said in words exactly where the figure is drawn
   // — one predicate, so the name and the mark cannot come to disagree.
@@ -444,6 +486,10 @@ export function deckCardName(
     named?.toLowerCase() ?? (finish === null ? null : FINISH_LABEL[finish].toLowerCase()),
     card.labelName,
     card.gameChanger === true ? "game changer" : null,
+    // The second glyph on the same tag, in the order the tag draws them. Lowercased like every
+    // clause here, since the constant is written as a mark's own name — a fragment on its own —
+    // and this is a sentence.
+    noted ? NOTE_MARK_LABEL.toLowerCase() : null,
     // Before the rule break, because it is the milder fact and this list runs from what the card
     // *is* to what is wrong with it — and lowercased like every other clause here, since the
     // constant is written as a tooltip (a fragment on its own) and this is a sentence.

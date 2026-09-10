@@ -219,7 +219,7 @@ pub fn open_read(data_dir: &Path) -> rusqlite::Result<Connection> {
 /// `art_taggings`, `art_tag_illustrations`, `oracle_tags`, `oracle_tag_parents`,
 /// `oracle_taggings`, `oracle_tag_cards`, `cards_fts_idx` and `cards_fts_config`. **Two are on
 /// the user side, not one — `muted_tags` and, since user schema v31, `device_names`**
-/// (`schema.rs:448-464` lists both in [`crate::schema::SYNCED_TABLES`], and both `CREATE TABLE`s
+/// ([`crate::schema::SYNCED_TABLES`], and both `CREATE TABLE`s
 /// carry the same `) WITHOUT ROWID;`). A transaction whose *only* corpus write is to one of the
 /// first twelve is invisible here, and `image_cache` is the likeliest candidate in the crate.
 /// **The same blind spot is why live sync's write-wake rides `commit_hook` rather than this

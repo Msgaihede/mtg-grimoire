@@ -23,6 +23,7 @@ import {
   deckCardName,
   deckCardMenuProps,
   deckCardMarked,
+  deckCardNoted,
   deckCardPress,
   deckCardProps,
   deckCardSelectedProps,
@@ -74,6 +75,7 @@ export function GridView({
   tracksCollection,
   violations,
   theoryPlan,
+  noted,
   onSelect,
   actions,
   selectedSlot,
@@ -113,6 +115,16 @@ export function GridView({
    *  handed down whole like `violations` beside it. `undefined` for a deck with no plan, and on
    *  the plan itself. */
   theoryPlan?: TheoryPlan;
+  /**
+   * Every oracle id a deck note names — `deckNotes.ts`' `notedOracleIds` over the notes the
+   * editor already holds, handed down whole like `violations` beside it.
+   *
+   * `undefined` draws no note glyph anywhere, which is a surface that has not heard of notes and
+   * is also the state before the read lands. The per-card question is `cardControl.ts`'s
+   * `deckCardNoted`, so the guard keeping an **orphan** printing unmarked — it carries no oracle
+   * id, and a note attaches by nothing else — is asked once for all four views.
+   */
+  noted?: ReadonlySet<string>;
   onSelect?: (card: DeckCard) => void;
   /** What may be done to a card here — see {@link DeckCardActions}. */
   actions?: DeckCardActions;
@@ -199,6 +211,7 @@ export function GridView({
           marketplace={marketplace}
           violations={violations}
           theoryPlan={theoryPlan}
+          noted={noted}
           tracksCollection={tracksCollection}
           onSelect={onSelect}
           actions={actions}
@@ -218,6 +231,7 @@ function GridGroup({
   marketplace,
   violations,
   theoryPlan,
+  noted,
   tracksCollection,
   onSelect,
   actions,
@@ -230,6 +244,8 @@ function GridGroup({
   violations?: Map<string, ValidationIssue[]>;
   /** Handed through to the tiles — see {@link GridView}'s own props. */
   theoryPlan?: TheoryPlan;
+  /** Handed through to the tiles — see {@link GridView}'s own props. */
+  noted?: ReadonlySet<string>;
   /** Handed through to the tiles — see {@link GridView}'s own props. **Required here where the
    *  wall's is optional**: this group is module-private with one mount, so a required prop costs
    *  nothing and a hop that forgets to forward it is a red build rather than a red `0/4` on every
@@ -312,6 +328,7 @@ function GridGroup({
               currency={marketplace.currency}
               ruleBreakText={ruleBreak(violations?.get(card.cardId))}
               theoryMark={theoryMatchMark(theoryPlan, card)}
+              noted={deckCardNoted(card, noted)}
               tracksCollection={tracksCollection}
               onSelect={onSelect}
               actions={actions}
@@ -357,6 +374,7 @@ function GridCard({
   currency,
   ruleBreakText,
   theoryMark,
+  noted,
   tracksCollection,
   onSelect,
   actions,
@@ -373,6 +391,9 @@ function GridCard({
    *  does not ask for; otherwise the tier it is in and how far the live list is from the plan at
    *  that tier's own grain, where `0` is the card the plan asks for exactly. */
   theoryMark: TheoryMark | null;
+  /** Whether a deck note names this card — `deckCardNoted`'s answer, resolved by the group for
+   *  {@link theoryMark}'s reason, and required here for {@link GridGroup}'s. */
+  noted: boolean;
   /** Whether the deck reads the collection at all — see {@link GridView}'s own props. Required
    *  here for {@link GridGroup}'s reason. */
   tracksCollection: boolean;
@@ -466,7 +487,7 @@ function GridCard({
     >
       <button
         type="button"
-        aria-label={deckCardName(card, ruleBreakText, theoryMark, tracksCollection)}
+        aria-label={deckCardName(card, ruleBreakText, theoryMark, tracksCollection, noted)}
         {...deckCardProps(card)}
         {...deckCardPress(card, onSelect, actions)}
         // Inset, for the stacked card's reason: the button *is* the card face, whose edge sits 1px
@@ -487,6 +508,7 @@ function GridCard({
           width={scaled(TILE_WIDTH, zoom)}
           ruleBreakText={ruleBreakText}
           theoryMark={theoryMark}
+          noted={noted}
           landedKey={landedKey}
         />
       </button>

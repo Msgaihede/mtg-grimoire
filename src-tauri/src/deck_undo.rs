@@ -47,7 +47,7 @@
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 #[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
@@ -93,7 +93,10 @@ const DECK_FIELDS: &[&str] = &[
     // left it alone would put a deck's format back and leave the platform the same press moved.
     "game_key",
     "description",
-    "notes",
+    // **`notes` was here until user schema v43 and is deliberately not replaced.** The column
+    // is gone — one paragraph became [`Op::Notes`]' many rows — and `notes_open` is not its
+    // successor on this list any more than `tokens_open` or `stats_open` are on it: a
+    // disclosure is not an audited edit, so there is nothing for a Ctrl+Z to put back.
     "cover_card_id",
     "cover_kind",
     // **Retired, and it must stay on this list until the column itself goes.** Nothing has
@@ -302,6 +305,49 @@ pub struct Carrier {
     pub label_id: Option<i64>,
 }
 
+/// One `deck_notes` row, as a step carries it — user schema v43.
+///
+/// **`created_at` and `updated_at` are deliberately absent**, [`CardRow`]'s rule: a restored
+/// note is a new row and claiming it had been there all along is the one thing about it that is
+/// not true. `id` **is** here, unlike `CardRow`'s, because something does point at it —
+/// [`NoteCard::note_id`] — and the whole difficulty this variant exists for is that the id may
+/// have been taken since.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteRow {
+    pub id: i64,
+    /// Which deck the note belongs to.
+    ///
+    /// **Always the step's own deck**, unlike [`Carrier::deck_id`], and carried anyway so the
+    /// row is a whole `deck_notes` row rather than most of one: a note hangs off exactly one
+    /// deck and nothing in this app records a note step against a different one. A restore
+    /// inserts with this value; a *patch* and a *delete* are scoped by the step's deck instead,
+    /// which is [`Op::Categories`]' fence and keeps a step from reaching into another deck's
+    /// notebook however the row was built.
+    pub deck_id: i64,
+    /// May be empty. The list prints the body's first line when it is, computed at render — so
+    /// there is nothing derived here for a restore to put back inconsistently.
+    pub title: String,
+    /// CommonMark, in the dialect `noteMarkdown.ts` pins. Text on this side, whole and opaque.
+    pub body: String,
+    pub sort_order: i64,
+}
+
+/// One `deck_note_cards` row — which card a note names, by the identity every printing of it
+/// shares.
+///
+/// **An `oracle_id` and never a `card_id`**, `deck_tokens`' argument: a printing id means
+/// nothing on the far device's shelf, and a note written against the Theory list is about the
+/// same card as one written against the Live list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteCard {
+    /// The note the row hangs off — **remapped through [`Remap`] like every other id in a
+    /// step**, because the note it names may have come back under a fresh number.
+    pub note_id: i64,
+    pub oracle_id: String,
+}
+
 /// One reversal instruction. A step is a list of these, applied in order.
 ///
 /// **Order inside a step is load-bearing**: `deck_cards.category_id` and `.label_id` are real
@@ -357,6 +403,48 @@ pub enum Op {
         #[serde(default)]
         carriers: Vec<Carrier>,
     },
+    /// The same three lists over `deck_notes`, plus which cards each note named — user schema
+    /// v43, and the fifth of these.
+    ///
+    /// **`restore` and `patch` are two lists because they are two intents, and the reason
+    /// transfers from [`Op::Categories`] word for word.** A patch is a retitle, a rewrite or a
+    /// reorder: the row is there and its columns go back. A restore is a delete being undone:
+    /// the row is *gone*, and whatever holds its id now is the reader's own newer note —
+    /// `deck_notes.id` is a rowid alias, so deleting the highest-numbered note and writing a
+    /// new one reuses the number, and that new note belongs to the same deck. A single list
+    /// deciding by "is there a row at this id" would therefore overwrite the reader's newest
+    /// note with the one they deleted, silently. That is not a hypothesis: it is what
+    /// `a_restored_category_keeps_its_cards_even_when_its_id_was_reused` caught one table over,
+    /// and `a_restored_note_keeps_its_cards_even_when_its_id_was_reused` is the same failure
+    /// pinned here.
+    ///
+    /// **`attachments` is the whole `deck_note_cards` set for the notes in this step, not a
+    /// diff** — [`Op::Labels`]' `carriers` again, for a sharper reason than its. Those rows
+    /// hang off the note with `ON DELETE CASCADE`, so undoing a note's delete finds them *gone*
+    /// rather than changed and the step has to rebuild them; and the arm deletes each named
+    /// note's rows before inserting the list, which is [`Op::Cards`]' "delete exactly the scope
+    /// and insert exactly the rows" and is what makes a replay idempotent.
+    ///
+    /// ⚠️ **"The notes in this step" is the union of all four lists and never `attachments`
+    /// alone.** An empty attachment set is a real state — it is what undoing a note's *first*
+    /// attach must reach — and a list of rows cannot carry the id of a note that has none. A
+    /// caller therefore has to name such a note in `restore` or `patch`, which is what
+    /// `deck_notes`' attach and detach both do; the arm's own comment states the failure.
+    ///
+    /// **No `#[serde(alias)]`.** The aliases on [`Op::Labels`] exist because schema v33
+    /// *renamed* something that steps already on a reader's disk had written down. `Notes` has
+    /// never had another spelling, so an alias here would be a read path for a step that has
+    /// never existed.
+    Notes {
+        #[serde(default)]
+        restore: Vec<NoteRow>,
+        #[serde(default)]
+        patch: Vec<NoteRow>,
+        #[serde(default)]
+        delete: Vec<i64>,
+        #[serde(default)]
+        attachments: Vec<NoteCard>,
+    },
     /// Put named `decks` columns back. Keys are checked against [`DECK_FIELDS`].
     Deck {
         fields: serde_json::Map<String, Value>,
@@ -389,6 +477,11 @@ impl Step {
 struct Remap {
     categories: HashMap<i64, i64>,
     labels: HashMap<i64, i64>,
+    /// The same for `deck_notes` — user schema v43. A note's id is pointed at by
+    /// [`NoteCard::note_id`] and by nothing else, so this map has exactly one reader; it exists
+    /// for the same reason the two above it do, which is that a rowid alias hands a deleted
+    /// row's number to the next row written.
+    notes: HashMap<i64, i64>,
 }
 
 impl Remap {
@@ -398,6 +491,10 @@ impl Remap {
 
     fn label(&self, id: Option<i64>) -> Option<i64> {
         id.map(|t| self.labels.get(&t).copied().unwrap_or(t))
+    }
+
+    fn note(&self, id: i64) -> i64 {
+        self.notes.get(&id).copied().unwrap_or(id)
     }
 }
 
@@ -979,6 +1076,86 @@ pub fn apply(tx: &Connection, deck_id: i64, ops: &[Op]) -> Result<(), String> {
                     .map_err(|e| e.to_string())?;
                 }
             }
+            Op::Notes {
+                restore,
+                patch,
+                delete,
+                attachments,
+            } => {
+                // **Deletes first**, [`Op::Labels`]' order and its reason: a note being taken
+                // away frees the rowid that a restore below may then be handed, and the
+                // CASCADE takes that note's `deck_note_cards` rows with it so nothing here has
+                // to.
+                //
+                // `AND deck_id = ?2`, unlike the label arm one block up: a note belongs to
+                // exactly one deck, so the step's deck is a fence rather than a redundancy.
+                for id in delete {
+                    tx.execute(
+                        "DELETE FROM deck_notes WHERE id = ?1 AND deck_id = ?2",
+                        params![remap.note(*id), deck_id],
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+                for row in restore {
+                    restore_note(tx, row, &mut remap)?;
+                }
+                for row in patch {
+                    patch_note(tx, deck_id, row, &remap)?;
+                }
+                // **The whole set for the notes this step names, never a diff** — `Op::Cards`'
+                // "delete exactly the scope, insert exactly the rows", which is what makes the
+                // arm idempotent under a replay.
+                //
+                // ⚠️ **The scope is the union of all four lists, and drawing it from
+                // `attachments` alone is the bug this comment exists to prevent.** That list
+                // cannot name a note whose attachment set is *empty* — there is no row in it
+                // to carry the id — and empty is exactly the state undoing a note's **first**
+                // attach has to reach. A scope read off `attachments` would clear nothing
+                // there, the `INSERT OR IGNORE` would add nothing, and the row would survive
+                // its own undo: the card goes on wearing a note glyph it should have lost, in
+                // a deck whose history says the attach was reversed. Redoing a detach fails
+                // the same way. `restore` and `patch` are what carry such a note — `deck_notes`
+                // always names the note row on an attach or a detach — and `delete` and
+                // `attachments` join them so the scope is well-defined for any step, including
+                // one built somewhere that does not follow that convention.
+                //
+                // `delete`'s ids are in it for a second reason: those rows go through the
+                // note's `ON DELETE CASCADE`, and `PRAGMA foreign_keys` is per-connection, so
+                // on a connection that has it off the clear is what keeps an orphan from being
+                // handed to whatever next takes that rowid.
+                //
+                // Resolved through [`Remap`] like every other id here, and collected so a note
+                // named by two lists is cleared once.
+                //
+                // `INSERT OR IGNORE`, because `idx_deck_note_cards_grain` is a real unique
+                // index and a step listing one card twice describes one fact — a refusal there
+                // would fail a reader's Ctrl+Z over a duplicate the schema is already deciding
+                // about.
+                let scope: BTreeSet<i64> = restore
+                    .iter()
+                    .chain(patch)
+                    .map(|r| r.id)
+                    .chain(delete.iter().copied())
+                    .chain(attachments.iter().map(|c| c.note_id))
+                    .map(|id| remap.note(id))
+                    .collect();
+                for id in &scope {
+                    tx.execute(
+                        "DELETE FROM deck_note_cards WHERE note_id = ?1",
+                        params![id],
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+                for card in attachments {
+                    tx.execute(
+                        "INSERT OR IGNORE INTO deck_note_cards
+                            (note_id, oracle_id, created_at, updated_at)
+                         VALUES (?1, ?2, unixepoch(), unixepoch())",
+                        params![remap.note(card.note_id), card.oracle_id],
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+            }
             Op::Deck { fields } => {
                 for (field, value) in fields {
                     if !DECK_FIELDS.contains(&field.as_str()) {
@@ -1180,6 +1357,70 @@ fn restore_label(tx: &Connection, row: &LabelRow, remap: &mut Remap) -> Result<(
     Ok(())
 }
 
+/// Bring one note back from a delete — [`restore_category`]'s two cases, over `deck_notes`.
+///
+/// The **row's own** `deck_id`, which is the step's in every step this app records — see
+/// [`NoteRow::deck_id`]. The two cases are the category's exactly: the id is free and the note
+/// comes back under it, so the `attachments` beside it resolve with no remap; or something
+/// holds it — almost always the reader's own newer note, `deck_notes.id` being a rowid alias —
+/// and the note comes back under a fresh id which every later op in the step reads through
+/// [`Remap`]. Updating the row in place instead would overwrite that newer note with the one
+/// the reader deleted, which is the whole failure [`Op::Notes`] splits its two lists to avoid.
+///
+/// **No unique index can refuse this**, unlike [`restore_label`]: `deck_notes` is uid-only and
+/// has no grain, deliberately — two devices each typing a note about the mana base must stay
+/// two notes.
+fn restore_note(tx: &Connection, row: &NoteRow, remap: &mut Remap) -> Result<(), String> {
+    if taken(tx, "deck_notes", row.id)? {
+        let fresh: i64 = tx
+            .query_row(
+                "INSERT INTO deck_notes
+                    (deck_id, title, body, sort_order, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, unixepoch(), unixepoch())
+                 RETURNING id",
+                params![row.deck_id, row.title, row.body, row.sort_order],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        remap.notes.insert(row.id, fresh);
+    } else {
+        tx.execute(
+            "INSERT INTO deck_notes
+                (id, deck_id, title, body, sort_order, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, unixepoch(), unixepoch())",
+            params![row.id, row.deck_id, row.title, row.body, row.sort_order],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Put an existing note's columns back — a retitle, a rewrite or a reorder, undone.
+///
+/// [`patch_category`]'s contract: the row must be there, and `AND deck_id = ?5` is the fence
+/// that keeps a step from rewriting another deck's notebook. A patch that changes nothing means
+/// the step is being replayed against a deck it does not describe, which the strict-stack cursor
+/// makes unreachable and which is therefore a bug rather than a state to tolerate in silence.
+fn patch_note(tx: &Connection, deck_id: i64, row: &NoteRow, remap: &Remap) -> Result<(), String> {
+    let changed = tx
+        .execute(
+            "UPDATE deck_notes
+                SET title = ?2, body = ?3, sort_order = ?4, updated_at = unixepoch()
+              WHERE id = ?1 AND deck_id = ?5",
+            params![
+                remap.note(row.id),
+                row.title,
+                row.body,
+                row.sort_order,
+                deck_id
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+    (changed > 0)
+        .then_some(())
+        .ok_or_else(|| MISSING_ROW.to_owned())
+}
+
 /// Is anything at all sitting on this rowid?
 ///
 /// **Deck-blind on purpose.** The question a restore asks is "may I have my id back", and the
@@ -1187,7 +1428,7 @@ fn restore_label(tx: &Connection, row: &LabelRow, remap: &mut Remap) -> Result<(
 /// commonest holder and the one that made the deck-scoped version of this check wrong.
 ///
 /// The table name is interpolated because `PRAGMA`-free SQLite has no parameter position for
-/// one; both call sites pass a literal from this module and no caller reaches it.
+/// one; all three call sites pass a literal from this module and no caller reaches it.
 fn taken(tx: &Connection, table: &str, id: i64) -> Result<bool, String> {
     tx.query_row(
         &format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE id = ?1)"),
@@ -2654,32 +2895,425 @@ mod tests {
         );
     }
 
+    /// Write one note straight into `deck_notes` and answer its id.
+    ///
+    /// **Raw SQL rather than `deck_notes::create_note`**, deliberately: what is under test here
+    /// is [`Op::Notes`]' replay, and driving it through the command would make the fixture
+    /// depend on that module's refusals, its audit row and its own step — three things that can
+    /// fail this test for reasons that are not this test's.
+    fn note(conn: &Connection, deck_id: i64, title: &str, body: &str, sort_order: i64) -> i64 {
+        conn.query_row(
+            "INSERT INTO deck_notes (deck_id, title, body, sort_order, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, unixepoch(), unixepoch())
+             RETURNING id",
+            params![deck_id, title, body, sort_order],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// The note's title, body and sort order as they are now, or `None`.
+    fn read_note(conn: &Connection, id: i64) -> Option<(String, String, i64)> {
+        conn.query_row(
+            "SELECT title, body, sort_order FROM deck_notes WHERE id = ?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()
+        .unwrap()
+    }
+
+    /// Which cards a note names, in oracle-id order.
+    fn attached(conn: &Connection, note_id: i64) -> Vec<String> {
+        let mut stmt = conn
+            .prepare("SELECT oracle_id FROM deck_note_cards WHERE note_id = ?1 ORDER BY oracle_id")
+            .unwrap();
+        let rows = stmt
+            .query_map(params![note_id], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        rows
+    }
+
+    /// [`a_restored_category_keeps_its_cards_even_when_its_id_was_reused`] over `deck_notes`,
+    /// and the reason [`Op::Notes`] carries two lists rather than one — user schema v43.
+    ///
+    /// `deck_notes.id` is a rowid alias, so deleting the highest-numbered note and writing a new
+    /// one **reuses the number**. A single list deciding by "is there a row at this id" would
+    /// therefore find the reader's newest note sitting where the deleted one was and rewrite it
+    /// into the deleted one's title and body — a Ctrl+Z that destroys a note the reader wrote
+    /// *after* the change being undone, silently, with the row count unchanged either way. That
+    /// is why this test follows the *attachment* as well: a restore that landed on the usurper
+    /// would also hang the deleted note's card off the reader's newer one.
+    #[test]
+    fn a_restored_note_keeps_its_cards_even_when_its_id_was_reused() {
+        let conn = seeded();
+        let id = deck(&conn, "Burn");
+        let mana = note(&conn, id, "Mana", "Fourteen sources.", 0);
+        conn.execute(
+            "INSERT INTO deck_note_cards (note_id, oracle_id, created_at, updated_at)
+             VALUES (?1, 'o1', unixepoch(), unixepoch())",
+            params![mana],
+        )
+        .unwrap();
+
+        // What the delete's step would have recorded, read before the write it reverses —
+        // this module's whole discipline.
+        let recorded = NoteRow {
+            id: mana,
+            deck_id: id,
+            title: "Mana".to_owned(),
+            body: "Fourteen sources.".to_owned(),
+            sort_order: 0,
+        };
+        let cards = vec![NoteCard {
+            note_id: mana,
+            oracle_id: "o1".to_owned(),
+        }];
+
+        conn.execute("DELETE FROM deck_notes WHERE id = ?1", params![mana])
+            .unwrap();
+        assert!(
+            attached(&conn, mana).is_empty(),
+            "the CASCADE took the attachment, which is why `attachments` is a set and not a diff"
+        );
+
+        // The reader writes another note, which takes the freed rowid.
+        let usurper = note(&conn, id, "Sideboard", "Bolt on the draw.", 1);
+        assert_eq!(
+            usurper, mana,
+            "the fixture only tests anything if the id was reused"
+        );
+
+        apply(
+            &conn,
+            id,
+            &[Op::Notes {
+                restore: vec![recorded],
+                patch: vec![],
+                delete: vec![],
+                attachments: cards,
+            }],
+        )
+        .unwrap();
+
+        assert_eq!(
+            read_note(&conn, usurper),
+            Some(("Sideboard".to_owned(), "Bolt on the draw.".to_owned(), 1)),
+            "the reader's newer note is untouched — the failure a single list would produce"
+        );
+
+        let restored: i64 = conn
+            .query_row(
+                "SELECT id FROM deck_notes WHERE deck_id = ?1 AND title = 'Mana'",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_ne!(
+            restored, mana,
+            "it had to move, because the newer note holds that id"
+        );
+        assert_eq!(
+            read_note(&conn, restored),
+            Some(("Mana".to_owned(), "Fourteen sources.".to_owned(), 0)),
+            "and it came back whole rather than as a row with the right title"
+        );
+        assert_eq!(
+            attached(&conn, restored),
+            vec!["o1".to_owned()],
+            "the card followed it through the remap"
+        );
+        assert!(
+            attached(&conn, usurper).is_empty(),
+            "and it did not land on the note that took the id"
+        );
+    }
+
+    /// The other three lists, and the property that makes a replay safe.
+    ///
+    /// **`attachments` is the whole set for the notes in the step**, so applying the same step
+    /// twice leaves one row per card and not two — which is what the arm's delete-then-insert
+    /// buys and what a diff could not. `patch` puts an existing note's columns back without
+    /// touching its id, `delete` takes a note away and the CASCADE takes its cards, and a patch
+    /// naming a note that is not there is [`MISSING_ROW`] rather than a silent success.
+    #[test]
+    fn a_notes_op_patches_deletes_and_rebuilds_the_attachment_set() {
+        let conn = seeded();
+        let id = deck(&conn, "Burn");
+        let mana = note(&conn, id, "Mana", "Fourteen sources.", 0);
+        let plan = note(&conn, id, "Plan", "Race them.", 1);
+        conn.execute(
+            "INSERT INTO deck_note_cards (note_id, oracle_id, created_at, updated_at)
+             VALUES (?1, 'o2', unixepoch(), unixepoch())",
+            params![mana],
+        )
+        .unwrap();
+
+        let step = [Op::Notes {
+            restore: vec![],
+            patch: vec![NoteRow {
+                id: mana,
+                deck_id: id,
+                title: "Mana base".to_owned(),
+                body: "Fifteen sources.".to_owned(),
+                sort_order: 3,
+            }],
+            delete: vec![plan],
+            attachments: vec![
+                NoteCard {
+                    note_id: mana,
+                    oracle_id: "o1".to_owned(),
+                },
+                NoteCard {
+                    note_id: mana,
+                    oracle_id: "o2".to_owned(),
+                },
+            ],
+        }];
+
+        apply(&conn, id, &step).unwrap();
+        assert_eq!(
+            read_note(&conn, mana),
+            Some(("Mana base".to_owned(), "Fifteen sources.".to_owned(), 3)),
+            "a patch puts the columns back and leaves the id alone"
+        );
+        assert_eq!(
+            read_note(&conn, plan),
+            None,
+            "and the delete took the other"
+        );
+        assert_eq!(
+            attached(&conn, mana),
+            vec!["o1".to_owned(), "o2".to_owned()]
+        );
+
+        // Replayed. Every statement in the arm is idempotent, which is what "delete exactly the
+        // scope and insert exactly the rows" promises — a second pass must not double the set.
+        apply(&conn, id, &step).unwrap();
+        assert_eq!(
+            attached(&conn, mana),
+            vec!["o1".to_owned(), "o2".to_owned()],
+            "the set was rebuilt rather than added to"
+        );
+
+        // A patch naming a note that is not there is a step built wrong at its call site, and
+        // the alternative is a `0 rows changed` reporting success — `patch_category`'s rule.
+        let err = apply(
+            &conn,
+            id,
+            &[Op::Notes {
+                restore: vec![],
+                patch: vec![NoteRow {
+                    id: plan,
+                    deck_id: id,
+                    title: "Plan".to_owned(),
+                    body: "Race them.".to_owned(),
+                    sort_order: 1,
+                }],
+                delete: vec![],
+                attachments: vec![],
+            }],
+        )
+        .unwrap_err();
+        assert_eq!(err, MISSING_ROW);
+    }
+
+    /// A step reaches the deck it was recorded against and no other.
+    ///
+    /// `deck_notes.id` is unique across the whole table, so a patch or a delete addressed by id
+    /// alone would reach a *different deck's* note — and the strict-stack cursor cannot fence
+    /// that, because it only promises the step is replayed against the deck it was filed under.
+    /// `AND deck_id = ?` in both statements is what does, and the refusal is [`MISSING_ROW`]
+    /// rather than a quiet no-op.
+    #[test]
+    fn a_notes_op_cannot_reach_another_decks_notebook() {
+        let conn = seeded();
+        let mine = deck(&conn, "Burn");
+        let theirs = deck(&conn, "Storm");
+        let elsewhere = note(&conn, theirs, "Theirs", "Not yours.", 0);
+
+        let err = apply(
+            &conn,
+            mine,
+            &[Op::Notes {
+                restore: vec![],
+                patch: vec![NoteRow {
+                    id: elsewhere,
+                    deck_id: theirs,
+                    title: "Rewritten".to_owned(),
+                    body: "By the wrong step.".to_owned(),
+                    sort_order: 0,
+                }],
+                delete: vec![],
+                attachments: vec![],
+            }],
+        )
+        .unwrap_err();
+        assert_eq!(err, MISSING_ROW);
+
+        apply(
+            &conn,
+            mine,
+            &[Op::Notes {
+                restore: vec![],
+                patch: vec![],
+                delete: vec![elsewhere],
+                attachments: vec![],
+            }],
+        )
+        .unwrap();
+        assert_eq!(
+            read_note(&conn, elsewhere),
+            Some(("Theirs".to_owned(), "Not yours.".to_owned(), 0)),
+            "the delete named another deck's note and left it standing"
+        );
+    }
+
+    /// Undoing a note's **first** attach takes its attachment set back to empty.
+    ///
+    /// ⚠️ **The case a scope drawn from `attachments` cannot reach, and the reason the arm
+    /// unions all four lists.** `deck_notes::attach_card` records a step whose undo names the
+    /// note in `patch` and carries an **empty** `attachments` — because that is what the note
+    /// held before the press. A scope read off `attachments` would be empty too, so the arm
+    /// would clear nothing, insert nothing, and answer `Ok(())` over a row that is still there:
+    /// the card goes on wearing a note glyph in a deck whose history says the attach was
+    /// reversed, and no count anywhere changes. Redoing a detach is the same step from the
+    /// other end.
+    #[test]
+    fn undoing_the_first_attach_on_a_note_leaves_it_naming_nothing() {
+        let conn = seeded();
+        let id = deck(&conn, "Burn");
+        let mana = note(&conn, id, "Mana", "Fourteen sources.", 0);
+        conn.execute(
+            "INSERT INTO deck_note_cards (note_id, oracle_id, created_at, updated_at)
+             VALUES (?1, 'o1', unixepoch(), unixepoch())",
+            params![mana],
+        )
+        .unwrap();
+        assert_eq!(attached(&conn, mana), vec!["o1".to_owned()]);
+
+        // The undo side of an attach: the note row as it stood, and the set it held before —
+        // which is nothing at all.
+        apply(
+            &conn,
+            id,
+            &[Op::Notes {
+                restore: vec![],
+                patch: vec![NoteRow {
+                    id: mana,
+                    deck_id: id,
+                    title: "Mana".to_owned(),
+                    body: "Fourteen sources.".to_owned(),
+                    sort_order: 0,
+                }],
+                delete: vec![],
+                attachments: vec![],
+            }],
+        )
+        .unwrap();
+
+        assert!(
+            attached(&conn, mana).is_empty(),
+            "the attachment survived its own undo — the card would keep a note glyph it lost"
+        );
+        assert_eq!(
+            read_note(&conn, mana),
+            Some(("Mana".to_owned(), "Fourteen sources.".to_owned(), 0)),
+            "and the note itself is untouched: an attach is not a note edit"
+        );
+    }
+
+    /// A `Notes` step survives the round trip through the JSON column it is stored in — and
+    /// **without a `#[serde(alias)]`**, which is the one thing about this variant that is a
+    /// decision rather than a copy of [`Op::Labels`].
+    ///
+    /// The aliases on `Labels` exist because schema v33 renamed something steps already on disk
+    /// had written down; `Notes` has never had another spelling, so a step carrying one would
+    /// be a step no build has ever produced. The four lists are `#[serde(default)]` all the
+    /// same, for the reason every list on the four variants above is: a step that names three
+    /// of them is the ordinary case.
+    #[test]
+    fn a_notes_step_round_trips_through_its_json_column() {
+        let step = Step::new(
+            vec![Op::Notes {
+                restore: vec![NoteRow {
+                    id: 4,
+                    deck_id: 1,
+                    title: String::new(),
+                    body: "Untitled on purpose.".to_owned(),
+                    sort_order: 2,
+                }],
+                patch: vec![],
+                delete: vec![9],
+                attachments: vec![NoteCard {
+                    note_id: 4,
+                    oracle_id: "o1".to_owned(),
+                }],
+            }],
+            vec![],
+        );
+        let json = serde_json::to_string(&step).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Step>(&json).unwrap(),
+            step,
+            "the step that comes back out is the step that went in"
+        );
+        // camelCase on the wire, `deck_undo`'s convention throughout — and the tag is `notes`,
+        // which is what an internally-tagged enum refuses to read if it drifts.
+        assert!(
+            json.contains(r#""op":"notes""#) && json.contains(r#""sortOrder":2"#),
+            "the stored spelling is the one every reader of this column expects: {json}"
+        );
+
+        // The ordinary sparse step: three lists absent, and `#[serde(default)]` reads each as
+        // empty rather than failing the press.
+        let sparse: Op = serde_json::from_str(r#"{"op":"notes","delete":[3]}"#).unwrap();
+        assert_eq!(
+            sparse,
+            Op::Notes {
+                restore: vec![],
+                patch: vec![],
+                delete: vec![3],
+                attachments: vec![],
+            }
+        );
+    }
+
     /// A `Deck` op writes the SQLite value the column came out as, never its JSON text — a
     /// `theory_enabled` of `"true"` is a string SQLite stores happily and every later read
     /// sees as neither 0 nor 1.
+    ///
+    /// **The null half rode `notes` until user schema v43 took the column away**, and it is
+    /// `description` now rather than gone: what it pins is that a `Value::Null` reaches SQLite
+    /// as a NULL and not as the four characters `null`, which needs *a* nullable column on
+    /// [`DECK_FIELDS`] and does not care which. `description` is the nearest one — same
+    /// `TEXT`, same nullability, and the column `notes` spent its whole life being contrasted
+    /// with.
     #[test]
     fn a_deck_op_restores_a_flag_as_a_number_and_a_null_as_null() {
         let conn = seeded();
         let id = deck(&conn, "Burn");
-        let before = read_deck_fields(&conn, id, &["theory_enabled", "notes"]).unwrap();
+        let before = read_deck_fields(&conn, id, &["theory_enabled", "description"]).unwrap();
 
         conn.execute(
-            "UPDATE decks SET theory_enabled = 1, notes = 'x' WHERE id = ?1",
+            "UPDATE decks SET theory_enabled = 1, description = 'x' WHERE id = ?1",
             params![id],
         )
         .unwrap();
 
         apply(&conn, id, &[Op::Deck { fields: before }]).unwrap();
 
-        let (theory, notes): (i64, Option<String>) = conn
+        let (theory, description): (i64, Option<String>) = conn
             .query_row(
-                "SELECT theory_enabled, notes FROM decks WHERE id = ?1",
+                "SELECT theory_enabled, description FROM decks WHERE id = ?1",
                 params![id],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap();
         assert_eq!(theory, 0);
-        assert_eq!(notes, None);
+        assert_eq!(description, None);
     }
 
     /// A bracket the reader set and then took back, through the two real commands — schema v26.

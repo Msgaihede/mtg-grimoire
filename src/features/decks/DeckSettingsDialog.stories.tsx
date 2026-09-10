@@ -22,8 +22,8 @@ const FRAME_WAIT = 5_000;
  * **Every backend on this screen is the fake's** — `deck_get`, `deck_update`,
  * `format_specs_list`, `deck_folder_list`, `deck_set_folder` and `search_cards` (the cover
  * picker's "Search every card" box) — so picking art really writes, the credit line underneath
- * the picture really changes, the Folder select really files the deck, and the notes field and
- * the theory switch really stick. `deck_set_cover_image` was on that list and is deleted with
+ * the picture really changes, the Folder select really files the deck, and the description field
+ * and the theory switch really stick. `deck_set_cover_image` was on that list and is deleted with
  * the custom cover; **the one gap this screen had went with it**. That gap was the upload's file
  * picker: `open()` from `@tauri-apps/plugin-dialog` reaches Tauri's `invoke`, and outside the app
  * window there is nothing behind it, so the press could only ever end in a refusal line here.
@@ -129,10 +129,13 @@ export const FilingTheDeck: Story = {
 };
 
 /**
- * The notebook and the deck's kind, both of which write and stick.
+ * The caption and the deck's kind, both of which write and stick.
  *
- * `notes` is **not** `description` — a caption is what the gallery tile shows and this is the
- * long-form thing nothing else draws.
+ * `description` is the one line the gallery tile prints, which is why it is the field on trial
+ * here: a write that did not stick would be invisible until the reader went back to the
+ * gallery. **It used to be the deck's `notes` textarea beside it**, and that field is gone —
+ * user schema v43 replaced the deck's single `notes` column with the Notes band's many notes,
+ * which the deck editor draws rather than this dialog.
  *
  * And setting the kind to `Theory + Actual` **moves the live list into the plan**, in the same
  * write: the deck the reader built becomes the plan, the live list starts empty, and the copies
@@ -145,12 +148,13 @@ export const FilingTheDeck: Story = {
  * `role="group"` of three `aria-pressed` buttons rather than a `switch`, because a deck is now a
  * regular deck, a deck with a plan, or one whose cardboard the reader does not own.
  */
-export const NotesAndTheory: Story = {
+export const DescriptionAndTheory: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
-    const notes = await canvas.findByLabelText("Notes");
-    await userEvent.type(notes, "Swap the Bolts for Bowmasters when the sideboard arrives.");
+    const description = await canvas.findByLabelText("Description");
+    await userEvent.clear(description);
+    await userEvent.type(description, "Swap the Bolts for Bowmasters when the sideboard arrives.");
     // Blur, which is what commits a text field here.
     await userEvent.click(canvas.getByLabelText("Name"));
 
@@ -173,7 +177,9 @@ export const NotesAndTheory: Story = {
     // The caption is the answer to the press, so it changes with it — and it is the one place
     // the deck's cards being poured into the plan is said before it happens.
     await expect(canvas.getByText(/starts the actual list empty/)).toBeInTheDocument();
-    await expect(notes).toHaveValue("Swap the Bolts for Bowmasters when the sideboard arrives.");
+    await expect(description).toHaveValue(
+      "Swap the Bolts for Bowmasters when the sideboard arrives.",
+    );
   },
 };
 

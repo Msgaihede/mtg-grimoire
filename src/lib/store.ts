@@ -774,17 +774,17 @@ interface AppState {
    * Which overlay the card detail modal has open **over itself**, or `null` for none.
    *
    * **One field, so at most one is ever open** — the same shape {@link printingsRequest} uses one
-   * line up, and it is load-bearing twice over. All four are opened from one options rail on one
+   * line up, and it is load-bearing twice over. All five are opened from one options rail on one
    * modal, so a reader is asking exactly one of these questions at a time and a field apiece
    * would only be somewhere for two of them to disagree; and `LAYER.overlayStacked` is one rung
-   * for the four *because* of it — a rung is only allowed to serve surfaces that cannot overlap
+   * for the five *because* of it — a rung is only allowed to serve surfaces that cannot overlap
    * each other, which this field is what guarantees.
    *
    * **It carries nothing but which one**, unlike `printingsRequest`, which carries a question:
    * that one names the printing the reader asked *from* and the row a press would rewrite, and it
-   * is opened from card menus all over the app rather than from this modal alone. These four are
+   * is opened from card menus all over the app rather than from this modal alone. These five are
    * read-only surfaces about {@link selectedCardId} and there is nothing else for them to say —
-   * so the printings modal keeps its own field rather than becoming a fifth value here.
+   * so the printings modal keeps its own field rather than becoming a sixth value here.
    *
    * **An overlay with filters of its own is still nothing but a name here**, which is worth
    * stating because `"combos"` is the first one that has any: its size and owned-only narrowing
@@ -876,18 +876,18 @@ interface AppState {
  * Which surface the card detail modal has open over itself — see {@link AppState.cardOverlay},
  * the only field of this type and where the single-field design is argued.
  *
- * A union of four names rather than four booleans, which is the same statement the field makes
- * about there being at most one: four flags can all be true at once and one of them would then
+ * A union of five names rather than five booleans, which is the same statement the field makes
+ * about there being at most one: five flags can all be true at once and one of them would then
  * have to be declared the winner somewhere, by a reader rather than by the type. **It was three
- * until `"combos"` joined**, and that a new surface costs one word here rather than a flag, a
- * clear and a winner is the whole of the argument — the count in this paragraph moves and
- * nothing else does.
+ * until `"combos"` joined and four until `"notes"` did**, and that a new surface costs one word
+ * here rather than a flag, a clear and a winner is the whole of the argument — the count in this
+ * paragraph moves and nothing else does.
  *
- * **The printings modal is deliberately not a fifth name** — it carries a question
+ * **The printings modal is deliberately not a sixth name** — it carries a question
  * ({@link PrintingsRequest}) and is opened from card menus that have nothing to do with this
  * modal, so it keeps the field it already has.
  */
-export type CardOverlay = "legality" | "oracleTags" | "cardText" | "combos";
+export type CardOverlay = "legality" | "oracleTags" | "cardText" | "combos" | "notes";
 
 /**
  * The question the printings modal is open on — see {@link AppState.printingsRequest}, which is

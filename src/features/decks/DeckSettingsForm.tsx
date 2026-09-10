@@ -44,7 +44,6 @@ export interface DeckSettingsValue {
    */
   gameKey: DeckGame;
   description: string;
-  notes: string;
   /**
    * Whether this deck keeps a plan beside the list it has actually sleeved up — and **half
    * of a pair, never written on its own**.
@@ -124,7 +123,7 @@ export interface DeckSettingsFormProps {
    * | Field | What Enter means |
    * | --- | --- |
    * | Name | "that is the answer" — a single-line field whose key ends the whole question |
-   * | Description, Notes | a newline. A paragraph is what these are for |
+   * | Description | a newline. A paragraph is what it is for |
    * | The cover picker's search box | "I have finished typing a card name", never "make the deck" — `DeckCoverPicker` prevents the key itself rather than leaving it to whatever is mounted above |
    *
    * The Name field used to get that for free: `CreateDeckDialog` was a `<form>`, so Enter in a
@@ -225,7 +224,7 @@ export interface DeckSettingsFormProps {
  *
  * | Control | `onChange` | `onCommit` |
  * | --- | --- | --- |
- * | Name, Description, Notes | every keystroke | on blur — and Enter blurs the name field, unless a host took Enter for {@link DeckSettingsFormProps.onSubmit} |
+ * | Name, Description | every keystroke | on blur — and Enter blurs the name field, unless a host took Enter for {@link DeckSettingsFormProps.onSubmit} |
  * | Game, Format, Deck kind, Folder, the cover | on the one act that settles them | never |
  *
  * A select, a switch and a tile all finish in a single act, so there is nothing for a second
@@ -342,7 +341,7 @@ export function DeckSettingsForm({
   );
 }
 
-/** Name, game, format, description, notes — what the deck carries as words. */
+/** Name, game, format, description — what the deck carries as words. */
 function Fields({
   value,
   onChange,
@@ -477,23 +476,11 @@ function Fields({
           onBlur={() => onCommit?.({ description: value.description })}
           className={cn(FIELD, "resize-y py-2 leading-relaxed")}
         />
-        {/* The two long fields are not the same field, and the gallery is where the difference
-            shows. Said once, under the shorter of them. */}
+        {/* What this paragraph is *for*, said under it: the gallery tile prints its first line,
+            which is the whole reason to keep it short. It used to be the shorter of a pair —
+            a `Notes` textarea sat beneath it until user schema v43 replaced the deck's single
+            `notes` column with the Notes band's many notes, and this is the survivor. */}
         <p className="mt-1 text-[0.6875rem] text-dim">The one line the gallery tile shows.</p>
-      </div>
-
-      <div>
-        <label htmlFor={`${id}-notes`} className={cn(CAPTION, "mb-1.5")}>
-          Notes
-        </label>
-        <textarea
-          id={`${id}-notes`}
-          rows={6}
-          value={value.notes}
-          onChange={(e) => onChange({ notes: e.target.value })}
-          onBlur={() => onCommit?.({ notes: value.notes })}
-          className={cn(FIELD, "resize-y py-2 leading-relaxed")}
-        />
       </div>
     </>
   );

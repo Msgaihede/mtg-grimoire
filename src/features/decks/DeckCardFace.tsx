@@ -206,6 +206,18 @@ export interface DeckCardFaceProps {
    *  a card the plan does not ask for; otherwise the tier it is in and how far the live list is
    *  from the plan **at that tier's own grain**, where `0` is the card the plan asks for exactly. */
   theoryMark: TheoryMark | null;
+  /**
+   * Whether a deck note names this card — resolved by the caller through
+   * `cardControl.ts`'s `deckCardNoted`, so the face is handed an answer rather than a set to look
+   * itself up in. That is {@link theoryMark}'s arrangement above, and its reason: an orphan
+   * printing has no oracle id, and the guard that keeps such a card unmarked belongs in one place
+   * rather than at each of the four views.
+   *
+   * **Optional and defaulting to `false`, where the two marks above it are required** — see
+   * `QuantityTag.noted`, whose asymmetry this mirrors: an unmarked card is one whose note the
+   * reader finds a press away in the Notes band, not a card quietly claimed to be ordinary.
+   */
+  noted?: boolean;
   /** The nonce this card's last add was given, or `undefined` for a card that did not just arrive
    *  — passed through as the mark's `key`, so a second add replays it. */
   landedKey: number | undefined;
@@ -224,6 +236,7 @@ export function DeckCardFace({
   width,
   ruleBreakText,
   theoryMark,
+  noted = false,
   landedKey,
   className,
 }: DeckCardFaceProps) {
@@ -400,6 +413,11 @@ export function DeckCardFace({
           // corpus says nothing either way — so the coercion is what keeps a `null` off a prop
           // whose two states are *crowned* and *not*.
           gameChanger={card.gameChanger === true}
+          // The fifth per-card fact, folded into this tag rather than drawn beside it — there was
+          // no corner left, and `CardMarks.tsx`'s census and its 11px overflow measurement are
+          // the argument. A card that is both a game changer and noted draws both glyphs and the
+          // number; the words for both are `deckCardName`'s, since this tag is `aria-hidden`.
+          noted={noted}
         />
         {/* The plan's tick, at the far end of the same strip the quantity tag opens.
             **In the strip rather than absolutely positioned beside it**, which is what makes it

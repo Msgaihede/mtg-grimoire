@@ -1,4 +1,4 @@
-import { Crown } from "lucide-react";
+import { Crown, StickyNote } from "lucide-react";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { cn } from "@/lib/utils";
 
@@ -196,6 +196,14 @@ export const COUNT_TAG_BOX_MIRRORED = cn(
  * digits and buys nothing, where the crown is a second **fact about the card** the digits are
  * printed on. {@link CountTag.crowned} carries the whole argument.
  *
+ * **A second joined it on 2026-09-10** — {@link CountTag.noted}, the deck note glyph (issue #447) —
+ * and it is the same argument a second time rather than a widening of it. Both are facts about the
+ * card the digits are printed on; neither is a reading of the digits. What the pair costs is stated
+ * on that prop, and what keeps this from becoming a strip of stickers is that a *third* one has to
+ * make the argument again from the beginning: every corner of a deck card is already claimed
+ * (`features/decks/CardMarks.tsx`'s header has the census), so this box is where a new fact lands,
+ * and "there was room" is not by itself a reason for it to.
+ *
  * ## It is `aria-hidden`, and that is deliberate
  *
  * `FoilOverlay`'s rule, for `FoilOverlay`'s reason. Every surface that draws this draws a card as
@@ -210,6 +218,7 @@ export function CountTag({
   title,
   paint = NEUTRAL_COUNT_PAINT,
   crowned = false,
+  noted = false,
   className,
 }: {
   count: number;
@@ -278,6 +287,57 @@ export function CountTag({
    * deck's two card-face views.
    */
   crowned?: boolean;
+  /**
+   * Whether a **note** names this card — said as a second glyph in this box, drawn after
+   * {@link crowned}'s crown and before the number (2026-09-10, issue #447). Defaults to `false`,
+   * which is the tag every caller that has not heard of notes goes on drawing.
+   *
+   * ## It is folded in here for the crown's reason, arrived at from a different direction
+   *
+   * The crown came in because its own drawing had run out of room. This one never had a drawing:
+   * the question was where a *fifth* per-card fact goes, and the answer is that there is nowhere
+   * else. Every corner of a deck card is claimed — the quantity tag top-left, the theory mark
+   * top-right, the rule break bottom-left — and the marks strip is `overflow-hidden` and was
+   * measured overflowing a 165px tile by 11px with only the marks it already draws
+   * (`components/GameChangerMark`'s header carries that measurement). So the crown is the
+   * **precedent** rather than merely the neighbour: a fifth fact folded into an existing mark at a
+   * cost of 14px, rather than drawn beside it at a cost of a corner nobody has.
+   *
+   * **A card that is both is both**, which is the one thing this may not economise on: a game
+   * changer the reader has written about draws the crown, the note glyph *and* the number. Two
+   * facts sharing one glyph, or one suppressing the other, would be a mark that means different
+   * things on different cards — and a reader cannot learn a mark whose absence is ambiguous.
+   *
+   * ## It takes no colour of its own, and that is a rule rather than a default
+   *
+   * `currentColor`, so it is {@link paint}'s `fg` exactly as the crown is — and the two are
+   * therefore always the same colour, which is what says they are two facts of one kind rather
+   * than a hierarchy. There was no colour available to give it even had one been wanted: the
+   * `--color-pie-*` deeps are what a **label** means, gold is what a picked card wears, and the
+   * destructive red is a rule break. A sixth vocabulary word bought nothing here.
+   *
+   * ## The 14px it costs is the crown's 14px again
+   *
+   * An 11px glyph and a 3px gap, both scaled by `--mark-scale`, and it moves no padding for
+   * {@link COUNT_TAG_BOX}'s reason — `pl − pr = 5px` is a derivation the content width cancels out
+   * of, so a wider content run leaves the centring exactly where it was. The gap rides on
+   * *either* flag, since one glyph beside the number needs it as much as two do.
+   *
+   * **The stroke weight is the crown's 2.75 and the size is the crown's 11px**, deliberately: two
+   * glyphs in one 22px box drawn at two weights would read as one being the louder fact.
+   * ⚠️ **Neither has been checked in the shipped window at the ends of the zoom ladder** — the
+   * fold detail on this glyph is ~2.75px at 1×, so 0.5× is where it would first read as a plain
+   * square, and that is a live pass rather than something either suite can answer.
+   *
+   * ## The words are the caller's, exactly as they are for the crown
+   *
+   * The whole tag is `aria-hidden`, so this announces nothing: a pointer gets {@link title} and a
+   * screen reader gets whatever names the card. **A caller passing `true` owes the fact in words**
+   * — in this `title` and in the accessible name of whatever the tag is drawn inside.
+   * `QuantityTag` in `features/decks/CardMarks.tsx` is where that is done for the deck's two
+   * card-face views, and `NOTE_MARK_LABEL` beside it is the one spelling of the phrase.
+   */
+  noted?: boolean;
   /** Where the caller puts it. The corner is the surface's, never this mark's. */
   className?: string;
 }) {
@@ -287,7 +347,16 @@ export function CountTag({
       aria-hidden="true"
       {...tip(title, { describes: false })}
       style={{ backgroundColor: paint.css, color: paint.fg, clipPath: COUNT_TAG_SLANT }}
-      className={cn(COUNT_TAG_BOX, crowned && "gap-[calc(3px*var(--mark-scale,1))]", className)}
+      className={cn(
+        COUNT_TAG_BOX,
+        // One gap for either glyph and for both: `column-gap` is drawn *between* items, so the
+        // single class is right for a box holding two of them as well as for one holding one.
+        // Still on the flags rather than on the box, for the reason the crown's doc gives — an
+        // unglyphed tag holds one anonymous flex item, and *inert* there is a fact about today's
+        // content rather than a property of the class.
+        (crowned || noted) && "gap-[calc(3px*var(--mark-scale,1))]",
+        className,
+      )}
     >
       {crowned ? (
         <Crown
@@ -298,6 +367,21 @@ export function CountTag({
           // The `mb` is the optical centring the prop's doc derives; `block` takes the glyph off
           // the text baseline it would otherwise sit on, and `shrink-0` keeps it whole in a box
           // whose digits can grow.
+          className={cn(
+            "mb-[calc(1px*var(--mark-scale,1))] block shrink-0",
+            "size-[calc(11px*var(--mark-scale,1))]",
+          )}
+          strokeWidth={2.75}
+          aria-hidden="true"
+        />
+      ) : null}
+      {noted ? (
+        <StickyNote
+          // The crown's size, weight and optical `mb`, written out rather than shared: the two
+          // are one family and a helper here would be three lines of indirection over four
+          // classes. `lucide-sticky-note` is the handle a test or a live probe finds it by —
+          // the glyph is `aria-hidden` inside an `aria-hidden` box, so there is nothing in the
+          // accessibility tree to look it up with, exactly as with the crown.
           className={cn(
             "mb-[calc(1px*var(--mark-scale,1))] block shrink-0",
             "size-[calc(11px*var(--mark-scale,1))]",

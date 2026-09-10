@@ -6,9 +6,14 @@ import type {
   MenuSubmenu,
 } from "@/components/menu/types";
 import type { CardMenuDeps } from "@/features/card/cardMenu";
-import type { DeckCard, DeckCategory, DeckLabel } from "@/lib/ipc";
+import type { DeckCard, DeckCategory, DeckLabel, DeckNote } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
-import { buildDeckCardMenu, deckCardLabelRows, type DeckCardMenuDeps } from "./deckCardMenu";
+import {
+  buildDeckCardMenu,
+  deckCardLabelRows,
+  deckCardNoteRows,
+  type DeckCardMenuDeps,
+} from "./deckCardMenu";
 import { card, spec } from "./validation/fixtures";
 
 /** The shared builder's own dependencies, stubbed — this file is about the deck's extras,
@@ -102,6 +107,43 @@ function collectionDeps(over: Partial<DeckCardMenuDeps> = {}): DeckCardMenuDeps 
     quickAdd: vi.fn(),
     quickAddAndUnwish: vi.fn(),
     pullCard: vi.fn(),
+    ...over,
+  });
+}
+
+/**
+ * One deck note, naming whichever cards the case is about.
+ *
+ * `card()`'s `oracleId` defaults to `o-${name}`, so `note(…, ["Lightning Bolt"])` and `bolt()`
+ * agree with no id spelled twice — which is the whole of what an attachment is, since a note
+ * attaches by oracle id and never by a printing.
+ */
+function note(over: Partial<DeckNote> = {}, names: string[] = []): DeckNote {
+  return {
+    id: 1,
+    deckId: 4,
+    title: "Mana base",
+    body: "Fourteen sources.",
+    sortOrder: 0,
+    cards: names.map((name) => ({ oracleId: `o-${name}`, name })),
+    createdAt: 0,
+    updatedAt: 0,
+    ...over,
+  };
+}
+
+/**
+ * The deck card with the two note callbacks wired — what `DeckEditor` hands the builder once the
+ * band exists.
+ *
+ * **Deliberately not folded into {@link deps}**, on `collectionDeps`' argument: every other test in
+ * this file is then a test of a menu whose surface wired no note editor, which is exactly what the
+ * block's absence rule has to be checked against.
+ */
+function noteDeps(over: Partial<DeckCardMenuDeps> = {}): DeckCardMenuDeps {
+  return deps({
+    addNote: vi.fn(),
+    openNote: vi.fn(),
     ...over,
   });
 }
@@ -760,6 +802,221 @@ describe("buildDeckCardMenu", () => {
         }
       });
     });
+  });
+});
+
+/**
+ * **The note block** — `Add note…`, and `Notes ▸` where there are any (2026-09-10, issue #447).
+ *
+ * The rows are `deckCardNoteRows`' and are pinned on their own below; what this block is about is
+ * the *menu*: that the two callbacks are all-or-none, where the rule falls, and that nothing about
+ * the rest of the menu moved.
+ */
+describe("the note block", () => {
+  /** The shape with separators kept, since `labels` strips them and every other assertion in this
+   *  file is therefore blind to one arriving or leaving. */
+  const shape = (items: MenuItem[]) =>
+    items.map((item) => (item.kind === "separator" ? `—${item.id}` : item.id));
+
+  /**
+   * **All-or-none, and absent is the whole block including its rule** — `collectionItems`' guard
+   * and `cardMenu.tsx`'s `moveItem` rule. A surface that wired no note editor draws the menu it
+   * always drew, separator included: a stray rule with nothing under it is a menu that looks as
+   * though a row failed to render.
+   *
+   * The `undefined`-each-way cases are the ones that matter — half a pair wired is exactly the
+   * state a partially finished call site is in, and `Notes ▸` with nothing to open is a list of
+   * dead rows.
+   */
+  it("draws nothing at all unless both callbacks are wired", () => {
+    for (const over of [
+      {},
+      { addNote: vi.fn() },
+      { openNote: vi.fn() },
+    ] as Partial<DeckCardMenuDeps>[]) {
+      const items = buildDeckCardMenu(
+        bolt(),
+        deps({ notes: [note({}, ["Lightning Bolt"])], ...over }),
+      );
+      expect(shape(items)).not.toContain("—sep-notes");
+      expect(has(items, "Add note…")).toBe(false);
+      expect(has(items, "Notes")).toBe(false);
+    }
+  });
+
+  /**
+   * **Under a rule of their own, between the label rows and the removal.** Everything above the
+   * block writes the deck — where the card goes, what it is called — and the row below takes the
+   * cardboard out. A note writes neither, so it is its own block rather than a tail on the filing
+   * rows or a neighbour of the destructive one.
+   */
+  it("puts the rows under their own rule, between Label card and Remove card", () => {
+    const items = buildDeckCardMenu(bolt(), noteDeps({ notes: [note({}, ["Lightning Bolt"])] }));
+    expect(shape(items).slice(-6)).toEqual([
+      "label-card",
+      "—sep-notes",
+      "note-add",
+      "card-notes",
+      "—sep-remove",
+      "remove-card",
+    ]);
+  });
+
+  /** And with no note naming the card, the block is the add alone — still under its own rule, so
+   *  the row a reader learns the position of does not move with the deck's notebook. */
+  it("keeps the rule and the add row for a card no note names", () => {
+    const items = buildDeckCardMenu(bolt(), noteDeps({ notes: [note({}, ["Ponder"])] }));
+    expect(shape(items).slice(-5)).toEqual([
+      "label-card",
+      "—sep-notes",
+      "note-add",
+      "—sep-remove",
+      "remove-card",
+    ]);
+  });
+
+  /**
+   * **Both rows stay about the right-clicked card under a picked set** — `Notes ▸` because four
+   * cards have four lists with no one list to draw, and `Add note…` because it opens one editor
+   * over one document.
+   */
+  it("stays singular under a picked set", () => {
+    // One object, not two calls to `bolt()`: `card()` stamps an incrementing `id`, so a second
+    // call is a different row and the assertion below would be about the wrong card.
+    const clicked = bolt();
+    const picked = [clicked, card({ name: "Bear", quantity: 2 })];
+    const addNote = vi.fn();
+    const items = buildDeckCardMenu(
+      clicked,
+      noteDeps({ addNote, picked, notes: [note({}, ["Lightning Bolt"])] }),
+    );
+
+    expect(has(items, "Add note…")).toBe(true);
+    expect(has(items, "Notes")).toBe(true);
+    (find(items, "Add note…") as MenuAction).onSelect();
+    expect(addNote).toHaveBeenCalledTimes(1);
+    expect(addNote).toHaveBeenCalledWith(clicked);
+  });
+});
+
+describe("deckCardNoteRows", () => {
+  const open = (rows: MenuItem[]) => (find(rows, "Notes") as MenuSubmenu).items;
+
+  /**
+   * **`Add note…` is unconditional and `Notes ▸` is not**, which is the whole shape of the block.
+   *
+   * A card can always be written about, so the press that starts a note is on every card of the
+   * surface; a card named by nothing has no list, and the row is **absent** rather than greyed —
+   * a greyed row's accessible name in this app includes its reason, so `Notes (no notes name this
+   * card)` would be a sentence read out on the great majority of a deck's cards to say that
+   * nothing has happened.
+   */
+  it("offers the add on every card and the submenu only where a note names one", () => {
+    const notes = [note({}, ["Lightning Bolt"])];
+    expect(labels(deckCardNoteRows(bolt(), notes, vi.fn(), vi.fn()))).toEqual([
+      "Add note…",
+      "Notes",
+    ]);
+    expect(labels(deckCardNoteRows(card({ name: "Ponder" }), notes, vi.fn(), vi.fn()))).toEqual([
+      "Add note…",
+    ]);
+    // No notes at all, and a read that has not answered — the same two states, the same one row.
+    expect(labels(deckCardNoteRows(bolt(), [], vi.fn(), vi.fn()))).toEqual(["Add note…"]);
+  });
+
+  /**
+   * **An orphan matches nothing rather than everything**, which is `notesForCard`'s rule and the
+   * one arm a loose equality gets wrong: a printing with no `oracleId` compared against a note's
+   * empty attachment list would draw a submenu of every deck-level note on the deck.
+   */
+  it("draws no submenu for a printing with no oracle id", () => {
+    const rows = deckCardNoteRows(
+      bolt({ oracleId: null }),
+      [note({}, ["Lightning Bolt"]), note({ id: 2 }, [])],
+      vi.fn(),
+      vi.fn(),
+    );
+    expect(labels(rows)).toEqual(["Add note…"]);
+  });
+
+  /**
+   * **Every note that names the card, in the deck's own `sortOrder`** — no `sortOptions`. It is
+   * the second of the two exemptions this app grants: an order the reader arranged themselves,
+   * exactly as the deck's categories are. Sorting here would list a reader's notebook one way in
+   * the band and another in this menu, over the same deck.
+   *
+   * The titles are deliberately in reverse alphabetical order against the stored one, which is
+   * what makes this assertion discriminate at all.
+   */
+  it("keeps the deck's own note order rather than sorting it", () => {
+    const rows = deckCardNoteRows(
+      bolt(),
+      [
+        note({ id: 1, title: "Zurgo plan", sortOrder: 0 }, ["Lightning Bolt"]),
+        note({ id: 2, title: "Mana base", sortOrder: 1 }, ["Lightning Bolt"]),
+        note({ id: 3, title: "Not this card", sortOrder: 2 }, ["Ponder"]),
+      ],
+      vi.fn(),
+      vi.fn(),
+    );
+    expect(labels(open(rows))).toEqual(["Zurgo plan", "Mana base"]);
+  });
+
+  /**
+   * **The row's word is `noteTitle`'s and is never respelled here.** A blank title falls back to
+   * the body's first line and then to `Untitled note`, which is one rule with three arms — and a
+   * row reading `Untitled note` in this menu beside a band row reading the body's first line would
+   * be one note with two names on one screen.
+   */
+  it("names a note the way the rest of the app names it", () => {
+    const rows = deckCardNoteRows(
+      bolt(),
+      [
+        note({ id: 1, title: "", body: "## Mana base\nmore", sortOrder: 0 }, ["Lightning Bolt"]),
+        note({ id: 2, title: "", body: "   ", sortOrder: 1 }, ["Lightning Bolt"]),
+      ],
+      vi.fn(),
+      vi.fn(),
+    );
+    expect(labels(open(rows))).toEqual(["Mana base", "Untitled note"]);
+  });
+
+  /**
+   * **The submenu is `submenu` and never `lazy`**, which is the test `menu/types.ts` states for
+   * the two kinds: the notes are already in hand — the surface read them for the band and for the
+   * cards' own marks — so there is nothing to fetch when the row expands.
+   */
+  it("builds the submenu from notes already in hand, with nothing to mount", () => {
+    const rows = deckCardNoteRows(bolt(), [note({}, ["Lightning Bolt"])], vi.fn(), vi.fn());
+    const submenu = find(rows, "Notes");
+    expect(submenu.kind).toBe("submenu");
+    expect(submenu.kind === "submenu" && submenu.items.every((i) => i.kind === "action")).toBe(true);
+  });
+
+  /**
+   * The two presses. `onOpen` takes the **note** rather than an id, because the surface that opens
+   * one has to draw it and the row already holds the whole thing.
+   */
+  it("hands the card to the add and the whole note to the open", () => {
+    const onAdd = vi.fn();
+    const onOpen = vi.fn();
+    const row = bolt();
+    const mine = note({ id: 12, title: "Mana base" }, ["Lightning Bolt"]);
+    const rows = deckCardNoteRows(row, [mine], onAdd, onOpen);
+
+    (find(rows, "Add note…") as MenuAction).onSelect();
+    expect(onAdd).toHaveBeenCalledWith(row);
+    (find(open(rows), "Mana base") as MenuAction).onSelect();
+    expect(onOpen).toHaveBeenCalledWith(mine);
+  });
+
+  /** **No row here is greyed**, which is this block's own rule made checkable: the add is always
+   *  live, and a note that cannot be opened is a note that is not listed. */
+  it("greys nothing at all", () => {
+    const rows = deckCardNoteRows(bolt(), [note({}, ["Lightning Bolt"])], vi.fn(), vi.fn());
+    for (const item of [...rows, ...open(rows)]) {
+      expect(item.kind === "action" && item.disabled === true).toBe(false);
+    }
   });
 });
 

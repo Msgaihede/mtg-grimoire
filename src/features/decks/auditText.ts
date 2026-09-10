@@ -567,8 +567,8 @@ function categoryLine(p: Record<string, unknown>): AuditLine {
   }
 }
 
-/** The deck's own fields. `cover` and `notes` say only that they changed: a cover is an id
- *  nobody can read and a note is a paragraph nobody wants in a one-line history. */
+/** The deck's own fields. `cover`, `notes` and `note` say only that they changed: a cover is an
+ *  id nobody can read and a note is a paragraph nobody wants in a one-line history. */
 function deckLine(p: Record<string, unknown>): AuditLine {
   const from = text(p.from);
   const to = text(p.to);
@@ -600,8 +600,67 @@ function deckLine(p: Record<string, unknown>): AuditLine {
         text: to === "custom" ? "Set a custom deck cover" : "Set the deck cover",
         detail: null,
       };
+    // ⚠️ **`notes` is a reader for old rows and must stay in this file for good.** The column
+    // it describes — `decks.notes`, one textarea in the settings dialog — is gone: user schema
+    // v43 replaced it with the `deck_notes` table and the `note` arm below. **Nothing new will
+    // ever write this field again, and that is exactly why it cannot be deleted.** Audit rows
+    // are durable: every history row written before v43 still carries `field: "notes"`, and the
+    // `default` arm at the bottom of this switch answers an unrecognised field with "Changed
+    // the deck" — a sentence true of every deck edit, which never fails and therefore never
+    // goes red. Removing this case would silently demote years of a reader's history to that
+    // sentence, and no build, suite or type would say so. Its test case is a test of how old
+    // history reads, and it stays for the same reason.
     case "notes":
       return { text: "Edited the deck notes", detail: null };
+    // The **many** notes, `deck_notes` at user schema v43 — one row per thing that happened to
+    // one note, so the arm switches on `action` the way `categoryLine` does rather than
+    // answering every row with one sentence.
+    //
+    // **The body is never printed**, which is the rule the `notes` arm above states and this
+    // one inherits unchanged: a note is a paragraph nobody wants in a one-line history. The
+    // *title* is a line and is a different thing, so it rides in `detail` — except under
+    // `edit`, where naming the note would be the one place this switch implied something about
+    // what was typed into it. A blank title is legal, and `text()` answers `null` for it, so
+    // the detail simply falls away rather than reading "".
+    case "note": {
+      const title = text(p.note);
+      const card = text(p.card);
+      switch (text(p.action)) {
+        case "create":
+          return { text: "Added a note", detail: title };
+        case "edit":
+          return { text: "Edited a note", detail: null };
+        case "delete":
+          return { text: "Deleted a note", detail: title };
+        // `<card>` is the card's **name**, resolved by `deck_notes.rs` at the moment it was
+        // true — `defaultCategory`'s rule, and for its reason: the row stores an `oracle_id`,
+        // which is a uuid no reader can resolve. A row that carries none says the shorter
+        // sentence rather than printing "undefined" at somebody.
+        case "attach":
+          return {
+            text: card ? `Attached ${card} to a note` : "Attached a card to a note",
+            detail: title,
+          };
+        case "detach":
+          return {
+            text: card ? `Detached ${card} from a note` : "Detached a card from a note",
+            detail: title,
+          };
+        // **The one action that is about the list rather than about a note**, which is why it
+        // is the one that names none: `deck_notes.rs` writes `note` and `card` as `null` here,
+        // because a reorder moves rows it would be arbitrary to pick one of. The sentence is
+        // plural for the same reason, and `categoryLine`'s `reorder` arm is the precedent
+        // word for word — the two lists behave alike and so should read alike.
+        //
+        // It is here rather than left to the `default` below because that arm answers
+        // "Changed a note", which is true of a reorder and therefore never fails: the reader
+        // would simply be told less than the row knows. `xGroup`'s trap, met early.
+        case "reorder":
+          return { text: "Reordered the notes", detail: null };
+        default:
+          return { text: "Changed a note", detail: null };
+      }
+    }
     case "description":
       return { text: "Edited the deck description", detail: null };
     case "built":
