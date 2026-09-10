@@ -1103,17 +1103,15 @@ row measured 38px. The whole line read
 `Format Commander · Cards 100+3 · Lands 32 · Avg. mana 2.58 · Price $948.94 · Owned 0 / 103
 missing` with `1 issue · 6 game changers · Bracket ~4` in the right-hand group at **297px**.
 
-**That 297 was read with `6 game changers` as a `<span>`; it became a `<button>` on 2026-09-08 —
-the game-changer spotlight — and it is a `<span>` again since 2026-09-09**, when the spotlight was
-deleted. What ended it is not a width: the fade landed on the great majority of the cards, the
-deck's views overlap cards so it compounded, and a hundred-card deck at a quarter opacity read as
-one blur rather than as a deck with a few cards standing out of it
-([frontend-design.md](frontend-design.md) carries the whole account). **So the 297 above is the
-figure that stands**, in both directions — the words never changed and neither did the height, and
-what the button cost was ~16px more in its **latched** state alone, for a 12px crown and a `gap-1`
-inside its own box. Nothing on this line is a press again; the question the spotlight was asking is
-a `Game Changers` chip in the toolbar's label-filter row now, one line down, which moves nothing on
-the ledger. Neither the button nor the chip has been driven in the shipped window.
+**That 297 was read with `6 game changers` as a `<span>`, and the element under those words has
+changed three times since.** A `<button>` on 2026-09-08 (the spotlight), a `<span>` again on
+2026-09-09 when the spotlight was deleted and the filter moved to a chip in the toolbar's
+label-filter row, and a `<button>` again on **2026-09-10**, when that chip came back and merged
+into this count — one control, the crown drawn in both states, `pie-gold` when pressed.
+([frontend-design.md](frontend-design.md) carries the whole account of why the spotlight went: the
+fade landed on the great majority of the cards, the deck's views overlap cards so it compounded,
+and a hundred-card deck at a quarter opacity read as one blur.) **So the 297 above is the figure
+for the span**, and the merged chip is measured below — the same deck, the same 1017, **313**.
 
 ### The toolbar's split, read off the y coordinates
 
@@ -1927,6 +1925,13 @@ question it answered (`src/features/decks/CLAUDE.md` carries the argument). This
 drove the replacement, on the reader's own 101-card Azula deck — the deck the spotlight was
 reported from, which is what makes the before and after a comparison rather than two pictures.
 
+⚠️ **The chip this section measures is no longer in the toolbar.** On 2026-09-10 it moved back to
+the ledger and merged into the game-changer count beside the bracket, so every rect below is a
+reading of a control that is not drawn there any more. It is kept because **the defect is about
+`FILTER_CONTROL` rather than about this chip** — the next caption-plus-glyph chip in that row meets
+it again — and because the instrument is the transferable half. The merged chip was driven the same
+way and is clean; the pass is two sections down.
+
 **It found a layout defect that had already merged**, and the shape of it is the transferable
 half: a class that composes to nothing is invisible to every instrument but a window.
 
@@ -1998,6 +2003,60 @@ Maybeboard likewise). That is `drawsWhenEmpty` behaving exactly as it does under
 rather than anything this chip introduced — a reader's own piles and the seeded zones stay on
 screen, and stay drop targets, while a filter is running. It is written down because it looks like
 a finding and is the documented rule.
+
+## The chip merged back into the ledger's count — 2026-09-10, `npm run tauri dev` (debug), a copy of the real db
+
+The same deck the section above was driven on — `Azula`, 122 drawn cards, six of them game
+changers — with the filter moved back onto the ledger's game-changer readout, one control between
+the format check and the bracket. **The pass found nothing wrong**, which is worth writing down
+for the one measurement it was taken to make: this chip is the second caption-plus-glyph control
+in this editor, and the first one shipped with its crown on a line of its own.
+
+### The crown and the caption, which is the pair that failed last time
+
+At **1920×1080**, the chip at rest: box `x 1662, y 179, 133 × 28`, `display: flex`, `scrollWidth`
+131 = `clientWidth` 131 — no overflow inside a fixed box, which is exactly the state the toolbar
+chip's `h-9` was hiding.
+
+| | Toolbar chip, shipped (2026-09-09) | This chip |
+| --- | --- | --- |
+| `display` | `block` | `flex` |
+| Crown centre `y` | 228 | **193** |
+| Caption centre `y` | 240 | **193** |
+| On one line | no | **yes** |
+| Chip width vs content | 110 / wants 128 | **133 / 131** |
+
+Measured again in the **tight** arm at 1024×700 (a 761px editor column): the caption is the
+`sr-only` `6 game changers` plus a visible `6 GC`, the chip is `60px` with `scrollWidth` 58 =
+`clientWidth` 58, and the crown's centre is the chip's own — `193` and `193`.
+
+### The line still holds at both widths
+
+| Window | `dl` `clientWidth` | `dl` `scrollWidth` | Height | Right-hand group | Page `scrollWidth` / `clientWidth` |
+| --- | --- | --- | --- | --- | --- |
+| 1280×800 | 1017 | 1017 | 38 | **313** | 1280 / 1280 |
+| 1024×700 | 761 | 761 | 38 | — | 1024 / 1024 |
+
+**313 against the bare span's 297** (the same deck, the same 1017, the same three controls) — 16px
+for the border, the `px-2` and a 12px crown with its `gap-1`. One line at 38px at both widths, no
+overflow on the `<dl>` and no page-level horizontal scroll, which is the thing this editor has
+twice gone hunting phantom scrollbars over.
+
+### The press
+
+- Rest → `aria-pressed="false"`, `border-color` and `color` the line's own `--color-border` /
+  `--color-dim`; **122 cards drawn**.
+- Pressed → `aria-pressed="true"`, both `rgb(217, 185, 92)` — `#d9b95c`, `--color-pie-gold`, the
+  crown's own gold and deliberately not the accent; **6 cards drawn**, the deck's six game
+  changers.
+- Released → back to 122. A toggle, not a mode.
+- **The box does not move on the press**: `x 1662, width 133` in both states, because the crown is
+  drawn at rest as well and the press changes only two colours.
+- The accessible name is the chip's own caption (`aria-label` is **null** in both states), and the
+  tooltip is wired: `aria-describedby="app-tooltip"`, reading `Show only the game changers.` at
+  rest and `Showing only the game changers. Press to show the whole deck.` pressed.
+- Nothing named `Game Changers` is left anywhere in the toolbar, and this deck wears no labels, so
+  `Filter by label` draws no group at all — the second gate arm gone with the chip.
 
 ## The redesigned Deck stats band, driven 2026-09-10
 

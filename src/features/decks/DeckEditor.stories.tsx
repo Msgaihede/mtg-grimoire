@@ -1330,31 +1330,30 @@ export const SwapFolds: Story = {
 };
 
 /**
- * **The `Game Changers` filter chip** — which is what answers *where are they* now that the
- * ledger's count beside it is a plain readout again.
+ * **The `Game Changers` chip** — the ledger's count, which is also what answers *where are they*.
  *
- * It replaced a **spotlight** on 2026-09-09: hovering or latching that count faded every card in
+ * It replaced a **spotlight** on 2026-09-09: hovering or latching the count faded every card in
  * the deck that was not a game changer to a quarter, and on a hundred-card deck the stacked
  * quarter-opacity cards read as an unusable blur. This says the same thing by taking the other
  * cards away, so a card that survives looks **exactly** as it looks unfiltered.
  *
- * The chip sits in the toolbar's label-filter row, drawn **first** and always in the same place:
- * every other chip in that row is one of the reader's own label strings, so the row's contents
- * move as labels come and go and the app's own chip must not move with them. It carries a crown
- * whether or not it is pressed — the glyph is the chip's identity, and `aria-pressed` is what
- * says whether the filter is on — in `text-pie-gold`, the gold the crowns on the cards themselves
- * are drawn in.
+ * For a day the filter was a separate chip in the toolbar's label-filter row, which put the number
+ * and the way to act on it two lines apart and made the app's one fixed chip the odd string in a
+ * row of the reader's own. It is one control again since 2026-09-10, back where the count has been
+ * since 2026-08-24 — between the format check and the bracket, wearing a crown whether or not it
+ * is pressed, because the glyph is the chip's identity and `aria-pressed` is what says whether the
+ * filter is on. On, it takes `pie-gold` for its edge and its words: the gold the crowns on the
+ * cards themselves are drawn in.
  *
- * **Deck 2 is the "no labels at all" arm**, which is the half of the row's two-armed gate easiest
- * to lose in a tidy: no card here wears a label, so the row exists for this chip alone. Its one
- * game changer is Ancient Tomb, which is the fixture's own argument for the mark existing — a
- * land, with no mana cost to read it off.
+ * **Deck 2's one game changer is Ancient Tomb**, which is the fixture's own argument for the mark
+ * existing — a land, with no mana cost to read it off — so the caption reads `1 game changer` and
+ * the chip is addressed by exactly that.
  *
- * **When both kinds of chip are pressed they `OR`**, which is the reader's own call: a game
- * changer rarely wears a label, so an `AND` would empty the wall on the commonest pair of presses
- * there is and read as the filter having broken. That pairing is `DeckEditor.test.tsx`'s to pin,
- * because it needs a deck holding a labelled card, a game changer and a card that is neither —
- * three rows arranged for the assertion rather than a deck anybody would build.
+ * **A ticked label and this chip `OR`**, which is the reader's own call: a game changer rarely
+ * wears a label, so an `AND` would empty the wall on the commonest pair of presses there is and
+ * read as the filter having broken. That pairing is `DeckEditor.test.tsx`'s to pin, because it
+ * needs a deck holding a labelled card, a game changer and a card that is neither — three rows
+ * arranged for the assertion rather than a deck anybody would build.
  */
 export const GameChangerFilter: Story = {
   args: { deckId: 2 },
@@ -1365,11 +1364,10 @@ export const GameChangerFilter: Story = {
 
     // Exact, never `/game changer/`: a card that *is* one says so in its own accessible name, so
     // a loose pattern matches the cards as well as the control.
-    const chip = await canvas.findByRole("button", { name: "Game Changers" });
-    const row = chip.closest('[role="group"]') as HTMLElement;
-    await expect(row).toHaveAccessibleName("Filter by label or game changer");
-    // The chip alone: this deck wears no labels, so nothing else is in the row.
-    await expect(within(row).getAllByRole("button")).toHaveLength(1);
+    const chip = await canvas.findByRole("button", { name: "1 game changer" });
+    // On the ledger line and not in the label row — this deck wears no labels, so that row is not
+    // drawn at all, which is what the chip's own move took away.
+    await expect(canvas.queryByRole("group", { name: "Filter by label" })).toBeNull();
     await expect(chip).toHaveAttribute("aria-pressed", "false");
 
     await userEvent.click(chip);
