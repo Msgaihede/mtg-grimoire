@@ -2039,10 +2039,25 @@ visible from the column, and no unit test sees the corpus it gunzips.
 a sibling of the desk row, so the panel's width comes off the desk and not off the page.
 
 **The Mana pips figure track measures 64px at that floor**, inside a ~171px tile: the row is a 44px
-word, a 32px percentage and two 6px gaps, and the track is what is left. It was estimated at
+word, a 32px percentage and two gaps, and the track is what is left. It was estimated at
 **31px** before the pass, from an assumption that the band would still be two columns at a 602px
 editor — it is not, because the columns wrap before they squeeze. A proportion bar with its own
 number printed beside it, at 64px, reads.
+
+⚠️ **Those two column widths moved on 2026-09-10 and this reading is the build before it.** The
+tile's three strings were `text-[0.625rem]` — the app's smallest type, two steps under the
+`text-xs` every other readout in this band writes its figures at — and the reader reported the tile
+as too small to read. They are `text-xs` now, and the two fixed columns are sized from that: at
+12px in this app's own faces `Sources` measures **46.1px** and a mono `100%` **28.8px**, so `w-11`
+(44) and `w-8` (32) became **`w-13` (52)** and **`w-9` (36)**. The track therefore gives up **12px**
+at every width, which at this floor is 64 → ~52. **Measured in Storybook over the devtools MCP
+rather than in the shipped window** — Markus had a debug build of his own running, so the `app`
+lock could not be taken — at the band's own `min-w-[22rem]` floor, which is narrower than the 367px
+column a 1024 window gives: tile content **141px**, word column 52 on one line, track **45px**,
+percentage 36, and no horizontal overflow on the card, the grid or any of the twelve figures.
+`110 pips · 100 cards`, the longest caption the arithmetic can produce, is 144px there and **wraps
+to a second line** rather than overflowing — which is why the caption keeps no width of its own.
+Nothing here has been re-driven in the shipped window.
 
 ### The disclosure
 
