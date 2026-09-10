@@ -73,6 +73,13 @@ import { DeckHistoryDialog } from "./DeckHistoryDialog";
 import { DeckBracket } from "./DeckBracket";
 import { DeckLedger } from "./DeckLedger";
 import { DeckNameField } from "./DeckNameField";
+// **The band and never the editor it can open.** `DeckNotesPanel` reaches `NoteEditor` through
+// `React.lazy`, so Tiptap's 141.5 kB gzip stays out of this chunk — an import of that module
+// anywhere on this path would put it back with nothing going red. `DeckNotesPanel.test.tsx`
+// sweeps `src/` for exactly that.
+import { DeckNotesPanel } from "./DeckNotesPanel";
+import { notedOracleIds } from "./deckNotes";
+import { useDeckNotes } from "./useDeckNotes";
 import { DeckSearchPanel, MIN_PANEL_WIDTH_PX } from "./DeckSearchPanel";
 import { DeckSettingsDialog } from "./DeckSettingsDialog";
 import { DeckStats } from "./DeckStats";
@@ -3491,6 +3498,27 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     [deck.cards, spec],
   );
 
+  /**
+   * Every oracle id a deck note names — the per-card note mark, in every view at once.
+   *
+   * **There is no *"which cards in this deck have notes"* command and there must not be one.**
+   * The band below already holds every note and every note holds its oracle ids, so this is a
+   * `Set` built in TypeScript from a read the page has already made — the boundary this repo
+   * keeps, and the same call `Empty a list` makes for its two counts. A second command would be
+   * a second source of truth for a fact already in hand, free to disagree with the band a reader
+   * is looking at.
+   *
+   * **The same hook the band mounts, and that costs one cache read rather than a round trip**:
+   * `useDeckNotes` keys on `["decks", "notes", deckId]`, so the two observers share one query.
+   * Reading it here rather than lifting it out of the band is what keeps the band's own props
+   * the four the plan gives it.
+   *
+   * `undefined` never reaches a view — an empty set is what a deck with no notes answers, and
+   * `deckCardNoted` treats the two alike.
+   */
+  const notes = useDeckNotes(deckId);
+  const noted = useMemo(() => notedOracleIds(notes.notes), [notes.notes]);
+
   /** Copies of the cards the format calls game changers, over the piles that count — the second
    *  half of the header's rules readout, beside the check chip's own count. */
   const gameChangers = useMemo(
@@ -3742,6 +3770,11 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     groups,
     marketplace,
     violations,
+    // Which cards a note names, handed down whole beside `violations` and for its reason: one
+    // answer about the deck that every card drawn is tested against, where a per-card lookup
+    // would be a hundred answers to one question. **All four views**, so a card marked in Stacks
+    // is marked in Table one toolbar press later.
+    noted,
     theoryPlan,
     // Whether this deck has a binder behind it at all — {@link tracks}, handed down whole like
     // `violations` and `theoryPlan` beside it, because it is one fact about the deck that every
@@ -4867,6 +4900,48 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             separateXGroup={separateX}
           />
         </>
+      )}
+
+      {row && (
+        // What the reader has written down about this deck — many notes, each managed and
+        // deleted on its own, each free to name any number of cards (issue #447, schema v43).
+        //
+        // **After `DeckStats`, and last on the page.** Neither this band nor the two above it may
+        // go between the deck and `PriceStrip`: the remove tray is drawn on that strip for the
+        // length of a drag, at `-top-3` reaching up into this column's own `gap-3`, so anything
+        // inserted between them would leave a reader dragging a card past a wall of prose to
+        // reach the one drop that takes it out. Below the strip, the three bands are only ever
+        // ordered against each other, and the reader's reason for this one being last is that a
+        // notebook is opened deliberately: the tokens wall is a list of cards the deck is about
+        // to want and the stats band is four charts read at a glance, where a note is read by
+        // somebody who came here to read it.
+        //
+        // **A `section` and `shrink-0`** for the two reasons the bands above spell out in full —
+        // a second complementary landmark answered `getByRole("complementary")` and broke five of
+        // `App.test.tsx`'s pane assertions, and `shrink-0` on the bands below the desk is the
+        // whole of why this editor scrolls. Both live on the panel's own root, so this mount
+        // cannot get either wrong.
+        //
+        // **The cards go down as a prop and the band mounts no second `useDeck`.** It did, for
+        // the attach picker's card names — `CategoriesDialog`'s arrangement, and free only while
+        // the deck query is *fresh*: this band is gated on `row`, so it mounts after the first
+        // read settles, and a second observer arriving on a stale query is a second `deck_get`.
+        // Which of the deck's two lists these are is this file's answer, which is also why
+        // `useDeckNotes` takes no variant — `deck_notes` has no such column, and a note written
+        // against the plan shows on the actual list too because both hold the same oracle ids.
+        //
+        // `notesOpen` is the deck's own column (`decks.notes_open`, schema v43) rather than
+        // editor state, for `tokensOpen`'s reason one band up: whether a reader wants their notes
+        // in front of them is an answer about a *particular* deck, and a `useState` here would
+        // ask it again every time they opened one. The column is `DEFAULT 0` and not `1` —
+        // v37's answer rather than v42's — because this band is new and no deck has ever shown
+        // one, so a shut default takes nothing from anybody.
+        <DeckNotesPanel
+          deckId={deckId}
+          cards={deck.cards}
+          open={row.notesOpen}
+          onToggle={(next) => deck.update.mutate({ notesOpen: next })}
+        />
       )}
 
       {/* The overlays, mounted **at the editor's top level and as siblings of the layout

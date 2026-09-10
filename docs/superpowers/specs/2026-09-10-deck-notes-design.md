@@ -176,9 +176,15 @@ if v < 43 {
 ### ⚠️ `DECK_SELECT` maps by position
 
 `decks.notes` is column 12 in the whole-deck read and `deck.rs:1072` is `notes: r.get(12)?`. Every
-`r.get(n)` after it shifts by one when the column goes, `IMAGE_COL` included — which v42 already
-had to bump from 26 to 27 for the opposite reason. The before-image mapper at `deck.rs:1939`
-(`r.get(7)`) shifts the same way.
+`r.get(n)` after it shifts down by one when the column goes — fourteen of them in `deck_row` and
+nine in the before-image mapper, plus `update_deck`'s `?9`–`?20` and `cover_kind`'s `ELSE ?10`.
+
+**⚠️ `IMAGE_COL` nevertheless stays at 27, and this section said 26 until the build corrected it
+on 2026-09-10.** Removing `notes` at column 12 drops it to 26, and appending `notes_open` puts it
+straight back — the two edits cancel at the *end* of the row and nowhere in the middle of it. So
+the one constant a reader would check to decide whether the read had moved is the one number that
+did not move, while every read between 12 and 26 did. That is the trap, and it is written into
+`IMAGE_COL`'s own doc comment now rather than only here.
 
 ### The text already in the column is discarded
 
@@ -519,3 +525,18 @@ and a failed query look identical and mean opposite things.
   the note most worth keeping.
 - **Images, tables and card-link nodes in a body.** The dialect is §6's list. Widening it later
   costs a rule on both renderers, which is why the round-trip test exists.
+- **A block inside a blockquote.** `Block`'s `quote` member holds `Inline[]`, so a list written
+  inside a quote reads back with its `-` markers visible as literal text rather than as a list.
+  The words are all there — this is the *nothing is dropped* rule doing its job rather than
+  failing — and the editor round-trips the construct fine, so only the read-only rendering differs.
+  Fixing it means `quote: { blocks: Block[] }`, a recursive union every consumer has to handle,
+  and it was **declined on 2026-09-10 with the alternative costed**: three renderers grow a
+  recursive case so that a list nested inside a quote in a deck note loses two visible characters.
+  If a reader ever reports it, that is the fix and it is bounded (a quote may hold any block but
+  another quote).
+- **Two marks on one run.** `~~struck [link](…)~~` reads back as struck text with the words intact
+  and **the href gone**, because `Inline` is one mark per run. Same trade, same reason, and the
+  same fix if it ever matters — a nested inline union.
+- **A hard break is a `"\n"` inside a text run**, since the union has no break member. Every
+  renderer of these blocks must set `whitespace-pre-line`, or a break a reader typed draws as a
+  space. That is a contract on the consumers rather than a limitation of the reader.

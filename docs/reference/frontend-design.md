@@ -371,6 +371,30 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   its own in that strip for the chip's absence to be about — and one surviving `mark={false}` here
   would be the *third* crown on the card, the tag under it already wearing one. The bullet below
   is where that is settled and measured.
+- **A note's mark is folded in beside the crown, and it is the second fact to take that route**
+  (2026-09-10, issue #447). A deck card whose deck holds a note naming it draws an 11px
+  `StickyNote` inside `CountTag`, after the crown and before the number, in the tag's own
+  foreground — so a card that is both a Game Changer and noted shows **both glyphs and the
+  quantity** in one box. On the two row views it is `CardMarks`' `NoteMark`, a 12px stroked glyph
+  beside `LabelDot`.
+  **It went there because there is no corner left**, which the section below already argued for the
+  crown and which a measurement settled: the marks strip is `overflow-hidden` and was measured
+  overflowing a 165px tile by 11px, top-left is the quantity tag's, top-right the theory mark's,
+  bottom-left the rule-break box's. `crowned` is the precedent — a fifth fact folded *into* an
+  existing mark at a cost of 14px rather than drawn beside it — and this is the sixth, at the same
+  14px, moving no padding for the same reason (`COUNT_TAG_BOX`'s `pl − pr = 5px` is a derivation
+  the content width cancels out of).
+  **It takes no colour of its own**, which is the rule below read once more: the `--color-pie-*`
+  deeps are spoken for by labels and gold is spoken for by selection, so the glyph is
+  `currentColor` and inherits whatever the label already decided. Against `LabelDot` it separates
+  by **shape** — a stroked outline against an 8px filled square — because separating by colour
+  there would be a seventh thing colour means.
+  **The tag is `aria-hidden`, so the words are owed twice**: `NOTE_MARK_LABEL` (`"Has a note"`) in
+  the tag's tooltip phrase and again in `cardControl.ts`'s `deckCardName`, or the fact reaches a
+  sighted reader and nobody else. Asserting it wants an anchored regex on the **tooltip**, not
+  `toHaveAccessibleName` on the tag — an `aria-hidden` element has no accessible name, so that
+  assertion would pass against `""` whatever the mark drew, which is a fence reporting success by
+  construction.
 - **One game changer, one glyph — and what differs is what it is printed _on_** (2026-09-08). It
   is a crown everywhere. On the deck's **two card-face views** it is printed inside
   `CardMarks`' `QuantityTag`, before the number, in the tag's own foreground colour. On the deck's

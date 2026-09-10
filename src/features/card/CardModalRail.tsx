@@ -1,19 +1,20 @@
 /**
  * The card modal's right-hand options rail — spec §7's list, and the grimoire figures under it.
  *
- * **It is a list rather than a fixed set of slots, and that is the whole design.** Seven entries
- * are every surface's (`Legality`, `Oracle tags`, `Card text`, `Combos`, `Open on Scryfall`,
- * `Open on EDHREC`, `Open on <marketplace>`) and whatever else a surface contributes arrives as
- * {@link RailAction}s — so the deck editor's eight and the search wall's seven are one component
- * drawing a longer or a shorter list, rather than a component with seven named slots plus a hole
- * for the extras. A rail built the other way makes "how many options does this surface have" a
- * fact about *this file*, which is the one place it cannot be known.
+ * **It is a list rather than a fixed set of slots, and that is the whole design.** Eight entries
+ * are every surface's (`Legality`, `Oracle tags`, `Card text`, `Combos`, `Notes`,
+ * `Open on Scryfall`, `Open on EDHREC`, `Open on <marketplace>`) and whatever else a surface
+ * contributes arrives as {@link RailAction}s — so the deck editor's nine and the search wall's
+ * eight are one component drawing a longer or a shorter list, rather than a component with eight
+ * named slots plus a hole for the extras. A rail built the other way makes "how many options does
+ * this surface have" a fact about *this file*, which is the one place it cannot be known.
  *
  * **The list is in two blocks and the boundary is whether the press stays in the app.** The first
- * four rows open a surface of this app and are named for it — nouns, `Legality`, `Oracle tags`,
- * `Card text`, `Combos`; the last three leave, and are verbs saying where to. `Combos` joined the
- * first block on 2026-09-08 for issue #359 and went at the *end* of it for the reason the ladder
- * below is fixed: nothing a reader has already learnt the position of moves.
+ * five rows open a surface of this app and are named for it — nouns, `Legality`, `Oracle tags`,
+ * `Card text`, `Combos`, `Notes`; the last three leave, and are verbs saying where to. `Combos`
+ * joined the first block on 2026-09-08 for issue #359 and `Notes` on 2026-09-10 for issue #447,
+ * and each went at the *end* of it for the reason the ladder below is fixed: nothing a reader has
+ * already learnt the position of moves.
  *
  * **The three `Open on` rows are a ladder, not a list, and are deliberately not alphabetical**
  * — the context menu's `Open on` submenu's own argument. Scryfall is where the card's data came
@@ -154,7 +155,7 @@ export function CardModalRail({
   const grimoireId = useId();
   const openOverlay = useAppStore((s) => s.openCardOverlay);
 
-  // The four overlays are one store field with one writer, so naming which is the whole of what
+  // The five overlays are one store field with one writer, so naming which is the whole of what
   // an entry does — see `AppState.cardOverlay`, where the single-field shape is argued. Nothing
   // here holds open-state of its own, which is what makes at most one of them open true by
   // construction rather than by four call sites agreeing. It is also what a test here has to
@@ -173,6 +174,16 @@ export function CardModalRail({
     // *interaction* rather than about this card's text — so it is the one option in this block
     // that no amount of reading the card beside it could answer.
     { label: "Combos", onSelect: overlay("combos") },
+    // **`Notes`, not `View notes` or `Add a note`** — issue #447, and the row above states the
+    // rule it is obeying. A verb here would say the press leaves the app, which is the one thing
+    // the two blocks are separated to tell a reader; and `Add a note` would be a verb that is
+    // also a lie, since nothing on this surface writes one — a note is written in the deck that
+    // holds the card, and this row only reads.
+    //
+    // What it opens is every note naming this card in **every** deck, which is the one question
+    // a deck's own notes band cannot answer: the reader may have opened this card from the
+    // collection, from search, or from a different deck entirely.
+    { label: "Notes", onSelect: overlay("notes") },
     {
       label: "Open on Scryfall",
       external: true,

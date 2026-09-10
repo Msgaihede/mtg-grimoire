@@ -585,6 +585,12 @@ describe("auditSentence", () => {
       text: "Set a custom deck cover",
       detail: null,
     });
+    // ⚠️ **A test of how *old* history reads, and it stays for good.** `decks.notes` was
+    // dropped at user schema v43 and nothing will ever write this field again — but audit rows
+    // are durable, so every row a reader wrote before the upgrade still says `notes`. The
+    // `default` arm answers an unrecognised field with "Changed the deck", which is true of
+    // every deck edit and therefore never fails, so deleting this case and its arm would
+    // demote years of history with nothing going red. This assertion is the fence.
     expect(deck({ field: "notes", from: null, to: null })).toEqual({
       text: "Edited the deck notes",
       detail: null,
@@ -612,6 +618,75 @@ describe("auditSentence", () => {
     });
     expect(deck({ field: "theory", from: false, to: true })).toEqual({
       text: "Turned the theory list on",
+      detail: null,
+    });
+  });
+
+  /**
+   * The **many** notes — `deck_notes` at user schema v43, and the arm beside the `notes` one
+   * above rather than in place of it: `notes` reads the deck's old single column out of history
+   * and `note` reads the table that replaced it. Six actions, so six sentences; a shared
+   * template would read as machine output, which is `categoryLine`'s rule — and that switch is
+   * the model down to its own `reorder` arm.
+   *
+   * **The body is never printed** — a note is a paragraph nobody wants in a one-line history,
+   * which is the rule the old field's sentence stated and this one inherits. The *title* is a
+   * line rather than a paragraph, so it rides in `detail`; `edit` withholds it, because naming
+   * the note there would be the only place this switch implied something about what was typed
+   * into it, and `reorder` has none to name because it is about the list.
+   */
+  it("says what happened to a note, and never what the note says", () => {
+    const deck = (payload: Record<string, unknown>) =>
+      auditSentence(entry("deck", payload, { cardId: null, cardName: null }));
+
+    expect(deck({ field: "note", action: "create", note: "Mana base", card: null })).toEqual({
+      text: "Added a note",
+      detail: "Mana base",
+    });
+    // A blank title is legal — `deck_notes.title` defaults to `''` and the band prints the
+    // body's first line instead — so the detail falls away rather than reading "".
+    expect(deck({ field: "note", action: "create", note: "", card: null })).toEqual({
+      text: "Added a note",
+      detail: null,
+    });
+    // The one action that withholds the title, and the whole body is withheld everywhere.
+    expect(deck({ field: "note", action: "edit", note: "Mana base", card: null })).toEqual({
+      text: "Edited a note",
+      detail: null,
+    });
+    expect(deck({ field: "note", action: "delete", note: "Mana base", card: null })).toEqual({
+      text: "Deleted a note",
+      detail: "Mana base",
+    });
+    // `card` is the card's **name**, resolved by `deck_notes.rs` at the moment it was true —
+    // the row itself stores an `oracle_id`, which is a uuid no reader can resolve.
+    expect(
+      deck({ field: "note", action: "attach", note: "Mana base", card: "Lightning Bolt" }),
+    ).toEqual({ text: "Attached Lightning Bolt to a note", detail: "Mana base" });
+    expect(
+      deck({ field: "note", action: "detach", note: "Mana base", card: "Lightning Bolt" }),
+    ).toEqual({ text: "Detached Lightning Bolt from a note", detail: "Mana base" });
+    // A row that names no card says the shorter sentence rather than printing "undefined" at
+    // somebody — the shape every other arm in this switch takes for a missing payload field.
+    expect(deck({ field: "note", action: "attach", note: "", card: null })).toEqual({
+      text: "Attached a card to a note",
+      detail: null,
+    });
+    // **The sixth action, and the one that names nothing.** A reorder is about the list rather
+    // than about a note, so `deck_notes.rs` writes `note` and `card` as `null` — there is no
+    // one row it would be honest to pick — and the sentence is plural to match. Asserted with
+    // both fields null, which is the payload the backend actually writes: a test that passed a
+    // title here would be pinning a row that never happens.
+    expect(deck({ field: "note", action: "reorder", note: null, card: null })).toEqual({
+      text: "Reordered the notes",
+      detail: null,
+    });
+    // An `action` this build has never seen does not claim one of the six happened —
+    // `folderLine`'s rule, and the reason this arm switches on `action` at all. It has to be a
+    // word the switch really does not know: every one of the six above would pass this
+    // assertion off its own arm and prove nothing about the fallback.
+    expect(deck({ field: "note", action: "pin", note: "Mana base", card: null })).toEqual({
+      text: "Changed a note",
       detail: null,
     });
   });

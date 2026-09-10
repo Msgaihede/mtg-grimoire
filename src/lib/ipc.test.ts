@@ -25,6 +25,7 @@ import deckpaneRs from "../../src-tauri/src/deckpane.rs?raw";
 import decksortRs from "../../src-tauri/src/decksort.rs?raw";
 import deckMetaRs from "../../src-tauri/src/deck_meta.rs?raw";
 import deckMissingRs from "../../src-tauri/src/deck_missing.rs?raw";
+import deckNotesRs from "../../src-tauri/src/deck_notes.rs?raw";
 import deckPullRs from "../../src-tauri/src/deck_pull.rs?raw";
 import deckQuickAddRs from "../../src-tauri/src/deck_quick_add.rs?raw";
 import deckTheoryRs from "../../src-tauri/src/deck_theory.rs?raw";
@@ -58,7 +59,9 @@ import {
   ipcError,
   type ArtTagProgressEvent,
   type CardCombosPage,
+  type CardNote,
   type ComboProgress,
+  type DeckNote,
   type DeckTokenRow,
   type FeedProgressEvent,
   type OracleTagProgressEvent,
@@ -659,16 +662,23 @@ describe("ipc argument names match the Rust command signatures", () => {
     // A create carries the **whole deck** now, so every field is pinned by name. Nothing
     // type-checks this mirror against `deck::DeckInput`, and serde fills a field it cannot
     // find with that field's default — so a key misspelled here is not a type error, it is a
-    // deck quietly born without its notes.
+    // deck quietly born without its blurb.
     //
     // The bare call above is the other half of the pin: an omitted `folderId` travels as
     // omitted, and on an INSERT that *is* the top level — unlike `DeckPatch.folderId`, where
     // a missing value means "leave it" and only `deck_set_folder` reaches the root.
+    //
+    // ⚠️ **This literal is the _whole_ fence on `DeckInput`'s field list.** `DeckRow` is on the
+    // mirror table further down and `DeckInput` is on neither table, so nothing else in this
+    // build compares it with `deck::DeckInput`. That is why `notes` — the v8 column, dropped at
+    // schema v43 with the rest of the single-notes model — was deleted from *here* in the same
+    // commit as from `ipc.ts`: a field left standing in this object would have gone on being
+    // sent to a command that no longer names it, and Tauri drops a payload field a command does
+    // not declare, silently. A note is `ipc.deckNoteCreate` now, after the deck exists.
     await ipc.deckCreate({
       name: "Rakdos Sacrifice",
       formatKey: "commander",
       description: "Aristocrats, but rude",
-      notes: "Swap the Cauldron once the reprint lands.",
       coverCardId: "p1",
       folderId: 3,
       theoryEnabled: true,
@@ -678,7 +688,6 @@ describe("ipc argument names match the Rust command signatures", () => {
         name: "Rakdos Sacrifice",
         formatKey: "commander",
         description: "Aristocrats, but rude",
-        notes: "Swap the Cauldron once the reprint lands.",
         coverCardId: "p1",
         folderId: 3,
         theoryEnabled: true,
@@ -707,6 +716,20 @@ describe("ipc argument names match the Rust command signatures", () => {
       id: 4,
       patch: { theoryEnabled: false, virtualOnly: true },
     });
+
+    // **The third disclosure rides the ordinary patch**, `decks.notes_open` at schema v43, and
+    // it is pinned here for the reason `DeckInput`'s literal above is: `DeckPatch` is on neither
+    // mirror table, so this object is the whole of what compares it with `deck::DeckPatch`. The
+    // failure is the quiet kind — Tauri drops a payload field a command does not declare, so a
+    // misspelt key is a band that closes itself on every reload with nothing red anywhere, which
+    // is indistinguishable from a reader who never opened it.
+    //
+    // ⚠️ **Opening the band is not writing a note.** This patch carries a boolean about a
+    // disclosure; the notes themselves are rows, written by the eight `deckNote*` commands
+    // pinned further down. The v8 `notes` field that used to be spellable here is gone with the
+    // column, and its absence is fenced by this literal and nothing else.
+    await ipc.deckUpdate(4, { notesOpen: true });
+    expect(invoke).toHaveBeenCalledWith("deck_update", { id: 4, patch: { notesOpen: true } });
 
     invoke.mockResolvedValue(undefined);
     await ipc.deckDelete(4);
@@ -1709,6 +1732,176 @@ describe("ipc argument names match the Rust command signatures", () => {
 
     await ipc.deckTokenAdd(7, "c-9");
     expect(invoke).toHaveBeenLastCalledWith("deck_token_add", { deckId: 7, cardId: "c-9" });
+  });
+
+  /**
+   * **The eight note commands** — schema v43, issue #447 — and the family where two ids that a
+   * type checker cannot tell apart do opposite things.
+   *
+   * Three separations carry this case and none of them is visible to the compiler.
+   *
+   * **`id` against `noteId`.** The four deck-scoped writes take `(deckId, id)` and the two
+   * attachment writes take `(deckId, noteId)`, because Rust spells them that way — and both are
+   * `i64` addressing the same row. **Tauri drops a payload field a command does not name**, so a
+   * wrapper that reached for the sibling spelling hands the command a missing argument rather
+   * than a wrong one, and the loop at the bottom is what compares the two sides.
+   *
+   * **`oracleId` against a printing id.** A note attaches by the card's identity across every
+   * printing of it, which is `deck_tokens`' argument verbatim — a printing id means nothing on
+   * the far device's shelf. The two are one word apart and interchangeable to a type checker, so
+   * a wrapper sending `cardId` here would attach nothing on the near device and nothing on any
+   * other, with no rejection: an oracle id nothing matches is a note that simply names no card,
+   * which is a legitimate answer.
+   *
+   * **`title` and `body` against "leave it".** `deck_note_update` is the one patch-shaped write
+   * in the family, so both keys travel on every call with `undefined` folded to `null` —
+   * `deck_token_set`'s rule three cases up, and with `??` rather than `||` for exactly its
+   * reason: `""` is a **title the reader deliberately cleared** and `||` would send it as "leave
+   * it alone". That is this command's `quantity: 0`, and it is the arm a reader hits every time
+   * they take a heading off a note.
+   *
+   * The two DTOs are annotated rather than left inferred, which is half the assertion: a field
+   * this side spells differently is a compile error here and `undefined` everywhere else.
+   * `DeckNote` and `CardNote` are two shapes for one table asking opposite questions, so the
+   * pair is spelled out rather than assumed — `CardNote` carries `deckName` and no `cards`,
+   * because the caller asked about one card and already knows which.
+   */
+  it("names the deck note command arguments the way Rust spells them", async () => {
+    const note: DeckNote = {
+      id: 3,
+      deckId: 7,
+      title: "Mana base",
+      body: "Fourteen sources is the floor.",
+      sortOrder: 0,
+      // Empty would be the ordinary case; one entry is what pins the nested shape, which no
+      // parity check on the outer struct can see.
+      cards: [{ oracleId: "o-bolt", name: "Lightning Bolt" }],
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    invoke.mockResolvedValue([note]);
+
+    // Read back rather than assumed: the DTO reaches this side already camelCased by serde and
+    // the wrapper transforms nothing, so this mirror is the only thing standing between the
+    // crate and every caller.
+    expect(await ipc.deckNotes(7)).toEqual([note]);
+    expect(invoke).toHaveBeenLastCalledWith("deck_notes", { deckId: 7 });
+
+    // **Not scoped by `variant`**, unlike every other deck read in this file. A note attaches by
+    // `oracleId` and both of a deck's lists hold the same oracle ids, so scoping it would make
+    // one sentence appear and disappear as the reader flipped a toggle. Equality rather than
+    // `not.toContain`, which a parser that found nothing would pass trivially.
+    expect(payloadKeys(ipcSource, "deck_notes")).toEqual(["deckId"]);
+
+    invoke.mockResolvedValue(note);
+    await ipc.deckNoteCreate(7, "Mana base", "Fourteen sources is the floor.", ["o-bolt"]);
+    expect(invoke).toHaveBeenLastCalledWith("deck_note_create", {
+      deckId: 7,
+      title: "Mana base",
+      body: "Fourteen sources is the floor.",
+      oracleIds: ["o-bolt"],
+    });
+
+    // The empty array still travels as an explicit key rather than being dropped — a note about
+    // the mana base names no card, and that is the commonest note there is.
+    await ipc.deckNoteCreate(7, "", "", []);
+    expect(invoke).toHaveBeenLastCalledWith("deck_note_create", {
+      deckId: 7,
+      title: "",
+      body: "",
+      oracleIds: [],
+    });
+
+    await ipc.deckNoteUpdate(7, 3, { body: "Sixteen, after the flood swap." });
+    expect(invoke).toHaveBeenLastCalledWith("deck_note_update", {
+      deckId: 7,
+      id: 3,
+      title: null,
+      body: "Sixteen, after the flood swap.",
+    });
+
+    // The `??`-not-`||` half, stated as its own call: a blank title is the reader taking the
+    // heading off, and `||` would travel as `null` — "leave it" — so the heading would spring
+    // back the next time the note was read.
+    await ipc.deckNoteUpdate(7, 3, { title: "" });
+    expect(invoke).toHaveBeenLastCalledWith("deck_note_update", {
+      deckId: 7,
+      id: 3,
+      title: "",
+      body: null,
+    });
+
+    // `noteId`, not `id` — the two attachment writes are the break in the family's pattern, and
+    // a copy-paste from the update above is a runtime rejection with no type error anywhere.
+    await ipc.deckNoteAttach(7, 3, "o-bolt");
+    expect(invoke).toHaveBeenLastCalledWith("deck_note_attach", {
+      deckId: 7,
+      noteId: 3,
+      oracleId: "o-bolt",
+    });
+
+    await ipc.deckNoteDetach(7, 3, "o-bolt");
+    expect(invoke).toHaveBeenLastCalledWith("deck_note_detach", {
+      deckId: 7,
+      noteId: 3,
+      oracleId: "o-bolt",
+    });
+
+    invoke.mockResolvedValue(undefined);
+    await ipc.deckNoteDelete(7, 3);
+    expect(invoke).toHaveBeenLastCalledWith("deck_note_delete", { deckId: 7, id: 3 });
+
+    // The whole list in the order the reader put it, passed through untouched: `sort_order` is
+    // rewritten from this array's positions, so a wrapper that sorted or deduped here would
+    // rearrange a deck's notes behind the reader's back.
+    await ipc.deckNoteReorder(7, [3, 1, 2]);
+    expect(invoke).toHaveBeenLastCalledWith("deck_note_reorder", { deckId: 7, ids: [3, 1, 2] });
+
+    // **The one read in the family that is not deck-scoped**, and the second shape. A card
+    // opened from the collection or from search has no deck in hand, so the row carries the deck
+    // it was found in — `deckName` is the field that would otherwise be missing, and a bare
+    // `deckId` names nothing to a reader looking at five decks.
+    const found: CardNote = {
+      id: 3,
+      deckId: 7,
+      deckName: "Rakdos Sacrifice",
+      title: "Mana base",
+      body: "Fourteen sources is the floor.",
+    };
+    invoke.mockResolvedValue([found]);
+    expect(await ipc.cardNotes("o-bolt")).toEqual([found]);
+    expect(invoke).toHaveBeenLastCalledWith("card_notes", { oracleId: "o-bolt" });
+
+    // **And the crate declares every one of them**, which is `combos_for_card`'s fence below
+    // applied to a whole family at once. The expected list is read out of `ipc.ts` rather than
+    // written down here, so this cannot pass by agreeing with itself; containment rather than
+    // equality, `finishBearing`'s rule, since a command may declare `state` and never be sent
+    // it. Both length guards are what stop a parser that found nothing from reading as a pass —
+    // a `pub async fn` this parser cannot see is a green test over an empty list.
+    expect(deckNotesRs.length).toBeGreaterThan(1_000);
+    for (const command of [
+      "deck_notes",
+      "deck_note_create",
+      "deck_note_update",
+      "deck_note_delete",
+      "deck_note_attach",
+      "deck_note_detach",
+      "deck_note_reorder",
+      "card_notes",
+    ]) {
+      const sent = payloadKeys(ipcSource, command).map(snake);
+      const declared = commandParams(deckNotesRs, command);
+      expect(sent, `nothing parsed out of ipc.ts for \`${command}\``).not.toHaveLength(0);
+      expect(
+        declared,
+        `\`${command}\` is not declared \`pub async fn\` in deck_notes.rs`,
+      ).not.toHaveLength(0);
+      for (const key of sent) {
+        expect(declared, `\`${command}\` is sent \`${key}\` and does not declare it`).toContain(
+          key,
+        );
+      }
+    }
   });
 
   /**
@@ -3839,6 +4032,43 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     // printing's TCGplayer product ids under `id`"* above: this row compares struct fields and
     // would say nothing about either.
     ["TcgplayerIds", cardRs, "TcgplayerIds"],
+    // **The notes feature's three, added with it** (2026-09-10, issue #447) — three rows for two
+    // commands, because `DeckNoteCard` is **nested** and that is `OptimizePrinting`'s reason at
+    // the scale it bites hardest: a note's `cards` list is the whole content of a submenu, a
+    // chip and the deck's per-card marks, so a field renamed one level down leaves `DeckNoteRow`
+    // agreeing field for field while every card the note names arrives `undefined`.
+    //
+    // **On this table and not on `mirrors` above**, for `ShareRow`'s reason twice over and
+    // deliberately rather than by omission: neither draws a picture — a note is prose about a
+    // card, and a row carrying an art URL per attachment would be paying for a wall nobody
+    // renders — and the largest of the three is eight fields against that table's floor of ten.
+    // Both of those rules are properties of a card *wall's* row rather than of a mirror.
+    //
+    // **`DeckNote`/`DeckNoteRow` and `CardNote`/`CardNoteRow` are the two spellings that differ**,
+    // `DeckCard`/`DeckCardRow`'s precedent, so both pairs are written out rather than assumed.
+    // They are also two shapes over one table asking opposite questions — a `DeckNote` carries
+    // the cards it names, a `CardNote` carries the deck it was found in — so a row copied from
+    // one to the other would compare a struct with the wrong half of the feature.
+    //
+    // What a drift costs is the quiet kind this table exists for, and every one of it is a band
+    // that still draws. A renamed `title` reads `undefined`, `noteTitle` takes its
+    // body's-first-line arm, and every note in the app is headed by its own opening sentence —
+    // which is a **designed** state for a note with no heading, so the bug and the feature are
+    // the same picture. A renamed `body` empties `parseNoteBody` and draws a row with a title
+    // and nothing under it, which reads as a note somebody left blank. A renamed `sortOrder`
+    // makes the reader's own arrangement `undefined` on every row and the list stops
+    // remembering a drag. A renamed `oracleId` one level down gives `notedOracleIds` a `Set` of
+    // `undefined`, so **no** card in any deck draws the note glyph — the mark simply never
+    // appears, which is indistinguishable from a reader who has written no notes. And a renamed
+    // `deckName` leaves the card modal listing five notes under five blanks.
+    //
+    // ⚠️ **`rustFields` needs one field per line and a closing brace of its own**, so a
+    // `DeckNoteCard` written as a one-line struct fails this row with `has no closing brace` for
+    // a mirror that is perfectly correct — the CRLF trap above, arriving from the other
+    // direction. `cargo fmt` expands it, and CI runs `cargo fmt --check`.
+    ["DeckNote", deckNotesRs, "DeckNoteRow"],
+    ["DeckNoteCard", deckNotesRs, "DeckNoteCard"],
+    ["CardNote", deckNotesRs, "CardNoteRow"],
   ];
 
   it.each(plainMirrors)(

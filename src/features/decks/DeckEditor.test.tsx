@@ -15,6 +15,7 @@ import type {
   DeckCard,
   DeckCategory,
   DeckDetail,
+  DeckNote,
   DeckRow,
   DeckLabel,
   FormatSpec,
@@ -146,6 +147,10 @@ const prefetchImages = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 // deck's group. `collectionAdd` and `deckCategoryCreate` above are the fourth and fifth, and are
 // already here for the card menu and the quick zones.
 const cardDetail = vi.hoisted(() => vi.fn());
+/** The Notes band's read — **hoisted where the five note writes below are not**, because it is
+ *  the one of the six a test in this file configures: which cards a note names is what puts the
+ *  note glyph on a card in all four views. */
+const deckNotes = vi.hoisted(() => vi.fn());
 const collectionList = vi.hoisted(() => vi.fn());
 const collectionToDeck = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
@@ -180,6 +185,20 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckTokenSet: vi.fn().mockResolvedValue(undefined),
     deckTokenClear: vi.fn().mockResolvedValue(undefined),
     deckTokenAdd: vi.fn().mockResolvedValue(undefined),
+    // **The Notes band asks on every open too, for the tokens band's reason exactly** — its
+    // header counts the deck's notes whether or not the band is drawn, because that number is
+    // the reason to open it. Answered with an empty list: the band then draws its "no notes"
+    // sentence and, crucially, *no* `role="alert"`. Left off the mock the read rejects with
+    // `ipc.deckNotes is not a function`, the band draws its refusal line, and every
+    // `getByRole("alert")` in this file starts failing with "Found multiple elements". The five
+    // writes are here for the same reason: a press that reached an undefined function would fail
+    // as a write refusal rather than as the missing double it is.
+    deckNotes,
+    deckNoteCreate: vi.fn().mockResolvedValue(undefined),
+    deckNoteUpdate: vi.fn().mockResolvedValue(undefined),
+    deckNoteDelete: vi.fn().mockResolvedValue(undefined),
+    deckNoteAttach: vi.fn().mockResolvedValue(undefined),
+    deckNoteDetach: vi.fn().mockResolvedValue(undefined),
     formatSpecs,
     searchCards,
     searchOpen,
@@ -268,7 +287,6 @@ const DECK: DeckRow = {
   // The four v8 deck columns. Every real row carries all four, so the fixture does too.
   coverKind: "card_art",
   folderId: null,
-  notes: null,
   theoryEnabled: false,
   virtualOnly: false,
   theoryMarkExact: true,
@@ -287,6 +305,9 @@ const DECK: DeckRow = {
   separateXGroup: false,
   tokensOpen: false,
   statsOpen: true,
+  // Schema v43, and `0` is the column's own default: the Notes band is new, so no deck on any
+  // disk has ever shown one and a shut default takes nothing from anybody.
+  notesOpen: false,
   // Schema v16, and `0` is `AUTO_CATEGORY` — the column's own default and the state every deck
   // is born in: an add that names no pile is filed by what the card does. A test about the
   // setting overrides it through `detail()`, which is the *only* way to move it now — it was a
@@ -294,6 +315,23 @@ const DECK: DeckRow = {
   defaultCategoryId: 0,
   bracket: 0,
 };
+
+/** One row of what `deck_notes` answers — the Notes band's read, and the source of the per-card
+ *  note mark through `notedOracleIds`. `cards` empty is the ordinary case: a note about the mana
+ *  base names no card at all, which is exactly the note this feature exists for. */
+function noteRow(over: Partial<DeckNote> = {}): DeckNote {
+  return {
+    id: 1,
+    deckId: DECK.id,
+    title: "Why four",
+    body: "Because it is the best card in the format.",
+    sortOrder: 0,
+    cards: [],
+    createdAt: 0,
+    updatedAt: 0,
+    ...over,
+  };
+}
 
 /** The picker, as `format_specs` serves it — every enabled row in `sort_order`. */
 const PICKER: FormatSpec[] = [spec("modern"), spec("commander"), spec("gladiator"), spec("casual")];
@@ -786,6 +824,9 @@ beforeEach(() => {
       detail({}, [bolt(), card({ name: "Bear", typeLine: "Creature — Bear", quantity: 2 })]),
     );
   deckUpdate.mockReset().mockResolvedValue(DECK);
+  // No notes unless a test says otherwise — which is what keeps the band silent and, since
+  // 2026-09-10, keeps the note glyph off every card in every other case here.
+  deckNotes.mockReset().mockResolvedValue([]);
   deckSetCardQuantity.mockReset().mockResolvedValue({ id: 1, quantity: 0, removed: true });
   // What a cut gave back: the row in `Recently removed` the copies landed in, and how many.
   // `deckCardId` is `null` from this direction by design — the caller handed the id in, and a
@@ -1855,6 +1896,120 @@ describe("DeckEditor", () => {
 
     expect(asOf.compareDocumentPosition(tokens) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(tokens.compareDocumentPosition(stats) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  /**
+   * **Notes is the third band and the last thing on the page** (schema v43, issue #447).
+   *
+   * The constraint is the neighbours' and is unchanged: nothing may come between the deck and the
+   * price strip, because the strip is where the remove tray is drawn for the length of a drag. So
+   * all three bands are below it and the three are only ever ordered against each other — which
+   * is why the strip is asserted here as well as the stats band. An assertion that only said
+   * "stats before notes" would stay green if somebody moved the pair above the strip together,
+   * and that is the one arrangement that costs a reader something.
+   *
+   * The reader's reason for last is that a notebook is opened deliberately: the token wall is a
+   * list of cards the deck is about to want, the stats band is charts read at a glance, and a
+   * note is read by somebody who came to read it.
+   */
+  it("draws the notes band under the price strip and under the stats band", async () => {
+    await open();
+
+    const asOf = screen.getByText(/prices as of the last/i);
+    const stats = screen.getByRole("region", { name: "Deck stats" });
+    const notes = screen.getByRole("region", { name: "Notes" });
+
+    expect(asOf.compareDocumentPosition(notes) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(stats.compareDocumentPosition(notes) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  /**
+   * **The press writes `decks.notes_open` through the ordinary `deck_update`**, which is the one
+   * piece of this band's wiring nothing else covers: `DeckNotesPanel.test.tsx` owns the
+   * disclosure's own behaviour and has no deck to write to, and this file owns the deck the
+   * answer is stored on. `DeckPatch` names no field per write, so the column is free.
+   *
+   * **Shut on arrival, unlike the stats band beside it.** `decks.notes_open` is `DEFAULT 0` — the
+   * band is new and no deck has ever shown one, so a shut default takes nothing from anybody,
+   * where `stats_open`'s `DEFAULT 1` was the opposite question with the opposite answer.
+   */
+  it("writes the notes band's open state onto the deck", async () => {
+    await open();
+
+    const notes = screen.getByRole("region", { name: "Notes" });
+    const disclosure = within(notes).getByRole("button", { name: "Notes" });
+    expect(disclosure).toHaveAttribute("aria-expanded", "false");
+
+    await userEvent.click(disclosure);
+    await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { notesOpen: true }));
+  });
+
+  /**
+   * **The note mark, in all four views at once — the half of issue #447 that is "built but
+   * unwired" until something here draws it.**
+   *
+   * The set is `notedOracleIds` over the notes this editor already reads, so there is no
+   * *"which cards in this deck have notes"* command and there must not be one: the band holds
+   * every note and every note holds its oracle ids, and a second command would be a second
+   * source of truth for a fact already in hand.
+   *
+   * **The two card-face views and the text view say it in words rather than only as a glyph.**
+   * The glyph on those three is drawn inside `QuantityTag`, which is `aria-hidden`, and an
+   * `aria-label` replaces an element's content for naming purposes — so `deckCardName`'s clause
+   * is the whole of what a keyboard reader gets, and without it the mark reaches a sighted reader
+   * and nobody else, with nothing anywhere going red. The table is the exception on purpose: a
+   * cell is not swallowed by a row's label, so `NoteMark` carries its own name there.
+   *
+   * The **computed** name is asserted, never its parts — a CSS `gap` is not a word separator to
+   * name computation.
+   */
+  it("marks a noted card in all four views, and leaves its neighbour alone", async () => {
+    deckNotes.mockResolvedValue([
+      noteRow({ cards: [{ oracleId: "o-Lightning Bolt", name: "Lightning Bolt" }] }),
+    ]);
+    const user = userEvent.setup();
+    await open();
+
+    /** The three views that draw a card as one named button. */
+    const bothCards = async () => {
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: /^Lightning Bolt/ })).toHaveAccessibleName(
+          /has a note/,
+        ),
+      );
+      expect(screen.getByRole("button", { name: /^Bear/ })).not.toHaveAccessibleName(
+        /has a note/,
+      );
+    };
+
+    await bothCards();
+    await pickOption(user, "View", "Grid");
+    await bothCards();
+    await pickOption(user, "View", "Text");
+    await bothCards();
+
+    // The table draws the glyph beside the label's dot instead, and it is the one view where the
+    // mark names itself — one card noted, so one mark, and the neighbour's absence is the other
+    // half of the same count.
+    await pickOption(user, "View", "Table");
+    await waitFor(() =>
+      expect(screen.getAllByRole("img", { name: "Has a note" })).toHaveLength(1),
+    );
+  });
+
+  /**
+   * An **orphan** printing — one whose card has left the corpus — carries no `oracleId`, and a
+   * note attaches by oracle id and by nothing else. A loose test would mark every such card,
+   * which is why the guard is `cardControl.ts`'s `deckCardNoted` and is asked in one place for
+   * all four views.
+   */
+  it("never marks a card that has no oracle id", async () => {
+    deckGet.mockResolvedValue(detail({}, [bolt({ name: "Ghost", oracleId: null, quantity: 1 })]));
+    deckNotes.mockResolvedValue([noteRow({ title: "About nothing in particular" })]);
+    await open();
+
+    const ghost = await screen.findByRole("button", { name: /^Ghost/ });
+    expect(ghost).not.toHaveAccessibleName(/has a note/);
   });
 
   /**

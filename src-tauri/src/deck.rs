@@ -315,10 +315,13 @@ pub struct DeckInput {
     /// and a create that refused the combination would be refusing a deck over a filter.
     pub game_key: String,
     /// The one-line blurb the gallery tile shows.
+    ///
+    /// **The deck's only prose at create time, since user schema v43.** `notes` sat beside it
+    /// here until then and was the other half of a pair this doc comment spent three fields
+    /// contrasting — a caption and a notebook. The notebook is `deck_notes` now: many rows,
+    /// each able to name any number of cards, none of them reachable from a create. A deck is
+    /// born with no notes for the reason it is born with no cards.
     pub description: Option<String>,
-    /// The long-form notes — the v8 column, and **not** [`Self::description`]. Two columns
-    /// because they are two things: a caption and a notebook.
-    pub notes: Option<String>,
     /// The card whose art crop the tile draws.
     ///
     /// A **soft** reference, like every card id in a user table, so nothing is checked here:
@@ -407,16 +410,6 @@ pub struct DeckPatch {
     /// by the rule above, a `null` here means "leave it". A reader looking for the way to put a
     /// deck back at the root of the tree wants that command.
     pub folder_id: Option<i64>,
-    /// The deck's long-form notes — the v8 column, and **not** [`Self::description`], which is
-    /// the one-line blurb the gallery tile shows. Two columns because they are two things: a
-    /// caption and a notebook.
-    ///
-    /// **Neither column is "the create-time one" and neither is "the settings-only one."** This
-    /// line used to split them that way — it said `description` was what the "New deck" dialog
-    /// fills — and that stopped being a useful distinction the moment [`DeckInput`] grew to
-    /// carry both: the two dialogs now render one form, so every deck-level field is reachable
-    /// from whichever of them the user is in. What tells these two apart is what they hold.
-    pub notes: Option<String>,
     /// Whether this deck keeps a theory list beside its live one.
     ///
     /// **Switching it on MOVES the live list into theory when there is nothing in it**, in this
@@ -469,6 +462,22 @@ pub struct DeckPatch {
     /// stats band has been on screen for every existing deck since before it had a control, and
     /// a rung may not take a band away from a reader who did not ask.
     pub stats_open: Option<bool>,
+    /// Whether the editor's **Notes** band is expanded — user schema v43.
+    ///
+    /// The third of these and every rule the two above it carry: storage only on this side, on
+    /// this patch rather than on [`DeckViewState`] because a disclosure a reader opens once is
+    /// worth an `updated_at` where a tab, a grouping and a sort are not, and **no arm in
+    /// [`record_deck_edit`]** — `auditText.ts`'s `default` arm would word it *Changed the
+    /// deck*, which is true of every edit and therefore never wrong and never useful.
+    ///
+    /// ⚠️ **The column's `DEFAULT` is `0`, which is [`Self::tokens_open`]'s answer and not
+    /// [`Self::stats_open`]'s** — and the two rungs asked the same question honestly and
+    /// answered it opposite ways. What decides it is whether the upgrade changes what is on
+    /// screen: v42 defaulted the stats band open because it was *already* drawn for every deck
+    /// on every disk, where the Notes band is new and no deck has ever shown one. A collapsed
+    /// default takes nothing from anybody. A patch says nothing about defaults either way:
+    /// absent still means "leave it".
+    pub notes_open: Option<bool>,
     /// Which of this deck's categories an add that names none lands in — the editor's "Add to"
     /// answer, asked in the deck's settings.
     ///
@@ -618,8 +627,6 @@ pub struct DeckRow {
     pub updated_at: i64,
     /// Which folder the deck is filed in, or `None` for the root of the tree.
     pub folder_id: Option<i64>,
-    /// The deck's long-form notes — the v8 column, not [`Self::description`].
-    pub notes: Option<String>,
     /// Whether this deck keeps a theory list beside its live one.
     ///
     /// Read here as well as written through [`DeckPatch`] because a switch the app can set and
@@ -717,6 +724,22 @@ pub struct DeckRow {
     /// takes the column default, which here is *open*. That is the right answer rather than an
     /// accident of the DDL: a copy shows its stats, exactly as the original does.
     pub stats_open: bool,
+    /// Whether the editor's **Notes** band is expanded — user schema v43.
+    ///
+    /// The third disclosure on this row and every rule its two neighbours carry: read here as
+    /// well as written through [`DeckPatch`], because a switch the app can set and never see is
+    /// a switch nothing can draw; per deck, because it is an answer about how *this* list is
+    /// read rather than about where the reader's cursor was.
+    ///
+    /// ⚠️ **Every existing deck is *collapsed*, which is the column's `DEFAULT 0` and
+    /// [`Self::tokens_open`]'s answer rather than [`Self::stats_open`]'s.** The band is new —
+    /// no deck on any disk has ever shown one — so shut costs nobody anything, where v42 could
+    /// not default the stats band the same way without closing a band readers were already
+    /// reading. See [`DeckPatch::notes_open`], where the trade is written out.
+    ///
+    /// **[`duplicate_deck`] deliberately does not carry it**, both neighbours' note — so a copy
+    /// takes the column default, which here is *shut*.
+    pub notes_open: bool,
     /// Which of this deck's categories an add that names none lands in — schema v16, and `0`
     /// for **Auto**, where the card's own text decides.
     ///
@@ -1029,11 +1052,11 @@ static DECK_SELECT: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
                          AND dc.variant = 'live'
                          AND cat.is_active = 1
                          AND cat.kind IN ('main','commander','maybe')), 0),
-            d.updated_at, d.folder_id, d.notes, d.theory_enabled,
+            d.updated_at, d.folder_id, d.theory_enabled,
             d.last_variant, d.last_group_by, d.last_sort_by, d.separate_x_group,
             d.default_category_id, d.game_key, d.bracket, d.tokens_open,
             d.theory_mark_exact, d.theory_mark_name, d.theory_mark_unplanned,
-            d.virtual_only, d.stats_open,
+            d.virtual_only, d.stats_open, d.notes_open,
             {images}
        FROM decks d
        LEFT JOIN format_specs fs ON fs.key = d.format_key
@@ -1043,18 +1066,26 @@ static DECK_SELECT: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
 });
 
 fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
-    /// Where `DECK_SELECT`'s image columns start — one past `d.stats_open`, the
+    /// Where `DECK_SELECT`'s image columns start — one past `d.notes_open`, the
     /// last named column. Named rather than inlined for `deck_card_select`'s reason: the
     /// pairing arithmetic below is `front_face_map`'s and only the *offset* is this function's.
     ///
     /// **It moves with every column added to the end of the named list**, and it has moved
-    /// five times in a week: it read 21 until schema v37 put `tokens_open` there, 22 until v38
+    /// five times: it read 21 until schema v37 put `tokens_open` there, 22 until v38
     /// appended the first two theory marks, 24 until v39 appended the third, 25 until v40
     /// appended the deck kind, and 26 until v42 appended the stats disclosure. Forgetting to
     /// move it is not silent for `tokens_open`'s
     /// kind of column — the image reads are `Option<String>` and an `INTEGER` beside them makes
     /// rusqlite refuse the conversion rather than answer a plausible URL — but it *is* silent
     /// the other way round, which is what the comment on the image read itself describes.
+    ///
+    /// ⚠️ **v43 moved it twice and left it here, which is the one entry in that list that is
+    /// not a number changing.** The rung dropped `notes` out of the *middle* — position 12,
+    /// pulling every index above it down by one — and appended `notes_open` at the end, pushing
+    /// them back up. The two cancel exactly, so this constant reads 27 before and after and
+    /// every `r.get(n)` below it moved anyway. A reader checking the migration against this
+    /// number alone would conclude nothing had to change; the fourteen reads between
+    /// `theory_enabled` and `stats_open` are what actually shifted.
     const IMAGE_COL: usize = 27;
     Ok(DeckRow {
         id: r.get(0)?,
@@ -1069,88 +1100,109 @@ fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
         card_count: r.get(9)?,
         updated_at: r.get(10)?,
         folder_id: r.get(11)?,
-        notes: r.get(12)?,
-        theory_enabled: r.get(13)?,
-        last_variant: r.get(14)?,
-        last_group_by: r.get(15)?,
-        last_sort_by: r.get(16)?,
+        theory_enabled: r.get(12)?,
+        last_variant: r.get(13)?,
+        last_group_by: r.get(14)?,
+        last_sort_by: r.get(15)?,
         // Positional, like every read above it — a column added anywhere but the **end** of
         // `DECK_SELECT`'s list shifts every index after it, silently, into a field of the same
         // SQLite type. New columns go last here for exactly that reason, and this one is the
         // proof: it read 15 on the branch that wrote it, where v12's three did not exist yet,
         // and reading 15 after the merge would have handed a `TEXT` variant to a `bool`.
         //
-        // **Every index from here up moved down by one when schema v25 dropped `is_built`**,
-        // which is the same rule read backwards and the reason a removal is as dangerous as an
-        // addition: the column that was at 8 is gone, so leaving these numbers alone would have
-        // handed `archived`'s `INTEGER` to `card_count` and walked the whole tail off the end.
-        separate_x_group: r.get(17)?,
-        // 18, at the end of the list, for the reason written on the line above it. This one is
+        // **Every index from here up has moved down by one twice**, which is the same rule read
+        // backwards and the reason a removal is as dangerous as an addition. Schema v25 dropped
+        // `is_built` from position 8: leaving these numbers alone would have handed `archived`'s
+        // `INTEGER` to `card_count` and walked the whole tail off the end. **User schema v43
+        // dropped `notes` from position 12** and did it again — and that one is the more
+        // dangerous of the two, because `notes` was `TEXT` sitting immediately below three
+        // `TEXT` columns (`last_variant`, `last_group_by`, `last_sort_by`), so an index left
+        // alone would have handed the deck's remembered tab its grouping and answered a
+        // perfectly plausible string at every one of them.
+        separate_x_group: r.get(16)?,
+        // 17, at the end of the list, for the reason written on the line above it. This one is
         // the second proof of that rule: the branch that wrote it was cut from a head where
         // `separate_x_group` was the last column, and inserting it anywhere but here would have
         // handed an `INTEGER` category id to a `bool` with nothing going red.
-        default_category_id: r.get(18)?,
-        // 19, at the end of the list, for the reason written two comments up. Third proof of
+        default_category_id: r.get(17)?,
+        // 18, at the end of the list, for the reason written two comments up. Third proof of
         // that rule and the cheapest one to have got wrong: `game_key` is TEXT and so is
-        // `last_variant` at 14, so a column inserted beside the format — where it *reads* like
+        // `last_variant` at 13, so a column inserted beside the format — where it *reads* like
         // it belongs — would have handed a deck's variant to its game and back, with both
         // fields still holding a plausible-looking string.
-        game_key: r.get(19)?,
-        // 20, at the end of the list, for the reason written three comments up — and the
+        game_key: r.get(18)?,
+        // 19, at the end of the list, for the reason written three comments up — and the
         // fourth proof of that rule, this one from the other side of the trap. `bracket` is an
         // INTEGER and so are `archived` at 8, `card_count` at 9, `updated_at` at 10,
-        // `folder_id` at 11, `theory_enabled` at 13, `separate_x_group` at 17 and
-        // `default_category_id` at 18: a column inserted beside the deck's other *settings*,
+        // `folder_id` at 11, `theory_enabled` at 12, `separate_x_group` at 16 and
+        // `default_category_id` at 17: a column inserted beside the deck's other *settings*,
         // where it reads like it belongs, would have handed a bracket to a bool and a pile id
         // to a bracket, with every field still holding a number SQLite is perfectly happy to
         // give back.
-        bracket: r.get(20)?,
-        // 21, at the end of the named list, for the reason written five comments up — and the
+        bracket: r.get(19)?,
+        // 20, at the end of the named list, for the reason written five comments up — and the
         // fifth proof of that rule. `tokens_open` is a bool over an INTEGER column, which is
-        // what `archived` at 8, `theory_enabled` at 13 and `separate_x_group` at 17 are: put
+        // what `archived` at 8, `theory_enabled` at 12 and `separate_x_group` at 16 are: put
         // beside any of them, where a disclosure's stored state reads like it belongs, it would
         // have swapped a deck's archived flag for whether an area was open and neither field
         // would have looked wrong.
-        tokens_open: r.get(21)?,
-        // 22 and 23, at the end of the list, for the reason written six comments up — and the
+        tokens_open: r.get(20)?,
+        // 21 and 22, at the end of the list, for the reason written six comments up — and the
         // sixth and seventh proofs of that rule, this pair the most dangerous yet. Both are
-        // `bool` over an `INTEGER` column, and so are `archived` at 8, `theory_enabled` at 13,
-        // `separate_x_group` at 17 and `tokens_open` on the line above: a column inserted beside
+        // `bool` over an `INTEGER` column, and so are `archived` at 8, `theory_enabled` at 12,
+        // `separate_x_group` at 16 and `tokens_open` on the line above: a column inserted beside
         // `theory_enabled`, **where it reads like it belongs and where these two fields are
         // declared on the struct**, would have handed the theory switch to the theory mark and
         // the mark to the X group, with every field still holding a `0` or a `1` that `bool`
         // accepts without complaint. The declaration order and the read order are two different
         // things, and only this one is load-bearing.
-        theory_mark_exact: r.get(22)?,
-        theory_mark_name: r.get(23)?,
-        // 24, at the end of the list, for the reason written seven comments up — and the
+        theory_mark_exact: r.get(21)?,
+        theory_mark_name: r.get(22)?,
+        // 23, at the end of the list, for the reason written seven comments up — and the
         // eighth proof of it. Schema v39's third tier is a `bool` over an `INTEGER` column like
         // the pair above it, and the trap here is one grain sharper than theirs: the two
         // columns it most reads like it belongs beside are the two it was appended after, and
         // an index that landed on either of them would have swapped one theory mark for another
         // — three fields all holding a `0` or a `1`, all drawn on the same list, and no way to
         // tell from the row which switch the reader had actually moved.
-        theory_mark_unplanned: r.get(24)?,
-        // 25, at the end of the list, for the reason written eight comments up — and the ninth
+        theory_mark_unplanned: r.get(23)?,
+        // 24, at the end of the list, for the reason written eight comments up — and the ninth
         // proof of it, this one sharper than v39's was. Schema v40's kind is a `bool` over an
         // `INTEGER` column like the four before it, and the column it most reads like a
-        // neighbour of is `theory_enabled` at 13 — which is the **other half of the same pair**.
+        // neighbour of is `theory_enabled` at 12 — which is the **other half of the same pair**.
         // An index that landed there would not merely swap two switches, it would hand a deck's
         // kind to its own opposite: a virtual deck read as a theory deck and back, both fields
         // still holding a `0` or a `1`, and the three kinds this pair spells all still looking
         // like answers.
-        virtual_only: r.get(25)?,
-        // 26, at the end of the list, for the reason written nine comments up — and the tenth
+        virtual_only: r.get(24)?,
+        // 25, at the end of the list, for the reason written nine comments up — and the tenth
         // proof of it. Schema v42's disclosure is a `bool` over an `INTEGER` column like the
-        // five before it, and the one it most reads like a neighbour of is `tokens_open` at 21
+        // five before it, and the one it most reads like a neighbour of is `tokens_open` at 20
         // — the *other* disclosure on this row, the two of them a pair of bands in one editor.
         // An index that landed there would swap which area the reader had open for which other
         // area they had open, both fields still holding a `0` or a `1`, and the two switches
         // still looking like answers. **The declaration order is no help here either**: this
-        // field is declared beside `tokens_open` on the struct and read six positions away
+        // field is declared beside `tokens_open` on the struct and read five columns away
         // from it, which is the theory-mark pair's own note read one column further.
-        stats_open: r.get(26)?,
-        // **From 27**, last of all, for the reason written ten comments up — the
+        stats_open: r.get(25)?,
+        // 26, at the end of the list, for the reason written ten comments up — and the eleventh
+        // proof of it, with the previous two read together. User schema v43's disclosure is the
+        // **third** `bool` over an `INTEGER` column that says whether a band in this one editor
+        // is open, and the other two are at 20 and 25: an index that landed on either would
+        // swap which band the reader had open for which other band they had open, all three
+        // fields holding a `0` or a `1` and all three still looking like answers. The
+        // declaration order is no help for the same reason it is none one line up — the three
+        // are declared in a run on the struct and read 20, 25, 26.
+        //
+        // ⚠️ **And this is the read v43 could most easily have got wrong in the other
+        // direction.** The same rung *dropped* a column out of the middle of this list, so
+        // appending here without pulling the fourteen reads above it down by one would have
+        // left `notes_open` reading `stats_open`'s column and every field between
+        // `theory_enabled` and `stats_open` reading its neighbour's — a whole-row shear that
+        // types out perfectly, because the shifted pairs are TEXT-onto-TEXT and INTEGER-onto-
+        // INTEGER all the way up.
+        notes_open: r.get(26)?,
+        // **From 27**, last of all, for the reason written eleven comments up — the
         // `crate::image_uri::FRONT_FACE_COLUMNS` expressions `front_face_selects` appended, in
         // the (top-level, face) pairs `front_face_map` folds back up, one pair per variant.
         //
@@ -1702,17 +1754,19 @@ pub fn create_deck(conn: &Connection, input: &DeckInput) -> Result<DeckRow, Stri
     let virtual_only = input.virtual_only.unwrap_or(false);
     let id: i64 = tx
         .query_row(
-            "INSERT INTO decks (name, format_key, game_key, description, notes, cover_card_id,
+            // `notes` was here until user schema v43 took the column away. Nothing replaces it:
+            // a deck is born with no notes for the reason it is born with no cards, and
+            // `deck_notes` is where they go.
+            "INSERT INTO decks (name, format_key, game_key, description, cover_card_id,
                                 folder_id, theory_enabled, virtual_only,
                                 created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, unixepoch(), unixepoch())
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, unixepoch(), unixepoch())
              RETURNING id",
             params![
                 name,
                 format_key,
                 game_key,
                 input.description,
-                input.notes,
                 input.cover_card_id,
                 input.folder_id,
                 input.theory_enabled.unwrap_or(false),
@@ -1799,7 +1853,6 @@ struct DeckBefore {
     cover_kind: String,
     archived: bool,
     folder_id: Option<i64>,
-    notes: Option<String>,
     theory_enabled: bool,
     separate_x_group: bool,
     default_category_id: i64,
@@ -1921,7 +1974,7 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
     let before: DeckBefore = tx
         .query_row(
             "SELECT name, format_key, description, cover_card_id, cover_kind,
-                    archived, folder_id, notes, theory_enabled, separate_x_group,
+                    archived, folder_id, theory_enabled, separate_x_group,
                     default_category_id, game_key, bracket,
                     theory_mark_exact, theory_mark_name, theory_mark_unplanned,
                     virtual_only
@@ -1936,40 +1989,47 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                     cover_kind: r.get(4)?,
                     archived: r.get(5)?,
                     folder_id: r.get(6)?,
-                    notes: r.get(7)?,
-                    theory_enabled: r.get(8)?,
-                    separate_x_group: r.get(9)?,
-                    default_category_id: r.get(10)?,
+                    theory_enabled: r.get(7)?,
+                    separate_x_group: r.get(8)?,
+                    default_category_id: r.get(9)?,
                     // Last in the list, `DECK_SELECT`'s rule for its own reason: these reads
                     // are positional too, and `game_key` is TEXT like four of the columns
-                    // above it — and every index above moved down by one when schema v25
-                    // dropped `is_built` out of the middle of the list.
-                    game_key: r.get(11)?,
-                    // 12, at the end, same rule. `bracket` is an INTEGER and so are `archived`
-                    // at 5, `folder_id` at 6, `theory_enabled` at 8, `separate_x_group` at 9
-                    // and `default_category_id` at 10 — six columns any one of which would take
+                    // above it.
+                    //
+                    // **Every index above has moved down by one twice**: schema v25 dropped
+                    // `is_built` out of the middle of the list, and user schema v43 dropped
+                    // `notes` from position 7. The second is the quieter of the two — `notes`
+                    // was `Option<String>` and so are `description` at 2 and `cover_card_id`
+                    // at 3, so an index left alone would have recorded a history row comparing
+                    // the deck's blurb against its cover and reported a change that never
+                    // happened.
+                    game_key: r.get(10)?,
+                    // 11, at the end, same rule. `bracket` is an INTEGER and so are `archived`
+                    // at 5, `folder_id` at 6, `theory_enabled` at 7, `separate_x_group` at 8
+                    // and `default_category_id` at 9 — five columns any one of which would take
                     // a bracket without complaint.
-                    bracket: r.get(12)?,
-                    // 13, 14 and 15, at the end, same rule — and the trio with the least
+                    bracket: r.get(11)?,
+                    // 12, 13 and 14, at the end, same rule — and the trio with the least
                     // standing
                     // between it and a silent swap, `deck_row`'s note one screen up: all three
                     // are
-                    // `bool` over `INTEGER`, and so are `archived` at 5, `theory_enabled` at 8
-                    // and `separate_x_group` at 9. A crossed pair here would not fail, it would
+                    // `bool` over `INTEGER`, and so are `archived` at 5, `theory_enabled` at 7
+                    // and `separate_x_group` at 8. A crossed pair here would not fail, it would
                     // record a history row saying the reader turned a *different* mark on —
                     // which, now that there are three of them drawn side by side on one list,
                     // is a lie the reader is in the best possible position to be confused by.
-                    theory_mark_exact: r.get(13)?,
-                    theory_mark_name: r.get(14)?,
-                    theory_mark_unplanned: r.get(15)?,
-                    // 16, at the end, same rule — and the one read on this list where a
+                    theory_mark_exact: r.get(12)?,
+                    theory_mark_name: r.get(13)?,
+                    theory_mark_unplanned: r.get(14)?,
+                    // 15, at the end, same rule — and the one read on this list where a
                     // crossed index costs more than a wrong history row. This value decides
                     // whether the transition below **files a drawer of the reader's cardboard
                     // into `Recently removed` and deletes the deck's group**, so an index that
-                    // landed on `theory_enabled` at 8 would make a deck's copies move because
-                    // the reader switched their plan on. Nine `bool`-over-`INTEGER` columns are
-                    // now in this SELECT and only the position tells them apart.
-                    virtual_only: r.get(16)?,
+                    // landed on `theory_enabled` at 7 would make a deck's copies move because
+                    // the reader switched their plan on. Seven `bool`-over-`INTEGER` columns
+                    // are in this SELECT — `archived`, `theory_enabled`, `separate_x_group`,
+                    // the three marks and this one — and only the position tells them apart.
+                    virtual_only: r.get(15)?,
                 })
             },
         )
@@ -2014,51 +2074,63 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 -- what puts that row back on the only word this app means. Bound rather than
                 -- spelled, so the word this writes and the word `cover_value` reads are one
                 -- constant.
-                cover_kind = CASE WHEN ?5 IS NULL THEN cover_kind ELSE ?10 END,
+                cover_kind = CASE WHEN ?5 IS NULL THEN cover_kind ELSE ?9 END,
                 archived = coalesce(?6, archived),
                 folder_id = coalesce(?7, folder_id),
-                notes = coalesce(?8, notes),
-                theory_enabled = coalesce(?9, theory_enabled),
-                -- `?11` and not `?10`: that hole is `COVER_CARD_ART` above, which is bound
+                -- `notes = coalesce(?8, notes)` stood here until user schema v43, and **its
+                -- absence is the whole of why the new commands own their own delete**: no patch
+                -- on this list can write a NULL, because `coalesce` reads a bound NULL as
+                -- leave-it, so the one column a reader could fill was the one column no
+                -- command could empty. `deck_notes` is many rows with a real delete, and there
+                -- was no precedent here to copy.
+                theory_enabled = coalesce(?8, theory_enabled),
+                -- `?10` and not `?9`: that hole is `COVER_CARD_ART` above, which is bound
                 -- rather than spelled. A new column takes the next number at the **end** of the
                 -- list, never the next one that reads free — and a *dropped* column renumbers
-                -- every hole after it, which is what v25 taking `is_built` out did to these.
-                separate_x_group = coalesce(?11, separate_x_group),
-                default_category_id = coalesce(?12, default_category_id),
-                game_key = coalesce(?13, game_key),
-                -- `?14`, the next number at the **end** of the list, which is the rule the
+                -- every hole after it, which is what v25 taking `is_built` out did to these and
+                -- what v43 taking `notes` out has done again.
+                separate_x_group = coalesce(?10, separate_x_group),
+                default_category_id = coalesce(?11, default_category_id),
+                game_key = coalesce(?12, game_key),
+                -- `?13`, the next number at the **end** of the list, which is the rule the
                 -- comment nine lines up states. The **validated** binding rather than
                 -- `patch.bracket`: `valid_bracket` ran above, and binding the raw field would
                 -- make the fence decorative on exactly the path it exists for.
-                bracket = coalesce(?14, bracket),
-                -- `?15`, the next number at the **end** of the list, which is the rule the
-                -- comment fourteen lines up states and the reason this is not `?11`'s neighbour
+                bracket = coalesce(?13, bracket),
+                -- `?14`, the next number at the **end** of the list, which is the rule the
+                -- comment fourteen lines up states and the reason this is not `?10`'s neighbour
                 -- however much it reads like one.
-                tokens_open = coalesce(?15, tokens_open),
-                -- `?16` and `?17`, the next two at the **end** for the same reason. **No
+                tokens_open = coalesce(?14, tokens_open),
+                -- `?15` and `?16`, the next two at the **end** for the same reason. **No
                 -- validated binding beside them**, unlike `bracket` above: a bool has two values
                 -- and both are answers, so there is no fence for a raw field to make decorative.
-                theory_mark_exact = coalesce(?16, theory_mark_exact),
-                theory_mark_name = coalesce(?17, theory_mark_name),
-                -- `?18`, the next number at the **end**, same rule one rung later — and the
-                -- hole where getting it wrong is cheapest to do and hardest to see: `?16` and
-                -- `?17` are the two columns it reads most like a neighbour of, and all three
+                theory_mark_exact = coalesce(?15, theory_mark_exact),
+                theory_mark_name = coalesce(?16, theory_mark_name),
+                -- `?17`, the next number at the **end**, same rule one rung later — and the
+                -- hole where getting it wrong is cheapest to do and hardest to see: `?15` and
+                -- `?16` are the two columns it reads most like a neighbour of, and all three
                 -- take the same `Option<bool>`, so a crossed number is an UPDATE that succeeds
                 -- and moves the wrong switch.
-                theory_mark_unplanned = coalesce(?18, theory_mark_unplanned),
-                -- `?19`, the next number at the **end**, same rule one rung later — and the
+                theory_mark_unplanned = coalesce(?17, theory_mark_unplanned),
+                -- `?18`, the next number at the **end**, same rule one rung later — and the
                 -- one hole on this list that is not written from the patch field of the same
-                -- name. Both this and `?9` are bound from [`deck_kind`]'s answer rather than
+                -- name. Both this and `?8` are bound from [`deck_kind`]'s answer rather than
                 -- from `patch`, which is what makes `theory_enabled = 1, virtual_only = 1` a
                 -- state no statement here can produce. Binding the raw fields would make that
                 -- fence decorative on exactly the path it exists for — `bracket`'s note eight
                 -- lines up, read for a rule about a *pair* rather than about a range.
-                virtual_only = coalesce(?19, virtual_only),
-                -- `?20`, the next number at the **end**, same rule one rung later — and
-                -- `?15`'s trap read one disclosure further: `tokens_open` is the hole this
+                virtual_only = coalesce(?18, virtual_only),
+                -- `?19`, the next number at the **end**, same rule one rung later — and
+                -- `?14`'s trap read one disclosure further: `tokens_open` is the hole this
                 -- most reads like a neighbour of, both are `Option<bool>`, and a crossed
                 -- number is an UPDATE that succeeds and opens the wrong band.
-                stats_open = coalesce(?20, stats_open),
+                stats_open = coalesce(?19, stats_open),
+                -- `?20`, the next number at the **end**, same rule one rung later — and the
+                -- trap above read once more, now with three holes rather than two: `?14`,
+                -- `?19` and this one are the three disclosures of one editor, all
+                -- `Option<bool>`, and a crossed number among them is an UPDATE that succeeds
+                -- and opens a band the reader did not press.
+                notes_open = coalesce(?20, notes_open),
                 updated_at = unixepoch()
               WHERE id = ?1",
             params![
@@ -2069,8 +2141,7 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 patch.cover_card_id,
                 patch.archived,
                 patch.folder_id,
-                patch.notes,
-                // **The resolved half of the pair, not `patch.theory_enabled`** — see `?19`
+                // **The resolved half of the pair, not `patch.theory_enabled`** — see `?18`
                 // below and [`deck_kind`].
                 theory_enabled,
                 COVER_CARD_ART,
@@ -2084,6 +2155,7 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 patch.theory_mark_unplanned,
                 virtual_only,
                 patch.stats_open,
+                patch.notes_open,
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -2370,13 +2442,14 @@ fn record_deck_edit(
     if let Some(to) = patch.archived.filter(|a| *a != before.archived) {
         field("archived", json!(before.archived), json!(to))?;
     }
-    if let Some(to) = patch
-        .notes
-        .as_deref()
-        .filter(|n| Some(*n) != before.notes.as_deref())
-    {
-        field("notes", json!(before.notes), json!(to))?;
-    }
+    // **`notes` had an arm here until user schema v43, and no arm replaces it.** The column is
+    // gone; what a note is now is a `deck_notes` row, and `deck_notes.rs` writes its own
+    // history under `field: "note"` with an `action` beside it — a create, an edit, a delete
+    // and the two attachment verbs are five events where this was one. **`auditText.ts`'s
+    // `case "notes"` stays where it is regardless**: history rows are durable, every row a
+    // reader wrote before v43 still says `notes`, and deleting that arm would demote years of
+    // history to the default *Changed the deck*. This is the removal of a **writer**, not of a
+    // vocabulary.
     // One row, whether or not the theory list was seeded above: the seeding is part of
     // switching the list on, not a second edit, and N `add` rows for one press would read as a
     // deck somebody typed out.
@@ -2848,9 +2921,16 @@ struct CopiedCard {
 /// how a copy said it was a draft, and an empty group says it better: it is the same sentence,
 /// stated as a fact about where the cards are rather than as a flag beside them.
 ///
-/// Everything that describes the deck rather than its state — format, description, cover, notes,
+/// Everything that describes the deck rather than its state — format, description, cover,
 /// which folder it is filed in, whether it keeps a theory list, whether it groups its X cards,
 /// which bracket it is — comes across, so the copy looks like what was copied.
+///
+/// **`notes` was on that list until user schema v43 and its replacement is not**, which is a
+/// change of substance rather than of spelling. A single paragraph was a property of the deck
+/// and copied like `description`; `deck_notes` is a table of rows the reader wrote deliberately,
+/// each able to name cards, and copying it would need the same two id maps the categories and
+/// labels below need — for rows nobody asked to have twice. A copy is a draft, and a draft
+/// starts with an empty notebook.
 /// `separate_x_group` is on that side of the line for the plainest reason available: it decides
 /// how the list is *read*, and a copy that reads differently from its original is a surprise
 /// nobody asked for.
@@ -2924,12 +3004,12 @@ pub fn duplicate_deck(conn: &Connection, id: i64) -> Result<DeckRow, String> {
             // keeps the pair the two of them spell intact across the copy: the source's kind is
             // the copy's kind, whichever of the three it is.
             "INSERT INTO decks (name, format_key, description, cover_kind, cover_card_id,
-                                folder_id, notes, theory_enabled,
+                                folder_id, theory_enabled,
                                 separate_x_group, bracket, theory_mark_exact, theory_mark_name,
                                 theory_mark_unplanned, virtual_only,
                                 archived, created_at, updated_at)
              SELECT name || ' (copy)', format_key, description, cover_kind, cover_card_id,
-                    folder_id, notes, theory_enabled, separate_x_group,
+                    folder_id, theory_enabled, separate_x_group,
                     bracket, theory_mark_exact, theory_mark_name, theory_mark_unplanned,
                     virtual_only,
                     0, unixepoch(), unixepoch()
@@ -9035,7 +9115,6 @@ mod tests {
                 format_key: "modern".to_owned(),
                 game_key: "paper".to_owned(),
                 description: Some("Fast red".to_owned()),
-                notes: Some("Skewers over Bolts in game two.".to_owned()),
                 cover_card_id: Some("bolt-lea".to_owned()),
                 folder_id: Some(folder),
                 theory_enabled: Some(true),
@@ -9047,10 +9126,10 @@ mod tests {
         assert_eq!(deck.name, "Burn", "still trimmed by `valid_name`");
         assert_eq!(deck.format_key, "modern");
         assert_eq!(deck.description.as_deref(), Some("Fast red"));
-        assert_eq!(
-            deck.notes.as_deref(),
-            Some("Skewers over Bolts in game two."),
-            "the notebook and the caption are two columns and both arrive at create"
+        assert!(
+            !deck.notes_open,
+            "and the Notes band starts shut — user schema v43's `DEFAULT 0`, never a Rust \
+             fallback, and the opposite of `stats_open` one column along"
         );
         assert_eq!(deck.cover_card_id.as_deref(), Some("bolt-lea"));
         assert_eq!(
@@ -9229,7 +9308,6 @@ mod tests {
                 format_key: "modern".to_owned(),
                 game_key: "paper".to_owned(),
                 description: Some("Fast red".to_owned()),
-                notes: Some("Skewers over Bolts in game two.".to_owned()),
                 cover_card_id: Some("bolt-lea".to_owned()),
                 folder_id: Some(folder),
                 theory_enabled: Some(true),
@@ -9768,7 +9846,6 @@ mod tests {
             card_count: 60,
             updated_at: 1_800_000_000,
             folder_id: Some(7),
-            notes: None,
             theory_enabled: true,
             // **Not all `true`, and not all `false`.** Schema v38 defaults its two to 1 and v39
             // its one, so a matched trio would read correct on a wire that carried one field
@@ -9804,6 +9881,15 @@ mod tests {
             // it: this column defaults open, so `true` is what every deck in every database
             // carries and a field that never left Rust would read correct on all of them.
             stats_open: false,
+            // `true` rather than the column's `DEFAULT 0`, sixth application of that rule — and
+            // **the value that separates the three disclosures from one another here**. This
+            // row now carries three `bool`s that all mean "is a band in the editor open", read
+            // at 20, 25 and 26 by `deck_row`; `tokens_open` and this one are `true` where
+            // `stats_open` is `false`, so no single crossed pair among the three leaves the
+            // object unchanged. The **keys** below are what tell `tokensOpen` from `notesOpen`,
+            // which share a value because three booleans cannot be pairwise distinct — the
+            // theory marks' own note, one set of fields along.
+            notes_open: true,
             // Two keys, both real URLs, because this is the one field on the row whose *shape*
             // crosses the boundary rather than a scalar: `Option<BTreeMap>` has to reach
             // TypeScript as an object of variant keys and not as a list or a bare string, and
@@ -9828,7 +9914,7 @@ mod tests {
                 "coverKind": "card_art",
                 "coverArtist": "Christopher Rush", "archived": false,
                 "cardCount": 60, "updatedAt": 1800000000,
-                "folderId": 7, "notes": null, "theoryEnabled": true,
+                "folderId": 7, "theoryEnabled": true,
                 // Schema v38's pair and v39's third, not all agreeing: all three default to
                 // `1`, so a matched trio would be the answer whether or not any column
                 // reached the wire — and these three are the only fields on this row a crossed
@@ -9872,6 +9958,13 @@ mod tests {
                 // would swap two bools of the same type in one editor and change nothing about
                 // the shape of this object.
                 "statsOpen": false,
+                // User schema v43, and `notesOpen` rather than `notes_open`, `tokensOpen`'s
+                // reason two keys up — the Notes band reads this to know whether to draw itself
+                // open. **The third disclosure key on this object**, which is what makes the
+                // pair's note above a trio's: `deck_row` reads the three at 20, 25 and 26, a
+                // crossed index among them succeeds silently, and only the values (`true`,
+                // `false`, `true`) and these three keys tell them apart.
+                "notesOpen": true,
                 // The cover printing's picture, spelled out key by key: this is the deck
                 // gallery's only way to draw a cover on web and on the phone, and it is a map
                 // rather than a URL because `LIST_VARIANTS` decides what a row carries.
@@ -9905,6 +9998,12 @@ mod tests {
         // `src/lib/ipc.ts` mirrors, and a wrong one here is not a compile error on either side:
         // `#[serde(default)]` would read a misspelled field as an omitted one and the deck would
         // simply come out unconfigured.
+        //
+        // **`notes` was in this payload until user schema v43 and the key below is what pins
+        // that it has gone.** `DeckInput` is not on `ipc.test.ts`'s mirror table — only
+        // `DeckRow` is — so these hand-written assertions are the *only* fence on this struct's
+        // shape, and a create still sending a notes paragraph has to be read as the
+        // `#[serde(default)]` no-op it now is rather than silently accepted.
         let whole: DeckInput = serde_json::from_str(
             r#"{"name":"Burn","formatKey":"modern","gameKey":"arena","description":"Fast red",
                 "notes":"Sideboard plan","coverCardId":"bolt-lea","folderId":7,
@@ -9912,7 +10011,6 @@ mod tests {
         )
         .expect("the create payload, carrying a whole deck");
         assert_eq!(whole.description.as_deref(), Some("Fast red"));
-        assert_eq!(whole.notes.as_deref(), Some("Sideboard plan"));
         assert_eq!(whole.cover_card_id.as_deref(), Some("bolt-lea"));
         assert_eq!(whole.folder_id, Some(7));
         assert_eq!(whole.theory_enabled, Some(true));
@@ -10221,8 +10319,11 @@ mod tests {
     /// **Both disclosures are moved in the same test, in opposite directions**, which is what
     /// no assertion about one of them alone can do: `tokens_open` and `stats_open` are two
     /// `bool`s over two `INTEGER` columns, adjacent in `DeckPatch`, in `DeckRow` and in the
-    /// table, read six positions apart by `deck_row`, and bound to two `?` holes five apart in
-    /// `update_deck`. Every one of those is a place a crossed pair succeeds silently.
+    /// table, read five columns apart by `deck_row` (20 and 25), and bound to two `?` holes
+    /// five apart in `update_deck` (`?14` and `?19`). Every one of those is a place a crossed
+    /// pair succeeds silently. `notes_open` is the third of them since user schema v43 and has
+    /// [`the_notes_disclosure_round_trips_and_is_not_recorded`] to itself, which moves it
+    /// against both of these for the same reason.
     ///
     /// **No history row, which is the other half of `tokens_open`'s rule**: a disclosure is
     /// not an audited edit, `record_deck_edit` has no arm for either flag, and `auditText.ts`'
@@ -10316,6 +10417,104 @@ mod tests {
         );
     }
 
+    /// The Notes disclosure, end to end — and **`false` on a new deck is the assertion**.
+    ///
+    /// [`the_stats_disclosure_round_trips_and_is_not_recorded`]'s job for user schema v43, with
+    /// the starting value back the way `tokens_open` has it. The two rungs asked one question
+    /// and answered it opposite ways, and which answer applies turns on whether the upgrade
+    /// changes what is on screen: v42 defaulted the stats band **open** because it was already
+    /// drawn for every deck on every disk, where the Notes band is new and no deck has ever
+    /// shown one. A `DEFAULT 1` here would have opened a band under every reader in the
+    /// database, and a `create_deck` reading a Rust fallback instead of the column would do the
+    /// same to every new deck.
+    ///
+    /// **All three disclosures are moved in one test and no two of them agree**, which is what
+    /// no assertion about a pair can do now that there are three. They are three `bool`s over
+    /// three `INTEGER` columns, declared in a run in `DeckPatch` and in `DeckRow`, read at 20,
+    /// 25 and 26 by `deck_row`, and bound to `?14`, `?19` and `?20` in `update_deck`. Every one
+    /// of those is a place a crossed index succeeds silently and opens the wrong band.
+    ///
+    /// **No history row**, which is the rule both of its neighbours carry: a disclosure is not
+    /// an audited edit, `record_deck_edit` has no arm for any of the three, and `auditText.ts`'
+    /// `default` arm would word one *Changed the deck* — true of every edit, so never wrong and
+    /// never useful in a drawer read months later.
+    #[test]
+    fn the_notes_disclosure_round_trips_and_is_not_recorded() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        assert!(
+            !deck.notes_open,
+            "a new deck's Notes band is shut — the column's own DEFAULT 0, never a Rust fallback"
+        );
+        assert!(
+            deck.stats_open,
+            "and the band that defaults the other way still does, which is what makes the two \
+             tellable apart"
+        );
+
+        let patched = update_deck(
+            &conn,
+            deck.id,
+            &DeckPatch {
+                notes_open: Some(true),
+                stats_open: Some(false),
+                tokens_open: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(patched.notes_open, "the readback is the write");
+        assert!(
+            !patched.stats_open && patched.tokens_open,
+            "and the other two moved with it, no two agreeing — so no one `?` hole can be \
+             another's"
+        );
+
+        let read = read_deck(&conn, deck.id).unwrap().unwrap();
+        assert!(
+            read.notes_open && !read.stats_open && read.tokens_open,
+            "…including through `DECK_SELECT`'s positional reads, which is where a column \
+             added anywhere but the end goes wrong silently — and v43 both dropped one out of \
+             the middle of that list and appended this one to the end of it"
+        );
+
+        // Absent means "leave it", the `coalesce(?n, column)` contract — and the fence against
+        // a mis-numbered `?` hole writing over a neighbour.
+        let after = update_deck(&conn, deck.id, &DeckPatch::default()).unwrap();
+        assert!(after.notes_open, "an absent field means leave it");
+        assert!(!after.stats_open && after.tokens_open);
+        assert_eq!(after.name, "Burn");
+
+        // **A real edit first, so the absence below is an absence and not an empty list.** A
+        // deck that had only ever had its disclosures poked has no `deck` audit rows at all,
+        // and an assertion over nothing passes whatever `record_deck_edit` does.
+        update_deck(
+            &conn,
+            deck.id,
+            &DeckPatch {
+                name: Some("Burn II".to_owned()),
+                notes_open: Some(false),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let words: Vec<String> = crate::deck_audit::list(&conn, deck.id, 20)
+            .unwrap()
+            .iter()
+            .filter(|r| r.kind == crate::deck_audit::DECK)
+            .map(|r| r.payload.clone())
+            .collect();
+        assert!(
+            words.iter().any(|p| p.contains("name")),
+            "the drawer has to be reachable for the next assertion to mean anything: {words:?}"
+        );
+        assert!(
+            !words.iter().any(|p| p.contains("notesOpen")),
+            "opening a band is not an edit anybody reads a drawer for: {words:?}"
+        );
+    }
+
     /// A copy shows its stats, because [`duplicate_deck`] does not carry the column and the
     /// column's own `DEFAULT` is open.
     ///
@@ -10335,6 +10534,7 @@ mod tests {
             &DeckPatch {
                 stats_open: Some(false),
                 tokens_open: Some(true),
+                notes_open: Some(true),
                 ..Default::default()
             },
         )
@@ -10350,11 +10550,16 @@ mod tests {
             !copy.tokens_open,
             "and the other disclosure is not carried either, which is its DEFAULT 0"
         );
+        assert!(
+            !copy.notes_open,
+            "nor the third — user schema v43's DEFAULT 0, and the original had it open, so \
+             this is the default doing the work and not a value that travelled"
+        );
     }
 
     /// A copy reads the way its original read. `separate_x_group` is a property of *how the
-    /// list is shown*, not of the deck's state, so it travels with the format, the notes and
-    /// the theory switch rather than being reset the way `archived` is.
+    /// list is shown*, not of the deck's state, so it travels with the format, the description
+    /// and the theory switch rather than being reset the way `archived` is.
     #[test]
     fn a_duplicate_keeps_the_x_group_switch() {
         let conn = seeded();

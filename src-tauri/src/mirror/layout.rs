@@ -606,7 +606,7 @@ mod tests {
             card_count: 0,
             updated_at: 0,
             folder_id: None,
-            notes: None,
+            notes_open: false,
             theory_enabled: false,
             // Schema v40's column, and the layout reads it for the same reason it reads none of
             // the marks below: it does not have to. A virtual deck carries `theory_enabled:

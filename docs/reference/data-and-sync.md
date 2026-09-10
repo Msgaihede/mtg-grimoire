@@ -5,8 +5,11 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
 - Data dir is `<exe dir>/data`, falling back to `%APPDATA%/com.mtggrimoire.app/data`.
   **Under `tauri dev` the exe is `src-tauri/target/debug/`, so the databases are
   `src-tauri/target/debug/data/user.db` and `corpus.db`** — not `src-tauri/data/`, and
-  **not one file since schema 27**: the reader's eighteen tables are `main` and the
-  rebuildable twenty-five are `ATTACH`ed as `corpus`. A folder still holding a single
+  **not one file since schema 27**: the reader's **twenty-seven** tables are `main` and the
+  rebuildable **twenty-five** are `ATTACH`ed as `corpus`. (Eighteen against twenty-five at the
+  split itself; the user side is what has grown since, and this line said eighteen until user
+  schema v43 — a count in prose that no build checks, which is the rot this file's own header
+  warns about.) A folder still holding a single
   `mtg.db` is converted at the next launch by `split::convert`, which never touches that
   file until the new one is safely renamed into place. Delete that `data/` folder to force
   a clean first-run sync. All three locations are gitignored.
@@ -557,9 +560,9 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   **v29 is sync's own rung and it is the widest one on either ladder.** It adds `sync_uid` with a
   unique index to **the eleven tables that were on the census then** — this line said "all twelve"
   until 2026-09-07 and was wrong in both directions, since the rung's own `ALTER TABLE`s are
-  eleven (spelled out below) and the census is **thirteen** now: `device_names` joined
-  at v31 and `deck_tokens` at v37, and each carries the column in its own `CREATE TABLE` rather
-  than through this rung. It also adds `needs_review` to the three folder tables,
+  eleven (spelled out below) and the census is **fifteen** now: `device_names` joined
+  at v31, `deck_tokens` at v37, and `deck_notes` and `deck_note_cards` at v43, and each carries
+  the column in its own `CREATE TABLE` rather than through this rung. It also adds `needs_review` to the three folder tables,
   the op log (`sync_ops`, `sync_clock`, `sync_state`, `sync_peers`), and it **rebuilds
   `error_log`** so `source` can be `'relay'` — that vocabulary is inside a `CHECK` and SQLite
   has no `ALTER — CHECK`. The user side is **twenty-two tables and thirty-six indexes**
@@ -891,6 +894,27 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   stay green throughout**, because that comparison is built by running the ladder end to end on an
   empty file. The disagreement would exist only on the databases a suite never opens, and arrive
   as a `no such column` in the shipped window.
+  **v43 gives a deck many notes and takes its one away** (2026-09-10, issue #447) — `deck_notes`
+  and `deck_note_cards` in, `decks.notes` out, `decks.notes_open` in. It is the first rung on
+  either ladder to **drop a synced column**, and the two directions cost very different things.
+  Adding a synced table is the ordinary ten-site job [sync.md](sync.md) lists. Dropping a synced
+  column turns out to cost nothing on the wire at all, because `apply::updates()` walks the
+  *local* spec's field list rather than the incoming op's — so a v42 peer that goes on sending
+  `notes` has it skipped rather than deferred, and the stream that an unknown *table* would stall
+  keeps flowing.
+  ⚠️ **Its real trap is local and would have landed at a reader's first upgrade, not in any
+  test starting from a fresh database** — v25's lesson exactly. Capture triggers are persistent
+  objects, and `sync_upd_decks` names `notes` in its `AFTER UPDATE OF` list, so SQLite refuses
+  `DROP COLUMN` on it. The rung drops the three `decks` triggers first and `prepare_database`
+  reinstalls them on the next line, which is **v33's** move rather than a new one.
+  **`notes_open` is `DEFAULT 0`, which is v37's answer and not v42's** — v42 gave `stats_open`
+  a `1` because that band was already on screen for every deck on every disk, where this band is
+  new and a collapsed default takes nothing from anybody.
+  **The old paragraph is discarded rather than migrated**, decided by the repository owner on
+  2026-09-10 and stated here rather than buried: a reader who used the old field loses it, with
+  no undo, at the upgrade.
+  (**v40, v41 and v42 have no paragraph on this page** — the ladder narrative here stops at v39
+  and has done since before this rung. Naming the gap so nobody reads the absence as a claim.)
   **v25 makes the collection's folders the physical ledger of where every card sits.** It inserts
   the single `Recently removed` folder and one `deck` folder per deck (**archived decks
   included** — archiving is a flag and an archived deck still holds its cards), converts every

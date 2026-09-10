@@ -54,6 +54,28 @@
  * Settings → Appearance — which is exactly why the separations that are structural are the ones
  * the rule rests on.
  *
+ * ## A fifth fact landed on 2026-09-10, and it is where the four separations stopped being enough
+ *
+ * A deck note (issue #447) is a thing the reader wrote about a card, and a card the reader has
+ * written about wants a mark. **There was no corner left to put one in**, which is the finding
+ * rather than the complaint: top-left is {@link QuantityTag}'s, top-right is
+ * {@link TheoryMatchMark}'s, bottom-left is {@link RuleBreakMark}'s since 2026-08-20, and the marks
+ * strip is `overflow-hidden` and was measured overflowing a 165px tile by **11px** with only the
+ * marks it already draws. So the four separations could not have been satisfied by a new mark at
+ * all — **place** was the one a reader takes in first and there was no place to take.
+ *
+ * So the note is folded **into** {@link QuantityTag}, beside the crown, which is `crowned`'s own
+ * precedent read one fact later: a fifth fact costs 14px of a mark both card-face views already
+ * draw rather than a corner nobody has. A card that is both a game changer and noted draws **both
+ * glyphs and the number** — see {@link CountTag.noted} for why neither may stand for the other.
+ *
+ * **On the two row views the separation is _shape_ rather than place**, and that is the one thing
+ * about this mark a new reader gets wrong: `TableView` and `TextView` have no corners at all, so
+ * {@link NoteMark} sits inline beside {@link LabelDot} — a stroked glyph against an 8px filled
+ * square. The mark takes **no colour of its own** on either surface: the `--color-pie-*` deeps are
+ * what a label means and gold is what a picked card wears, so a sixth vocabulary word would have
+ * been spent saying something the shape already says.
+ *
  * ## Every one of these is `aria-hidden`, and that is deliberate
  *
  * It is `FoilOverlay`'s rule, for `FoilOverlay`'s reason. Three of these five surfaces draw a
@@ -66,7 +88,8 @@
  *
  * Adding a mark here means asking which of those two says it in words.
  */
-import { Check, X } from "lucide-react";
+import { Check, StickyNote, X } from "lucide-react";
+import type { SVGProps } from "react";
 import { COUNT_TAG_BOX_MIRRORED, COUNT_TAG_SLANT_MIRRORED, CountTag } from "@/components/CountTag";
 import { FinishMark } from "@/components/FinishMark";
 import { GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
@@ -126,6 +149,78 @@ export function LabelDot({
 }
 
 /**
+ * What the note glyph means, in words, said once so that the tag's tooltip, the row views' inline
+ * mark and `deckCardName`'s clause cannot drift apart (2026-09-10, issue #447).
+ *
+ * **"Has a note" and not "Noted", "Note" or "1 note".** It is the shortest true sentence, and each
+ * of the three it beat is wrong in its own way: *Noted* is an adjective a reader has to be taught,
+ * *Note* is the noun for the thing rather than a statement about the card, and a **count** would be
+ * a number this mark deliberately does not carry — a card may be named by five notes and the mark
+ * says the same thing for all five, because what it is for is telling a reader there is something
+ * to read rather than how much of it there is. It stays singular for that reason: `a note` is what
+ * makes the sentence true at one, and it is not falsified at five.
+ *
+ * **Capital `H`, like {@link GAME_CHANGER_LABEL}'s capital `G`**, because both are clauses joined
+ * by ` · ` into a phrase whose earlier clauses are the card's own label and its count — a
+ * mid-phrase lowercase would read as a continuation of the clause before it rather than as a fact
+ * of its own.
+ */
+export const NOTE_MARK_LABEL = "Has a note";
+
+/**
+ * A card a deck note names, for the two views that draw **no art** — the table's rows and the text
+ * columns (2026-09-10, issue #447).
+ *
+ * The card-face views fold this fact into {@link QuantityTag}, beside the crown. These two have no
+ * corners and no tag to print it on, so the glyph stands inline — which is exactly where
+ * {@link LabelDot} already stands, and **shape is the whole of what separates the two**: a stroked
+ * outline against an 8px filled square. That is the file header's four separations with *place*
+ * unavailable and *colour* deliberately declined, which leaves shape and words carrying it, and
+ * both are stated rather than assumed here.
+ *
+ * ## It takes no colour of its own
+ *
+ * `currentColor` and no colour utility, so it is the row's own text colour. There was none to give
+ * it: the `--color-pie-*` deeps are what a **label** means (the dot beside it may be wearing any of
+ * them), gold is what a picked card wears, and destructive is a rule break. A mark that borrowed
+ * one of those would be saying a second thing by accident, and this mark has only one thing to say.
+ *
+ * ## It names itself, where the marks on a card face do not
+ *
+ * {@link DeckFinishMark}'s arrangement and its argument verbatim: a `role="img"` with the fact as
+ * its accessible name. `TableView` draws rows, and a name inside a **cell** is really read;
+ * `TextView`'s row is a button with an explicit `aria-label`, which *replaces* its content for
+ * naming, so there it is decoration and the word is `deckCardName`'s. Neither surface has to
+ * remember which — a named glyph is free to be either, where an `sr-only` span inside a labelled
+ * button would be text announced to nobody.
+ *
+ * **The name is one text node**, which is not a detail: a CSS `gap` is not a word separator to name
+ * computation, so a label and a count in two spans compute to `Missing2`. There is one string here
+ * and it is {@link NOTE_MARK_LABEL}.
+ *
+ * No `--mark-scale`: neither surface is a card face, so neither zooms. 12px, which is
+ * {@link DeckFinishMark}'s glyph and {@link TheoryMatchBadge}'s on the same line.
+ */
+export function NoteMark({ className }: { className?: string }) {
+  const tip = useTooltip();
+  return (
+    <StickyNote
+      // The word, not the shape — `FinishMark`'s rule: a screen reader saying "sticky note" beside
+      // a card's name would be describing the icon rather than the card.
+      role="img"
+      aria-label={NOTE_MARK_LABEL}
+      // See the identical cast in `FinishMark` and `GameChangerMark`: `TooltipBinding`'s handlers
+      // are typed against `HTMLElement`, and this anchor is the lucide `<svg>` glyph itself.
+      // `describes: false` — the name above already *is* the sentence, so an `aria-describedby`
+      // would be the same words twice.
+      {...(tip(NOTE_MARK_LABEL, { describes: false }) as SVGProps<SVGSVGElement>)}
+      className={cn("block size-3 shrink-0", className)}
+      strokeWidth={2}
+    />
+  );
+}
+
+/**
  * The copy count as a **filled tag in the card's own label colour**, crowned where the card is one
  * the format calls a game changer — the deck's card-face mark, and the one place three facts about
  * a card are drawn as a single object.
@@ -169,6 +264,16 @@ export function LabelDot({
  * is what makes this one a *label*: the colour it is filled with, the sentence naming all three
  * facts, and the z-index below.
  *
+ * ## Why the note joined them (2026-09-10)
+ *
+ * The same argument a third time, and the first one that was never about room running out. A deck
+ * note (issue #447) is a fifth per-card fact, and there was **no corner left to draw it in** — the
+ * file header has the census and the 11px overflow measurement. So it is folded in here beside the
+ * crown, at the same 14px, and a card that is both a game changer and noted draws **both glyphs and
+ * the number**: two facts, two glyphs, one object. {@link CountTag.noted} carries the geometry and
+ * {@link NOTE_MARK_LABEL} the words; the row views draw {@link NoteMark} instead, because they have
+ * no tag to print it on.
+ *
  * {@link LabelDot} is untouched and is still what the table, the text columns and the categories
  * panel draw — a row has a column for the count and does not need the two folded together.
  */
@@ -177,6 +282,7 @@ export function QuantityTag({
   name,
   color,
   gameChanger,
+  noted = false,
   className,
 }: {
   quantity: number;
@@ -197,26 +303,51 @@ export function QuantityTag({
    * that says the fact at all now.
    */
   gameChanger: boolean;
+  /**
+   * Whether a **deck note** names this card — the second glyph in the tag, and a second clause on
+   * the sentence (2026-09-10, issue #447).
+   *
+   * **Optional and defaulting to `false`, where {@link gameChanger} above is required — and the
+   * asymmetry is deliberate rather than an inconsistency.** `gameChanger` is required because it is
+   * the *only* thing on a deck's card face that says the fact at all, so a caller that had not
+   * thought about it would be drawing a tag quietly claiming the card is ordinary. A note is not
+   * like that: the deck's Notes band lists every note whether or not any card wears a mark, so an
+   * unmarked card is a card whose note the reader finds one press away rather than a fact nothing
+   * on screen carries. A surface that has not heard of notes therefore draws the tag it always
+   * drew, which is also what keeps this from being a flag day across four views.
+   *
+   * **The set it is read from is TypeScript's**, `deckNotes.ts`'s `notedOracleIds` over the notes
+   * the page already holds — there is no *"which cards in this deck have notes"* command and there
+   * must not be one, because the band holds every note and every note holds its oracle ids.
+   */
+  noted?: boolean;
   className?: string;
 }) {
-  // All three facts, because each of them makes a riddle of the others alone: the count without
-  // the name makes the colour one, the name without the count makes the number one, and the crown
-  // says nothing in words at all — this tag is `aria-hidden`, so `title` is the whole of what a
-  // pointer gets and `deckCardName` the whole of what a keyboard reader gets.
+  // All four facts, because each of them makes a riddle of the others alone: the count without
+  // the name makes the colour one, the name without the count makes the number one, and the two
+  // glyphs say nothing in words at all — this tag is `aria-hidden`, so `title` is the whole of what
+  // a pointer gets and `deckCardName` the whole of what a keyboard reader gets.
   //
-  // Appended rather than folded in, so the two arms this had before are the same two strings for a
-  // card that is not a game changer. `GAME_CHANGER_LABEL` rather than the words, because it is one
-  // fact and this file no longer owns any of its spellings.
-  const said = name === null ? `${quantity} in this pile` : `${name} · ${quantity} in this pile`;
+  // **Clauses appended in the order the glyphs are drawn**, so a pointer resting anywhere on the
+  // mark reads the mark left to right. Appending rather than folding in is what keeps an ordinary
+  // card's sentence byte-for-byte the string it has always been — which is the property the
+  // suite's anchored assertions are written against. `GAME_CHANGER_LABEL` and
+  // {@link NOTE_MARK_LABEL} rather than the words: each is one fact, and this file owns one of the
+  // two spellings and neither of the others.
+  const counted = `${quantity} in this pile`;
+  const clauses = [name === null ? counted : `${name} · ${counted}`];
+  if (gameChanger) clauses.push(GAME_CHANGER_LABEL);
+  if (noted) clauses.push(NOTE_MARK_LABEL);
   return (
     <CountTag
       count={quantity}
       // Still a `title` **prop** — `CountTag` (`components/CountTag.tsx`) owns turning it into
       // a `useTooltip()` binding internally.
-      title={gameChanger ? `${said} · ${GAME_CHANGER_LABEL}` : said}
+      title={clauses.join(" · ")}
       // Nothing for an unlabelled card, which is how it lands on the neutral grey — see above.
       paint={name === null ? undefined : { css: labelColorCss(color), fg: labelFgCss(color) }}
       crowned={gameChanger}
+      noted={noted}
       className={cn(
         // **The rung is kept and covers nothing since 2026-09-08.** It was here to paint over the
         // Game Changer ribbon tucked 10px under this tag's slanted tail; the crown is drawn inside

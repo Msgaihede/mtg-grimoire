@@ -117,7 +117,6 @@ function Body({
     name: row?.name ?? "",
     formatKey: row?.formatKey ?? DEFAULT_FORMAT,
     description: row?.description ?? "",
-    notes: row?.notes ?? "",
     // **The kind's two columns, from one answer.** A story that names a `kind` gets
     // `deckKindPatch`'s pair; one that does not takes the deck's own. Spread from that
     // function rather than written out as two ternaries, so no fixture here can seed the
@@ -267,7 +266,7 @@ export const Default: Story = {
 };
 
 /**
- * The **create** shape: no deck, so no name, no notes and nothing to pick art from.
+ * The **create** shape: no deck, so no name, no description and nothing to pick art from.
  *
  * This is the whole point of the component. Every field the settings dialog offers is here
  * before the deck exists, and the host holds a draft instead of writing — one `deck_create` at
@@ -380,13 +379,13 @@ export const EveryChangeAndEveryCommit: Story = {
 
     // A text field does not settle in one act, which is the whole reason for the second
     // callback: every keystroke, and then the blur that says the reader is finished.
-    await userEvent.type(canvas.getByLabelText("Notes"), " Cut Avacyn.");
+    await userEvent.type(canvas.getByLabelText("Description"), " Cut Avacyn.");
     await expect(args.onCommit).not.toHaveBeenCalled();
 
     await userEvent.click(canvas.getByLabelText("Name"));
     await waitFor(async () => {
       await expect(args.onCommit).toHaveBeenCalledWith(
-        expect.objectContaining({ notes: expect.stringContaining("Cut Avacyn.") }),
+        expect.objectContaining({ description: expect.stringContaining("Cut Avacyn.") }),
       );
     });
   },

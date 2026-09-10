@@ -310,7 +310,7 @@ const DECK: DeckRow = {
   cardCount: 100,
   updatedAt: 1_786_266_000,
   folderId: 2,
-  notes: null,
+  notesOpen: false,
   theoryEnabled: false,
   virtualOnly: false,
   theoryMarkExact: true,

@@ -42,7 +42,6 @@ const VALUE: DeckSettingsValue = {
   name: "Burn",
   formatKey: "modern",
   description: "Twenty damage, quickly.",
-  notes: "Sideboard plan lives in the Maybeboard.",
   // Both false, which `deckKind` reads as `regular` — the kind every deck is born as, and
   // the state every deck that predates `decks.virtual_only` (schema v40) is in.
   theoryEnabled: false,
@@ -188,7 +187,6 @@ describe("DeckSettingsForm", () => {
     expect(screen.getByLabelText("Name")).toHaveValue("Burn");
     expect(screen.getByRole("button", { name: "Format" })).toHaveTextContent("Modern");
     expect(screen.getByLabelText("Description")).toHaveValue("Twenty damage, quickly.");
-    expect(screen.getByLabelText("Notes")).toHaveValue("Sideboard plan lives in the Maybeboard.");
     // The kind is a group of three now rather than one switch, and the fixture's own kind is
     // the pressed one. Addressed by `aria-pressed` and never by a class: a `hover:` variant
     // makes a class assertion vacuous, and jsdom loads no stylesheet to resolve one anyway.
@@ -267,27 +265,23 @@ describe("DeckSettingsForm", () => {
 
   /**
    * **Enter submits from the name and from nowhere else**, which is a split rather than an
-   * inconsistency: a paragraph is what the two long fields are for, and a form that made the
-   * deck on the reader's first line break would be unusable for the only field it has six rows
-   * of. (The third case — the cover picker's search box — is its own component's, and
+   * inconsistency: a paragraph is what the long field is for, and a form that made the deck on
+   * the reader's first line break would be unusable for the only field it has three rows of.
+   * (The third case — the cover picker's search box — is its own component's, and
    * `DeckCoverPicker.test.tsx` pins it there.)
    */
-  it("leaves Enter alone in the description and the notes", async () => {
+  it("leaves Enter alone in the description", async () => {
     const onSubmit = vi.fn();
     form({ onSubmit });
 
     await userEvent.type(screen.getByLabelText("Description"), "{Enter}Fast.");
-    await userEvent.type(screen.getByLabelText("Notes"), "{Enter}Cut Avacyn.");
 
     expect(onSubmit).not.toHaveBeenCalled();
     expect(screen.getByLabelText("Description")).toHaveValue("Twenty damage, quickly.\nFast.");
-    expect(screen.getByLabelText("Notes")).toHaveValue(
-      "Sideboard plan lives in the Maybeboard.\nCut Avacyn.",
-    );
   });
 
-  /** The description and the notes are two fields, and a form that wrote one into the other
-   *  would be invisible until the gallery tile changed. */
+  /** The description names itself in both callbacks, so a form that wrote it into some other
+   *  field would be invisible until the gallery tile changed. */
   it("fires onChange and onCommit for the description, as the description", async () => {
     const { onChange, onCommit } = form();
 
@@ -298,31 +292,17 @@ describe("DeckSettingsForm", () => {
     expect(onCommit).toHaveBeenCalledWith({ description: "Twenty damage, quickly. Fast." });
   });
 
-  it("fires onChange and onCommit for the notes, as the notes", async () => {
-    const { onChange, onCommit } = form();
-
-    await userEvent.type(screen.getByLabelText("Notes"), " Cut Avacyn.");
-    await userEvent.tab();
-
-    expect(onChange).toHaveBeenLastCalledWith({
-      notes: "Sideboard plan lives in the Maybeboard. Cut Avacyn.",
-    });
-    expect(onCommit).toHaveBeenCalledWith({
-      notes: "Sideboard plan lives in the Maybeboard. Cut Avacyn.",
-    });
-  });
-
   /** The create dialog passes no `onCommit`, because it has nothing to write yet. Blurring a
    *  field is then an ordinary thing to do rather than a crash. */
   it("survives a host that passes no onCommit", async () => {
     const onChange = vi.fn();
     render(<Harness onChange={onChange} />);
 
-    await userEvent.type(screen.getByLabelText("Notes"), "x");
+    await userEvent.type(screen.getByLabelText("Description"), "x");
     await userEvent.tab();
 
     expect(onChange).toHaveBeenLastCalledWith({
-      notes: "Sideboard plan lives in the Maybeboard.x",
+      description: "Twenty damage, quickly.x",
     });
   });
 

@@ -135,7 +135,7 @@ const BURN: DeckRow = {
   // Every real row carries all of them, so the fixture does too.
   coverKind: "card_art",
   folderId: null,
-  notes: null,
+  notesOpen: false,
   theoryEnabled: false,
   virtualOnly: false,
   theoryMarkExact: true,

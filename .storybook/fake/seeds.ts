@@ -83,6 +83,8 @@ import type {
   FakeDeckCategory,
   FakeDeckFolder,
   FakeDeckLabel,
+  FakeDeckNote,
+  FakeDeckNoteCard,
   FakeDeckToken,
   FakeEntry,
   FakeRelayShare,
@@ -775,12 +777,12 @@ const DAY = 86_400;
 const FILED_DECK_FOLDER = 2;
 
 /** The columns {@link starterDecks}' `deck` helper fills in for a deck that says nothing about
- *  them — the four schema v8 added, the three that remember where the reader was, and schema
- *  v40's kind flag beside the theory one it pairs with. */
+ *  them — the schema v8 ones that are left, the three that remember where the reader was, and
+ *  schema v40's kind flag beside the theory one it pairs with. (`notes` was on this list until
+ *  user schema v43 replaced that column with rows; see {@link starterDeckNotes}.) */
 type DefaultedDeckColumn =
   | "coverKind"
   | "folderId"
-  | "notes"
   | "theoryEnabled"
   | "virtualOnly"
   | "lastVariant"
@@ -796,7 +798,6 @@ function starterDecks(): FakeDeck[] {
   ): FakeDeck => ({
     coverKind: "card_art",
     folderId: null,
-    notes: null,
     // Off on the first three: the Theory/Live control **is** this boolean, and a deck that
     // draws one is a deck every story about it has to say which list it is looking at.
     theoryEnabled: false,
@@ -890,9 +891,10 @@ function starterDecks(): FakeDeck[] {
       // Filed, so the root wall is still the three decks every gallery story was written
       // against — see {@link FILED_DECK_FOLDER}.
       folderId: FILED_DECK_FOLDER,
-      notes:
-        "Bracket 3, so two game changers is the budget. The Cut list is switched off rather " +
-        "than emptied — the cards are still there when I change my mind.",
+      // **The deck that carried the old `decks.notes` paragraph**, and the deck that carries the
+      // two rows replacing it — {@link starterDeckNotes}. The paragraph is not migrated into
+      // them: user schema v43 discards the column's text outright, because a table whose whole
+      // point is that its rows are deliberate must not open with one nobody asked to keep.
       // **The one deck with a plan.** Everything the theory list is for is only reachable from
       // a deck that has one: the editor's Theory/Live control, `deck_theory_diff`, and the two
       // theory commands.
@@ -1176,6 +1178,100 @@ function testbedDeckCards(
     filed(printing("pcy", "45"), "Card advantage", 1, "theory"),
     filed(printing("mp2", "8"), "Card advantage", 1, "theory"),
     filed(printing("wwk", "31"), "Card advantage", 1, "theory"),
+  ];
+}
+
+/**
+ * The note that names cards, so the rows in {@link starterDeckNoteCards} can point at it without
+ * a lookup — `deck_note_cards.note_id`, which is the only thing an attachment is keyed by.
+ */
+const TESTBED_NOTE = 1;
+
+/**
+ * **Deck 4's two notes**, and the only ones in any seed — user schema v43's `deck_notes`, which
+ * is what replaced `decks.notes`.
+ *
+ * The column they replace was a single paragraph on this very deck, and the rung deliberately
+ * **discards** it rather than copying it into a first row: the whole point of the new table is
+ * that its rows are ones a reader chose to make, so these are two notes somebody wrote and not
+ * one paragraph converted.
+ *
+ * **Two of them, because "names some cards" and "names none" are the two states the band draws
+ * differently**, and a seed carrying one would leave the other to a story that cannot build it —
+ * a seed is the world.
+ *
+ * * **The first names two cards, and both are Game Changers.** Rhystic Study and Consecrated
+ *   Sphinx, deck 4's own pair, and that is a fixture rather than decoration: the note glyph is
+ *   folded **into** `QuantityTag` beside the crown rather than drawn as a new corner, so a card
+ *   that is crowned *and* noted is the one thing that pins the fold, and no story could reach it
+ *   without a seeded attachment. It also gives the band's row a card-count chip to draw, and
+ *   `notedOracleIds` two ids rather than one.
+ * * **The second names none and its title is blank**, which is two states in one row and neither
+ *   is a missing value. A note naming no card is the ordinary case; a blank title reads as the
+ *   body's first line, a derivation `features/decks/deckNotes.ts` makes at *render* and this
+ *   seed therefore stores nothing of — which is exactly why a fixture has to reach it. Its
+ *   first line is a heading, so the fallback has the marker to strip as well as the line to
+ *   take.
+ *
+ * **Deck 4 and not deck 1**, which is {@link virtualDeckSeed}'s rule one table down: a note on
+ * the shell deck would put a glyph on two tiles in every story ever written against it, where
+ * deck 4 is the testbed every unusual deck-level state already lives on — the plan, the
+ * switched-off pile, the label, the folder, the remembered tab. It is also where the paragraph
+ * this table replaces was seeded.
+ *
+ * The bodies are CommonMark in the dialect `features/decks/noteMarkdown.ts` pins, and between
+ * them they reach a paragraph, a heading, a bullet list, bold and italic — so the read-only
+ * renderer has more than one block kind to draw without a story typing one.
+ */
+function starterDeckNotes(): FakeDeckNote[] {
+  return [
+    {
+      id: TESTBED_NOTE,
+      deckId: 4,
+      title: "The two game changers, and why there is no third",
+      body:
+        "Two game changers is the whole budget at bracket 3.\n\n" +
+        "- **Rhystic Study** — nobody pays, and that is the whole card\n" +
+        "- *Consecrated Sphinx* — worse in a race, better at a long table\n\n" +
+        "A third would push the estimate to 4, so these two stay and nothing joins them.",
+      sortOrder: 0,
+      // Under {@link CLOCK_BASE} like every other seeded row, so the first write of any story
+      // still lands at `CLOCK_BASE + 1` — {@link starterDecks}' rule, and these are the first
+      // seeded rows outside `decks` to carry a pair of timestamps a reader could sort on.
+      createdAt: CLOCK_BASE - DAY,
+      updatedAt: CLOCK_BASE - 2 * HOUR,
+    },
+    {
+      id: 2,
+      deckId: 4,
+      // **Blank, and stored blank.** Not `null` — the column is `TEXT NOT NULL DEFAULT ''` — and
+      // not filled in from the body here, because the whole argument for deriving it at render
+      // is that a stored copy would go stale the moment the body was edited.
+      title: "",
+      body:
+        "## Cut list is switched off, not emptied\n\n" +
+        "The cards are still there when I change my mind. Switch the pile back on and the " +
+        "deck reports a banned card, which is the point of leaving it where it is.",
+      sortOrder: 1,
+      createdAt: CLOCK_BASE - HOUR,
+      updatedAt: CLOCK_BASE - HOUR,
+    },
+  ];
+}
+
+/**
+ * What the first note names — **by `oracleId`, never by a printing id**.
+ *
+ * Read off the printings rather than typed, which is this file's rule for every card reference:
+ * a row that disagrees with its own card is a fixture nothing can catch. The consequence is the
+ * one worth seeing in a story — the note follows the *card*, so it draws on deck 4's live rows
+ * and on its theory rows alike, and it would survive the reader swapping either to a different
+ * printing.
+ */
+function starterDeckNoteCards(): FakeDeckNoteCard[] {
+  return [
+    { id: 1, noteId: TESTBED_NOTE, oracleId: printing("pcy", "45").oracleId },
+    { id: 2, noteId: TESTBED_NOTE, oracleId: printing("mp2", "8").oracleId },
   ];
 }
 
@@ -1539,6 +1635,8 @@ function starterSeed(): FakeDb {
       ...testbedDeckCards(deckCategories, deckLabels, migrated.length + 1),
     ],
     deckTokens: starterDeckTokens(),
+    deckNotes: starterDeckNotes(),
+    deckNoteCards: starterDeckNoteCards(),
     deckAudit: starterAudit(),
   });
 }
@@ -1935,9 +2033,6 @@ function bracketMismatchSeed(): FakeDb {
     coverKind: "card_art",
     archived: false,
     folderId: null,
-    notes:
-      "It is a casual deck. The Thrasios line is a coincidence and I have never drawn both " +
-      "halves of it.",
     theoryEnabled: false,
     // A deck whose owner is wrong about its bracket is a deck they built out of cardboard —
     // and a virtual one would have no owned figures for the panel beside the readout to draw.
@@ -2295,9 +2390,6 @@ function virtualDeckSeed(): FakeDb {
     coverKind: "card_art",
     archived: false,
     folderId: null,
-    notes:
-      "Vivi is the rebalanced Alchemy card, so half this list has no paper printing at all. " +
-      "Nothing here is a shopping list.",
     // **The kind, and the pair is the whole of it.** `false/true` is Virtual; `deck_update`
     // writes the other column whenever a patch sets one, so a fixture spelling `true/true`
     // would be a fixture of a state the store cannot hold.

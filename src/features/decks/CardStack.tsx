@@ -25,6 +25,7 @@ import {
   deckCardName,
   deckCardMenuProps,
   deckCardMarked,
+  deckCardNoted,
   deckCardPress,
   deckCardProps,
   deckCardSelectedProps,
@@ -503,6 +504,16 @@ export interface CardStackProps {
    */
   theoryPlan?: TheoryPlan;
   /**
+   * Every oracle id a deck note names — `deckNotes.ts`' `notedOracleIds` over the notes the
+   * editor already holds, handed in whole for {@link CardStackProps.violations}' reason.
+   *
+   * `undefined` is a surface that has not heard of notes, and every card in the pile draws none —
+   * which is also the state before the read lands. The per-card question is
+   * `cardControl.ts`'s `deckCardNoted`, so the guard that keeps an **orphan** printing unmarked
+   * (no oracle id, and a note attaches by nothing else) is asked in one place for all four views.
+   */
+  noted?: ReadonlySet<string>;
+  /**
    * Whether the deck these cards are in reads the collection at all — `deckKind.ts`'s
    * `tracksCollection(deck)`, `false` for the third deck kind (issue #401).
    *
@@ -625,6 +636,7 @@ export function CardStack({
   currency,
   violations,
   theoryPlan,
+  noted,
   tracksCollection = true,
   onSelect,
   actions,
@@ -686,6 +698,7 @@ export function CardStack({
           transition={reduced ? STILL : stackCard}
           ruleBreakText={ruleBreak(violations?.get(card.cardId))}
           theoryMark={theoryMatchMark(theoryPlan, card)}
+          noted={deckCardNoted(card, noted)}
           tracksCollection={tracksCollection}
           onSelect={onSelect}
           actions={actions}
@@ -740,6 +753,7 @@ function StackedCard({
   transition,
   ruleBreakText,
   theoryMark,
+  noted,
   tracksCollection,
   onSelect,
   actions,
@@ -773,6 +787,11 @@ function StackedCard({
    *  a card the plan does not ask for; otherwise the tier it is in and how far the live list is
    *  from the plan **at that tier's own grain**, where `0` is the card the plan asks for exactly. */
   theoryMark: TheoryMark | null;
+  /** Whether a deck note names this card — `deckCardNoted`'s answer, resolved by the stack for
+   *  {@link theoryMark}'s reason. **Required here where the stack's own set is optional**, which
+   *  is `tracksCollection`'s argument one line down: this card is module-private, so a hop that
+   *  forgot to forward it is a red build rather than a mark nobody ever sees. */
+  noted: boolean;
   /** Whether the deck reads the collection at all — {@link CardStackProps.tracksCollection},
    *  forwarded. **Required here where the stack's own is optional**: this card is module-private
    *  and its one mount is a dozen lines up, so a required prop costs nothing and a hop that
@@ -889,7 +908,7 @@ function StackedCard({
         type="button"
         // Every mark below is `aria-hidden`, so this string is the whole of what a keyboard
         // reader gets — including the red shortage figure, which nothing else would say.
-        aria-label={deckCardName(card, ruleBreakText, theoryMark, tracksCollection)}
+        aria-label={deckCardName(card, ruleBreakText, theoryMark, tracksCollection, noted)}
         // How the card pane hands the caret back after a printing swap replaces this card.
         {...deckCardProps(card)}
         {...deckCardPress(card, onSelect, actions)}
@@ -909,6 +928,7 @@ function StackedCard({
           width={stackCardWidth(zoom)}
           ruleBreakText={ruleBreakText}
           theoryMark={theoryMark}
+          noted={noted}
           landedKey={landedKey}
         />
       </button>

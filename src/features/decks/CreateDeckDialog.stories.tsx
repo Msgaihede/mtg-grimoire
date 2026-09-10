@@ -268,7 +268,7 @@ export const Refused: Story = {
     const canvas = within(canvasElement);
 
     await userEvent.type(await canvas.findByLabelText("Name"), "Sunday burn");
-    await userEvent.type(canvas.getByLabelText("Notes"), "Bring the burn.");
+    await userEvent.type(canvas.getByLabelText("Description"), "Bring the burn.");
     await userEvent.click(canvas.getByRole("button", { name: "Create deck" }));
 
     await waitFor(async () => {
@@ -276,7 +276,7 @@ export const Refused: Story = {
     });
     // Still holding them, so the reader presses again rather than retyping.
     await expect(canvas.getByLabelText("Name")).toHaveValue("Sunday burn");
-    await expect(canvas.getByLabelText("Notes")).toHaveValue("Bring the burn.");
+    await expect(canvas.getByLabelText("Description")).toHaveValue("Bring the burn.");
   },
 };
 

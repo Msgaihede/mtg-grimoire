@@ -32,7 +32,6 @@ const BLANK: DeckSettingsValue = {
   // format list already hidden, for a reason nothing on screen explains.
   gameKey: ANY_GAME,
   description: "",
-  notes: "",
   // **Both false is `regular`, which is the kind every deck is born as.** The two columns
   // are one three-way choice — `deckKind` folds them into a word and `deckKindPatch` writes
   // them together on every press of the form's group — so the pair is written out here
@@ -183,7 +182,7 @@ export interface CreateDeckDialogProps {
  * The whole deck, described before it exists.
  *
  * **It used to ask two questions**, name and format, and everything else a deck carries —
- * description, notes, cover, folder, theory — was reachable only from `DeckSettingsDialog`. So
+ * description, cover, folder, theory — was reachable only from `DeckSettingsDialog`. So
  * the app's one *creating* act produced a deck the reader then had to go and configure. It
  * hosts one {@link DeckSettingsForm} now, in the same 55rem two-column panel the settings
  * dialog draws, and one `deck_create` writes every answer at once.
@@ -448,7 +447,6 @@ function CreateDeckBody({
         formatKey,
         gameKey: value.gameKey,
         description: trimmedOrAbsent(value.description),
-        notes: trimmedOrAbsent(value.notes),
         coverCardId: coverCardId ?? undefined,
         // `number | null` in the draft, `number | undefined` on the wire. This is an INSERT, so
         // an absent folder genuinely means the top level and means it — `DeckPatch.folderId`'s

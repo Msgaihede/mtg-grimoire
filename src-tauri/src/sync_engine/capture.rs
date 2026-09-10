@@ -30,7 +30,8 @@
 //!    module green; removing both makes one insert write two ops.** Both stay - the `OF`
 //!    clause is the cheaper of the two, since SQLite skips the trigger without evaluating
 //!    anything, and the `WHEN` is the only one of them that can also see
-//!    `UPDATE decks SET notes = notes`, which names a captured column and moves nothing.
+//!    `UPDATE decks SET description = description`, which names a captured column and moves
+//!    nothing.
 //! 3. **`last_insert_rowid()` and `changes()` are unaffected by a trigger's own writes.** The
 //!    op row this module inserts does not become the answer a caller's `INSERT INTO decks` gets
 //!    back, which would have broken most of the crate silently.
@@ -105,7 +106,7 @@ impl Spec {
 }
 
 /// One spec per synced table. `schema::SYNCED_TABLES` is the census this is held to.
-pub const TABLES: [Spec; 13] = [
+pub const TABLES: [Spec; 15] = [
     Spec {
         table: "collection_entries",
         keys: &["id"],
@@ -266,6 +267,40 @@ pub const TABLES: [Spec; 13] = [
         append_only: false,
     },
     Spec {
+        table: "deck_note_cards",
+        keys: &["id"],
+        // `oracle_id` is on the field list although it is half the grain — `deck_tokens`',
+        // `muted_tags`' and `device_names`' reason: the far device has to be able to *build* the
+        // row, and the grain `apply::META` restates is a way of recognising one already there.
+        fields: &["oracle_id"],
+        counters: &[],
+        // **The parent is `deck_notes` and not `decks`.** The row hangs off the note, which is
+        // what makes the notes list complete by construction: an attachment is a pointer the
+        // note holds, never a place the note lives.
+        parents: &[Parent {
+            key: "note",
+            col: "note_id",
+            table: "deck_notes",
+            absent: Absent::Null,
+            soft: false,
+        }],
+        append_only: false,
+    },
+    Spec {
+        table: "deck_notes",
+        keys: &["id"],
+        fields: &["title", "body", "sort_order"],
+        counters: &[],
+        parents: &[Parent {
+            key: "deck",
+            col: "deck_id",
+            table: "decks",
+            absent: Absent::Null,
+            soft: false,
+        }],
+        append_only: false,
+    },
+    Spec {
         table: "deck_tokens",
         keys: &["id"],
         // **`quantity` is a field and not a counter, on two grounds.** Mechanically a counter
@@ -306,18 +341,24 @@ pub const TABLES: [Spec; 13] = [
             // stored absolute, so a `D:\…\covers\7.webp` that reached a phone named nothing
             // there.
             //
-            // It stays here because **taking a field off a spec is a change to what this
-            // device sends and there is no rule written down for making one**. The receiving
-            // half looks safe by inspection — `apply::updates` and `apply::creations` both walk
+            // It stays here because what removing it buys today is one dead key out of a deck
+            // op that is already sent. A later rung takes the column, this line and the `CHECK`
+            // that still names `'custom'` together, once every device in a group is past v32.
+            //
+            // **This paragraph used to say there was no rule written down for taking a field
+            // off a spec, and that the receiving half was only safe "by inspection". User
+            // schema v43 wrote the rule down and the inspection is a test now** —
+            // `apply::tests::a_field_this_build_no_longer_syncs_is_skipped_rather_than_stalling`
+            // drives a `decks` op carrying a field this spec does not name and asserts it is
+            // applied with nothing deferred. `apply::updates` and `apply::creations` both walk
             // the *local* spec and ask the incoming op for each name, so a field they do not
-            // know is never read, and `merge::fold` is an untyped map that validates nothing —
-            // but "safe by inspection" is not the same as budgeted, and what removing it buys
-            // today is one dead key out of a deck op that is already sent. A later rung takes
-            // the column, this line and the `CHECK` that still names `'custom'` together, once
-            // every device in a group is past v32.
+            // know is never visited; `merge::fold` is an untyped map that validates nothing.
             "cover_image_path",
             "archived",
-            "notes",
+            // **`decks.notes` came off this list at user schema v43** (issue #447), which is the
+            // first field ever removed from a spec. The column is gone and `deck_notes` /
+            // `deck_note_cards` replace it; a peer still on v42 goes on sending the key and the
+            // test named above is what says that costs nothing.
             "theory_enabled",
             // **Schema v40's deck kind, and it travels beside the flag above it because the two
             // of them *are* the kind** — `0/0` regular, `1/0` theory-and-actual, `0/1` virtual.
@@ -383,8 +424,10 @@ pub const TABLES: [Spec; 13] = [
             // says from the other end: `apply::updates` and `apply::creations` walk the *local*
             // spec and ask the incoming op for each name, so a device on the old rung receiving
             // one of these ops never reads a field it does not know, and a device on this rung
-            // receiving an old op finds the key absent and leaves the column alone. Removing a
-            // field is the direction with no rule written down; this is the other one.
+            // receiving an old op finds the key absent and leaves the column alone. **Removing
+            // a field is the same mechanism read from the other end** — v43 took `notes` off
+            // this list and `a_field_this_build_no_longer_syncs_is_skipped_rather_than_stalling`
+            // is what says so; this sentence claimed that direction had no rule until then.
             "theory_mark_exact",
             "theory_mark_name",
             "theory_mark_unplanned",
@@ -710,7 +753,7 @@ fn insert_trigger(spec: &Spec) -> String {
 /// measured fact rather than a claim — removing either leaves every test in this module green,
 /// and removing both makes one insert write two ops. Both stay: the `OF` clause is the cheaper
 /// of the two, and the `WHEN` is the only one of them that can also see
-/// `UPDATE decks SET notes = notes`.
+/// `UPDATE decks SET description = description`.
 fn update_trigger(spec: &Spec) -> String {
     let t = spec.table;
     let watched = spec.watched().join(", ");
@@ -1158,13 +1201,13 @@ mod tests {
         )
         .unwrap();
         conn.execute("DELETE FROM sync_ops", []).unwrap();
-        conn.execute("UPDATE decks SET notes = 'hello'", [])
+        conn.execute("UPDATE decks SET description = 'hello'", [])
             .unwrap();
 
         let o = ops(&conn);
         assert_eq!(o.len(), 1);
         let fields: serde_json::Value = serde_json::from_str(&o[0].2).unwrap();
-        assert_eq!(fields["notes"], "hello");
+        assert_eq!(fields["description"], "hello");
         assert!(
             fields.get("name").is_none(),
             "name did not change: {fields}"
@@ -1227,27 +1270,28 @@ mod tests {
 
     /// **A field cleared to NULL is a change and must travel as one.** `json_patch` would have
     /// *removed* the key instead — RFC 7386 merge semantics — and the far device would keep the
-    /// old note forever with nothing anywhere to say the clear had happened.
+    /// old description forever with nothing anywhere to say the clear had happened.
     #[test]
     fn clearing_a_field_to_null_still_names_it() {
         let conn = db();
         conn.execute(
-            "INSERT INTO decks (name, format_key, notes, created_at, updated_at)
+            "INSERT INTO decks (name, format_key, description, created_at, updated_at)
              VALUES ('A', 'commander', 'old', unixepoch(), unixepoch())",
             [],
         )
         .unwrap();
         conn.execute("DELETE FROM sync_ops", []).unwrap();
-        conn.execute("UPDATE decks SET notes = NULL", []).unwrap();
+        conn.execute("UPDATE decks SET description = NULL", [])
+            .unwrap();
 
         let o = ops(&conn);
         assert_eq!(o.len(), 1, "clearing a field is a change: {o:?}");
         let fields: serde_json::Value = serde_json::from_str(&o[0].2).unwrap();
         assert!(
-            fields.get("notes").is_some(),
+            fields.get("description").is_some(),
             "the op must name the cleared field: {fields}"
         );
-        assert!(fields["notes"].is_null());
+        assert!(fields["description"].is_null());
     }
 
     /// An update that moves nothing writes nothing.
@@ -1355,7 +1399,7 @@ mod tests {
         );
     }
 
-    /// **An edit that is not a move does not ship the row's parents.** A note edit carrying
+    /// **An edit that is not a move does not ship the row's parents.** A description edit carrying
     /// the row's current folder would win last-writer-wins against a concurrent *move* with an
     /// earlier stamp, and the move would be silently undone by an edit that had nothing to do
     /// with it -- per-field LWW's whole argument, one column type over.
@@ -1376,7 +1420,7 @@ mod tests {
         .unwrap();
         conn.execute("DELETE FROM sync_ops", []).unwrap();
 
-        conn.execute("UPDATE decks SET notes = 'hello'", [])
+        conn.execute("UPDATE decks SET description = 'hello'", [])
             .unwrap();
         let parents: String = conn
             .query_row("SELECT parents FROM sync_ops", [], |r| r.get(0))
@@ -1384,7 +1428,7 @@ mod tests {
         let parents: serde_json::Value = serde_json::from_str(&parents).unwrap();
         assert!(
             parents.get("folder").is_none(),
-            "a note edit must not restate the folder: {parents}"
+            "a description edit must not restate the folder: {parents}"
         );
 
         // ...and a move ships exactly the parent that moved.
@@ -1476,7 +1520,7 @@ mod tests {
             .unwrap();
         }
         conn.execute("DELETE FROM sync_ops", []).unwrap();
-        conn.execute("UPDATE decks SET notes = 'swept'", [])
+        conn.execute("UPDATE decks SET description = 'swept'", [])
             .unwrap();
 
         let (rows, stamps): (i64, i64) = conn
@@ -1581,7 +1625,8 @@ mod tests {
         assert!(ops(&conn).is_empty());
 
         // ...and the guard lifts.
-        conn.execute("UPDATE decks SET notes = 'x'", []).unwrap();
+        conn.execute("UPDATE decks SET description = 'x'", [])
+            .unwrap();
         assert_eq!(ops(&conn).len(), 1, "the guard must not be sticky");
     }
 

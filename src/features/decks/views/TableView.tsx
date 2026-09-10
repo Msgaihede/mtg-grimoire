@@ -43,12 +43,14 @@ import { cn } from "@/lib/utils";
 import {
   DeckFinishMark,
   LabelDot,
+  NoteMark,
   rowMarkColor,
   theoryMatchLabel,
   TheoryMatchBadge,
 } from "../CardMarks";
 import {
   deckCardMarked,
+  deckCardNoted,
   deckCardProps,
   deckCardSelectedProps,
   DeckCardControls,
@@ -90,6 +92,10 @@ type Row =
        *  place the plan is read. `null` is a card the plan does not ask for; otherwise the tier
        *  it is in and the difference at that tier's own grain. */
       theoryMark: TheoryMark | null;
+      /** Whether a deck note names this card — `cardControl.ts`'s `deckCardNoted`, resolved into
+       *  the row rather than asked in the cell, for {@link theoryMark}'s reason. It is what puts
+       *  {@link NoteMark} beside the label's dot. */
+      noted: boolean;
     };
 
 /**
@@ -120,6 +126,7 @@ export function TableView({
   tracksCollection,
   violations,
   theoryPlan,
+  noted,
   onSelect,
   actions,
   selectedSlot,
@@ -155,6 +162,21 @@ export function TableView({
   /** The deck's plan — `theoryMatch.ts`'s two lookups and the deck's own two mark switches,
    *  handed in whole like `violations` beside it. `undefined` for a deck with no plan. */
   theoryPlan?: TheoryPlan;
+  /**
+   * Every oracle id a deck note names — `deckNotes.ts`' `notedOracleIds` over the notes the
+   * editor already holds, handed in whole like `violations` beside it.
+   *
+   * `undefined` draws no note glyph anywhere, which is a surface that has not heard of notes and
+   * is also the state before the read lands. The per-row question is `cardControl.ts`'s
+   * `deckCardNoted`, so the guard keeping an **orphan** printing unmarked — it carries no oracle
+   * id, and a note attaches by nothing else — is written once for all four views.
+   *
+   * **This view says the fact in the Labels cell rather than on a tag**, because it has no tag: a
+   * row has a column for the count. {@link NoteMark} sits beside {@link LabelDot} and separates
+   * from it by **shape** — a stroked glyph against an 8px filled square — since the label's
+   * palette is spoken for and gold means *picked*.
+   */
+  noted?: ReadonlySet<string>;
   onSelect?: (card: DeckCard) => void;
   /**
    * What may be done to a card here — see {@link DeckCardActions}.
@@ -209,9 +231,10 @@ export function TableView({
         card,
         ruleBreakText: ruleBreak(violations?.get(card.cardId)),
         theoryMark: theoryMatchMark(theoryPlan, card),
+        noted: deckCardNoted(card, noted),
       })),
     ]);
-  }, [groups, violations, theoryPlan]);
+  }, [groups, violations, theoryPlan, noted]);
 
   const columns = useMemo<TableColumn<Row>[]>(
     () => [
@@ -432,11 +455,27 @@ export function TableView({
         // card name held 84.
         width: "5rem",
         header: "Labels",
+        // **The note glyph lives here, and it is drawn for a card with no label at all** — which
+        // is why the cell's guard moved off `labelName` and onto the pair. The column is *Labels*
+        // and this is not one; what it is is the only place in a row view where a per-card mark
+        // has room, and `CardMarks.tsx`'s argument is that a fifth mark had no corner of its own
+        // left to take. It separates from the dot by **shape** rather than by colour — a stroked
+        // glyph against an 8px filled square — because the `--color-pie-*` deeps are spoken for
+        // by labels and gold is spoken for by selection.
+        //
+        // A cell is not swallowed by a label, which is this view's standing difference from the
+        // other three: `NoteMark` carries its own `role="img"` and its own name, so the fact
+        // reaches a keyboard reader here without `deckCardName` saying it.
         cell: (row) =>
-          row.kind === "card" && row.card.labelName !== null ? (
+          row.kind === "card" && (row.card.labelName !== null || row.noted) ? (
             <span className="flex min-w-0 items-center gap-1.5">
-              <LabelDot name={row.card.labelName} color={row.card.labelColor} />
-              <span className="min-w-0 truncate text-xs">{row.card.labelName}</span>
+              {row.card.labelName !== null && (
+                <LabelDot name={row.card.labelName} color={row.card.labelColor} />
+              )}
+              {row.noted && <NoteMark />}
+              {row.card.labelName !== null && (
+                <span className="min-w-0 truncate text-xs">{row.card.labelName}</span>
+              )}
             </span>
           ) : null,
       },

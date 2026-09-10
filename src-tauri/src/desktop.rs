@@ -17,11 +17,11 @@
 use crate::sync::AppState;
 use crate::{
     camera, card, collection, collection_alloc, collection_folders, combos, db, deck, deck_audit,
-    deck_meta, deck_missing, deck_pull, deck_quick_add, deck_theory, deck_tokens, deck_undo,
-    deckpane, decksort, errors, export, flatten, images, import, index, listview, markcolors,
-    marketplace, marketplace_feed, mirror, nav, paths, reset, scanner, schema, scryfall, search,
-    searchopen, share, sync, sync_engine, sync_pair, tags, update, wishlist, wishlist_folders,
-    wishlist_optimize, zoom,
+    deck_meta, deck_missing, deck_notes, deck_pull, deck_quick_add, deck_theory, deck_tokens,
+    deck_undo, deckpane, decksort, errors, export, flatten, images, import, index, listview,
+    markcolors, marketplace, marketplace_feed, mirror, nav, paths, reset, scanner, schema,
+    scryfall, search, searchopen, share, sync, sync_engine, sync_pair, tags, update, wishlist,
+    wishlist_folders, wishlist_optimize, zoom,
 };
 // **Not in the list above, because this file compiles for Android too.** Its name says
 // `desktop`, but its gate is `cfg(not(target_family = "wasm"))` — desktop *and* mobile — while
@@ -504,6 +504,22 @@ pub fn run() {
             deck_tokens::deck_token_set,
             deck_tokens::deck_token_clear,
             deck_tokens::deck_token_add,
+            // The Notes band's read, its six writes, and the one read that is not deck-scoped at
+            // all. `generate_handler!` names a command after the **last path segment** again, so
+            // `deck_notes::deck_notes` registers as `deck_notes` — the module and the read wear
+            // one name for `deck_tokens`' reason, and `card_notes` is filed here rather than with
+            // the card commands because the rows it answers are a deck's.
+            //
+            // **No capability entry for any of them**: Tauri v2's ACL gates `core:` and `plugin:`
+            // commands, and an app's own `#[tauri::command]` is always callable.
+            deck_notes::deck_notes,
+            deck_notes::deck_note_create,
+            deck_notes::deck_note_update,
+            deck_notes::deck_note_delete,
+            deck_notes::deck_note_attach,
+            deck_notes::deck_note_detach,
+            deck_notes::deck_note_reorder,
+            deck_notes::card_notes,
             marketplace::get_marketplace,
             marketplace::set_marketplace,
             zoom::card_zoom,

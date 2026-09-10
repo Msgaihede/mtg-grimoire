@@ -12,6 +12,9 @@
  * Set as foil             (or a `Finish ▸` submenu where the printing is sold in three)
  * Label card           ▸  None / the deck's labels / New label…
  * ─────────────────────
+ * Add note…               opens the editor with this card already attached
+ * Notes                ▸  the notes that name this card — only where there are any
+ * ─────────────────────
  * Remove card             every copy, out of this pile
  * ```
  *
@@ -48,6 +51,7 @@ import {
   PackageOpen,
   Plus,
   Sparkles,
+  StickyNote,
   Tag,
   UserRound,
 } from "lucide-react";
@@ -55,7 +59,19 @@ import type { MenuAction, MenuItem } from "@/components/menu/types";
 import { buildCardMenu, type CardMenuDeps, type CardMenuTarget } from "@/features/card/cardMenu";
 import { plural } from "@/lib/counts";
 import { FINISH_LABEL, parseFinishes } from "@/lib/finish";
-import type { DeckCard, DeckCategory, DeckFinish, DeckLabel, FormatSpec } from "@/lib/ipc";
+import type {
+  DeckCard,
+  DeckCategory,
+  DeckFinish,
+  DeckLabel,
+  DeckNote,
+  FormatSpec,
+} from "@/lib/ipc";
+// `noteTitle` and `notesForCard` are `deckNotes.ts`'s, imported rather than respelled: a blank
+// title falling back to the body's first line is one rule, and *which notes name this card* is
+// one predicate. A menu that answered either of them itself would be the second spelling that
+// comes to disagree — `quickAddShort` one submenu up is the same rule at the same distance.
+import { noteTitle, notesForCard } from "./deckNotes";
 // **`./quickCollection`, and the name is load-bearing on Windows.** The plan called this module
 // `quickAdd.ts`; `QuickAdd.tsx` — the toolbar's card field — already sits in this folder, and a
 // case-insensitive file system resolves `./quickAdd` and `./QuickAdd` to whichever the resolver
@@ -232,6 +248,45 @@ export interface DeckCardMenuDeps {
    */
   tracksCollection?: boolean;
   /**
+   * **Every note the deck holds** — `ipc.deckNotes`' answer, unfiltered, exactly as
+   * {@link categories} is (2026-09-10, issue #447).
+   *
+   * Unfiltered because the filtering is `notesForCard`'s and is done here: a note attaches by
+   * `oracleId`, so *which notes name this card* is a question about the note's own attachment list
+   * rather than about anything the surface knows. Handing this builder a pre-filtered list would
+   * put that predicate at every call site.
+   *
+   * **Absent reads as none, and that is honest at both of the states it covers** — the read has not
+   * answered yet, and the deck has no notes. Neither draws a `Notes ▸` row, and `Add note…` is
+   * there in both, so a reader never meets a menu that has taken a press away. (The four-states
+   * rule the card modal follows is about a *list* a reader is reading; a menu row that is simply
+   * not offered yet is not an empty list.)
+   */
+  notes?: readonly DeckNote[];
+  /**
+   * **Add note…** — open the surface's note editor with this card already attached. It writes
+   * nothing itself.
+   *
+   * `addLabel`'s arrangement and its two reasons verbatim: it keeps this file's purity contract,
+   * and — the half that is a defect rather than a preference — a `mutate`-scoped `onSuccess`
+   * belongs to the *observer*, so a create started from a menu and chained to an attach loses its
+   * second half to an Escape landing during the round trip. The editor's observer outlives both
+   * the menu and the dialog.
+   *
+   * **Optional, and absent takes {@link openNote}'s rows with it** — see {@link noteItems}.
+   */
+  addNote?: (card: DeckCard) => void;
+  /**
+   * **Open one note** — the press behind every row of `Notes ▸`.
+   *
+   * It takes the note rather than an id, because the surface that opens one has to draw it and
+   * the row already holds the whole thing: an id would send the editor back to a list the menu was
+   * built from.
+   *
+   * Optional, on {@link addNote}'s terms.
+   */
+  openNote?: (note: DeckNote) => void;
+  /**
    * **The whole picked set, when the right-clicked card is in it** — issue #214. Empty, absent, or
    * holding one card, and this menu is about the row that was right-clicked, exactly as it was
    * before multi-select existed.
@@ -285,6 +340,11 @@ function manyCards(n: number): string {
  * shortfall: four rows short by four different amounts have no one number to name, so a plural
  * row could only quote a total no card on screen is wearing.
  *
+ * **The two note rows stay singular too, and it is a third kind of reason** — see
+ * {@link noteItems}. `Notes ▸` lists the notes that name *this* card, and four cards have four
+ * lists with no one list to draw; `Add note…` opens one editor over one document, and a note that
+ * arrived naming four cards the reader had picked minutes ago is a document they did not write.
+ *
  * Everything above the first separator is `cardMenu.tsx`'s and is about the printing rather than
  * about this deck; it is singular for that reason and not for this one.
  */
@@ -336,6 +396,12 @@ export function buildDeckCardMenu(card: DeckCard, deps: DeckCardMenuDeps): MenuI
         },
       ],
     },
+    // **Under a rule of their own, between the label rows and the removal** — the notes are
+    // neither. Everything above them writes the *deck* (where the card goes, what it is called);
+    // the row below takes the cardboard out. A note writes neither: it is something the reader
+    // wrote *about* the card, so it is its own block rather than a tail on the filing rows or a
+    // neighbour of the destructive one.
+    ...noteItems(card, deps),
     // A second rule, and it is the same kind of line as the first: everything above says where
     // this card goes or what it is called, and this one takes it out. A row that removes
     // cardboard does not sit flush against a row that renames it.
@@ -573,6 +639,118 @@ function collectionItems(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
       ],
     },
   ];
+}
+
+/**
+ * The note block, and the rule above it — `Add note…` and, where there are any, `Notes ▸`
+ * (2026-09-10, issue #447).
+ *
+ * ```
+ * ─────────
+ * Add note…
+ * Notes                                   ▸
+ *     Mana base
+ *     Why this is not a Bolt
+ * ```
+ *
+ * **All-or-none on the two callbacks**, which is {@link collectionItems}' guard and
+ * `cardMenu.tsx`'s `moveItem` rule: a surface that wired neither gets no block at all, separator
+ * included, so a menu drawn over a deck with no note editor behind it is the menu it always was.
+ * The two travel together because `Notes ▸` with nothing to open is a list of dead rows and
+ * `Add note…` with no way back to what was written is a write nobody can read.
+ *
+ * **`Add note…` is unconditional inside the block and `Notes ▸` is not**, and that pair is the
+ * whole shape. A card can always be written about, so the press that starts a note is on every
+ * card of the surface; a card that is named by nothing has no list, and an **absent** row is the
+ * answer rather than a greyed one — a greyed row's accessible name in this app includes its
+ * reason, so `Notes (no notes name this card)` is a sentence read out on the great majority of a
+ * deck's cards to say that nothing has happened. That is the inverse of {@link collectionItems}'
+ * call, and deliberately: a shortfall is a state every card in a deck passes through, so a row
+ * that vanished there would read as a bug, where a note is something a reader made on purpose and
+ * its absence is the ordinary case.
+ *
+ * **The ellipsis is the app's own promise** — `More labels…`, `Clear stack…`, `Move to folder…`:
+ * the menu closes and a surface opens, rather than the press being the whole act. `Notes ▸`'s own
+ * rows carry none, because opening a note the reader already wrote is not a further question.
+ *
+ * **Both rows are about the right-clicked card under a picked set** — {@link buildDeckCardMenu}'s
+ * doc has the argument.
+ */
+function noteItems(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
+  const { addNote, openNote } = deps;
+  if (addNote === undefined || openNote === undefined) return [];
+  return [
+    { kind: "separator", id: "sep-notes" },
+    ...deckCardNoteRows(card, deps.notes ?? [], addNote, openNote),
+  ];
+}
+
+/**
+ * The note rows themselves — the add, and the notes that name this card.
+ *
+ * **Exported so the rules above can be pinned without mounting a menu, and so `DeckEditor` can
+ * compose them**, which is {@link deckCardLabelRows}' arrangement one block down and its reason:
+ * these are a `MenuItem[]` built from facts the surface already holds, so nothing here mounts,
+ * queries or holds state.
+ *
+ * **`notesForCard` and `noteTitle` are `deckNotes.ts`'s and are imported rather than respelled.**
+ * The first is *which notes name this card*, which is a question about a note's own attachment
+ * list — matched on `oracleId`, so a note written against the Theory list shows on the Live one
+ * and a printing swap does not lose it, and a card with **no** oracle id (an orphan) matches
+ * nothing rather than everything. The second is *what a note is called*, which is the stored title,
+ * or the body's first line, or `Untitled note` — three arms this menu must not know about, since a
+ * row reading `Untitled note` here and a band row reading the body's first line would be one note
+ * with two names on one screen.
+ *
+ * **The rows are in the deck's own `sortOrder`**, which is what `ipc.deckNotes` answers in and
+ * `notesForCard` preserves — no `sortOptions`. It is the second of the two exemptions
+ * `src/CLAUDE.md` grants: an order the reader arranged themselves, exactly as the deck's
+ * categories are. Sorting them here would list a reader's notebook one way in the band and another
+ * in this menu, over the same deck.
+ */
+export function deckCardNoteRows(
+  card: DeckCard,
+  /** The deck's whole notebook, `readonly` like {@link DeckCardMenuDeps.categories} beside it —
+   *  a builder narrows a list, it does not own one. */
+  notes: readonly DeckNote[],
+  onAdd: (card: DeckCard) => void,
+  onOpen: (note: DeckNote) => void,
+): MenuItem[] {
+  const mine = notesForCard(notes, card.oracleId);
+  const rows: MenuItem[] = [
+    {
+      kind: "action",
+      id: "note-add",
+      // `Add note…`, not `New note…`: the reader is adding one to a notebook that is already the
+      // deck's, and the band above it is called Notes. `More labels…`'s `Plus` for the same
+      // reason it wears one — the glyph on an *add* row is the add, and `StickyNote` below is the
+      // notes themselves.
+      label: "Add note…",
+      Icon: Plus,
+      onSelect: () => onAdd(card),
+    },
+  ];
+  if (mine.length === 0) return rows;
+  rows.push({
+    kind: "submenu",
+    id: "card-notes",
+    // `Notes`, the same word the deck's own band wears, and a plain noun rather than
+    // `View notes` — every submenu head in this menu names the thing it opens.
+    label: "Notes",
+    Icon: StickyNote,
+    // **`submenu` and never `lazy`.** The notes are already in hand — the surface read them for
+    // the band and for the cards' own marks — so there is nothing to fetch when the row expands,
+    // which is exactly the test `types.ts` states for the two kinds.
+    items: mine.map(
+      (note): MenuItem => ({
+        kind: "action",
+        id: `note-${note.id}`,
+        label: noteTitle(note),
+        onSelect: () => onOpen(note),
+      }),
+    ),
+  });
+  return rows;
 }
 
 /**

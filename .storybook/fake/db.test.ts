@@ -163,7 +163,6 @@ function deck(over: Partial<FakeDeck> = {}): FakeDeck {
     coverCardId: null,
     coverKind: "card_art",
     folderId: null,
-    notes: null,
     theoryEnabled: false,
     // The kind, and `false/false` is a regular deck — what every test in this file that says
     // nothing about it is about. A test that wants the third kind passes `virtualOnly: true`,
@@ -7732,7 +7731,6 @@ describe("the deck row itself", () => {
         name: "  Burn  ",
         formatKey: "modern",
         description: "fast red",
-        notes: "the sideboard plan lives here",
         coverCardId: BOLT.id,
         folderId: folder.id,
         theoryEnabled: true,
@@ -7742,7 +7740,6 @@ describe("the deck row itself", () => {
       name: "Burn",
       formatKey: "modern",
       description: "fast red",
-      notes: "the sideboard plan lives here",
       coverCardId: BOLT.id,
       folderId: folder.id,
       theoryEnabled: true,
@@ -7776,7 +7773,6 @@ describe("the deck row itself", () => {
     expect(row).toMatchObject({
       folderId: null,
       description: null,
-      notes: null,
       coverCardId: null,
       coverKind: "card_art",
       theoryEnabled: false,
@@ -7913,8 +7909,32 @@ describe("the deck row itself", () => {
 
   it("leaves absent patch fields alone", () => {
     const db = makeDeckDb({ decks: [deck({ id: 1, name: "Burn", description: "fast" })] });
-    const row = writeHandlers(db).deck_update({ id: 1, patch: { notes: "sideboard plan" } });
-    expect(row).toMatchObject({ name: "Burn", description: "fast", notes: "sideboard plan" });
+    // `notesOpen` where this test said `notes` until user schema v43: the column it patched is
+    // gone, and the one that replaced it is the disclosure rather than the prose. What it pins
+    // is unchanged — `coalesce(?n, column)`, so the two fields the patch says nothing about are
+    // still the ones the deck was seeded with.
+    const row = writeHandlers(db).deck_update({ id: 1, patch: { notesOpen: true } });
+    expect(row).toMatchObject({ name: "Burn", description: "fast", notesOpen: true });
+  });
+
+  /**
+   * `decks.notes_open`'s default, and the one thing about it that is easy to get backwards.
+   *
+   * Its two neighbours disagree — `tokens_open` is `DEFAULT 0` and `stats_open` is `DEFAULT 1` —
+   * and which one applies turns on whether the upgrade changes what is on screen. The stats band
+   * was already drawn for every deck on every disk, so a `0` would have taken it away; the Notes
+   * band is new, so a `0` takes nothing from anybody. A `?? true` here would story the editor
+   * against a deck the app would draw shut.
+   */
+  it("opens a deck with its Notes band shut and its Deck stats band open", () => {
+    const db = makeDeckDb({ decks: [deck({ id: 1 })] });
+    expect(readHandlers(db).deck_list()[0]).toMatchObject({
+      notesOpen: false,
+      statsOpen: true,
+      tokensOpen: false,
+    });
+    const born = writeHandlers(db).deck_create({ deck: { name: "Burn", formatKey: "modern" } });
+    expect(born).toMatchObject({ notesOpen: false, statsOpen: true, tokensOpen: false });
   });
 
   /**
@@ -7973,6 +7993,443 @@ describe("the deck row itself", () => {
     // Anything that is not blank is stored, whether or not this build has a mode by that name.
     w.deck_set_view_state({ deckId: 1, viewState: { groupBy: "byArtist" } });
     expect(db.decks[0].lastGroupBy).toBe("byArtist");
+  });
+});
+
+/**
+ * `deck_notes` and `deck_note_cards` (user schema v43, issue #447) — many notes per deck, each
+ * naming any number of cards.
+ *
+ * The block exists because almost every rule here is about a thing that **stays**: a note stays
+ * in the list when it acquires a card, a note stays when it loses its last one, a second attach
+ * of one card stays one row. Each of those looks identical to a correct implementation and to
+ * one that never wrote anything, so they are asserted against a contrast rather than alone.
+ */
+describe("deck notes", () => {
+  /** Two decks, so `card_notes`' whole reason — answering across every deck — is reachable. */
+  const notesDb = () => makeDeckDb({ decks: [deck({ id: 1 }), deck({ id: 2, name: "Storm" })] });
+  const BOLT_ORACLE = BOLT.oracleId;
+  const SPHINX_ORACLE = FOIL_ONLY.oracleId;
+
+  it("keeps a note in the list when it names a card, which is the issue's whole point", () => {
+    // *"Notes should always appear in the notes list, even when they are attached to a card."*
+    // It holds by construction rather than by a rule: the attachment hangs off the note, so
+    // there is no other place a note could have gone.
+    const db = notesDb();
+    const note = writeHandlers(db).deck_note_create({
+      deckId: 1,
+      title: "Mana",
+      body: "Fourteen sources.",
+      oracleIds: [BOLT_ORACLE],
+    });
+    expect(note.cards).toEqual([{ oracleId: BOLT_ORACLE, name: "Lightning Bolt" }]);
+    const all = readHandlers(db).deck_notes({ deckId: 1 });
+    expect(all).toHaveLength(1);
+    expect(all[0].id).toBe(note.id);
+  });
+
+  it("names any number of cards, deduping a repeat rather than storing it twice", () => {
+    // `(note_id, oracle_id)` is unique, so a caller sending one id twice describes one fact.
+    const db = notesDb();
+    const note = writeHandlers(db).deck_note_create({
+      deckId: 1,
+      title: "Both halves",
+      body: "b",
+      oracleIds: [BOLT_ORACLE, SPHINX_ORACLE, BOLT_ORACLE],
+    });
+    expect(note.cards.map((c) => c.oracleId).sort()).toEqual(
+      [BOLT_ORACLE, SPHINX_ORACLE].sort(),
+    );
+    expect(db.deckNoteCards).toHaveLength(2);
+  });
+
+  it("attaches a card the note already names without erroring and without adding a row", () => {
+    // The grain, from the app's side: two devices attaching one card to one note describe one
+    // fact, and a second row would make the card modal read two notes for one note.
+    const db = notesDb();
+    const w = writeHandlers(db);
+    const note = w.deck_note_create({ deckId: 1, title: "t", body: "b", oracleIds: [] });
+    w.deck_note_attach({ deckId: 1, noteId: note.id, oracleId: BOLT_ORACLE });
+    const again = w.deck_note_attach({ deckId: 1, noteId: note.id, oracleId: BOLT_ORACLE });
+    expect(again.cards).toHaveLength(1);
+    expect(db.deckNoteCards).toHaveLength(1);
+    // And the second press recorded nothing, because nothing happened: a press that changed no
+    // row must not put a line in the drawer or spend the reader's one Ctrl+Z.
+    const attaches = db.deckAudit.filter(
+      (a) => (JSON.parse(a.payload) as { action?: string }).action === "attach",
+    );
+    expect(attaches).toHaveLength(1);
+  });
+
+  it("keeps the note when its last card is detached, and detaching twice is not an error", () => {
+    // The card is a reference the note holds, never a place the note lives — so losing every
+    // card cannot delete a note. `deck_note_delete` is the only thing that can.
+    const db = notesDb();
+    const w = writeHandlers(db);
+    const note = w.deck_note_create({
+      deckId: 1,
+      title: "Mana",
+      body: "b",
+      oracleIds: [BOLT_ORACLE],
+    });
+    const bare = w.deck_note_detach({ deckId: 1, noteId: note.id, oracleId: BOLT_ORACLE });
+    expect(bare.cards).toEqual([]);
+    expect(readHandlers(db).deck_notes({ deckId: 1 })).toHaveLength(1);
+    expect(() =>
+      w.deck_note_detach({ deckId: 1, noteId: note.id, oracleId: BOLT_ORACLE }),
+    ).not.toThrow();
+  });
+
+  it("answers the oracle id itself for a card the database has no row for", () => {
+    // A soft reference like every other card reference in a user table. A note about a printing
+    // that left the corpus still draws a row a reader can read and detach; an empty name would
+    // draw a blank chip and a refusal would take the whole note off the screen.
+    const db = notesDb();
+    const note = writeHandlers(db).deck_note_create({
+      deckId: 1,
+      title: "t",
+      body: "b",
+      oracleIds: ["o-not-in-the-corpus"],
+    });
+    expect(note.cards).toEqual([
+      { oracleId: "o-not-in-the-corpus", name: "o-not-in-the-corpus" },
+    ]);
+  });
+
+  it("refuses a blank oracle id on the two paths that would store one, and on neither other", () => {
+    // The module's one refusal about an *argument*, and the split is what this test is for: the
+    // same blank string reaches four places. A create and an attach would each store a permanent
+    // attachment to no card — a row nothing could then name in order to remove — so both are
+    // fenced. The other two are not, and neither absence is an oversight.
+    const db = notesDb();
+    const w = writeHandlers(db);
+    expect(() =>
+      w.deck_note_create({ deckId: 1, title: "t", body: "b", oracleIds: [BOLT_ORACLE, ""] }),
+    ).toThrow(/it needs one/);
+    const note = w.deck_note_create({ deckId: 1, title: "t", body: "b", oracleIds: [] });
+    expect(() => w.deck_note_attach({ deckId: 1, noteId: note.id, oracleId: "" })).toThrow(
+      /it needs one/,
+    );
+    expect(db.deckNoteCards).toEqual([]);
+    // The detach folds into nothing, as it does for any id the note does not name.
+    expect(() =>
+      w.deck_note_detach({ deckId: 1, noteId: note.id, oracleId: "" }),
+    ).not.toThrow();
+    // And the read answers an empty list: an orphan printing genuinely has no oracle id, and a
+    // modal opened on one has to draw something.
+    expect(readHandlers(db).card_notes({ oracleId: "" })).toEqual([]);
+  });
+
+  it("leaves nothing at all behind when a create names a blank id", () => {
+    // **What survives the refusal, which is a different question from whether one happens.** The
+    // whole list is validated ahead of the transaction, so a blank id anywhere in it leaves no
+    // note, no attachment, no history row and no undo step — where a check made per insert would
+    // refuse in the same words and leave a half-made note standing. The blank is **second** on
+    // purpose: a handler that validated as it inserted would already have written the note and
+    // the first attachment by the time it reached this one.
+    const db = notesDb();
+    expect(() =>
+      allHandlers(db).deck_note_create({
+        deckId: 1,
+        title: "Mana",
+        body: "b",
+        oracleIds: [BOLT_ORACLE, ""],
+      }),
+    ).toThrow(/it needs one/);
+    expect(db.deckNotes).toEqual([]);
+    expect(db.deckNoteCards).toEqual([]);
+    expect(db.deckAudit).toEqual([]);
+    expect(db.deckUndo).toEqual([]);
+    // And the deck's own clock has not moved, because `touch_deck` never ran: a refused create
+    // must not resort the gallery over a write that did not happen.
+    expect(db.decks[0].updatedAt).toBe(WHEN);
+  });
+
+  it("makes one attachment when a create names the same card twice", () => {
+    // `(note_id, oracle_id)` is unique, so the crate dedupes through a `HashSet` in the same
+    // pre-transaction loop that validates. A caller naming one card twice describes one fact and
+    // must fold rather than hit the grain — `deck_note_attach`'s answer to the same press.
+    const db = notesDb();
+    const note = writeHandlers(db).deck_note_create({
+      deckId: 1,
+      title: "t",
+      body: "b",
+      oracleIds: [BOLT_ORACLE, BOLT_ORACLE],
+    });
+    expect(note.cards).toHaveLength(1);
+    expect(db.deckNoteCards).toHaveLength(1);
+  });
+
+  it("checks the blank id before it resolves the deck or the note", () => {
+    // A refusal about an argument does not depend on which row it was aimed at — the order the
+    // crate validates in, and the ordering mistake that would otherwise answer "not there any
+    // more" for a caller whose real problem is the empty string.
+    const db = notesDb();
+    const w = writeHandlers(db);
+    expect(() => w.deck_note_attach({ deckId: 1, noteId: 999, oracleId: "" })).toThrow(
+      /it needs one/,
+    );
+    expect(() =>
+      w.deck_note_create({ deckId: 99, title: "t", body: "b", oracleIds: [""] }),
+    ).toThrow(/it needs one/);
+  });
+
+  it("refuses a missing note and another deck's note in two different sentences", () => {
+    // "Gone" and "not yours" are different things to tell a stale editor, and nothing in the DDL
+    // stops a `note_id` naming another deck's note — so the second is a real fence.
+    const db = notesDb();
+    const w = writeHandlers(db);
+    const note = w.deck_note_create({ deckId: 1, title: "t", body: "b", oracleIds: [] });
+    expect(() => w.deck_note_update({ deckId: 1, id: 999, title: "x" })).toThrow(
+      /not there any more/,
+    );
+    expect(() => w.deck_note_update({ deckId: 2, id: note.id, title: "x" })).toThrow(
+      /belongs to a different deck/,
+    );
+    expect(() => w.deck_note_delete({ deckId: 2, id: note.id })).toThrow(
+      /belongs to a different deck/,
+    );
+  });
+
+  it("edits either field, leaves the other, and can empty a title the old column never could", () => {
+    // `update_deck` writes `coalesce(?n, notes)`, so the column this replaced could never be
+    // emptied by a patch at all — only an undo could write it back to NULL. An empty title here
+    // is a state the app draws (the list reads the body's first line), so it is a real value.
+    const db = notesDb();
+    const w = writeHandlers(db);
+    const note = w.deck_note_create({ deckId: 1, title: "Mana", body: "b", oracleIds: [] });
+    expect(w.deck_note_update({ deckId: 1, id: note.id, body: "c" })).toMatchObject({
+      title: "Mana",
+      body: "c",
+    });
+    expect(w.deck_note_update({ deckId: 1, id: note.id, title: "" })).toMatchObject({
+      title: "",
+      body: "c",
+    });
+  });
+
+  it("reads a null on the wire as 'leave it' and an empty string as a cleared title", () => {
+    // **The one place this fake could silently disagree with `ipc.ts`.** `deckNoteUpdate` takes
+    // an optional patch and folds an absent field to `null` before it invokes, because Tauri
+    // fills parameters by name — so what arrives here is `null` and never `undefined`. A `||`
+    // on this side would read a deliberately cleared title as no change at all, which is this
+    // command's `quantity: 0` and is invisible to a type-checker on both sides of the wire.
+    const db = notesDb();
+    const w = writeHandlers(db);
+    const note = w.deck_note_create({ deckId: 1, title: "Mana", body: "b", oracleIds: [] });
+    expect(w.deck_note_update({ deckId: 1, id: note.id, title: null, body: "c" })).toMatchObject({
+      title: "Mana",
+      body: "c",
+    });
+    expect(w.deck_note_update({ deckId: 1, id: note.id, title: "", body: null })).toMatchObject({
+      title: "",
+      body: "c",
+    });
+  });
+
+  it("records one history row per note write, and none for an edit that changed nothing", () => {
+    // One row for an edit however many fields moved — editing a note is one event, where
+    // `deck_update` writes one row per changed field because each of those is one. And no row at
+    // all for a form saved untouched, which is that handler's rule rather than a difference.
+    const db = notesDb();
+    const w = writeHandlers(db);
+    const note = w.deck_note_create({ deckId: 1, title: "Mana", body: "b", oracleIds: [] });
+    w.deck_note_update({ deckId: 1, id: note.id, title: "Mana base", body: "c" });
+    const before = db.deckAudit.length;
+    w.deck_note_update({ deckId: 1, id: note.id, title: "Mana base" });
+    expect(db.deckAudit).toHaveLength(before);
+
+    w.deck_note_attach({ deckId: 1, noteId: note.id, oracleId: BOLT_ORACLE });
+    w.deck_note_delete({ deckId: 1, id: note.id });
+    const payloads = db.deckAudit.map((a) => JSON.parse(a.payload) as Record<string, unknown>);
+    expect(db.deckAudit.map((a) => a.kind)).toEqual(["deck", "deck", "deck", "deck"]);
+    expect(payloads.map((p) => p.action)).toEqual(["create", "edit", "attach", "delete"]);
+    // The `deck` kind and `field: "note"`, never a tenth audit kind: `deck_audit.kind` carries a
+    // CHECK, SQLite has no `ALTER … CHECK`, and a tenth word would rebuild every reader's whole
+    // deck history — firing `deck_undo`'s cascade and emptying the undo stack on every real
+    // launch while leaving it intact in every test.
+    expect(payloads.every((p) => p.field === "note")).toBe(true);
+    // The card's name and not its oracle id, for the reason a filing records the folder's path:
+    // an id in a history row is a string no reader could resolve.
+    expect(payloads[2]).toMatchObject({ action: "attach", card: "Lightning Bolt" });
+    expect(payloads[0].card).toBeNull();
+  });
+
+  it("takes a note and its attachments with the deck, and gives both back on an undo", () => {
+    // Two cascades in one press — `deck_notes.deck_id` and then `deck_note_cards.note_id` — and
+    // the undo half is what `deckState` recording both tables is for: a restored note that had
+    // lost the cards it named would be a Ctrl+Z that gave back half of what it took.
+    const db = notesDb();
+    const w = allHandlers(db);
+    const note = w.deck_note_create({
+      deckId: 1,
+      title: "Mana",
+      body: "b",
+      oracleIds: [BOLT_ORACLE, SPHINX_ORACLE],
+    });
+    w.deck_note_delete({ deckId: 1, id: note.id });
+    expect(db.deckNotes).toEqual([]);
+    expect(db.deckNoteCards).toEqual([]);
+
+    const cursor = w.deck_undo_state({ deckId: 1, redoId: null });
+    w.deck_undo_apply({ deckId: 1, auditId: cursor.undo!.id });
+    const back = readHandlers(db).deck_notes({ deckId: 1 });
+    expect(back).toHaveLength(1);
+    expect(back[0].cards).toHaveLength(2);
+
+    // And the deck delete really does take both tables, which is the other half of the cascade.
+    writeHandlers(db).deck_delete({ id: 1 });
+    expect(db.deckNotes).toEqual([]);
+    expect(db.deckNoteCards).toEqual([]);
+  });
+
+  it("orders by sort_order, and a reorder records a row naming no note", () => {
+    // Every note in the deck moved, so there is no `from` and no `to` that is about one of them
+    // — `deck_category_reorder`'s reasoning, and `auditText.ts` prints `Reordered the notes`
+    // with no detail. The **six-word** vocabulary rather than the five the row-level verbs
+    // suggest: `deck_audit.rs`'s rule is that every deck write leaves exactly one row.
+    const db = notesDb();
+    const w = writeHandlers(db);
+    const first = w.deck_note_create({ deckId: 1, title: "A", body: "b", oracleIds: [] });
+    const second = w.deck_note_create({ deckId: 1, title: "B", body: "b", oracleIds: [] });
+    expect(readHandlers(db).deck_notes({ deckId: 1 }).map((n) => n.title)).toEqual(["A", "B"]);
+    // The unknown id is skipped rather than failing the reorder over one entry —
+    // `deck_category_reorder`'s rule one table over.
+    w.deck_note_reorder({ deckId: 1, ids: [second.id, first.id, 999] });
+    expect(readHandlers(db).deck_notes({ deckId: 1 }).map((n) => n.title)).toEqual(["B", "A"]);
+    const last = db.deckAudit[db.deckAudit.length - 1];
+    expect(last.kind).toBe("deck");
+    expect(JSON.parse(last.payload)).toEqual({
+      field: "note",
+      action: "reorder",
+      note: null,
+      card: null,
+    });
+  });
+
+  it("puts the reader's old order back on a Ctrl+Z", () => {
+    // The history row above is also what puts the drag on the undo stack: `journalled` keys a
+    // step to the last row a call wrote, and `deckState` records every note's `sortOrder`. A
+    // handler that recorded nothing would leave a Storybook reorder unreversible where the real
+    // one is not — a difference no story could see and every reader could.
+    const db = notesDb();
+    const w = allHandlers(db);
+    const first = w.deck_note_create({ deckId: 1, title: "A", body: "b", oracleIds: [] });
+    const second = w.deck_note_create({ deckId: 1, title: "B", body: "b", oracleIds: [] });
+    w.deck_note_reorder({ deckId: 1, ids: [second.id, first.id] });
+    const cursor = w.deck_undo_state({ deckId: 1, redoId: null });
+    expect(cursor.undo).not.toBeNull();
+    w.deck_undo_apply({ deckId: 1, auditId: cursor.undo!.id });
+    expect(readHandlers(db).deck_notes({ deckId: 1 }).map((n) => n.title)).toEqual(["A", "B"]);
+  });
+
+  it("answers card_notes across every deck, and answers nothing for a blank oracle id", () => {
+    // The one read here that is not deck-scoped, and the whole reason the card modal can say
+    // what a reader has written about a card opened from anywhere. A blank id is an orphan
+    // printing, and a handler that let one through would match every note naming nothing.
+    const db = notesDb();
+    const w = writeHandlers(db);
+    w.deck_note_create({ deckId: 1, title: "In burn", body: "b", oracleIds: [BOLT_ORACLE] });
+    w.deck_note_create({ deckId: 2, title: "In storm", body: "b", oracleIds: [BOLT_ORACLE] });
+    w.deck_note_create({ deckId: 1, title: "Names nothing", body: "b", oracleIds: [] });
+    const found = readHandlers(db).card_notes({ oracleId: BOLT_ORACLE });
+    expect(found).toHaveLength(2);
+    expect(found.map((n) => [n.deckId, n.deckName, n.title])).toEqual([
+      [2, "Storm", "In storm"],
+      [1, "Test deck", "In burn"],
+    ]);
+    expect(readHandlers(db).card_notes({ oracleId: "" })).toEqual([]);
+    // A deck's own read is the other question and does not answer it: deck 1 holds two notes,
+    // only one of which names this card.
+    expect(readHandlers(db).deck_notes({ deckId: 1 })).toHaveLength(2);
+  });
+
+  it("goes with the whole cabinet when the decks are cleared", () => {
+    // `decks_clear` empties every deck table, and these two cascade from `decks` like the rest.
+    // A pair left standing would be rows naming a deck that is not there — invisible until a
+    // `card_notes` read found them and drew a note under a blank heading.
+    const db = seed("starter");
+    expect(db.deckNotes.length).toBeGreaterThan(0);
+    expect(db.deckNoteCards.length).toBeGreaterThan(0);
+    writeHandlers(db).decks_clear();
+    expect(db.deckNotes).toEqual([]);
+    expect(db.deckNoteCards).toEqual([]);
+  });
+
+  /**
+   * The fault both reads honour, and the state it is the only spelling of: **an empty list and a
+   * failed read look identical on screen and mean opposite things.** The band draws its own
+   * refusal line where a deck with no notes draws an add field, and the card modal's overlay has
+   * four arms rather than three for exactly this.
+   */
+  it("fails both note reads under the deckNotes fault, in two different sentences", () => {
+    const db = { ...seed("starter"), fault: "deckNotes" as const };
+    expect(() => readHandlers(db).deck_notes({ deckId: 4 })).toThrow(/the deck's notes/);
+    expect(() => readHandlers(db).card_notes({ oracleId: BOLT_ORACLE })).toThrow(
+      /the notes for this card/,
+    );
+    // A blank oracle id still reaches the refusal rather than the `[]` arm, which is the one
+    // ordering here that could make the fault unreachable for the card most likely to be opened
+    // in it.
+    expect(() => readHandlers(db).card_notes({ oracleId: "" })).toThrow(/could not be read/);
+  });
+
+  it("is its own fault and not deckMeta's, in both directions", () => {
+    // Two modules, two faults. Folding them together would make a story that meant to fail the
+    // notes read fail the folder tree beside it — and the other way round, a `deckMeta` story
+    // would lose its notes for a reason it never asked for.
+    const notesFailing = { ...seed("starter"), fault: "deckNotes" as const };
+    expect(() => readHandlers(notesFailing).deck_folder_list()).not.toThrow();
+    const metaFailing = { ...seed("starter"), fault: "deckMeta" as const };
+    expect(() => readHandlers(metaFailing).deck_folder_list()).toThrow(/deck folders/);
+    expect(() => readHandlers(metaFailing).deck_notes({ deckId: 4 })).not.toThrow();
+  });
+
+  it("answers an empty list for a deck that is not there rather than refusing", () => {
+    // A band at the bottom of a page must never be able to stop a deck from drawing —
+    // `deck_tokens`' call one feature over, and the same one.
+    expect(readHandlers(notesDb()).deck_notes({ deckId: 99 })).toEqual([]);
+  });
+
+  it("refuses every note write while a sync holds the write connection", () => {
+    // The busy sweep below walks all six of these too; asserted here as well because the sweep
+    // proves the refusal exists and this proves not one row moved behind it.
+    const db = makeDeckDb({ decks: [deck({ id: 1 })], fault: "busy" });
+    const w = writeHandlers(db);
+    expect(() =>
+      w.deck_note_create({ deckId: 1, title: "t", body: "b", oracleIds: [] }),
+    ).toThrow(/busy/i);
+    expect(db.deckNotes).toEqual([]);
+  });
+
+  /**
+   * `starter`'s own two rows, asserted here rather than left to a story: the seed is the world,
+   * so a fixture that stopped resolving would take the band's stories and the card marks with it
+   * and nothing else would go red.
+   */
+  it("seeds deck 4 with one note naming two game changers and one naming none", () => {
+    const db = seed("starter");
+    const notes = readHandlers(db).deck_notes({ deckId: 4 });
+    expect(notes).toHaveLength(2);
+    expect(notes[0].cards.map((c) => c.name)).toEqual([
+      "Consecrated Sphinx",
+      "Rhystic Study",
+    ]);
+    expect(notes[1].cards).toEqual([]);
+    // Both attachments resolve to a card in the corpus — an oracle id that stopped resolving
+    // would draw its own id as a name and the story would still look plausible.
+    expect(notes[0].cards.every((c) => c.oracleId !== c.name)).toBe(true);
+    // And both are Game Changers, which is what makes them the fixture for the mark folded in
+    // beside the crown: a card that is crowned *and* noted is reachable from no other seed.
+    const crowned = notes[0].cards.every(
+      (c) => db.cards.find((card) => card.oracleId === c.oracleId)?.gameChanger === true,
+    );
+    expect(crowned).toBe(true);
+    // The second note's title is stored blank, which is the state `noteTitle`'s body-first-line
+    // arm exists for. Nothing derives it here — that is the frontend's, at render.
+    expect(notes[1].title).toBe("");
+    // No other seeded deck has one, so every story written against decks 1–3 draws an empty band.
+    expect(readHandlers(db).deck_notes({ deckId: 1 })).toEqual([]);
   });
 });
 
@@ -9159,6 +9616,23 @@ describe("the busy fault", () => {
       // those three also take are already on this record, from the deck card writes.
       oracleId: TOKEN_ORACLE.treasure,
       tokenState: "auto",
+      // The six note writes' own keys. `deckId`, `id`, `ids` and `oracleId` are already on this
+      // record; these four are what user schema v43 added, and none of them is read on this path
+      // — `refuseIfBusy` is the first statement in all six — but every one is named because
+      // `invoke` matches by name, which is this record's whole rule.
+      //
+      // All four are **valid**, for `root`'s reason: a note refuses neither a blank title nor a
+      // blank body (both are states the app draws), and `oracleIds` being empty is the ordinary
+      // create, so there is nothing here a handler could refuse instead of the sync. `noteId` is
+      // `1` rather than a number no note has, so a handler that resolved its row before taking
+      // the lock would fail this loop by answering "not there any more" instead of BUSY — which
+      // is exactly the ordering mistake this sweep looks for. It is `1` and the store has no
+      // note at all, which is the same red from the other direction and is the best this record
+      // can do without seeding one; the ordering is pinned by a test of its own below.
+      noteId: 1,
+      title: "Mana",
+      body: "Fourteen sources.",
+      oracleIds: [],
       // `deck_missing_to_collection`'s own boolean, and the **fifth** one-line boolean on this
       // record. Never read on this path — `refuseIfBusy` is the first statement in that handler,
       // ahead even of the empty-list refusal — and named for `collapsed`'s reason: `invoke`
@@ -9536,7 +10010,27 @@ describe("the busy fault", () => {
     // Nothing joined `unlocked`, and no `share_*` read went to `readHandlers`: this feature's
     // whole command surface is in one table for one reason, which is the first time that has
     // been true of a branch here. Re-counted by running the sweep and reading `left`.
-    expect(names).toHaveLength(104);
+    //
+    // Deck notes then added **six**, 104 → 110, and this is the entry where the handler count and
+    // the delta differ for the fifth time: the feature ships **eight** commands and two of them
+    // are reads. `deck_notes` and `card_notes` go through `lock_db_read` and are in
+    // `readHandlers`, not in this table at all — exactly as `deck_pull_plan` and
+    // `deck_quick_add_wishes` are not. The six that are here (`deck_note_create`, `_update`,
+    // `_delete`, `_attach`, `_detach` and `_reorder`) all take plain `sync::with_write`: nothing
+    // in this feature moves a copy across the collection boundary, so none of them needs
+    // `with_write_owned`, and none of them touches the network, so none joined `unlocked`.
+    //
+    // Two of the six are worth this loop more than the other four: `deck_note_attach` and
+    // `deck_note_detach` are **idempotent** — a second press folds into nothing and answers the
+    // same row — so a handler that forgot `refuseIfBusy` would answer `Ok` on a busy database
+    // and look exactly like one that had correctly done nothing. `deck_note_reorder` is the
+    // third: its whole body is a loop over `sortOrder`, so a missing refusal there would show up
+    // nowhere else in the file, which is the `set_nav_collapsed` shape one feature over.
+    //
+    // **This delta is arithmetic against one tree**, which every paragraph above says is the
+    // thing that keeps going wrong at a merge — so re-run the sweep after the next one rather
+    // than adding to whichever figure is here. 110 was taken by running it and reading `left`.
+    expect(names).toHaveLength(110);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,

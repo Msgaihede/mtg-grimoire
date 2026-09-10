@@ -1561,7 +1561,10 @@ mod tests {
                      unixepoch(),unixepoch())",
             "INSERT INTO deck_folders (name, sort_order, created_at, updated_at)
              VALUES ('Shelf', 0, unixepoch(), unixepoch())",
-            "INSERT INTO decks (name, format_key, folder_id, notes, created_at, updated_at)
+            // `description` and not `notes`: user schema v43 dropped that column, replacing the
+            // deck's one paragraph with the `deck_notes` table. What this row is for is a deck
+            // carrying *some* nullable text across the pair, and the caption does that job.
+            "INSERT INTO decks (name, format_key, folder_id, description, created_at, updated_at)
              VALUES ('Atraxa', 'commander',
                      (SELECT id FROM deck_folders WHERE name = 'Shelf'),
                      'a plan', unixepoch(), unixepoch())",
