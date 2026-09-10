@@ -118,10 +118,14 @@ describe("CardChin", () => {
    * cannot see, a screenshot barely can, and neither the seam nor the tone test above would
    * notice.
    *
-   * The two radii are the two hosts' own corners rather than a preference: the stack's face clips
-   * at `rounded-[7px]` inside a `rounded-lg` border, so the chin closing that card matches the
-   * face; bare `CardArt` is `rounded-lg` outright, so the chin closing that one matches the art.
-   * A chin wearing the wrong one is a corner that misses its host by a pixel of curve.
+   * The two radii are the two hosts' own corners rather than a preference: bare `CardArt` is
+   * `rounded-lg` outright, so the chin closing that one matches the art. The bordered card's is
+   * **the bar's own** and is deliberately not `DeckCardFace`'s `FACE_RADIUS` — the two agreed
+   * until 2026-09-10, when the face was corrected to the padding box's 9px and this one was
+   * measured against it and kept at 7: the chin's box is the *border* box across and the padding
+   * box down, so it is neither of the card's two curves, and at 9 its border left the card's and
+   * the bottom corner read as a 4px smear of two arcs. A chin wearing the other host's radius is
+   * a corner that misses its host by a pixel of curve.
    *
    * `classList.contains` throughout, never `className.includes` — a substring match passes on
    * `border-x` when the class is `border-x-2`.

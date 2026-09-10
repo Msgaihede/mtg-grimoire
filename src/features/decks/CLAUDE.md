@@ -2294,7 +2294,7 @@ price | type`). An **inactive category stays its own group in all three grouping
     border box, so a picked card that also breaks a rule wears a gold ring around a red card.
   - **The chin's seam is `"card"` and the tile's `<img>` has no `alt`.** `seam="art"` is what a
     bare `CardArt` frame needs — three edges of its own under a frame that stops where the bar
-    begins — and there is no such frame here: the face clips its own corners at `rounded-[7px]`
+    begins — and there is no such frame here: the face clips its own corners at `FACE_RADIUS`
     inside the wrapper's border, so the chin draws sides only and rides onto that border. The `alt`
     was the card's own name while the picture was `CardArt`'s; inside `DeckCardFace` it is `""`,
     because the button around the face already says the whole sentence through `deckCardName` and
@@ -3442,7 +3442,14 @@ price | type`). An **inactive category stays its own group in all three grouping
   `GridView`'s caption and `CardGrid`'s caption strip went the same way and for the same reason;
   `atLeast` survives in `GridView` for the **gutter alone**, which is space *between* cards rather
   than chrome on one. `STACK_DATA_RISE` is the kind that never moved — 4px at every zoom, because
-  the 7px corner radius it hides the seam of is a Tailwind class that does not scale either.
+  the corner radius it hides the seam of is a Tailwind class at a fixed pixel count, which does
+  not scale either. **That count is not the face's own any more** — `DeckCardFace`'s
+  `FACE_RADIUS` was corrected from 7px to **9** on 2026-09-10 (the card's `rounded-lg` is 10 here,
+  not Tailwind's stock 8, so the padding box the face fills curves at 9) and the rise was
+  re-measured against it and left at 4, the bottom corners coming back pixel for pixel identical.
+  A 7px face was 2px wide of its own box, and everything in it — the picture, the printed frame,
+  the quantity tag, the plan's tick — painted over the card's own edge in all four corners, which
+  is what a reader reported as the rule break's red border being cut off by the badges.
 - **The column is derived from the card, not the other way round** (it used to be: 14rem minus
   padding). `stackColumnWidth(zoom) = stackCardWidth(zoom) + padding + border`, with the chrome
   **added and never multiplied** — 6px of padding is 6px at every zoom, because padding is not part
