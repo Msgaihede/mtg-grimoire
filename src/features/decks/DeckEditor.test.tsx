@@ -655,19 +655,23 @@ async function openAddTo(user: UserEvent) {
 const group = (name: string) => screen.getByRole("region", { name });
 
 /**
- * The toolbar's `Game Changers` filter chip.
+ * The ledger's `Game Changers` chip — the count beside the bracket, which is also the filter.
  *
  * Matched on the **exact** name rather than on `/game changer/`, and that is not fussiness: a
  * card that *is* one says so in its own accessible name (`Lightning Bolt, 2 copies, game
  * changer`), so a loose pattern finds a wall of buttons the moment a deck under test has one —
- * which is every test in this block. The chip's own name never changes with its state; the state
- * is `aria-pressed`.
+ * which is every test in this block. The chip's own name is its caption and never changes with
+ * its state; the state is `aria-pressed`.
+ *
+ * The caption *is* the count, so the name is `2 game changers` wherever the ledger has one to
+ * print and the bare `Game Changers` where it does not — a game changer parked in a switched-off
+ * pile, which is the one case the two gates disagree about.
  */
-const gcChip = () => screen.findByRole("button", { name: "Game Changers" });
+const gcChip = (name = "2 game changers") => screen.findByRole("button", { name });
 
-/** The row those chips live in — named for both of its arms, because it is drawn for a deck with
- *  labels, for a deck with a game changer, or for one with both. */
-const CHIP_ROW = "Filter by label or game changer";
+/** The row the deck's own label chips live in. Its name lost its second half on 2026-09-10, when
+ *  the `Game Changers` chip went back to the ledger and took the row's second gate arm with it. */
+const CHIP_ROW = "Filter by label";
 
 /**
  * Wait until `format_specs` has answered, for the deck under test.
@@ -1719,11 +1723,11 @@ describe("DeckEditor", () => {
     expect(within(main).getByText("4 cards")).toBeInTheDocument();
   });
 
-  /** The deck's own labels, as filters. **Nothing at all for a deck with neither a label nor a
-   *  game changer** — an empty group with a name is a control that says there is something to
-   *  press. The default fixture is that deck: no labels, and no row carrying `gameChanger`. The
-   *  other arm of the gate has its own case in the game-changer block below. */
-  it("offers no chip row to a deck with no labels and no game changer", async () => {
+  /** The deck's own labels, as filters. **Nothing at all for a deck with none** — an empty group
+   *  with a name is a control that says there is something to press. The gate had a second arm
+   *  (`|| hasGameChangers`) for the day the `Game Changers` chip sat in this row, and it went back
+   *  to the ledger with the chip; the case below is what holds that. */
+  it("offers no chip row to a deck with no labels", async () => {
     await open();
 
     expect(screen.queryByRole("group", { name: CHIP_ROW })).not.toBeInTheDocument();
@@ -3167,32 +3171,33 @@ describe("DeckEditor", () => {
    */
   it("says how many game changers the deck plays, and nothing when it plays none", async () => {
     await open();
-    expect(screen.queryByText(/game changer/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/game changer/i)).not.toBeInTheDocument();
 
     deckGet.mockResolvedValue(detail({}, [bolt({ gameChanger: true, quantity: 2 })]));
     wrap(<DeckEditor deckId={4} />);
 
-    expect(await screen.findByText("2 game changers")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "2 game changers" })).toBeInTheDocument();
   });
 
   /**
-   * ## The `Game Changers` filter chip (2026-09-09)
+   * ## The `Game Changers` chip is the count and the filter (2026-09-10)
    *
-   * The ledger's count above says *how many*; **this chip is what answers _which ones_**, and it
-   * replaces the spotlight that fell to a quarter opacity every card in the deck that was not one
-   * — on a hundred-card deck a wall of stacked quarter-opacity cards is an unusable blur, so the
-   * reader asked for it gone.
+   * The ledger's chip says *how many* and pressing it answers *which ones*. It replaces the
+   * spotlight that faded every card in the deck that was not one to a quarter — on a hundred-card
+   * deck a wall of stacked quarter-opacity cards is an unusable blur, so the reader asked for it
+   * gone — and it spent 2026-09-09 as a separate chip in the toolbar's label-filter row, which
+   * put the number and the way to act on it two lines apart.
    *
-   * It is a chip in the toolbar's label-filter row and it obeys that row's grain: chips **OR**
-   * among themselves and **AND** with the text box. A card that survives it looks exactly as it
-   * looks unfiltered, which is the whole of what the fade cost.
+   * It keeps that row's grain even though it no longer shares the row: the chips **OR** among
+   * themselves and **AND** with the text box. A card that survives it looks exactly as it looks
+   * unfiltered, which is the whole of what the fade cost.
    */
 
   /** The gate, both ways. A deck that draws no game changer has no chip to press; one that does
-   *  gets it, in front of whatever labels the deck's cards wear. */
+   *  gets it, on the ledger line between the check and the bracket. */
   it("draws the Game Changers chip only for a deck that draws a game changer", async () => {
     await open();
-    expect(screen.queryByRole("button", { name: "Game Changers" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /game changers?$/i })).not.toBeInTheDocument();
 
     deckGet.mockResolvedValue(detail({}, [bolt({ gameChanger: true, quantity: 2 }), bear()]));
     wrap(<DeckEditor deckId={4} />);
@@ -3201,19 +3206,16 @@ describe("DeckEditor", () => {
   });
 
   /**
-   * **The arm that is easy to get wrong**, because the row's gate now has two of them: a deck
-   * with a game changer and **no labels at all** still draws the row, for the chip alone. Written
-   * against a deck whose `labels` is empty, which is what a gate left at `deck.labels.length > 0`
-   * would answer `false` for.
+   * **The chip is not in the label row and the row is not drawn for it**, which is the arm the
+   * move is likeliest to be undone through — the row carried the chip and a second gate arm for a
+   * day, so a deck with a game changer and no labels drew a group for the chip alone.
    */
-  it("draws the chip row for a deck with a game changer and no labels at all", async () => {
+  it("draws no label row for a deck with a game changer and no labels at all", async () => {
     deckGet.mockResolvedValue(detail({}, [bolt({ gameChanger: true, quantity: 2 }), bear()]));
     await open();
 
-    const row = screen.getByRole("group", { name: CHIP_ROW });
-    expect(within(row).getByRole("button", { name: "Game Changers" })).toBeInTheDocument();
-    // The chip is the only thing in it — nothing invented a label to keep it company.
-    expect(within(row).getAllByRole("button")).toHaveLength(1);
+    expect(await gcChip()).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: CHIP_ROW })).not.toBeInTheDocument();
   });
 
   /** The press itself: the deck narrows to the game changers, and a second press gives the rest
@@ -3271,13 +3273,14 @@ describe("DeckEditor", () => {
 
   /**
    * **A game changer parked in a switched-off pile is matched**, and that is the gate reading
-   * `card.gameChanger` rather than the ledger's count beside it.
+   * `card.gameChanger` where the count on the same chip reads `categoryActive`.
    *
-   * The count sums copies over `categoryActive` piles, because it is a rules readout — the number
-   * the format will judge — so this deck's ledger says nothing at all. What the chip answers is
-   * *where are the powerful cards on this desk*, and a card the reader has parked in their
-   * Maybeboard is still in front of them. Same split `validateForMarks` and `validateDeck`
-   * already make (issue #134).
+   * The count is a rules readout — copies over the piles that count, which is the number the
+   * format will judge — so on this deck it has nothing to say and the chip falls back to its bare
+   * caption. What the press answers is *where are the powerful cards on this desk*, and a card the
+   * reader has parked in their Maybeboard is still in front of them. Same split `validateForMarks`
+   * and `validateDeck` already make (issue #134), and it is the one case that proves the chip is
+   * gated on the deck's rows rather than on the number printed in it.
    */
   it("draws the chip for a game changer parked in a switched-off pile, and matches it", async () => {
     deckGet.mockResolvedValue(
@@ -3294,10 +3297,11 @@ describe("DeckEditor", () => {
     );
     await open();
 
-    // The rules readout counts nothing, because the pile counts toward nothing.
-    expect(screen.queryByText(/game changer/)).not.toBeInTheDocument();
+    // The chip draws its bare caption, because the pile counts toward nothing and a chip reading
+    // `0 game changers` would point at a card that is right there.
+    expect(screen.queryByText(/0 game changers/)).not.toBeInTheDocument();
 
-    await userEvent.click(await gcChip());
+    await userEvent.click(await gcChip("Game Changers"));
     expect(
       within(group("Maybeboard")).getByRole("button", { name: /^Deadly Rollick/ }),
     ).toBeInTheDocument();
@@ -3327,7 +3331,7 @@ describe("DeckEditor", () => {
     deckGet.mockResolvedValue(detail({}, [bear()]));
     await writeToDeck("Burn without it");
     await waitFor(() =>
-      expect(screen.queryByRole("button", { name: "Game Changers" })).not.toBeInTheDocument(),
+      expect(screen.queryByRole("button", { name: /game changers?$/i })).not.toBeInTheDocument(),
     );
     // The wall is not empty: the chip went, and the filter it was driving went with it.
     expect(

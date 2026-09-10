@@ -446,7 +446,8 @@ function GridCard({
         // **The stacked card's own wrapper, class for class.** This was `group relative` and
         // nothing else from 2026-08-16 until the two views became one card: a bare positioned box
         // around a `CardArt` frame that supplied its own edge. A stacked card is `rounded-lg
-        // border` with the face inset at `rounded-[7px]` and the chin riding onto that border, so
+        // border` with the face inset at `DeckCardFace`'s `FACE_RADIUS` and the chin riding onto
+        // that border, so
         // the tile has to carry the same edge or the shared face would sit in two different
         // objects on two drawings of one deck.
         //
@@ -455,7 +456,12 @@ function GridCard({
         // `group-hover:` would arm a bar hundreds of pixels below the strip under the pointer.
         // Nothing overlaps a tile on this wall, so the pointer is the honest question and
         // `REVEALED_ON_CARD` hangs off this class.
-        "group relative block rounded-lg border",
+        //
+        // **`bg-surface` is the card being an opaque object, and it became load-bearing on
+        // 2026-09-10** — the stacked card's paragraph on the same class has the whole of why, and
+        // this tile takes it for the identical reason: `FACE_RADIUS` gave the face's corners back
+        // to the border, and what is behind the bottom two is this element rather than the desk.
+        "group relative block rounded-lg border bg-surface",
         // Deeper than Tailwind's own `shadow-lg`/`shadow-2xl`, whose alphas are 0.1 and 0.25 —
         // written for a card on white. These sit on the app's felt at 0.16 lightness, where a
         // 10 % shadow is not a shadow. The stack's *resting* shadow and not its open one: a tile
@@ -556,7 +562,8 @@ function GridCard({
         // and right edges of that outline, which is the one thing the outline exists to prevent.
         tone={ruleBreakText !== null ? "destructive" : "default"}
         // **`"card"`, where it was `"art"`.** The face inside the button clips its own corners at
-        // `rounded-[7px]` and this tile carries the border, so the chin draws sides only and rides
+        // `DeckCardFace`'s `FACE_RADIUS` and this tile carries the border, so the chin draws sides
+        // only and rides
         // onto the card's own border rather than supplying a bottom edge of its own — the stacked
         // card's arrangement exactly, and now for the same reason. `"art"` is what a bare
         // `CardArt` frame needs, and there is no longer one here.

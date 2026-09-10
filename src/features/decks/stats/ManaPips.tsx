@@ -19,7 +19,14 @@ import type { CSSProperties, JSX, ReactNode } from "react";
 import { ManaText } from "@/components/ManaText";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { plural } from "@/lib/counts";
-import { MANA_FILL, MANA_KEYS, MANA_LABEL, type ManaKey, type PipCounts } from "@/lib/mana";
+import {
+  MANA_FILL,
+  MANA_KEYS,
+  MANA_LABEL,
+  manaSymbolClass,
+  type ManaKey,
+  type PipCounts,
+} from "@/lib/mana";
 import { cn } from "@/lib/utils";
 import type { DeckStatsSummary } from "../DeckStats";
 import { percent, StatsCard, Track } from "./StatsCard";
@@ -163,7 +170,16 @@ function Band({
         {keys.map((key) => (
           <span
             key={key}
-            className="flex items-center justify-center"
+            // **The glyph's size is set here, on the segment, and never on the `<i>` that draws
+            // it.** `mana-font`'s own `.ms` rule declares `font-size: inherit` — a class
+            // selector, exactly as specific as a Tailwind utility, and `main.tsx` imports
+            // `mana.css` after `index.css`, so on a tie source order hands the font the win. A
+            // `text-[…]` written on the `<i>` would be in the markup, in the stylesheet, and
+            // doing nothing; `DeckColorBar` carries the same arrangement and the measurement
+            // behind it. 14px is what the pill this replaced occupied overall — `ms-cost` is
+            // 1.3em of a glyph the font had already stepped to 0.95em of the 11px it inherited —
+            // so the mark keeps its weight in the 32px band and loses only its disc.
+            className="flex items-center justify-center text-[0.875rem] leading-none"
             style={{
               width: `${(shareOf(counts[key], whole) ?? 0) * 100}%`,
               background: MANA_FILL[key],
@@ -181,7 +197,22 @@ function Band({
               boxShadow: "inset -1px 0 0 var(--color-bg)",
             }}
           >
-            <ManaText source={`{${key}}`} className="text-[0.6875rem]" />
+            {/* **The bare glyph on the field, never `ManaText`'s `ms-cost` pill.** That pill is
+                the font's own printed symbol — an opaque disc in `mana-font`'s palette with the
+                glyph knocked out of it — and it is right everywhere a symbol sits on a surface
+                that is not already the colour, which is what the census tiles below and
+                `CurveByColor` are. Here the field *is* the colour, so the pill landed as a
+                second, slightly-off disc on top of it: `#aca29a` on `--color-mana-b`, `#db8664`
+                on `--color-mana-r`. It read as a smudge behind the pip rather than as a symbol,
+                and it disagreed with the deck gallery's own band, which has drawn a knocked-out
+                glyph straight on the fill since it shipped. So this is `DeckColorBar`'s
+                arrangement character for character — `manaSymbolClass` in `text-black`, sized by
+                the parent — and the two bands are one drawing of one fact again.
+
+                `aria-hidden` because the glyph is a font `::before` on an empty element with
+                nothing to announce; the strip above it is hidden anyway, and the sentence a
+                reader hears is the `sr-only` span beside it. */}
+            <i className={cn(manaSymbolClass(key), "text-black")} aria-hidden="true" />
           </span>
         ))}
       </span>
@@ -272,12 +303,23 @@ function ColorTile({
  * The word and the percentage take fixed columns so the six tiles' tracks start and end at the
  * same two x positions — six bars that each began where their own label happened to end would be
  * six charts rather than one grid. What that costs is the track itself at the narrowest useful
- * width: at the app's 1280×800 with the card pane docked the editor column is ~602px, so a
- * two-column band gives this card ~271px of content, a tile ~131px, and a tile's content box
- * ~115px — of which the two fixed columns and the gaps take 84, leaving the track ~31px. It is a
+ * width, and the sum is taken at the band's own floor: a stats column is `min-w-[22rem]` (352px),
+ * which leaves this card 326px of content, a tile 159px and a tile's content box **141px** — of
+ * which the two fixed columns and the two gaps take 96, leaving the track **~45px**. It is a
  * proportion bar rather than something anybody measures off, and the percentage beside it is the
  * number, so a short track is a legible failure; the alternative — a track on a line of its own —
  * spends a third line per figure and six lines per card.
+ *
+ * **All three strings are `text-xs`, and the two column widths are that size measured rather than
+ * guessed** (2026-09-10, the reader's report that the tile read too small). They were
+ * `text-[0.625rem]` — the app's smallest type, two steps under the `text-xs` every other readout
+ * in this band writes its figures at, on the one card where the numbers are the whole readout. At
+ * 12px in this app's own faces `Sources` is **46.1px** and a mono `100%` is **28.8px**, so the
+ * columns are `w-13` (52) and `w-9` (36) rather than the 44 and 32 that fitted 10px type; a word
+ * that does not fit its `shrink-0` column wraps to two lines and takes the row's baseline with it.
+ * **The caption is deliberately left free to wrap** — it is the one string with no ceiling
+ * (`110 pips · 100 cards` is 144px at this size), and a second line under a tall deck's tile is a
+ * better failure than a truncation that eats the `· N cards` half.
  */
 function Figure({
   word,
@@ -302,17 +344,17 @@ function Figure({
   return (
     <div className="flex min-w-0 flex-col gap-0.5" {...tip(hint)}>
       <div className="flex items-center gap-1">
-        <span className="w-11 shrink-0 text-[0.625rem] font-medium text-text">{word}</span>
+        <span className="w-13 shrink-0 text-xs font-medium text-text">{word}</span>
         {drawTrack ? (
           <Track share={share ?? 0} fill={fill} style={fillStyle} />
         ) : (
           <span className="min-w-0 flex-1" />
         )}
-        <span className="w-8 shrink-0 text-right font-mono text-[0.625rem] tabular-nums text-text">
+        <span className="w-9 shrink-0 text-right font-mono text-xs tabular-nums text-text">
           {percent(share)}
         </span>
       </div>
-      <span className="font-mono text-[0.625rem] text-dim">{caption}</span>
+      <span className="font-mono text-xs text-dim">{caption}</span>
     </div>
   );
 }

@@ -3,7 +3,6 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ChevronLeft,
   Columns3Cog,
-  Crown,
   History,
   Redo2,
   Scale,
@@ -336,8 +335,8 @@ const DESK_GAP = 16;
 const DECK_HEIGHT_FLOOR = "min-h-96";
 
 /** Stable identity for "no label chip is pressed", so the memo below does not re-run on every
- *  render. It is the label half of that row and not the whole of it — the `Game Changers` chip
- *  beside them is a boolean and needs no such identity. */
+ *  render. The other half of that filter — the ledger's `Game Changers` chip — is a boolean and
+ *  needs no such identity. */
 const NO_LABELS: readonly number[] = [];
 
 /** Stable identity for the wishes a *closed* {@link QuickUnwishDialog} is handed. The shell
@@ -1132,9 +1131,11 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const [filter, setFilter] = useState("");
   const [labelIds, setLabelIds] = useState<readonly number[]>(NO_LABELS);
   /**
-   * Whether the toolbar's `Game Changers` chip is pressed — the app's own fixed chip in the row
-   * of the reader's arbitrary label strings, and **the thing that answers _which cards are the
-   * game changers_** now that the ledger's count is a plain readout again.
+   * Whether the ledger's `Game Changers` chip is pressed — **the thing that answers _which cards
+   * are the game changers_**, where the count printed on that same chip says how many.
+   *
+   * It spent a day in the toolbar's label-filter row (2026-09-09 → 2026-09-10) and is back beside
+   * the bracket, merged into the readout it belongs to; {@link DeckLedger} carries why.
    *
    * Plain `useState` like the two above it and persisted nowhere: which cards a reader is
    * looking at right now is a fact about the sitting, not about the deck. What is *derived* from
@@ -3350,6 +3351,11 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * that a *read*: this repo's lint refuses `setState` in an effect and refuses it only at
    * `npm run verify`, and a reader who steps a card to zero and undoes it finds their filter
    * exactly where they left it.
+   *
+   * **It is gated on exactly what draws the chip and must go on being so.** {@link DeckLedger}
+   * draws the chip on `hasGameChangers`, so gating this on the *count* beside it would take the
+   * fence away in the one case the two disagree about — a game changer parked in a switched-off
+   * pile, where the count is nothing and the chip is there to be pressed.
    */
   const gcFilter = gcOnly && hasGameChangers;
 
@@ -3360,11 +3366,15 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * of what is under it — a group saying 60 over four visible rows is a heading that lies about
    * the only thing it is for.
    *
-   * **The chip row is an `OR` among itself and an `AND` with the text box**, and the game-changer
-   * chip joined the first of those rather than the second (2026-09-09, the reader's call). One
-   * row of chips asks one question — *show me the cards that are any of these* — and an `AND`
-   * would be near useless anyway: a game changer rarely wears a label, so ticking both would
-   * empty the wall and read as the filter having broken.
+   * **The chips are an `OR` among themselves and an `AND` with the text box**, and the
+   * game-changer chip joined the first of those rather than the second (2026-09-09, the reader's
+   * call). An `AND` would be near useless: a game changer rarely wears a label, so ticking both
+   * would empty the wall and read as the filter having broken.
+   *
+   * **That survived the chip moving back to the ledger (2026-09-10) and the argument for it
+   * changed shape.** It used to be *one row of chips asks one question*, which was a fact about
+   * the row they shared; the two controls are a header apart now, so what is left is the failure
+   * itself — the pair of presses a reader is likeliest to make would answer with an empty desk.
    *
    * **Filtering used to decide which headings exist and no longer decides anything about it.**
    * `emptyGroupRules` carried a `narrowed` flag: while this filter was running, `grouping.ts`'
@@ -4156,6 +4166,12 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           marketplace={marketplace}
           formatName={spec?.displayName ?? row.formatName ?? null}
           gameChangers={gameChangers}
+          // The count is what the format will judge and the gate is what is on the desk, so the
+          // chip is drawn for a game changer parked in a switched-off pile and says only `Game
+          // Changers` for it. See both props for the split.
+          hasGameChangers={hasGameChangers}
+          gameChangersOnly={gcFilter}
+          onGameChangersOnlyToggle={() => setGcOnly((on) => !on)}
           tight={tightHeader}
           // Four terms rather than five on a Virtual deck — the `Owned` figure is the one thing
           // on this line that is about a *binder* rather than about the deck. See {@link tracks}.
@@ -4399,75 +4415,28 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               pickers and the tools without moving either in the DOM. */}
           {tightHeader && <span aria-hidden="true" className="order-2 h-0 basis-full" />}
 
-          {/* The deck's own labels, as filters, and the app's own `Game Changers` chip in front
-              of them. Nothing at all for a deck with neither — an empty group with a name is a
-              control that says there is something to press.
+          {/* The deck's own labels, as filters. Nothing at all for a deck with none — an empty
+              group with a name is a control that says there is something to press.
 
-              **The gate has two arms and the row is named for both** (2026-09-09): a deck with a
-              game changer and no labels at all draws this row for the chip alone, which is the
-              arm easiest to lose in a tidy.
+              **The row is the reader's own strings and only those** (2026-09-10). It carried the
+              app's own `Game Changers` chip for a day, pinned in front of them so it would not
+              drift about in an alphabet that is not its own — and a fixed chip in a row of
+              arbitrary user labels is the odd one out however it is pinned. It went back to the
+              ledger, where the count it belongs to has been since 2026-08-24; see
+              {@link DeckLedger}. Two things about the gate went with it: the second arm
+              (`|| hasGameChangers`), which drew this row for a deck with no labels at all, and
+              the second half of its name.
 
               **A toolbar item of its own, and it was inside the filter's box until 2026-08-24.**
               That box grew a `max-w-[25rem]` ceiling in the same change — the field's, and a good
               one — and a row of arbitrary user strings crammed into 400px is not what the ceiling
               was for. */}
-          {(deck.labels.length > 0 || hasGameChangers) && (
+          {deck.labels.length > 0 && (
             <div
               role="group"
-              aria-label="Filter by label or game changer"
+              aria-label="Filter by label"
               className={cn("flex flex-wrap items-center gap-1.5", tightHeader && "order-3")}
             >
-              {/* **First, and fixed there.** Every other chip in this row is one of the reader's
-                  own strings, so the row's contents move as they add and rename labels; this one
-                  is the app's, and a fixed position is what keeps it where they last left it
-                  rather than somewhere in an alphabet that is not its own.
-
-                  **The crown is drawn always rather than only when pressed**, because here it is
-                  the chip's *identity* and not its state — `aria-pressed` is what says whether
-                  the filter is on. `text-pie-gold` is the gold the crowns and banners on the
-                  cards themselves are drawn in, so the chip and what it narrows to say one fact
-                  in one colour; that is why the on state is written out here instead of taking
-                  {@link filterChipState}'s accent, which would make this the one chip in the row
-                  whose colour disagreed with the cards under it.
-
-                  A bare glyph and never `GameChangerMark`: that component names itself and binds
-                  a tooltip of its own, which inside a control that already has a name would be a
-                  second name on one button. */}
-              {hasGameChangers && (
-                <button
-                  type="button"
-                  aria-pressed={gcFilter}
-                  onClick={() => setGcOnly((on) => !on)}
-                  className={cn(
-                    FILTER_CONTROL,
-                    FILTER_FOCUS,
-                    // **`inline-flex items-center` is load-bearing and `FILTER_CONTROL` does not
-                    // carry it** (2026-09-09). That recipe is `h-9 … rounded-md border text-sm`
-                    // plus the press — geometry, no display — because every other chip in this
-                    // row is a bare string, and a `<button>`'s initial `display` is enough for
-                    // one. This is the row's first chip with a *glyph* beside its words, so
-                    // without a flex context the crown is a block-level line of its own: it
-                    // stacked **above** the caption, two lines inside a fixed 36px box with the
-                    // words clipped, and the `gap-1.5` below styled nothing at all.
-                    //
-                    // Driven in the shipped window 2026-09-09 (debug build, 1920×1080, real
-                    // corpus): the crown's box at y=228 against the caption's at y=240, the chip
-                    // 110px wide where its content wants 128. jsdom lays nothing out and computes
-                    // no `display`, so neither suite can go red for it — a live pass is the only
-                    // witness, and this is what one found.
-                    //
-                    // The type size is the label chips' own, for the label chips' own reason —
-                    // this chip shares their line and must not set a taller one.
-                    "inline-flex items-center gap-1.5 px-2.5 text-xs",
-                    gcFilter
-                      ? "border-pie-gold text-pie-gold"
-                      : "border-border text-dim hover:text-pie-gold",
-                  )}
-                >
-                  <Crown className="size-3 shrink-0" aria-hidden="true" />
-                  Game Changers
-                </button>
-              )}
               {deck.labels.map((label) => {
                 const on = labelIds.includes(label.id);
                 return (

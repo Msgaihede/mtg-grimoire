@@ -1522,11 +1522,13 @@ price | type`). An **inactive category stays its own group in all three grouping
     scope. Read-only — changing it is a Deck settings trip — and it is the first thing to go at
     `TIGHT_HEADER_PX`, where the check button's own name still carries it. With no spec in hand it
     falls back to the deck row's `formatName`.
-- **The game-changer count on that line is a plain readout, and for one day it was a press** — the
-  _spotlight_, shipped 2026-09-08 and **deleted 2026-09-09**. The chip beside the bracket says how
-  many; the deck laid out under it says nothing about **where**, and on a hundred-card desk that is
-  a hunt through four views' worth of crowns — so hovering the count, or landing the caret on it,
-  or clicking to latch it, faded every card in the deck that was **not** a game changer to **25 %**
+- **The game-changer count on that line is a press, and what it does is _narrow_ the deck** —
+  `DeckLedger`'s chip, between the format check and the bracket. It says how many; pressing it
+  answers **where**, which the deck laid out under it says nothing about and which on a
+  hundred-card desk is a hunt through four views' worth of crowns.
+  **Two arrangements are wrong in ways that are not obvious, and both shipped.** The first was the
+  _spotlight_ (2026-09-08 → 2026-09-09): hovering the count, or landing the caret on it, or
+  clicking to latch it, faded every card in the deck that was **not** a game changer to **25 %**
   through one flat CSS rule (`[data-gc-spotlight] .deck-gc-dimmed`), with the class spread by all
   four views out of `cardControl.tsx`.
   **What withdrew it is what a real deck looks like under it, and the number was not the mistake.**
@@ -1539,42 +1541,62 @@ price | type`). An **inactive category stays its own group in all three grouping
   transparent cards give a blur effect."_ The 0.25 was chosen as **a fade and never a hide**, so
   the dimmed cards would keep their legibility and every hit target they had; at deck scale they
   kept neither, which is why no other opacity would have been the fix.
-  **The question moved to the toolbar's filter row, and that is the rule this leaves behind: in
-  this editor "which of these cards are X" is answered by _narrowing_ the deck, never by dimming
-  the rest of it.** A `Game Changers` chip sits in the label-filter row beside the deck's own
-  labels and behaves exactly as they do — press it and the deck is narrowed to the cards that
-  match, press it again and the deck comes back. Four things carry it:
-  - **It joins the label chips' OR and does not intersect them.** That row is **one question** —
-    _show me the cards that are any of these_ — so a reader with `Ramp` and `Game Changers` both
-    pressed gets their ramp **and** their game changers rather than the overlap. A chip that
-    narrowed what the chips beside it had already narrowed would be two kinds of question in one
-    group, with nothing on the row to say which chip is which.
-  - **It is drawn only for a deck that actually draws a game changer.** A chip that can only ever
-    narrow a deck to nothing is a control that reads as broken, and a deck with none has no
-    question for it to answer — the same argument that gates the count it stands in for.
-  - **On is `pie-gold` with a crown glyph, and never the accent.** Every other chip in that row is
-    the accent, which is what a label chip's pressed state means here; this one wears the gold the
-    crowns on the cards themselves wear, so the chip and the cards it leaves on screen are one fact
-    in one colour. `GameChangerMark`'s rule one layer down — gold survives where the mark is
-    unfilled — reached from the filter's end.
+  **The rule that leaves behind is the one to keep: in this editor "which of these cards are X" is
+  answered by _narrowing_ the deck, never by dimming the rest of it.**
+  **The second wrong arrangement is where the narrowing first went** (2026-09-09 → 2026-09-10): a
+  separate `Game Changers` chip in the toolbar's label-filter row, with the ledger's count back to
+  a bare span. It fixed the blur and cost something else — the number and the way to act on it two
+  lines apart, and the app's one fixed chip standing in a row that is otherwise the reader's own
+  arbitrary label strings, where it had to be pinned first so the reader's renames could not move
+  it about. So the count **is** the button now, in the place it has held since 2026-08-24. Five
+  things carry it:
+  - **It is the reader's, not a row's: `DeckLedger` draws it and `DeckEditor` owns the state.**
+    The chip takes `gameChangers`, `hasGameChangers`, `gameChangersOnly` and one toggle callback,
+    and decides none of them — the editor's `gcOnly`/`gcFilter` pair is unchanged by the move.
+  - **The gate is `hasGameChangers` and the caption is the count, and the two disagree in exactly
+    one case.** The count is copies over the piles that count, because it is a rules readout; the
+    gate is a question about what is on the desk. A game changer parked in a switched-off
+    Maybeboard is a card the reader wants to press this about, so the chip is drawn for it and
+    reads the bare `Game Changers` — `0 game changers` would point at a card that is right there.
+    Same split `validateForMarks` and `validateDeck` make one screen over (issue #134).
+  - **It ORs with the label chips and does not intersect them**, which survived the move and whose
+    argument changed shape with it. It was *one row asks one question*, a fact about the row they
+    shared; what is left is the failure itself — a game changer rarely wears a label, so an `AND`
+    would empty the wall on the commonest pair of presses there is and read as the filter having
+    broken.
+  - **On is `pie-gold` for the edge and the words, and never the accent.** The accent on this line
+    already means something else — `DeckBracket`'s edge says *a reading you can go and look at* —
+    and this gold is what the crowns on the cards themselves are drawn in, so the chip and the
+    cards it leaves on screen are one fact in one colour. `GameChangerMark`'s rule one layer down,
+    reached from the filter's end. **The border is the half a later tidy is likeliest to take
+    off**: it went with the handlers on 2026-09-09 for a good reason — a bordered span between two
+    real buttons goes on making an offer nothing behind it can keep — and both are back together.
+  - **The crown is drawn in both states**, because here it is the chip's *identity* rather than its
+    state: `aria-pressed` says whether the filter is on, and a glyph that came and went would move
+    the chip's width on a line that already wraps. The name is the chip's own contents and never an
+    `aria-label` — a label replaces those contents, which would silence the `sr-only` twin the
+    narrow arm is named by. **Driven in the shipped window 2026-09-10** (debug build, a copy of the
+    real db, the same 122-card Azula deck the toolbar chip was driven on): crown and caption on one
+    centre line at both widths, the box `133px` at rest **and** pressed, the `<dl>` one 38px line
+    with no overflow at 1017 and at 761, and the right-hand group **313** against the bare span's
+    297. Every figure:
+    [decks-live-findings.md](../../../docs/reference/decks-live-findings.md).
   - **There is no hover preview and nothing is dimmed.** A card that survives the filter looks
     exactly as it looks unfiltered: no class on any card, no attribute on any container, and
     nothing for a drag to have to be exempted from. That absence is what the spotlight cost and is
     the half worth keeping — a mark spread by four views to say _this card is not the one you asked
     about_ is a mark all four have to get right, and a filter needs none of it.
-  - **A chip with a glyph in it needs `inline-flex items-center` of its own, because
-    `FILTER_CONTROL` carries no `display`** (2026-09-09, found by driving the shipped window). That
-    recipe is `h-9 … rounded-md border text-sm` plus the press — geometry only — and it has never
-    needed one, because every other chip in this row is a bare string and a `<button>`'s initial
-    display is enough for a caption. This is the first chip in the row with a **glyph beside its
-    words**, and without a flex context the crown is a block-level line of its own: it stacked
-    *above* the caption, two lines inside a fixed 36px box with the words clipping at the bottom,
-    and the `gap-1.5` written beside it styled nothing at all. **Fix it at the chip and never on
-    `FILTER_CONTROL`**, which is shared with every caption-only chip in the app and must not gain a
-    display for one caller. **Nothing in either suite can go red for this** — jsdom lays nothing
-    out and computes no `display`, so a test asserting the chip's class list passes while those
-    classes compose to a two-line control; the instrument that catches it is the crown's rect
-    measured *against* the caption's, which is
+  - **The toolbar chip's own trap went with it and is worth keeping as a warning about
+    `FILTER_CONTROL`** (2026-09-09, found by driving the shipped window). That recipe is
+    `h-9 … rounded-md border text-sm` plus the press — geometry only, **no `display`** — because
+    every chip in that row is a bare string and a `<button>`'s initial display is enough for one.
+    The `Game Changers` chip was the row's first with a **glyph beside its words**, and without a
+    flex context of its own the crown was a block-level line: it stacked *above* the caption, two
+    lines inside a fixed 36px box with the words clipping, and the `gap-1.5` beside it styled
+    nothing at all. **A future chip with a glyph fixes that at the chip and never on
+    `FILTER_CONTROL`**, which is shared with every caption-only chip in the app. **Nothing in
+    either suite can go red for it** — jsdom lays nothing out and computes no `display` — and the
+    instrument that catches it is the crown's rect measured *against* the caption's, which is
     [decks-live-findings.md](../../../docs/reference/decks-live-findings.md)'s own rule that a
     stacking or centring fault names a **pair** and never one element.
 - **The deck stats are a band at the foot of the editor, drawn full width, and since 2026-09-10
@@ -1659,6 +1681,21 @@ price | type`). An **inactive category stays its own group in all three grouping
     filling by colour key is the point at which all of them want one home" cashed in: the two pips
     bands, the six per-colour tracks and the six colour curves are that third surface several
     times over. Everything that is not a colour is the accent.
+  - **A symbol printed _on_ one of those fills is the bare glyph, never `ManaText`** (2026-09-10).
+    `ManaText` always adds `ms-cost`, the font's own pill — an opaque disc in `mana-font`'s
+    palette (`#aca29a` for black, `#db8664` for red) with the glyph knocked out of it — which is
+    the printed article everywhere a symbol sits on a surface that is *not* already the colour:
+    the census tiles, `CurveByColor`, a cost in a table row. On a `MANA_FILL` field it lands as a
+    second, slightly-off disc behind the pip and reads as a smudge, which is what a reader
+    reported of the two pips bands. So a field with a symbol on it draws
+    `manaSymbolClass(key)` in `text-black` — `DeckColorBar`'s arrangement, and now `ManaPips`'
+    `Band`'s, so the tile's band and the editor's are one drawing. **The size goes on the field
+    and not on the `<i>`**: `.ms` declares `font-size: inherit` at a Tailwind utility's own
+    specificity and `mana.css` is imported last, so a `text-[…]` on the glyph is in the markup,
+    in the stylesheet and inert. Both bands and the reference band were photographed side by side
+    over the built stylesheet (headless Edge, 2026-09-10, app lock held elsewhere): the pill's
+    glyph computed **9.35px inside a 12.1px disc**, the bare one **14px**, so the mark keeps its
+    weight in the 32px band and loses only the disc.
   - **`sourcesKnown` is a third state and the one most easily collapsed into the second.**
     `sources` all zero is a real answer (a deck of pure spells makes no mana); `sourcesKnown ===
     false` is *every counted row answered `null`*, which is a database that has not re-ingested
@@ -2294,7 +2331,7 @@ price | type`). An **inactive category stays its own group in all three grouping
     border box, so a picked card that also breaks a rule wears a gold ring around a red card.
   - **The chin's seam is `"card"` and the tile's `<img>` has no `alt`.** `seam="art"` is what a
     bare `CardArt` frame needs — three edges of its own under a frame that stops where the bar
-    begins — and there is no such frame here: the face clips its own corners at `rounded-[7px]`
+    begins — and there is no such frame here: the face clips its own corners at `FACE_RADIUS`
     inside the wrapper's border, so the chin draws sides only and rides onto that border. The `alt`
     was the card's own name while the picture was `CardArt`'s; inside `DeckCardFace` it is `""`,
     because the button around the face already says the whole sentence through `deckCardName` and
@@ -3442,7 +3479,14 @@ price | type`). An **inactive category stays its own group in all three grouping
   `GridView`'s caption and `CardGrid`'s caption strip went the same way and for the same reason;
   `atLeast` survives in `GridView` for the **gutter alone**, which is space *between* cards rather
   than chrome on one. `STACK_DATA_RISE` is the kind that never moved — 4px at every zoom, because
-  the 7px corner radius it hides the seam of is a Tailwind class that does not scale either.
+  the corner radius it hides the seam of is a Tailwind class at a fixed pixel count, which does
+  not scale either. **That count is not the face's own any more** — `DeckCardFace`'s
+  `FACE_RADIUS` was corrected from 7px to **9** on 2026-09-10 (the card's `rounded-lg` is 10 here,
+  not Tailwind's stock 8, so the padding box the face fills curves at 9) and the rise was
+  re-measured against it and left at 4, the bottom corners coming back pixel for pixel identical.
+  A 7px face was 2px wide of its own box, and everything in it — the picture, the printed frame,
+  the quantity tag, the plan's tick — painted over the card's own edge in all four corners, which
+  is what a reader reported as the rule break's red border being cut off by the badges.
 - **The column is derived from the card, not the other way round** (it used to be: 14rem minus
   padding). `stackColumnWidth(zoom) = stackCardWidth(zoom) + padding + border`, with the chrome
   **added and never multiplied** — 6px of padding is 6px at every zoom, because padding is not part

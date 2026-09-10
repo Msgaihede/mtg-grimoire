@@ -28,7 +28,11 @@ function StackCard({ tone = "default" }: { tone?: "default" | "destructive" }) {
         tone === "destructive" ? "border-destructive" : "border-border",
       )}
     >
-      <div className="aspect-[488/680] rounded-[7px] bg-bg" />
+      {/* The card face this chin closes, at the corner a real one clips to: `DeckCardFace`'s
+          `FACE_RADIUS`, which is the wrapper's `rounded-lg` less the 1px border the face sits
+          inside. It was `rounded-[7px]` here until 2026-09-10, matching the face; the face is
+          9px now, so a 7 here would draw this story's seam against a card no deck view has. */}
+      <div className="aspect-[488/680] rounded-[9px] bg-bg" />
     </div>
   );
 }
@@ -257,8 +261,8 @@ export const CallerPrinting: Story = {
  * The height is the only thing this component is told: `chinHeight(zoom)`. The gem, the gutters
  * and the type size themselves off `--mark-scale`, published by `cardScaleVars` on the card's own
  * root — which is why each stop below is a wrapper rather than a prop, and why the same
- * component sits unscaled in three tables and the card pane. The rise does **not** scale: it is
- * derived from a corner radius that is 7px at every stop.
+ * component sits unscaled in three tables and the card pane. The rise does **not** scale: the
+ * corner it hides the seam of is a Tailwind class at a fixed pixel count, whatever the count is.
  */
 export const Zoom: Story = {
   render: (args) => (
@@ -278,7 +282,8 @@ export const Zoom: Story = {
     await expect(chins).toHaveLength(3);
     await expect(chins[0].style.height).toBe(`${chinHeight(0.5)}px`);
     await expect(chins[2].style.height).toBe(`${chinHeight(2)}px`);
-    // Four pixels at every stop, because the corner it hides the seam of is 7px at every stop.
+    // Four pixels at every stop, because the corner it hides the seam of is a fixed pixel count
+    // at every stop — `CHIN_RISE` has why four, and why it is measured rather than derived.
     await expect(chins[2].style.marginTop).toBe(`-${CHIN_RISE}px`);
   },
 };

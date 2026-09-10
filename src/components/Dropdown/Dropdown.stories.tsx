@@ -83,6 +83,41 @@ const SET_OPTIONS: DropdownOption[] = [
   icon: <i className={cn(setGlyphClass(o.value), "w-4 shrink-0 text-center")} aria-hidden="true" />,
 }));
 
+/**
+ * The card modal's label picker, in the two sizes that make it the one caller of `triggerIcon`.
+ *
+ * The swatch is written out here rather than imported from `features/decks/LabelColorPicker`,
+ * which is where the app draws it: a primitive's story that reached into a feature would make
+ * this workbench entry fail for a reason that is not the primitive's. The classes are that
+ * component's, kept in step by eye — the geometry is what this story is about.
+ *
+ * `No label` carries neither, which is the state the trigger has to draw as words alone.
+ */
+const LABEL_OPTIONS: DropdownOption[] = [
+  { value: "", label: "No label" },
+  ...[
+    { value: "1", label: "Removal", hex: "#d3202a" },
+    { value: "2", label: "Ramp", hex: "#00733e" },
+    { value: "3", label: "Keeper", hex: "#0e68ab" },
+  ].map(({ hex, ...o }) => ({
+    ...o,
+    icon: (
+      <span
+        aria-hidden="true"
+        style={{ backgroundColor: hex }}
+        className="size-2.5 shrink-0 rounded-[2px]"
+      />
+    ),
+    triggerIcon: (
+      <span
+        aria-hidden="true"
+        style={{ backgroundColor: hex }}
+        className="size-4 shrink-0 rounded-[4px]"
+      />
+    ),
+  })),
+];
+
 /** A required callback whose call a story has nothing to say about — module-level so a render
  *  does not mint a fresh spy on every re-render. Stories that assert a call use their own. */
 const noop = fn();
@@ -207,6 +242,36 @@ export const RichRows: Story = {
     await userEvent.click(canvas.getByRole("button", { name: "Set" }));
     const option = canvas.getByRole("option", { name: /Kamigawa: Neon Dynasty/ });
     await expect(option).toHaveTextContent("NEO");
+  },
+};
+
+/**
+ * The picked row's glyph rides on the **closed** trigger, so a control says what it is set to
+ * rather than only what it is called — the card modal's label picker, where the colour is how two
+ * labels are told apart. `triggerIcon` is what makes it 16px here and 10px in the rows: the list
+ * shows every colour at once, the trigger shows one alone.
+ *
+ * `No label` is the state with no glyph to draw, and picking it takes the swatch away.
+ */
+export const PickedIcon: Story = {
+  args: { label: "Label", value: "1", options: LABEL_OPTIONS, fill: true, onChange: fn() },
+  render: (args) => (
+    <div className="w-56 rounded-md border border-dashed border-border p-2">
+      <StatefulDropdown key={args.value} {...args} />
+    </div>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const trigger = canvas.getByRole("button", { name: "Label" });
+    await expect(trigger).toHaveTextContent("Removal");
+    // `span[aria-hidden]` rather than `[aria-hidden]` — the chevron is aria-hidden too, and a
+    // selector matching either would go green on the arrow if the swatch never drew.
+    await expect(trigger.querySelector("span[aria-hidden='true']")).toBeInTheDocument();
+
+    await userEvent.click(trigger);
+    await userEvent.click(canvas.getByRole("option", { name: "No label" }));
+    await expect(trigger).toHaveTextContent("No label");
+    await expect(trigger.querySelector("span[aria-hidden='true']")).toBeNull();
   },
 };
 

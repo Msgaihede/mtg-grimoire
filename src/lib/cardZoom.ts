@@ -298,13 +298,24 @@ export const CHIN_HEIGHT = 28;
 /**
  * How far the chin rides **up** over the face's bottom corners.
  *
- * It is what joins the two boxes into one card: the face clips its own 7px corners, and a bar
- * butted flush under them shows two hairlines of background through the gap. Four pixels is that
- * radius less its own border, so the chin's square top corners are covered exactly where the face
- * is still solid.
+ * It is what joins the two boxes into one card: the face clips its own corners, and a bar butted
+ * flush under them shows two hairlines of background through the gap. The chin's square top
+ * corners are covered exactly where the face is still solid.
  *
- * **It does not zoom**, because the radius it is derived from does not — the corner is a Tailwind
- * class, 7px at every stop, so the overlap that hides the seam is 4px at every stop too.
+ * **Four was written as "that radius less its own border" against a 7px face, and both halves of
+ * that sentence have gone** (2026-09-10). The face's corner is `DeckCardFace`'s `FACE_RADIUS`,
+ * **9px** — the card's `rounded-lg` less the 1px border it sits inside, where 7 was Tailwind's
+ * stock-8 arithmetic — and 7 less 1 was never 4 anyway. So the number is kept because it was
+ * *measured* rather than because the derivation still runs: driven over the dev server that day
+ * against both the old face and the new, the bottom corners came back **pixel for pixel
+ * identical**, because the bar covers them whichever curve the face took. What 9px did expose was
+ * two pixels of the desk immediately above the bar, where the face's corner now curves away in
+ * the middle of the card — closed by the card's own `bg-surface` rather than by a taller rise,
+ * which would have moved every card's height and the row pitch of a wall that has nothing wrong
+ * with it.
+ *
+ * **It does not zoom**, and that survives the correction intact: the corner it hides the seam of
+ * is a Tailwind class at a fixed pixel count, so the overlap is 4px at every stop of the ladder.
  */
 export const CHIN_RISE = 4;
 

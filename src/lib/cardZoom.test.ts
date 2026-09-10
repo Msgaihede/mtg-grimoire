@@ -216,9 +216,12 @@ describe("the chin", () => {
   });
 
   /**
-   * The rise does **not** scale, because the thing it is derived from does not: it is a Tailwind
-   * `rounded-[7px]` corner less its own 1px border, and that corner is 7px at every zoom. A rise
-   * that scaled would clear the seam at 1× and show two hairlines of background at 0.5×.
+   * The rise does **not** scale, because the corner it hides the seam of does not: that corner
+   * is a Tailwind class at a fixed pixel count at every zoom. A rise that scaled would clear the
+   * seam at 1× and show two hairlines of background at 0.5×.
+   *
+   * **Four is measured and no longer derived** — `CHIN_RISE`'s own doc has the account, including
+   * why the 2026-09-10 correction of the face's radius moved the bottom corners not one pixel.
    */
   it("holds the rise still at every zoom", () => {
     expect(CHIN_RISE).toBe(4);
