@@ -134,6 +134,65 @@ export interface DeckNotesPanelProps {
    *  `DEFAULT 0` because this band is new, so a shut default takes nothing from anybody. */
   open: boolean;
   onToggle: (next: boolean) => void;
+  /**
+   * **A note act asked for from somewhere else in the editor — the card menu's two rows**
+   * (issue #447).
+   *
+   * The band is the only thing on the page that can honour one: it holds the notes query, the
+   * five writes and the one-panel-per-row state, and a menu row that reached any of those itself
+   * would be a second spelling of all three. So `deckCardMenu.tsx`'s `Add note…` and `Notes ▸`
+   * hand their answer up to `DeckEditor`, which parks it here — the shape `quickCategory` already
+   * uses for a drop that has to survive until a dialog answers.
+   *
+   * **`null` is the resting state and the only one that means nothing is owed.** A *handled*
+   * request is cleared by the host through {@link DeckNotesPanelProps.onRequestHandled}, so the
+   * prop is never a standing instruction the band re-runs.
+   */
+  request?: DeckNoteRequest | null;
+  /**
+   * Called once the band has acted on {@link DeckNotesPanelProps.request}, so the host can clear
+   * it.
+   *
+   * **"Acted on" is *taken*, not *finished*, and for `add` those are two different moments.** The
+   * create is a round trip; waiting for it would leave a refused write's request standing for the
+   * rest of the session, and the second press a reader made after nothing happened would be
+   * refused as a duplicate of a request the band had already consumed. The band's own refusal
+   * line is what says a create did not land.
+   */
+  onRequestHandled?: () => void;
+}
+
+/**
+ * One act the card menu asks the band for.
+ *
+ * Two members and deliberately not one with a flag: `add` carries a **card** because a note born
+ * from a card menu names that card as it is written, and `open` carries a **note id** because
+ * the note already exists. Neither field means anything to the other arm, and a single shape
+ * carrying both optional would let a caller ask for an add of nothing.
+ *
+ * `DeckNoteCard` rather than a `DeckCard`, which is what the menu holds: the two fields here are
+ * the whole of what a note needs — the identity it attaches by, and the word to print — and a
+ * deck row carries a printing, a pile, a finish and a quantity that a note has no use for.
+ * **`oracleId` is `string` and not `string | null`**, which is what makes an orphan printing
+ * unrepresentable rather than merely refused: see `DeckEditor`'s `addNote` for the row that is
+ * absent because of it.
+ */
+export type DeckNoteRequest =
+  | { kind: "add"; card: DeckNoteCard }
+  | { kind: "open"; noteId: number };
+
+/**
+ * The note the band has been sent to, and whether it was sent there to write or to read.
+ *
+ * It is **not** {@link DeckNoteRequest} one layer down, and the difference is the whole reason
+ * for the second type: an `add` request holds a card and no id, because the id does not exist
+ * until the create answers. This is what the request *becomes* once there is a row to point at.
+ */
+interface NoteFocus {
+  noteId: number;
+  /** Open this note's editor as it arrives — `add` only. Reading is what `open` is for, and an
+   *  editor a reader did not ask for is a body they can lose by pressing the wrong thing. */
+  edit: boolean;
 }
 
 /**
@@ -185,14 +244,104 @@ export function DeckNotesPanel({
   cards,
   open,
   onToggle,
+  request = null,
+  onRequestHandled,
 }: DeckNotesPanelProps): JSX.Element {
   const notes = useDeckNotes(deckId);
   const attachable = useMemo(() => attachableCards(cards), [cards]);
+
+  /** Which note the band has been sent to, once there is one to point at. It outlives the request
+   *  that produced it: it is where the reader was *put*, not an instruction still owed. */
+  const [focus, setFocus] = useState<NoteFocus | null>(null);
+
+  /** The newest request this band has taken — see the adjustment below. */
+  const [taken, setTaken] = useState<DeckNoteRequest | null>(null);
+
+  /**
+   * Take the host's request, **once per request object**.
+   *
+   * ⚠️ **Written during render rather than in an effect, and that is a rule of this repo rather
+   * than a style.** eslint's `react-hooks/set-state-in-effect` refuses a `setState` in an effect
+   * body outright — and `tsc` and the whole vitest suite are green on the pattern it refuses, so
+   * it only goes red at `npm run verify`. What is left is React's own *adjusting state when a prop
+   * changes*: the component sets its **own** state during render, React re-runs it before
+   * committing anything, and no child ever sees the stale value.
+   *
+   * **Identity and not an id, because two requests can be equal and still be two presses.** A
+   * reader who right-clicks one card twice means two notes; `DeckEditor` builds a fresh object per
+   * press, so comparing the object is what tells *asked again* from *rendered again*.
+   *
+   * `open` resolves to a focus here because the note already exists. `add`'s cannot, and that
+   * asymmetry is the whole reason {@link NoteFocus} is a second type: there is no id until the
+   * create answers with one.
+   */
+  if (request !== null && request !== taken) {
+    setTaken(request);
+    if (request.kind === "open") setFocus({ noteId: request.noteId, edit: false });
+  }
+
+  // `mutate` off the mutation rather than the mutation object, because the object is rebuilt on
+  // every render of this component and `mutate` is not — so the effect below names one dependency
+  // that actually holds still.
+  const createNote = notes.create.mutate;
+
+  /**
+   * Everything taking a request *does* — the disclosure, the write, and the hand-back.
+   *
+   * ⚠️ **The ref is the whole of the idempotency and it is not decoration.** This effect names
+   * `open` among its dependencies and its own first act is to change `open`, so it re-runs at
+   * least once for every request it honours — and without the guard that second run is a second
+   * note, made silently, on a press the reader made once. `main.tsx` wraps the app in
+   * `React.StrictMode`, which runs a mount effect **twice** in development, and a `useRef`
+   * survives that double invocation where a local flag would not: same fiber, same ref object. So
+   * a guard written any other way passes in a release build and doubles every note under
+   * `tauri dev`.
+   *
+   * **No `setState` of this component's own in the body** — see the adjustment above. The two
+   * writes made from here are a prop callback and a mutation's `onSuccess`, which is the callback
+   * shape that rule exists to leave alone.
+   *
+   * **`onRequestHandled` is called here rather than in that `onSuccess`** — see
+   * {@link DeckNotesPanelProps.onRequestHandled} for why a refused write must not leave a request
+   * standing.
+   */
+  const acted = useRef<DeckNoteRequest | null>(null);
+  useEffect(() => {
+    if (taken === null || acted.current === taken) return;
+    acted.current = taken;
+
+    // Both kinds open the band and neither closes it: a note a reader asked to read or to write
+    // is one they cannot do either to behind a shut disclosure. `onToggle` rather than a local
+    // flag, because the answer is `decks.notes_open` — so the band is open again next time, which
+    // is what they just said they wanted.
+    if (!open) onToggle(true);
+
+    if (taken.kind === "add") {
+      // **Titled with the card's name, and the card attached in the same write.** The title is
+      // what `noteTitle` would otherwise have to invent — a blank one reads `Untitled note` in
+      // the band and in that card's own `Notes ▸` submenu the moment it appears, which is a row
+      // with no identity in a list of rows; the reader is looking at the title field a beat later
+      // and can type over it. `oracleIds` is what *names* the card, in the same transaction, so
+      // the note turns up under this card's submenu on the next read with no attach step to lose.
+      //
+      // **The scoped `onSuccess` is safe here where it is a defect in the label chain**
+      // (`deckCardMenu.tsx`'s `addLabel`): that callback belongs to the *observer*, and the
+      // observer there is a dialog the reader can dismiss mid-flight. This observer is the band,
+      // which outlives the menu — and were it to unmount there would be no editor left to open.
+      createNote(
+        { title: taken.card.name, body: "", oracleIds: [taken.card.oracleId] },
+        { onSuccess: (note) => setFocus({ noteId: note.id, edit: true }) },
+      );
+    }
+
+    onRequestHandled?.();
+  }, [taken, open, onToggle, createNote, onRequestHandled]);
 
   return (
     <NotesBand
       open={open}
       onToggle={onToggle}
+      focus={focus}
       notes={notes.notes}
       attachable={attachable}
       answered={notes.query.isSuccess}
@@ -210,6 +359,18 @@ export function DeckNotesPanel({
 export interface NotesBandProps {
   open: boolean;
   onToggle: (next: boolean) => void;
+  /**
+   * The note the band has been sent to, or `null` — {@link DeckNotesPanel}'s answer to a request
+   * from the card menu.
+   *
+   * **Optional and defaulting to `null`, so the workbench and every existing caller are
+   * unchanged.** A band nobody has sent anywhere behaves exactly as it did.
+   *
+   * It stays set after it has been honoured, which is what keeps this from being an instruction:
+   * the band acts on the object's *identity*, so a reader who closes the editor this opened does
+   * not have it reopened under them on the next render.
+   */
+  focus?: NoteFocus | null;
   /** Every note on the deck, in `sort_order`. */
   notes: readonly DeckNote[];
   /** What the attach picker offers — see {@link attachableCards}. */
@@ -245,6 +406,7 @@ export interface NotesBandProps {
 export function NotesBand({
   open,
   onToggle,
+  focus = null,
   notes,
   attachable,
   answered,
@@ -269,6 +431,36 @@ export function NotesBand({
     setConfirming(which === "confirm" ? id : null);
     setPicking(which === "cards" ? id : null);
   };
+
+  /** The focus this band has already opened a row for — see the adjustment below. */
+  const [sentTo, setSentTo] = useState<NoteFocus | null>(null);
+
+  /**
+   * A note the band was sent to, opened for writing where it was sent there to be written.
+   *
+   * **Only `edit` touches this state**, which is the whole of the read/write split the two menu
+   * rows make: `Add note…` ends in a body the reader is about to type and `Notes ▸` ends in one
+   * they came to read — so an `open` reaching in here would put a row they wanted to *look* at
+   * behind 141.5 kB of ProseMirror, and shut whatever panel they already had open on the way.
+   * Bringing the row into view is {@link NoteRow}'s half and happens for both.
+   *
+   * **During render and not in an effect**, for {@link DeckNotesPanel}'s reason —
+   * `react-hooks/set-state-in-effect`, and React's own *adjusting state when a prop changes*.
+   * Comparing the focus **object** is what lets a reader shut an editor this opened without it
+   * being reopened under them on the next render: closing writes `editing`, and `sentTo` is
+   * untouched until a genuinely new focus arrives.
+   *
+   * The three setters rather than `only`, which is redefined on every render and could not be
+   * compared against anything.
+   */
+  if (focus !== sentTo) {
+    setSentTo(focus);
+    if (focus !== null && focus.edit) {
+      setEditing(focus.noteId);
+      setConfirming(null);
+      setPicking(null);
+    }
+  }
 
   return (
     // The Deck stats band's grammar, character for character: a rule and the content under it.
@@ -371,6 +563,11 @@ export function NotesBand({
                   <NoteRow
                     key={note.id}
                     note={note}
+                    // The focus object itself and never a boolean: two presses on one note are
+                    // two objects and one `true`, so a boolean would bring the row into view the
+                    // first time and do nothing the second — which is exactly the press a reader
+                    // makes when the row has scrolled away again.
+                    focused={focus !== null && focus.noteId === note.id ? focus : null}
                     attachable={attachable}
                     pending={pending}
                     editing={editing === note.id}
@@ -432,6 +629,7 @@ function actionLabel(verb: string, rest: string): JSX.Element {
  *  reader can do to it. */
 function NoteRow({
   note,
+  focused,
   attachable,
   pending,
   editing,
@@ -445,6 +643,8 @@ function NoteRow({
   onDetach,
 }: {
   note: DeckNote;
+  /** Non-null while this is the row the band was sent to — see {@link NotesBandProps.focus}. */
+  focused: NoteFocus | null;
   attachable: readonly NoteCardChoice[];
   pending: boolean;
   editing: boolean;
@@ -459,9 +659,38 @@ function NoteRow({
 }) {
   const title = noteTitle(note);
   const { deleteRef, owedFocusRef } = useDestructiveFocus(confirming);
+  const rowRef = useRef<HTMLLIElement>(null);
+
+  /**
+   * Bring this row where the reader is looking, when the card menu sent them here.
+   *
+   * **The caret rather than a scroll call, and the scroll is the belt.** A press on `Notes ▸` is
+   * a reader going somewhere, so the caret goes with them — otherwise it is left on the card they
+   * right-clicked, which is behind the deck they have just scrolled past, and their next Tab
+   * restarts from there. Focusing an element scrolls it into view by itself in a browser; the
+   * explicit call is what covers a row already partly on screen, and `block: "nearest"` is the
+   * app's rule for it.
+   *
+   * **`tabIndex={-1}` and no focus class**, which is the app's landing-pad rule: a reader can
+   * neither Tab nor arrow onto this row, so a ring here would mark a stop that does not exist.
+   *
+   * **The caret is deliberately not put in the editor an `add` opens.** `NoteEditor` arrives
+   * behind `React.lazy`, so a focus call made here races a chunk fetch and lands on nothing; the
+   * row is what is on screen at the moment the request is honoured.
+   *
+   * jsdom implements neither scroll-on-focus nor `scrollIntoView`, hence the `?.` — the same
+   * absence `CardGrid`'s tile works around.
+   */
+  useEffect(() => {
+    if (focused === null) return;
+    const el = rowRef.current;
+    if (el === null) return;
+    el.focus();
+    el.scrollIntoView?.({ block: "nearest" });
+  }, [focused]);
 
   return (
-    <li className="rounded-md border border-border px-2.5 py-2">
+    <li ref={rowRef} tabIndex={-1} className="rounded-md border border-border px-2.5 py-2">
       <div className="flex items-center gap-2.5">
         <span className="min-w-0 flex-1 truncate text-[0.8125rem] text-text">{title}</span>
         {/* The card-count chip, drawn only where the note names any — a `0 cards` on every note
