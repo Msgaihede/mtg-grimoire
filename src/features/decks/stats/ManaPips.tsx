@@ -19,7 +19,14 @@ import type { CSSProperties, JSX, ReactNode } from "react";
 import { ManaText } from "@/components/ManaText";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { plural } from "@/lib/counts";
-import { MANA_FILL, MANA_KEYS, MANA_LABEL, type ManaKey, type PipCounts } from "@/lib/mana";
+import {
+  MANA_FILL,
+  MANA_KEYS,
+  MANA_LABEL,
+  manaSymbolClass,
+  type ManaKey,
+  type PipCounts,
+} from "@/lib/mana";
 import { cn } from "@/lib/utils";
 import type { DeckStatsSummary } from "../DeckStats";
 import { percent, StatsCard, Track } from "./StatsCard";
@@ -163,7 +170,16 @@ function Band({
         {keys.map((key) => (
           <span
             key={key}
-            className="flex items-center justify-center"
+            // **The glyph's size is set here, on the segment, and never on the `<i>` that draws
+            // it.** `mana-font`'s own `.ms` rule declares `font-size: inherit` — a class
+            // selector, exactly as specific as a Tailwind utility, and `main.tsx` imports
+            // `mana.css` after `index.css`, so on a tie source order hands the font the win. A
+            // `text-[…]` written on the `<i>` would be in the markup, in the stylesheet, and
+            // doing nothing; `DeckColorBar` carries the same arrangement and the measurement
+            // behind it. 14px is what the pill this replaced occupied overall — `ms-cost` is
+            // 1.3em of a glyph the font had already stepped to 0.95em of the 11px it inherited —
+            // so the mark keeps its weight in the 32px band and loses only its disc.
+            className="flex items-center justify-center text-[0.875rem] leading-none"
             style={{
               width: `${(shareOf(counts[key], whole) ?? 0) * 100}%`,
               background: MANA_FILL[key],
@@ -181,7 +197,22 @@ function Band({
               boxShadow: "inset -1px 0 0 var(--color-bg)",
             }}
           >
-            <ManaText source={`{${key}}`} className="text-[0.6875rem]" />
+            {/* **The bare glyph on the field, never `ManaText`'s `ms-cost` pill.** That pill is
+                the font's own printed symbol — an opaque disc in `mana-font`'s palette with the
+                glyph knocked out of it — and it is right everywhere a symbol sits on a surface
+                that is not already the colour, which is what the census tiles below and
+                `CurveByColor` are. Here the field *is* the colour, so the pill landed as a
+                second, slightly-off disc on top of it: `#aca29a` on `--color-mana-b`, `#db8664`
+                on `--color-mana-r`. It read as a smudge behind the pip rather than as a symbol,
+                and it disagreed with the deck gallery's own band, which has drawn a knocked-out
+                glyph straight on the fill since it shipped. So this is `DeckColorBar`'s
+                arrangement character for character — `manaSymbolClass` in `text-black`, sized by
+                the parent — and the two bands are one drawing of one fact again.
+
+                `aria-hidden` because the glyph is a font `::before` on an empty element with
+                nothing to announce; the strip above it is hidden anyway, and the sentence a
+                reader hears is the `sr-only` span beside it. */}
+            <i className={cn(manaSymbolClass(key), "text-black")} aria-hidden="true" />
           </span>
         ))}
       </span>
