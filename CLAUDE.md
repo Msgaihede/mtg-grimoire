@@ -220,6 +220,7 @@ number to compare against.
 | [text-mirror.md](docs/reference/text-mirror.md) | The plain-text mirror — the layout, the dirty map, why the pruner reads a manifest instead of guessing, the measured cost of a pass, and the bugs still open |
 | [wishlist-folders.md](docs/reference/wishlist-folders.md) | The two folder tables, the four-term grain, the merge rule, the root-add duplicate and the `elsewhere` mark |
 | [collection-folders.md](docs/reference/collection-folders.md) | The collection's cabinet — the eleventh grain term, the deck groups and `Recently removed` that made it the ledger of where every card sits, the v25 conversion, and what a zero quantity now costs |
+| [home-page.md](docs/reference/home-page.md) | The landing view — the layout document and the three files that keep its round-trip promise, why an empty widget list is a layout, the six widgets, the flex-wrap grid and why a container query would reparent every popover, the `activity` table with its three rules and the write-site census, the nine commands, and the chord renumbering that left two destinations without one |
 | [decks-live-findings.md](docs/reference/decks-live-findings.md) | What driving the shipped window found — **including the bugs still open** |
 | [tags-live-findings.md](docs/reference/tags-live-findings.md) | The Tags page in the shipped window — the art ingest timed, both performance gates settled, and the bugs still open |
 | [card-scanner.md](docs/reference/card-scanner.md) | The crate, the pipeline and every measurement behind it, the three evidence tiers and their weights, both tracker verdicts and the failures that shaped them, the debug server and how to drive it without a camera, and the app's Scanner view |
@@ -232,7 +233,7 @@ number to compare against.
 | [ci-and-releases.md](docs/reference/ci-and-releases.md) | Both workflows, in full |
 | [hosted-relay-deploy.md](docs/reference/hosted-relay-deploy.md) | The deploy runbook — what exists and what does not, how to ask the host rather than a document, the order, and the things only a live deploy can settle |
 | [collection-sharing.md](docs/reference/collection-sharing.md) | The read-only shared binder — the snapshot format and its six absences, the size measured, the two `collection.rs` traps the publisher has its own read to avoid, the second Worker and the `live`/`lapsed`/`revoked` pass, both viewers, and **what is not deployed** |
-| [sync.md](docs/reference/sync.md) | Pairing **and** the relay — the protocol step by step, the six digits, the thirteen synced tables, how a row is named across devices, §7.3's five rules against the test that proves each, the envelope measured, the auth gate and the two routes that stand outside it, the group door, the rewrap hop that carries a removal to every device, and what is not built |
+| [sync.md](docs/reference/sync.md) | Pairing **and** the relay — the protocol step by step, the six digits, the fifteen synced tables, how a row is named across devices, §7.3's five rules against the test that proves each, the envelope measured, the auth gate and the two routes that stand outside it, the group door, the rewrap hop that carries a removal to every device, and what is not built |
 | [test-coverage.md](docs/reference/test-coverage.md) | What both suites reach, and why the Rust figure needs a correction |
 
 ## Running and verifying

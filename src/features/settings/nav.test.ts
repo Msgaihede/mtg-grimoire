@@ -109,7 +109,7 @@ const UNDER: Record<GroupId, PanelId[]> = {
   carddata: ["prices"],
   sync: ["sync", "review"],
   tags: ["hidden-tags"],
-  appearance: ["theory-marks", "labels"],
+  appearance: ["start-view", "theory-marks", "labels"],
   storage: ["data-folder", "backup", "cache", "web-storage", "danger"],
   errors: ["errors"],
 };
@@ -166,6 +166,7 @@ describe("panelsOn", () => {
       "sync",
       "review",
       "hidden-tags",
+      "start-view",
       "theory-marks",
       "labels",
       "data-folder",
@@ -183,6 +184,7 @@ describe("panelsOn", () => {
       "sync",
       "review",
       "hidden-tags",
+      "start-view",
       "theory-marks",
       "labels",
       "data-folder",
@@ -298,8 +300,29 @@ describe("visiblePanels", () => {
    * Filing the label list under Tags would put the two words on one rail entry, which is the one
    * thing this repo's vocabulary rule forbids.
    */
-  it("draws both appearance panels under their own group", () => {
-    expect(visiblePanels("appearance", "", false)).toEqual(["theory-marks", "labels"]);
+  it("draws every appearance panel under their own group", () => {
+    expect(visiblePanels("appearance", "", false)).toEqual([
+      "start-view",
+      "theory-marks",
+      "labels",
+    ]);
+  });
+
+  /**
+   * **The entry stopped being about marks alone, and this is the half of that a query can see.**
+   * `Opening view` is which view the app launches on — not a mark and not a label — and it is
+   * reachable by the words a reader would actually type at it rather than by this repo's own.
+   *
+   * `start` is deliberately not one of the words asserted here: `Clear data`'s line already
+   * carries "start over", so that query has two honest answers and would make a poor claim about
+   * this panel. `landing` is this panel's and nothing else's, which is what lets the second
+   * assertion be an equality rather than a `toContain`.
+   */
+  it("finds the opening view by the words a reader would type", () => {
+    for (const query of ["landing", "launch", "opening view", "first screen", "home page"]) {
+      expect(visiblePanels("updates", query, false)).toContain("start-view");
+    }
+    expect(visiblePanels("updates", "landing", false)).toEqual(["start-view"]);
   });
 
   /**

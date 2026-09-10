@@ -126,8 +126,10 @@ import { STATUS, VERDICTS } from "@/features/scanner/fixtures";
 // re-exports it from the real module unchanged — so both programs read the same tuple.
 import { IMAGE_VARIANTS, type ImageVariant } from "@/lib/images";
 import type {
+  ActivityEntry,
   BackupZip,
   BracketCardRow,
+  BreakdownRow,
   CardCombo,
   CardCombosPage,
   CardDetail,
@@ -182,6 +184,7 @@ import type {
   DeckTokenState,
   DecksCleared,
   DeckLabel,
+  DeckValue,
   DeckVariant,
   DeckViewState,
   EntryChange,
@@ -189,6 +192,8 @@ import type {
   EntryPatch,
   FacetResponse,
   FinishPrices,
+  HomeLayout,
+  HomeWidget,
   ImportCommitOutcome,
   ImportItem,
   ImportMatch,
@@ -253,6 +258,7 @@ import type {
   WishlistOptimizePlan,
   WishlistQuery,
   WishlistSortKey,
+  WishlistSummary,
 } from "@/lib/ipc";
 // The app's own `{X}` test, borrowed rather than re-spelled: the fake answers what Rust
 // answers, and a second reading of "does this cost name X" would let the workbench and the
@@ -821,6 +827,56 @@ export interface FakeDeckAudit {
   payload: string;
   /** Signed **copies**, for the day header's roll-up. `0` means "this changed no card count",
    *  never "nothing happened" — a rename, a reorder, a move and a label all record `0`. */
+  delta: number;
+}
+
+/**
+ * One row of `activity` (user schema v43) — **the other half of the home page's feed**.
+ *
+ * {@link FakeDeckAudit} with a *scope* where that one has a deck, and the two are read as one
+ * list by {@link readHandlers.activity_recent}. What is worth knowing before reading either is
+ * that they do not overlap: a change that writes a `deck_audit` row writes **no** `activity`
+ * row, so a card cut from a deck appears in the feed once rather than twice, and the two
+ * vocabularies under `kind` are told apart by {@link scope} and never by the word itself.
+ *
+ * **There is no `deckId` here and that is the table's shape rather than an omission.** This
+ * table records changes made to no deck at all; the feed's `deckId` is a `NULL` literal in the
+ * half of the union that reads it, and a column here would be a field every row wrote `null`
+ * into and one a story could seed into a state the backend cannot produce.
+ *
+ * **The ids restart at 1 alongside `deck_audit`'s**, which is what the real tables do — two
+ * `INTEGER PRIMARY KEY`s counting independently — so the feed holds two rows with the same id
+ * and nothing is wrong. Nothing joins on them and the page keys a line on `scope` plus `id`.
+ */
+export interface FakeActivity {
+  id: number;
+  /** Unix **seconds**, like {@link FakeDeckAudit.at}. */
+  at: number;
+  /**
+   * Which cabinet the change was made in — `collection` or `wishlist`, the two words the
+   * column's CHECK allows. **Never `deck`**: that scope is the literal the union's second arm
+   * supplies, and a row holding it here is a row the database refuses.
+   */
+  scope: "collection" | "wishlist";
+  /**
+   * What was done. The column CHECKs against eight words, so this is narrowed where
+   * {@link FakeDeckAudit.kind} is — and the reason the *deck* half can seed a word this build
+   * has never heard of and this half cannot is the same CHECK read from either side: a newer
+   * build would have to rebuild the constraint to write a ninth, which is a migration rather
+   * than a row.
+   */
+  kind: "add" | "remove" | "quantity" | "move" | "edit" | "folder" | "import" | "clear";
+  /** The printing, or `null` where the change was about no one card — an import, a clear, a
+   *  folder rename. Soft, like every card id in a user table. */
+  cardId: string | null;
+  /** Denormalised at write time, {@link FakeDeckAudit.cardName}'s reason: the row outlives the
+   *  printing, and a line that can only say `e7f8…` is not a line. */
+  cardName: string | null;
+  /** **JSON text**, not an object — `payload TEXT NOT NULL CHECK (json_valid(payload))`, so it
+   *  arrives as a string and `activityText.ts` is the one module that looks inside it. */
+  payload: string;
+  /** Signed **copies**, for the day header's roll-up. `0` means "this changed no card count",
+   *  never "nothing happened" — an edit, a move and a folder rename all record `0`. */
   delta: number;
 }
 
@@ -1455,6 +1511,16 @@ export interface FakeDb {
   deckAudit: FakeDeckAudit[];
   /** `deck_undo` — one step per deck write, keyed to the history row it reverses. */
   deckUndo: FakeDeckUndo[];
+  /**
+   * `activity` (user schema v43) — every collection and wishlist change, for the home page's
+   * feed. See {@link FakeActivity}: the *deck* half of that feed is {@link FakeDb.deckAudit}
+   * and the two are read as one list, never merged into one table.
+   *
+   * Empty is the honest state of an install that has changed nothing since the table existed,
+   * which is what `empty` stands in — and it is the only way to reach three of the four states
+   * `ActivityWidget` draws. `starter` and `large` both seed a past.
+   */
+  activity: FakeActivity[];
   update: FakeUpdate;
   /**
    * `error_log`, which is empty in every world but the `errorLog` fault's.
@@ -1685,6 +1751,45 @@ export interface FakeDb {
    * this table's usual split.
    */
   deckFolderPane: FakeDeckFolderPane | null;
+  /**
+   * `app_meta.home_layout` — which widgets the reader has on the home page, in what order and
+   * how wide.
+   *
+   * **The stored document, or `null` for the row never having been written**, which is
+   * {@link FakeDb.deckFolderPane}'s shape one row over and its argument: the value is a JSON
+   * *object* rather than a map, so this is the row and not the answer read out of it. Storing
+   * the parsed document rather than the raw text is that field's call too — `home::stored`
+   * collapses every unparseable row into the default, so "this row is not JSON" and "there is
+   * no row" are one state to every caller and there is nothing for a second one to seed.
+   *
+   * **What a story *can* seed here is the whole point of the feature**, and none of it would be
+   * reachable through a narrowed field: a `kind` this build has never heard of, a `config`
+   * shaped like nothing this build reads, a `version` from a later document, a `span` outside
+   * the two the write allows — and an **empty** widget list, which is a layout and not a
+   * missing row. `home.rs` builds its whole design around the first of those; a fake that
+   * stored `WidgetKind` would make the placeholder card unstoryable.
+   *
+   * **The read hands back whatever is here, verbatim, and the write refuses** — this table's
+   * usual split at its widest, because `home::stored` validates *nothing* and `home::store`
+   * validates four things. See {@link readHandlers.home_layout} and
+   * {@link writeHandlers.set_home_layout}.
+   */
+  homeLayout: HomeLayout | null;
+  /**
+   * `app_meta.start_view` — which view the app opens on.
+   *
+   * A **stored string** and `null` for the row not being there, which is
+   * {@link FakeDb.deckSort}'s field down to the reason: the vocabulary is the *frontend's* —
+   * `ViewId` in `src/lib/store.ts` — so `startview.rs` has no list to check a word against and
+   * stores anything non-blank verbatim. A story can therefore seed a view this build has
+   * retired and watch the shell fall back to Home, which is the state the frontend's own
+   * narrowing exists for and one a narrowed field would put out of reach.
+   *
+   * Both ways to the default are here, as they are for every string on this table: the row has
+   * never been written, or somebody emptied it by hand. See {@link readHandlers.start_view} and
+   * {@link writeHandlers.set_start_view}.
+   */
+  startView: string | null;
   /**
    * `marketplace_prices` — the table that made a third and fourth marketplace possible.
    *
@@ -2352,6 +2457,109 @@ function isStorablePaneWidth(width: number): boolean {
 }
 
 /**
+ * `home::VERSION` — the document version this build writes, and the only one the write accepts.
+ *
+ * A *future* document is refused **in words** rather than downgraded, which is the one thing
+ * about this constant worth reading: rewriting a document by rules that do not apply to it is
+ * how a newer build's page comes back wrong with nothing said anywhere. The **read** has no
+ * opinion about it at all — see {@link readHandlers.home_layout}.
+ */
+const HOME_LAYOUT_VERSION = 1;
+
+/** `home::MIN_SPAN` — the narrowest a widget may be, in grid columns. */
+const MIN_WIDGET_SPAN = 1;
+
+/** `home::MAX_SPAN` — the widest. Two is the whole grid, so this is a fact about the *document*
+ *  rather than a preference about layout, which is why it is one of the four things the write
+ *  refuses. */
+const MAX_WIDGET_SPAN = 2;
+
+/** `home::MAX_BYTES` — the most a serialized layout may be. 64 KiB is orders of magnitude more
+ *  than six widgets and their settings, so anything over it is a `config` being used as a
+ *  document store or a bug minting widgets in a loop. */
+const MAX_HOME_LAYOUT_BYTES = 64 * 1024;
+
+/** `home::NO_ID`, verbatim. */
+const NO_WIDGET_ID = "A widget needs an id, and this layout has one without.";
+
+/** `home::NO_KIND`, verbatim — the id says *which* widget and the kind says *what it draws*. */
+const NO_WIDGET_KIND = "A widget needs a kind, and this layout has one without.";
+
+/**
+ * `home::DEFAULT_LAYOUT` — the six widgets a database nobody has customised answers, as
+ * `(id, kind, span)` in order.
+ *
+ * **Spelled here rather than imported from `features/home/widgets.ts`**, which is
+ * {@link AUTO_BRACKET}'s rule and lands as hard on this one as it does on
+ * {@link DEFAULT_DECK_SORT}: the crate seeds a first launch and the frontend falls back when
+ * *it* is handed something that is not a layout, so these are two constants that have to agree,
+ * in two languages, because they cannot share one across a wire. A fake that read the app's copy
+ * would agree with it by construction and could never show the two disagreeing — which is the
+ * one thing about this pair worth being able to see. `home.rs`'s table is the one to copy from.
+ *
+ * **These `kind` strings are TypeScript's vocabulary and this table knows nothing about them.**
+ * Nothing here compares a stored kind against them; they are the seed and no more, which is the
+ * whole design {@link readHandlers.home_layout} and {@link writeHandlers.set_home_layout} sit
+ * either side of.
+ *
+ * The ids **are** the kinds, because a default layout holds each widget once — a second `decks`
+ * widget gets a minted id from the page, and the id is what identifies a widget.
+ */
+const DEFAULT_HOME_WIDGETS: readonly (readonly [string, string, number])[] = [
+  ["summary", "summary", 2],
+  ["decks", "decks", 1],
+  ["activity", "activity", 1],
+  ["collectionValue", "collectionValue", 1],
+  ["wishlistValue", "wishlistValue", 1],
+  ["folders", "folders", 2],
+];
+
+/**
+ * {@link DEFAULT_HOME_WIDGETS} as a document — `home::default_layout`.
+ *
+ * A **function** rather than a constant object, and it is the one thing here that is about this
+ * fake rather than about the crate: a shared object would let one story's `Reset` hand the next
+ * story the array a drag had already reordered. Every call builds its own widgets.
+ *
+ * `config` is `null` throughout, which is what `serde_json::Value::Null` serialises to.
+ */
+function defaultHomeLayout(): HomeLayout {
+  return {
+    version: HOME_LAYOUT_VERSION,
+    widgets: DEFAULT_HOME_WIDGETS.map(([id, kind, span]) => ({ id, kind, span, config: null })),
+  };
+}
+
+/**
+ * `startview::DEFAULT_VIEW` — where the app opens for a reader who has never said.
+ *
+ * **Spelled here rather than imported from `src/lib/store.ts`**, {@link DEFAULT_DECK_SORT}'s
+ * rule one row over and for its reason exactly: the word the *backend* answers and the word the
+ * frontend falls back to are two constants that happen to agree, and a fake reading the app's
+ * copy could never show them disagreeing.
+ */
+const DEFAULT_START_VIEW = "home";
+
+/** `startview::NO_VIEW`, verbatim — the one refusal that module is in a position to make. */
+const NO_START_VIEW = "A starting view cannot be blank.";
+
+/** `activity::MAX_LIMIT` — `deck_audit`'s {@link AUDIT_MAX_LIMIT} twin and the same number. */
+const ACTIVITY_MAX_LIMIT = 500;
+
+/**
+ * `collection::NOT_A_DIMENSION`, verbatim.
+ *
+ * **Two sentences rather than one shared constant, because the crate has two** — this one names
+ * a *collection* and {@link NOT_A_LIST_DIMENSION} names a *list*, and they live in two modules
+ * that each own their own four columns. A fake that folded them would be a workbench where the
+ * wishlist's refusal reads as the collection's, which is the one thing a story renders here.
+ */
+const NOT_A_COLLECTION_DIMENSION = "That is not a way to break down a collection.";
+
+/** `wishlist::BAD_DIMENSION`, verbatim — {@link NOT_A_COLLECTION_DIMENSION}'s twin. */
+const NOT_A_LIST_DIMENSION = "That is not a way to break down a list.";
+
+/**
  * What the `errorLog` fault seeds: one of each shape the panel has to draw.
  *
  * A folded repeat (the ×600 an unreachable image host produces — the case the whole grain
@@ -2520,6 +2728,12 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // Never seeded, always earned: a step exists only where a *write* made one, so a story's
     // Undo button is about the edit that story made rather than about a fixture.
     deckUndo: [],
+    // Empty, and here the emptiness is a whole state rather than a starting value: it is the
+    // only world in which three of `ActivityWidget`'s four states are reachable — nothing has
+    // happened yet, against the feed still loading and the read refused. Every write in `db.ts`
+    // that a later wave teaches to record will append here, so a change made during a story
+    // lands above whatever the seed laid down. `starter` and `large` both seed a past.
+    activity: [],
     update: defaultUpdate(),
     // Empty here, and filled by the `errorLog` **fault** rather than by any seed: "what has
     // failed" is a state of the world, not a shape of collection, so every seed can be in
@@ -2582,6 +2796,17 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // the width the app ships. A story that wants one railed, or one dragged wide, passes the
     // whole row — both halves are written together and there is no half of one to seed.
     deckFolderPane: null,
+    // The home page's own row, and a `null` for the fourth time — a reader who has never moved,
+    // removed or added a widget. `home_layout` answers {@link DEFAULT_HOME_LAYOUT} for that,
+    // which is the six the crate seeds a first launch with, so every home story that says
+    // nothing about customising opens on the page the app ships. A story that wants a
+    // rearranged page — or a widget from a build that has not been written yet — passes the
+    // whole document, because that is how the row is written.
+    homeLayout: null,
+    // The eleventh `app_meta` row and a `null` a third time: a reader who has never chosen a
+    // landing view. `start_view` answers `home` for it, which is what the app opens on out of
+    // the box and what every story that says nothing about the setting is standing in.
+    startView: null,
     // Empty here and filled by a seed, exactly as the card corpus is: a downloaded feed is a
     // table with rows in it, and "no rows" is the honest state of an install that has never
     // chosen Card Kingdom. `starterSeed` fills both from the corpus.
@@ -7703,6 +7928,75 @@ function givenHint(hint: string | null): string | null {
   return trimmed === "" ? null : trimmed;
 }
 
+/** One row on its way into a breakdown bucket: which bucket, what to call it, how many copies
+ *  and what one copy costs. {@link foldBuckets} is the `GROUP BY`. */
+interface BucketRow {
+  key: string;
+  name: string | null;
+  copies: number;
+  unit: number | null;
+}
+
+/**
+ * The `GROUP BY` both breakdowns share — `sum(copies)`, `sum(copies * unit)` and `max(name)`
+ * over rows already bucketed by their own caller.
+ *
+ * **Shared because it is the arithmetic, not the buckets.** Which column a row lands under is
+ * where the collection and the wishlist genuinely differ (one reads the entry's finish, the
+ * other the wish's *preferred* finish; one falls back through `collection_entries.set_code`,
+ * the other through the wish's own), and each handler spells its own arms out for that reason.
+ * What must not differ is what happens to a NULL price, and that is the whole of what is here.
+ *
+ * **`value` is `null` when the marketplace priced nothing in the bucket, and `0` is a different
+ * answer.** SQLite's `sum()` skips NULL terms and answers NULL only when every term is one, and
+ * that distinction is the em dash: a bucket of forty cards no feed has heard of must not read as
+ * a bucket worth nothing. A `?? 0` anywhere in here would make the two states untestable.
+ *
+ * `name` is `max()` over the non-null names, which is what the crate's `max(b.label)` does: the
+ * only dimension with a name is `set`, every row in a set bucket carries the same one, and the
+ * aggregate exists so an *orphan* — a row whose printing has left `cards` — cannot null out a
+ * bucket the rest of which knows what it is called.
+ *
+ * **Unordered.** The two commands sort differently (the collection by bucket, the wishlist by
+ * money) and each does its own, because that is the difference the two `ORDER BY`s have.
+ */
+function foldBuckets(rows: readonly BucketRow[]): BreakdownRow[] {
+  const out = new Map<string, BreakdownRow>();
+  for (const row of rows) {
+    const bucket = out.get(row.key) ?? { key: row.key, name: null, cards: 0, value: null };
+    bucket.cards += row.copies;
+    if (row.name !== null && (bucket.name === null || cmp(row.name, bucket.name) > 0)) {
+      bucket.name = row.name;
+    }
+    if (row.unit !== null) bucket.value = (bucket.value ?? 0) + row.copies * row.unit;
+    out.set(row.key, bucket);
+  }
+  return [...out.values()];
+}
+
+/**
+ * The colour bucket, over `cards.color_identity` — `collection::breakdown`'s `CASE` arm and
+ * `wishlist::COLOR_BUCKET`, which are the same three lines in two files.
+ *
+ * **That column is concatenated letters (`"WU"`) and never a JSON array** — `card_row` writes it
+ * that way and `filters.rs` reads it with `instr` — so this is a `length` test. The three arms
+ * **partition**, which is what lets a breakdown's rows sum to the summary above it: exactly one
+ * colour keys on that colour, two or more key `multi`, and none keys `c`.
+ *
+ * **A single colour keys on the stored *uppercase* letter while the two special keys are
+ * lowercase.** That asymmetry is the wire rather than an inconsistency to tidy — one widget
+ * draws both lists' bars and one TypeScript vocabulary maps all six keys, so a `w` here against
+ * a `W` in the crate would be two bars nothing on screen could relate.
+ *
+ * **A row whose printing has left `cards` lands in `c`**, because the join found nothing and
+ * `coalesce(NULL, '')` is `''`. It is the honest bucket at bar size and keeps the arms at three.
+ */
+function colorBucket(card: FakeCard | null): string {
+  const identity = card?.colorIdentity ?? "";
+  if (identity === "") return "c";
+  return identity.length > 1 ? "multi" : identity;
+}
+
 /**
  * Every read command, bound to one store.
  *
@@ -8317,6 +8611,79 @@ export function readHandlers(db: FakeDb) {
       };
     },
 
+    /**
+     * `collection::breakdown` — the whole collection cut one way, which is what a value
+     * widget's bars are.
+     *
+     * **The whole collection, and not a scope.** It takes a dimension and a marketplace and
+     * nothing else: the widget is a picture of what the reader *has*, not of what a filtered
+     * list is showing, so there is no {@link CollectionQuery} to narrow it and the only
+     * exclusion is the quantity one below.
+     *
+     * **It prices through {@link finishPriceAt}, which is the very function
+     * {@link readHandlers.collection_summary} sums** — the crate's own arrangement, where both
+     * statements interpolate one `sorting::price_expr` fragment — so a bar can never disagree
+     * with the total printed above it. Two implementations of one figure disagree the first
+     * time either changes.
+     *
+     * **A row at quantity zero contributes nothing — no copies, and no bucket of its own.**
+     * Schema v24 lets an entry sit at zero while the reader owns none of that printing today,
+     * so every aggregate over this table has to decide what such a row means; this one counts
+     * *copies*, and the filter is what stops a printing the reader no longer holds conjuring an
+     * otherwise-empty bar. (No seed carries such a row — `.storybook/CLAUDE.md`'s rule — so it
+     * is a test that stands one up.)
+     *
+     * **Ordered by bucket, ascending**, which is the crate's `ORDER BY b.bucket` and
+     * deliberately *not* the wishlist's order one command over: that one sorts by money. Neither
+     * is a conclusion about how a widget should draw them — Rust supplies the facts.
+     *
+     * `value`'s `null` and the `max()` on the name are {@link foldBuckets}'.
+     */
+    collection_breakdown: (args: {
+      dimension: string;
+      marketplace?: MarketplaceId;
+    }): BreakdownRow[] => {
+      const mp = marketplaceOf(args.marketplace);
+      // `collection::breakdown_columns`, and it is resolved **before a single row is read** for
+      // that function's reason: the dimension is refused over an empty collection exactly as it
+      // is over a full one, so a story on `empty` reads the same sentence a story on `starter`
+      // does. **A dimension is the name of a column of this database**, which is a fact Rust
+      // owns — `BreakdownDimension` is TypeScript's vocabulary about *widgets* and deliberately
+      // not a second copy of this list.
+      const bucketOf = ((): ((e: FakeEntry, card: FakeCard | null) => [string, string | null]) => {
+        switch (args.dimension) {
+          // `coalesce(c.rarity, 'unknown')`: an orphan, whose printing has left `cards`, is
+          // bucketed rather than dropped. No Scryfall rarity is spelled that way, so the bucket
+          // cannot collide with a real one.
+          case "rarity":
+            return (_e, card) => [card?.rarity ?? "unknown", null];
+          case "color":
+            return (_e, card) => [colorBucket(card), null];
+          // Through the **entry's own** denormalised `set_code` before giving up, which is
+          // `scope`'s set-filter fallback: the row records what the reader owns in the terms
+          // printed on the card, so an orphan still files under the set it came from rather
+          // than under a hole. That column is NOT NULL here, so there is no third link — and
+          // the name is `null` for exactly those orphans, since nothing but the corpus knows
+          // that `isd` is *Innistrad*.
+          case "set":
+            return (e, card) => [card?.setCode ?? e.setCode, card?.setName ?? null];
+          // `e.finish`, `TEXT NOT NULL` with a CHECK, so there is nothing to bucket.
+          case "finish":
+            return (e) => [e.finish, null];
+          default:
+            throw refuse(NOT_A_COLLECTION_DIMENSION);
+        }
+      })();
+      const rows: BucketRow[] = [];
+      for (const e of db.collectionEntries) {
+        if (e.quantity <= 0) continue;
+        const card = cardById(db, e.cardId);
+        const [key, name] = bucketOf(e, card);
+        rows.push({ key, name, copies: e.quantity, unit: finishPriceAt(db, card, e.finish, mp) });
+      }
+      return foldBuckets(rows).sort((a, b) => cmp(a.key, b.key));
+    },
+
     /** `wishlist::list_wishes`. */
     wishlist_list: (args: { query: WishlistQuery }) => {
       const q = args.query;
@@ -8559,6 +8926,113 @@ export function readHandlers(db: FakeDb) {
       return [...byFolder.values()].sort((a, b) => a.folderId - b.folderId);
     },
 
+    /**
+     * `wishlist::summarise_wishlist` — the whole list's four numbers, in one round trip.
+     *
+     * **This is {@link readHandlers.wishlist_folder_summary} with two clauses removed, and
+     * naming both is the point**: the `GROUP BY folder_id` (there is one answer here rather than
+     * one per drawer) and `WHERE w.folder_id IS NOT NULL` — the clause that keeps root-level
+     * wishes out of a folder *tile*, because the root is not a folder and has no tile to draw.
+     * **A list total that inherited it would be wrong by exactly the root**, silently, and the
+     * root is where most wishes live. That is the whole reason this command exists, and
+     * `db.test.ts` is what pins it: the two answers live in two handlers and cannot share a
+     * loop without one of them owning the other's price rule.
+     *
+     * Every figure is the folder tile's, term for term. `unpriced` is **rows** and not copies —
+     * `sum(CASE WHEN unit_price IS NULL THEN 1 ELSE 0 END)`, the folder summary's own line — so
+     * the four numbers add up across the folders and the root exactly.
+     *
+     * `cost` is `0` and never `null` where nothing is priced, which is the one figure on this
+     * DTO that parts from {@link BreakdownRow.value}'s em-dash rule: the crate's `coalesce`
+     * makes it a number, and the `unpriced` count beside it is how the widget says the total is
+     * worth less than it looks.
+     *
+     * **Every copy on the list is a copy still to buy.** The wishlist asks the collection
+     * nothing since 2026-09-08, so `copies` is `sum(quantity)` and there is no shortfall to
+     * subtract.
+     */
+    wishlist_summary: (args: { marketplace?: MarketplaceId }): WishlistSummary => {
+      const mp = marketplaceOf(args.marketplace);
+      const summary: WishlistSummary = { wishes: 0, copies: 0, cost: 0, unpriced: 0 };
+      for (const w of db.wishlistEntries) {
+        const unit = wishPriceAt(db, wishCard(db, w), w.preferredFinish, mp);
+        summary.wishes += 1;
+        summary.copies += w.quantity;
+        summary.cost += unit === null ? 0 : w.quantity * unit;
+        summary.unpriced += unit === null ? 1 : 0;
+      }
+      return summary;
+    },
+
+    /**
+     * `wishlist::breakdown` — the same money {@link readHandlers.wishlist_summary} totals,
+     * grouped one dimension at a time.
+     *
+     * Same join, same price, same multiplication, so a bar can never disagree with the figure
+     * printed above it and `sum(row.cards)` is `copies` for **every** dimension.
+     *
+     * **No quantity filter, where {@link readHandlers.collection_breakdown} has one**, and it
+     * reads as an omission and is not: `wishlist_entries` carries `CHECK (quantity > 0)` — a
+     * wish for none of something is not a wish — while schema v24 lets a *collection* row sit at
+     * zero. The two lists differ in the table rather than in the query.
+     *
+     * **Ordered dearest first**, then by copies, then by key so it is deterministic — the
+     * crate's `ORDER BY value DESC NULLS LAST, cards DESC, bucket ASC`, and deliberately not the
+     * collection's plain bucket order one command over. Neither is a conclusion about how a
+     * widget should draw them.
+     */
+    wishlist_breakdown: (args: {
+      dimension: string;
+      marketplace?: MarketplaceId;
+    }): BreakdownRow[] => {
+      const mp = marketplaceOf(args.marketplace);
+      // `wishlist::breakdown_columns`, resolved before a row is read — the collection's reason
+      // one cabinet over, and the sentence is that module's own rather than this one's.
+      const bucketOf = ((): ((w: FakeWish, card: FakeCard | null) => [string, string | null]) => {
+        switch (args.dimension) {
+          // Coalesced because a wish outlives its printing: the join can miss, and `key` is a
+          // string rather than a nullable one precisely so every row lands in a bucket and the
+          // sums hold.
+          case "rarity":
+            return (_w, card) => [card?.rarity ?? "unknown", null];
+          case "color":
+            return (_w, card) => [colorBucket(card), null];
+          // Through the wish's **own** denormalised `set_code` before giving up, which is the
+          // collection's fallback with one more link: that column is nullable here where the
+          // collection's is NOT NULL, because an any-printing wish never had a set to record,
+          // so the literal is the floor. No Scryfall set code is spelled `unknown`.
+          case "set":
+            return (w, card) => [card?.setCode ?? w.setCode ?? "unknown", card?.setName ?? null];
+          // **The wish's column and not the printing's**, so an orphan wish still buckets
+          // correctly. `null` is *the reader has not said*, which is a real answer rather than
+          // a gap — `row_price_expr`'s two arms turn on exactly that — so it gets a bucket of
+          // its own rather than being folded into `nonfoil`.
+          case "finish":
+            return (w) => [w.preferredFinish ?? "any", null];
+          default:
+            throw refuse(NOT_A_LIST_DIMENSION);
+        }
+      })();
+      const rows: BucketRow[] = db.wishlistEntries.map((w) => {
+        const card = wishCard(db, w);
+        const [key, name] = bucketOf(w, card);
+        return {
+          key,
+          name,
+          copies: w.quantity,
+          unit: wishPriceAt(db, card, w.preferredFinish, mp),
+        };
+      });
+      // `DESC NULLS LAST` through {@link nullsLast}'s own `desc`, which is the half of that
+      // helper this file otherwise never reaches for: an unpriced bucket sorts after every
+      // priced one, including a bucket priced at zero, rather than being flipped to the top
+      // with the rest of the order.
+      const byValueDesc = nullsLast((r: BreakdownRow) => r.value, numeric).desc;
+      return foldBuckets(rows).sort(
+        (a, b) => byValueDesc(a, b) || b.cards - a.cards || cmp(a.key, b.key),
+      );
+    },
+
     /** `deck::list_decks`: archived last, most recently touched first. */
     deck_list: (): DeckRow[] =>
       [...db.decks]
@@ -8620,6 +9094,53 @@ export function readHandlers(db: FakeDb) {
             .sort(([a], [b]) => cmp(a, b))
             .map(([cost, copies]) => ({ cost, copies })),
         }));
+    },
+
+    /**
+     * `deck::deck_values_for` — every deck's live list valued at one marketplace, in one round
+     * trip.
+     *
+     * **The pile is {@link toDeckRow}'s `cardCount`, term for term** — `live`, an **active**
+     * category, and {@link SIZE_KINDS}' three kinds — and that is the definition rather than a
+     * resemblance: a tile draws this figure directly under that count, so a value covering a
+     * different pile than the count covers is a tile disagreeing with itself and nothing on the
+     * screen would say which half to believe. The sideboard and the companion are played
+     * *beside* the deck and are outside both; a theory row is a plan and is outside both.
+     *
+     * **Every deck gets a row**, archived and empty ones included, which is the one difference
+     * from {@link readHandlers.deck_pip_costs} directly above — that one is *absent* for a deck
+     * with nothing to say. The crate gets it from a `LEFT JOIN` rather than a `GROUP BY` over
+     * the cards, so the caller can index by id with no missing-key branch and decide for itself
+     * what an archived deck is worth drawing. A fake that emitted only the decks holding
+     * something would let a story be written against a lookup that cannot miss and would break
+     * that story on the real backend.
+     *
+     * **`value` is `null` and never `0` when the marketplace prices none of it** — the crate's
+     * `sum()` over nothing, which is {@link BreakdownRow.value}'s rule: a deck of unpriced cards
+     * is an em dash, and a deck of *tokens* really is worth nothing. `unpriced` is copies rather
+     * than rows, because the total it qualifies is copies too.
+     *
+     * The price is {@link deckPriceAt}, which is what a deck card's own `unitPrice` is quoted
+     * at — a deck names a printing and not a finish — so a tile and the deck it opens can never
+     * quote one pile at two prices.
+     */
+    deck_values: (args: { marketplace?: MarketplaceId }): DeckValue[] => {
+      const mp = marketplaceOf(args.marketplace);
+      return [...db.decks]
+        .sort((a, b) => a.id - b.id)
+        .map((d) => {
+          const row: DeckValue = { deckId: d.id, value: null, unpriced: 0 };
+          for (const dc of db.deckCards) {
+            if (dc.deckId !== d.id || dc.variant !== LIVE) continue;
+            const category = categoryById(db, dc.categoryId);
+            if (category === undefined || !category.isActive) continue;
+            if (!SIZE_KINDS.includes(category.kind)) continue;
+            const unit = deckPriceAt(db, cardById(db, dc.cardId), mp);
+            if (unit === null) row.unpriced += dc.quantity;
+            else row.value = (row.value ?? 0) + dc.quantity * unit;
+          }
+          return row;
+        });
     },
 
     /**
@@ -9015,6 +9536,66 @@ export function readHandlers(db: FakeDb) {
         .sort((a, b) => b.at - a.at || b.id - a.id)
         .slice(0, limit)
         .map(toDeckAudit);
+    },
+
+    /**
+     * `activity::recent` — the home page's feed, newest first. **Two tables read as one.**
+     *
+     * The union is the whole shape of this handler, and it is a `UNION ALL` in the crate for a
+     * reason worth keeping in mind here: the `collection` and `wishlist` rows come from
+     * {@link FakeDb.activity}, the `deck` rows are {@link FakeDb.deckAudit}'s — the very rows
+     * {@link readHandlers.deck_audit_list} draws in the history drawer — and a change that
+     * writes a deck audit row writes **no** activity row, so it appears here exactly once.
+     *
+     * **`scope` and `deckId` are the two columns the union supplies rather than reads.** Every
+     * deck row is `'deck'` whatever the table says, and every activity row's `deckId` is `null`
+     * — the crate's `NULL AS deck_id`. There is no `deckId` on {@link FakeActivity} to get that
+     * wrong with, which is the shape that comment is about.
+     *
+     * **The ids collide across the two halves and that is fine**: nothing joins on them and the
+     * page keys a line on `scope` plus `id`. A fake that renumbered one side would hide a bug in
+     * every caller that keys on the id alone.
+     *
+     * `at DESC, id DESC`, because `unixepoch()` has one-second resolution and one press can
+     * write two rows inside one second — and here {@link stamp} is derived rather than
+     * wall-clock, which makes that the common case rather than a rarity.
+     *
+     * `limit` is **clamped into `1..=500`** rather than obeyed, `deck_audit_list`'s rule and for
+     * its reason: the low end is load-bearing, because SQLite reads a negative `LIMIT` as no
+     * limit at all, so a `0` from a widget whose config had not loaded would otherwise be a read
+     * of every change the reader has ever made.
+     *
+     * **No fault reaches it**, `deck_audit_list`'s `deckMeta` included: that one stands in for
+     * the *editor's* metadata reads failing, and this is one SELECT over two tables the crate
+     * runs on the read connection like every other read here.
+     */
+    activity_recent: (args: { limit: number }): ActivityEntry[] => {
+      const limit = Math.min(Math.max(args.limit, 1), ACTIVITY_MAX_LIMIT);
+      const feed: ActivityEntry[] = [
+        ...db.activity.map((a) => ({
+          id: a.id,
+          at: a.at,
+          scope: a.scope,
+          kind: a.kind,
+          deckId: null,
+          cardId: a.cardId,
+          cardName: a.cardName,
+          payload: a.payload,
+          delta: a.delta,
+        })),
+        ...db.deckAudit.map((a) => ({
+          id: a.id,
+          at: a.at,
+          scope: "deck",
+          kind: a.kind,
+          deckId: a.deckId,
+          cardId: a.cardId,
+          cardName: a.cardName,
+          payload: a.payload,
+          delta: a.delta,
+        })),
+      ];
+      return feed.sort((a, b) => b.at - a.at || b.id - a.id).slice(0, limit);
     },
 
     /**
@@ -9733,6 +10314,50 @@ export function readHandlers(db: FakeDb) {
           : null,
       collapsed: db.deckFolderPane?.collapsed ?? false,
     }),
+
+    /**
+     * `home::stored` — the reader's home page, or the six a first launch gets.
+     *
+     * **The one setting on this table whose read validates *nothing*, and that is the design
+     * rather than a gap.** Its neighbours each check what they read against a list and shrug at
+     * anything else; this one hands the stored document straight back — `version` included, a
+     * `kind` this build has never heard of included, a `config` shaped like nothing this build
+     * reads included. **The widgets in a newer document are exactly what an older build must not
+     * lose**, so the page draws a "this came from a newer version" card for a kind it cannot
+     * place and writes the row back untouched. `markcolors.rs`'s preserve-what-you-do-not-
+     * understand rule, said about a document instead of a map.
+     *
+     * That leaves one edge, and it is the one worth reading twice: **an empty widget list is a
+     * layout, not a missing row.** A reader who removed every tile has said something, and
+     * handing them the six defaults back on the next launch would undo it silently, every time,
+     * for ever. Only `null` — the row never having been written — is the default here.
+     *
+     * The refusals all sit on the write. See {@link writeHandlers.set_home_layout}: this table's
+     * read-shrugs/write-refuses split, at its widest.
+     *
+     * A read, so it answers through every second of a sync — the write does not.
+     */
+    home_layout: (): HomeLayout => db.homeLayout ?? defaultHomeLayout(),
+
+    /**
+     * `startview::stored` — which view the app opens on, or `home`.
+     *
+     * {@link readHandlers.deck_sort}'s narrowest-fallback-in-the-file, one row over and for the
+     * same reason: there is no list on this side to check a word against. The views are
+     * `ViewId`'s, the narrowing is TypeScript's, and a Rust-side allow-list would mean every new
+     * view is a Rust change and a *downgrade* would strand a reader on a page that no longer
+     * exists. So a word this build has never heard of is answered **verbatim** and the shell
+     * falls back — which is the state {@link FakeDb.startView} exists to let a story seed.
+     *
+     * Both ways to the default are here, as they are for every string on this table: the row has
+     * never been written, or somebody emptied it by hand. A blank is the one value the write
+     * refuses, so a row holding one was hand-edited — and it must still read as `home` rather
+     * than as a view in nobody's vocabulary.
+     *
+     * A read, so it answers through every second of a sync — the write does not.
+     */
+    start_view: (): string =>
+      db.startView !== null && db.startView.trim() !== "" ? db.startView : DEFAULT_START_VIEW,
 
     /**
      * `mirror::settings::mirror_status` — everything the Backup panel draws, in one round trip.
@@ -17013,6 +17638,104 @@ export function writeHandlers(db: FakeDb) {
         );
       }
       db.deckFolderPane = { width: args.width, collapsed: args.collapsed };
+    },
+
+    /**
+     * `home::store` — remember the reader's home page.
+     *
+     * **Four refusals, and they are the exact complement of a read that has none.**
+     * {@link readHandlers.home_layout} discards nothing and validates nothing, so without these
+     * a layout this build cannot read back would look saved, survive a restart in the table, and
+     * read as itself for ever — the bug `set_printing_group_by`'s note calls the half a fake is
+     * easiest to leave out, met from the other direction. Validated in the crate's order, first
+     * failure wins, and **all of it before the row is touched**, so a refused write leaves the
+     * existing layout exactly where it stood.
+     *
+     * **Nothing here looks at a `kind`'s spelling or inside a `config`.** That is the split this
+     * whole feature exists for: the vocabulary is TypeScript's, and a kind this build has never
+     * heard of is the case the design is built around rather than an error. A fake that narrowed
+     * `kind` on the way in would make the "came from a newer version" card unreachable from a
+     * story while looking like diligence.
+     *
+     * **A future `version` is refused in words rather than downgraded**, which is the one
+     * refusal here that is about a document and not about a field: rewriting a document by rules
+     * that do not apply to it is how a newer build's page comes back wrong with nothing logged.
+     *
+     * **The stored widgets are copied rather than kept by reference.** The page hands over the
+     * document it is holding and goes on dragging it; a store that aliased that array would let
+     * the next read answer with edits nobody saved — a state the backend cannot produce, which
+     * is this fake's own bar.
+     *
+     * The byte cap is `JSON.stringify`'s length where the crate measures serde's bytes. They
+     * differ on non-ASCII and on nothing else a layout contains, and the number is 64 KiB
+     * against six widgets, so what the cap is *for* — a `config` used as a document store, or a
+     * bug minting widgets in a loop — is caught either way.
+     *
+     * It honours `busy` like every other ordinary write here — `home.rs` takes the write
+     * connection through `sync::with_write`, and **the lock comes first**: a junk document sent
+     * while a sync holds the connection answers BUSY, because nothing has looked at it yet.
+     */
+    set_home_layout: (args: { layout: HomeLayout }): void => {
+      refuseIfBusy(db);
+      const layout = args.layout;
+      if (layout.version !== HOME_LAYOUT_VERSION) {
+        throw refuse(
+          `That home layout is version ${layout.version}, and this app stores version ` +
+            `${HOME_LAYOUT_VERSION}. Refusing it rather than rewriting it as something this ` +
+            `build understands.`,
+        );
+      }
+      for (const widget of layout.widgets) {
+        if (widget.id.trim() === "") throw refuse(NO_WIDGET_ID);
+        if (widget.kind.trim() === "") throw refuse(NO_WIDGET_KIND);
+        if (widget.span < MIN_WIDGET_SPAN || widget.span > MAX_WIDGET_SPAN) {
+          throw refuse(
+            `The widget "${widget.id}" asks to be ${widget.span} columns wide. ` +
+              `A widget is ${MIN_WIDGET_SPAN} or ${MAX_WIDGET_SPAN}.`,
+          );
+        }
+      }
+      const json = JSON.stringify(layout);
+      if (json.length > MAX_HOME_LAYOUT_BYTES) {
+        throw refuse(
+          `That home layout is ${json.length} bytes and the most this app stores is ` +
+            `${MAX_HOME_LAYOUT_BYTES}.`,
+        );
+      }
+      db.homeLayout = {
+        version: layout.version,
+        widgets: layout.widgets.map((w: HomeWidget) => ({ ...w })),
+      };
+    },
+
+    /**
+     * `startview::store` — remember which view the app opens on.
+     *
+     * **One refusal, and it is the only one Rust is in a position to make.** The word is trimmed
+     * first, so `"  decks  "` is stored as `decks` and a caller's stray whitespace cannot become
+     * a preference no later read matches; a word that is nothing *but* whitespace is then a
+     * blank and is refused rather than stored. Everything else is written as given — a Rust-side
+     * allow-list would mean every new view is a Rust change, and a downgrade would strand a
+     * reader on a page that no longer exists.
+     *
+     * That puts it beside {@link writeHandlers.set_deck_sort} rather than beside the writes that
+     * check a value against a list: the value **has** a vocabulary and the backend does not have
+     * it, so any wider refusal could only be `startview.rs` guessing about a union the frontend
+     * owns — while a blank is refusable without a vocabulary, because it is a view in nobody's.
+     * It is also the one value {@link readHandlers.start_view} discards, so storing it would be a
+     * write that reported success and read back as `home` for ever.
+     *
+     * The sentence is `startview::NO_VIEW` verbatim, like every refusal here — a story renders
+     * these.
+     *
+     * It honours `busy` like every other ordinary write — `startview.rs` takes the write
+     * connection through `sync::with_write`, and the lock comes first.
+     */
+    set_start_view: (args: { view: string }): void => {
+      refuseIfBusy(db);
+      const view = args.view.trim();
+      if (view === "") throw refuse(NO_START_VIEW);
+      db.startView = view;
     },
 
     /**

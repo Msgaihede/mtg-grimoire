@@ -59,6 +59,16 @@ const deckGet = vi.hoisted(() => vi.fn());
  *  all three of its states — stored open, stored collapsed, and a read that fails. */
 const navCollapsed = vi.hoisted(() => vi.fn());
 const setNavCollapsed = vi.hoisted(() => vi.fn());
+/**
+ * The `app_meta` row that says which view the app opens on — read once, at launch, by the
+ * hydration this shell mounts.
+ *
+ * Answered `"search"` in the `beforeEach` below, which is the same view that block puts in the
+ * store: this file's whole world is a reader standing on Search, and a stored word that
+ * disagreed with it would move every test in the file onto a page it was not written about. The
+ * one case that is *about* the hydration puts the store somewhere else and watches it land.
+ */
+const startView = vi.hoisted(() => vi.fn());
 // `TitleBar` is the one thing in this shell that does not go through `@/lib/ipc` — it reads the
 // window, through `@/lib/window`. The workbench's fakes rather than hand-rolled stubs, so this
 // file and Storybook agree about what a window does. Left off, the real `@tauri-apps/api`
@@ -135,6 +145,10 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     // sidebar in — the state every test in this file but the collapse block stands in.
     navCollapsed,
     setNavCollapsed,
+    // The launch read `useStartViewHydration` makes, the fourth of these the shell makes on the
+    // way up. Answered in the `beforeEach` rather than here, because one case below stores a
+    // different word.
+    startView,
     // And the deck editor's search column, read here at launch rather than where it is drawn —
     // the shell mounts `usePrefetchSearchOpen` so the answer is in the cache long before a
     // deck is opened. Nothing in this file draws a deck editor, so the value it answers is not
@@ -171,6 +185,9 @@ import { DURATION } from "@/lib/motion";
 import type { Update } from "@/lib/useUpdate";
 import { cardDraggable, type DragPayload } from "@/features/decks/dnd";
 import { queryClient } from "@/lib/query";
+// The key the launch read fills, imported rather than respelled: a key written twice is a key
+// that drifts, which is why the hook exports it.
+import { START_VIEW_KEY } from "@/lib/useStartView";
 import { PHONE_PX } from "@/lib/viewports";
 import { useAppStore } from "@/lib/store";
 import { boxed, startPointerDrag } from "@/test-drag";
@@ -295,8 +312,14 @@ beforeEach(() => {
   // draws an eighth row, and this file's very first case asserts the rail's buttons **literally**.
   // A share left open by one test would fail a case about something else entirely, naming the
   // wrong culprit.
+  // `viewPulse` joins them because it is the guard the launch hydration is dropped by, and it is
+  // bumped by every `Ctrl+1…9` press this file makes. Left where the last case put it, a
+  // non-zero counter would make `hydrateStartView` a no-op for every test that ran after — so
+  // the hydration case below would pass or fail on the *order* of the file rather than on the
+  // shell, which is the worst shape a leak can take.
   useAppStore.setState({
     activeView: "search",
+    viewPulse: 0,
     openDeckId: null,
     keyMapOpen: false,
     openedShares: [],
@@ -321,6 +344,9 @@ beforeEach(() => {
   deckGet.mockReset().mockResolvedValue(null);
   navCollapsed.mockReset().mockResolvedValue(false);
   setNavCollapsed.mockReset().mockResolvedValue(undefined);
+  // The same view the store is put on above, so the launch read agrees with the world every
+  // other case in this file stands in and moves nobody. See the spy's own comment.
+  startView.mockReset().mockResolvedValue("search");
 });
 
 it("renders nav and refresh button", async () => {
@@ -333,15 +359,16 @@ it("renders nav and refresh button", async () => {
   // By role, not by text: the ribbon now renders the active view's title with the same
   // word the nav item uses, so a bare `getByText("Search")` is ambiguous.
   //
-  // **In DOM order, because the order is a decision rather than the array's history** — the two
-  // ways into the database, then the three lists the reader owns, then Scanner, then the two
-  // placeholders, then Settings.
-  // Nine separate `getByRole` calls stayed green through any shuffle of the column, which is
+  // **In DOM order, because the order is a decision rather than the array's history** — Home
+  // first, then the two ways into the database, then the three lists the reader owns, then
+  // Scanner, then the two placeholders, then Settings.
+  // Separate `getByRole` calls stayed green through any shuffle of the column, which is
   // the one thing about this list a reader would notice from across the room. `within` the rail
-  // keeps the ribbon's own title out of the answer, and the toggle at the rail's foot is the
-  // tenth button inside it.
+  // keeps the ribbon's own title out of the answer, and the collapse toggle at the rail's foot is
+  // the last button inside it.
   const nav = screen.getByRole("navigation", { name: "Views" });
   expect(within(nav).getAllByRole("button").map((b) => b.textContent)).toEqual([
+    "Home",
     "Search",
     "Tagger",
     "Decks",
@@ -358,16 +385,16 @@ it("renders nav and refresh button", async () => {
 });
 
 /**
- * The eighth destination, and the only one the rail does not always draw.
+ * The one destination the rail does not always draw.
  *
  * Shared is somebody else's collection opened from a link, and a reader who never opens one never
  * sees the row (spec decision 6) — so the case above, which asserts the rail's buttons literally,
  * is also the *absence* half of this rule.
  *
  * **The filter is `AppShell`'s and not `nav.ts`'s**, which is what keeps `NAV` a plain list that
- * `nav.test.ts` asserts whole and that `switchView`'s chords bind against by index. `Ctrl+6`
- * therefore reaches this view whether or not the row is drawn, which is the way in before the
- * first link has been pasted.
+ * `nav.test.ts` asserts whole and that `switchView`'s chords bind against by index. The digits
+ * therefore mean the same thing whether or not this row is drawn — which is exactly what binding
+ * against a fixed list buys, and why this entry is the one left out of it.
  */
 describe("the Shared row", () => {
   const railButtons = () =>
@@ -394,6 +421,7 @@ describe("the Shared row", () => {
     );
 
     expect(railButtons()).toEqual([
+      "Home",
       "Search",
       "Tagger",
       "Decks",
@@ -1664,6 +1692,7 @@ describe("the shell's choice of navigation", () => {
     expect(bar).toHaveStyle({ paddingBottom: "var(--safe-b)" });
     expect(bar).not.toHaveAttribute("id");
     expect(within(bar).getAllByRole("button").map((b) => b.textContent)).toEqual([
+      "Home",
       "Search",
       "Tagger",
       "Decks",
@@ -1712,9 +1741,10 @@ describe("the shell's choice of navigation", () => {
     const rail = screen.getByRole("navigation", { name: "Views" });
     expect(rail).toHaveAttribute("id", "app-nav");
     expect(rail).not.toHaveStyle({ paddingBottom: "var(--safe-b)" });
-    // The tenth button is the collapse toggle, and its presence is the whole assertion that
-    // this is the rail: the nine words above are the same nine either way.
+    // The last button is the collapse toggle, and its presence is the whole assertion that
+    // this is the rail: the words above it are the same words either way.
     expect(within(rail).getAllByRole("button").map((b) => b.textContent)).toEqual([
+      "Home",
       "Search",
       "Tagger",
       "Decks",
@@ -1748,7 +1778,7 @@ describe("the shell's choice of navigation", () => {
  * a store-only assertion cannot see.
  */
 describe("the shell's keyboard bindings", () => {
-  it("switches view on Ctrl+3", async () => {
+  it("switches view on Ctrl+4", async () => {
     const user = userEvent.setup();
     render(
       <AppShell update={noUpdate}>
@@ -1756,12 +1786,15 @@ describe("the shell's keyboard bindings", () => {
       </AppShell>,
     );
 
-    await user.keyboard("{Control>}3{/Control}");
+    await user.keyboard("{Control>}4{/Control}");
 
-    // Decks and not something else, which is the whole of what "by index" buys: the third chord
-    // activates the third entry in `NAV`, so the rail's order is the binding rather than a list
+    // Decks and not something else, which is the whole of what "by index" buys: the fourth chord
+    // activates the fourth entry in `NAV`, so the rail's order is the binding rather than a list
     // of nine ids restated in the handler. Written out as the word a reader would say rather
-    // than as `NAV[2].id`, per the rule that an assertion must not read its own constant.
+    // than as `NAV[3].id`, per the rule that an assertion must not read its own constant.
+    //
+    // **It was `Ctrl+3` until the home page took the head of `NAV`**, which is the renumbering
+    // this file's next case is the fence around.
     expect(useAppStore.getState().activeView).toBe("decks");
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Decks");
   });
@@ -1769,20 +1802,23 @@ describe("the shell's keyboard bindings", () => {
   /**
    * ⚠️ **The Shared view has no chord, and this case is the fence around that.**
    *
-   * Ten destinations against nine digits: `Ctrl+0` is not a tenth step of the run, so exactly one
-   * entry goes without, and it is the one row the rail does not always draw. A digit bound to a
-   * row that appears and disappears would either shift every digit after it or point at a row
-   * half the readers do not have — one press meaning two things to two readers, which is the
-   * whole thing these chords binding against a *list* exists to prevent.
+   * Eleven destinations against nine digits: `Ctrl+0` is not a tenth step of the run, so two
+   * entries go without — and this one goes without because it is the row the rail does not always
+   * draw. A digit bound to a row that appears and disappears would either shift every digit after
+   * it or point at a row half the readers do not have — one press meaning two things to two
+   * readers, which is the whole thing these chords binding against a *list* exists to prevent.
+   * (`settings` is the other, for the unrelated reason the next case pins: the run simply ends
+   * before it.)
    *
    * It cost that view its keyboard route and nothing else: the way in is the cabinet's own
    * **Open a shared collection** button, which is what the chord was standing in for while
    * nothing else reached the view.
    *
-   * **`Ctrl+6` is Scanner**, and asserting that rather than merely asserting *not shared* is what
-   * makes this a test of the binding rather than of an absence.
+   * **`Ctrl+7` is Scanner**, and asserting that rather than merely asserting *not shared* is what
+   * makes this a test of the binding rather than of an absence. It was `Ctrl+6` until Home took
+   * the head of `NAV`.
    */
-  it("gives the Shared view no chord, and Ctrl+6 reaches Scanner instead", async () => {
+  it("gives the Shared view no chord, and Ctrl+7 reaches Scanner instead", async () => {
     const user = userEvent.setup();
     render(
       <AppShell update={noUpdate}>
@@ -1795,19 +1831,31 @@ describe("the shell's keyboard bindings", () => {
       }),
     ).toBeNull();
 
-    await user.keyboard("{Control>}6{/Control}");
+    await user.keyboard("{Control>}7{/Control}");
 
     expect(useAppStore.getState().activeView).toBe("scanner");
-    // …and no digit reaches it: the run is nine long and the tenth destination is not on it.
+    // …and no digit reaches it: the run is nine long and this destination is not on it.
     for (const digit of ["1", "2", "3", "4", "5", "6", "7", "8", "9"]) {
       await user.keyboard(`{Control>}${digit}{/Control}`);
       expect(useAppStore.getState().activeView).not.toBe("shared");
     }
   });
 
-  /** The rows the two placeholders pushed along, so the shift itself is pinned — and Settings on
-   *  the last digit, which is what the shared view going without is what keeps true. */
-  it("keeps Scanner on Ctrl+6 and Settings on Ctrl+9", async () => {
+  /**
+   * ⚠️ **The renumbering, pinned end to end — and `Ctrl+9` no longer opens Settings.**
+   *
+   * Home took the head of `NAV`, so every digit moved one row down the rail and the ninth digit
+   * stops at Playtesting. That is a deliberate break in a binding readers have in their fingers,
+   * and this is the case that makes putting it back a red build rather than a quiet merge: a
+   * count can only say *how many* destinations go without a chord, never *which*, and the which
+   * is the half a reader feels.
+   *
+   * The two absences are asserted differently on purpose. Shared is unreachable by **any** digit
+   * (the case above sweeps all nine), because its exclusion is a filter. Settings is unreachable
+   * because the run **ends** — so what is pinned here is the last digit landing one row short of
+   * it, which is the fact that would change the day a tenth digit existed.
+   */
+  it("runs Ctrl+1 to Ctrl+9 from Home to Playtesting, leaving Settings off the end", async () => {
     const user = userEvent.setup();
     render(
       <AppShell update={noUpdate}>
@@ -1815,17 +1863,30 @@ describe("the shell's keyboard bindings", () => {
       </AppShell>,
     );
 
-    await user.keyboard("{Control>}6{/Control}");
-    expect(useAppStore.getState().activeView).toBe("scanner");
+    await user.keyboard("{Control>}1{/Control}");
+    expect(useAppStore.getState().activeView).toBe("home");
+
+    await user.keyboard("{Control>}2{/Control}");
+    expect(useAppStore.getState().activeView).toBe("search");
 
     await user.keyboard("{Control>}7{/Control}");
-    expect(useAppStore.getState().activeView).toBe("trade");
+    expect(useAppStore.getState().activeView).toBe("scanner");
 
     await user.keyboard("{Control>}8{/Control}");
+    expect(useAppStore.getState().activeView).toBe("trade");
+
+    // The end of the run, and the whole of the breaking change: this was Settings until the home
+    // page shipped.
+    await user.keyboard("{Control>}9{/Control}");
     expect(useAppStore.getState().activeView).toBe("playtesting");
 
-    await user.keyboard("{Control>}9{/Control}");
-    expect(useAppStore.getState().activeView).toBe("settings");
+    // …and no digit reaches Settings at all. Swept rather than asserted once, because the failure
+    // this guards against is a *shift* — a chord list grown to ten, or Home dropped back out of
+    // `NAV` — and either would land Settings on some digit rather than on the one it used to have.
+    for (const digit of ["1", "2", "3", "4", "5", "6", "7", "8", "9"]) {
+      await user.keyboard(`{Control>}${digit}{/Control}`);
+      expect(useAppStore.getState().activeView).not.toBe("settings");
+    }
   });
 
   it("does not switch view while a modal is open", async () => {
@@ -1914,7 +1975,7 @@ describe("the shell's keyboard bindings", () => {
   });
 
   /**
-   * And the guard is `F1`'s alone — a held `Ctrl+3` goes on arriving.
+   * And the guard is `F1`'s alone — a held `Ctrl+4` goes on arriving.
    *
    * Selecting the view you are already on is idempotent, so there is no failure to guard against
    * here, and hoisting the check to the top of the handler would decide the question for every
@@ -1922,14 +1983,14 @@ describe("the shell's keyboard bindings", () => {
    * that placement a decision rather than an accident: it goes red on a handler that drops every
    * repeated press.
    */
-  it("keeps switching view while Ctrl+3 auto-repeats", () => {
+  it("keeps switching view while Ctrl+4 auto-repeats", () => {
     render(
       <AppShell update={noUpdate}>
         <div>content</div>
       </AppShell>,
     );
 
-    fireEvent.keyDown(document.body, { key: "3", ctrlKey: true, repeat: true });
+    fireEvent.keyDown(document.body, { key: "4", ctrlKey: true, repeat: true });
 
     expect(useAppStore.getState().activeView).toBe("decks");
   });
@@ -2006,5 +2067,135 @@ describe("the shell's keyboard bindings", () => {
       add.mockRestore();
       remove.mockRestore();
     }
+  });
+});
+
+/**
+ * The view the app opens on, read once at launch.
+ *
+ * **This is the shell's job rather than a view's**, for the same reason every other read in that
+ * block is: it is the only component that is always mounted, so the round trip starts before the
+ * reader has reached anything — and on a launch that is also a first sync it queues behind one,
+ * which is exactly the case a second copy of the read would make worse.
+ */
+describe("the stored opening view", () => {
+  /**
+   * Every source file in the app, as text — `nav.test.ts`'s `?raw` glob and its reason: this
+   * project has no `@types/node` and cannot reach `node:fs`, so Vite is the only thing here that
+   * can read a file off disk.
+   */
+  const SOURCES = import.meta.glob<string>("/src/**/*.{ts,tsx}", {
+    query: "?raw",
+    import: "default",
+    eager: true,
+  });
+
+  /**
+   * The same source with its comments taken out.
+   *
+   * This repo keeps its reasoning in prose and the prose names its own hooks freely — the block
+   * above the call in `AppShell.tsx` says `useStartViewHydration` twice, and `StartViewPanel`'s
+   * doc says it once — so a text sweep that counted comments would report several mounts of a
+   * hook that is called once. Block comments first, then line comments, with the `[^:]` guard so
+   * a `mtgimg://` in a sentence does not swallow the rest of its line.
+   */
+  const withoutComments = (source: string) =>
+    source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+
+  /**
+   * **The hook is mounted exactly once, in this component, and nothing in the program says so.**
+   *
+   * `useStartViewHydration` guards itself against a double *render* — a ref, which survives
+   * StrictMode's simulated remount — but nothing in it can see a second **component** calling it,
+   * and a second caller is two launch reads racing to seed one store. The hook's own doc says
+   * "call this once", and a doc comment is not a fence; this is the fence: the shipped tree,
+   * swept as text, with the declaring module and both kinds of non-shipped file left out.
+   *
+   * A surface that "just wants to know" the stored word calls `useStartView` instead, which is a
+   * read of the cache this fills.
+   */
+  it("mounts the hydration in the shell and nowhere else", () => {
+    // A glob that stops matching returns `{}`, and a sweep over nothing agrees with everything.
+    expect(Object.keys(SOURCES).length).toBeGreaterThan(20);
+
+    const callers = Object.entries(SOURCES)
+      // A test drives the hook and a story may mount a component that holds it; neither is the
+      // shipped tree. The declaring module is left out by name, because its own signature —
+      // `export function useStartViewHydration(): void` — contains the call's exact characters.
+      .filter(([path]) => !path.includes(".test.") && !path.includes(".stories."))
+      .filter(([path]) => path !== "/src/lib/useStartView.ts")
+      .filter(([, source]) => withoutComments(source).includes("useStartViewHydration()"))
+      .map(([path]) => path);
+
+    expect(callers).toEqual(["/src/components/AppShell.tsx"]);
+
+    // And once *within* that file: the assertion above would pass just as well over a component
+    // that called it twice in one body.
+    const shell = withoutComments(SOURCES["/src/components/AppShell.tsx"]);
+    expect(shell.split("useStartViewHydration()").length - 1).toBe(1);
+  });
+
+  /**
+   * The behaviour the mount buys: a stored word lands the app on that view.
+   *
+   * The store is put on Home first — where `store.ts` really starts — so this is about a *move*
+   * rather than about the state the `beforeEach` already left behind. The ribbon's `<h1>` is the
+   * observable rather than the store field, because a reader cannot see a zustand field: `NAV`'s
+   * label is both the rail's word and the ribbon's title, so one heading says which page the app
+   * came up on.
+   */
+  it("lands the app on the stored view", async () => {
+    useAppStore.setState({ activeView: "home", viewPulse: 0 });
+    startView.mockResolvedValue("search");
+
+    render(
+      <AppShell update={noUpdate}>
+        <div>content</div>
+      </AppShell>,
+    );
+
+    // By role and by level: `Search` is also a rail button and a filter box's name.
+    expect(await screen.findByRole("heading", { level: 1, name: "Search" })).toBeInTheDocument();
+    expect(useAppStore.getState().activeView).toBe("search");
+    // Once. A second caller of the hook would be a second launch read, which is the whole of what
+    // "mounted exactly once" is worth.
+    expect(startView).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * And a press already made wins.
+   *
+   * The guard is `store.ts`'s (`viewPulse`) rather than this component's, but the shell is where
+   * the race actually happens: on a launch that is also a first sync the read queues behind one,
+   * so a reader who has already reached for the rail would otherwise be yanked off the page they
+   * asked for a beat later, with nothing on screen explaining it.
+   *
+   * **The cache is waited on rather than the store**, and that is what keeps the case from being
+   * vacuous: "the view did not change" is true of a read that never landed at all, so the answer
+   * has to be observed arriving somewhere before the absence means anything.
+   */
+  it("does not move a reader who has already pressed something", async () => {
+    useAppStore.setState({ activeView: "home", viewPulse: 0 });
+    const stored = deferred<string>();
+    startView.mockReturnValue(stored.promise);
+    const user = userEvent.setup();
+
+    render(
+      <AppShell update={noUpdate}>
+        <div>content</div>
+      </AppShell>,
+    );
+
+    // The reader gets there first.
+    await user.click(screen.getByRole("button", { name: "Decks" }));
+    expect(useAppStore.getState().activeView).toBe("decks");
+
+    // …and the launch read lands afterwards, saying Search.
+    stored.resolve("search");
+    await waitFor(() => {
+      expect(queryClient.getQueryData(START_VIEW_KEY)).toBe("search");
+    });
+
+    expect(useAppStore.getState().activeView).toBe("decks");
   });
 });

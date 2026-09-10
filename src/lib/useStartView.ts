@@ -13,16 +13,15 @@ import { useAppStore, type ViewId } from "./store";
 export const START_VIEW_KEY = ["startView"];
 
 /**
- * The view the app opens on.
+ * The view the app opens on — a {@link ViewId}, and nothing narrower.
  *
- * ⚠️ **This alias is a seam, and Task 24 of the home-page plan closes it.** `store.ts` gains
- * `"home"` as {@link ViewId}'s first member in the same task that adds `hydrateStartView`, and on
- * the day it does this type is *definitionally* `ViewId` — a union absorbs a member it already
- * holds. Delete the alias then and spell `ViewId` throughout; nothing else in this module or in
- * its callers changes. Writing it this way rather than casting `"home"` into a union that does not
- * yet hold it is the difference between a fence the compiler keeps and a lie it cannot see.
+ * **This was `ViewId | "home"` for exactly as long as the union did not hold `"home"`**, which was
+ * the gap between this module landing and the rail growing its Home row. It was written that way
+ * rather than casting `"home"` into a union that did not yet contain it, because a widening the
+ * compiler can check is a fence and a cast is a claim. The union holds `"home"` now, so the alias
+ * says what it always meant.
  */
-export type StartView = ViewId | "home";
+export type StartView = ViewId;
 
 /**
  * The view a database nobody has changed — and every failure below — opens on.
@@ -162,19 +161,6 @@ export function useStartView(): {
 }
 
 /**
- * The store, plus the action Task 24 adds to it.
- *
- * ⚠️ **The second half of this module's seam.** `hydrateStartView` is added to `store.ts` beside
- * `hydrateCardZoom` in Task 24 of the home-page plan, which runs after this file. Until it lands
- * the action is genuinely absent, so it is named as optional and called with `?.` — a runtime
- * check rather than a cast that claims something untrue. On the day Task 24 lands, `AppState`
- * carries the action itself, this intersection stops adding anything, and the alias and the `?.`
- * can both go. Nothing else here changes.
- */
-type StoreWithStartView = ReturnType<typeof useAppStore.getState> & {
-  hydrateStartView?: (view: StartView) => void;
-};
-
 /**
  * Land the app on the stored view, once, at launch.
  *
@@ -220,8 +206,7 @@ export function useStartViewHydration(): void {
       .then((stored) => {
         // Narrowed before it crosses into the store, never after: `activeView` is a `ViewId` and
         // a word Rust stored is a `string`, and this is the one door between them.
-        const state = useAppStore.getState() as StoreWithStartView;
-        state.hydrateStartView?.(asStartView(stored));
+        useAppStore.getState().hydrateStartView(asStartView(stored));
       })
       .catch(() => {});
   }, [queryClient]);

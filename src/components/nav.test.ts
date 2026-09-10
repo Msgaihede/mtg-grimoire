@@ -8,6 +8,10 @@ describe("the navigation census", () => {
   it("names every view exactly once", () => {
     const ids = NAV.map((e) => e.id);
     expect(ids).toEqual([
+      // First, because it is the page the app opens on and a reader reads a column downward —
+      // a landing page anywhere but the top row is a page the reader is standing on and cannot
+      // find. Its arrival is what renumbered every chord below it.
+      "home",
       "search",
       "tags",
       "decks",
@@ -48,40 +52,53 @@ describe("the navigation census", () => {
   });
 
   /**
-   * Every destination a chord can reach is reachable from the keyboard — the one thing about
-   * this list that lives in another module.
+   * Which destinations a digit reaches — the one thing about this list that lives in another
+   * module.
    *
    * `Ctrl+1…9` is bound **by index**: `AppShell` walks `switchView`'s chords and activates
-   * `CHORD_NAV[i]`. So the two lists are one binding written down twice, and nothing in the
-   * program holds them together — `shortcuts.ts` deliberately does not import this module,
-   * because the catalogue is pure data over a plain event and a runtime edge from it to a file
-   * of React components is the wrong direction. A *test* importing both is the fence that costs
-   * nothing at runtime.
+   * `CHORD_NAV[i]`, where `CHORD_NAV` is this list minus `shared`. So the two lists are one
+   * binding written down twice, and nothing in the program holds them together —
+   * `shortcuts.ts` deliberately does not import this module, because the catalogue is pure data
+   * over a plain event and a runtime edge from it to a file of React components is the wrong
+   * direction. A *test* importing both is the fence that costs nothing at runtime.
    *
-   * **Growth is the direction that goes silent, which is why the fence is here rather than in
-   * `shortcuts.test.ts`.** An eleventh entry added to the array above with no chord is simply
-   * unreachable, while the panel goes on saying "Jump to a section" over a range that no longer
-   * covers the rail — and the catalogue's own tests would all still pass, because they pin
-   * `Ctrl+1` through `Ctrl+9` literally and have never heard of this list. The other two
-   * directions are already answered: a shrink is caught by `AppShell`'s `i >= CHORD_NAV.length`
-   * floor, and a reorder remapping the digits is the design working as intended.
+   * ⚠️ **Two destinations go without a chord and the reasons are different, which is why this is
+   * no longer a subtraction.** It used to read `NAV.length - 1` against a rail of ten, on the
+   * argument that a second exclusion should have to be *written* rather than arrive by
+   * arithmetic. It has been written: `shared` goes without because its row is **conditional**,
+   * and a digit bound to a row that appears and disappears would mean two things to two readers;
+   * `settings` goes without because the **run is nine long and the rail is eleven**, and Home
+   * belongs at the top in reading order. The first reason no amount of room would change; the
+   * second is arithmetic and would reverse the day a tenth digit existed.
    *
-   * ⚠️ **`NAV.length - 1`, and the `- 1` is a decision rather than an off-by-one.** Ten
-   * destinations arrived on 2026-09-08 against nine digits — `Ctrl+0` is not a tenth step of
-   * that run — so exactly one entry has no chord, and it is `shared`, the one row the rail does
-   * not always draw. The subtraction is spelled against the **id** below rather than as a bare
-   * number, so a *second* exclusion cannot arrive by arithmetic: it would have to be written.
-   *
-   * A length rather than a literal, because the literal is `shortcuts.test.ts`' job and stating
-   * it twice would make a legitimate eleventh view two edits away from green instead of one. The
-   * pair is what pins it: that file says the chords are `Ctrl+1…9`, this one says there are as
-   * many of them as there are places a digit can go.
+   * **The ninth entry is pinned by name, and that is the fence a renumbering needs.** A
+   * merge that quietly restored the old order would put Settings back on `Ctrl+9` with every
+   * count in this file still correct — a length can only say *how many* go without, never
+   * *which*, and it is the *which* that a reader has in their fingers.
    */
-  it("has a chord for every destination a digit can reach", () => {
+  it("puts nine destinations inside the run of digits, ending at Playtesting", () => {
     const chorded = NAV.filter((n) => n.id !== "shared");
-    expect(shortcut("global", "switchView").chords).toHaveLength(chorded.length);
-    // …and the one left out is left out on purpose, which is the half a length cannot say.
+    // The run itself: nine digits, `Ctrl+1` through `Ctrl+9`, as `shortcuts.test.ts` pins
+    // literally. Read rather than restated, so the two files cannot disagree about the length.
+    const digits = shortcut("global", "switchView").chords.length;
+    expect(digits).toBe(9);
+
+    // `Ctrl+1` is Home — the top of the column and the page the app opens on.
+    expect(chorded[0].id).toBe("home");
+    // …and `Ctrl+9` is Playtesting, which is where the run stops. Written out as the word rather
+    // than as `chorded[digits - 1].id`, per the rule that an assertion must not read its own
+    // constant.
+    expect(chorded[8].id).toBe("playtesting");
+
+    // **Settings is past the end**, which is the half the two lines above cannot say: it is on
+    // the rail, it is not in the run, and `Ctrl+9` does not open it.
+    expect(chorded.slice(0, digits).map((n) => n.id)).not.toContain("settings");
+    expect(NAV.map((n) => n.id)).toContain("settings");
+
+    // And `shared` is left out of `CHORD_NAV` altogether — the other exclusion, for its own
+    // reason, and the one that is a filter rather than a run ending.
     expect(NAV.map((n) => n.id)).toContain("shared");
+    expect(chorded.map((n) => n.id)).not.toContain("shared");
     expect(chorded).toHaveLength(NAV.length - 1);
   });
 });

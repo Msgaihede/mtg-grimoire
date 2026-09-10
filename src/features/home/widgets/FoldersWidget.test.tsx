@@ -13,7 +13,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ipc,
   type CollectionFolder,
@@ -152,6 +152,14 @@ const tiles = (list: HTMLElement) =>
     .getAllByRole("button")
     .map((button) => button.getAttribute("aria-label"));
 
+/**
+ * **The store is module state and outlives `cleanup()`**, so a case that leaves something
+ * written is a case the next one inherits — and the two press cases below write a folder
+ * hand-off that nothing in this file mounts a page to spend. `store.test.ts`'s own reset, for
+ * its own reason.
+ */
+beforeEach(() => useAppStore.setState(useAppStore.getInitialState()));
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -288,7 +296,21 @@ describe("FoldersWidget", () => {
     expect(tiles(collectionList())).toEqual(["Binder, collection folder, 12 cards, $30.00"]);
   });
 
-  it("opens the collection when a collection tile is pressed", async () => {
+  /**
+   * **A press is a navigation *and* a hand-off, and this asserts both halves of one press.**
+   *
+   * The view was the whole of what a press could do until the door existed: which drawer a reader
+   * is standing in is `useCollection`'s own `useState`, deliberately, so a shortcut that only
+   * changed the view landed them at the root of the cabinet whose *drawer* they had pressed.
+   * `pendingFolder` carries the rest, and `CollectionPage` spends it as it arrives.
+   *
+   * **The order the two writes are made in is what this really pins.** `setActiveView` clears a
+   * hand-off on every view change, so a press that named the folder *first* would erase its own
+   * message — and the failure is silent, because the reader still lands on the right page, at the
+   * root, exactly as they did before any of this existed. `store.test.ts` pins the two store
+   * rules; this pins that the widget writes them the right way round.
+   */
+  it("opens the collection at the folder that was pressed", async () => {
     const user = userEvent.setup();
     useAppStore.setState({ activeView: "settings" });
     draw({ widget: widget({ collectionFolderIds: [1] }) });
@@ -296,9 +318,12 @@ describe("FoldersWidget", () => {
     await user.click(screen.getByRole("button", { name: /^Binder, collection folder/ }));
 
     expect(useAppStore.getState().activeView).toBe("collection");
+    expect(useAppStore.getState().pendingFolder).toEqual({ scope: "collection", id: 1 });
   });
 
-  it("opens the wishlist when a wishlist tile is pressed", async () => {
+  /** The same press on the other cabinet — and the `scope` is what stops the wishlist's page
+   *  reading the collection's post, since one field serves both. */
+  it("opens the wishlist at the folder that was pressed", async () => {
     const user = userEvent.setup();
     useAppStore.setState({ activeView: "settings" });
     draw({ widget: widget({ wishlistFolderIds: [10] }) });
@@ -306,6 +331,7 @@ describe("FoldersWidget", () => {
     await user.click(screen.getByRole("button", { name: /^Buy soon, wishlist folder/ }));
 
     expect(useAppStore.getState().activeView).toBe("wishlist");
+    expect(useAppStore.getState().pendingFolder).toEqual({ scope: "wishlist", id: 10 });
   });
 
   /**

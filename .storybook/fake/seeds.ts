@@ -75,6 +75,7 @@ import {
   SUPPORTING_SINCE,
 } from "./db";
 import type {
+  FakeActivity,
   FakeCollectionFolder,
   FakeDb,
   FakeDeck,
@@ -1526,6 +1527,145 @@ function starterAudit(): FakeDeckAudit[] {
 }
 
 /**
+ * What has happened to the seeded **collection and wishlist** — the other half of the home
+ * page's feed, and {@link starterAudit}'s design one table over.
+ *
+ * `activity_recent` reads this and `deck_audit` as one list, so these rows are timed to **land
+ * between** the deck rows above rather than beside them: the day a story opens on holds a deck
+ * line, a collection line and a wishlist line interleaved, which is the only arrangement that
+ * shows what the feed is for. A seed whose two halves sat in different weeks would draw two
+ * lists under one heading and prove nothing about the union.
+ *
+ * **Three days, and each is a different shape of day.** The oldest is one bulk press and its
+ * folder — the reader starting over — which is what gives the roll-up a day of `+40 / −89` to
+ * print; the middle day is ordinary tidying; today is a mixture with a deck's own week running
+ * through it.
+ *
+ * **Every kind the column CHECKs is here**, which is `starterAudit`'s argument about the
+ * drawer's chips read one table over and made about sentences instead: `activityText.ts` words
+ * sixteen `(scope, kind)` pairs and a seed reaching eight of them leaves half of that file
+ * undrawn in the workbench. What is deliberately *not* here is a kind this build has never heard
+ * of — that row is `starterAudit`'s to carry, because the `activity` CHECK refuses a ninth word
+ * and a newer build would have to rebuild the constraint to write one.
+ *
+ * **The two bulk shapes are both here and they are not the same row.** A wishlist `add` naming
+ * **no card** and carrying a `cards` count is a *run* — the deck shopping-list press — and it is
+ * the one payload that changes which sentence its own kind draws.
+ *
+ * `delta` is signed copies and `0` wherever the change was not about copies: a move between
+ * drawers, a field edit and a folder rename all record `0`, because a roll-up that counted a
+ * move would double a card that only ever changed shelf.
+ */
+function starterActivity(): FakeActivity[] {
+  let id = 0;
+  const row = (
+    scope: FakeActivity["scope"],
+    kind: FakeActivity["kind"],
+    at: number,
+    payload: string,
+    delta = 0,
+  ): FakeActivity => ({
+    id: (id += 1),
+    at,
+    scope,
+    kind,
+    cardId: null,
+    cardName: null,
+    payload,
+    delta,
+  });
+  /** A row about one printing, named as the backend denormalises it — {@link starterAudit}'s
+   *  own helper, and for its reason: the name copied at write time is the one a feed line keeps
+   *  the day that printing leaves the card database. */
+  const card = (
+    scope: FakeActivity["scope"],
+    kind: FakeActivity["kind"],
+    at: number,
+    setCode: string,
+    collectorNumber: string,
+    payload: string,
+    delta: number,
+  ): FakeActivity => {
+    const p = printing(setCode, collectorNumber);
+    return { ...row(scope, kind, at, payload, delta), cardId: p.id, cardName: p.name };
+  };
+
+  return [
+    // --- six days ago: the reader starts over ---------------------------------------------
+    row("wishlist", "clear", daysAgo(6, 16, 40), '{"cards":89}', -89),
+    row("collection", "import", daysAgo(6, 17, 12), '{"cards":40,"rows":37}', 40),
+    row("collection", "folder", daysAgo(6, 17, 20), '{"action":"create","name":"Binder"}'),
+
+    // --- three days ago: ordinary tidying --------------------------------------------------
+    card(
+      "collection",
+      "add",
+      daysAgo(3, 9, 40),
+      "2x2",
+      "117",
+      '{"folder":"Binder","finish":"nonfoil"}',
+      3,
+    ),
+    card(
+      "wishlist",
+      "add",
+      daysAgo(3, 9, 55),
+      "mh2",
+      "138",
+      '{"folder":"Ordered","finish":"foil"}',
+      1,
+    ),
+    row(
+      "wishlist",
+      "folder",
+      daysAgo(3, 10, 2),
+      '{"action":"rename","name":"Ordered","from":"On order"}',
+    ),
+
+    // --- yesterday: between deck 4's two rows ----------------------------------------------
+    card("collection", "quantity", daysAgo(1, 19, 30), "mh2", "267", '{"from":4,"to":2}', -2),
+    card(
+      "collection",
+      "move",
+      daysAgo(1, 19, 44),
+      "isd",
+      "51",
+      '{"from":"Binder","to":"Recently removed"}',
+      0,
+    ),
+    card("wishlist", "remove", daysAgo(1, 21, 5), "c21", "263", '{"folder":"Backordered"}', -1),
+    card(
+      "collection",
+      "edit",
+      daysAgo(1, 21, 12),
+      "lea",
+      "288",
+      '{"fields":["condition","purchasePrice"]}',
+      0,
+    ),
+
+    // --- today: threaded through deck 4's and deck 3's own rows -----------------------------
+    card("collection", "add", daysAgo(0, 9, 15), "fut", "153", '{"folder":null,"finish":"foil"}', 1),
+    // **The run, not a card**: no printing, and a `cards` count in the payload. It is what a
+    // deck's `Send missing to wishlist` writes, and the one row here whose sentence is chosen by
+    // its payload rather than by its kind.
+    row("wishlist", "add", daysAgo(0, 10, 2), '{"cards":12,"rows":9,"folder":"Ordered"}', 12),
+    card("collection", "remove", daysAgo(0, 12, 30), "mp2", "8", '{"folder":"Trade binder"}', -2),
+    card(
+      "wishlist",
+      "move",
+      daysAgo(0, 14, 40),
+      "mh2",
+      "267",
+      '{"from":"Ordered","to":"Backordered"}',
+      0,
+    ),
+    card("wishlist", "quantity", daysAgo(0, 16, 20), "ema", "32", '{"from":2,"to":1}', -1),
+    card("wishlist", "edit", daysAgo(0, 16, 48), "gtc", "148", '{"fields":["printing"]}', 0),
+  ];
+}
+
+/**
  * Both downloaded price feeds, already fetched — which is the state a reader who has ever
  * chosen Card Kingdom is in, and the only one a story about *prices* can be written against.
  *
@@ -1638,6 +1778,11 @@ function starterSeed(): FakeDb {
     deckNotes: starterDeckNotes(),
     deckNoteCards: starterDeckNoteCards(),
     deckAudit: starterAudit(),
+    // The feed's other half. Its ids restart at 1 alongside `deckAudit`'s and that is what the
+    // real tables do — two `INTEGER PRIMARY KEY`s counting independently — so the union holds
+    // pairs of rows sharing an id and nothing is wrong: the page keys a line on `scope` plus
+    // `id`. A seed that offset one side would hide a caller keying on the id alone.
+    activity: starterActivity(),
   });
 }
 
@@ -1966,16 +2111,83 @@ function largeEntries(cards: FakeCard[]): FakeEntry[] {
   return rows;
 }
 
+/** How many days of history {@link largeActivity} writes, and how many rows on each. Twelve and
+ *  fifteen because the product is what this seed is for: 180 rows past `ActivityWidget`'s
+ *  default limit of 50, so the widget is deciding where to stop rather than showing everything
+ *  there is — and twelve **day headings**, where `starter`'s three all fit on one screen. */
+const LARGE_ACTIVITY_DAYS = 12;
+const LARGE_ACTIVITY_PER_DAY = 15;
+
+/**
+ * A feed deep enough to be cut off — {@link largeEntries}' argument applied to the home page.
+ *
+ * **Collection rows only, and no `deck_audit` half at all**, because this seed has no decks:
+ * that is not a gap to fill but the honest shape of a world whose whole subject is one cabinet's
+ * depth. `starter` is where the union of the two tables means something.
+ *
+ * **Generated rather than written out**, which is `fillerCombos`' rule in `db.ts` and for its
+ * reason: a hundred and eighty typed rows are a hundred and eighty chances to disagree with each
+ * other, and nothing here is meant to be read individually. Two properties of them are
+ * load-bearing rather than arbitrary — `at` and `id` **ascend together**, which is what an
+ * `INTEGER PRIMARY KEY` written by a clock looks like, so a handler that forgot to sort would
+ * answer the exact reverse of the truth; and each row names a card from the synthetic corpus, so
+ * every line has a real name and none of them collides with a `starter` story's expectations.
+ *
+ * The five kinds are the **card-shaped** ones. `folder`, `import` and `clear` are bulk presses
+ * that say nothing about a card and would read as the same sentence a dozen times over; the
+ * seed that words all eight is `starter`.
+ */
+function largeActivity(cards: FakeCard[]): FakeActivity[] {
+  const kinds: FakeActivity["kind"][] = ["add", "quantity", "remove", "move", "edit"];
+  const payloads: Record<string, [string, number]> = {
+    add: ['{"folder":"Binder","finish":"nonfoil"}', 2],
+    quantity: ['{"from":3,"to":2}', -1],
+    remove: ['{"folder":"Binder"}', -1],
+    move: ['{"from":"Binder","to":"Recently removed"}', 0],
+    edit: ['{"fields":["condition"]}', 0],
+  };
+  const rows: FakeActivity[] = [];
+  for (let day = LARGE_ACTIVITY_DAYS - 1; day >= 0; day -= 1) {
+    for (let n = 0; n < LARGE_ACTIVITY_PER_DAY; n += 1) {
+      const kind = kinds[(day * LARGE_ACTIVITY_PER_DAY + n) % kinds.length];
+      const [payload, delta] = payloads[kind];
+      const card = cards[CARDS.length + rows.length * LARGE_PRINTINGS_EACH];
+      rows.push({
+        id: rows.length + 1,
+        // A fixed hour and a walking minute, {@link daysAgo}'s rule: an offset in seconds
+        // crosses midnight and files a row under the wrong day whenever a story is opened late.
+        at: daysAgo(day, 9 + Math.floor(n / 4), (n % 4) * 13),
+        scope: "collection",
+        kind,
+        cardId: card.id,
+        cardName: card.name,
+        payload,
+        delta,
+      });
+    }
+  }
+  return rows;
+}
+
 /**
  * Past the cap, and nothing else.
  *
  * No decks and no wishes: this seed exists for the two things only depth can show — a count
  * that stops at 5 000 and says so, and a list long enough that the virtualiser is deciding what
  * to render. A deck story wants `starter`, where the decks mean something.
+ *
+ * **The activity feed is the third thing depth shows**, and it is here rather than in `starter`
+ * for the same reason the 600 entries are: `ActivityWidget` reads 50 rows and this world holds
+ * 180 over twelve days, so a story on it is about a feed that has been *cut off* — which is a
+ * state three days of tidying cannot reach.
  */
 function largeSeed(): FakeDb {
   const cards = largeCards();
-  return makeDb({ cards, collectionEntries: largeEntries(cards) });
+  return makeDb({
+    cards,
+    collectionEntries: largeEntries(cards),
+    activity: largeActivity(cards),
+  });
 }
 
 /* ------------------------------------------------------------------ brackets ----------- */

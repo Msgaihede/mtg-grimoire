@@ -96,7 +96,11 @@ describe("per-story isolation", () => {
 
     installWorld({ seed: "starter" });
     const state = useAppStore.getState();
-    expect(state.activeView).toBe("search");
+    // The app's own initial view, which is **Home** since the home page shipped and was Search
+    // before it. Read off `store.ts`'s initial state rather than named as a fact about this
+    // test: what is being asserted is that `installWorld` restores whatever the app's default
+    // *is*, and the literal is only how that is spelled today.
+    expect(state.activeView).toBe("home");
     expect(state.openDeckId).toBeNull();
     expect(state.selectedCardId).toBeNull();
     // `setState(…, true)` replaces the state object wholesale. The actions live in it, so this
@@ -274,9 +278,10 @@ describe("two worlds at once", () => {
     installWorld({ seed: "empty" }, { resetStore: false });
     expect(useAppStore.getState().activeView).toBe("decks");
 
-    // …and the canvas, where a story is on its own, still gets the app's own defaults.
+    // …and the canvas, where a story is on its own, still gets the app's own defaults — Home
+    // since the home page shipped, Search before it.
     installWorld({ seed: "empty" });
-    expect(useAppStore.getState().activeView).toBe("search");
+    expect(useAppStore.getState().activeView).toBe("home");
   });
 });
 

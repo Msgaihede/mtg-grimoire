@@ -329,6 +329,38 @@ export function WishlistPage() {
   const folders = useWishlistFolders();
 
   /**
+   * **The folder another surface asked this page to open on its way in** — `store.ts`'s
+   * `pendingFolder`, `CollectionPage`'s consume site on the other cabinet and argued in full
+   * there. The short of it: a render-phase adjustment rather than a mount effect, because that is
+   * React's own answer for state that has to follow something upstream and because a
+   * `setFolderId` inside a `useEffect` body is a lint failure; it waits for the census, since
+   * *is that drawer still there* cannot be asked of a list that has not answered; a hand-off
+   * naming a folder this cabinet no longer carries is dropped in silence, the reader landing at
+   * the root, which is where a deleted folder's wishes have just gone; and it is spent either
+   * way, because a hand-off that survived its read would drop the reader back into that drawer
+   * every later visit — the folder-restored-at-launch behaviour `useWishlist` refuses in words.
+   *
+   * **`scope` is what keeps the two pages from reading each other's post.** One field serves both
+   * cabinets, so the check is not "is there a hand-off" but "is there one for me": a press on a
+   * collection tile that somehow reached this page must fall through untouched rather than open
+   * whichever wishlist folder happens to share that id.
+   */
+  const pendingFolder = useAppStore((s) => s.pendingFolder);
+  const clearPendingFolder = useAppStore((s) => s.clearPendingFolder);
+  const pendingHere =
+    pendingFolder !== null && pendingFolder.scope === "wishlist" && !folders.query.isPending
+      ? pendingFolder.id
+      : null;
+  if (pendingHere !== null && folderId !== pendingHere) {
+    if (folders.folders.some((folder) => folder.id === pendingHere)) {
+      wishlist.openFolder(pendingHere);
+    }
+  }
+  useEffect(() => {
+    if (pendingHere !== null) clearPendingFolder();
+  }, [pendingHere, clearPendingFolder]);
+
+  /**
    * The export dialog, and the sweep that fills it — `CollectionPage`'s twin, for the same
    * reason: `ExportDialog` is mounted unconditionally below so its close can fade rather than
    * vanish, so this hook runs every render and `enabled: exporting` is what stops it sweeping

@@ -400,7 +400,8 @@ describe("the catalogue's shape", () => {
     });
   });
 
-  it("has an entry for every scope, and the nine views are honestly empty", () => {
+  it("has an entry for every scope, and every view is honestly empty", () => {
+    expect(SHORTCUTS.home).toEqual([]);
     expect(SHORTCUTS.search).toEqual([]);
     expect(SHORTCUTS.tags).toEqual([]);
     expect(SHORTCUTS.decks).toEqual([]);
@@ -422,7 +423,14 @@ describe("the catalogue's shape", () => {
     ]);
   });
 
-  it("gives switchView one chord per rail entry, Ctrl+1 through Ctrl+9", () => {
+  /**
+   * **Nine, and the count is the whole of this assertion — it is not one per rail entry.** It read
+   * that way while the rail was ten rows and one of them was conditional; the rail is eleven now
+   * and two go without, so the run and the column are two lengths and `nav.test.ts` is where the
+   * mapping between them is pinned. This file's job is the literal: the digits are `1` to `9`,
+   * each with Ctrl and nothing else.
+   */
+  it("gives switchView the run Ctrl+1 through Ctrl+9", () => {
     const chords = shortcut("global", "switchView").chords;
     expect(chords.map((c) => chordParts(c))).toEqual([
       ["Ctrl", "1"],

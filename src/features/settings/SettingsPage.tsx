@@ -9,6 +9,7 @@ import { LabelsPanel } from "@/features/settings/LabelsPanel";
 import { MarketplacePanel } from "@/features/settings/MarketplacePanel";
 import { ReviewPanel } from "@/features/settings/ReviewPanel";
 import { SettingsNav } from "@/features/settings/SettingsNav";
+import { StartViewPanel } from "@/features/settings/StartViewPanel";
 import { SyncPanel } from "@/features/settings/SyncPanel";
 import { TheoryMarksPanel } from "@/features/settings/TheoryMarksPanel";
 import { UpdatePanel } from "@/features/settings/UpdatePanel";
@@ -298,7 +299,20 @@ export function SettingsPage({ update }: { update: Update }) {
             it is the reason this panel exists at all. */}
         {shown("hidden-tags") && <HiddenTagsPanel hidden={hidden} />}
 
-        {/* **First in `Appearance`, and that group is not a section of `Tags`** — the argument is
+        {/* **First in `Appearance`, and the panel that made that group about more than marks.**
+            Which view the app opens on is not a mark a reader puts on a card, so the entry's
+            question had to widen to hold it — `nav.ts`'s `GROUPS` doc carries that argument, and
+            the two panels below are unmoved by it. It is first because it is the cheapest press
+            on the group: a change here costs one launch's landing, where the two below recolour
+            a mark on every deck and delete a label app-wide.
+
+            It reaches the backend itself, which is `BackupPanel`'s rule and `TheoryMarksPanel`'s
+            reason directly below: `useStartView` reads the one `["startView"]` cache entry
+            `AppShell` already filled at launch, so a hook here would be a second reader of one
+            cached answer and threading it down would buy a prop. */}
+        {shown("start-view") && <StartViewPanel />}
+
+        {/* **Second in `Appearance`, and that group is not a section of `Tags`** — the argument is
             `nav.ts`'s and it is a vocabulary one: a *tag* here is one of Scryfall's two tagger
             datasets, and the coloured mark a reader puts on a deck card is a *label*. Putting the
             two words on one rail entry would teach a reader they mean the same thing.
@@ -309,7 +323,7 @@ export function SettingsPage({ update }: { update: Update }) {
             cached answer rather than a second channel — and threading it down would buy a prop. */}
         {shown("theory-marks") && <TheoryMarksPanel />}
 
-        {/* **Second in `Appearance`, and it is the deck editor's Labels dialog with the deck taken
+        {/* **Third in `Appearance`, and it is the deck editor's Labels dialog with the deck taken
             out.** That dialog draws two sections — the labels *this deck's list is wearing*, whose
             destructive control takes a label off those cards, and every other label, whose
             destructive control deletes it app-wide. Settings has no deck and therefore no first

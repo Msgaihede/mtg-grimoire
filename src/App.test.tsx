@@ -558,6 +558,13 @@ beforeEach(() => {
   // test is never asked for. Order-independence, at the price of one line.
   queryClient.clear();
   useAppStore.setState(useAppStore.getInitialState());
+  // **And then off Home, which is where the store now starts.** Every case below this line is
+  // about one of the other views — the rail reaching a real page, a card opening, a deck editor
+  // swapping in — and each of them used to begin on the search wall because that is where the app
+  // opened. Seeding it back keeps those cases about their own subject instead of about the six
+  // widgets of a page they never press. The one case that does *not* take this seed is the very
+  // next one, which is what pins where the app actually opens.
+  useAppStore.setState({ activeView: "search" });
   searchCards.mockReset().mockResolvedValue({ items: [BOLT], total: 1, totalIsCapped: false });
   // Answered per id rather than one card for every read — see {@link M10_DETAIL} for why the
   // difference reaches the DOM now that a printings row is its own press.
@@ -590,7 +597,33 @@ beforeEach(() => {
   });
 });
 
-it("opens on the search view", async () => {
+/**
+ * **Where the app opens**, and the whole wire behind it: `ViewId`'s first member, `NAV`'s first
+ * row, `ActiveView`'s first arm and the store's initial value all agreeing about the word `home`.
+ * `HomePage`'s own tests render it directly, so nothing there can see any of that.
+ *
+ * The initial value is asserted **literally** rather than read back off `getInitialState()` and
+ * compared with itself — an assertion that reads its own constant is green whatever the constant
+ * says. The `setState` after it is what undoes this file's `beforeEach` seed, which every other
+ * case in this file wants and this one is precisely about not having.
+ */
+it("opens on the home page", async () => {
+  expect(useAppStore.getInitialState().activeView).toBe("home");
+  useAppStore.setState({ activeView: "home" });
+  render(<App />);
+
+  // The ribbon's `h1` is where the view is named — `NAV`'s label, so this is also the check that
+  // the rail and the ribbon say one word rather than two.
+  expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Home");
+  // …and the page under it is the real one rather than a blurb: `Customize` is `HomePage`'s own
+  // control and nothing else in the app draws it.
+  expect(await screen.findByRole("button", { name: /customize/i })).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Card search" })).not.toBeInTheDocument();
+});
+
+/** The search wall, drawn for the view this file's `beforeEach` seeds — which is what every case
+ *  below it stands on, so it is worth one case of its own that nothing else has to imply. */
+it("draws the search view", async () => {
   render(<App />);
 
   expect(await screen.findByRole("heading", { name: "Card search", level: 2 })).toBeInTheDocument();

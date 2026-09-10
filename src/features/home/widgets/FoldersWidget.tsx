@@ -45,13 +45,15 @@
  * `DecksWidget`'s "six most recently updated" is the same decision on the other cabinet. The
  * fallback is `user` folders only: twenty deck groups would bury the two binders that matter.
  *
- * **The press opens the view, and today it cannot open the folder.** Which drawer a reader is
- * standing in is `useCollection`'s and `useWishlist`'s own `useState` — deliberately, so a
- * folder restored at launch cannot open the app somewhere nobody navigated to — and there is no
- * cross-view door into it. Carrying one would mean a field on the store both pages consume on
- * mount, which is a change to files this widget does not own. So a press lands on the view and
- * the folder is one press further; the day that door exists, it goes in {@link openFolder} and
- * nowhere else.
+ * **The press opens the view *and* the folder, through a door that is one field wide.** Which
+ * drawer a reader is standing in is still `useCollection`'s and `useWishlist`'s own `useState` —
+ * deliberately, so a folder restored at launch cannot open the app somewhere nobody navigated to
+ * — so what this widget writes is not that state but a **one-shot hand-off**: `store.ts`'s
+ * `pendingFolder`, which the page that answers reads once on its way in and spends. Two things
+ * about it belong here rather than only there. The two writes are **ordered** — `setActiveView`
+ * first, `setPendingFolder` second — because a view change is what *clears* a hand-off, so the
+ * other order would have this widget wipe the folder it just named; and both live in
+ * {@link openFolder}, which is the one function every tile on both walls presses.
  */
 import type { ReactElement, ReactNode } from "react";
 import { Folder, Inbox, Layers } from "lucide-react";
@@ -386,6 +388,7 @@ function Picker({
 export function FoldersWidget({ widget, onConfig, ...chrome }: WidgetProps): ReactElement {
   const { currency } = useMarketplace();
   const setActiveView = useAppStore((s) => s.setActiveView);
+  const setPendingFolder = useAppStore((s) => s.setPendingFolder);
   const collection = useCollectionFolders();
   const wishlist = useWishlistFolders();
 
@@ -431,9 +434,26 @@ export function FoldersWidget({ widget, onConfig, ...chrome }: WidgetProps): Rea
     });
   };
 
-  /** Where a press lands. One function so the day a folder can be opened across views, it is one
-   *  edit — see this module's head. */
-  const openFolder = (view: "collection" | "wishlist") => setActiveView(view);
+  /**
+   * Where a press lands — the view, and the drawer inside it.
+   *
+   * **The two writes are in this order and must stay in it.** `setActiveView` clears
+   * `pendingFolder` on every view change, which is what keeps a hand-off nobody read from opening
+   * a folder the reader asked for one navigation ago — so naming the folder *before* the view
+   * would have this line wipe its own press. Written the right way round, the clear is spent on
+   * whatever was stale before the press and the hand-off written after it survives to the page.
+   *
+   * Both `set`s land in one React commit (they are made from one event handler), so the page
+   * mounts with the folder already named; it would still work if they did not, because each page
+   * reads the field as it renders rather than only as it mounts.
+   *
+   * One function so that everything about crossing into another view is in one place — see this
+   * module's head.
+   */
+  const openFolder = (scope: "collection" | "wishlist", id: number) => {
+    setActiveView(scope);
+    setPendingFolder({ scope, id });
+  };
 
   return (
     <WidgetCard
@@ -485,7 +505,7 @@ export function FoldersWidget({ widget, onConfig, ...chrome }: WidgetProps): Rea
                 Icon={kind.Icon}
                 face={face}
                 spokenName={`${folder.name}, ${kind.spoken}, ${face.spoken}`}
-                onOpen={() => openFolder("collection")}
+                onOpen={() => openFolder("collection", folder.id)}
               />
             );
           })}
@@ -507,7 +527,7 @@ export function FoldersWidget({ widget, onConfig, ...chrome }: WidgetProps): Rea
                 Icon={Folder}
                 face={face}
                 spokenName={`${folder.name}, wishlist folder, ${face.spoken}`}
-                onOpen={() => openFolder("wishlist")}
+                onOpen={() => openFolder("wishlist", folder.id)}
               />
             );
           })}

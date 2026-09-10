@@ -32,9 +32,11 @@ import {
 } from "./db";
 import { listen } from "./event";
 import type {
+  FakeActivity,
   FakeCollectionFolder,
   FakeDb,
   FakeDeck,
+  FakeDeckAudit,
   FakeDeckCard,
   FakeDeckCategory,
   FakeEntry,
@@ -57,6 +59,8 @@ import type {
   DeckVariant,
   EntryChange,
   EntryInput,
+  HomeLayout,
+  HomeWidget,
   ImportResolveLine,
   SearchRequest,
   SearchSortKey,
@@ -67,6 +71,9 @@ import type {
 } from "@/lib/ipc";
 import type { Finish } from "@/lib/finish";
 import { PRINTING_GROUP_BY_OPTIONS } from "@/features/card/printings";
+// The app's own reader, borrowed for one fence: a seeded payload whose keys were misspelled
+// degrades to a sentence rather than an error, so nothing but this would notice.
+import { activityLine } from "@/features/home/activityText";
 import type { MarketplaceId } from "@/lib/marketplace";
 import { parseSnapshotValue, SNAPSHOT_VERSION } from "@/lib/shareSnapshot";
 import type { SortSpec } from "@/lib/sort";
@@ -9659,6 +9666,20 @@ describe("the busy fault", () => {
       folderUid: null,
       ownerName: "Ada",
       fields: { condition: false, lang: false, value: false },
+      // `set_home_layout`'s own argument, and **valid for `root`'s reason**: that handler has
+      // four refusals of its own — a version it does not write, a blank id, a blank kind, a span
+      // outside the two, and a document over 64 KiB — so a document that tripped any of them
+      // would fail this loop by answering that sentence instead of BUSY, which is exactly the
+      // ordering mistake this sweep looks for. An **empty** widget list is a layout rather than a
+      // degenerate one (it is the state a reader who removed every tile is in), so this is a
+      // legitimate value and not a placeholder.
+      //
+      // `set_start_view`'s argument is `view` above, which it shares with `set_list_view` — the
+      // **third** key on this record that two writes spell the same way, after `section` and
+      // `items`. Harmless for their reason: both reach `refuseIfBusy` before they look at an
+      // argument, and `"grid"` is non-blank, so the one refusal `set_start_view` has cannot stand
+      // in for a refusal about a sync either.
+      layout: { version: 1, widgets: [] },
     };
     // The five above excluded, this is every command that really takes the write lock —
     // re-counted 2026-08-12 **after a merge in which three branches had each added one**,
@@ -10030,7 +10051,26 @@ describe("the busy fault", () => {
     // **This delta is arithmetic against one tree**, which every paragraph above says is the
     // thing that keeps going wrong at a merge — so re-run the sweep after the next one rather
     // than adding to whichever figure is here. 110 was taken by running it and reading `left`.
-    expect(names).toHaveLength(110);
+    //
+    // The home page then added **two**, 110 → 112, and the feature ships **nine** commands: the
+    // seventh entry here where the handler count and the delta are different figures, and the
+    // widest gap of any of them. `set_home_layout` and `set_start_view` are the eleventh and
+    // twelfth `app_meta` writes and join for the reason all ten before them do — the row is in
+    // the reader's own database, so the write takes the write connection through
+    // `sync::with_write` and answers BUSY under a sync. The other seven are **reads**:
+    // `home_layout`, `start_view`, `activity_recent`, `wishlist_summary`,
+    // `collection_breakdown`, `wishlist_breakdown` and `deck_values` all go through `db_read` or
+    // `lock_db_read` and answer through every second of a sync, so none of them is in this table
+    // at all — the split every preference and every list read before them is on.
+    //
+    // `set_home_layout` is worth this loop more than its neighbour: it has **four** refusals of
+    // its own where `set_start_view` has one, so a handler that ran any of them before taking
+    // the lock would still refuse something and could look busy enough to pass a careless test.
+    // The ordering is what `layout` on the record above is valid for.
+    //
+    // **This delta is arithmetic against one tree** — re-run the sweep after the next merge
+    // rather than adding to it. 112 was taken by running it and reading `left`.
+    expect(names).toHaveLength(112);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -14471,5 +14511,665 @@ describe("sharing a collection", () => {
     const jace = parsed.cards.find((c) => c.n.startsWith("Jace"))!;
     expect(jace).not.toHaveProperty("c");
     expect(parsed.cards.find((c) => c.n === "Sol Ring")!).not.toHaveProperty("p");
+  });
+});
+
+/* ------------------------------------------------------------------ the home page ------ */
+
+/** A printing the marketplace prices in **no** finish — `usd`, `usd_foil` and `usd_etched` all
+ *  null. Found rather than named, because `cards.ts` is generated wholesale and a hard-coded id
+ *  would be a row nothing regenerates. It is what the em-dash rule is tested against: a bucket,
+ *  a list and a deck made only of these must answer `null` and never `0`. */
+const NO_PRICE = CARDS.find((c) => {
+  const p = JSON.parse(c.prices) as Record<string, string | null>;
+  return p.usd === null && p.usd_foil === null && p.usd_etched === null;
+})!;
+
+/** Every entry the store holds, unfiltered — which is what the home page's own reads are over. */
+const WHOLE_COLLECTION: CollectionQuery = { limit: 0, offset: 0 };
+
+describe("the collection breakdown", () => {
+  /**
+   * **The property the whole command is written to keep**, and the reason `breakdown` groups over
+   * the same price expression `summarise` sums rather than over one of its own: a bar drawn under
+   * a total it disagrees with is a widget arguing with itself, and nothing on screen would say
+   * which half to believe.
+   *
+   * All four dimensions, because each partitions differently and only `color` has to *derive* its
+   * buckets — a `multi` arm that dropped a two-colour card would still sum correctly on the other
+   * three.
+   */
+  it("sums to the collection summary for every dimension", () => {
+    const db = makeDb({
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT.id, quantity: 3 }),
+        entry({ id: 2, cardId: BOLT_2X2.id, finish: "foil", quantity: 1 }),
+        entry({ id: 3, cardId: NO_PRICE.id, quantity: 2 }),
+        entry({ id: 4, cardId: CARDS.find((c) => (c.colorIdentity ?? "").length > 1)!.id }),
+        entry({ id: 5, cardId: CARDS.find((c) => c.colorIdentity === "")!.id, quantity: 4 }),
+      ],
+    });
+    const reads = readHandlers(db);
+    const summary = reads.collection_summary({ query: WHOLE_COLLECTION });
+
+    for (const dimension of ["rarity", "color", "set", "finish"]) {
+      const rows = reads.collection_breakdown({ dimension });
+      expect(rows.reduce((n, r) => n + r.cards, 0)).toBe(summary.totalCards);
+      expect(rows.reduce((n, r) => n + (r.value ?? 0), 0)).toBeCloseTo(summary.value, 9);
+    }
+  });
+
+  /**
+   * **`null` is not zero**, which is the one thing on `BreakdownRow` a `?? 0` would quietly
+   * destroy: the widget draws an em dash for `null` and a number for `0`, so a bucket of cards no
+   * feed has heard of has to be unmistakable from a bucket the feed prices at nothing.
+   *
+   * The copies still count — the reader owns them — which is what makes the two figures on one
+   * row say different things.
+   */
+  it("counts an unpriced copy and leaves its bucket's value null rather than zero", () => {
+    const db = makeDb({
+      collectionEntries: [entry({ id: 1, cardId: NO_PRICE.id, quantity: 2 })],
+    });
+
+    const rows = readHandlers(db).collection_breakdown({ dimension: "finish" });
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].cards).toBe(2);
+    expect(rows[0].value).toBeNull();
+  });
+
+  /** The one dimension whose key is not the word — nothing but the corpus knows that `isd` is
+   *  *Innistrad*. The other three answer `null`, because the key says itself. */
+  it("carries the set name beside the set code, and nothing beside the other three", () => {
+    const db = makeDb({ collectionEntries: [entry({ id: 1, cardId: BOLT.id })] });
+    const reads = readHandlers(db);
+
+    expect(reads.collection_breakdown({ dimension: "set" })[0]).toMatchObject({
+      key: BOLT.setCode,
+      name: BOLT.setName,
+    });
+    for (const dimension of ["rarity", "color", "finish"]) {
+      expect(reads.collection_breakdown({ dimension })[0].name).toBeNull();
+    }
+  });
+
+  /**
+   * The three colour arms, and they **partition** — which is what lets the sum above hold.
+   *
+   * The keys are deliberately mixed case: a single colour is the **stored uppercase letter**
+   * where the two derived buckets are lowercase, because one widget draws both cabinets' bars and
+   * one vocabulary maps all six keys. A fake that lowercased the letter would look tidier and
+   * would leave every bar unmatched.
+   */
+  it("buckets a colourless card in c and a two-colour card in multi, as the wire spells them", () => {
+    const mono = CARDS.find((c) => c.colorIdentity === "R")!;
+    const multi = CARDS.find((c) => (c.colorIdentity ?? "").length > 1)!;
+    const colourless = CARDS.find((c) => c.colorIdentity === "")!;
+    const db = makeDb({
+      collectionEntries: [
+        entry({ id: 1, cardId: mono.id }),
+        entry({ id: 2, cardId: multi.id }),
+        entry({ id: 3, cardId: colourless.id }),
+      ],
+    });
+
+    const keys = readHandlers(db)
+      .collection_breakdown({ dimension: "color" })
+      .map((r) => r.key);
+
+    expect(keys).toContain("R");
+    expect(keys).toContain("multi");
+    expect(keys).toContain("c");
+  });
+
+  /**
+   * Schema v24 lets a collection row sit at zero, and every aggregate over that table has to
+   * decide deliberately what such a row means. This one counts **copies**, so a zero row adds
+   * nothing — and, crucially, does not conjure an otherwise-empty bar out of a printing the
+   * reader no longer holds.
+   *
+   * **Stood up locally rather than asked of a seed**, `.storybook/CLAUDE.md`'s rule: no seed
+   * holds a zero row, because the app deletes one, and a fixture carrying it would make every
+   * existence-shaped reader look right here and wrong in the window.
+   */
+  it("gives a row at quantity zero no copies and no bucket of its own", () => {
+    const db = makeDb({
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT.id, quantity: 1 }),
+        entry({ id: 2, cardId: NO_PRICE.id, quantity: 0 }),
+      ],
+    });
+
+    const rows = readHandlers(db).collection_breakdown({ dimension: "set" });
+
+    expect(rows.map((r) => r.key)).toEqual([BOLT.setCode]);
+    expect(rows[0].cards).toBe(1);
+  });
+
+  /**
+   * **Refused over an empty collection too**, which is the half a fake gets wrong by validating
+   * inside the loop: a story on `empty` asking for a fifth dimension must read the same sentence
+   * a story on `starter` does, and a handler that only refused where there were rows would answer
+   * `[]` — a bar chart of nothing, drawn under a heading nobody typed.
+   *
+   * The two cabinets' sentences are different words on purpose: this one names a *collection*.
+   */
+  it("refuses a dimension it has never heard of, over rows and over none", () => {
+    for (const db of [makeDb({ collectionEntries: [entry({ id: 1 })] }), makeDb()]) {
+      expect(() => readHandlers(db).collection_breakdown({ dimension: "sideboard" })).toThrow(
+        /not a way to break down a collection/i,
+      );
+    }
+  });
+});
+
+describe("the wishlist summary", () => {
+  /** Two wishes in `Ordered`, one in `Backordered`, two at the root — the arrangement the
+   *  subtotal arithmetic is only visible in. Every wish names a priced printing, so the root's
+   *  own cost cannot be zero by accident. */
+  function filed(): FakeWish[] {
+    return [
+      wish({ id: 1, cardId: BOLT.id, quantity: 2, folderId: 1 }),
+      wish({ id: 2, cardId: BOLT_2X2.id, quantity: 1, folderId: 1 }),
+      wish({ id: 3, cardId: BOLT_JA.id, quantity: 3, folderId: 2 }),
+      wish({ id: 4, cardId: BOLT.id, quantity: 1, folderId: null }),
+      wish({ id: 5, cardId: BOLT_2X2.id, quantity: 4, folderId: null }),
+    ];
+  }
+
+  /**
+   * **The whole reason this command exists.** `wishlist_folder_summary` carries
+   * `WHERE w.folder_id IS NOT NULL` — the clause that keeps root-level wishes out of a folder
+   * *tile*, because the root is not a folder and has no tile to draw — and a list total that
+   * inherited it would be wrong by exactly the root, silently, for every reader who files some of
+   * their wishes and not others.
+   *
+   * The root's own figures are taken by summarising a store holding **only** those wishes, so the
+   * assertion cannot pass vacuously: were the root contributing nothing, the two sides would
+   * agree with it at zero and the test would be about nothing.
+   */
+  it("is the folder subtotals plus the root", () => {
+    const all = makeDb({ wishlistEntries: filed() });
+    const rootOnly = makeDb({ wishlistEntries: filed().filter((w) => w.folderId === null) });
+    const reads = readHandlers(all);
+
+    const whole = reads.wishlist_summary({});
+    const folders = reads.wishlist_folder_summary({});
+    const root = readHandlers(rootOnly).wishlist_summary({});
+
+    expect(root.cost).toBeGreaterThan(0);
+    expect(root.copies).toBeGreaterThan(0);
+    expect(whole.cost).toBeCloseTo(folders.reduce((n, f) => n + f.cost, 0) + root.cost, 9);
+    expect(whole.copies).toBe(folders.reduce((n, f) => n + f.copies, 0) + root.copies);
+    expect(whole.wishes).toBe(folders.reduce((n, f) => n + f.wishes, 0) + root.wishes);
+    expect(whole.unpriced).toBe(folders.reduce((n, f) => n + f.unpriced, 0) + root.unpriced);
+  });
+
+  /** A copy the marketplace cannot quote is still a copy the reader wants: it counts in `copies`
+   *  and not in `cost`, and the `unpriced` beside the figure is how the widget says the total is
+   *  worth less than it looks. `unpriced` is **rows** — the folder tile's own unit. */
+  it("counts an unpriced wish in copies and not in cost", () => {
+    const db = makeDb({
+      wishlistEntries: [
+        wish({ id: 1, cardId: BOLT.id, quantity: 1 }),
+        wish({ id: 2, cardId: NO_PRICE.id, quantity: 5 }),
+      ],
+    });
+    const priced = makeDb({ wishlistEntries: [wish({ id: 1, cardId: BOLT.id, quantity: 1 })] });
+
+    const summary = readHandlers(db).wishlist_summary({});
+
+    expect(summary.copies).toBe(6);
+    expect(summary.unpriced).toBe(1);
+    expect(summary.cost).toBeCloseTo(readHandlers(priced).wishlist_summary({}).cost, 9);
+  });
+});
+
+describe("the wishlist breakdown", () => {
+  /** The collection's twin one cabinet over, and the same argument: a bar cannot be allowed to
+   *  disagree with the figure printed above it. */
+  it("sums to the wishlist summary for every dimension", () => {
+    const db = makeDb({
+      wishlistEntries: [
+        wish({ id: 1, cardId: BOLT.id, quantity: 2, preferredFinish: "foil" }),
+        wish({ id: 2, cardId: BOLT_2X2.id, quantity: 1 }),
+        wish({ id: 3, cardId: NO_PRICE.id, quantity: 3 }),
+        // An any-printing wish — no `cardId` at all, which is the row the join has to choose a
+        // printing for before it can price anything.
+        wish({ id: 4, quantity: 4 }),
+      ],
+    });
+    const reads = readHandlers(db);
+    const summary = reads.wishlist_summary({});
+
+    for (const dimension of ["rarity", "color", "set", "finish"]) {
+      const rows = reads.wishlist_breakdown({ dimension });
+      expect(rows.reduce((n, r) => n + r.cards, 0)).toBe(summary.copies);
+      expect(rows.reduce((n, r) => n + (r.value ?? 0), 0)).toBeCloseTo(summary.cost, 9);
+    }
+  });
+
+  /**
+   * The wishlist's finish dimension is the **wish's** column and not the printing's, and `null`
+   * there is *the reader has not said* — a real answer rather than a gap, which is why it gets a
+   * bucket of its own instead of being folded into `nonfoil`.
+   */
+  it("buckets a wish that names no finish as any", () => {
+    const db = makeDb({
+      wishlistEntries: [
+        wish({ id: 1, cardId: BOLT.id, preferredFinish: null }),
+        wish({ id: 2, cardId: BOLT_2X2.id, preferredFinish: "foil" }),
+      ],
+    });
+
+    const keys = readHandlers(db)
+      .wishlist_breakdown({ dimension: "finish" })
+      .map((r) => r.key);
+
+    expect(keys).toContain("any");
+    expect(keys).toContain("foil");
+    expect(keys).not.toContain("nonfoil");
+  });
+
+  /** Dearest first, then by copies, then by key — and an **unpriced** bucket last, which is what
+   *  `DESC NULLS LAST` means and what a naive descending sort puts at the top. */
+  it("orders dearest first and puts the unpriced bucket last", () => {
+    // Over `finish`, so the two buckets are distinct by construction — the two printings may
+    // share a set, and a test whose subject is *ordering* must not be able to fold to one row.
+    const db = makeDb({
+      wishlistEntries: [
+        wish({ id: 1, cardId: NO_PRICE.id, quantity: 9, preferredFinish: "etched" }),
+        wish({ id: 2, cardId: BOLT.id, quantity: 1, preferredFinish: "nonfoil" }),
+      ],
+    });
+
+    const rows = readHandlers(db).wishlist_breakdown({ dimension: "finish" });
+
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({ key: "nonfoil" });
+    expect(rows[0].value).not.toBeNull();
+    // The unpriced bucket last, though it holds nine copies to the priced one's one — which is
+    // what `DESC NULLS LAST` means and what a naive descending sort puts at the top.
+    expect(rows[1]).toMatchObject({ key: "etched", cards: 9, value: null });
+  });
+
+  /** Its own sentence, which names a *list* where the collection's names a collection — two
+   *  refusals in two modules, and a story renders both. */
+  it("refuses a dimension it has never heard of, over rows and over none", () => {
+    for (const db of [makeDb({ wishlistEntries: [wish({ id: 1 })] }), makeDb()]) {
+      expect(() => readHandlers(db).wishlist_breakdown({ dimension: "sideboard" })).toThrow(
+        /not a way to break down a list/i,
+      );
+    }
+  });
+});
+
+describe("deck values", () => {
+  /** A deck holding one printing in every pile there is, so the value's arithmetic is a
+   *  multiple of one unit price and the exclusions are readable as a count. */
+  function fiveKinds(): FakeDb {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [
+        deckCard({ id: 1, categoryKind: "main", quantity: 2 }),
+        deckCard({ id: 2, categoryKind: "commander", quantity: 1 }),
+        deckCard({ id: 3, categoryKind: "maybe", quantity: 1 }),
+        deckCard({ id: 4, categoryKind: "side", quantity: 3 }),
+        deckCard({ id: 5, categoryKind: "companion", quantity: 2 }),
+        deckCard({ id: 6, categoryKind: "main", quantity: 5, variant: "theory" }),
+      ],
+    });
+    // The Maybeboard ships inactive; an **active** one is a pile the reader deliberately switched
+    // on, and `cardCount` counts it. Switching it on here is what makes the assertion below about
+    // three kinds rather than two.
+    db.deckCategories.find((c) => c.kind === "maybe")!.isActive = true;
+    return db;
+  }
+
+  /**
+   * **The pile is `cardCount`'s, term for term** — the definition rather than a resemblance: a
+   * tile draws this figure directly under that count, so a value covering a different pile is a
+   * tile disagreeing with itself.
+   *
+   * Asserted as a *multiple of one unit price* rather than against a number typed here, because
+   * `cards.ts` is generated and a literal would be a figure nothing regenerates.
+   */
+  it("counts the same cards a deck's card count does", () => {
+    const db = fiveKinds();
+    const reads = readHandlers(db);
+    const unit = reads.deck_get({ id: 1, variant: "live" })!.cards[0].unitPrice!;
+
+    const value = reads.deck_values({})[0];
+
+    // main 2 + commander 1 + an active maybe 1. The sideboard and the companion are played
+    // beside the deck, and a theory row is a plan.
+    expect(reads.deck_list()[0].cardCount).toBe(4);
+    expect(value.value).toBeCloseTo(4 * unit, 9);
+    expect(value.unpriced).toBe(0);
+  });
+
+  /** A switched-off pile counts toward nothing whatever its kind — the exclusion `cardCount`
+   *  makes without naming a kind, and the one the crate puts in the join's `ON` rather than in a
+   *  `WHERE` so the deck's own row survives. */
+  it("counts nothing in a category the reader switched off", () => {
+    const db = fiveKinds();
+    db.deckCategories.find((c) => c.kind === "main")!.isActive = false;
+    const reads = readHandlers(db);
+    const unit = reads.deck_get({ id: 1, variant: "live" })!.cards[0].unitPrice!;
+
+    expect(reads.deck_values({})[0].value).toBeCloseTo(2 * unit, 9);
+  });
+
+  /** `null` and never `0`, `BreakdownRow.value`'s rule: a deck of cards no feed has heard of is
+   *  an em dash, and a deck of tokens really is worth nothing. The copies are still counted, in
+   *  the figure that travels beside it. */
+  it("answers null and not zero for a deck with nothing priced", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [deckCard({ id: 1, cardId: NO_PRICE.id, quantity: 3 })],
+    });
+
+    expect(readHandlers(db).deck_values({})[0]).toEqual({ deckId: 1, value: null, unpriced: 3 });
+  });
+
+  /**
+   * **Every deck gets a row**, which is the one difference from `deck_pip_costs` beside it — that
+   * one is *absent* for a deck with nothing to say. A caller indexes by id with no missing-key
+   * branch and decides for itself what an archived deck is worth drawing, so a fake that emitted
+   * only the decks holding something would let a story be written against a lookup that cannot
+   * miss, and that story would break on the real backend.
+   */
+  it("gives an empty deck and an archived deck a row apiece", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 }), deck({ id: 2, archived: true }), deck({ id: 3 })],
+      deckCards: [deckCard({ id: 1, deckId: 3 })],
+    });
+    const reads = readHandlers(db);
+
+    expect(reads.deck_values({}).map((v) => v.deckId)).toEqual([1, 2, 3]);
+    expect(reads.deck_values({})[0]).toEqual({ deckId: 1, value: null, unpriced: 0 });
+  });
+});
+
+describe("the activity feed", () => {
+  /** One `activity` row, with the column defaults every test that says nothing about them
+   *  wants. */
+  function activity(over: Partial<FakeActivity> = {}): FakeActivity {
+    return {
+      id: 1,
+      at: WHEN,
+      scope: "collection",
+      kind: "add",
+      cardId: null,
+      cardName: null,
+      payload: "{}",
+      delta: 0,
+      ...over,
+    };
+  }
+
+  /** One `deck_audit` row, the other half of the union. */
+  function audit(id: number, at: number, over: Partial<FakeDeckAudit> = {}): FakeDeckAudit {
+    return {
+      id,
+      deckId: 1,
+      at,
+      variant: "live",
+      kind: "add",
+      cardId: null,
+      cardName: null,
+      payload: "{}",
+      delta: 1,
+      ...over,
+    };
+  }
+
+  /**
+   * **Two tables read as one**, which is the whole shape of this command: the `collection` and
+   * `wishlist` lines come from `activity` and the `deck` ones from `deck_audit` — the very rows
+   * the history drawer draws — and neither table knows about the other.
+   *
+   * Strictly descending by `at`, and both vocabularies present, so a handler that read one table
+   * and concatenated the other could not pass.
+   */
+  it("interleaves both tables, newest first", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      activity: [
+        activity({ id: 1, at: 10, scope: "collection" }),
+        activity({ id: 2, at: 30, scope: "wishlist", kind: "remove" }),
+        activity({ id: 3, at: 50, scope: "collection", kind: "import" }),
+      ],
+      deckAudit: [audit(1, 20), audit(2, 40, { kind: "remove", delta: -1 })],
+    });
+
+    const feed = readHandlers(db).activity_recent({ limit: 10 });
+
+    expect(feed.map((e) => e.at)).toEqual([50, 40, 30, 20, 10]);
+    expect(new Set(feed.map((e) => e.scope))).toEqual(new Set(["collection", "wishlist", "deck"]));
+  });
+
+  /**
+   * `deckId` is the union's `NULL AS deck_id` on one arm and a real column on the other, so it is
+   * non-null on **exactly** the rows that came out of `deck_audit`. It is how the page decides
+   * whether a line can be pressed through to a deck.
+   *
+   * The ids colliding across the two halves is asserted here rather than worked around: nothing
+   * joins on them and the page keys a line on `scope` plus `id`, so a fake that renumbered one
+   * side would hide a caller keying on the id alone.
+   */
+  it("carries a deckId on the deck rows alone, ids colliding and all", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 7 })],
+      activity: [activity({ id: 1, at: 10 })],
+      deckAudit: [audit(1, 20, { deckId: 7 })],
+    });
+
+    const feed = readHandlers(db).activity_recent({ limit: 10 });
+
+    expect(feed.map((e) => e.id)).toEqual([1, 1]);
+    expect(feed.map((e) => e.deckId)).toEqual([7, null]);
+  });
+
+  /**
+   * The clamp, and **the low end is the load-bearing half**: SQLite reads a negative `LIMIT` as
+   * no limit at all, so a `0` arriving from a widget whose config had not finished loading would
+   * otherwise be a read of every change the reader has ever made.
+   */
+  it("clamps the limit into one through five hundred", () => {
+    const db = makeDb({
+      activity: Array.from({ length: 600 }, (_, i) => activity({ id: i + 1, at: i + 1 })),
+    });
+    const reads = readHandlers(db);
+
+    expect(reads.activity_recent({ limit: 0 })).toHaveLength(1);
+    expect(reads.activity_recent({ limit: -1 })).toHaveLength(1);
+    expect(reads.activity_recent({ limit: 10_000 })).toHaveLength(500);
+  });
+
+  /** The seeds a story stands in. `empty` is the only world three of `ActivityWidget`'s four
+   *  states are reachable from, so its emptiness is the fixture rather than an omission — and
+   *  `large`'s depth is what puts the feed past the widget's own default limit. */
+  it("is seeded in starter and large, and empty in empty", () => {
+    expect(readHandlers(seed("empty")).activity_recent({ limit: 50 })).toHaveLength(0);
+    expect(readHandlers(seed("starter")).activity_recent({ limit: 50 }).length).toBeGreaterThan(0);
+    expect(readHandlers(seed("large")).activity_recent({ limit: 50 })).toHaveLength(50);
+  });
+
+  /**
+   * **The seed's payloads, through the app's own reader** — `share_open`'s fence one feature over
+   * and for its reason: `activityText.ts` is total over a payload it cannot parse, so a seeded row
+   * whose keys were misspelled would degrade to *"Changed your collection"* and every story would
+   * go on drawing. A workbench full of that sentence is a workbench that has stopped teaching
+   * anything, and nothing else in this file would have said so.
+   *
+   * It asserts the **fallback is absent** rather than transcribing sixteen sentences: the wording
+   * is `activityText.ts`'s to change, and a copy of it here would be a second spelling to keep in
+   * step. What the seed owes is only that every row reaches an arm.
+   *
+   * `starter` reaches all eight kinds across both cabinets, so this walks the whole table.
+   */
+  it("words every seeded row rather than falling through to the shortest sentence", () => {
+    const feed = readHandlers(seed("starter"))
+      .activity_recent({ limit: 500 })
+      .filter((e) => e.scope !== "deck");
+
+    expect(new Set(feed.map((e) => e.kind)).size).toBe(8);
+    for (const entry of feed) {
+      expect(activityLine(entry).text).not.toMatch(/^Changed your (collection|wishlist)$/);
+    }
+  });
+});
+
+describe("the home layout", () => {
+  /** A layout naming one widget, so a test can say what it is about in one line. */
+  function one(over: Partial<HomeWidget> = {}): HomeLayout {
+    return {
+      version: 1,
+      widgets: [{ id: "w1", kind: "summary", span: 1, config: null, ...over }],
+    };
+  }
+
+  /** The state every fresh install is in, so it is the one the fallback has to be right about. */
+  it("answers the crate's own six for a row nobody has written", () => {
+    expect(readHandlers(makeDb()).home_layout().widgets.map((w) => w.kind)).toEqual([
+      "summary",
+      "decks",
+      "activity",
+      "collectionValue",
+      "wishlistValue",
+      "folders",
+    ]);
+  });
+
+  /**
+   * **The feature's central promise.** The widget vocabulary is TypeScript's and appears in no
+   * Rust file, so a document written by a build that knows a seventh widget has to survive a
+   * round trip through one that does not — otherwise a portable app a reader runs two versions of
+   * quietly empties its own home page every time they open the older one.
+   *
+   * The `config` travels with it untouched, which is the half that makes the rule useful: a build
+   * that cannot *read* a widget's settings must still write them back the way it found them.
+   */
+  it("round-trips a widget kind this build has never heard of, config and all", () => {
+    const db = makeDb();
+    writeHandlers(db).set_home_layout({
+      layout: one({ kind: "somethingFromTheFuture", config: { keep: [1, 2, 3] } }),
+    });
+
+    const back = readHandlers(db).home_layout();
+
+    expect(back.widgets[0].kind).toBe("somethingFromTheFuture");
+    expect(back.widgets[0].config).toEqual({ keep: [1, 2, 3] });
+  });
+
+  /**
+   * **An empty widget list is a layout, not a missing row**, and it is the edge the read rule
+   * turns on: a reader who removed every tile has said something, and handing them the six
+   * defaults back on the next launch would undo it silently, every time, for ever.
+   */
+  it("keeps an empty widget list rather than answering the default", () => {
+    const db = makeDb();
+    writeHandlers(db).set_home_layout({ layout: { version: 1, widgets: [] } });
+
+    expect(readHandlers(db).home_layout().widgets).toHaveLength(0);
+  });
+
+  /**
+   * The four refusals, and **each leaves the row exactly as it stood** — the complement of a read
+   * that validates nothing at all. Without them a layout this build cannot use would look saved,
+   * survive a restart in the table and read back as itself for ever.
+   *
+   * A *version* is refused in words rather than downgraded: rewriting a document by rules that do
+   * not apply to it is how a newer build's page comes back wrong with nothing logged.
+   */
+  it("refuses a future version, a blank id, a blank kind and a span outside the two", () => {
+    const db = makeDb();
+    writeHandlers(db).set_home_layout({ layout: one({ id: "kept" }) });
+
+    const refusals: [HomeLayout, RegExp][] = [
+      [{ ...one(), version: 2 }, /version 2/],
+      [one({ id: "  " }), /needs an id/],
+      [one({ kind: " " }), /needs a kind/],
+      [one({ span: 0 }), /0 columns wide/],
+      [one({ span: 3 }), /3 columns wide/],
+    ];
+    for (const [layout, sentence] of refusals) {
+      expect(() => writeHandlers(db).set_home_layout({ layout })).toThrow(sentence);
+    }
+    expect(readHandlers(db).home_layout().widgets[0].id).toBe("kept");
+  });
+
+  /** The cap, and the row it refused is still the one that was there — `home::MAX_BYTES`, which
+   *  is about a `config` used as a document store rather than about what the table can take. */
+  it("refuses a document over the cap and leaves the row alone", () => {
+    const db = makeDb();
+    writeHandlers(db).set_home_layout({ layout: { version: 1, widgets: [] } });
+    const fat: HomeLayout = {
+      version: 1,
+      widgets: Array.from({ length: 4000 }, (_, i) => ({
+        id: `w${i}`,
+        kind: "summary",
+        span: 1,
+        config: { pad: "x".repeat(64) },
+      })),
+    };
+
+    expect(() => writeHandlers(db).set_home_layout({ layout: fat })).toThrow(/the most this app/i);
+    expect(readHandlers(db).home_layout().widgets).toHaveLength(0);
+  });
+
+  /**
+   * **The store copies rather than aliases**, which is this fake's own bar rather than the
+   * crate's: the page hands over the document it is holding and goes on dragging it, so a store
+   * keeping the caller's array would let the next read answer with edits nobody saved — a state
+   * the backend cannot produce, because on the other side of the wire the document is text.
+   */
+  it("stores a copy, so the caller's own edits do not reach the next read", () => {
+    const db = makeDb();
+    const layout = one();
+    writeHandlers(db).set_home_layout({ layout });
+
+    layout.widgets[0].kind = "editedAfterTheWrite";
+
+    expect(readHandlers(db).home_layout().widgets[0].kind).toBe("summary");
+  });
+});
+
+describe("the starting view", () => {
+  /** Out of the box, and what every story that says nothing about the setting stands in. */
+  it("answers home for a row nobody has written", () => {
+    expect(readHandlers(makeDb()).start_view()).toBe("home");
+  });
+
+  /**
+   * **The vocabulary is TypeScript's**, so there is no list on this side to check a word against
+   * and a word this build has never heard of comes back verbatim — the frontend is what falls
+   * back to Home. A Rust-side allow-list would mean every new view is a Rust change, and a
+   * downgrade would strand a reader on a page that no longer exists.
+   */
+  it("hands back a view this build has never heard of, unchanged", () => {
+    expect(readHandlers(makeDb({ startView: "someViewFromTheFuture" })).start_view()).toBe(
+      "someViewFromTheFuture",
+    );
+  });
+
+  /** A blank is the one value the read discards, so it must also be the one the write refuses —
+   *  otherwise the write reports success and reads back as `home` for ever. The word is trimmed
+   *  on the way in, so a caller's stray whitespace cannot become a preference no read matches. */
+  it("trims on the way in, refuses a blank, and leaves the row alone", () => {
+    const db = makeDb();
+    writeHandlers(db).set_start_view({ view: "  decks  " });
+    expect(readHandlers(db).start_view()).toBe("decks");
+
+    expect(() => writeHandlers(db).set_start_view({ view: "   " })).toThrow(/cannot be blank/i);
+    expect(readHandlers(db).start_view()).toBe("decks");
+  });
+
+  /** A row somebody emptied by hand still reads as the default — the second of the two ways to
+   *  it that every string on this table has. */
+  it("reads a hand-emptied row as home", () => {
+    expect(readHandlers(makeDb({ startView: "   " })).start_view()).toBe("home");
   });
 });

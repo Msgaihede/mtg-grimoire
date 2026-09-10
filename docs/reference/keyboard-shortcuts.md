@@ -119,9 +119,9 @@ question. `"global"` is first and always present.
 an open editor would list chords for a page that is not on screen. `deckEditor` is therefore not a
 `ViewId` and never will be.
 
-**A scope with no shortcuts draws nothing — not a heading over a gap.** **All ten view scopes are
-empty today** — `search`, `tags`, `decks`, `collection`, `wishlist`, `shared`, `scanner`, `trade`,
-`playtesting`, `settings` — and
+**A scope with no shortcuts draws nothing — not a heading over a gap.** **All eleven view scopes
+are empty today** — `home`, `search`, `tags`, `decks`, `collection`, `wishlist`, `shared`,
+`scanner`, `trade`, `playtesting`, `settings` — and
 `SHORTCUTS` spells each of them out with an empty array rather than leaving them off the record:
 making the emptiness explicit is what stops a scope being forgotten when a view starts binding
 something.
@@ -131,7 +131,8 @@ the editor's chords, and `deckEditor` *replaces* `decks` rather than nesting und
 paragraph above. The design and `KeyMap.tsx`'s comment were corrected first, `KeyMap.stories.tsx`
 and `KeyMap.test.tsx` on the review pass that found them still saying it. Six, not five, in all
 four — a count this page has since carried to seven for `scanner`, to **nine** for `trade` and
-`playtesting`, and to **ten** for `shared`.) That emptiness is the whole reason `Ctrl+1…9` sits in
+`playtesting`, to **ten** for `shared`, and to **eleven** for `home`.) That emptiness is the whole
+reason `Ctrl+1…9` sits in
 `"global"` — it is what gives the panel something true to say on a page that binds nothing.
 
 **Scanner joined the rail on 2026-09-08, before Settings, and that is the design working rather
@@ -157,9 +158,9 @@ count. A tenth entry needs a different answer — not one more line in `switchVi
 
 **`shared` — somebody else's collection, opened from a link — makes `NAV` ten**, and the paragraph
 above is why that could not be ten digits. So the chords bind `AppShell`'s **`CHORD_NAV`**, which
-is `NAV` minus that one entry, and `Ctrl+1…9` walk the nine destinations every reader has:
+is `NAV` minus that one entry, and `Ctrl+1…9` walked the nine destinations every reader has:
 Search, Tagger, Decks, Collection, Wishlist, Scanner, Trade, Playtesting, Settings. **Settings
-stays `Ctrl+9`.**
+stayed `Ctrl+9`** — for two days; the section below is where that ended.
 
 **Which entry goes without is forced rather than chosen.** A chord's whole value is that it does
 not move, and `shared` is the one row the rail does not always draw — its row appears only once a
@@ -179,6 +180,48 @@ buys is that no other view's digit moved.
 throws — a chord with no destination behind it. A destination with no chord costs nothing, which
 is exactly what `shared` now relies on, and `nav.test.ts` pins the `- 1` against the **id** rather
 than as a bare number so a second exclusion would have to be written down.
+
+### The eleventh destination is the home page, it goes at the top, and every digit moved
+
+**`home` — the landing view, 2026-09-10,
+[issue #448](https://github.com/Msgaihede/mtg-grimoire/issues/448) — is `NAV`'s _first_ entry**,
+and `CHORD_NAV` is still `NAV` minus `shared`, so inserting at the head shifted the whole run:
+
+| chord | before | after |
+| --- | --- | --- |
+| `Ctrl+1` | Search | **Home** |
+| `Ctrl+2` | Tagger | Search |
+| `Ctrl+3` | Decks | Tagger |
+| `Ctrl+4` | Collection | Decks |
+| `Ctrl+5` | Wishlist | Collection |
+| `Ctrl+6` | Scanner | Wishlist |
+| `Ctrl+7` | Trade | Scanner |
+| `Ctrl+8` | Playtesting | Trade |
+| `Ctrl+9` | **Settings** | Playtesting |
+| — | Shared | Shared, **Settings** |
+
+⚠️ **`Ctrl+9` no longer opens Settings**, and this is the third renumbering in three days —
+Scanner moved it to `Ctrl+7`, Trade and Playtesting to `Ctrl+9`, and Home has now taken it off the
+run altogether. That is a deliberate, breaking change to a binding readers have in their fingers,
+and it belongs in the release note as one rather than being discovered.
+
+**Two destinations now go without a chord, and the two reasons are different.** The paragraph above
+this section says there is one; it says so about a rail of ten, and reading the two as one rule is
+how a later edit puts the wrong one back:
+
+* **`shared` goes without because its row is _conditional_** — the argument two paragraphs up,
+  unchanged. It is a reason no amount of room would fix: a twelfth digit would still not buy this
+  entry a chord.
+* **`settings` goes without because the run ends before it.** Eleven rows against nine digits is
+  pure arithmetic, and what decides *which* two fall off is reading order: Home is the page the app
+  opens on, a reader reads a column downward, and a landing page anywhere but the first row is a
+  page the reader is standing on and cannot find. Settings is the row that costs least — it is
+  drawn on every screen at a fixed place, where `shared` can be absent altogether. **Give this run
+  a tenth digit and Settings takes it back**, which is exactly what is not true of `shared`.
+
+`nav.test.ts` pins the ninth `CHORD_NAV` entry as `playtesting` and asserts `settings` is not in
+the first nine, so a merge cannot quietly restore the old numbering; the exclusions are still
+matched on **id** rather than counted. [home-page.md](home-page.md) is the rest of the record.
 
 ## `range` is declared, never counted
 

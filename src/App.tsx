@@ -15,6 +15,7 @@ import { CardToDeckProvider } from "@/features/card/cardMenu";
 import { CollectionPage } from "@/features/collection/CollectionPage";
 import { DeckEditor } from "@/features/decks/DeckEditor";
 import { DecksPage } from "@/features/decks/DecksPage";
+import { HomePage } from "@/features/home/HomePage";
 import { PlaytestingPage } from "@/features/playtesting/PlaytestingPage";
 import { ScannerPage } from "@/features/scanner/ScannerPage";
 import { SearchPage } from "@/features/search/SearchPage";
@@ -31,6 +32,10 @@ import { FeedDownloadProvider } from "@/pwa/FeedDownloadProvider";
 function ActiveView({ update }: { update: Update }) {
   const activeView = useAppStore((s) => s.activeView);
   const openDeckId = useAppStore((s) => s.openDeckId);
+  // First, because it is the view the app opens on — `store.ts`'s `activeView` starts here, and
+  // `useStartView` is the only thing that moves it before the reader has pressed anything. The
+  // arms are in `NAV`'s order, so the first arm and the first rail row are the same decision.
+  if (activeView === "home") return <HomePage />;
   if (activeView === "search") return <SearchPage />;
   if (activeView === "tags") return <TagsPage />;
   if (activeView === "collection") return <CollectionPage />;

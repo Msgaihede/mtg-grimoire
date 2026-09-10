@@ -32,6 +32,7 @@ export type PanelId =
   | "sync"
   | "review"
   | "hidden-tags"
+  | "start-view"
   | "theory-marks"
   | "labels"
   | "data-folder"
@@ -110,6 +111,35 @@ export const PANELS: Record<PanelId, PanelMeta> = {
     title: "Hidden tags",
     group: "tags",
     keywords: "show again unhide scryfall tagger oracle illustration art mute",
+  },
+  /**
+   * **First in `Appearance`, and the panel that widened what that group is about.**
+   *
+   * The entry held two panels about the reader's own *marks* until this one arrived, and a
+   * landing page is not a mark. What the three answer together is the question one rung up —
+   * what this app looks like when the reader is in front of it — and the opening view is the
+   * first sentence of that answer, which is also why it is drawn first: the "ordered by what a
+   * press costs" rule puts it above two panels that recolour a mark app-wide and delete a label
+   * app-wide, where this one costs a single launch's landing.
+   *
+   * **The keyword line leads with what a reader would type rather than with this app's word for
+   * it.** Nobody types "view id" or "activeView"; they type "start", "launch", "open on" or the
+   * name of the page they want to land on. `matches` splits the query on whitespace and wants
+   * every word to land, so "startup" is written out beside "start" — a prefix test alone would
+   * reach it, but the substring half of `matches` is what carries a reader who typed the longer
+   * word. No British/American split arises in this line (compare `theory-marks`, where
+   * `customise` and `customize` are two entries for exactly that reason), but the *place* has
+   * two names in ordinary use and both are here: "home" and "landing".
+   *
+   * `restart` is deliberately absent — it is `Updates`' word, for the press that relaunches the
+   * app after an install, and a reader who types it wants that panel rather than this one.
+   */
+  "start-view": {
+    title: "Opening view",
+    group: "appearance",
+    keywords:
+      "start startup launch open opens opening landing home first page screen default " +
+      "view begin where",
   },
   /**
    * **Under `Appearance`, and under `Tags` over this repo's dead body.**
@@ -207,8 +237,12 @@ type GroupMeta = {
  * **Seven entries, fewer than the panels they index**, which is the whole point: a list as long
  * as the page it indexes is a second scroll rather than a way through the first. Where two
  * panels answer one question they share an entry — `Needs review` is what sync asks of a reader,
- * and `Appearance`'s two are the reader's own marks recoloured — and where a panel is the only
- * answer to its own question it gets an entry to itself.
+ * and `Appearance`'s panels are what this app looks like when the reader is in front of it (the
+ * view it opens on, and their own marks recoloured) — and where a panel is the only answer to
+ * its own question it gets an entry to itself. **That sentence used to say "`Appearance`'s two
+ * are the reader's own marks recoloured", and `Opening view` is what widened it**: a landing
+ * page is not a mark, and the question the entry names had to be the larger one for the third
+ * panel to belong under it at all.
  *
  * **`Card data` holds one panel, and that is a group kept rather than a group forgotten.**
  * `Prices` shared it with `Combos` — both optional bulk feeds of card facts the app works

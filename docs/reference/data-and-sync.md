@@ -5,11 +5,13 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
 - Data dir is `<exe dir>/data`, falling back to `%APPDATA%/com.mtggrimoire.app/data`.
   **Under `tauri dev` the exe is `src-tauri/target/debug/`, so the databases are
   `src-tauri/target/debug/data/user.db` and `corpus.db`** — not `src-tauri/data/`, and
-  **not one file since schema 27**: the reader's **twenty-seven** tables are `main` and the
+  **not one file since schema 27**: the reader's **twenty-eight** tables are `main` and the
   rebuildable **twenty-five** are `ATTACH`ed as `corpus`. (Eighteen against twenty-five at the
   split itself; the user side is what has grown since, and this line said eighteen until user
-  schema v43 — a count in prose that no build checks, which is the rot this file's own header
-  warns about.) A folder still holding a single
+  schema v43 and twenty-seven until v44 — a count in prose that no build checks, which is the rot
+  this file's own header warns about. Both halves are `grep -c 'Side::User'` and
+  `grep -c 'Side::Corpus'` over `schema::TABLES`; count them, never add to the number above.)
+  A folder still holding a single
   `mtg.db` is converted at the next launch by `split::convert`, which never touches that
   file until the new one is safely renamed into place. Delete that `data/` folder to force
   a clean first-run sync. All three locations are gitignored.
@@ -913,6 +915,25 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   **The old paragraph is discarded rather than migrated**, decided by the repository owner on
   2026-09-10 and stated here rather than buried: a reader who used the old field loses it, with
   no undo, at the upgrade.
+  **v44 adds `activity`, the collection's and the wishlist's history** (2026-09-10,
+  [issue #448](https://github.com/Msgaihede/mtg-grimoire/issues/448)) — one table and one index,
+  `idx_activity_recent (at DESC, id DESC)`, and the twenty-eighth user table. It is `deck_audit`'s
+  shape with a *scope* where that one has a deck: Rust records what happened as a kind, a card, a
+  JSON `payload` and a signed copy `delta`, and the webview writes the sentence, because a
+  sentence is domain logic and a table that stored one would hold the phrasing of whichever
+  release wrote each row. **It is deliberately not in `SYNCED_TABLES` and carries no `sync_uid`**,
+  where `deck_audit` is on both — so in a paired group the deck lines in the home page's feed
+  arrive from every device and the collection lines are that device's. That asymmetry is a
+  recorded consequence and a follow-up, argued in
+  [home-page.md](home-page.md) §5, and the rung's own DDL carries the sentence as a comment so the
+  next reader of `schema.rs` meets it at the table. **It is also the first user table with a
+  pruner**: `maintenance.rs` trims it to the newest 5 000 rows at launch, because `deck_audit` is
+  bounded by how many cards a person actually puts in a deck and a log of every press is not
+  bounded at all.
+  ⚠️ **It was written as v43 and renumbered**, which is this ladder's ordinary rule and not a
+  judgement call: `deck_notes` took v43 on `main` the same day, so the home-page branch moved to
+  v44 **before** merging. Renumbering after the merge is the expensive direction — fixture names
+  collide as well as rung numbers.
   (**v40, v41 and v42 have no paragraph on this page** — the ladder narrative here stops at v39
   and has done since before this rung. Naming the gap so nobody reads the absence as a claim.)
   **v25 makes the collection's folders the physical ledger of where every card sits.** It inserts

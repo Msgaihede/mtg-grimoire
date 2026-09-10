@@ -55,6 +55,7 @@ import { useMarkColorVars } from "@/lib/useMarkColors";
 import { useNavCollapsed } from "@/lib/useNavCollapsed";
 import { useNavLabels } from "@/lib/useNavLabels";
 import { useOracleTagProgress } from "@/lib/useOracleTagProgress";
+import { useStartViewHydration } from "@/lib/useStartView";
 import { statusLine, useSync } from "@/lib/useSync";
 import { useSyncInvalidation } from "@/lib/useSyncInvalidation";
 import { useSyncProgress } from "@/lib/useSyncProgress";
@@ -84,22 +85,41 @@ const SWITCH_VIEW = shortcut("global", "switchView");
 const KEY_MAP = shortcut("global", "keyMap");
 
 /**
- * The destinations `Ctrl+1…9` walk — `NAV` minus the one row that is not always drawn.
+ * The list `Ctrl+1…9` is bound against, by index — `NAV` minus the one row that is not always
+ * drawn.
  *
- * **Ten destinations against nine digits, and this is which one goes without.** `Ctrl+0` is not a
- * tenth step of that run (`lib/shortcuts.ts` says why), so one entry has to have no chord, and
- * the choice is forced by what a chord is *for*: it does not move. Every other row is on the rail
- * for every reader; `shared` appears only once a link has been opened, so a digit bound to it
- * would either shift the digits after it — one press meaning two things to two readers — or
- * point at a row half the readers do not have.
+ * **Eleven destinations against nine digits, so two go without a chord — and the two reasons are
+ * different, which is why only one of them is a filter.** `Ctrl+0` is not a tenth step of that
+ * run (`lib/shortcuts.ts` says why), so the shortfall has to be paid twice over:
  *
- * It costs that view its keyboard route and nothing else. The route it had was a *fallback*,
- * written when nothing in the app offered a first share; `features/collection/ShareFolderMenu.tsx`
- * draws **Open a shared collection** beside the Share control now, which is the signpost the
- * chord was standing in for. `docs/reference/keyboard-shortcuts.md` carries the record.
+ * - **`shared` is excluded here, because its row is _conditional_.** Somebody else's binder
+ *   appears on the rail only once a link has been opened, and a chord's whole value is that it
+ *   does not move — a digit bound to a row that comes and goes would either shift every digit
+ *   after it, one press meaning two things to two readers, or point at a row half the readers do
+ *   not have. No amount of room would change that, which is what makes it a filter rather than
+ *   arithmetic.
+ * - **`settings` is _not_ excluded here and goes without anyway, because the run simply ends
+ *   before it.** It is this list's tenth and last entry, `SWITCH_VIEW.chords` is nine long, and
+ *   the handler's `i >= CHORD_NAV.length` guard never even gets to refuse it — there is no tenth
+ *   chord to look up. That is arithmetic and would reverse the day a tenth digit existed.
  *
- * Derived rather than written out, so a destination added to `NAV` joins the run by construction
- * and only a deliberate second exclusion could ever be a decision again.
+ * **So `Ctrl+9` is Playtesting, and `Ctrl+9` is _not_ Settings.** This block said the opposite
+ * until Home arrived at the head of the rail — "exactly one entry goes without a chord", and
+ * "`Ctrl+9` is Settings for every reader, always" — and both halves of that were true of a
+ * ten-row rail and are false of this one. The renumbering is deliberate and `nav.test.ts` pins
+ * the ninth entry **by name**, because a length can only say how many rows go without and never
+ * which, and it is the *which* a reader has in their fingers.
+ *
+ * Losing the digit costs Settings nothing else: unlike `shared`, its row is drawn on every screen
+ * at a fixed place, so it was always one press away and still is. What `shared` lost was its only
+ * keyboard route, and that route was a *fallback* written when nothing in the app offered a first
+ * share — `features/collection/ShareFolderMenu.tsx` draws **Open a shared collection** beside the
+ * Share control now, which is the signpost the chord was standing in for.
+ * `docs/reference/keyboard-shortcuts.md` carries the record.
+ *
+ * Derived rather than written out, so a destination added to `NAV` joins the list by construction
+ * and only a deliberate second *exclusion* could ever be a decision again — which is exactly what
+ * did not happen to Settings.
  */
 const CHORD_NAV = NAV.filter((n) => n.id !== "shared");
 
@@ -232,8 +252,13 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   // app, and passed down `isWebTarget()`-gated at the call site below.
   const deviceSync = useDeviceSyncLive();
   /**
-   * The app's two window-wide chords: `Ctrl+1`…`Ctrl+9` to jump between the nine destinations
-   * {@link CHORD_NAV} names, and `F1` to open the map that says so.
+   * The app's two window-wide chords: `Ctrl+1`…`Ctrl+9` to jump between the first **nine** of the
+   * ten destinations {@link CHORD_NAV} names, and `F1` to open the map that says so.
+   *
+   * **Nine of ten and not "the nine {@link CHORD_NAV} names"**, which is what this line said until
+   * Home joined the rail. That list is `NAV` minus `shared` — ten entries — and the run of digits
+   * is nine, so Settings sits on it and past the end of it at once. The digits reach Home through
+   * Playtesting; the tenth entry is reachable by every other means and by no chord.
    *
    * **Both matched against `@/lib/shortcuts` rather than compared by hand**, which is what makes
    * the panel's rows and these bindings one fact instead of two that drift silently past both CI
@@ -338,6 +363,24 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   // becomes four custom properties on `:root`, which is where every mark that wears one already
   // reads it, so no view is handed a hex and no mark subscribes to anything.
   useMarkColorVars();
+  // And once more for the view the reader wants to be *put* on, which is this block's one hook
+  // that changes what is on screen rather than how it is drawn. Here for the block's own reason
+  // and for one of its own: the read has to start before the reader has reached anything, and a
+  // second copy would be a second launch read racing the first — the shell is the only component
+  // that is always mounted, so it is the only place "once per launch" can be spelled at all.
+  //
+  // **It renders nothing and returns nothing, and it is deliberately not a `useQuery`.** This
+  // component never draws the stored word; an observer here would re-render the whole shell every
+  // time the Settings row changed it. The fetch fills the same `["startView"]` entry
+  // `useStartView` reads back — same key, same `staleTime: Infinity` — so the Settings panel
+  // opened later costs no round trip.
+  //
+  // **A press already made wins, and the guard for that is `store.ts`'s rather than this line's.**
+  // On a launch that is also a first sync the read queues behind one, so a reader who has already
+  // reached for the rail would otherwise be yanked off the page they asked for a beat later;
+  // `hydrateStartView` drops a seed that lands after the first `setActiveView`. Nothing here has
+  // to know that — this side's only job is to never send it twice.
+  useStartViewHydration();
   // The three docked search columns — the deck editor's, the collection's and the wishlist's —
   // read here rather than where any of them is drawn, and that is a measurement rather than a
   // preference for tidiness. Asked by the panel, the read queues behind the page's own read on
