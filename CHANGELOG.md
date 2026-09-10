@@ -30,6 +30,38 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.24.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.23.1...v0.24.0) (2026-09-10)
+
+
+### Features
+
+* **decks:** many notes to a deck, each naming any number of cards ([3c10664](https://github.com/Msgaihede/mtg-grimoire/commit/3c106645ec38462a0df4dcfdb6b66019c9153533))
+* **decks:** many notes to a deck, each naming any number of cards ([a0a0710](https://github.com/Msgaihede/mtg-grimoire/commit/a0a0710b12d6e0303ca1a67a738683bbce027d3c))
+* **decks:** merge the Game Changers filter back into the ledger's count ([25c0b02](https://github.com/Msgaihede/mtg-grimoire/commit/25c0b022ca59560bbfd0a75a0b227518d6b72f27))
+* **decks:** merge the Game Changers filter back into the ledger's count ([3432995](https://github.com/Msgaihede/mtg-grimoire/commit/3432995e7b2477b8321accca71398316bc73af17))
+* **decks:** redesign the deck stats band into a collapsible section ([3544c7b](https://github.com/Msgaihede/mtg-grimoire/commit/3544c7bb1aba4b23dcee68cf9ca0730fcc62c027))
+* **decks:** redesign the deck stats band into a collapsible section ([28d92a1](https://github.com/Msgaihede/mtg-grimoire/commit/28d92a1af7f3a40d2f4507331db33ed1196051cd))
+* **home:** a customizable home page with widgets, shortcuts and a recent-actions feed ([94c2280](https://github.com/Msgaihede/mtg-grimoire/commit/94c2280fa4723eb446c7bdabc97cbcc15c472e30))
+* **home:** add the layout and start-view hooks ([21ae61d](https://github.com/Msgaihede/mtg-grimoire/commit/21ae61dbe0cb4ac6094ac62dd615e5e2a98a22ff))
+* **home:** add the layout, start-view, activity log and read commands ([bbe6af4](https://github.com/Msgaihede/mtg-grimoire/commit/bbe6af4904253d204c6a425ea9e52b0dfda2265a))
+* **home:** draw the six widgets and the customizable page ([564d90e](https://github.com/Msgaihede/mtg-grimoire/commit/564d90ec864025dbe3c85f70774979f7eee10272))
+* **home:** fix the prop shape every widget takes ([636d301](https://github.com/Msgaihede/mtg-grimoire/commit/636d3013b8181206b64eacd921ac5355f784a3b6))
+* **home:** land Home in the rail and make it the launch view ([b0d6f22](https://github.com/Msgaihede/mtg-grimoire/commit/b0d6f2250f545dd997975075bf8a6c9468041b01))
+
+
+### Bug Fixes
+
+* **decks:** drop the mana-font pill from the deck stats pip bands ([002de5b](https://github.com/Msgaihede/mtg-grimoire/commit/002de5bed0cb65ef2c1b83bda0d6615339384d05))
+* **decks:** drop the mana-font pill from the deck stats pip bands ([81c5205](https://github.com/Msgaihede/mtg-grimoire/commit/81c5205c0f3e748d08a5e4ed4a4133977cd11bf0))
+* **decks:** raise the Mana pips tile type off the app's smallest ([ef6d244](https://github.com/Msgaihede/mtg-grimoire/commit/ef6d244e82ccec93824dd36588afad1062ec3560))
+* **decks:** raise the Mana pips tile type off the app's smallest ([3170ed6](https://github.com/Msgaihede/mtg-grimoire/commit/3170ed66100d10b3216ff9bf29a37c3fced7c882))
+* **decks:** stop a deck card's face painting over its own border corners ([8551fd4](https://github.com/Msgaihede/mtg-grimoire/commit/8551fd4a13e513be567e38f377001db9b35094c5))
+* **decks:** stop a deck card's face painting over its own border corners ([39bed3d](https://github.com/Msgaihede/mtg-grimoire/commit/39bed3d64e3b8247eb54a4f352a3336d98875889))
+* **decks:** wire the card menu's note rows, which shipped unreachable ([da1abbd](https://github.com/Msgaihede/mtg-grimoire/commit/da1abbd28bed5b375de5f1f94558eefe45519f17))
+* **decks:** wire the card menu's note rows, which shipped unreachable ([ddb3f50](https://github.com/Msgaihede/mtg-grimoire/commit/ddb3f508474b2a116816d3c1420ea6bddd9bd37e))
+* **dropdown:** draw the picked row's glyph on the closed trigger ([7cefc7c](https://github.com/Msgaihede/mtg-grimoire/commit/7cefc7c62940adca182097e5d3d51f6aaef95bf3))
+* **dropdown:** draw the picked row's glyph on the closed trigger ([23424a5](https://github.com/Msgaihede/mtg-grimoire/commit/23424a5117e72bd0e1f9262f9bb65c5785b284d5))
+
 ## [0.23.1](https://github.com/Msgaihede/mtg-grimoire/compare/v0.23.0...v0.23.1) (2026-09-09)
 
 
