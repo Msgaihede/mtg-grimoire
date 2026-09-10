@@ -1681,6 +1681,21 @@ price | type`). An **inactive category stays its own group in all three grouping
     filling by colour key is the point at which all of them want one home" cashed in: the two pips
     bands, the six per-colour tracks and the six colour curves are that third surface several
     times over. Everything that is not a colour is the accent.
+  - **A symbol printed _on_ one of those fills is the bare glyph, never `ManaText`** (2026-09-10).
+    `ManaText` always adds `ms-cost`, the font's own pill — an opaque disc in `mana-font`'s
+    palette (`#aca29a` for black, `#db8664` for red) with the glyph knocked out of it — which is
+    the printed article everywhere a symbol sits on a surface that is *not* already the colour:
+    the census tiles, `CurveByColor`, a cost in a table row. On a `MANA_FILL` field it lands as a
+    second, slightly-off disc behind the pip and reads as a smudge, which is what a reader
+    reported of the two pips bands. So a field with a symbol on it draws
+    `manaSymbolClass(key)` in `text-black` — `DeckColorBar`'s arrangement, and now `ManaPips`'
+    `Band`'s, so the tile's band and the editor's are one drawing. **The size goes on the field
+    and not on the `<i>`**: `.ms` declares `font-size: inherit` at a Tailwind utility's own
+    specificity and `mana.css` is imported last, so a `text-[…]` on the glyph is in the markup,
+    in the stylesheet and inert. Both bands and the reference band were photographed side by side
+    over the built stylesheet (headless Edge, 2026-09-10, app lock held elsewhere): the pill's
+    glyph computed **9.35px inside a 12.1px disc**, the bare one **14px**, so the mark keeps its
+    weight in the 32px band and loses only the disc.
   - **`sourcesKnown` is a third state and the one most easily collapsed into the second.**
     `sources` all zero is a real answer (a deck of pure spells makes no mana); `sourcesKnown ===
     false` is *every counted row answered `null`*, which is a database that has not re-ingested
