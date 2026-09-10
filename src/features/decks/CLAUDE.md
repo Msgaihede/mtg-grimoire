@@ -4138,3 +4138,65 @@ decision), and three resolver-side ones in
 [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md) with their
 reproductions — a printing hint trusted over the card name, `MOXFIELD_LIST`'s fabricated hints,
 and `MATCH_ORDER` having no language term.
+
+## The Notes band
+
+User schema **v43**, 2026-09-10, [issue #447](https://github.com/Msgaihede/mtg-grimoire/issues/447).
+The storage side, the eight commands and the undo `Op` are
+[decks-storage.md](../../../docs/reference/decks-storage.md); the whole design is
+[the spec](../../../docs/superpowers/specs/2026-09-10-deck-notes-design.md).
+
+- **`decks.notes` is gone.** One `TEXT` column and one textarea in Deck settings became
+  `deck_notes` — many rows to a deck — and `deck_note_cards`, one row per card a note names.
+  `DeckSettingsForm` draws no Notes control at all now, which is why the sentence above listing
+  what it draws lost the word.
+- **A note names a card by `oracle_id`.** So `notedOracleIds(notes)` is a `Set` of oracle ids and
+  every consumer tests a card's `oracleId` against it. **A card with a `null` `oracleId` is never
+  noted** — `cardControl.tsx`'s `deckCardNoted` is the one place that guard lives, so an orphan
+  printing cannot be marked by four views each remembering.
+- **The band is the third collapsible section**, after `DeckStats`, wearing `DeckTokensPanel`'s
+  grammar character for character and remembering itself in `decks.notes_open`. Unlike
+  `DeckTokensPanel` it **keeps its disclosure at zero notes**: the way to write a first note is
+  inside the band, so plain type where the control should be would be a dead end.
+- **The band takes `cards`, not `variant`, and that is a measured call.** It first read
+  `useDeck(deckId, variant)` for the attach picker's card names — `CategoriesDialog`'s
+  arrangement, and free *only while that query is fresh*. The band is gated on the deck row, so it
+  mounts **after** the first read settles, and a second observer arriving on a stale query
+  refetches: one extra `deck_get` per deck opened, with the app's 30 s `staleTime` the only thing
+  in the way. Four `DeckEditor.test.tsx` tests went red on exactly that. `deck_notes` carries no
+  variant column and a note written against the plan shows on the actual list too, so the word was
+  only ever deciding which cards were on screen to attach.
+- **Reading a note loads no editor.** The band, the card menu and the card modal render
+  `parseNoteBody`'s blocks — a closed AST modelled on `src/lib/releaseNotes.ts`, for that file's
+  own reason: the shipped CSP is `script-src 'self'` with no `dangerouslySetInnerHTML` anywhere in
+  `src/`. `NoteEditor` is behind `React.lazy`, and **nothing on the read path may import it
+  statically** — one eager import puts a measured 148 kB gzip back in the main chunk and nothing
+  goes red.
+- **A hard break travels as `"\n"` inside a text run**, because `Inline` has no break member. Any
+  renderer of these blocks sets `whitespace-pre-line` or every break a reader typed draws as a
+  space.
+
+### ⚠️ The card menu's note rows are opt-in, and that is how they shipped unreachable
+
+`buildDeckCardMenu` takes `notes`, `addNote` and `openNote` as **optional** deps with an
+all-or-none guard — a surface wiring none gets no block at all, separator included, which is
+`collectionItems`' rule and right for a builder three surfaces call. **`DeckEditor` passed none of
+the three**, so `Add note…` and `Notes ▸` were absent from every deck card's menu while
+`deckCardNoteRows` sat behind 66 passing tests.
+
+Nothing could have gone red: the builder's tests pass it the deps by hand, and no test asserted
+the *editor* supplies them. It was found by driving the shipped window, and the fence is now a
+`DeckEditor.test.tsx` case asserting the built menu **contains** `Add note…` — the assertion whose
+absence let it ship. **A new optional dep on this builder owes that same kind of test at the call
+site, not only at the builder.**
+
+Two things that fix carries, both easy to undo by accident:
+
+- **`useDeckNotes(deckId)` must be declared above `deckCardMenu`.** `notes.notes` is in that
+  `useCallback`'s dependency array and a dep array is evaluated **during render**, so a hook
+  declared below it is a TDZ `ReferenceError` on the first paint of every deck.
+- **The request effect is guarded by a `useRef`, not by a local flag.** The effect names `open` in
+  its deps and its own first act is `onToggle(true)`, so it re-runs at least once per request; and
+  `StrictMode` double-invokes it. Taking the request is a **render-phase adjustment** rather than a
+  `setState` in an effect, which `react-hooks/set-state-in-effect` refuses — and that rule only
+  goes red at `npm run verify`, never in `tsc` or vitest.

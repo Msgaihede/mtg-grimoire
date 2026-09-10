@@ -49,7 +49,12 @@ vi.mock("./NoteEditor", () => ({
   }) => <textarea aria-label={ariaLabel} value={value} onChange={(e) => onChange(e.target.value)} />,
 }));
 
-import { DeckNotesPanel, NOTES_HEADING, attachableCards } from "./DeckNotesPanel";
+import {
+  DeckNotesPanel,
+  NOTES_HEADING,
+  attachableCards,
+  type DeckNoteRequest,
+} from "./DeckNotesPanel";
 
 /* --------------------------------------------------------------------- fixtures ------- */
 
@@ -70,10 +75,14 @@ function note(over: Partial<DeckNote> & { id: number }): DeckNote {
  *  and a fresh `[]` per render would rebuild the picker's memo on every keystroke. */
 const NO_CARDS: DeckCard[] = [];
 
-function renderBand(props: { open?: boolean; cards?: DeckCard[] } = {}) {
+function renderBand(
+  props: { open?: boolean; cards?: DeckCard[]; request?: DeckNoteRequest | null } = {},
+) {
   const onToggle = vi.fn();
+  const onRequestHandled = vi.fn();
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  const view = render(
+  type Over = { request?: DeckNoteRequest | null; open?: boolean };
+  const band = (over: Over = {}) => (
     <QueryClientProvider client={client}>
       <DeckNotesPanel
         deckId={4}
@@ -81,12 +90,28 @@ function renderBand(props: { open?: boolean; cards?: DeckCard[] } = {}) {
         // no `staleTime`, which is exactly the condition that made a second `useDeck` here a
         // second `deck_get`**, so the prop is what keeps this file about the band.
         cards={props.cards ?? NO_CARDS}
-        open={props.open ?? true}
+        open={over.open ?? props.open ?? true}
         onToggle={onToggle}
+        request={"request" in over ? (over.request ?? null) : (props.request ?? null)}
+        onRequestHandled={onRequestHandled}
       />
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
-  return { ...view, onToggle, client };
+  const view = render(band());
+  return {
+    ...view,
+    onToggle,
+    onRequestHandled,
+    client,
+    /**
+     * Re-render the band **under the same query client** — what a host does when it parks a
+     * second request, clears the first, or writes `decks.notes_open` and hands the answer back.
+     *
+     * `view.rerender` replaces the *root*, so a bare `<DeckNotesPanel …/>` here would drop the
+     * provider and every hook in the tree would throw "No QueryClient set".
+     */
+    update: (over: Over) => view.rerender(band(over)),
+  };
 }
 
 /** The band's own region, which every assertion below is scoped to. */
@@ -512,6 +537,146 @@ describe("a refused read", () => {
     await userEvent.click(within(region).getByRole("button", { name: "Add note" }));
 
     expect(await within(region).findByRole("alert")).toHaveTextContent("the deck is gone");
+  });
+});
+
+/* --------------------------------------------------------- the card menu's two rows ---- */
+
+/**
+ * **What the card menu asks the band for** (issue #447).
+ *
+ * The rows themselves are `deckCardMenu.tsx`'s and the wiring that reaches them is
+ * `DeckEditor.test.tsx`'s; what is left — and what nothing else can see — is the band's own end of
+ * the contract: that a request is taken **once**, that `add` and `open` do two different things,
+ * and that the host is handed the request back so it can clear it.
+ */
+describe("a note act asked for from the card menu", () => {
+  const BOLT: DeckNoteRequest = {
+    kind: "add",
+    card: { oracleId: "o-bolt", name: "Lightning Bolt" },
+  };
+
+  /**
+   * **Titled with the card, naming the card, in one write.**
+   *
+   * The title is what `noteTitle` would otherwise have to invent: a blank one reads
+   * `Untitled note` in this band and in that card's own `Notes ▸` submenu the moment it appears,
+   * which is a row with no identity in a list of rows. `oracleIds` in the same call is what makes
+   * it turn up under the card again with no attach step to lose.
+   */
+  it("writes a note that already names the card", async () => {
+    renderBand({ request: BOLT });
+
+    await waitFor(() =>
+      expect(deckNoteCreate).toHaveBeenCalledWith(4, "Lightning Bolt", "", ["o-bolt"]),
+    );
+  });
+
+  /**
+   * **Opens the band, and only where it is shut.**
+   *
+   * A note a reader was sent to write is one they cannot write behind a shut disclosure. The
+   * second half is what stops the request being a press the reader did not make: an already-open
+   * band writes `decks.notes_open` for nothing, and every one of those is a row in the deck's
+   * history.
+   */
+  it("opens the band when it is shut, and leaves an open one alone", async () => {
+    const shut = renderBand({ open: false, request: BOLT });
+    await waitFor(() => expect(shut.onToggle).toHaveBeenCalledWith(true));
+    shut.unmount();
+
+    const already = renderBand({ open: true, request: BOLT });
+    await waitFor(() => expect(deckNoteCreate).toHaveBeenCalled());
+    expect(already.onToggle).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **The editor is open on the new note, which is what "quick add a note to a card" means.**
+   *
+   * The id does not exist until the create answers, which is why the band holds a *focus* rather
+   * than re-reading the request: `onSuccess` is the only place that id ever arrives. The second
+   * answer from `deck_notes` is the invalidation landing — the row cannot be drawn before it, so
+   * a fixture with one answer would assert about an editor that could never appear.
+   */
+  it("opens the new note's editor once the write lands", async () => {
+    deckNotes.mockResolvedValueOnce([]).mockResolvedValue([note({ id: 9, title: "Lightning Bolt" })]);
+    deckNoteCreate.mockResolvedValue(note({ id: 9, title: "Lightning Bolt" }));
+    renderBand({ request: BOLT });
+
+    expect(await screen.findByLabelText("Body of Lightning Bolt")).toBeInTheDocument();
+  });
+
+  /**
+   * ⚠️ **The failure this whole shape exists to prevent: one press, two notes.**
+   *
+   * The band's effect names `open` among its dependencies and its own first act is to change
+   * `open`, so it re-runs at least once for every request it honours — and `React.StrictMode`
+   * runs a mount effect twice again on top of that. Re-rendering with the **same object** is the
+   * cheapest way to say so: a guard on anything but identity, or one held anywhere but a ref,
+   * passes every other test in this file and doubles every note in the shipped window.
+   */
+  it("takes one request once, even as the band opens under it", async () => {
+    // Shut, so honouring the request is what opens it — which is the whole hazard: `open` is a
+    // dependency of the effect *and* the first thing the effect changes, so a host that answers
+    // the toggle re-runs it with the request still standing.
+    const view = renderBand({ open: false, request: BOLT });
+    await waitFor(() => expect(view.onToggle).toHaveBeenCalledWith(true));
+
+    view.update({ open: true, request: BOLT });
+    view.update({ open: true, request: BOLT });
+
+    await waitFor(() => expect(deckNoteCreate).toHaveBeenCalledTimes(1));
+    expect(view.onRequestHandled).toHaveBeenCalledTimes(1);
+  });
+
+  /** A second press is a second note, and the host's fresh object is what says so — the reason
+   *  the guard compares identity rather than a card id. */
+  it("takes a second request as a second note", async () => {
+    const view = renderBand({ request: BOLT });
+    await waitFor(() => expect(deckNoteCreate).toHaveBeenCalledTimes(1));
+
+    // Cleared by the host, then asked again — the round trip a real press makes.
+    view.update({ request: null });
+    view.update({ request: { kind: "add", card: { oracleId: "o-bolt", name: "Lightning Bolt" } } });
+
+    await waitFor(() => expect(deckNoteCreate).toHaveBeenCalledTimes(2));
+    expect(view.onRequestHandled).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * **`open` brings the note to the reader and stops there.**
+   *
+   * Reading is the point, so no editor — an `open` that mounted one would put a row the reader
+   * wanted to *look* at behind 141.5 kB of ProseMirror and shut whatever panel they already had
+   * open. The caret is the "into view" half: focusing an element scrolls it into view in a
+   * browser, and it is the half jsdom can actually see.
+   */
+  it("brings a note into view without opening its editor", async () => {
+    deckNotes.mockResolvedValue([note({ id: 5, title: "Mana base" })]);
+    const view = renderBand({ request: { kind: "open", noteId: 5 } });
+
+    const region = await band();
+    // The row and not its title: a note's own words are spelled a fourth time inside each of its
+    // three actions' `sr-only` twins (`Edit Mana base`), so a text query finds four nodes and the
+    // one it is about is a `<span>` inside the row rather than the row.
+    const row = await within(region).findByRole("listitem");
+    await waitFor(() => expect(document.activeElement).toBe(row));
+
+    expect(within(region).queryByLabelText("Body of Mana base")).toBeNull();
+    expect(deckNoteCreate).not.toHaveBeenCalled();
+    expect(view.onRequestHandled).toHaveBeenCalledTimes(1);
+  });
+
+  /** Nothing is asked for and nothing happens — the resting state, and the one every existing
+   *  caller of this band is in. */
+  it("does nothing at all without a request", async () => {
+    deckNotes.mockResolvedValue([note({ id: 5, title: "Mana base" })]);
+    const view = renderBand();
+
+    await within(await band()).findByRole("listitem");
+    expect(deckNoteCreate).not.toHaveBeenCalled();
+    expect(view.onToggle).not.toHaveBeenCalled();
+    expect(view.onRequestHandled).not.toHaveBeenCalled();
   });
 });
 
