@@ -211,3 +211,28 @@ export function useStartViewHydration(): void {
       .catch(() => {});
   }, [queryClient]);
 }
+
+/*
+ * ## The launch flash, measured — and why nothing is done about it
+ *
+ * **A reader who chose any view but Home sees Home first, for about 93 ms.** Driven in the shipped
+ * window on 2026-09-10 (debug build, against the real 277-entry database, sampled per
+ * `requestAnimationFrame` across a reload with `start_view` set to `search`): the ribbon read
+ * **Home at 224 ms** and **Search at 317 ms**. Six frames. Short enough that neither suite can see
+ * it — jsdom has no frames and Storybook never launches — and long enough to read as a glitch.
+ *
+ * **The obvious fix was built and backed out, and the reason is worth more than the fix.** Holding
+ * the view area until this read settles (`isPending`, released the moment `viewPulse` says the
+ * reader has pressed something) is four lines, keeps the shell drawn throughout, and looked right.
+ * It trades a **bounded** flicker for an **unbounded** blank: `lib/query.ts` sets `retry: 1`, so a
+ * read that fails or hangs holds the gate for a round trip and then another, and a view that is
+ * *waiting* is indistinguishable on screen from a view that is *broken*. The flicker costs a
+ * minority of readers a sixth of a second; the gate costs whoever hits a slow read an app that
+ * appears to have nothing in it. Nine tests in `App.test.tsx` went red the moment it landed —
+ * every one of them a case where the read had not settled by the time the reader looked, which is
+ * precisely the failure, arriving as a warning rather than as a bug report.
+ *
+ * So the swap stays. If it is ever worth removing, the honest way is to make the *launch* read
+ * unable to hang — one attempt, no retry, a hard deadline after which the default stands — rather
+ * than to make the view wait on a query that has no ceiling.
+ */
