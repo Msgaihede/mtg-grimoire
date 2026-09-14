@@ -1415,9 +1415,21 @@ layer.
     an invalidation on every write that can change what is in a deck, and `query.ts`'s 30 s
     `staleTime` would hide whichever one was forgotten. A *quantity* change does not move it, and
     that is correct: a second Sol Ring is not a fifth combo piece.
-- **Four views** — `Stacks | Table | Text | Grid` (`DeckEditor`'s `VIEWS`) — crossed with three
-  `Group by` modes (`category | manaValue | type`) and four sorts (`alphabetical | manaCost |
-price | type`). An **inactive category stays its own group in all three grouping modes** — as long
+- **`Labels` and `Full deck` joined the `Group by` picker on 2026-09-14** ([issue
+  #461](https://github.com/Msgaihede/mtg-grimoire/issues/461)), stored as `label` and `deck`.
+  `label` is a derived mode like `type`: `No label` first, then one heading per label **by name,
+  keyed by label id** — never by use, which would reshuffle the desk each time a card is labelled.
+  `deck` is one heading over **exactly the piles `splitRail` would flow**, and it calls `splitRail`
+  rather than spelling that rule again: the command zones still head it, and the Sideboard, the
+  Maybeboard and every switched-off pile stay piles of their own so the column views still rail
+  them. **That makes `deck` the one derived mode that keeps an _active_ Sideboard whole** — under
+  `manaValue`, `type` and `label` its cards are bucketed with the rest. The reason for the mode is
+  a sort across the whole deck (the most expensive card, not the most expensive per pile). Nothing
+  in Rust moved: `last_group_by` is stored verbatim and `asGroupBy` accepts the new words because
+  it is derived from `GROUP_BY_OPTIONS`.
+- **Four views** — `Stacks | Table | Text | Grid` (`DeckEditor`'s `VIEWS`) — crossed with five
+  `Group by` modes (`category | manaValue | type | label | deck`) and four sorts (`alphabetical |
+  manaCost | price | type`). An **inactive category stays its own group in every grouping mode** — as long
   as it holds cards — and it stays that group _whole_: `buildGroups` appends it carrying its own
   `kind`, so a switched-off
   Sideboard is still `kind: "side"` under `manaValue` and `type`. Only the **derived** groups are

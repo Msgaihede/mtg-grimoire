@@ -9,8 +9,12 @@ import {
   DEFAULT_GROUP_BY,
   drawsWhenEmpty,
   type EmptyGroupRules,
+  FULL_DECK_GROUP_KEY,
+  FULL_DECK_GROUP_NAME,
   GROUP_BY_OPTIONS,
   isCommandZone,
+  NO_LABEL_GROUP_KEY,
+  NO_LABEL_GROUP_NAME,
   X_GROUP_KEY,
   X_GROUP_NAME,
 } from "./grouping";
@@ -932,9 +936,141 @@ describe("buildGroups by a derived key", () => {
    * `sortOptions` before drawing it, so the sequence here is free to read in whatever order
    * explains the modes. `DeckEditor.test.tsx` is where the picker's own order is pinned.
    */
-  it("offers exactly the three groupings the toolbar shows", () => {
-    expect(GROUP_BY_OPTIONS.map((o) => o.value)).toEqual(["category", "manaValue", "type"]);
-    expect(GROUP_BY_OPTIONS.map((o) => o.label)).toEqual(["Categories", "Mana value", "Type"]);
+  it("offers exactly the five groupings the toolbar shows", () => {
+    expect(GROUP_BY_OPTIONS.map((o) => o.value)).toEqual([
+      "category",
+      "manaValue",
+      "type",
+      "label",
+      "deck",
+    ]);
+    expect(GROUP_BY_OPTIONS.map((o) => o.label)).toEqual([
+      "Categories",
+      "Mana value",
+      "Type",
+      "Labels",
+      "Full deck",
+    ]);
+  });
+});
+
+/** A card wearing one of the reader's labels — all three label fields together, as the read
+ *  answers them. */
+const labelled = (labelId: number, labelName: string, over: Partial<DeckCard> = {}) =>
+  card({ labelId, labelName, labelColor: "#d3202a", ...over });
+
+describe("buildGroups by label (issue #461)", () => {
+  it("draws No label first and then one heading per label, by name", () => {
+    const groups = buildGroups(
+      [
+        labelled(9, "Proxy", { name: "Sol Ring" }),
+        card({ name: "Island" }),
+        labelled(4, "budget", { name: "Arcane Signet" }),
+        labelled(9, "Proxy", { name: "Mana Crypt" }),
+      ],
+      [MAIN],
+      "label",
+      "alphabetical",
+    );
+
+    // `budget` before `Proxy` although it was made later and worn less: the order is the name's,
+    // case-folded, so labelling one more card never reshuffles the desk.
+    expect(names(groups)).toEqual([NO_LABEL_GROUP_NAME, "budget", "Proxy"]);
+    expect(groups[0].key).toBe(NO_LABEL_GROUP_KEY);
+    expect(groups.map((g) => g.cards.map((c) => c.name))).toEqual([
+      ["Island"],
+      ["Arcane Signet"],
+      ["Mana Crypt", "Sol Ring"],
+    ]);
+    expect(groups.every((g) => g.categoryId === null && g.kind === null)).toBe(true);
+  });
+
+  /** No `No label` heading when every card wears one — a derived heading never draws empty. */
+  it("draws no No label heading when every card is labelled", () => {
+    const groups = buildGroups([labelled(4, "Ramp")], [MAIN], "label", "alphabetical");
+    expect(names(groups)).toEqual(["Ramp"]);
+  });
+
+  /** Keyed by id, so two reads either side of a rename keep one React key for the pile. */
+  it("keys a label heading by the label's id, not its name", () => {
+    const before = buildGroups([labelled(4, "Ramp")], [MAIN], "label", "alphabetical");
+    const after = buildGroups([labelled(4, "Mana")], [MAIN], "label", "alphabetical");
+    expect(before[0].key).toBe(after[0].key);
+  });
+
+  it("keeps the command zone at the head and a switched-off pile whole at the tail", () => {
+    const groups = buildGroups(
+      [
+        inCategory(COMMANDER, labelled(4, "Ramp", { name: "Azula" })),
+        labelled(4, "Ramp", { name: "Sol Ring" }),
+        inCategory(MAYBE, labelled(4, "Ramp", { name: "Mind Stone" })),
+      ],
+      [COMMANDER, MAIN, MAYBE],
+      "label",
+      "alphabetical",
+    );
+    expect(names(groups)).toEqual(["Commander", "Ramp", "Maybeboard"]);
+    expect(groups[1].cards.map((c) => c.name)).toEqual(["Sol Ring"]);
+  });
+});
+
+describe("buildGroups as the full deck (issue #461)", () => {
+  it("puts the deck's own piles under one heading, sorted across all of them", () => {
+    const groups = buildGroups(
+      [
+        card({ name: "Sol Ring", unitPrice: 2, quantity: 1 }),
+        inCategory(RAMP, card({ name: "Mana Crypt", unitPrice: 150, quantity: 1 })),
+        card({ name: "Island", unitPrice: null, quantity: 4 }),
+      ],
+      [MAIN, RAMP],
+      "deck",
+      "price",
+    );
+
+    expect(names(groups)).toEqual([FULL_DECK_GROUP_NAME]);
+    expect(groups[0].key).toBe(FULL_DECK_GROUP_KEY);
+    // The point of the mode: the most expensive card in the deck is first, not the most
+    // expensive card in whichever pile happens to be drawn first.
+    expect(groups[0].cards[0].name).toBe("Mana Crypt");
+    expect(groups[0].count).toBe(6);
+    expect(groups[0].totalPrice).toBe(152);
+    expect(groups[0].categoryId).toBeNull();
+  });
+
+  /**
+   * The commander, the Sideboard, the Maybeboard and every switched-off pile stay piles of their
+   * own — the command zone at the head, the rest after, where the column views rail them. An
+   * **active** Sideboard is the case the derived modes would have bucketed and this one must not.
+   */
+  it("keeps the commander, the sideboard and every switched-off pile out of it", () => {
+    const groups = buildGroups(
+      [
+        inCategory(COMMANDER, card({ name: "Azula" })),
+        card({ name: "Sol Ring" }),
+        inCategory(SIDE, card({ name: "Pyroblast" })),
+        inCategory(CUTS, card({ name: "Mind Stone" })),
+        inCategory(RAMP, card({ name: "Arcane Signet" })),
+      ],
+      [COMMANDER, MAIN, SIDE, RAMP, MAYBE, CUTS],
+      "deck",
+      "alphabetical",
+    );
+
+    // Sideboard, Maybeboard and Cuts in their own `sortOrder`, the empty Maybeboard included —
+    // the same piles, drawn the same way, as under `category`.
+    expect(names(groups)).toEqual([
+      "Commander",
+      FULL_DECK_GROUP_NAME,
+      "Sideboard",
+      "Maybeboard",
+      "Cuts",
+    ]);
+    expect(groups[1].cards.map((c) => c.name)).toEqual(["Arcane Signet", "Sol Ring"]);
+  });
+
+  it("draws no Full deck heading over a deck with nothing in it", () => {
+    const groups = buildGroups([], [MAIN, SIDE], "deck", "alphabetical");
+    expect(names(groups)).toEqual(["Sideboard"]);
   });
 });
 
