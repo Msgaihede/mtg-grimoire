@@ -51,7 +51,7 @@ const COST_HINT =
   "Coloured pips this deck's costs ask for. A hybrid counts once in each of its halves, and generic mana is not a pip.";
 
 const SOURCES_HINT =
-  "Copies that can produce each colour. A dual land counts in every colour it makes, so these add up to more than the number of mana sources in the deck.";
+  "Copies that can produce each colour this deck's costs ask for, plus colourless. A dual land counts in every such colour it makes, so these can add up to more than the number of mana sources in the deck.";
 
 /** The band's own label column. Fixed, so `Cost` and `Sources` start their tracks at one x. */
 const BAND_LABEL = "w-[4.5rem] shrink-0 text-[0.9375rem] font-medium text-text";
