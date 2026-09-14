@@ -1565,6 +1565,16 @@ describe("DeckEditor", () => {
     await pickOption(user, "Group by", "Mana value");
     expect(screen.getByRole("list", { name: "Mana value 1" })).toBeInTheDocument();
     expect(screen.queryByRole("list", { name: "Instant" })).not.toBeInTheDocument();
+
+    // Issue #461's two: the fixture's one card wears no label, and the whole deck is one pile.
+    await pickOption(user, "Group by", "Labels");
+    expect(screen.getByRole("list", { name: "No label" })).toBeInTheDocument();
+    expect(deckSetViewState).toHaveBeenLastCalledWith(4, { groupBy: "label" });
+
+    await pickOption(user, "Group by", "Full deck");
+    expect(screen.getByRole("list", { name: "Full deck" })).toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "No label" })).not.toBeInTheDocument();
+    expect(deckSetViewState).toHaveBeenLastCalledWith(4, { groupBy: "deck" });
   });
 
   /**
@@ -1597,7 +1607,7 @@ describe("DeckEditor", () => {
     expect(optionLabels()).toEqual(["Stacks", "Grid", "Table", "Text"]);
 
     await openDropdown(user, "Group by");
-    expect(optionLabels()).toEqual(["Categories", "Mana value", "Type"]);
+    expect(optionLabels()).toEqual(["Categories", "Full deck", "Labels", "Mana value", "Type"]);
 
     await openDropdown(user, "Sort");
     expect(optionLabels()).toEqual(["Alphabetical", "Mana cost", "Price", "Type"]);

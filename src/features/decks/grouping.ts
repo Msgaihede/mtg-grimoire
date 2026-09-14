@@ -10,9 +10,10 @@
  * *the switch decides whether a pile counts at all; the kind decides only whether the pile
  * is played beside the deck or in it.* So an inactive category is never bucketed into
  * somebody else's curve — and a card in one is never hidden, because the affordance for
- * switching the pile back on is seeing what is in it. Under `manaValue` and `type` the
+ * switching the pile back on is seeing what is in it. Under `manaValue`, `type` and `label` the
  * derived groups are built from the **active** cards only, and every **inactive category**
- * holding cards is then appended as itself, unchanged, in `sortOrder`.
+ * holding cards is then appended as itself, unchanged, in `sortOrder`. `deck` is the same rule
+ * with one heading instead of many, and one more pile kept whole — see {@link buildGroups}.
  *
  * **The command zones are the one exception, and they are the second half of that same
  * sentence** — {@link COMMAND_ZONE_KINDS}. A commander is not a card in the curve; it is the card
@@ -48,23 +49,35 @@
  */
 import type { CategoryKind, DeckCard, DeckCategory } from "@/lib/ipc";
 import { hasVariableCost } from "@/lib/mana";
+import { compareLabels } from "@/lib/options";
 import {
   autoCategoryDisplayOrder,
   autoCategoryFor,
   PREDEFINED_CATEGORY_NAMES,
 } from "./autoCategory";
 import { sortCards, type SortBy } from "./sorting";
+import { splitRail } from "./views/columns";
 
-export type GroupBy = "category" | "manaValue" | "type";
+/**
+ * What the headings are. `category` is the reader's own piles; `manaValue`, `type` and `label`
+ * are **derived** headings built from the active cards; `deck` is one heading over the whole
+ * deck — see {@link buildGroups} for what each of the last two leaves out and why.
+ *
+ * The words are stored verbatim in `decks.last_group_by`, so a value is spelled once and never
+ * renamed: a stored word this build does not know reopens the editor on the default.
+ */
+export type GroupBy = "category" | "manaValue" | "type" | "label" | "deck";
 
-/** The toolbar's Group by select, so the three are named in one place. **The order here is not
+/** The toolbar's Group by select, so the modes are named in one place. **The order here is not
  *  the order they are offered in** — a picker sorts by label (`src/lib/options.ts`), so this
- *  array is free to read in whatever order explains the modes and a fourth entry may be
+ *  array is free to read in whatever order explains the modes and a new entry may be
  *  appended without deciding where it appears. */
 export const GROUP_BY_OPTIONS: readonly { value: GroupBy; label: string }[] = [
   { value: "category", label: "Categories" },
   { value: "manaValue", label: "Mana value" },
   { value: "type", label: "Type" },
+  { value: "label", label: "Labels" },
+  { value: "deck", label: "Full deck" },
 ];
 
 /** What a deck is grouped by until somebody says otherwise — the editor's initial state, and
@@ -167,6 +180,50 @@ export interface CardGroup {
  */
 export const X_GROUP_KEY = "mv-x";
 export const X_GROUP_NAME = "Mana value X";
+
+/**
+ * The heading for the cards that wear no label, under `groupBy: "label"`. Exported for
+ * {@link X_GROUP_KEY}'s reason. The words are the card modal's label picker's own unset row, so
+ * one state reads the same on both surfaces.
+ */
+export const NO_LABEL_GROUP_KEY = "label-none";
+export const NO_LABEL_GROUP_NAME = "No label";
+
+/** The one heading `groupBy: "deck"` draws over the deck itself. Its key is outside every other
+ *  namespace here, because it is not a bucket of anything — it is all of them. */
+export const FULL_DECK_GROUP_KEY = "deck-all";
+export const FULL_DECK_GROUP_NAME = "Full deck";
+
+/**
+ * The label heading a card files under: `No label` first, then one heading per label.
+ *
+ * **Keyed by the label's id and never by its name**, so a rename between two reads keeps the
+ * rows React already has. Labels after `No label` are ordered by name in {@link buildGroups}
+ * rather than by how many cards wear them — a use order would reshuffle the desk every time the
+ * reader labelled a card, which is moving the layout under the hand that is doing the labelling.
+ */
+function labelBucket(
+  card: Pick<DeckCard, "labelId" | "labelName">,
+): { key: string; name: string; order: number } {
+  if (card.labelId === null) return { key: NO_LABEL_GROUP_KEY, name: NO_LABEL_GROUP_NAME, order: 0 };
+  return { key: `label-${card.labelId}`, name: card.labelName ?? "", order: 1 };
+}
+
+/** The whole deck as one derived heading — `categoryId` `null`, so, like every derived group,
+ *  nothing can be dropped into it. */
+function fullDeckGroup(cards: DeckCard[]): CardGroup {
+  return {
+    key: FULL_DECK_GROUP_KEY,
+    name: FULL_DECK_GROUP_NAME,
+    kind: null,
+    categoryId: null,
+    isActive: true,
+    isPredefined: false,
+    isAuto: false,
+    cards,
+    ...totals(cards),
+  };
+}
 
 /**
  * The mana-value buckets: 0–7 exactly, 8 open-ended, X, unknown last.
@@ -489,6 +546,17 @@ function splitCommandZones(groups: readonly CardGroup[]): {
  * one's name. It is passed through to {@link manaValueBucket}, which is called from the one
  * `manaValue` arm, so the inertness is structural rather than a branch to keep in step.
  *
+ * **`label` is a derived grouping like `type`**: `No label` first, then one heading per label by
+ * name. An active Sideboard's cards are bucketed with the rest, exactly as they are into a curve.
+ *
+ * **`deck` is one heading over the deck, and it is the one derived mode that keeps the Sideboard
+ * whole.** Issue #461 asked for it so a sort reads across the whole deck at once — the most
+ * expensive card, not the most expensive card per pile. What it holds is what `splitRail` would
+ * flow: the command zones still head the list, and the Sideboard, the Maybeboard and every
+ * switched-off pile are appended as themselves, so the column views still rail them. A heading
+ * called "Full deck" that also held the sideboard would be a count that disagrees with the
+ * deck's size for no reason on screen.
+ *
  * **A card is in the X group or in its `cmc` bucket, never in both.** Every surface that draws
  * these headings counts copies and sums prices per group — the editor's column captions, the
  * curve, the stats strip — so a card counted twice makes the headings add up to more than the
@@ -549,6 +617,27 @@ export function buildGroups(
 
   if (groupBy === "category") return [...command, ...rest];
 
+  // One heading over the deck — the piles `splitRail` would *flow* — and every other pile as
+  // itself: the command zones already lifted to the head, and the Sideboard, the Maybeboard and
+  // every switched-off pile after it, where the column views rail them. The test is `splitRail`
+  // itself rather than a second spelling of "played beside the deck", so the rail this mode
+  // leaves standing is exactly the rail every view draws. Unlike the derived modes below, an
+  // *active* Sideboard is kept whole rather than bucketed: a heading called "Full deck" that
+  // quietly held the sideboard would be a sum nobody could check against the deck's size.
+  // `rest` keeps its `sortOrder`, so the railed piles are filtered out of it rather than taken
+  // from `splitRail`'s reordered `rail`.
+  if (groupBy === "deck") {
+    const { flow } = splitRail(rest);
+    const inDeck = new Set(flow);
+    const deckCards = flow.flatMap((group) => group.cards);
+    return [
+      ...command,
+      // No cards, no heading — a derived group has never drawn empty, and this is one.
+      ...(deckCards.length > 0 ? [fullDeckGroup(sortCards(deckCards, sortBy))] : []),
+      ...rest.filter((group) => !inDeck.has(group)),
+    ];
+  }
+
   // Derived: the active cards are bucketed, and every switched-off pile is appended as
   // itself. Both halves are the rule. Bucketing an inactive card would count a Maybeboard
   // card into the curve the reader is reading; dropping the pile would make ten cards vanish
@@ -566,7 +655,9 @@ export function buildGroups(
     const bucket =
       groupBy === "manaValue"
         ? manaValueBucket(card, separateX)
-        : (() => {
+        : groupBy === "label"
+          ? labelBucket(card)
+          : (() => {
             // What the card *is* comes from the matching order; where its heading *sits*
             // comes from the reading order, which puts Land last. See `autoCategory.ts` for
             // why those are two lists and must stay two.
@@ -599,7 +690,14 @@ export function buildGroups(
   }
 
   const derivedGroups = [...derived.values()]
-    .sort((a, b) => a.order - b.order)
+    // The name breaks a tie only for labels, whose headings all share one order past `No label`.
+    // Mana value and type are left on their order alone, where a tie keeps the order the cards
+    // arrived in exactly as it did before labels were a grouping.
+    .sort(
+      (a, b) =>
+        a.order - b.order ||
+        (groupBy === "label" ? compareLabels(a.group.name, b.group.name) : 0),
+    )
     .map(({ group }) => ({
       ...group,
       cards: sortCards(group.cards, sortBy),
