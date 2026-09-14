@@ -196,6 +196,13 @@ export interface DeckStatsSummary {
    * so a Sol Ring counts once for colourless exactly as an Ancient Tomb does. The reading is
    * therefore "sources that can make this colour", and the tile words it that way rather than
    * printing a mana count the data cannot support.
+   *
+   * **A colour counts only where some counted cost asks for it** ({@link pips} above zero), so a
+   * mono-white deck running dual lands reads white sources and nothing else: the blue half of a
+   * Hallowed Fountain is supply for a demand the deck does not have, and drawing it would split
+   * the Sources band into a colour the Cost band never mentions. **Colourless is always counted**,
+   * because `{C}` is a pip almost nothing prints while colourless mana — Sol Ring, Ancient Tomb —
+   * pays for every generic cost in the deck, so a deck with no `{C}` pips still wants to see it.
    */
   sources: PipCounts;
   /**
@@ -417,6 +424,12 @@ export function deckStats(cards: readonly DeckCard[], separateXGroup = false): D
     // is an orphan, which has no answer to give.
     if (card.producedMana !== null) sourcesKnown = true;
     for (const key of producedKeys(card.producedMana)) sources[key] += card.quantity;
+  }
+  // Supply is only counted where there is demand for it: a colour no counted cost asks for is
+  // zeroed after the loop, so a mono-white deck's Hallowed Fountains read as white sources and not
+  // as blue ones. Colourless is exempt — see {@link DeckStatsSummary.sources}.
+  for (const key of MANA_KEYS) {
+    if (key !== "C" && pips[key] === 0) sources[key] = 0;
   }
 
   let price = 0;

@@ -463,6 +463,8 @@ describe("deckStats", () => {
    */
   it("counts a source once in every colour it makes", () => {
     const stats = usdStats([
+      // Azorius Charm asks for both halves, so both halves of the Fountain are wanted supply.
+      card({ name: "Azorius Charm", manaCost: "{W}{U}", colors: "WU", producedMana: "" }),
       dual("Hallowed Fountain", "WU", 4),
       card({
         name: "Sol Ring",
@@ -533,8 +535,56 @@ describe("deckStats", () => {
 
     expect(usdStats([orphan, island]).sourcesKnown).toBe(true);
     expect(usdStats([island, orphan]).sourcesKnown).toBe(true);
-    // …and the orphan contributes nothing to the counts either way.
-    expect(usdStats([orphan, island]).sources.U).toBe(1);
+    // …and the orphan contributes nothing to the counts either way. The Counterspell is there so
+    // blue is a colour the deck asks for, which is the only way an Island counts at all.
+    const counterspell = card({ name: "Counterspell", manaCost: "{U}{U}", producedMana: "" });
+    expect(usdStats([orphan, island, counterspell]).sources.U).toBe(1);
+  });
+
+  /**
+   * **Supply is only counted where there is demand.** A mono-white deck running Hallowed Fountains
+   * reads white sources and nothing else: blue is a colour no cost in the deck asks for, so the
+   * Fountain's blue half is dropped from the Sources band rather than splitting it into a colour the
+   * Cost band never mentions.
+   *
+   * The pair of fixtures is the reader's own two examples. The second is why colourless is the
+   * exception: a Sol Ring in a mono-white deck still shows, though no card prints a `{C}` pip.
+   */
+  it("counts a source only in the colours the deck's costs ask for, colourless always", () => {
+    const swords = card({ name: "Swords", manaCost: "{W}", colors: "W", producedMana: "" });
+
+    const duals = usdStats([swords, dual("Hallowed Fountain", "WU", 4), dual("Plains", "W", 10)]);
+    expect(duals.sources).toEqual({ W: 14, U: 0, B: 0, R: 0, G: 0, C: 0 });
+
+    const rock = usdStats([
+      swords,
+      dual("Plains", "W", 10),
+      card({
+        name: "Sol Ring",
+        typeLine: "Artifact",
+        manaCost: "{1}",
+        cmc: 1,
+        colors: null,
+        producedMana: "C",
+      }),
+    ]);
+    expect(rock.pips).toEqual({ W: 1, U: 0, B: 0, R: 0, G: 0, C: 0 });
+    expect(rock.sources).toEqual({ W: 10, U: 0, B: 0, R: 0, G: 0, C: 1 });
+  });
+
+  /**
+   * The demand that gates a colour is the **counted** deck's. A blue spell parked in a switched-off
+   * Maybeboard asks for nothing — it is not in the deck — so it cannot make the Fountain's blue
+   * half count either.
+   */
+  it("ignores the demand of a switched-off pile when deciding which sources count", () => {
+    const stats = usdStats([
+      card({ name: "Swords", manaCost: "{W}", colors: "W", producedMana: "" }),
+      card({ name: "Counterspell", manaCost: "{U}{U}", producedMana: "", categoryActive: false }),
+      dual("Hallowed Fountain", "WU", 4),
+    ]);
+
+    expect(stats.sources).toEqual({ W: 4, U: 0, B: 0, R: 0, G: 0, C: 0 });
   });
 
   /**
@@ -1061,20 +1111,25 @@ describe("DeckStats", () => {
         cmc: 1,
         quantity: 4,
       }),
+      card({ name: "Azorius Charm", manaCost: "{W}{U}", colors: "WU", producedMana: "" }),
+      card({ name: "Giant Growth", manaCost: "{G}", colors: "G", producedMana: "" }),
       dual("Hallowed Fountain", "WU", 4),
       dual("Command Tower", "WUBRG", 1),
     ]);
 
-    // Four duals and a Command Tower, so white and blue read 5 of the 9 counted colours.
+    // Four duals and a Command Tower, so white and blue read 5 of the 12 counted colours.
     expect(pipTile("White")).toHaveTextContent("5 sources");
     expect(pipTile("Blue")).toHaveTextContent("5 sources");
     expect(pipTile("Red")).toHaveTextContent("1 source");
     // Singular, which nothing else in this suite would notice.
     expect(pipTile("Green")).toHaveTextContent("1 source");
+    // No cost asks for black, so the Tower's black is not counted — the tile says so rather than
+    // claiming a source for a colour the deck never spends.
+    expect(pipTile("Black")).toHaveTextContent("no sources");
     // The mix, said once as a phrase — the band's `sr-only` sentence, which is the only place a
     // reader hears *which colours are in this deck at all* rather than six tiles one at a time.
     expect(within(statsCard("Mana pips")).getByText(/^Sources:/)).toHaveTextContent(
-      "Sources: White 38%, Blue 38%, Black 8%, Red 8%, Green 8%.",
+      "Sources: White 42%, Blue 42%, Red 8%, Green 8%.",
     );
   });
 
