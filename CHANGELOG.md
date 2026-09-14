@@ -30,6 +30,20 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.25.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.24.0...v0.25.0) (2026-09-14)
+
+
+### Features
+
+* **decks:** group the deck by label, or as one full-deck pile ([8013c82](https://github.com/Msgaihede/mtg-grimoire/commit/8013c82d30ea79fce872cc43dcbe5230459deeb6))
+* **decks:** group the deck by label, or as one full-deck pile ([4f4357b](https://github.com/Msgaihede/mtg-grimoire/commit/4f4357bc5b418eeb5f2ea7ba163389bc27948f23)), closes [#461](https://github.com/Msgaihede/mtg-grimoire/issues/461)
+
+
+### Bug Fixes
+
+* **decks:** count mana sources only for colours the deck's costs ask for ([76dad2f](https://github.com/Msgaihede/mtg-grimoire/commit/76dad2ff0a8a22eccb4c9518d966d57c01d32092))
+* **decks:** count mana sources only for colours the deck's costs ask for ([7858300](https://github.com/Msgaihede/mtg-grimoire/commit/7858300f4561b293caaff167cbcb9f6b7883f674))
+
 ## [0.24.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.23.1...v0.24.0) (2026-09-10)
 
 
