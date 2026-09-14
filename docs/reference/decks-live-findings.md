@@ -2085,6 +2085,12 @@ This is the half no fresh worktree can test, because a fresh worktree is a fresh
 `35 sources` red, and `9 sources` white on a deck that casts no white pip at all. None of that is
 visible from the column, and no unit test sees the corpus it gunzips.
 
+**That white nine is gone since 2026-09-14, by decision rather than by accident.** `deckStats` now
+zeroes a colour's sources when no counted cost asks for that colour, so a mono-white deck's dual
+lands read white and nothing else; **colourless is exempt** and always counted, because `{C}` is a
+pip almost nothing prints while colourless mana pays every generic cost. The figures above are the
+build before that rule.
+
 ### It draws, at every width tried
 
 | Window | webview | band | column each | overflow (doc / main / band) |
