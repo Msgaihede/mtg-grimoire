@@ -273,8 +273,8 @@ fence (§9) keeps holding: every new key it reads is in the verdict.
 | `scanner_reset` | — | `()` | — |
 | `scanner_capture` | frame, `Sidecar` | `Captured` | — |
 | `scanner_set_filters` | `ScanFilters` | `()` or a sentence | **new** |
-| `scanner_prefs_get` / `scanner_prefs_set` | — / `ScannerPrefs` JSON | | **new** |
-| `scanner_tray_get` / `scanner_tray_set` | — / `TrayRow[]` JSON | | **new** |
+| `scanner_prefs` / `set_scanner_prefs` | — / `ScannerPrefs` | | **new** — `home_layout` / `set_home_layout`'s shape |
+| `scanner_tray` / `set_scanner_tray` | — / `ScannerTrayRow[]` | | **new** |
 
 The four new ones are `#[cfg(not(target_family = "wasm"))]` like their siblings. Prefs and tray
 are two `app_meta` keys, `scanner_prefs` and `scanner_tray`, each one JSON value written whole.
@@ -288,8 +288,9 @@ filters to the session before the first frame.
 
 The tray is committed through **`collection_import_commit`**, once for all rows, with the chosen
 folder — the existing one-transaction batch, so the activity log and every other write-site rule
-the import already honours hold without a second copy. Rows it wrote leave the tray; a row it
-refused stays with its sentence.
+the import already honours hold without a second copy. It is one transaction, so it is all or
+nothing: on success every row leaves the tray; on a refusal every row stays, and the sentence
+sits above them.
 
 ## 8. The view
 
@@ -314,7 +315,8 @@ while any row is unpicked or the tray is empty.
 
 **The Developer switch** shows today's panels (§9 "The view") and a new **Tiers** panel: the last
 resolve's tiers as a list — tier, survivor count, and the detail (the read name, the collector
-pairing, a conflict, the margin). Off, the panel column is gone and the tray takes its place.
+pairing, a conflict, the margin). They sit under the tray in the same scrolling column; off, the
+column is the tray alone.
 
 The existing `MatchPanel` stays a developer panel. The reader's view never shows votes, a lead or a
 distance.
