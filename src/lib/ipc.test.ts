@@ -33,8 +33,11 @@ import deckTheoryRs from "../../src-tauri/src/deck_theory.rs?raw";
 import deckTokensRs from "../../src-tauri/src/deck_tokens.rs?raw";
 import homeRs from "../../src-tauri/src/home.rs?raw";
 import markcolorsRs from "../../src-tauri/src/markcolors.rs?raw";
+import priceHistoryRs from "../../src-tauri/src/price_history.rs?raw";
+import recentCardsRs from "../../src-tauri/src/recent_cards.rs?raw";
 import resetRs from "../../src-tauri/src/reset.rs?raw";
 import searchRs from "../../src-tauri/src/search.rs?raw";
+import setCompletionRs from "../../src-tauri/src/set_completion.rs?raw";
 import shareRs from "../../src-tauri/src/share/commands.rs?raw";
 import startviewRs from "../../src-tauri/src/startview.rs?raw";
 import syncCommandsRs from "../../src-tauri/src/sync_engine/commands.rs?raw";
@@ -2739,10 +2742,22 @@ describe("ipc argument names match the Rust command signatures", () => {
     expect(startviewRs.length, "startview.rs was not read").toBeGreaterThan(1_000);
 
     // An unknown `kind` and an opaque `config`, deliberately: what a build cannot draw it must
-    // still hand back, so the round trip below is the one this pair exists to keep honest.
+    // still hand back, so the round trip below is the one this pair exists to keep honest. Version
+    // 2's geometry and the version-1 `span` ride along, because both are what the page writes.
     const layout = {
-      version: 1,
-      widgets: [{ id: "w1", kind: "somethingFromTheFuture", span: 2, config: { keep: [1, 2, 3] } }],
+      version: 2,
+      widgets: [
+        {
+          id: "w1",
+          kind: "somethingFromTheFuture",
+          x: 5,
+          y: 9,
+          w: 6,
+          h: 3,
+          span: 2,
+          config: { keep: [1, 2, 3] },
+        },
+      ],
     };
     invoke.mockResolvedValue(layout);
     expect(await ipc.homeLayout()).toEqual(layout);
@@ -2764,6 +2779,68 @@ describe("ipc argument names match the Rust command signatures", () => {
     await ipc.setStartView("decks");
     expect(invoke).toHaveBeenCalledWith("set_start_view", { view: "decks" });
     expect(startviewRs).toMatch(/fn set_start_view\([^)]*\bview\s*:/s);
+  });
+
+  /**
+   * **The cell grid's three new widgets' wire** — the Recently viewed pair, Set completion and
+   * Price movers — pinned on the day they were written, one case because they are one page's
+   * worth of commands.
+   *
+   * Three traps, one per command family, and none of them visible to either compiler.
+   * `record_recent_card` takes a card id, and its neighbours on the card surface take `id`
+   * (`card_tcgplayer_ids`) or `oracleId` (`combos_for_card`) — a wrapper copied from either line
+   * sends a key Tauri cannot map onto `card_id`, and because the caller deliberately ignores this
+   * write's refusal, the symptom is a widget that never fills rather than an error. `set_completion`
+   * takes **no arguments**, `home_layout`'s trap: an argument object sent to a command that
+   * declares only the managed state is a deserialisation error. And `price_movers` is four
+   * arguments of which three are bare strings side by side, `collection_breakdown`'s trap
+   * tripled: a wrapper that swapped `window` and `direction` type-checks and is refused in words
+   * about a window nobody asked for.
+   *
+   * The crate is read for each declaration by name, with the same signature regex the home
+   * page's five reads use and for its reason — a read here is as likely to be
+   * `#[tauri::command(async)] pub fn` as `pub async fn`.
+   */
+  it("sends the new widgets' reads and the recently viewed write under the names their commands declare", async () => {
+    // A pass must never be able to mean "the crate was never read".
+    for (const [name, src] of [
+      ["recent_cards.rs", recentCardsRs],
+      ["set_completion.rs", setCompletionRs],
+      ["price_history.rs", priceHistoryRs],
+    ] as const) {
+      expect(src.length, `${name} was not read`).toBeGreaterThan(1_000);
+    }
+    const declares = (src: string, command: string, param: string) =>
+      expect(src, `\`${command}\` declares no \`${param}\``).toMatch(
+        new RegExp(`fn ${command}\\([^)]*\\b${param}\\s*:`, "s"),
+      );
+
+    invoke.mockResolvedValue([]);
+    await ipc.recentCards(8);
+    expect(invoke).toHaveBeenCalledWith("recent_cards", { limit: 8 });
+    declares(recentCardsRs, "recent_cards", "limit");
+
+    invoke.mockResolvedValue(undefined);
+    await ipc.recordRecentCard("bolt-lea");
+    expect(invoke).toHaveBeenCalledWith("record_recent_card", { cardId: "bolt-lea" });
+    declares(recentCardsRs, "record_recent_card", "card_id");
+
+    invoke.mockResolvedValue([]);
+    await ipc.setCompletion();
+    expect(invoke).toHaveBeenCalledWith("set_completion");
+    expect(setCompletionRs).toContain("fn set_completion(");
+
+    invoke.mockResolvedValue({ movers: [], since: null, days: 0 });
+    await ipc.priceMovers("30d", "down", "manapool", 12);
+    expect(invoke).toHaveBeenCalledWith("price_movers", {
+      window: "30d",
+      direction: "down",
+      marketplace: "manapool",
+      limit: 12,
+    });
+    for (const param of ["window", "direction", "marketplace", "limit"]) {
+      declares(priceHistoryRs, "price_movers", param);
+    }
   });
 
   it("reads the error log with a limit and clears it with nothing", async () => {
@@ -4170,10 +4247,30 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     // line silently stops linking anywhere — which looks exactly like the design working.
     //
     // `HomeWidget` is the row this table can say least about, deliberately: `kind` is a word this
-    // side invents and `config` is opaque to both sides, so parity over the four names is the
-    // whole of what is checkable and the round trip is pinned in the settings case above instead.
+    // side invents and `config` is opaque to both sides, so parity over the names is the whole of
+    // what is checkable and the round trip is pinned in the settings case above instead. **It
+    // earned more to say with layout version 2**: `x`, `y`, `w` and `h` are the widget's place on
+    // the grid, and a renamed one reads `undefined` — which `parseLayout` treats as *never placed*
+    // and quietly re-lays out from `span`, so the reader's arrangement resets on every launch with
+    // a page that still draws. `span` stays on both sides for the older build that requires it.
     ["HomeWidget", homeRs, "HomeWidget"],
     ["HomeLayout", homeRs, "HomeLayout"],
+    // **The cell grid's three new widgets' four** (2026-09-15). `RecentCard` from
+    // `recent_cards.rs`, `SetCompletion` from `set_completion.rs`, and `PriceMover` nested inside
+    // `PriceMovers` from `price_history.rs` — two rows for that one command for
+    // `OptimizePrinting`'s reason, since a field renamed inside a mover leaves the outer struct
+    // agreeing while every tile reads `undefined`.
+    //
+    // Every one is the quiet kind. A renamed `viewedAt` is `undefined` and the tile's caption
+    // prints no time; a renamed `size` is `undefined`, which is not `null`, so a set with a printed
+    // size draws as one Scryfall published none for and its bar vanishes. A renamed `delta` or
+    // `then` gives a mover `NaN`, and a renamed `days` on `PriceMovers` is exactly the field that
+    // tells *nothing moved* from *there is no history yet* — the two sentences that type says a
+    // reader must never confuse, confused on every launch with nothing red.
+    ["RecentCard", recentCardsRs, "RecentCard"],
+    ["SetCompletion", setCompletionRs, "SetCompletion"],
+    ["PriceMover", priceHistoryRs, "PriceMover"],
+    ["PriceMovers", priceHistoryRs, "PriceMovers"],
     ["WishlistSummary", wishlistRs, "WishlistSummary"],
     // Defined in `collection.rs` and imported by `wishlist.rs` — one struct for two commands, so
     // one row here rather than two, and a second definition in the wishlist would be the drift

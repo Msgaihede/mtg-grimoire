@@ -1,11 +1,11 @@
 /**
- * What the folders widget has to get right, and every case here is one of the three ways it
- * could be quietly wrong.
+ * What the folders widget has to get right, and every case here is one of the ways it could be
+ * quietly wrong.
  *
  * **Nothing here mocks `@/lib/ipc`.** A `vi.mock` of that module rebuilds `ipc` out of
  * `vi.fn()`s, which erases the mirror `ipc.test.ts` checks against Rust — so the happy paths
  * seed the **query cache** under the keys `useCollectionFolders` and `useWishlistFolders`
- * already use, with `staleTime: Infinity`, and no `queryFn` ever runs. The two cases that are
+ * already use, with `staleTime: Infinity`, and no `queryFn` ever runs. The cases that are
  * *about* a read in flight or refused are the exception, and they use `vi.spyOn` on one method
  * of the real `ipc` object rather than replacing the module: the other ninety commands stay
  * exactly what they were.
@@ -13,6 +13,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ipc,
@@ -25,8 +26,9 @@ import {
 import { useAppStore } from "@/lib/store";
 import { MARKETPLACE_FEEDS_KEY, MARKETPLACE_KEY } from "@/lib/useMarketplace";
 import { openDropdown } from "@/test-dropdown";
-import type { WidgetProps } from "../widgetProps";
-import { FoldersWidget } from "./FoldersWidget";
+import { makeFit, spanPx, type WidgetFit } from "../fit";
+import type { Density } from "../widgetSettings";
+import { FoldersWidget, FoldersWidgetSettings, shareRows } from "./FoldersWidget";
 
 /**
  * The four keys this widget reads through, spelled here because the hooks that own them build
@@ -97,68 +99,69 @@ interface Seed {
 }
 
 function widget(config: unknown = null): HomeWidget {
-  return { id: "folders", kind: "folders", span: 2, config };
+  return { id: "folders", kind: "folders", x: 0, y: 0, w: 4, h: 2, config };
 }
 
-/** Fresh spies per call — a shared one makes `toHaveBeenCalledTimes(1)` pass or fail by the
- *  order vitest happened to run the file in. `WidgetCard.test.tsx`'s `props()` is the precedent. */
-function props(over: Partial<WidgetProps> = {}): WidgetProps {
-  return {
-    widget: widget(),
-    editing: false,
-    onConfig: vi.fn(),
-    onRemove: vi.fn(),
-    onSpan: vi.fn(),
-    dragHandleRef: vi.fn(),
-    onNudge: vi.fn(),
-    ...over,
-  };
+/** The box a widget is told it is drawn in, at the grid's target cell. */
+function fitFor(w: number, h: number, density: Density = "comfortable"): WidgetFit {
+  return makeFit({ w, h, widthPx: spanPx(w, 104), heightPx: spanPx(h, 104), density });
 }
 
-function draw(over: Partial<WidgetProps> = {}, seed: Seed = {}) {
-  const client = new QueryClient({
+/** Room for every fixture: a three-cell panel eight tall, one list column. */
+const ROOMY = fitFor(3, 8);
+
+function client(seed: Seed): QueryClient {
+  const qc = new QueryClient({
     // `staleTime: Infinity` is what makes a seeded entry the whole answer: nothing refetches, so
     // no command is called and there is no round trip to race an assertion.
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },
   });
-  client.setQueryData(MARKETPLACE_KEY, "tcgplayer");
-  client.setQueryData(MARKETPLACE_FEEDS_KEY, []);
+  qc.setQueryData(MARKETPLACE_KEY, "tcgplayer");
+  qc.setQueryData(MARKETPLACE_FEEDS_KEY, []);
   if (seed.skip !== "collection") {
-    client.setQueryData(COLLECTION_FOLDERS, seed.collection ?? COLLECTION);
-    client.setQueryData(COLLECTION_SUMMARY, seed.collectionRows ?? COLLECTION_ROWS);
+    qc.setQueryData(COLLECTION_FOLDERS, seed.collection ?? COLLECTION);
+    qc.setQueryData(COLLECTION_SUMMARY, seed.collectionRows ?? COLLECTION_ROWS);
   }
   if (seed.skip !== "wishlist") {
-    client.setQueryData(WISHLIST_FOLDERS, seed.wishlist ?? WISHES);
-    client.setQueryData(WISHLIST_SUMMARY, seed.wishlistRows ?? WISHLIST_ROWS);
+    qc.setQueryData(WISHLIST_FOLDERS, seed.wishlist ?? WISHES);
+    qc.setQueryData(WISHLIST_SUMMARY, seed.wishlistRows ?? WISHLIST_ROWS);
   }
-  const all = props(over);
-  return {
-    ...all,
-    ...render(
-      <QueryClientProvider client={client}>
-        <FoldersWidget {...all} />
-      </QueryClientProvider>,
-    ),
-  };
+  return qc;
 }
 
-/** The list of collection tiles, addressed by the name the widget gives it. */
-const collectionList = () => screen.getByRole("list", { name: "Collection folders" });
-const wishlistList = () => screen.getByRole("list", { name: "Wishlist folders" });
+function renderWith(seed: Seed, ui: ReactElement) {
+  return render(<QueryClientProvider client={client(seed)}>{ui}</QueryClientProvider>);
+}
 
-/** Every tile in a list, in the order it is drawn. */
-const tiles = (list: HTMLElement) =>
-  within(list)
-    .getAllByRole("button")
-    .map((button) => button.getAttribute("aria-label"));
+function draw(
+  config: unknown = null,
+  { fit = ROOMY, still = false, seed = {} }: { fit?: WidgetFit; still?: boolean; seed?: Seed } = {},
+) {
+  return renderWith(
+    seed,
+    <FoldersWidget
+      widget={widget(config)}
+      fit={fit}
+      editing={false}
+      still={still}
+      onConfig={vi.fn()}
+    />,
+  );
+}
+
+/** Every row's accessible name, in the order it is drawn. */
+const rows = () =>
+  screen
+    .queryAllByRole("button")
+    .map((button) => button.getAttribute("aria-label"))
+    .filter((name) => name !== null);
 
 /**
  * **The store is module state and outlives `cleanup()`**, so a case that leaves something
- * written is a case the next one inherits — and the two press cases below write a folder
- * hand-off that nothing in this file mounts a page to spend. `store.test.ts`'s own reset, for
- * its own reason.
+ * written is a case the next one inherits — and the press cases below write a folder hand-off
+ * that nothing in this file mounts a page to spend.
  */
-beforeEach(() => useAppStore.setState(useAppStore.getInitialState()));
+beforeEach(() => useAppStore.setState(useAppStore.getInitialState(), true));
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -167,59 +170,51 @@ afterEach(() => {
 describe("FoldersWidget", () => {
   /**
    * Trap 1. `collection_folder_summary` answers *direct* copies — this folder's own, never what
-   * is nested under it — because SQL that walked the tree would be a second implementation of
-   * arithmetic `buildFolderTree` already does. So `Binder` is 3 + 4 + 5 copies and $10 + $20,
-   * and a widget that drew its raw row would say `3 cards · $10.00` over a drawer holding
-   * twelve.
+   * is nested under it. So `Binder` is 3 + 4 + 5 copies and $10 + $20, and a widget that drew
+   * its raw row would say `3 cards · $10.00` over a drawer holding twelve.
    */
   it("rolls a folder's sub-folders into its figures", () => {
-    draw({ widget: widget({ collectionFolderIds: [1] }) });
+    draw({ collectionFolderIds: [1], wishlistFolderIds: [12] });
 
-    expect(
-      screen.getByRole("button", { name: "Binder, collection folder, 12 cards, $30.00" }),
-    ).toBeInTheDocument();
-    expect(within(collectionList()).getByText("12 cards · $30.00")).toBeInTheDocument();
+    const binder = screen.getByRole("button", {
+      name: "Binder, collection folder, 12 cards, $30.00",
+    });
+    expect(within(binder).getByText("Collection · 12 cards")).toBeInTheDocument();
+    expect(within(binder).getByText("$30.00")).toBeInTheDocument();
   });
 
   /** The same sum on the other cabinet, over four fields instead of two — and the unpriced note
    *  rolls up with them, because it qualifies the subtotal it travels beside. */
   it("rolls a wishlist folder's sub-folders in too", () => {
-    draw({ widget: widget({ wishlistFolderIds: [10] }) });
+    draw({ wishlistFolderIds: [10] });
 
-    expect(
-      screen.getByRole("button", {
-        name: "Buy soon, wishlist folder, 3 wishes, $12.50, 1 unpriced",
-      }),
-    ).toBeInTheDocument();
+    const row = screen.getByRole("button", {
+      name: "Buy soon, wishlist folder, 3 wishes, $12.50, 1 unpriced",
+    });
+    expect(within(row).getByText("Wishlist · 3 wishes · 1 unpriced")).toBeInTheDocument();
   });
 
   /**
-   * Trap 3. `CollectionFolderSummary.value` is `number | null` where the page header's is
-   * `coalesce(…, 0.0)`, and the two differ on purpose: a tile has no room for the header's
-   * "n unpriced" note, so a drawer the marketplace priced nothing in draws an em dash rather
-   * than reading as a drawer worth nothing.
+   * Trap 3. `CollectionFolderSummary.value` is `number | null`: a drawer the marketplace priced
+   * nothing in draws an em dash rather than reading as a drawer worth nothing.
    */
   it("draws an em dash for a folder the marketplace priced nothing in", () => {
-    draw({ widget: widget({ collectionFolderIds: [5] }) });
+    draw({ collectionFolderIds: [5] }, { seed: { wishlist: [] } });
 
-    expect(within(collectionList()).getByText("2 cards · —")).toBeInTheDocument();
-    // And says it in words where a dash would be read aloud as punctuation.
-    expect(
-      screen.getByRole("button", { name: "Blue Tempo, deck folder, 2 cards, not priced" }),
-    ).toBeInTheDocument();
+    const row = screen.getByRole("button", { name: "Blue Tempo, deck folder, 2 cards, not priced" });
+    expect(within(row).getByText("—")).toBeInTheDocument();
   });
 
   /**
    * Trap 2. Both summaries `GROUP BY` their entries, so a folder holding nothing emits no row —
-   * which is a folder with nothing in it, not a folder that failed to load. `0 cards` is the
-   * honest face of an empty drawer.
+   * which is a folder with nothing in it, not a folder that failed to load. An empty drawer shows
+   * its count and no money at all.
    */
   it("counts a folder the summary skipped as empty rather than blank", () => {
-    draw({ widget: widget({ collectionFolderIds: [4], wishlistFolderIds: [12] }) });
+    draw({ collectionFolderIds: [4], wishlistFolderIds: [12] });
 
-    expect(
-      screen.getByRole("button", { name: "Trades, collection folder, 0 cards" }),
-    ).toBeInTheDocument();
+    const trades = screen.getByRole("button", { name: "Trades, collection folder, 0 cards" });
+    expect(trades).toHaveTextContent("TradesCollection · 0 cards");
     expect(
       screen.getByRole("button", { name: "Later, wishlist folder, 0 wishes" }),
     ).toBeInTheDocument();
@@ -228,194 +223,308 @@ describe("FoldersWidget", () => {
   /**
    * The app owns two kinds of collection folder — one per deck, and the single `Recently
    * removed` — and a reader may pin either. What they may not do is mistake a deck's group for
-   * a binder they made, so the tile says which it is in words as well as with a glyph.
+   * a binder they made, so the row says which it is in words as well as with a glyph.
    */
   it("labels the app's own folders for what they are", () => {
-    draw({ widget: widget({ collectionFolderIds: [5, 6] }) });
+    draw({ collectionFolderIds: [5, 6] }, { seed: { wishlist: [] } });
 
-    const list = collectionList();
-    expect(within(list).getByText("Deck")).toBeInTheDocument();
-    expect(within(list).getByText("Removed")).toBeInTheDocument();
-    expect(tiles(list)).toEqual([
+    expect(rows()).toEqual([
       "Blue Tempo, deck folder, 2 cards, not priced",
       "Recently removed, removed cards, 0 cards",
     ]);
-  });
-
-  /** …and offers them, which is where this parts company with every folder *picker* in the app:
-   *  those offer `user` and only `user`, because they are choosing a destination to write to. */
-  it("offers the app's own folders in its settings, labelled", async () => {
-    const user = userEvent.setup();
-    draw({ editing: true });
-
-    await user.click(screen.getByRole("button", { name: "Settings for Folders" }));
-    await openDropdown(user, "Collection folders");
-
-    expect(screen.getByRole("option", { name: "Blue Tempo (deck)" })).toBeInTheDocument();
-    expect(
-      screen.getByRole("option", { name: "Recently removed (removed cards)" }),
-    ).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "Binder" })).toBeInTheDocument();
+    expect(screen.getByText("Deck folder · 2 cards")).toBeInTheDocument();
+    expect(screen.getByText("Removed cards · 0 cards")).toBeInTheDocument();
   });
 
   /**
    * A `folders` widget is in the default layout with `config: null`, so this is what every
-   * reader sees before they have pinned anything — a dead card there would be the first thing
-   * the home page ever said. The fallback is the drawers **they made**, at the top level:
-   * offering twenty deck groups would bury the two binders they care about.
+   * reader sees before they have pinned anything. The fallback is the drawers **they made**, at
+   * the top level: offering twenty deck groups would bury the two binders they care about.
    */
   it("falls back to the top-level folders the reader made when nothing is pinned", () => {
     draw();
 
-    expect(tiles(collectionList())).toEqual([
+    expect(rows()).toEqual([
       "Binder, collection folder, 12 cards, $30.00",
       "Trades, collection folder, 0 cards",
-    ]);
-    expect(tiles(wishlistList())).toEqual([
       "Buy soon, wishlist folder, 3 wishes, $12.50, 1 unpriced",
       "Later, wishlist folder, 0 wishes",
     ]);
   });
 
-  /** A pinned set is drawn in the order it was pinned, not in the cabinet's order: the reader
-   *  chose both which and where. */
+  /** A pinned set is drawn in the order it was pinned, not in the cabinet's order. */
   it("draws a pinned set in the order it was pinned", () => {
-    draw({ widget: widget({ collectionFolderIds: [4, 1] }) });
+    draw({ collectionFolderIds: [4, 1] }, { seed: { wishlist: [] } });
 
-    expect(tiles(collectionList())).toEqual([
+    expect(rows()).toEqual([
       "Trades, collection folder, 0 cards",
       "Binder, collection folder, 12 cards, $30.00",
     ]);
   });
 
-  /** A pinned id whose folder another surface has deleted draws nothing and refuses nothing —
-   *  a widget is a shortcut, and a shortcut to somewhere that is gone is simply not a shortcut. */
+  /** A pinned id whose folder another surface has deleted draws nothing and refuses nothing. */
   it("skips a pinned folder that is no longer there", () => {
-    draw({ widget: widget({ collectionFolderIds: [1, 999] }) });
+    draw({ collectionFolderIds: [1, 999], wishlistFolderIds: [12] });
 
-    expect(tiles(collectionList())).toEqual(["Binder, collection folder, 12 cards, $30.00"]);
+    expect(rows()).toEqual([
+      "Binder, collection folder, 12 cards, $30.00",
+      "Later, wishlist folder, 0 wishes",
+    ]);
   });
 
-  /**
-   * **A press is a navigation *and* a hand-off, and this asserts both halves of one press.**
-   *
-   * The view was the whole of what a press could do until the door existed: which drawer a reader
-   * is standing in is `useCollection`'s own `useState`, deliberately, so a shortcut that only
-   * changed the view landed them at the root of the cabinet whose *drawer* they had pressed.
-   * `pendingFolder` carries the rest, and `CollectionPage` spends it as it arrives.
-   *
-   * **The order the two writes are made in is what this really pins.** `setActiveView` clears a
-   * hand-off on every view change, so a press that named the folder *first* would erase its own
-   * message — and the failure is silent, because the reader still lands on the right page, at the
-   * root, exactly as they did before any of this existed. `store.test.ts` pins the two store
-   * rules; this pins that the widget writes them the right way round.
-   */
-  it("opens the collection at the folder that was pressed", async () => {
-    const user = userEvent.setup();
-    useAppStore.setState({ activeView: "settings" });
-    draw({ widget: widget({ collectionFolderIds: [1] }) });
+  describe("cabinets and captions", () => {
+    it("draws only the collection when that is the cabinet chosen", () => {
+      draw({ cabinets: "collection" });
 
-    await user.click(screen.getByRole("button", { name: /^Binder, collection folder/ }));
-
-    expect(useAppStore.getState().activeView).toBe("collection");
-    expect(useAppStore.getState().pendingFolder).toEqual({ scope: "collection", id: 1 });
-  });
-
-  /** The same press on the other cabinet — and the `scope` is what stops the wishlist's page
-   *  reading the collection's post, since one field serves both. */
-  it("opens the wishlist at the folder that was pressed", async () => {
-    const user = userEvent.setup();
-    useAppStore.setState({ activeView: "settings" });
-    draw({ widget: widget({ wishlistFolderIds: [10] }) });
-
-    await user.click(screen.getByRole("button", { name: /^Buy soon, wishlist folder/ }));
-
-    expect(useAppStore.getState().activeView).toBe("wishlist");
-    expect(useAppStore.getState().pendingFolder).toEqual({ scope: "wishlist", id: 10 });
-  });
-
-  /**
-   * The config is written back **spread**, so a key this build has never heard of — a newer
-   * build's setting, carried through untouched by `widgetConfig` — survives a reader pinning a
-   * folder in an older one.
-   */
-  it("writes the config back, keeping what it does not know about", async () => {
-    const user = userEvent.setup();
-    const onConfig = vi.fn();
-    draw({
-      editing: true,
-      onConfig,
-      widget: widget({ collectionFolderIds: [], wishlistFolderIds: [], sortedBy: "value" }),
+      expect(screen.getByRole("list", { name: "Collection folders" })).toBeInTheDocument();
+      expect(rows()).toEqual([
+        "Binder, collection folder, 12 cards, $30.00",
+        "Trades, collection folder, 0 cards",
+      ]);
     });
 
-    await user.click(screen.getByRole("button", { name: "Settings for Folders" }));
-    await openDropdown(user, "Collection folders");
-    await user.click(screen.getByRole("option", { name: "Trades" }));
+    it("draws only the wishlist when that is the cabinet chosen", () => {
+      draw({ cabinets: "wishlist" });
 
-    expect(onConfig).toHaveBeenCalledTimes(1);
-    expect(onConfig).toHaveBeenCalledWith({
-      collectionFolderIds: [4],
-      wishlistFolderIds: [],
-      sortedBy: "value",
+      expect(screen.getByRole("list", { name: "Wishlist folders" })).toBeInTheDocument();
+      expect(rows()).toEqual([
+        "Buy soon, wishlist folder, 3 wishes, $12.50, 1 unpriced",
+        "Later, wishlist folder, 0 wishes",
+      ]);
+    });
+
+    /**
+     * With the switch off a row is one line: the name and its figure. **An empty drawer shows its
+     * count there**, because it has no money and the count is the one fact it has.
+     */
+    it("drops the caption when Show which cabinet is off", () => {
+      draw({ captions: false, collectionFolderIds: [1, 4] }, { seed: { wishlist: [] } });
+
+      expect(screen.queryByText(/^Collection ·/)).toBeNull();
+      expect(screen.getByRole("button", { name: /^Binder,/ })).toHaveTextContent("Binder$30.00");
+      expect(screen.getByRole("button", { name: /^Trades,/ })).toHaveTextContent("Trades0 cards");
+    });
+
+    it("drops the caption on a compact card", () => {
+      draw({ collectionFolderIds: [1] }, { fit: fitFor(3, 8, "compact"), seed: { wishlist: [] } });
+
+      expect(screen.queryByText(/^Collection ·/)).toBeNull();
+    });
+
+    /** On a two-cell tile the figure moves under the name, and it is the folder's whole face —
+     *  the count and the money — which is how every folder tile already reads. */
+    it("moves the folder's face under the name on a two-cell tile", () => {
+      draw({ collectionFolderIds: [1] }, { fit: fitFor(2, 4), seed: { wishlist: [] } });
+
+      const binder = screen.getByRole("button", { name: /^Binder,/ });
+      expect(within(binder).getByText("12 cards · $30.00")).toBeInTheDocument();
+      expect(binder).toHaveTextContent("Binder12 cards · $30.00");
     });
   });
 
-  /** Pinning is a toggle: a second press on a pinned folder takes it off the widget. */
-  it("unpins a folder that is already pinned", async () => {
-    const user = userEvent.setup();
-    const onConfig = vi.fn();
-    draw({ editing: true, onConfig, widget: widget({ collectionFolderIds: [1, 4] }) });
+  describe("what fits", () => {
+    const many = (n: number, from: number) =>
+      // `sortOrder` carries the order: the tree sorts siblings by it before the name, and by name
+      // alone `Drawer 10` files before `Drawer 2`.
+      Array.from({ length: n }, (_, i) =>
+        folder({ id: from + i, name: `Drawer ${i + 1}`, sortOrder: i }),
+      );
+    const wishes = (n: number, from: number): WishlistFolder[] =>
+      Array.from({ length: n }, (_, i) => ({
+        id: from + i,
+        parentId: null,
+        name: `Wish ${i + 1}`,
+        sortOrder: i,
+      }));
 
-    await user.click(screen.getByRole("button", { name: "Settings for Folders" }));
-    await openDropdown(user, "Collection folders");
-    await user.click(screen.getByRole("option", { name: "Binder" }));
+    /**
+     * A three-by-two panel holds three captioned rows (170px of body at 51 + 6). **Both cabinets
+     * share them** — two collection, one wishlist — rather than twelve drawers taking all three.
+     */
+    it("cuts the rows to the box and shares them between the cabinets", () => {
+      draw(null, {
+        fit: fitFor(3, 2),
+        seed: { collection: many(12, 100), collectionRows: [], wishlist: wishes(5, 200), wishlistRows: [] },
+      });
 
-    expect(onConfig).toHaveBeenCalledWith({ collectionFolderIds: [4], wishlistFolderIds: [] });
+      expect(rows()).toEqual([
+        "Drawer 1, collection folder, 0 cards",
+        "Drawer 2, collection folder, 0 cards",
+        "Wish 1, wishlist folder, 0 wishes",
+      ]);
+    });
+
+    it("draws four bare rows in the same box with the captions off", () => {
+      draw({ captions: false, cabinets: "collection" }, {
+        fit: fitFor(3, 2),
+        seed: { collection: many(12, 100), collectionRows: [] },
+      });
+
+      expect(rows()).toHaveLength(4);
+    });
+
+    it("gives the wishlist what the collection cannot use", () => {
+      expect(shareRows([1], [2, 3, 4, 5], 4)).toEqual([1, 2, 3, 4]);
+      expect(shareRows([1, 2, 3, 4, 5], [9], 4)).toEqual([1, 2, 3, 9]);
+      expect(shareRows([1, 2, 3], [7, 8, 9], 3)).toEqual([1, 2, 7]);
+    });
   });
 
-  /**
-   * The first of three states, each a sentence. A cabinet still being read says so rather than
-   * drawing `0 cards` across the window — a wrong number that then jumps is not a spinner.
-   *
-   * `vi.spyOn` on the one method rather than a module mock: see this file's head. The promise
-   * never settles, which is the state under test held still.
-   */
-  it("says the collection folders are still being read", () => {
-    vi.spyOn(ipc, "collectionFolderList").mockReturnValue(new Promise(() => {}));
-    vi.spyOn(ipc, "collectionFolderSummary").mockReturnValue(new Promise(() => {}));
-    draw({}, { skip: "collection" });
+  describe("opening a folder", () => {
+    /**
+     * **A press is a navigation *and* a hand-off, and the order the two writes are made in is what
+     * this really pins.** `setActiveView` clears a hand-off on every view change, so a press that
+     * named the folder *first* would erase its own message — and the failure is silent, because
+     * the reader still lands on the right page, at the root. The end state alone passes for the
+     * right order *and* for a store that happens to batch; the recorded order is the fence.
+     */
+    it("opens the collection at the folder that was pressed, view first", async () => {
+      const user = userEvent.setup();
+      const writes: string[] = [];
+      const { setActiveView, setPendingFolder } = useAppStore.getState();
+      useAppStore.setState({
+        activeView: "settings",
+        setActiveView: (view) => {
+          writes.push(`view:${view}`);
+          setActiveView(view);
+        },
+        setPendingFolder: (pending) => {
+          writes.push(`folder:${pending.scope}:${pending.id}`);
+          setPendingFolder(pending);
+        },
+      });
+      draw({ collectionFolderIds: [1] }, { seed: { wishlist: [] } });
 
-    expect(screen.getByText("Reading your collection folders…")).toBeInTheDocument();
-    // And the cabinet that *did* answer is drawn beside it: one refusal is not two.
-    expect(tiles(wishlistList())).toHaveLength(2);
+      await user.click(screen.getByRole("button", { name: /^Binder, collection folder/ }));
+
+      expect(writes).toEqual(["view:collection", "folder:collection:1"]);
+      expect(useAppStore.getState().activeView).toBe("collection");
+      expect(useAppStore.getState().pendingFolder).toEqual({ scope: "collection", id: 1 });
+    });
+
+    /** The same press on the other cabinet — and the `scope` is what stops the wishlist's page
+     *  reading the collection's post, since one field serves both. */
+    it("opens the wishlist at the folder that was pressed", async () => {
+      const user = userEvent.setup();
+      useAppStore.setState({ activeView: "settings" });
+      draw({ cabinets: "wishlist", wishlistFolderIds: [10] });
+
+      await user.click(screen.getByRole("button", { name: /^Buy soon, wishlist folder/ }));
+
+      expect(useAppStore.getState().activeView).toBe("wishlist");
+      expect(useAppStore.getState().pendingFolder).toEqual({ scope: "wishlist", id: 10 });
+    });
+
+    it("draws a still body with no presses", () => {
+      draw(null, { still: true });
+
+      expect(screen.queryByRole("button")).toBeNull();
+      expect(screen.getByText("Binder")).toBeInTheDocument();
+      expect(useAppStore.getState().pendingFolder).toBeNull();
+    });
   });
 
-  /** The second: a reader owed no folders is told there are none, in words that say what to do
-   *  about it. */
-  it("says when there are no folders at all", () => {
-    draw({}, { collection: [], collectionRows: [], wishlist: [], wishlistRows: [] });
+  describe("the states", () => {
+    /**
+     * A cabinet still being read says so rather than drawing `0 cards` across the window — a
+     * wrong number that then jumps is not a spinner. The promise never settles, which is the
+     * state under test held still.
+     */
+    it("says the collection folders are still being read, and draws the wishlist beside it", () => {
+      vi.spyOn(ipc, "collectionFolderList").mockReturnValue(new Promise(() => {}));
+      vi.spyOn(ipc, "collectionFolderSummary").mockReturnValue(new Promise(() => {}));
+      draw(null, { seed: { skip: "collection" } });
 
-    expect(screen.getByText(/No collection folders to show/)).toBeInTheDocument();
-    expect(screen.getByText(/No wishlist folders to show/)).toBeInTheDocument();
+      expect(screen.getByText("Reading your collection folders…")).toBeInTheDocument();
+      // One cabinet still out is not two.
+      expect(rows()).toHaveLength(2);
+    });
+
+    it("says when there are no folders at all", () => {
+      draw(null, { seed: { collection: [], collectionRows: [], wishlist: [], wishlistRows: [] } });
+
+      expect(screen.getByText(/No collection folders to show/)).toBeInTheDocument();
+      expect(screen.getByText(/No wishlist folders to show/)).toBeInTheDocument();
+      expect(screen.queryByRole("list")).toBeNull();
+    });
+
+    it("says nothing about a cabinet the card does not draw", () => {
+      draw({ cabinets: "collection" }, { seed: { wishlist: [], wishlistRows: [] } });
+
+      expect(screen.queryByText(/No wishlist folders to show/)).toBeNull();
+    });
+
+    /** A read the backend refused says so, and says what it said. */
+    it("says when the read was refused, and what the refusal was", async () => {
+      vi.spyOn(ipc, "collectionFolderList").mockRejectedValue("database is locked");
+      vi.spyOn(ipc, "collectionFolderSummary").mockResolvedValue([]);
+      draw(null, { seed: { skip: "collection" } });
+
+      expect(
+        await screen.findByText(/Could not read your collection folders — database is locked/),
+      ).toBeInTheDocument();
+    });
   });
 
-  /** The third: a read the backend refused says so, and says what it said — `ipcError` is how a
-   *  refusal becomes words. */
-  it("says when the read was refused, and what the refusal was", async () => {
-    vi.spyOn(ipc, "collectionFolderList").mockRejectedValue("database is locked");
-    vi.spyOn(ipc, "collectionFolderSummary").mockResolvedValue([]);
-    draw({}, { skip: "collection" });
+  describe("its settings", () => {
+    function settings(config: unknown, onConfig = vi.fn()) {
+      renderWith({}, <FoldersWidgetSettings widget={widget(config)} onConfig={onConfig} />);
+      return onConfig;
+    }
 
-    expect(
-      await screen.findByText(/Could not read your collection folders — database is locked/),
-    ).toBeInTheDocument();
-  });
+    /** …and offers the app's own folders, which is where this parts company with every folder
+     *  *picker* in the app: those offer `user` only, because they choose where to write. */
+    it("offers the app's own folders, labelled", async () => {
+      const user = userEvent.setup();
+      settings(null);
 
-  /** The card is `WidgetCard`'s, named by its heading, and the width it is drawn at is the
-   *  stored document's rather than anything this widget decides. */
-  it("draws inside a widget card at the stored span", () => {
-    draw({ widget: { id: "folders", kind: "folders", span: 1, config: null } });
+      await openDropdown(user, "Collection folders");
 
-    expect(screen.getByRole("region", { name: "Folders" })).toBeInTheDocument();
+      expect(screen.getByRole("option", { name: "Blue Tempo (deck)" })).toBeInTheDocument();
+      expect(
+        screen.getByRole("option", { name: "Recently removed (removed cards)" }),
+      ).toBeInTheDocument();
+      expect(screen.getByRole("option", { name: "Binder" })).toBeInTheDocument();
+    });
+
+    it("draws a picker only for the cabinets the card draws", () => {
+      settings({ cabinets: "collection" });
+
+      expect(screen.getByRole("button", { name: "Collection folders" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Wishlist folders" })).toBeNull();
+    });
+
+    /** The patch names one key; the page merges it and keeps every other one. */
+    it("pins a folder, patching only its own cabinet's pins", async () => {
+      const user = userEvent.setup();
+      const onConfig = settings({ collectionFolderIds: [], wishlistFolderIds: [12] });
+
+      await openDropdown(user, "Collection folders");
+      await user.click(screen.getByRole("option", { name: "Trades" }));
+
+      expect(onConfig).toHaveBeenCalledTimes(1);
+      expect(onConfig).toHaveBeenCalledWith({ collectionFolderIds: [4] });
+    });
+
+    /** Pinning is a toggle: a second press on a pinned folder takes it off, in place. */
+    it("unpins a folder that is already pinned", async () => {
+      const user = userEvent.setup();
+      const onConfig = settings({ collectionFolderIds: [1, 4] });
+
+      await openDropdown(user, "Collection folders");
+      await user.click(screen.getByRole("option", { name: "Binder" }));
+
+      expect(onConfig).toHaveBeenCalledWith({ collectionFolderIds: [4] });
+    });
+
+    it("pins a wishlist folder at the end of its set", async () => {
+      const user = userEvent.setup();
+      const onConfig = settings({ wishlistFolderIds: [12] });
+
+      await openDropdown(user, "Wishlist folders");
+      await user.click(screen.getByRole("option", { name: "Buy soon" }));
+
+      expect(onConfig).toHaveBeenCalledWith({ wishlistFolderIds: [12, 10] });
+    });
   });
 });

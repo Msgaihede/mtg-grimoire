@@ -1,59 +1,96 @@
 /**
- * The one prop shape every widget on the home page takes.
+ * The prop shapes the home page is built from — **its own file because the page, the card chrome
+ * and nine widget bodies are written independently**, and each needs these contracts from
+ * somewhere none of them owns.
  *
- * **It is its own file, and that is the point rather than tidiness.** Six widgets and the page
- * that renders them are written independently, and each of them needs this contract — so it lives
- * somewhere none of them owns. A shape declared inside `HomePage.tsx` would make the page a
- * dependency of every widget, and one declared inside `widgets.ts` would put a React concern in
- * the file that is deliberately free of them (that one is a registry of *labels and defaults*,
- * readable by a test that never renders anything).
- *
- * The split between the two interfaces below is the split between **what a widget is about** and
- * **what the page is doing to it**. A widget reads its own `widget.config` and writes it back
- * through `onConfig`; everything in {@link WidgetChrome} is the page's business, is identical for
- * all six, and is passed straight through to `WidgetCard` without a widget interpreting any of it.
- * That is why a widget's body can be written — and tested — without knowing that edit mode, drag
- * handles or spans exist.
+ * The split is the grid redesign's: **the page draws every card's chrome and a widget draws only
+ * its body.** Title, rename, the chip, the settings popover, remove, the grip and the resize corner
+ * are identical for every kind, so they are `WidgetCard`'s and nine copies of them are gone. What a
+ * widget is *about* — its data, its empty states, what fits in the box it was given, the rows a
+ * reader can press — is the body's, and a body can be written and tested knowing nothing about
+ * edit mode, drags or resizes.
  */
+import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
+
 import type { HomeWidget } from "@/lib/ipc";
 
+import type { WidgetFit } from "./fit";
+
 /**
- * What the page is doing to a widget, handed through to `WidgetCard` untouched.
- *
- * Every field here is the page's: the widget neither reads nor decides any of it. `span` is
- * deliberately **not** in this interface even though `WidgetCard` needs one — it is a property of
- * the stored document, so it is read off {@link WidgetProps.widget} and the two cannot drift.
+ * Write some of this widget's settings back. The page merges the fields into the stored config and
+ * **keeps every key it was not handed** — including a newer build's. A field set to `undefined` is
+ * removed.
  */
-export interface WidgetChrome {
-  /** Whether the reader has pressed **Customize**. A widget passes this to `WidgetCard` and,
-   *  with one exception, changes nothing else about itself: the tray is the card's business.
-   *  The exception is a widget that would otherwise swallow a drag — see `DecksWidget`. */
+export type ConfigPatch = (fields: Record<string, unknown>) => void;
+
+/** One widget body — everything inside the card under its title row. */
+export interface WidgetBodyProps {
+  /** The stored entry. Read registry settings through `widgetSettings.ts` (`pickOf`, `toggleOn`),
+   *  anything else through `widgetConfig` in `layout.ts` — never `widget.config` by hand. */
+  widget: HomeWidget;
+  /** The box this body is drawn in, and the whole-row arithmetic over it. */
+  fit: WidgetFit;
+  /**
+   * Customize is on. **The page makes the body inert while it is**, so a press on a deck tile
+   * picks the card up rather than opening the deck — a body needs to do nothing about it, and may
+   * use it only to stop something it would otherwise start (a hover preview, say).
+   */
   editing: boolean;
-  /** Drop this widget from the layout. */
-  onRemove: () => void;
-  /** One column or the whole line. */
-  onSpan: (span: 1 | 2) => void;
-  /** The grip. `WidgetCard` hands the element back so the page can make it draggable — and hands
-   *  back `null` when the tray goes away, which is what unregisters it. */
-  dragHandleRef: (el: HTMLElement | null) => void;
-  /** The grip's arrow keys. `dndManager` ships no `KeyboardSensor`, so without this a reorder is
-   *  a gesture only a mouse can make. */
-  onNudge: (delta: -1 | 1) => void;
+  /**
+   * This is a catalogue preview: a picture of a widget of this kind at its default footprint.
+   * **A still body writes nothing, opens nothing and publishes nothing** (no card walk, no
+   * recorder), and its scrollers clip rather than scroll — a scroller behind
+   * `pointer-events: none` is a bar a reader can see and cannot move.
+   */
+  still: boolean;
+  onConfig: ConfigPatch;
 }
 
-/** A widget: the stored entry it draws, its own way of writing that entry back, and the chrome
- *  the page wraps it in. */
-export interface WidgetProps extends WidgetChrome {
-  /** The stored entry. `widget.span` is what the card is drawn at and `widget.config` is this
-   *  widget's own settings — read it through `widgetConfig(widget, fallback)` from `./layout`,
-   *  never by hand, so a config written by a different build cannot reach the render. */
+/**
+ * A kind's own settings beyond the rows its registry entry declares — the deck picker behind
+ * `Pinned`, the Summary's figure checklist. Drawn at the foot of the settings popover.
+ */
+export interface WidgetSettingsProps {
   widget: HomeWidget;
+  onConfig: ConfigPatch;
+}
+
+/**
+ * The card every widget is drawn in — `WidgetCard.tsx`. The page supplies the geometry handlers;
+ * the card owns the chrome and the two anchored popovers (settings, and the question that comes
+ * before a remove).
+ */
+export interface WidgetCardProps {
+  widget: HomeWidget;
+  fit: WidgetFit;
+  /** Customize is on: the grip, the title field, the tray and the resize corner are drawn. */
+  editing: boolean;
+  /** A catalogue preview: no tray even if `editing`, and the body clips rather than scrolls. */
+  still?: boolean;
+  /** This card is being dragged: drawn lifted, in the accent. */
+  dragging?: boolean;
   /**
-   * Write this widget's settings back.
-   *
-   * The page merges and persists; a widget hands over the whole config object it wants stored.
-   * **Spread the current config rather than replacing it** — `widgetConfig` carries through keys
-   * it does not know about, and that is what stops this build deleting a newer one's settings.
+   * Whether this card can be moved and resized by pointer — `false` on a stacked (narrow) page,
+   * where there is no grid to drop on. The size steppers in settings still work either way.
    */
-  onConfig: (config: unknown) => void;
+  arrangeable?: boolean;
+  /** A press anywhere on the card while editing, **except on an element carrying `data-no-drag`**
+   *  — the tray, the title field, the resize corner. */
+  onDragStart?: (event: ReactPointerEvent<HTMLElement>) => void;
+  /** A press on the resize corner. */
+  onResizeStart?: (event: ReactPointerEvent<HTMLElement>) => void;
+  /** The grip's arrow keys: one cell in that direction. */
+  onNudge?: (dx: number, dy: number) => void;
+  /** The resize corner's arrow keys and the size steppers: one cell more or less. */
+  onGrow?: (dw: number, dh: number) => void;
+  /** Can the footprint change by this much — inside the kind's bounds and onto free cells? A
+   *  stepper that cannot is `aria-disabled` and keeps its tab stop. */
+  canGrow?: (dw: number, dh: number) => boolean;
+  onConfig: ConfigPatch;
+  /** Take the widget off the page. Called only after the reader answers the card's own question. */
+  onRemove: () => void;
+  /** The kind's {@link WidgetSettingsProps} component, already rendered. */
+  extraSettings?: ReactNode;
+  /** The body. */
+  children: ReactNode;
 }

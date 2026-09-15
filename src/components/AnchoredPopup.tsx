@@ -92,7 +92,17 @@ export function AnchoredPopup({
   triggerClassName?: string;
   /** On the panel — its width, and the layout of whatever the caller puts in it. */
   panelClassName?: string;
-  children: ReactNode;
+  /**
+   * The panel's contents — or a function of `close` for contents that have to shut the panel
+   * themselves: a question's *Keep*, a header's ✕.
+   *
+   * **`close` is Escape's own path**, the flag down and the caret handed back to the trigger, so a
+   * panel shut from inside lands the reader exactly where Escape would have. The alternative was a
+   * controlled `open` prop, which would have made every caller that does not need one hold state
+   * this shell already holds. Called only while the panel is mounted, so the function runs once per
+   * opening at most and never for a panel nobody has opened.
+   */
+  children: ReactNode | ((close: () => void) => ReactNode);
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLSpanElement>(null);
@@ -161,12 +171,34 @@ export function AnchoredPopup({
       <AnimatePresence>
         {open && (
           <Panel panelLabel={panelLabel} align={align} panelClassName={panelClassName}>
-            {children}
+            {typeof children === "function" ? (
+              <Contents render={children} close={dismiss} />
+            ) : (
+              children
+            )}
           </Panel>
         )}
       </AnimatePresence>
     </span>
   );
+}
+
+/**
+ * A function child, called with `close`.
+ *
+ * Its own component rather than a call inline in {@link AnchoredPopup}'s render, because `close`
+ * reaches the trigger's ref: calling the caller's function there is, to the compiler's lint, a ref
+ * handed to arbitrary code during render. Handed down as a prop it is what it actually is — an
+ * event handler the contents bind and never call while rendering.
+ */
+function Contents({
+  render,
+  close,
+}: {
+  render: (close: () => void) => ReactNode;
+  close: () => void;
+}) {
+  return <>{render(close)}</>;
 }
 
 /**

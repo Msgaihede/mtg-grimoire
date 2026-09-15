@@ -6,8 +6,17 @@ design is
 is the record of what shipped, with the reason at each site. Every figure keeps the date and the
 build it was taken on, and every count below names the command that answers it.
 
-The short version: **`ViewId` gains one member, `app_meta` gains two keys, the schema gains one
-table, and nothing else about the app changes.** The home page is a document the reader owns and
+> **Redesigned on 2026-09-15 onto a square-cell grid** — the Claude Design canvas
+> `Widget Home.dc.html`. Widgets are placed at `x, y` with a `w × h` footprint, dragged anywhere
+> in Customize, resized from a corner, configured in a per-card settings popover, removed only after
+> a question on the card, and added from a **Widget catalogue** of live previews. Three kinds
+> joined — **Recently viewed**, **Set completion**, **Price movers** — and each needed a fact the
+> app did not store: `app_meta.recent_cards`, `sets.printed_size` (corpus schema 4) and the
+> `price_snapshots` table (user schema 45). §1, §3, §4 and §6 describe the grid; §11 is the record
+> of the redesign itself. The design's `Sync` widget was sketched and deliberately not built.
+
+The short version of the original page: **`ViewId` gains one member, `app_meta` gains two keys,
+the schema gains one table, and nothing else about the app changes.** The home page is a document the reader owns and
 six widgets that read commands the rest of the app already had, plus one it did not — a global
 activity feed. The single load-bearing rule is that the *vocabulary* of widgets lives in
 TypeScript and only the *shape* of the document lives in Rust, which is what lets two builds of a
@@ -22,13 +31,30 @@ table since user schema v6, so **there is no migration** — this is a key in it
 `src-tauri/src/home.rs` is the module that owns the key.
 
 ```ts
-interface HomeWidget { id: string; kind: string; span: 1 | 2; config: unknown }
-interface HomeLayout { version: 1; widgets: HomeWidget[] }
+interface HomeWidget { id: string; kind: string; x: number; y: number; w: number; h: number; span?: number; config: unknown }
+interface HomeLayout { version: 2; widgets: HomeWidget[] }
 ```
 
 `home.rs` refuses, in this order and **all of it before `app_meta` is touched**: a `version` that
-is not `1`; an `id` or a `kind` that is blank after `trim`; a `span` outside `MIN_SPAN..=MAX_SPAN`
-(1 to 2); and a serialized document over `MAX_BYTES`, 64 KiB. On the read side there is nothing to
+is not `2`; an `id` or a `kind` that is blank after `trim`; a `w` outside `1..=MAX_W` (24) or an
+`h` outside `1..=MAX_H` (40); an `x` past `MAX_X` (1 000) or a `y` past `MAX_Y` (10 000); a `span`
+that is present and outside `1..=2`; and a serialized document over `MAX_BYTES`, 64 KiB. **Rust
+knows nothing about how many columns a window has** — `layout.ts`'s `normalise` is what brings a
+stored document inside the grid it is drawn on, and it does so on every draw **without writing the
+result back**, so narrowing the window never rewrites the reader's arrangement until they change
+something.
+
+**Version 1 still reads.** A version-1 row carries `span` and no geometry; Rust answers `0` for
+the four cells, and `parseLayout` reads `w === 0` as *never placed* and lays each widget out at its
+kind's default footprint (a `span: 2` widget the whole of the narrowest grid) in the reader's own
+order. Placed widgets claim their cells before any unplaced one is flowed in.
+
+**`span` is still written, on every version-2 document, for an *older* build.** That build's
+`home.rs` requires the field, so a document without it would read as the default layout there and
+the reader's next Customize in the old build would overwrite this build's page. With it, the old
+build draws the widgets in its row and refuses to save a version it does not write — the round
+trip this document has always promised. `toStored` in `layout.ts` derives it (`w > 4` is the whole
+row) on every write. On the read side there is nothing to
 refuse: a missing row, a row that is not JSON, a row holding an array or a bare string, a document
 whose `widgets` is a number — every one reads as the default layout, and `stored` is **infallible
 by signature** for `nav::nav_collapsed`'s reason.
@@ -42,7 +68,7 @@ in memory.
 ### The vocabulary is TypeScript's, and the round trip is the feature
 
 `kind` is a free `String` and `config` is an opaque `serde_json::Value`. Nothing in `home.rs`
-compares a stored kind against anything — the six spellings in its `DEFAULT_LAYOUT` table are the
+compares a stored kind against anything — the eight spellings in its `DEFAULT_LAYOUT` table are the
 *seed a first launch gets* and are used for nothing else. That is `markcolors.rs`'s split at its
 widest, and its rule verbatim: **a write preserves entries this build does not understand.**
 
@@ -53,10 +79,10 @@ one**, and three files each keep a third of it. Break any one and the other two 
 | --- | --- | --- |
 | `src-tauri/src/home.rs` | stores and returns `kind` and `config` untouched; validates shape only | grow an enum, an allow-list, or a `kind` check |
 | `layout.ts`'s `parseLayout` | keeps an entry whose `kind` this build cannot draw, drops only an entry that is not a widget at all | filter on `isWidgetKind` |
-| `HomePage.tsx`'s `renderWidget` `default` arm | draws `UnknownWidget` — a card saying where the widget came from, with its full edit tray | throw, or return `null` |
+| `HomePage.tsx`'s body switch `default` arm | draws the unknown-widget body — a sentence saying where the widget came from — inside the ordinary card, tray and all | throw, or return `null` |
 
 `widgets.ts` says the same thing from the other side: **`isWidgetKind` is a renderer's question and
-never a parser's.** The placeholder keeps its remove, width and grip on purpose — a widget this
+never a parser's.** The placeholder keeps its remove, size and grip on purpose — a widget this
 build cannot draw is the one a reader is most likely to want to move or take off the page.
 
 What follows from `config` being opaque is the rule for extending a widget: **a new per-widget
@@ -96,26 +122,46 @@ ever chosen. **Only an absent row and an unparseable one are the default**;
 `layout.test.ts`'s *"keeps an empty widget list rather than restoring the default"* pins the
 webview's, because both sides have a fallback and either alone would undo the reader's choice.
 
-## 3. The six widgets
+## 3. The nine widgets
 
-The default layout, in order, is `summary` (span 2), `decks`, `activity`, `collectionValue`,
-`wishlistValue`, `folders` (span 2). **A kind may appear more than once** — the `id` identifies a
-widget, so two `decks` widgets pinning two sets of decks is a layout to build rather than a case to
-refuse, and `newWidgetId` mints an id that does not collide.
+The default layout fills an eight-by-seven rectangle exactly, so a first launch shows no hole:
+`summary` 0,0 4×2 · `recentCards` 4,0 4×2 · `decks` 0,2 3×3 · `activity` 3,2 3×3 ·
+`collectionValue` 6,2 2×3 · `folders` 0,5 4×2 · `priceMovers` 4,5 2×2 · `setCompletion` 6,5 2×2.
+**A kind may appear more than once** — the `id` identifies a widget, so two `decks` widgets pinning
+two sets of decks is a layout to build rather than a case to refuse, and `newWidgetId` mints an id
+that does not collide.
+
+**Every kind declares what a reader can change about it in `widgets.ts`**: a default, minimum and
+maximum footprint, `picks` (one of several) and `toggles` (on/off, stored only as `false`), and the
+`chip` — which pick's label is drawn beside a wide card's title. The settings popover is built from
+that row, so a kind grows a setting by adding a row rather than by the panel learning a special
+case. Three settings belong to every kind and are not rows: the footprint (two size steppers), the
+density, and the title (a rename in the card's own title field; a blank or the kind's own name
+stores nothing). All of it lives in `config` — the extension rule below.
 
 | `kind` | draws | `config` |
 | --- | --- | --- |
-| `summary` | copies and value across the collection, the decks and the wishlist; each figure is a press that opens that view | — |
-| `decks` | pinned deck shortcuts — cover art, format, card count, value; empty config falls back to the most recently updated | `{ deckIds }` |
-| `folders` | pinned collection and wishlist folder shortcuts with their counts and value; empty config falls back to the top-level drawers the reader made | `{ collectionFolderIds, wishlistFolderIds }` |
-| `collectionValue` | the collection's total, its unpriced note, and bars along one dimension | `{ dimension }` |
-| `wishlistValue` | the same over the wishlist — a separate component, because the two lists' empty states and notes differ | `{ dimension }` |
-| `activity` | recent actions grouped by local calendar day, each day headed by its `+7 / −6` roll-up | `{ limit }` |
+| `summary` | Collection, Decks, Wishlist and Value figures; each a press that opens that view | `{ hide }` |
+| `decks` | deck shortcuts — cover, format, card count, value | `{ scope: recent·pinned·archived, deckIds, art }` |
+| `folders` | collection and wishlist folder shortcuts with counts and value | `{ cabinets: both·collection·wishlist, collectionFolderIds, wishlistFolderIds, captions }` |
+| `collectionValue` | the collection's total and its split along one dimension, as bars or a list | `{ dimension, chart: bars·list, figures }` |
+| `wishlistValue` | the same over the wishlist — a separate component, because the two lists' empty states and notes differ | `{ dimension, chart, figures }` |
+| `activity` | recent actions grouped by local calendar day, each day headed by its `+7 / −6` roll-up | `{ limit: 25·50·100, times }` |
+| `recentCards` | the cards this device opened last, as a strip of card faces that open the card | `{ count: 4·6·8, names }` |
+| `setCompletion` | every set the reader holds a card from, and how much of it | `{ sort: complete·cards·name, bars }` |
+| `priceMovers` | owned printings whose price moved most over a window | `{ window: 7d·30d·all, direction: both·up·down }` |
+
+**A config written before the grid keeps its meaning.** `dimension` and `limit` kept their keys
+rather than taking the design's `scope`, and a `decks` config holding pins but no `scope` reads as
+`pinned` — defaulting it to `recent` would have dropped every reader's pinned set on upgrade. A
+stored word no option carries reads as the pick's default, which is the vocabulary check
+`widgetConfig` cannot make; `activity`'s old `200` therefore reads as `50`.
 
 `DEFAULT_LAYOUT` exists in `home.rs` and in `widgets.ts`, **one fact in two places**, and the Rust
 one is what a first launch actually gets: `home::stored` answers it for a missing row long before
 the webview is loaded. The TypeScript copy is what `parseLayout` falls back to and what **Reset**
-writes. `widgets.test.ts` pins its half against a literal so the two cannot drift silently.
+writes. `widgets.test.ts` pins its half against a literal and `home.rs`'s tests pin theirs against
+the same JSON, so the two cannot drift silently.
 
 Two smaller rulings, each written at its site so it is a decision rather than an oversight:
 
@@ -145,30 +191,48 @@ query cache and turns an `invalidate` action under any of the three write roots 
 invalidation of its own key, *and* it holds a marker query under each root so the signal exists at
 all — `invalidateQueries` dispatches nothing when it matches no cached query.
 
-## 4. The grid is flex-wrap, and deliberately not a container query
+## 4. The grid is measured in JavaScript, and still not a container query
 
-`flex flex-wrap items-start gap-3`, each widget `min-w-[22rem] flex-1` (`WIDGET_CARD_BOX`), a
-`span: 2` widget `basis-full` (`WIDGET_CARD_WIDE`). Both are whole class strings and never a width
-computed from `span`, because Tailwind scans source *text* and an interpolated class emits no rule
-at all.
+Square cells with a 12px gap: at least **eight columns**, one more for every ~116px of canvas past
+that (`fit.ts`'s `columnsFor`, `TARGET_CELL` 104). The canvas is measured with a `ResizeObserver`
+and every computed size is an inline style — a column template, a row height, a grid line — because
+Tailwind scans source *text* and an interpolated class emits no rule at all. Resting, the grid is
+as tall as the arrangement; in Customize it gains four spare rows (at least eight) so a widget has
+somewhere to be dragged, with dashed guides down the middle of the gaps and a ghost rectangle that
+turns destructive over an occupied cell.
 
-**`container-type: inline-size` applies layout containment, which makes the box the containing
-block for every `fixed` descendant** — and these widgets open anchored popovers, context menus and,
-through them, dialogs whose scrim is a bare `fixed inset-0` that corrects for nothing. A container
-here would reparent them, which is the bug `layers.ts` was written about. The precedent is
-`src/features/decks/DeckStats.tsx:871-874`, which refuses a container over its own two columns in
-the same words and for the same reason; this page's refusal is the second, not the first.
+**The design canvas drew its cells in `cqw` units off a `container-type: inline-size` canvas and a
+`container-type: size` box per widget. The app does neither, and that refusal is the original
+page's, kept.** Layout containment makes the box the containing block for every `fixed`
+descendant — and these widgets open anchored popovers, context menus and, through them, dialogs
+whose scrim is a bare `fixed inset-0` that corrects for nothing. The design reached for container
+units because its runtime could not measure; this page can, so it measures. The precedent is
+`src/features/decks/DeckStats.tsx`, which refuses a container over its own two columns in the same
+words.
 
-**The consequence, stated rather than hidden: *where* a widget appears is an order and a width, not
-a free position.** There is no grid to drop a card into and no empty cell to leave. That is the
-whole of what the refusal costs, and §9 lists it again as something this feature does not do.
+**What fits in a card is a question about pixels, decided by the body.** `makeFit` hands each body
+its box and whole-row arithmetic (`fitCount` floors at zero, `linesFit` at one) and each body cuts
+its list to whole rows — half a row drawn into a clipped card reads as a broken card. **The tier is
+the one thing decided by cells**: two cells is a tile, three a panel, four or five a band, six or
+more the whole row. It decides *which* content a card carries (a caption, the chip, a footer), and
+content that changed as the window was dragged a few pixels would read as a card that could not
+make up its mind. The body still scrolls, in the app's slim bar with the gold thumb, so an estimate
+a few pixels out costs a scrollbar rather than a sentence.
 
-The page also does **no arithmetic about position**. `useWidgetDropTarget` reports which widget was
-dragged and which edge of this one it was let go on, and `moveWidget` takes exactly that pair — an
-index worked out on the page would be an index into the list *before* the dragged widget was lifted
-out of it, and one too high for every forward move. The grip's arrow keys go the same way, turning
-a delta into a neighbour's id and an edge, because `dndManager` ships no `KeyboardSensor` and a
-reorder that was only a drag is a rearrange half the readers do not have.
+**Two stacking rules keep the popovers visible, and nothing in jsdom can see either.** A card is
+not `overflow-hidden` — the settings and remove popovers anchor inside its title row and open past
+its edge, so clipping lives on the body scroller alone; and a grid box has **no z-index and no
+transform at rest**, so a card's `LAYER.popup` panel paints over the cards after it. Only the box
+being dragged is transformed and raised, and no popover is open while it is.
+
+**The page does no layout arithmetic of its own beyond cells.** A drop is `moveWidget(x, y)` and a
+corner release `resizeWidget(w, h)`, both refusing an occupied or out-of-grid rectangle by
+answering the document unchanged; the grip's arrow keys are a one-cell move, the corner's a
+one-cell resize, and the settings steppers the same resize with `aria-disabled` at a bound.
+**While Customize is on the body is `inert`**, so a press on a deck tile picks the card up instead
+of opening the deck — and a press on anything carrying `data-no-drag` (the title field, the tray,
+the corner) is still a press. Below a readable cell (`CELL_MIN`, 68px) the page **stacks**: one
+widget per row in reading order, full width, no grip and no corner, while the steppers still work.
 
 ## 5. The activity log
 
@@ -317,7 +381,7 @@ rules have the least to say about. Recorded as a known consequence and a follow-
 The rung's own DDL carries that sentence as a comment, so the next reader of `schema.rs` meets the
 decision at the table rather than in this file.
 
-## 6. The nine commands, on both targets
+## 6. The commands, on both targets
 
 Each goes **in the module its data lives in, with the gate on the wrapper** — `search.rs` is the
 pattern — and **each is routed on the web target as well**, because every one is a synchronous,
@@ -332,6 +396,9 @@ connection-only query, which is exactly what `web::route` answers.
 | `wishlist_breakdown` | `wishlist.rs` | the same shape |
 | `deck_values` | `deck.rs` | `[{ deckId, value, unpriced }]` — every deck, one query |
 | `activity_recent` | `activity.rs` | the union feed |
+| `recent_cards` / `record_recent_card` | `recent_cards.rs` | the cards this device opened, newest first (added with the grid, §11) |
+| `set_completion` | `set_completion.rs` | `[{ setCode, name, releasedAt, owned, size }]` (§11) |
+| `price_movers` | `price_history.rs` | `{ movers, since, days }` (§11) |
 
 Registration is three places, and a command missing from one of them answers `unknown command` at
 runtime with nothing red: `lib.rs`'s module map, `desktop.rs`'s `generate_handler!` list, and
@@ -399,8 +466,9 @@ the absence of `settings` from the run, so a merge cannot quietly put the old nu
 
 From the design's §9, plus two the build itself turned up:
 
-* **No free-form placement.** A widget has an order and a width. §4 is why the alternative would
-  reparent every popover on the page.
+* ~~**No free-form placement.**~~ **Built, on 2026-09-15** — the grid of §4. It was refused here
+  because the only way the original design saw to draw one was a container query, which would have
+  reparented every popover; measuring the canvas in JavaScript is what made it possible without one.
 * **No cross-device activity for the collection.** §5.
 * **No deck-folder shortcuts.** There is no `deck_folder_summary` command and deck folders carry no
   counts; the `decks` widget pins decks, which is what the issue asks for.
@@ -527,6 +595,72 @@ Three things happened in that merge and they are not the same shape:
   happened had the field been typed loosely.
 
 The counts this branch moved, and the command that answers each, so the next reader re-derives
-rather than trusts: `USER_SCHEMA_VERSION` is `grep USER_SCHEMA_VERSION src-tauri/src/schema.rs`;
+rather than trusts (a rule the grid redesign below followed for its own two rungs): `USER_SCHEMA_VERSION` is `grep USER_SCHEMA_VERSION src-tauri/src/schema.rs`;
 the user-table count is the `Side::User` entries in `schema::TABLES`; the routed-command count is
 `COMMANDS.len()` as the build computes it, which is why no document here writes it down twice.
+
+## 11. The grid redesign (2026-09-15)
+
+Imported from the Claude Design canvas `Widget Home.dc.html` (with its card component
+`Widget.dc.html`). The canvas's script is the spec — `KINDS`, `body()` and `view()` — and three of
+its workarounds were deliberately **not** copied, each because the runtime it was written for could
+not do what the app can: `cqw`/`cqh` sizing off `container-type` boxes (§4), laying content out
+against a 68px floor because it could not measure (the app measures), and `localStorage` for the
+document (the app has `app_meta`).
+
+**The page draws the chrome and a widget draws its body.** `WidgetCard` owns the title and its
+rename field, the chip, the settings popover (`WidgetSettingsPanel`, built from the kind's registry
+row), the remove question and the resize corner, identically for every kind; each of the nine
+`widgets/*Widget.tsx` renders content only, from `WidgetParts.tsx`'s figures, bars and bordered
+rows, and a body can be tested knowing nothing about Customize. `AnchoredPopup` grew one
+backwards-compatible shape for it — children may be a function of `close` — so Keep, Remove and the
+settings ✕ close through the same path as Escape. **The settings component is
+`WidgetSettingsPanel.tsx` and not `WidgetSettings.tsx`**: on Windows `./WidgetSettings` resolved to
+`widgetSettings.ts` (the registry reader) because `.ts` is tried before `.tsx`, and the panel
+rendered as `undefined`.
+
+**The catalogue's previews are the real card around the real body**, `still` — inert, clipped
+rather than scrolling, writing and opening nothing — at the kind's default footprint, so the
+catalogue cannot show a second idea of what a widget looks like.
+
+### Recently viewed — `app_meta.recent_cards`
+
+A JSON list of `{ cardId, at }`, newest first, deduplicated and capped at 24, **this device's** like
+every other `app_meta` row. `CardDetailModal` records the card it opens, once per distinct card
+(a ref that survives StrictMode's double mount), and ignores a refusal: a missed entry costs one
+tile. The read joins `cards` in one statement through `json_each`, keeping list order and skipping
+an id the corpus no longer holds without dropping it from the row. The clock is `unixepoch()`,
+because `SystemTime::now()` panics on the web target. Tiles draw a whole card (`grid` variant) so
+the printed artist credit is on screen — the design's `art` crop would have owed a credit line.
+
+### Set completion — corpus schema 4, `sets.printed_size`
+
+Scryfall's `/sets` publishes `printed_size` and the fetch used to drop it. The column is corpus
+schema **4**, added only when `PRAGMA corpus.table_info(sets)` lacks it — the shape gate
+`produced_mana` uses, for its reason — and `sync::sets_need_fetch` asks for `/sets` again on a
+table that holds rows and not one size, so an existing database fills the column at its next sync
+rather than at the next bulk rotation. **`owned` counts slots, not printings**: a collector number
+counts by its leading digits when it starts with one (`123a` fills 123) and not at all when it does
+not (`★12`), inside `1..=size`, so a set can never read more than complete; with no size known every
+distinct number counts and the widget draws a count with no percentage. The browser build never
+fills `sets`, so `size` is always `null` there.
+
+### Price movers — user schema 45, `price_snapshots`
+
+No price history existed: `cards` is dropped on every sync and `marketplace_prices` is replaced
+wholesale. `price_snapshots (day, marketplace, card_id, finish, price)` records one owned printing's
+price per marketplace per day, through `sorting::price_expr`, after every card ingest, after every
+feed store, and once at launch — so the first launch after upgrading already holds a baseline. It
+is **not synced**, for `activity`'s reason, and a soft reference to `cards.id` like every user table.
+
+**It is thinned, not only pruned**, and the reason is a measurement: 1 000 printings × 2
+marketplaces × 400 daily days is 800 000 rows and **114.7 MB** of `user.db`. Rows older than 35
+days keep one per printing per 7-day bucket (**25.3 MB** at the same shape), and anything past 400
+days goes. The 7-day and 30-day windows still read daily rows. Thinning runs only on a day's first
+snapshot and only over rows that crossed the 35-day line since the previous one.
+
+`price_movers` answers `since` — the baseline day actually compared against — and `days` — how many
+days of snapshots the marketplace holds — **so the widget can say two different sentences**: *no
+history yet* and *nothing moved*. `since` is taken before zero moves and the direction are filtered
+out, because computed over the returned movers a quiet week would also answer `null` and read as a
+database that had never remembered a price.

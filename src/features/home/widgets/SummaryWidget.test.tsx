@@ -23,8 +23,9 @@ import type { CollectionSummary, DeckRow, DeckValue, HomeWidget, WishlistSummary
 import type { MarketplaceId } from "@/lib/marketplace";
 import { useAppStore } from "@/lib/store";
 import { MARKETPLACE_FEEDS_KEY, MARKETPLACE_KEY } from "@/lib/useMarketplace";
+import { makeFit, spanPx, type WidgetFit } from "../fit";
 import { collectionTotalKey, deckListKey, deckValuesKey, wishlistTotalKey } from "../keys";
-import { SummaryWidget, sumDeckValues } from "./SummaryWidget";
+import { SummaryWidget, SummaryWidgetSettings, sumDeckValues } from "./SummaryWidget";
 
 /** One `deck_list` row, every field at the schema's default. `deckSort.test.ts`'s factory —
  *  this widget reads only how many there are, so nothing here is load-bearing except the type,
@@ -82,7 +83,29 @@ const DECK_VALUES: DeckValue[] = [
   { deckId: 2, value: null, unpriced: 60 },
 ];
 
-const WIDGET: HomeWidget = { id: "summary", kind: "summary", span: 2, config: null };
+/** A stored entry at a footprint, with a config. The footprint here is only what the entry says;
+ *  the box the body fits to is {@link fitOf}'s, which is what the page measures. */
+const widgetOf = (config: unknown = null, w = 4, h = 2): HomeWidget => ({
+  id: "summary",
+  kind: "summary",
+  x: 0,
+  y: 0,
+  w,
+  h,
+  config,
+});
+
+/** The fit of a `w × h` card on a grid of 104px cells — the grid's target cell, so a footprint
+ *  here is the size a reader at an ordinary window width would see. */
+function fitOf(w: number, h: number, over: Partial<{ widthPx: number; heightPx: number }> = {}) {
+  return makeFit({
+    w,
+    h,
+    widthPx: over.widthPx ?? spanPx(w, 104),
+    heightPx: over.heightPx ?? spanPx(h, 104),
+    density: "comfortable",
+  });
+}
 
 interface Seed {
   marketplace?: MarketplaceId;
@@ -90,17 +113,21 @@ interface Seed {
   decks?: DeckRow[];
   deckValues?: DeckValue[];
   wishlist?: WishlistSummary;
+  config?: unknown;
+  fit?: WidgetFit;
+  still?: boolean;
 }
 
 /**
- * Render the widget over a cache seeded through its own exported keys.
+ * Render the body over a cache seeded through its own exported keys.
  *
  * `staleTime: Infinity` is what makes a seeded entry *fresh* rather than merely present: a
  * stale one would refetch on mount and the figures would depend on the transport mock after
  * all. `retry: false` is what makes a refusal one rejection rather than two.
  *
  * Everything a seed omits is left unanswered, which is the loading state — so a test writes
- * only the reads it is about.
+ * only the reads it is about. The default box is the kind's own default footprint, four by two,
+ * which has room for all four figures.
  */
 function renderWidget(seed: Seed = {}) {
   const marketplace = seed.marketplace ?? "tcgplayer";
@@ -117,16 +144,15 @@ function renderWidget(seed: Seed = {}) {
   if (seed.deckValues) client.setQueryData(deckValuesKey(marketplace), seed.deckValues);
   if (seed.wishlist) client.setQueryData(wishlistTotalKey(marketplace), seed.wishlist);
 
+  const fit = seed.fit ?? fitOf(4, 2);
   render(
     <QueryClientProvider client={client}>
       <SummaryWidget
-        widget={WIDGET}
+        widget={widgetOf(seed.config, fit.w, fit.h)}
+        fit={fit}
         editing={false}
+        still={seed.still ?? false}
         onConfig={vi.fn()}
-        onRemove={vi.fn()}
-        onSpan={vi.fn()}
-        dragHandleRef={vi.fn()}
-        onNudge={vi.fn()}
       />
     </QueryClientProvider>,
   );
@@ -141,6 +167,10 @@ const FULL: Seed = {
   wishlist: WISHLIST,
 };
 
+/** The names of the figures a render drew, in order. */
+const pressed = () =>
+  screen.getAllByRole("button").map((button) => button.getAttribute("aria-label"));
+
 beforeEach(() => {
   useAppStore.setState(useAppStore.getInitialState());
   invoke.mockReset();
@@ -151,45 +181,49 @@ beforeEach(() => {
 
 describe("SummaryWidget", () => {
   /**
-   * The three figures, each with the copies it counts and the money it is worth — and the
-   * accessible name is where the whole sentence lives, because a flex column's text nodes
-   * compute into one run with no separator between the label and the number.
+   * The four figures — and each count's press label still carries the money the figure line has
+   * no room to print, because the accessible name is where the whole sentence lives: a figure's
+   * two lines compute into one run with no separator between the label and the number.
    */
-  it("draws the collection, the decks and the wishlist, each with its copies and its value", () => {
+  it("draws the collection, the decks, the wishlist and the value, each press naming its money", () => {
     renderWidget(FULL);
 
-    expect(
-      screen.getByRole("button", { name: "Collection: 1,196 cards, $2,437.19, 12 unpriced" }),
-    ).toBeInTheDocument();
-    // Two decks, and only the one the marketplace priced contributes to the figure.
-    expect(
-      screen.getByRole("button", { name: "Decks: 2 decks, $120.25, 62 unpriced" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Wishlist: 42 cards, $310.50, 3 unpriced" }),
-    ).toBeInTheDocument();
+    expect(pressed()).toEqual([
+      "Collection: 1,196 cards, $2,437.19, 12 unpriced",
+      // Two decks, and only the one the marketplace priced contributes to the figure.
+      "Decks: 2 decks, $120.25, 62 unpriced",
+      "Wishlist: 42 cards, $310.50, 3 unpriced",
+      "Collection value: $2,437.19, 12 unpriced",
+    ]);
 
     // A seeded cache is a fresh cache: nothing crossed the wire, so these figures are the ones
     // this test wrote rather than whatever a mock happened to answer.
     expect(invoke).not.toHaveBeenCalled();
   });
 
-  /**
-   * The unpriced note is on screen and not only in the name — a figure that silently omits
-   * sixty copies is a number that lies by rounding down, and the note has to be readable by the
-   * eye as well as by a screen reader.
-   */
-  it("prints the copies the marketplace could not price beside the figure they are missing from", () => {
+  /** Money is the accent and a count is body ink — a row of four golds would emphasise nothing. */
+  it("draws the value in the accent and the counts in body ink", () => {
     renderWidget(FULL);
 
+    expect(screen.getByText("$2,437.19").classList.contains("text-accent")).toBe(true);
+    expect(screen.getByText("1,196").classList.contains("text-text")).toBe(true);
+    expect(screen.getByText("1,196").classList.contains("text-accent")).toBe(false);
+  });
+
+  /**
+   * The unpriced note is on screen and not only in the name — a figure that silently omits copies
+   * is a number that lies by rounding down. `WidgetFigures` drops a qualification where three or
+   * more figures leave it no room to be read, so the note is asserted on a card showing two.
+   */
+  it("prints the copies the marketplace could not price beside the value when there is room", () => {
+    renderWidget({ ...FULL, config: { hide: ["decks", "wishlist"] } });
+
     expect(screen.getByText("12 unpriced")).toBeInTheDocument();
-    expect(screen.getByText("62 unpriced")).toBeInTheDocument();
-    expect(screen.getByText("3 unpriced")).toBeInTheDocument();
   });
 
   /** `$0.00` is a price nobody quoted. A marketplace that priced nothing in any deck gets an em
    *  dash — and the copies it could not price are still counted. */
-  it("draws an em dash when the marketplace priced nothing in any deck", () => {
+  it("says an em dash when the marketplace priced nothing in any deck", () => {
     renderWidget({
       ...FULL,
       deckValues: [
@@ -203,19 +237,33 @@ describe("SummaryWidget", () => {
     ).toBeInTheDocument();
   });
 
-  /** Each figure is a shortcut to the view it is about. */
+  /** Each figure is a shortcut to the view it is about — the value to the collection it prices. */
   it("opens the view a figure names", async () => {
     const user = userEvent.setup();
     renderWidget(FULL);
 
-    await user.click(screen.getByRole("button", { name: /^Collection:/ }));
-    expect(useAppStore.getState().activeView).toBe("collection");
-
     await user.click(screen.getByRole("button", { name: /^Decks:/ }));
     expect(useAppStore.getState().activeView).toBe("decks");
 
+    await user.click(screen.getByRole("button", { name: /^Collection:/ }));
+    expect(useAppStore.getState().activeView).toBe("collection");
+
     await user.click(screen.getByRole("button", { name: /^Wishlist:/ }));
     expect(useAppStore.getState().activeView).toBe("wishlist");
+
+    await user.click(screen.getByRole("button", { name: /^Collection value:/ }));
+    expect(useAppStore.getState().activeView).toBe("collection");
+  });
+
+  /**
+   * **A catalogue preview opens nothing.** The figures are drawn as text rather than presses, so
+   * there is no button to reach and no view to leave the dialog for.
+   */
+  it("draws a still body's figures as text that opens nothing", () => {
+    renderWidget({ ...FULL, still: true });
+
+    expect(screen.queryAllByRole("button")).toEqual([]);
+    expect(screen.getByText("1,196")).toBeInTheDocument();
   });
 
   /**
@@ -280,6 +328,112 @@ describe("SummaryWidget", () => {
       await screen.findByText(/Your totals could not be read\. database is locked/),
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Collection:/ })).toBeNull();
+  });
+});
+
+/**
+ * What fits. Figures wrap, so the count is how many share a line times how many lines the body
+ * has, capped by what the card's width in cells wants — and it is applied **after** the reader's
+ * own picks, so a hidden figure never takes a place a shown one could have had.
+ */
+describe("fitting the figures to the box", () => {
+  it("draws an honest pair on a two-cell tile", () => {
+    renderWidget({ ...FULL, fit: fitOf(2, 2) });
+
+    expect(pressed()).toEqual([
+      "Collection: 1,196 cards, $2,437.19, 12 unpriced",
+      "Decks: 2 decks, $120.25, 62 unpriced",
+    ]);
+  });
+
+  it("draws a pair on a three-cell panel one row tall", () => {
+    renderWidget({ ...FULL, fit: fitOf(3, 1) });
+    expect(pressed()).toHaveLength(2);
+  });
+
+  it("draws all four on a three-cell panel two rows tall", () => {
+    renderWidget({ ...FULL, fit: fitOf(3, 2) });
+    expect(pressed()).toHaveLength(4);
+  });
+
+  /** **Pixels, never cells, decide the room**: four cells of a narrow pane is ~220px, where two
+   *  figures fit on the one line a single-row card has. */
+  it("draws only what the pixels hold when a wide footprint is drawn narrow", () => {
+    renderWidget({ ...FULL, fit: fitOf(4, 1, { widthPx: 220 }) });
+    expect(pressed()).toHaveLength(2);
+  });
+
+  it("skips the figures the reader hid and fits what is left", () => {
+    renderWidget({ ...FULL, config: { hide: ["collection"] }, fit: fitOf(2, 2) });
+
+    expect(pressed()).toEqual([
+      "Decks: 2 decks, $120.25, 62 unpriced",
+      "Wishlist: 42 cards, $310.50, 3 unpriced",
+    ]);
+  });
+
+  /** A hand-edited `hide` holding things that are not words: the words still hide their figures,
+   *  and the rest is ignored rather than thrown on. */
+  it("reads the words in a hide list and ignores what is not one", () => {
+    renderWidget({ ...FULL, config: { hide: [1, null, "decks"] } });
+
+    expect(pressed()).toHaveLength(3);
+    expect(screen.queryByRole("button", { name: /^Decks:/ })).toBeNull();
+  });
+
+  /** A card with every figure off is not an empty body — that reads as a card that failed. */
+  it("says every figure is hidden rather than drawing nothing", () => {
+    renderWidget({ ...FULL, config: { hide: ["collection", "decks", "wishlist", "value"] } });
+
+    expect(screen.queryAllByRole("button")).toEqual([]);
+    expect(screen.getByText(/Every figure is hidden\./)).toBeInTheDocument();
+  });
+});
+
+/** The `Figures` checklist at the foot of the settings popover. */
+describe("SummaryWidgetSettings", () => {
+  function renderSettings(config: unknown) {
+    const onConfig = vi.fn();
+    render(<SummaryWidgetSettings widget={widgetOf(config)} onConfig={onConfig} />);
+    return onConfig;
+  }
+
+  it("ticks every figure the reader has not hidden", () => {
+    renderSettings({ hide: ["wishlist"] });
+
+    const boxes = screen.getAllByRole("checkbox");
+    expect(boxes).toHaveLength(4);
+    expect(boxes[0]).toHaveAccessibleName("Collection");
+    expect(screen.getByRole("checkbox", { name: "Collection" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Wishlist" })).not.toBeChecked();
+  });
+
+  it("hides a figure by adding it to the list", async () => {
+    const user = userEvent.setup();
+    const onConfig = renderSettings(null);
+
+    await user.click(screen.getByRole("checkbox", { name: "Decks" }));
+    expect(onConfig).toHaveBeenCalledWith({ hide: ["decks"] });
+  });
+
+  /** A key a newer build hid survives this build's press — the list is written whole, and a key
+   *  this build does not know is part of it. */
+  it("shows a figure again and keeps a hidden key it does not recognise", async () => {
+    const user = userEvent.setup();
+    const onConfig = renderSettings({ hide: ["decks", "streak"] });
+
+    await user.click(screen.getByRole("checkbox", { name: "Decks" }));
+    expect(onConfig).toHaveBeenCalledWith({ hide: ["streak"] });
+  });
+
+  /** Nothing hidden is stored as absent, so a card put back the way it was is the unconfigured
+   *  card rather than one carrying an empty list. */
+  it("removes the key when nothing is left hidden", async () => {
+    const user = userEvent.setup();
+    const onConfig = renderSettings({ hide: ["value"] });
+
+    await user.click(screen.getByRole("checkbox", { name: "Value" }));
+    expect(onConfig).toHaveBeenCalledWith({ hide: undefined });
   });
 });
 

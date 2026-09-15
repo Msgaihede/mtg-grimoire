@@ -252,6 +252,10 @@ pub struct SetRow {
     pub set_type: Option<String>,
     pub released_at: Option<String>,
     pub icon_svg_uri: Option<String>,
+    /// The denominator of the set's printed collector numbers (corpus schema 4). **`None` where
+    /// Scryfall omits the key**, which it does for sets with no printed run — promos, tokens,
+    /// most digital sets — and never a zero, which would be a denominator nobody printed.
+    pub printed_size: Option<i64>,
 }
 
 /// One entry of Scryfall's id-migration log.
@@ -659,6 +663,9 @@ impl Client {
                     set_type: s["set_type"].as_str().map(str::to_owned),
                     released_at: s["released_at"].as_str().map(str::to_owned),
                     icon_svg_uri: s["icon_svg_uri"].as_str().map(str::to_owned),
+                    // A non-positive size is read as absent rather than stored: a `/0` would be
+                    // a completion bar that divides by nothing.
+                    printed_size: s["printed_size"].as_i64().filter(|n| *n > 0),
                 });
             }
             if v["has_more"].as_bool() != Some(true) {
@@ -1700,5 +1707,25 @@ mod tests {
         let sets = c.fetch_sets().await.unwrap();
         assert_eq!(sets.len(), 2);
         assert_eq!(sets[1].arena_code.as_deref(), Some("dar"));
+    }
+
+    /// `printed_size` is read when Scryfall sends one and is `None` when it omits the key — and a
+    /// zero is read as absent, because it is a denominator nobody printed.
+    #[tokio::test]
+    async fn fetch_sets_reads_the_printed_size_and_leaves_an_omitted_one_unknown() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(GET).path("/sets");
+            then.status(200).json_body(serde_json::json!({
+            "has_more": false,
+            "data": [
+                {"code":"dom","name":"Dominaria","printed_size":269},
+                {"code":"pdom","name":"Dominaria Promos"},
+                {"code":"zero","name":"Zero","printed_size":0}
+            ]}));
+        });
+        let sets = Client::new(server.base_url()).fetch_sets().await.unwrap();
+        let sizes: Vec<Option<i64>> = sets.iter().map(|s| s.printed_size).collect();
+        assert_eq!(sizes, [Some(269), None, None]);
     }
 }

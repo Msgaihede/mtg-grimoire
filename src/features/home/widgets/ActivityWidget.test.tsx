@@ -1,10 +1,7 @@
 import { createElement, type ReactNode } from "react";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { pickOption } from "@/test-dropdown";
-import { LAYER } from "@/lib/layers";
 import type { ActivityEntry, HomeWidget } from "@/lib/ipc";
 
 /**
@@ -27,8 +24,10 @@ vi.mock("@/lib/ipc", async (importOriginal) => {
   return { ...actual, ipc: { ...actual.ipc, activityRecent } };
 });
 
+import { activityDays } from "../activityText";
+import { makeFit, spanPx, type WidgetFit } from "../fit";
 import { activityKey } from "../keys";
-import { ActivityWidget, ACTIVITY_LIMITS, DEFAULT_ACTIVITY_CONFIG } from "./ActivityWidget";
+import { ActivityWidget, fitDays } from "./ActivityWidget";
 
 /** Unix **seconds** from a local wall-clock time, like every stamp in this schema. Local rather
  *  than UTC so the day boundaries below are the same in every timezone. */
@@ -63,12 +62,31 @@ function entry(over: Partial<ActivityEntry> = {}): ActivityEntry {
   };
 }
 
+/** `n` rows on one day, a minute apart and newest first — the order `activity_recent` answers. */
+function day(n: number, d: number, over: Partial<ActivityEntry> = {}): ActivityEntry[] {
+  return Array.from({ length: n }, (_, i) => entry({ at: at(2026, 8, d, 8, 59 - i), ...over }));
+}
+
 const widgetOf = (config: unknown = null): HomeWidget => ({
   id: "activity",
   kind: "activity",
-  span: 1,
+  x: 0,
+  y: 0,
+  w: 3,
+  h: 3,
   config,
 });
+
+/** A `w × h` card on 104px cells. */
+const fitOf = (w: number, h: number): WidgetFit =>
+  makeFit({ w, h, widthPx: spanPx(w, 104), heightPx: spanPx(h, 104), density: "comfortable" });
+
+/** The kind's widest and tallest card — room for 26 lines, so a test about wording is never also
+ *  a test about the cut. */
+const ROOMY = fitOf(4, 8);
+
+/** The kind's default footprint: room for **eight** lines, a day heading counting as one. */
+const DEFAULT = fitOf(3, 3);
 
 interface World {
   /** Seeded under {@link activityKey}, which is the whole of how a case says "the read landed". */
@@ -76,7 +94,8 @@ interface World {
   /** The limit the seed is filed under — the stored config's, or the default. */
   limit?: number;
   config?: unknown;
-  editing?: boolean;
+  fit?: WidgetFit;
+  still?: boolean;
 }
 
 let client: QueryClient;
@@ -85,7 +104,7 @@ function wrapper({ children }: { children: ReactNode }) {
   return createElement(QueryClientProvider, { client }, children);
 }
 
-function draw({ entries, limit = DEFAULT_ACTIVITY_CONFIG.limit, config = null, editing }: World = {}) {
+function draw({ entries, limit = 50, config = null, fit = ROOMY, still = false }: World = {}) {
   client = new QueryClient({
     defaultOptions: {
       // `Infinity` only where an answer was seeded: it is what stops the seed being refetched
@@ -94,24 +113,17 @@ function draw({ entries, limit = DEFAULT_ACTIVITY_CONFIG.limit, config = null, e
     },
   });
   if (entries !== undefined) client.setQueryData<ActivityEntry[]>(activityKey(limit), entries);
-  const onConfig = vi.fn();
-  const view = render(
+  return render(
     <ActivityWidget
       widget={widgetOf(config)}
-      editing={editing ?? false}
-      onConfig={onConfig}
-      onRemove={vi.fn()}
-      onSpan={vi.fn()}
-      dragHandleRef={vi.fn()}
-      onNudge={vi.fn()}
+      fit={fit}
+      editing={false}
+      still={still}
+      onConfig={vi.fn()}
     />,
     { wrapper },
   );
-  return { ...view, onConfig };
 }
-
-/** The card itself — a `region` named by its heading, which is `WidgetCard`'s contract. */
-const card = () => screen.getByRole("region", { name: "Activity" });
 
 beforeEach(() => {
   nextId = 1;
@@ -152,43 +164,28 @@ describe("the day sections", () => {
   });
 
   /**
-   * A day that gained seven copies and lost six is `+7 / −6` and never `+1`: netting them says
-   * a busy afternoon was a quiet one. Read literally the drawing is "plus seven slash minus
-   * six", so the figure is spoken as a sentence beside it.
+   * A day that gained seven copies and lost six is `+7` and `−6` and never `+1`: netting them
+   * says a busy afternoon was a quiet one. Read literally the chips are "plus seven minus six", so
+   * the figure is spoken as a sentence beside them and the chips are hidden from that reading.
    */
-  it("rolls the day's copies up as two figures, drawn and spoken", () => {
+  it("rolls the day's copies up as two chips, drawn and spoken", () => {
     draw({
-      entries: [
-        entry({ delta: 3 }),
-        entry({ delta: 4 }),
-        entry({ kind: "remove", delta: -6 }),
-      ],
+      entries: [entry({ delta: 3 }), entry({ delta: 4 }), entry({ kind: "remove", delta: -6 })],
     });
 
-    expect(within(card()).getByText("+7 / −6")).toBeInTheDocument();
-    expect(within(card()).getByText("7 copies added, 6 copies removed")).toBeInTheDocument();
+    expect(screen.getByText("+7")).toHaveAttribute("aria-hidden", "true");
+    expect(screen.getByText("−6")).toHaveAttribute("aria-hidden", "true");
+    expect(screen.getByText("7 copies added, 6 copies removed")).toBeInTheDocument();
   });
 
-  /** A day of moves and renames changed no counts at all, and `+0 / −0` would be a figure
+  /** A day of moves and renames changed no counts at all, and `+0 −0` would be a figure
    *  pretending to be news. */
   it("says a day moved no copies rather than drawing two zeros", () => {
     draw({ entries: [entry({ kind: "move", delta: 0 })] });
 
-    expect(within(card()).getByText("no copies")).toBeInTheDocument();
-    expect(within(card()).getByText("no copies changed")).toBeInTheDocument();
-  });
-
-  /**
-   * The header rides over the rows scrolling under it, and the rung is `LAYER.header` — the one
-   * a sticky header takes everywhere in this app. Asserted through `classList`, never a string
-   * match on `className`, and against `LAYER` itself so a renamed rung comes here.
-   */
-  it("makes the day header sticky at the header rung", () => {
-    draw({ entries: [entry()] });
-
-    const header = screen.getByRole("heading", { level: 4, name: "Today" }).parentElement;
-    expect(header?.classList.contains("sticky")).toBe(true);
-    expect(header?.classList.contains(LAYER.header)).toBe(true);
+    expect(screen.getByText("no copies")).toBeInTheDocument();
+    expect(screen.getByText("no copies changed")).toBeInTheDocument();
+    expect(screen.queryByText("+0")).toBeNull();
   });
 });
 
@@ -197,7 +194,7 @@ describe("the lines", () => {
    * **The two halves of the feed, side by side.** A `deck` row came out of `deck_audit` and is
    * worded by the deck history's own sentence builder, so it reads here exactly as it reads in
    * that dialog; a `collection` row is worded by `activityText.ts`. This widget writes neither
-   * and adds nothing of its own to either.
+   * and adds nothing of its own to either — the detail rides after the sentence on the same line.
    */
   it("draws a deck line and a collection line, each in its own words", () => {
     draw({
@@ -212,10 +209,9 @@ describe("the lines", () => {
       ],
     });
 
-    const rows = within(card()).getAllByRole("listitem");
+    const rows = screen.getAllByRole("listitem");
     expect(rows).toHaveLength(2);
-    expect(rows[0]).toHaveTextContent("Added 3 × Lightning Bolt");
-    expect(rows[0]).toHaveTextContent("to Binder A · Foil");
+    expect(rows[0]).toHaveTextContent("Added 3 × Lightning Bolt · to Binder A · Foil");
     expect(rows[1]).toHaveTextContent("Added 2 × Lightning Bolt");
     expect(rows[1]).toHaveTextContent("to Main deck");
   });
@@ -241,7 +237,7 @@ describe("the lines", () => {
         ],
       });
 
-      expect(within(card()).getAllByRole("listitem")).toHaveLength(2);
+      expect(screen.getAllByRole("listitem")).toHaveLength(2);
       expect(
         complaints.mock.calls.filter((args) => String(args[0]).includes("same key")),
       ).toEqual([]);
@@ -254,8 +250,78 @@ describe("the lines", () => {
   it("stamps each line with its own time", () => {
     draw({ entries: [entry({ at: at(2026, 8, 11, 8, 30) })] });
 
-    const stamp = within(card()).getByText("08:30");
-    expect(stamp).toHaveAttribute("datetime", new Date(at(2026, 8, 11, 8, 30) * 1000).toISOString());
+    const stamp = screen.getByText("08:30");
+    expect(stamp).toHaveAttribute(
+      "datetime",
+      new Date(at(2026, 8, 11, 8, 30) * 1000).toISOString(),
+    );
+  });
+
+  /** `Show times` off is a stored `false`, and the line keeps its sentence without the stamp. */
+  it("leaves the stamp off when the reader switched times off", () => {
+    draw({ entries: [entry({ at: at(2026, 8, 11, 8, 30) })], config: { times: false } });
+
+    expect(screen.getByRole("listitem")).toHaveTextContent("Added Lightning Bolt");
+    expect(screen.queryByText("08:30")).toBeNull();
+  });
+});
+
+/**
+ * **Whole lines, never half of one.** A day heading costs a line, each day takes one fewer line
+ * than is left, and a day with no line left is dropped rather than drawn as a heading over nothing.
+ */
+describe("cutting the feed to the box", () => {
+  it("draws a heading and seven lines on the default card", () => {
+    draw({ entries: day(12, 11), fit: DEFAULT });
+
+    expect(screen.getAllByRole("heading", { level: 4 })).toHaveLength(1);
+    expect(screen.getAllByRole("listitem")).toHaveLength(7);
+  });
+
+  it("spends a heading from the budget for each day it draws", () => {
+    draw({ entries: [...day(3, 11), ...day(5, 10)], fit: DEFAULT });
+
+    expect(screen.getAllByRole("heading", { level: 4 }).map((h) => h.textContent)).toEqual([
+      "Today",
+      "Yesterday",
+    ]);
+    // Today: a heading and three lines, four left. Yesterday: a heading and three of its five.
+    expect(screen.getAllByRole("listitem")).toHaveLength(6);
+  });
+
+  it("drops a day there is no line left for", () => {
+    draw({ entries: [...day(7, 11), ...day(2, 10)], fit: DEFAULT });
+
+    expect(screen.getAllByRole("heading", { level: 4 }).map((h) => h.textContent)).toEqual([
+      "Today",
+    ]);
+    expect(screen.getAllByRole("listitem")).toHaveLength(7);
+  });
+
+  /** A card with room for no line still says one: `linesFit` floors at one, and a heading with
+   *  no line under it is dropped, so the one line is spent on the heading and the day goes. The
+   *  arithmetic's own edge, pinned so a change to it is a decision rather than an accident. */
+  it("draws nothing below a heading the box has no line for", () => {
+    const flat = makeFit({ w: 2, h: 1, widthPx: 220, heightPx: 50, density: "comfortable" });
+    expect(fitDays(activityDays(day(3, 11)), flat, 50)).toEqual([]);
+  });
+
+  /** The budget is capped by the limit as well as the box: a tall card never promises more rows
+   *  than were asked for. */
+  it("never draws more than the limit, headings included", () => {
+    const days = activityDays([...day(20, 11), ...day(20, 10)]);
+    const cut = fitDays(days, fitOf(4, 8), 25);
+
+    expect(cut.map((d) => d.lines.length)).toEqual([20, 3]);
+  });
+
+  /** The heading's roll-up is the whole day as read, not the lines the card had room for — a
+   *  figure that shrank as the card was resized would be one a reader cannot check. */
+  it("keeps a cut day's roll-up for the whole day", () => {
+    const [today] = fitDays(activityDays(day(12, 11, { delta: 2 })), DEFAULT, 50);
+
+    expect(today.lines).toHaveLength(7);
+    expect(today.added).toBe(24);
   });
 });
 
@@ -266,7 +332,7 @@ describe("the four sentences", () => {
     activityRecent.mockReturnValue(new Promise(() => {}));
     draw();
 
-    expect(within(card()).getByText("Reading recent activity…")).toBeInTheDocument();
+    expect(screen.getByText("Reading recent activity…")).toBeInTheDocument();
     expect(screen.queryByText("Nothing has happened yet.")).toBeNull();
   });
 
@@ -274,7 +340,7 @@ describe("the four sentences", () => {
   it("says nothing has happened yet, for a database with no rows", async () => {
     draw();
 
-    expect(await within(card()).findByText("Nothing has happened yet.")).toBeInTheDocument();
+    expect(await screen.findByText("Nothing has happened yet.")).toBeInTheDocument();
   });
 
   /**
@@ -285,9 +351,9 @@ describe("the four sentences", () => {
    */
   it("keeps the empty state honest about being this device's feed", async () => {
     draw();
-    await within(card()).findByText("Nothing has happened yet.");
+    await screen.findByText("Nothing has happened yet.");
 
-    expect(within(card()).getByText(/this device/i)).toBeInTheDocument();
+    expect(screen.getByText(/this device/i)).toBeInTheDocument();
   });
 
   /**
@@ -300,10 +366,8 @@ describe("the four sentences", () => {
     activityRecent.mockRejectedValue(new Error("BUSY: the database is being written to"));
     draw();
 
-    expect(await within(card()).findByText("Recent activity could not be read.")).toBeInTheDocument();
-    expect(
-      within(card()).getByText(/BUSY: the database is being written to/),
-    ).toBeInTheDocument();
+    expect(await screen.findByText("Recent activity could not be read.")).toBeInTheDocument();
+    expect(screen.getByText(/BUSY: the database is being written to/)).toBeInTheDocument();
     expect(screen.queryByText("Nothing has happened yet.")).toBeNull();
   });
 });
@@ -316,8 +380,8 @@ describe("the limit", () => {
     await waitFor(() => expect(activityRecent).toHaveBeenCalledWith(50));
   });
 
-  /** A stored config is read through `widgetConfig`, so a widget a reader has narrowed asks for
-   *  what they chose — and files the answer under a key of its own. */
+  /** A stored pick is read through `pickOf`, so a widget a reader has narrowed asks for what they
+   *  chose — and files the answer under a key of its own. */
   it("asks for the stored limit and files it under that key", async () => {
     draw({ config: { limit: 25 } });
 
@@ -325,38 +389,16 @@ describe("the limit", () => {
   });
 
   /**
-   * **`widgetConfig` checks the shape and never the range**, which its own doc says: a stored
-   * `NaN` is a number and passes, and `NaN` reaches SQLite as a limit no row can be read under.
-   * The floor and the ceiling are the backend's own clamp, said once on this side so the request
-   * is answerable before it is sent.
+   * **A stored limit no option carries reads as the default**, which is `pickValue`'s vocabulary
+   * check: a `NaN` is a number and would reach SQLite as a limit no row can be read under, `9999`
+   * is past the backend's clamp, `"100"` is the right number in the wrong type, and `200` is an
+   * option an earlier build offered and this registry does not.
    */
-  it("narrows a stored limit the backend could not answer", async () => {
-    draw({ config: { limit: 9_999 } });
-    await waitFor(() => expect(activityRecent).toHaveBeenCalledWith(500));
+  it.each([Number.NaN, 9_999, "100", 200])("reads a stored %s as fifty", async (stored) => {
+    draw({ config: { limit: stored } });
 
-    activityRecent.mockClear();
-    draw({ config: { limit: Number.NaN } });
     await waitFor(() => expect(activityRecent).toHaveBeenCalledWith(50));
-  });
-
-  /**
-   * **The config is spread, never replaced.** `setConfig` stores whatever a widget hands it, and
-   * `widgetConfig` carries keys this build has never heard of straight through — so a widget that
-   * wrote `{ limit }` alone would silently delete a newer build's settings on the first press.
-   */
-  it("writes the chosen limit back and keeps what it does not understand", async () => {
-    const user = userEvent.setup();
-    const { onConfig } = draw({
-      entries: [entry()],
-      config: { limit: 50, futureThing: "keep me" },
-      editing: true,
-    });
-
-    await user.click(screen.getByRole("button", { name: "Settings for Activity" }));
-    await pickOption(user, "Changes to show", `${ACTIVITY_LIMITS[2]} changes`);
-
-    expect(onConfig).toHaveBeenCalledTimes(1);
-    expect(onConfig).toHaveBeenCalledWith({ limit: ACTIVITY_LIMITS[2], futureThing: "keep me" });
+    expect(activityRecent).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -371,7 +413,7 @@ describe("staying fresh", () => {
     "re-reads the feed when a write invalidates %s",
     async (root) => {
       draw({ entries: [entry({ cardName: "Sol Ring" })] });
-      expect(within(card()).getByText("Added Sol Ring")).toBeInTheDocument();
+      expect(screen.getByText("Added Sol Ring")).toBeInTheDocument();
       expect(activityRecent).not.toHaveBeenCalled();
 
       activityRecent.mockResolvedValue([entry({ cardName: "Lightning Bolt" })]);
@@ -379,9 +421,7 @@ describe("staying fresh", () => {
         await client.invalidateQueries({ queryKey: [root] });
       });
 
-      await waitFor(() =>
-        expect(within(card()).getByText("Added Lightning Bolt")).toBeInTheDocument(),
-      );
+      await waitFor(() => expect(screen.getByText("Added Lightning Bolt")).toBeInTheDocument());
     },
   );
 
@@ -395,5 +435,18 @@ describe("staying fresh", () => {
     });
 
     expect(activityRecent).not.toHaveBeenCalled();
+  });
+
+  /** **A still body publishes nothing.** A catalogue preview draws the feed it was handed and
+   *  leaves the bridging to the live card, so a write does not refetch through the picture. */
+  it("does not bridge from a still body", async () => {
+    draw({ entries: [entry({ cardName: "Sol Ring" })], still: true });
+
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: ["collection"] });
+    });
+
+    expect(activityRecent).not.toHaveBeenCalled();
+    expect(screen.getByText("Added Sol Ring")).toBeInTheDocument();
   });
 });
