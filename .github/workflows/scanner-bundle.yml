@@ -85,15 +85,28 @@ jobs:
         run: node crates/card-scanner/scripts/fetch-ocr-models.mjs models
 
       # **A regression fence, not an accuracy claim**: Scryfall renders degraded in software and
-      # fed to both scan modes (`crates/card-scanner/src/bin/eval.rs`). It reports and does not
-      # gate — the table lands in the step summary. Before both publish and dry run, so every
-      # dispatch shows what the bundle it built can do.
+      # fed to both scan modes (`crates/card-scanner/src/bin/eval.rs`). The table lands in the
+      # step summary. Before both publish and dry run, so every dispatch shows what the bundle it
+      # built can do.
+      #
+      # **It reports and does not gate, and `continue-on-error` is what makes that true.** Under
+      # `bash -eo pipefail` a failed step skips everything after it, so without it an unreachable
+      # image host, a compile error or a panic in the evaluation would skip the weekly publish of
+      # a bundle that built fine. A failure is not silent either: the next step says so in the
+      # summary, where the table would have been.
       - name: Synthetic evaluation
+        id: eval
+        continue-on-error: true
         run: |
           cargo run --locked --release --bin eval --features builder --manifest-path crates/card-scanner/Cargo.toml -- \
             --bundle card-hashes.bin --bulk default-cards.jsonl --models models \
             --printings crates/card-scanner/eval/printings.txt --cache eval-cache --summary eval.md
           cat eval.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Synthetic evaluation failed
+        if: steps.eval.outcome == 'failure'
+        run: |
+          echo "**Synthetic evaluation failed — see the log of the \`Synthetic evaluation\` step.** The bundle still goes on to the publish or dry-run step below; the evaluation reports and does not gate." >> "$GITHUB_STEP_SUMMARY"
 
       # **Prerelease and not latest**, so nothing that asks GitHub for the latest release is ever
       # handed a bundle — the in-app updater lists releases and drops prereleases.
