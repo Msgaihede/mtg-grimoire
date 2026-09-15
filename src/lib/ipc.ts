@@ -43,24 +43,32 @@
  * `DeckFolderPane`                                — `src-tauri/src/deckpane.rs`
  * `ShareRow`/`ShareFields`                        — `src-tauri/src/share/commands.rs`
  * `ScannerAsset`/`ScannerStatus`/`ScannerSidecar`/
- * `ScannerCaptured`                                — `src-tauri/src/scanner.rs`
+ * `ScannerCaptured`/`ScannerPrefs`/
+ * `ScannerTrayRow`/`ScannerTrayChoice`             — `src-tauri/src/scanner.rs`
  * `ScannerOptions`/`ScannerVerdict`/`ScannerFrameSize`/
  * `ScannerStages`/`ScannerStanding`/`ScannerTracked`/
- * `ScannerCollectorTry`/`ScannerCollector`/`ScannerOcr` — `crates/card-scanner/src/session.rs`
+ * `ScannerCollectorTry`/`ScannerCollector`/`ScannerOcr`/
+ * `ScannerDecision`                                — `crates/card-scanner/src/session.rs`
+ * `ScannerChoice`/`ScannerTier`/`ScannerResolution` — `crates/card-scanner/src/resolve.rs`
+ * `ScanFilters`                                    — `crates/card-scanner/src/filters.rs`
  * `ScannerLabel`/`ScannerCandidate`/`ScannerMatch`  — `crates/card-scanner/src/reference.rs`
  * `ScannerLock`                                    — `crates/card-scanner/src/lock.rs`
  * `ScannerScore`/`ScannerTimings`                  — `crates/card-scanner/src/detect.rs`
  * `ScannerCardness`                                — `crates/card-scanner/src/cardness.rs`
  * `ScannerTrim`                                    — `crates/card-scanner/src/trim.rs`
  *
- * **The scanner's twenty-one are the one block here that is _not_ camelCase**, and they are the
+ * **The scanner's shapes are the one block here that is _not_ camelCase**, and they are the
  * exception rather than an oversight: the detector crate carries no
  * `#[serde(rename_all = "camelCase")]`, because its JSON was the standalone debug page's before
  * it was this app's and that page reads `decide_at` and `best_distance` by those names. The
  * mirror keeps the Rust spelling verbatim; `ipc.test.ts`'s `snakeMirrors` is the table that
- * compares them with no camel step.
+ * compares them with no camel step. **Three of the block are camelCase after all** —
+ * `ScannerPrefs`, `ScannerTrayRow` and `ScannerTrayChoice` — because they are this app's stored
+ * rows rather than the detector's JSON, and they sit on `plainMirrors` with every other one.
  *
- * **Twelve settings are one `app_meta` row each, and ten of them carry no struct at all.** Of the
+ * **Twelve settings are one `app_meta` row each, and ten of them carry no struct at all.** (The
+ * scanner's two rows, `scanner_prefs` and `scanner_tray`, are on top of those twelve and both
+ * carry structs; see {@link ScannerPrefs} and {@link ScannerTrayRow}.) Of the
  * ten: four answered as a
  * bare string — `getMarketplace`/`setMarketplace` (`src-tauri/src/marketplace.rs`),
  * `printingGroupBy`/`setPrintingGroupBy` (`src-tauri/src/card.rs`),
@@ -6335,11 +6343,34 @@ export type ScannerMethod = "canny" | "otsu" | "both";
 export type ScannerRule = "votes" | "confidence";
 
 /**
+ * How the scanner judges a card — `ScanMode` in `session.rs`, lowercased by serde.
+ *
+ * `fast` is the vote rule over hash matches, with a title read only after a leaderless stretch;
+ * `exact` runs the tier pipeline once per steady card and can answer with a choice of printings.
+ * Switching resets the tracker, so a card half-voted in one mode is not decided in the other.
+ */
+export type ScanMode = "fast" | "exact";
+
+/**
+ * Which printings the scanner may answer with — `ScanFilters` in
+ * `crates/card-scanner/src/filters.rs`. **Snake case**, like every scanner struct.
+ *
+ * Sets and a release-date range, and nothing else — no language, by decision. An empty `sets`
+ * and two `null` dates is no filter at all. Dates are `YYYY-MM-DD`, both ends inclusive.
+ */
+export interface ScanFilters {
+  /** Set codes, compared case-insensitively. Empty is any set. */
+  sets: string[];
+  released_from: string | null;
+  released_to: string | null;
+}
+
+/**
  * Everything a caller can change between frames — `FrameOptions` in `session.rs`.
  *
  * Every field has a Rust-side default and the struct is `#[serde(default)]`, so a partial
- * object parses; this side sends all ten regardless, because the page owns a slider for each
- * and a field it omitted would silently be the crate's default rather than the reader's.
+ * object parses; this side sends every field regardless, because the page owns a control for
+ * each and a field it omitted would silently be the crate's default rather than the reader's.
  */
 export interface ScannerOptions {
   work_long_edge: number;
@@ -6353,14 +6384,27 @@ export interface ScannerOptions {
   rule: ScannerRule;
   decide_at: number;
   lead_margin: number;
+  /** Rides the same `x-scanner-options` header as the sliders — no header of its own. */
+  mode: ScanMode;
 }
+
+/**
+ * Where an asset came from — `AssetSource` in `src-tauri/src/scanner.rs`, lowercased.
+ *
+ * The load order, first hit wins: a file in `data/scanner/`, then the copy compiled into the
+ * binary, then nothing. `file` also covers a file that is there and did not parse.
+ */
+export type ScannerAssetSource = "file" | "embedded" | "absent";
 
 /** One file the scanner needs, and whether it is there — `Asset` in `src-tauri/src/scanner.rs`. */
 export interface ScannerAsset {
+  /** The file the load looked at in `data/scanner/` — named even for an embedded or absent one. */
   path: string;
+  /** Something to load was there: the file, or for `embedded` the binary's copy. */
   present: boolean;
   loaded: boolean;
   error: string | null;
+  source: ScannerAssetSource;
 }
 
 /**
@@ -6570,12 +6614,71 @@ export interface ScannerOcr {
 }
 
 /**
+ * How a resolve or a decision came out — `Outcome` in `crates/card-scanner/src/resolve.rs`,
+ * snake-cased by serde.
+ */
+export type ScannerOutcome = "resolved" | "ambiguous" | "not_found";
+
+/** One printing a resolve could be — `ChoiceView` in `resolve.rs`. */
+export interface ScannerChoice {
+  id: string;
+  /** The corpus's oracle id for the printing; `null` where the corpus has none — never the
+   *  printing id standing in for one. */
+  oracle_id: string | null;
+  label: ScannerLabel | null;
+  /** The best normalized distance the burst reached; `null` for a printing only a name read found. */
+  distance: number | null;
+}
+
+/**
+ * The card the session has decided on — `DecisionView` in `session.rs`, on every committed frame.
+ *
+ * In Fast it is the tracker's printing, `resolved`, with no choices. In Exact it is the last
+ * resolve's first choice, and `ambiguous` carries the rest. The page adds a tray row when
+ * {@link ScannerVerdict.decision_seq} moves, and reads this to build it.
+ */
+export interface ScannerDecision {
+  printing: string;
+  oracle_id: string | null;
+  label: ScannerLabel | null;
+  outcome: ScannerOutcome;
+  choices: ScannerChoice[];
+}
+
+/** One tier of an Exact resolve and what it left — `TierView` in `resolve.rs`. */
+export interface ScannerTier {
+  tier: "filters" | "whole_card" | "title" | "collector" | "re_rank" | "classifier";
+  survivors: number;
+  /** The tier's own words: the read name, the collector pairing, a conflict, the margin. */
+  detail: string;
+}
+
+/** What an Exact resolve came to, on the frame it ran — `ResolutionView` in `resolve.rs`. */
+export interface ScannerResolution {
+  outcome: ScannerOutcome;
+  /** Best first, at most twelve. */
+  choices: ScannerChoice[];
+  /** All six tiers, in order. */
+  tiers: ScannerTier[];
+  elapsed_ms: number;
+}
+
+/**
  * What one frame came to — `Verdict` in `session.rs`, and the whole of what the page draws.
  *
  * `error` is the one optional field, because Rust's is `skip_serializing_if`: a frame that went
  * fine carries no key at all rather than a `null`.
  */
 export interface ScannerVerdict {
+  /** Which mode judged this frame. */
+  mode: ScanMode;
+  /** Moves once per new decision and never otherwise — what makes "one add per card" the
+   *  session's property rather than the page's timing. */
+  decision_seq: number;
+  /** The decided card, on every committed frame; `null` otherwise. */
+  decision: ScannerDecision | null;
+  /** Only on the frame an Exact resolve ran. */
+  resolution: ScannerResolution | null;
   ok: boolean;
   error?: string;
   frame: ScannerFrameSize;
@@ -6604,6 +6707,56 @@ export interface ScannerVerdict {
   tracked: ScannerTracked | null;
   collector: ScannerCollector | null;
   ocr: ScannerOcr | null;
+}
+
+/**
+ * How the reader last left the scanner — `ScannerPrefs` in `src-tauri/src/scanner.rs`, one
+ * `app_meta` row. **camelCase**, unlike every scanner struct above it: it is this app's stored
+ * preference and not the detector's JSON, so it follows the rest of this file. `filters` keeps
+ * the crate's snake case inside it.
+ *
+ * `finish`, `condition` and `folderId` are what a new tray row is born with. There is no
+ * language, by decision. A row that does not parse reads as the defaults on the far side.
+ */
+export interface ScannerPrefs {
+  mode: ScanMode;
+  filters: ScanFilters;
+  finish: Finish;
+  condition: Condition;
+  /** The folder a commit files into; `null` is the collection's root. */
+  folderId: number | null;
+  /** Whether the developer panels are showing. */
+  developer: boolean;
+}
+
+/** One printing a tray row could be — `ScannerTrayChoice` in `scanner.rs`. */
+export interface ScannerTrayChoice {
+  cardId: string;
+  oracleId: string | null;
+  name: string;
+  setCode: string;
+  collectorNumber: string;
+}
+
+/**
+ * One card waiting in the review tray — `ScannerTrayRow` in `scanner.rs`, stored whole in one
+ * `app_meta` row and handed back as the page wrote it.
+ *
+ * `key` is the page's own stable id for the row. `choices` is non-empty only while the row is
+ * still a choice to make. `addedAt` is the page's clock, in milliseconds. The write refuses a
+ * `quantity` below one and a tray longer than 5,000 rows, in words.
+ */
+export interface ScannerTrayRow {
+  key: string;
+  cardId: string;
+  oracleId: string | null;
+  name: string;
+  setCode: string;
+  collectorNumber: string;
+  finish: Finish;
+  quantity: number;
+  choices: ScannerTrayChoice[];
+  addedAt: number;
 }
 
 /**
@@ -9288,6 +9441,23 @@ export const ipc = {
       : invoke<ScannerCaptured>("scanner_capture", jpeg, {
           headers: { "x-scanner-capture": asciiJson(sidecar) },
         }),
+  /**
+   * `scanner::scanner_set_filters`. Narrows every later frame to these sets and dates, and resets
+   * the tracker. **Rejects in the crate's words** — no card names loaded to filter by, or filters
+   * no printing matches — and a rejection leaves the previous filters in force.
+   */
+  scannerSetFilters: (filters: ScanFilters) => invoke<void>("scanner_set_filters", { filters }),
+  /** `scanner::scanner_prefs`. Never rejects: a missing or unreadable row is the defaults. */
+  scannerPrefs: () => invoke<ScannerPrefs>("scanner_prefs"),
+  /** `scanner::set_scanner_prefs`. Written whole; rejects only with the write lock's `BUSY`. */
+  setScannerPrefs: (prefs: ScannerPrefs) => invoke<void>("set_scanner_prefs", { prefs }),
+  /** `scanner::scanner_tray`. Never rejects: a missing or unreadable row is an empty tray. */
+  scannerTray: () => invoke<ScannerTrayRow[]>("scanner_tray"),
+  /**
+   * `scanner::set_scanner_tray`. Written whole. Rejects a row with fewer than one copy and a tray
+   * longer than 5,000 rows, in words, and leaves the stored tray as it was.
+   */
+  setScannerTray: (rows: ScannerTrayRow[]) => invoke<void>("set_scanner_tray", { rows }),
   /**
    * Every share the group has published — `share::commands::share_list`, and the only one of the
    * five that could reconcile against the relay first.

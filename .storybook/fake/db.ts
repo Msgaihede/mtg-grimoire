@@ -118,7 +118,7 @@ import { isSearchView } from "@/lib/store";
 import { DEFAULT_GROUP_BY } from "@/features/decks/grouping";
 import { DEFAULT_SORT_BY } from "@/features/decks/sorting";
 import { SPECS } from "@/features/decks/validation/fixtures";
-import { STATUS, VERDICTS } from "@/features/scanner/fixtures";
+import { DEFAULT_SCANNER_PREFS, STATUS, VERDICTS } from "@/features/scanner/fixtures";
 // The app's own list of the four sizes the cache stores, borrowed rather than re-spelled for
 // `hasVariableCost`'s reason below: `card_image_uri` refuses a variant that is not one of them,
 // and a second hand-typed list here would let the workbench and the window disagree about which
@@ -226,8 +226,11 @@ import type {
   ReleaseNote,
   ReviewRow,
   ReviewTable,
+  ScanFilters,
   ScannerCaptured,
+  ScannerPrefs,
   ScannerStatus,
+  ScannerTrayRow,
   ScannerVerdict,
   SearchRequest,
   SearchSortKey,
@@ -1301,7 +1304,9 @@ export interface FakeUpdate {
  * it: a sync's *other* effects on a story are already `busy`'s.
  *
  * **`scannerMissing`** is the three scanner assets being absent and `scanner_status` naming their
- * paths — not a failure, the state every installation is in until a reader places the files.
+ * paths — not a failure, the state a build without embedded assets is in until a reader places
+ * the files. With no bundle there are no labels, so `scanner_set_filters` refuses any filter but
+ * the empty one, in the crate's words.
  *
  * **`shareLapsed`** is a shared collection link that has gone dark, and it is `pairingReadError`'s
  * split one feature over: **the one refusal in the viewer's flow a reader cannot produce by
@@ -1779,6 +1784,23 @@ export interface FakeDb {
    * {@link writeHandlers.set_home_layout}.
    */
   homeLayout: HomeLayout | null;
+  /**
+   * `app_meta.scanner_prefs` — the scanner's mode, filters, tray-row defaults and developer switch.
+   *
+   * **The answer rather than the row**, unlike {@link FakeDb.homeLayout}: `scanner::stored_prefs`
+   * folds a missing row and an unreadable one into `ScannerPrefs::default()`, so there is no
+   * `null` state a caller can see and a world starts on {@link DEFAULT_SCANNER_PREFS}. Read and
+   * written by {@link scannerHandlers}, never by a seed.
+   */
+  scannerPrefs: ScannerPrefs;
+  /**
+   * `app_meta.scanner_tray` — the review tray, newest first, stored whole.
+   *
+   * Empty in every world, because a tray row is a card somebody scanned: a story that wants rows
+   * writes them first — `TRAY_ROWS` through `set_scanner_tray`, or `makeDb({ scannerTray })` —
+   * and reads them back exactly as a restored session would.
+   */
+  scannerTray: ScannerTrayRow[];
   /**
    * `app_meta.recent_cards` — the cards this device opened most recently, newest first.
    *
@@ -2945,6 +2967,11 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // rearranged page — or a widget from a build that has not been written yet — passes the
     // whole document, because that is how the row is written.
     homeLayout: null,
+    // The scanner's two rows. Prefs start on the crate's own default rather than `null` — the
+    // read folds "never written" into it, so there is nothing else a caller could see — and the
+    // tray starts empty, because nobody has scanned anything in a world that was just made.
+    scannerPrefs: DEFAULT_SCANNER_PREFS,
+    scannerTray: [],
     // Both empty here and **derived below when the world says nothing** — the only two fields in
     // this function whose default depends on another. See {@link recentFromCollection} and
     // {@link historyFromCollection}: a world with a collection opens with a strip of cards and
@@ -20057,10 +20084,32 @@ function fakeQrMatrix(code: string): QrMatrix {
 
 /* -------------------------------------------------------------------- the scanner ---- */
 
+/** `scanner.rs`' `TRAY_ROW_NEEDS_A_COPY`, verbatim. */
+const TRAY_ROW_NEEDS_A_COPY = "A tray row needs at least one copy.";
+/** `scanner.rs`' `TRAY_IS_FULL`, verbatim. */
+const TRAY_IS_FULL = "The tray holds at most 5,000 rows — add these to the collection first.";
+/** `scanner.rs`' `MAX_TRAY_ROWS`. */
+const MAX_TRAY_ROWS = 5_000;
+/** The crate's `Session::set_filters` refusal for a session with no labels to filter by. */
+const FILTERS_NEED_NAMES =
+  "Filters need card names, and the scanner has none loaded — it needs corpus.db beside the bundle.";
+/** The crate's `Session::set_filters` refusal for filters no printing survives. */
+const NO_PRINTING_MATCHES = "No printing matches these filters.";
+
+/** A copy through JSON, which is what `app_meta` stores — so a story holding the object it was
+ *  handed cannot reach back into the row, and a row cannot hold anything JSON would not. */
+function throughJson<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
 /**
- * The scanner's four commands. **No store**: nothing here mirrors a table, and a Storybook
- * has no camera, so `scanner_frame` answers the decided fixture whatever bytes it is handed
- * and the panel stories are driven from fixtures directly.
+ * The scanner's commands. A Storybook has no camera, so `scanner_frame` answers the decided
+ * fixture whatever bytes it is handed and the panel stories are driven from fixtures directly.
+ *
+ * **Two rows of store and no table**: {@link FakeDb.scannerPrefs} and {@link FakeDb.scannerTray}
+ * are `app_meta` rows, read and written whole here and nowhere else. Neither is on
+ * {@link writeHandlers}, so `db.test.ts`' busy sweep does not walk them — but both writes still
+ * answer `busy`, because the crate's go through `sync::with_write`.
  */
 export function scannerHandlers(db: FakeDb) {
   return {
@@ -20072,6 +20121,41 @@ export function scannerHandlers(db: FakeDb) {
     scanner_reset: (): void => undefined,
     /** `scanner::scanner_capture`. */
     scanner_capture: (): ScannerCaptured => ({ saved: "live-1757300000.jpg" }),
+    /**
+     * `scanner::scanner_set_filters` — the crate's two refusals, reached without a corpus.
+     *
+     * **A set code of `zzz` is the one that matches nothing**, so a story can type it and draw the
+     * refusal; every other filter is accepted, because the fake holds no mask to narrow. Under
+     * `scannerMissing` there is no bundle and so no labels, and any filter but the empty one is
+     * refused as the crate refuses it. Nothing is stored: the filters a reader keeps are the
+     * prefs', and the page persists them only after this succeeds.
+     */
+    scanner_set_filters: (args: { filters: ScanFilters }): void => {
+      const f = args.filters;
+      const empty = f.sets.length === 0 && f.released_from === null && f.released_to === null;
+      if (empty) return;
+      if (db.fault === "scannerMissing") throw refuse(FILTERS_NEED_NAMES);
+      if (f.sets.some((s) => s.toLowerCase() === "zzz")) throw refuse(NO_PRINTING_MATCHES);
+    },
+    /** `scanner::scanner_prefs` — never refuses. */
+    scanner_prefs: (): ScannerPrefs => throughJson(db.scannerPrefs),
+    /** `scanner::set_scanner_prefs` — written whole; `busy` is the only refusal. */
+    set_scanner_prefs: (args: { prefs: ScannerPrefs }): void => {
+      refuseIfBusy(db);
+      db.scannerPrefs = throughJson(args.prefs);
+    },
+    /** `scanner::scanner_tray` — never refuses. */
+    scanner_tray: (): ScannerTrayRow[] => throughJson(db.scannerTray),
+    /**
+     * `scanner::set_scanner_tray` — written whole, with `store_tray`'s two refusals in its order,
+     * both before the row is touched so a refused write leaves the stored tray as it was.
+     */
+    set_scanner_tray: (args: { rows: ScannerTrayRow[] }): void => {
+      refuseIfBusy(db);
+      if (args.rows.length > MAX_TRAY_ROWS) throw refuse(TRAY_IS_FULL);
+      if (args.rows.some((row) => row.quantity < 1)) throw refuse(TRAY_ROW_NEEDS_A_COPY);
+      db.scannerTray = throughJson(args.rows);
+    },
   } satisfies Record<string, CommandHandler>;
 }
 
@@ -20146,10 +20230,10 @@ export function pluginHandlers() {
  * registers.
  *
  * The first two halves close over the one `db`, so a write is visible to the next read — the
- * property that makes a story clickable rather than a snapshot. The scanner and the plugin
- * tables each take **no store**: the scanner reads `db.fault` alone and mirrors no table, and
- * the plugin table mirrors no table and no module in the crate — neither can see the reader's
- * rows or change them.
+ * property that makes a story clickable rather than a snapshot. The scanner table mirrors no
+ * table: it reads `db.fault` and keeps its own two `app_meta` rows (prefs and the tray), and
+ * touches none of the reader's cards. The plugin table takes **no store** at all — it mirrors no
+ * table and no module in the crate.
  */
 export function allHandlers(db: FakeDb) {
   return {

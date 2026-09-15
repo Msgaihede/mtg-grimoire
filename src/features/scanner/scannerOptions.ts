@@ -1,6 +1,9 @@
 import type { ScannerOptions } from "./types";
 
-/** The debug page's sliders as they start — `FrameOptions::default()` in the crate, verbatim. */
+/**
+ * The debug page's sliders as they start, and the mode — `FrameOptions::default()` in the crate,
+ * verbatim. `mode` is not a slider: the reader's view sends the stored prefs' mode over it.
+ */
 export const DEFAULT_SCANNER_OPTIONS: ScannerOptions = {
   work_long_edge: 1024,
   method: "both",
@@ -12,6 +15,7 @@ export const DEFAULT_SCANNER_OPTIONS: ScannerOptions = {
   rule: "votes",
   decide_at: 8,
   lead_margin: 1.3,
+  mode: "fast",
 };
 
 /**

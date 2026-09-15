@@ -639,11 +639,17 @@ pub fn run() {
             sync_pair::pairing::sync_device_rename,
             sync_pair::pairing::sync_device_revoke,
             sync_pair::pairing::sync_group_leave,
-            // The scanner. Its state is managed separately below — see scanner.rs.
+            // The scanner, its prefs and its tray. The session's state is managed separately
+            // below — see scanner.rs; the prefs and the tray are `app_meta` rows on `AppState`.
             scanner::scanner_status,
             scanner::scanner_frame,
             scanner::scanner_reset,
             scanner::scanner_capture,
+            scanner::scanner_set_filters,
+            scanner::scanner_prefs,
+            scanner::set_scanner_prefs,
+            scanner::scanner_tray,
+            scanner::set_scanner_tray,
             // The relay, the membership and the review queue (spec §6.1, §7.2–§7.4, §7.7 and
             // §10). The panel's two reads, the Connect press, the claim code the reader pastes
             // back, one round trip now, the rows carrying a sentence, clearing one of them, the

@@ -14,6 +14,7 @@ describe("the scanner options", () => {
       rule: "votes",
       decide_at: 8,
       lead_margin: 1.3,
+      mode: "fast",
     });
   });
 
