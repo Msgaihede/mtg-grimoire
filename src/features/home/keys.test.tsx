@@ -17,16 +17,21 @@ import type { ReactNode } from "react";
 import type { HomeWidget } from "@/lib/ipc";
 import type { MarketplaceId } from "@/lib/marketplace";
 import { MARKETPLACE_FEEDS_KEY, MARKETPLACE_KEY } from "@/lib/useMarketplace";
+import { makeFit } from "./fit";
 import {
   activityKey,
   collectionBreakdownKey,
   collectionTotalKey,
   deckListKey,
   deckValuesKey,
+  priceMoversKey,
+  RECENT_CARDS_ROOT,
+  recentCardsKey,
+  setCompletionKey,
   wishlistBreakdownKey,
   wishlistTotalKey,
 } from "./keys";
-import type { WidgetProps } from "./widgetProps";
+import type { WidgetBodyProps } from "./widgetProps";
 import { CollectionValueWidget } from "./widgets/CollectionValueWidget";
 import { SummaryWidget } from "./widgets/SummaryWidget";
 import { WishlistValueWidget } from "./widgets/WishlistValueWidget";
@@ -75,6 +80,30 @@ describe("shape", () => {
   it("files the feed under its own root, carrying the limit", () => {
     expect(activityKey(50)).toEqual(["activity", "recent", 50]);
   });
+
+  // Both under the collection root: a copy added or removed changes what is owned, and a feed
+  // landing sweeps that root — which is also when a price snapshot is taken. The movers key
+  // carries every part of the question, the marketplace included.
+  it("files set completion and the price movers under the collection root", () => {
+    expect(setCompletionKey).toEqual(["collection", "setCompletion"]);
+    expect(priceMoversKey("30d", "up", "cardmarket", 100)).toEqual([
+      "collection",
+      "priceMovers",
+      "30d",
+      "up",
+      "cardmarket",
+      100,
+    ]);
+  });
+
+  // The second exception: a root with one writer, the card modal's recorder, which invalidates
+  // the root rather than a spelled-out key. So the list key has to sit under that root, or the
+  // recorder's invalidation reaches nothing.
+  it("files the recently viewed strip under the root the recorder invalidates", () => {
+    expect(RECENT_CARDS_ROOT).toEqual(["recentCards"]);
+    expect(recentCardsKey(8)).toEqual(["recentCards", "list", 8]);
+    expect(recentCardsKey(8).slice(0, RECENT_CARDS_ROOT.length)).toEqual(RECENT_CARDS_ROOT);
+  });
 });
 
 /**
@@ -99,16 +128,24 @@ describe("one key, one fetch", () => {
     invoke.mockImplementation(() => new Promise(() => {}));
   });
 
-  const chrome = (): Omit<WidgetProps, "widget"> => ({
+  /** The page's half of a body's props — see `widgetProps.ts`. A 4×3 card is room enough for
+   *  every widget here to draw, and what it draws is not this file's business anyway. */
+  const chrome = (): Omit<WidgetBodyProps, "widget"> => ({
+    fit: makeFit({ w: 4, h: 3, widthPx: 452, heightPx: 336, density: "comfortable" }),
     editing: false,
+    still: false,
     onConfig: vi.fn(),
-    onRemove: vi.fn(),
-    onSpan: vi.fn(),
-    dragHandleRef: vi.fn(),
-    onNudge: vi.fn(),
   });
 
-  const widget = (id: string, kind: string): HomeWidget => ({ id, kind, span: 1, config: null });
+  const widget = (id: string, kind: string): HomeWidget => ({
+    id,
+    kind,
+    x: 0,
+    y: 0,
+    w: 4,
+    h: 3,
+    config: null,
+  });
 
   /**
    * One client both widgets mount under.

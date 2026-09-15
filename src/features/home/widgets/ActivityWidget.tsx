@@ -5,8 +5,13 @@
  * else.** The grouping is `activityText.ts`'s {@link activityDays}, the wording is that file's
  * {@link ActivityLine} — which hands a `deck`-scoped row straight to the deck history's own
  * builder, so a deck line reads here character for character as it reads in that dialog. What
- * this file adds is the *shape*: a scroller, a sticky day header with the day's roll-up, a row,
- * and the four sentences the list has when it is not a list.
+ * this file adds is the *shape*: a day heading with the day's roll-up, a line, the cut to whole
+ * lines against the box the card was given, and the four sentences the list has when it is not a
+ * list.
+ *
+ * **A body, not a card.** `WidgetCard` draws the title, the tray and the settings popover — and
+ * the popover's two rows, `Changes to show` and `Show times`, are this kind's registry picks and
+ * toggles in `widgets.ts`, so nothing here draws a control.
  *
  * **Nothing here guards `activityLine` and nothing here re-words it.** That function is total
  * over every payload — a kind this build has never heard of, a truncated row, a `null` card —
@@ -41,55 +46,44 @@
  * feed is also refetched on mount and on focus like every other query in this app.
  *
  * **No `@container` here or on the page that draws this**, and no z-index that is not from
- * `LAYER` — `WidgetCard`'s own doc has both arguments in full.
+ * `LAYER` — `fit.ts`'s module doc has the first argument in full.
  */
-import { useEffect, useId, useMemo, type ReactElement } from "react";
+import { useEffect, useMemo, type ReactElement, type ReactNode } from "react";
 import {
   useQueries,
   useQuery,
   useQueryClient,
   type QueryKey,
 } from "@tanstack/react-query";
-import { Dropdown } from "@/components/Dropdown/Dropdown";
-import type { DropdownOption } from "@/components/Dropdown/types";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { count, plural } from "@/lib/counts";
 import { ipc, ipcError, type ActivityEntry } from "@/lib/ipc";
-import { LAYER } from "@/lib/layers";
 import { cn } from "@/lib/utils";
 import { activityDays, type ActivityDay, type ActivityLine } from "../activityText";
+import type { WidgetFit } from "../fit";
 import { activityKey } from "../keys";
-import { widgetConfig, widgetSpan } from "../layout";
-import { WidgetCard } from "../WidgetCard";
-import type { WidgetProps } from "../widgetProps";
-
-/** What this widget stores. One number, and the reader picks it in the settings popover. */
-export interface ActivityConfig {
-  /** How many rows to ask the backend for. See {@link feedLimit} for what a stored one is
-   *  allowed to be. */
-  limit: number;
-}
+import type { WidgetBodyProps } from "../widgetProps";
+import { DOWN_FILL, UP_FILL, WidgetMessage } from "../WidgetParts";
+import { pickOf, toggleOn } from "../widgetSettings";
 
 /**
- * The default, and — through `widgetConfig` — the schema a stored config is read against.
+ * The limit an entry with no usable stored one reads — the registry's own `dflt` for this kind's
+ * `limit` pick, which {@link pickOf} already answers. Restated only for the one case `pickOf`
+ * cannot type: a kind whose pick is not a number, which no entry of `widgets.ts` writes.
  *
- * Fifty is a few days of ordinary use and about two screens of scrolling. It is deliberately not
- * the backend's ceiling: this is a card on a dashboard rather than a log to audit, and the deck
- * history dialog is where a reader goes to read one deck's whole story.
+ * Fifty is a few days of ordinary use. It is deliberately not the backend's ceiling of 500: this
+ * is a card on a dashboard rather than a log to audit, and the deck history dialog is where a
+ * reader goes to read one deck's whole story.
  */
-export const DEFAULT_ACTIVITY_CONFIG: ActivityConfig = { limit: 50 };
+const DEFAULT_LIMIT = 50;
 
-/** The backend clamps a limit into `1..=500` — `activity_recent`'s own rule, which is what stops
- *  a `0` meaning *no limit at all*, since that is how SQLite reads a negative `LIMIT`. */
-const MAX_LIMIT = 500;
-
-/** What the settings popover offers. Every one of them is inside the backend's clamp, so the
- *  narrowing below can only ever fire on a config no press of this control produced. */
-export const ACTIVITY_LIMITS = [25, 50, 100, 200] as const;
-
-const LIMIT_OPTIONS: readonly DropdownOption[] = ACTIVITY_LIMITS.map((limit) => ({
-  value: String(limit),
-  label: `${limit} changes`,
-}));
+/**
+ * The height of one line of the feed, and of one day heading, in pixels — the unit the body is
+ * cut in. The design's figure: a line of 14px text on a 19px leading, with 4px above and below.
+ * **The classes on {@link Heading} and {@link Line} spell this out and must stay in step with it**;
+ * a row taller than the arithmetic thinks is a card whose last line is clipped.
+ */
+const LINE_PX = 27;
 
 /** The bare root, for the invalidation the bridge below sends. A write can only ever have
  *  changed all of this at once. `activityKey` — the feed's own key, carrying the limit — is in
@@ -108,16 +102,6 @@ const FEED_MARKER = "homeActivityFeed";
  *  empty array on every render of a card that is still waiting. */
 const NONE: readonly ActivityEntry[] = [];
 
-/**
- * The card's title.
- *
- * Spelled out rather than read off `WIDGET_META.activity.label`, which is the source of truth
- * for the Add-widget menu row: this file sits in `home/widgets/` and that record is in
- * `home/widgets.ts`, so an import of `"../widgets"` reads as this directory and resolves to the
- * file beside it. Two words are not worth a path that has to be explained. Keep them the same.
- */
-const HEADING = "Activity";
-
 /** 24-hour, because a stamp in a feed is data. `hourCycle` rather than `hour12: false`, which
  *  renders midnight as `24:00` under some ICU builds — `DeckHistoryDialog`'s note. */
 const TIME = new Intl.DateTimeFormat("en-US", {
@@ -127,27 +111,17 @@ const TIME = new Intl.DateTimeFormat("en-US", {
 });
 
 /**
- * A stored limit, narrowed to something the backend can answer.
- *
- * **`widgetConfig` checks the shape and never the range**, which its own doc states outright, so
- * everything below is reachable from a hand-edited row or a build that offered a different set:
- * `NaN` is a `number` and passes the shape check, and a `NaN` in a query key hashes to `null`
- * while reaching Rust as a limit no row can be read under. The clamp is the backend's own, said
- * once on this side so the request is answerable before it is sent.
- */
-function feedLimit(stored: number): number {
-  if (!Number.isFinite(stored)) return DEFAULT_ACTIVITY_CONFIG.limit;
-  return Math.min(Math.max(Math.round(stored), 1), MAX_LIMIT);
-}
-
-/**
  * Keep this feed as fresh as the writes that fill it, without any of them knowing it exists.
  *
  * The whole argument is in the module doc. Two pieces: markers that guarantee each write root
  * always has something to invalidate, and one subscription that turns an invalidation of any of
  * them into an invalidation of this feed.
+ *
+ * **Off on a still body** (`enabled: false`), which is a catalogue preview: it publishes nothing,
+ * and a second subscriber doubling every invalidation of the feed while the dialog is open is work
+ * for a picture. The live card beside it — when there is one — is still bridging.
  */
-function useWriteRootBridge(): void {
+function useWriteRootBridge(enabled: boolean): void {
   const client = useQueryClient();
 
   // Never read, and deliberately: this is a *presence* in the cache rather than a source of
@@ -159,43 +133,62 @@ function useWriteRootBridge(): void {
       queryFn: () => true,
       staleTime: Infinity,
       notifyOnChangeProps: [],
+      enabled,
     })),
   });
 
-  useEffect(
-    () =>
-      client.getQueryCache().subscribe((event) => {
-        // The *action* rather than the event: a query under these roots emits `fetch` and
-        // `success` on every ordinary read, and refetching this feed for a page that merely
-        // listed some decks would be a read per keystroke of somebody else's search box.
-        if (event.type !== "updated" || event.action.type !== "invalidate") return;
-        const root = event.query.queryKey[0];
-        if (typeof root !== "string") return;
-        if (!(WRITE_ROOTS as readonly string[]).includes(root)) return;
-        // No loop: this dispatches `invalidate` on the feed's own key, whose root is not one of
-        // the three above.
-        void client.invalidateQueries({ queryKey: ACTIVITY_ROOT });
-      }),
-    [client],
-  );
+  useEffect(() => {
+    if (!enabled) return;
+    return client.getQueryCache().subscribe((event) => {
+      // The *action* rather than the event: a query under these roots emits `fetch` and
+      // `success` on every ordinary read, and refetching this feed for a page that merely
+      // listed some decks would be a read per keystroke of somebody else's search box.
+      if (event.type !== "updated" || event.action.type !== "invalidate") return;
+      const root = event.query.queryKey[0];
+      if (typeof root !== "string") return;
+      if (!(WRITE_ROOTS as readonly string[]).includes(root)) return;
+      // No loop: this dispatches `invalidate` on the feed's own key, whose root is not one of
+      // the three above.
+      void client.invalidateQueries({ queryKey: ACTIVITY_ROOT });
+    });
+  }, [client, enabled]);
 }
 
 /**
- * The activity widget.
+ * The days the box has room for, cut to whole lines — the design's `body()` for this kind.
  *
- * `chrome` is every prop the page is doing *to* this widget and is handed to `WidgetCard`
- * untouched — the widget interprets none of it. `span` comes off the stored document rather than
- * out of that bundle, which is what stops the card being drawn at a width the layout does not
- * hold.
+ * **A day heading costs a line**, so each day takes at most one fewer line than is left and
+ * spends its heading from what remains; a day with no line left to draw is dropped rather than
+ * drawn as a heading over nothing, which would read as a day on which nothing happened. The
+ * budget is also capped at the limit, so a tall card never promises more than was asked for.
+ *
+ * The roll-up a day carries is still the whole day's as read — `+7 / −6` over every row of that
+ * day the query answered — because a day heading is a statement about the day, and one that
+ * shrank as the card was resized would be a figure a reader cannot check.
+ *
+ * Exported for its own test: it is arithmetic, and the cases worth pinning are easier to state
+ * over a list than through a render.
  */
-export function ActivityWidget({ widget, onConfig, ...chrome }: WidgetProps): ReactElement {
-  const span = widgetSpan(widget);
-  const config = widgetConfig(widget, DEFAULT_ACTIVITY_CONFIG);
-  const limit = feedLimit(config.limit);
-  const labelId = useId();
-  const fieldId = useId();
+export function fitDays(days: readonly ActivityDay[], fit: WidgetFit, limit: number): ActivityDay[] {
+  let left = Math.min(fit.linesFit(LINE_PX), limit);
+  const out: ActivityDay[] = [];
+  for (const day of days) {
+    const lines = day.lines.slice(0, Math.max(0, left - 1));
+    left -= lines.length + 1;
+    if (lines.length > 0) out.push({ ...day, lines });
+  }
+  return out;
+}
 
-  useWriteRootBridge();
+export function ActivityWidget({ widget, fit, still }: WidgetBodyProps): ReactElement {
+  const picked = pickOf(widget, "limit");
+  // The pick only ever answers one of its own options (25, 50, 100) or its default, so a stored
+  // `NaN`, `9999` or `"50"` reads as fifty here and never reaches the backend's clamp — the
+  // narrowing this file once did by hand is `widgetSettings.ts`'s vocabulary check now.
+  const limit = typeof picked === "number" ? picked : DEFAULT_LIMIT;
+  const times = toggleOn(widget, "times");
+
+  useWriteRootBridge(!still);
 
   const query = useQuery({
     queryKey: activityKey(limit),
@@ -205,79 +198,27 @@ export function ActivityWidget({ widget, onConfig, ...chrome }: WidgetProps): Re
   const entries = query.data ?? NONE;
   const days = useMemo(() => activityDays(entries), [entries]);
 
-  return (
-    <WidgetCard
-      heading={HEADING}
-      span={span}
-      settings={
-        <div className="flex flex-col gap-1.5">
-          {/* `id` **and** `labelledBy`, which is what `Dropdown` asks of a caller with a visible
-              label: the first keeps the pointer behaviour a `<label for>` gives, the second
-              states the accessible name outright rather than leaving it to an association a
-              later edit could quietly break. */}
-          <label id={labelId} htmlFor={fieldId} className="text-xs text-dim">
-            Changes to show
-          </label>
-          <Dropdown
-            id={fieldId}
-            labelledBy={labelId}
-            value={String(limit)}
-            // **Spread, never replace.** `setConfig` stores whatever it is handed and
-            // `widgetConfig` carries keys this build has never heard of straight through, so a
-            // write of `{ limit }` alone would delete a newer build's settings on the first
-            // press of this control.
-            onChange={(value) => onConfig({ ...config, limit: Number(value) })}
-            options={LIMIT_OPTIONS}
-            size="sm"
-            fill
-          />
-        </div>
-      }
-      {...chrome}
-    >
-      <Body days={days} pending={query.isPending} error={query.isError ? query.error : null} />
-    </WidgetCard>
-  );
-}
-
-/**
- * What the feed is when it is not a feed — and they are four different sentences.
- *
- * **The refusal is read before the emptiness**, which is `DeckHistoryDialog`'s rule and its
- * reason: a failed read has no rows either, and calling it "nothing has happened yet" tells a
- * reader with nine thousand cards that their history is gone.
- */
-function Body({
-  days,
-  pending,
-  error,
-}: {
-  days: readonly ActivityDay[];
-  pending: boolean;
-  error: unknown;
-}): ReactElement {
   if (days.length > 0) {
     return (
-      // The scroller the day headers stick to. A widget is a card on a page rather than a page,
-      // so the feed keeps its own height and the row of cards beside it keeps its shape;
-      // `min-h-0` because this is a flex child and a flex item's default `min-height: auto`
-      // would let the list push the card taller than the cap.
-      <div className="max-h-80 min-h-0 overflow-y-auto pr-1">
-        {days.map((day) => (
-          <Section key={day.key} day={day} />
+      <div className="flex flex-col" style={{ gap: fit.rowGap }}>
+        {fitDays(days, fit, limit).map((day) => (
+          <Section key={day.key} day={day} times={times} fit={fit} still={still} />
         ))}
       </div>
     );
   }
 
-  if (error !== null) {
+  // **The refusal is read before the emptiness**, which is `DeckHistoryDialog`'s rule and its
+  // reason: a failed read has no rows either, and calling it "nothing has happened yet" tells a
+  // reader with nine thousand cards that their history is gone.
+  if (query.isError) {
     return (
-      <Notice title="Recent activity could not be read.">
-        {ipcError(error)} The next change you make asks again.
+      <Notice title="Recent activity could not be read." tone="destructive">
+        {ipcError(query.error)} The next change you make asks again.
       </Notice>
     );
   }
-  if (pending) return <Notice title="Reading recent activity…" />;
+  if (query.isPending) return <Notice title="Reading recent activity…" />;
   return (
     <Notice title="Nothing has happened yet.">
       Add a card, file one into a folder or edit a deck, and the first line lands here. The
@@ -287,48 +228,60 @@ function Body({
   );
 }
 
-function Notice({ title, children }: { title: string; children?: React.ReactNode }): ReactElement {
+/** One of the four sentences, with its quieter half under it. The title is its own element so a
+ *  reader — and a test — can address it without the explanation. */
+function Notice({
+  title,
+  tone = "dim",
+  children,
+}: {
+  title: string;
+  tone?: "dim" | "destructive";
+  children?: ReactNode;
+}): ReactElement {
   return (
-    <div className="py-1">
-      <p className="text-sm">{title}</p>
+    <div className="flex flex-col gap-1">
+      <WidgetMessage tone={tone}>{title}</WidgetMessage>
       {children !== undefined && (
-        <p className="mt-1 max-w-prose text-xs leading-relaxed text-dim">{children}</p>
+        <p className="m-0 max-w-prose text-xs leading-relaxed text-dim">{children}</p>
       )}
     </div>
   );
 }
 
-/** One day: a sticky heading with its roll-up, and the day's lines under it. */
-function Section({ day }: { day: ActivityDay }): ReactElement {
+/**
+ * One day: its heading and roll-up, and the day's lines under it.
+ *
+ * **Not sticky, where the scrolling feed's header was.** The lines are cut to what the card has
+ * room for, so nothing ordinarily scrolls under a heading — and a sticky one needs a background of
+ * its own, which would paint a band across Customize's tinted card.
+ */
+function Section({
+  day,
+  times,
+  fit,
+  still,
+}: {
+  day: ActivityDay;
+  times: boolean;
+  fit: WidgetFit;
+  still: boolean;
+}): ReactElement {
   return (
-    <section className="pt-3 first:pt-0">
-      <div
-        className={cn(
-          // `bg-bg` and not `bg-surface`: `StatsCard` draws a border and no background of its
-          // own, so a widget's body sits on the page's colour and a header in any other one
-          // would read as a band across the card.
-          "sticky top-0 flex items-baseline gap-2 bg-bg py-1",
-          // The rung every sticky header in this app takes. It competes only inside this card's
-          // own stacking context, which is all it needs to: the rows scrolling under it are its
-          // siblings.
-          LAYER.header,
-        )}
-      >
-        {/* `h4` under `StatsCard`'s own `h3`, so the card's heading and its day sections are one
-            outline rather than two. The heading holds the label and nothing else — a count
-            folded in beside it would compute into the accessible name, and a `gap` between two
-            children joins them with no space at all ("Today3 changes"). */}
-        <h4 className="font-heading text-sm leading-none">{day.label}</h4>
-        <span aria-hidden="true" className="h-px flex-1 bg-border" />
-        <Roll added={day.added} removed={day.removed} />
-      </div>
-
-      <ul className="flex flex-col gap-0.5 pt-1">
+    <section className="flex flex-col" style={{ gap: fit.rowGap }}>
+      <Heading day={day} />
+      <ul className="m-0 flex list-none flex-col p-0" style={{ gap: fit.rowGap }}>
         {day.lines.map(({ entry, line }) => (
           // **`id` is unique within its own table and not across the feed** — `activity_recent`
           // is a `UNION ALL` over two of them, so the bare number collides and two rows would
           // become one with nothing said about it. The scope is what tells the tables apart.
-          <Row key={`${entry.scope === "deck" ? "d" : "a"}${entry.id}`} entry={entry} line={line} />
+          <Line
+            key={`${entry.scope === "deck" ? "d" : "a"}${entry.id}`}
+            entry={entry}
+            line={line}
+            time={times}
+            still={still}
+          />
         ))}
       </ul>
     </section>
@@ -336,11 +289,30 @@ function Section({ day }: { day: ActivityDay }): ReactElement {
 }
 
 /**
+ * A day's heading — its label in the accent, a rule, and the copies in and out.
+ *
+ * `h4` under the card's own heading, so the card and its day sections are one outline. The heading
+ * holds the label and nothing else — a count folded in beside it would compute into the accessible
+ * name, and a `gap` between two children joins them with no space at all ("Today3 changes").
+ */
+function Heading({ day }: { day: ActivityDay }): ReactElement {
+  return (
+    <div className="flex h-[27px] shrink-0 items-center gap-2">
+      <h4 className="m-0 font-heading text-sm leading-none text-accent">{day.label}</h4>
+      <span aria-hidden="true" className="h-px flex-1 bg-border" />
+      <Roll added={day.added} removed={day.removed} />
+    </div>
+  );
+}
+
+/**
  * The day's copies, in and out.
  *
- * Drawn as `+7 / −6` and spoken as a sentence: read literally that string is "plus seven slash
- * minus six". Two counters rather than one signed sum, because a day that gained seven and lost
- * six is not a quiet day and `+1` says it was.
+ * Drawn as two tinted chips — `+7` on the gain's fill and `−6` on the loss's — and spoken as a
+ * sentence: read literally the pair is "plus seven minus six". Two counters rather than one signed
+ * sum, because a day that gained seven and lost six is not a quiet day and `+1` says it was.
+ * **The colour is the fill and the numbers are body ink**, `WidgetParts.tsx`'s rule: the green at
+ * this size on this ground reads under the contrast floor as text.
  *
  * `count` rather than a bare number, unlike the deck history's own roll-up: that one sums one
  * deck's edits and this one sums the whole app's, where an import of 1,196 cards is an ordinary
@@ -348,11 +320,6 @@ function Section({ day }: { day: ActivityDay }): ReactElement {
  */
 function Roll({ added, removed }: { added: number; removed: number }): ReactElement {
   const quiet = added === 0 && removed === 0;
-  const drawn = quiet
-    ? "no copies"
-    : [added > 0 ? `+${count(added)}` : null, removed > 0 ? `−${count(removed)}` : null]
-        .filter((part) => part !== null)
-        .join(" / ");
   const spoken = quiet
     ? "no copies changed"
     : [
@@ -363,11 +330,42 @@ function Roll({ added, removed }: { added: number; removed: number }): ReactElem
         .join(", ");
 
   return (
-    <p className={cn("font-mono text-[0.7rem] tabular-nums", quiet ? "text-dim" : "text-text")}>
-      <span aria-hidden="true">{drawn}</span>
+    // `aria-hidden` on each drawn piece rather than on one `contents` wrapper around them:
+    // Chromium has dropped `aria-hidden` on a `display: contents` box before, which would read the
+    // chips *and* the sentence.
+    <p className="m-0 flex shrink-0 items-center gap-1 font-mono text-xs tabular-nums">
+      {quiet && (
+        <span aria-hidden="true" className="text-dim">
+          no copies
+        </span>
+      )}
+      {added > 0 && (
+        <span
+          aria-hidden="true"
+          className="rounded px-1 text-text"
+          style={{ background: tint(UP_FILL) }}
+        >
+          +{count(added)}
+        </span>
+      )}
+      {removed > 0 && (
+        <span
+          aria-hidden="true"
+          className="rounded px-1 text-text"
+          style={{ background: tint(DOWN_FILL) }}
+        >
+          −{count(removed)}
+        </span>
+      )}
       <span className="sr-only">{spoken}</span>
     </p>
   );
+}
+
+/** A fill at the design's 24% — an inline style, because a colour interpolated into a class name
+ *  emits no rule. */
+function tint(fill: string): string {
+  return `color-mix(in oklab, ${fill} 24%, transparent)`;
 }
 
 /** Which way a row moved copies. The rail carries emphasis only — the sentence beside it is what
@@ -385,28 +383,48 @@ function rail(delta: number): string {
  * wording at all**, and that is what makes a deck row here the same sentence the deck history
  * dialog draws for it. The scope is not drawn as a chip for the same reason: naming the cabinet
  * is the sentence's job, and a chip beside it would be a second opinion that could disagree.
+ *
+ * **One line of type, with the detail after the sentence in dim** rather than on a second line:
+ * the body is cut in {@link LINE_PX} rows, and a line that grew a second row would push the card's
+ * last line out of the box. Where the pair is too long for the card it truncates, and the whole of
+ * it is a hint on the text — `whenClipped`, so a line that fits says nothing twice.
  */
-function Row({ entry, line }: { entry: ActivityEntry; line: ActivityLine }): ReactElement {
+function Line({
+  entry,
+  line,
+  time,
+  still,
+}: {
+  entry: ActivityEntry;
+  line: ActivityLine;
+  time: boolean;
+  still: boolean;
+}): ReactElement {
+  const tip = useTooltip();
   const when = new Date(entry.at * 1000);
+  const whole = line.detail === null ? line.text : `${line.text} · ${line.detail}`;
 
   return (
-    <li className="flex items-start gap-2 rounded-md px-1.5 py-1 hover:bg-surface">
+    <li className="flex h-[27px] items-stretch gap-2 py-1">
       <span
         aria-hidden="true"
-        className={cn("w-[3px] flex-shrink-0 self-stretch rounded-full opacity-70", rail(entry.delta))}
+        className={cn("w-[3px] shrink-0 rounded-full opacity-70", rail(entry.delta))}
       />
-      <div className="min-w-0 flex-1">
-        <p className="text-sm leading-snug">{line.text}</p>
-        {line.detail !== null && (
-          <p className="mt-0.5 text-xs leading-snug text-dim">{line.detail}</p>
-        )}
-      </div>
-      <time
-        dateTime={when.toISOString()}
-        className="flex-shrink-0 font-mono text-[0.7rem] leading-5 text-dim"
+      <p
+        {...(still ? {} : tip(whole, { whenClipped: true }))}
+        className="m-0 min-w-0 flex-1 truncate text-sm leading-[19px]"
       >
-        {TIME.format(when)}
-      </time>
+        {line.text}
+        {line.detail !== null && <span className="text-dim"> · {line.detail}</span>}
+      </p>
+      {time && (
+        <time
+          dateTime={when.toISOString()}
+          className="shrink-0 font-mono text-xs leading-[19px] text-dim"
+        >
+          {TIME.format(when)}
+        </time>
+      )}
     </li>
   );
 }

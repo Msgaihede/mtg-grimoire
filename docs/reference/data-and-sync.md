@@ -5,10 +5,10 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
 - Data dir is `<exe dir>/data`, falling back to `%APPDATA%/com.mtggrimoire.app/data`.
   **Under `tauri dev` the exe is `src-tauri/target/debug/`, so the databases are
   `src-tauri/target/debug/data/user.db` and `corpus.db`** — not `src-tauri/data/`, and
-  **not one file since schema 27**: the reader's **twenty-eight** tables are `main` and the
+  **not one file since schema 27**: the reader's **twenty-nine** tables are `main` and the
   rebuildable **twenty-five** are `ATTACH`ed as `corpus`. (Eighteen against twenty-five at the
   split itself; the user side is what has grown since, and this line said eighteen until user
-  schema v43 and twenty-seven until v44 — a count in prose that no build checks, which is the rot
+  schema v43, twenty-seven until v44 and twenty-eight until v45 — a count in prose that no build checks, which is the rot
   this file's own header warns about. Both halves are `grep -c 'Side::User'` and
   `grep -c 'Side::Corpus'` over `schema::TABLES`; count them, never add to the number above.)
   A folder still holding a single
@@ -524,9 +524,15 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   answer; schema 27 splits the file in two and the halves number themselves separately
   (`USER_SCHEMA_VERSION` on the reader's file — this page stops spelling out which number two
   sentences from here, and says why — `CORPUS_SCHEMA_VERSION` on the rebuildable one, which stood
-  at **1** from the split until it grew its first and only rung on 2026-09-08: **corpus schema
+  at **1** from the split until it grew its first rung on 2026-09-08: **corpus schema
   2**, four prose columns on `combos`, described in
-  [commander-brackets.md](commander-brackets.md). This page names that rung rather than parking
+  [commander-brackets.md](commander-brackets.md). (That sentence said "first and only" and two
+  more have landed since, both gated on the table's *shape* for the reason
+  `schema::migrate_corpus` gives: **corpus schema 3** is `cards.produced_mana` (2026-09-10) and
+  **corpus schema 4** is `sets.printed_size` (2026-09-15), Scryfall's printed-run denominator,
+  written only by the `/sets` fetch — which `sync::sets_need_fetch` now also asks for when the
+  table holds rows and not one size, so the column fills at the next sync rather than at the next
+  bulk rotation.) This page names that rung rather than parking
   the head number beside it, for the reason the next two sentences give about the other half of
   the pair — and note the two scales are **deliberately incomparable**, so nothing may subtract
   one from the other: a user version says what has been done to rows that exist nowhere else, a
@@ -936,6 +942,24 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   collide as well as rung numbers.
   (**v40, v41 and v42 have no paragraph on this page** — the ladder narrative here stops at v39
   and has done since before this rung. Naming the gap so nobody reads the absence as a claim.)
+  **v45 adds `price_snapshots`, the home page's price history** (2026-09-15) — the twenty-ninth
+  user table and one index, `idx_price_snapshots_printing (marketplace, card_id, finish, day)`.
+  One row per UTC day (SQLite's `date('now')`) per *priced* marketplace per owned
+  `(card_id, finish)`, the price `sorting::price_expr` quotes; `price_history::snapshot` writes it
+  at launch, after a card ingest and after a feed store, and `price_movers` compares today's live
+  price against the latest row on or before a 7- or 30-day cutoff (or the oldest, for `all`).
+  **Not synced and no `sync_uid`**, for `activity`'s reason and a plainer one: every device reads
+  the same public prices. **`WITHOUT ROWID` with the key leading on `day`**, which stores the key
+  twice rather than three times and puts the table in `db::CrossFileFence`'s blind spot — closed
+  structurally, because the snapshot opens its own transaction and SQLite refuses one inside
+  another. **It is pruned *and thinned***: nothing older than 400 days, and beyond 35 days one row
+  per printing per seven-day bucket, on the first snapshot of each day. **Both halves were
+  measured** (2026-09-15, this table's exact DDL on Node 24's bundled SQLite, not the app's build):
+  a thousand owned printings in two priced marketplaces for 400 daily days is **800 000 rows and
+  114.7 MB** after a `VACUUM`, and thinned **176 000 rows and 25.3 MB**. The thinning itself costs
+  ~10 µs a row weighed — **2.4 s** to weigh 104 000 already-thinned rows and delete nothing — so the
+  day's first snapshot weighs only the rows that crossed the 35-day line since the previous
+  snapshot day, which for a daily reader is one day's rows.
   **v25 makes the collection's folders the physical ledger of where every card sits.** It inserts
   the single `Recently removed` folder and one `deck` folder per deck (**archived decks
   included** — archiving is a flag and an archived deck still holds its cards), converts every

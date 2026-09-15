@@ -931,6 +931,12 @@ mod tests {
                 "oracle_tag_parents",
                 "oracle_taggings",
                 "oracle_tags",
+                // The home page's price history (user schema v45). A mirrored file quotes today's
+                // price and never last month's, and the table is rewritten a day at a time by the
+                // app itself rather than by the reader — so a surface here would be a render for a
+                // change no file shows. It is `WITHOUT ROWID` and could not reach the hook anyway,
+                // which is not a decision; this is.
+                "price_snapshots",
                 "sets",
                 // The op log's clock (user schema v29). It describes a conversation rather
                 // than a collection, and it moves once per captured write — a surface here

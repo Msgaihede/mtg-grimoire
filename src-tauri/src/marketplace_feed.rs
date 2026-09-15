@@ -901,6 +901,25 @@ pub fn store(db: &Mutex<Connection>, feed: &Feed, fetched_at: i64) -> Result<Ing
         ],
     )?;
     tx.commit()?;
+    // **Today's prices at this marketplace for what the reader owns** — the Price movers
+    // widget's history (`crate::price_history`). After the commit and in a transaction of its
+    // own, on the connection this already holds: the swap above wrote only the corpus and this
+    // writes only the user file, so the two can never be one cross-file commit, and the snapshot
+    // refuses to join an open transaction anyway. Here rather than in `refresh` so the browser's
+    // `web::glue::ingest_prices`, which calls this same function, records the day too.
+    //
+    // Best-effort: the prices are stored either way, and a missed day is filled by the next
+    // launch or sync. Printed rather than recorded because `error_log` is the *refresh's*
+    // failure log and this refresh did not fail.
+    if let Err(e) = crate::price_history::snapshot_market(
+        &conn,
+        crate::sorting::Marketplace::from_id(feed.marketplace),
+    ) {
+        eprintln!(
+            "{} prices were stored but today's price history could not be recorded: {e}",
+            feed.marketplace
+        );
+    }
     Ok(Ingested {
         written: feed.prices.len(),
         skipped: feed.skipped,

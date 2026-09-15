@@ -64,6 +64,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
+import { RECENT_CARDS_ROOT } from "@/features/home/keys";
 import { ManaText } from "@/components/ManaText";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
 import { Dialog, type DialogFlanks } from "@/components/Dialog";
@@ -364,9 +365,51 @@ function useHoldingsFreshness(): void {
   }, [writing, queryClient]);
 }
 
+/**
+ * Remember each card the modal opens, for the home page's **Recently viewed** strip.
+ *
+ * **Here because this is the one place a card is opened**: every surface that opens one writes
+ * `selectedCardId`, and this modal is the only thing that draws it — so one effect covers the
+ * search, the collection, a deck, the printings wall and a step along the chevrons, with no
+ * opener learning a new call.
+ *
+ * **Once per distinct card, and the ref is what makes it once.** `StrictMode` runs a mount effect
+ * twice in development, and a second `record_recent_card` for the same id would be harmless to the
+ * list (it moves to the front of where it already is) but is a write nobody made. The ref survives
+ * that double run; it is cleared when the modal closes, so opening the same card again later is a
+ * new open and moves it to the front again.
+ *
+ * **A failure is ignored, silently, and on purpose** — `ipc.recordRecentCard`'s own note: a sync
+ * holding the write connection answers BUSY, and what that costs is one tile on the home page. The
+ * call is made inside a promise so a throw of any kind lands in the one handler that drops it rather
+ * than in the render. On success the strip's root is invalidated, which is the whole of what keeps
+ * it fresh — see `features/home/keys.ts`.
+ *
+ * No state is set here: the effect only talks to the backend and the cache.
+ */
+function useRecentCardRecorder(cardId: string | null): void {
+  const queryClient = useQueryClient();
+  const recorded = useRef<string | null>(null);
+  useEffect(() => {
+    if (cardId === null) {
+      recorded.current = null;
+      return;
+    }
+    if (recorded.current === cardId) return;
+    recorded.current = cardId;
+    void Promise.resolve()
+      .then(() => ipc.recordRecentCard(cardId))
+      .then(
+        () => queryClient.invalidateQueries({ queryKey: RECENT_CARDS_ROOT }),
+        () => undefined,
+      );
+  }, [cardId, queryClient]);
+}
+
 export function CardDetailModal() {
   const cardId = useAppStore((s) => s.selectedCardId);
   const setSelectedCardId = useAppStore((s) => s.setSelectedCardId);
+  useRecentCardRecorder(cardId);
   const openCardFromDeck = useAppStore((s) => s.openCardFromDeck);
   const walk = useAppStore((s) => s.cardWalk);
   // **What stacks over this panel**, and the only thing the shell needs to know to take its
