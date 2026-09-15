@@ -7,9 +7,12 @@
  * IPC boundary for a type.
  */
 export type {
+  ScanMode,
+  ScanFilters,
   ScannerMethod,
   ScannerRule,
   ScannerOptions,
+  ScannerAssetSource,
   ScannerAsset,
   ScannerStatus,
   ScannerSidecar,
@@ -31,5 +34,13 @@ export type {
   ScannerCollectorTry,
   ScannerCollector,
   ScannerOcr,
+  ScannerOutcome,
+  ScannerChoice,
+  ScannerDecision,
+  ScannerTier,
+  ScannerResolution,
   ScannerVerdict,
+  ScannerPrefs,
+  ScannerTrayChoice,
+  ScannerTrayRow,
 } from "@/lib/ipc";

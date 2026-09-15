@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useIsPresent } from "motion/react";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { FOCUS } from "@/lib/focus";
 import { LAYER } from "@/lib/layers";
 import { popup } from "@/lib/motion";
@@ -14,6 +15,11 @@ import { cn } from "@/lib/utils";
  * panel closes, and the four attributes that keep a fading panel from lying to a screen reader.
  * The *contents* are the caller's and have nothing in common, which is why this owns the shell
  * and nothing else.
+ *
+ * **The Scanner's reader view is the third caller, and the one that is not a square.** Its bar and
+ * its tray footer open the same kind of panel from a worded control that can also be refused —
+ * `triggerContent` and `refusal` — and they joined this shell rather than copying it, because the
+ * copy they started as had already dropped the scroll-into-view and the drag mark within a day.
  *
  * ## What the shell is actually for
  *
@@ -47,6 +53,8 @@ export function AnchoredPopup({
   label,
   panelLabel,
   icon,
+  triggerContent,
+  refusal = null,
   align = "end",
   className,
   triggerClassName,
@@ -63,8 +71,35 @@ export function AnchoredPopup({
   label: string;
   /** The panel's own accessible name, announced when the caret moves into it. */
   panelLabel: string;
-  /** What the trigger draws — one lucide icon, already sized by the caller. */
-  icon: ReactNode;
+  /**
+   * What the square trigger draws — one lucide icon, already sized by the caller. Every call site
+   * but the Scanner's passes this, and gets the 24px glyph button below.
+   */
+  icon?: ReactNode;
+  /**
+   * **A worded trigger**, drawn instead of {@link icon}'s square: the Scanner's bar and its tray
+   * footer, where a control says a value (`Filters: Any set`, the folder a commit files into)
+   * rather than a verb a glyph can stand for.
+   *
+   * Given this, the trigger drops the square box entirely and wears only the focus outline and
+   * {@link triggerClassName} — the caller's row decides the box, because the square's `size-*` and
+   * a row's `h-9` are different Tailwind groups and `tailwind-merge` would keep both. {@link label}
+   * is still the accessible name, so a caller spelling a caption and a value as two elements names
+   * the pair once rather than leaving the name algorithm to fuse them.
+   */
+  triggerContent?: ReactNode;
+  /**
+   * Why the popup cannot open right now, or `null` when it can.
+   *
+   * **Refused, the trigger stays in the tab order and says why**: `aria-disabled` rather than the
+   * attribute, the press does nothing, and the reason is the trigger's tooltip — a control that
+   * vanished from the tab order, or did nothing in silence, is one a reader cannot learn the rule
+   * of. **A refusal arriving while the panel is open closes it, and the reason going away does not
+   * reopen it** — the flag is put down during render rather than merely hidden behind the refusal,
+   * because a flag left up would remount the panel the moment the reason cleared, and the panel's
+   * mount effect would pull the caret into a popup nobody had asked for since.
+   */
+  refusal?: string | null;
   /**
    * Which edge of the panel is pinned to the trigger. `"end"` where the trigger sits at the
    * right of a wide row, so the panel opens back across it; `"start"` in a card wall, where the
@@ -104,9 +139,15 @@ export function AnchoredPopup({
    */
   children: ReactNode | ((close: () => void) => ReactNode);
 }) {
+  const tip = useTooltip();
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLSpanElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
+  const refused = refusal !== null;
+  // React's own answer to state that has to follow a prop: the adjustment is made during render,
+  // so no frame ever draws an open panel under a refusal and no effect is needed to notice one.
+  // See {@link refusal} for why hiding the panel without putting the flag down is not enough.
+  if (open && refused) setOpen(false);
 
   const dismiss = useCallback(() => {
     setOpen(false);
@@ -144,10 +185,17 @@ export function AnchoredPopup({
       <button
         ref={buttonRef}
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => {
+          if (refused) return;
+          setOpen((o) => !o);
+        }}
         aria-expanded={open}
         aria-haspopup="dialog"
         aria-label={label}
+        aria-disabled={refused || undefined}
+        // Nothing is bound without a refusal — `useTooltip` binds nothing for `null` — so every
+        // square trigger in the app carries exactly the handlers it always did.
+        {...tip(refusal)}
         // **24px and 14px are this trigger's size at 100% zoom, on a card.** Several surfaces
         // draw it and only the walls zoom, where it sits beside a rarity gem and a set code that
         // grow with the card — a button that held still was the one thing in that strip out of
@@ -155,18 +203,23 @@ export function AnchoredPopup({
         // already reduced by `CONTROL_SHRINK` for being drawn on a card; a table row and the
         // card pane set no such variable and take the `, 1` fallback, so both are exactly the
         // 24px they have always been.
-        className={cn(
-          "grid size-[calc(1.5rem*var(--control-scale,1))] shrink-0 place-items-center",
-          "rounded-md border border-border text-dim",
-          "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
-          FOCUS,
-          // Last, so `tailwind-merge` resolves every conflict in the caller's favour — which is
-          // the whole of what {@link triggerClassName} is for and the reason it is not spread
-          // somewhere earlier in this list.
-          triggerClassName,
-        )}
+        className={
+          triggerContent !== undefined
+            ? // The worded trigger: the caller's box and the focus outline, nothing of the square's.
+              cn(FOCUS, triggerClassName)
+            : cn(
+                "grid size-[calc(1.5rem*var(--control-scale,1))] shrink-0 place-items-center",
+                "rounded-md border border-border text-dim",
+                "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
+                FOCUS,
+                // Last, so `tailwind-merge` resolves every conflict in the caller's favour — which
+                // is the whole of what {@link triggerClassName} is for and the reason it is not
+                // spread somewhere earlier in this list.
+                triggerClassName,
+              )
+        }
       >
-        {icon}
+        {triggerContent !== undefined ? triggerContent : icon}
       </button>
       <AnimatePresence>
         {open && (

@@ -1,0 +1,205 @@
+# The synthetic evaluation's printings — read by `src/bin/eval.rs`.
+#
+# One Scryfall printing id per line; `#` starts a comment. A line `# stratum: <name>` starts a
+# stratum, and every id after it belongs to it until the next one. The evaluation reports each
+# stratum as its own row. Text after an id's `#` is for a reader and is ignored.
+#
+# Chosen 2026-09-15 from the dev corpus (read-only), seeded, from English, non-digital printings
+# with image_uris — so every id here is in the bundle. Tokens, emblems, art series, planes,
+# schemes, vanguards, oversized cards and memorabilia/funny sets are left out. Strata are
+# disjoint. Re-pick only on purpose: the table's figures are comparable across runs only while
+# this list holds still.
+
+# stratum: frame-1993
+# the 1993 frame, black or white border, not full-art
+e4855db6-570c-4845-9074-a9df7611307a  # Sorceress Queen — 4ED 162
+c521f86e-f1bb-4e63-ab12-5ecebba2701b  # Phantasmal Terrain — 2ED 69
+efa53e9a-0d7c-4d17-b2be-56930edfa2c2  # Fumarole — ICE 291
+6ece570a-f480-40fd-a2b1-26a89c44e732  # Demonic Attorney — 3ED 103
+b6e6108c-e70d-4498-8c79-929a0ff404a0  # Bog Imp — ITP 16
+7e13875f-f745-4afd-a830-33df9576dce8  # Spectral Bears — HML 98
+f13ad58a-6f9b-420a-bac1-40929f5e616a  # Nether Shadow — LEA 116
+431c9749-fd7b-4960-a910-8d41d3704e6c  # Giant Growth — ICE 246
+386ea9eb-abc1-4862-aa2d-8fb808d79490  # Swords to Plowshares — LEA 40
+4a7506f8-cf09-46ca-ad80-3c398c487ae2  # Agent of Stromgald — ALL 64a
+edcc56a0-1dc0-4261-8f9c-5a88ce83f9e9  # Hypnotic Specter — LEB 113
+cac56eda-5ed3-4abd-beec-f5063fbf930a  # Tobias Andrion — LEG 264
+3f3c77ad-fce8-4506-90e1-7ef71552a71c  # Wheel of Fortune — SUM 185
+a575a9af-e1de-4a1d-91d8-440585377e4f  # Fastbond — LEA 192
+3406dfe1-68e9-4757-9487-0b556c97d07a  # Cockatrice — 4ED 237
+
+# stratum: frame-1997
+# the 1997 frame, black or white border, not full-art
+76c27566-a1a0-4a45-a5ed-34da78388667  # Somberwald Sage — INR 418
+d80f7fa7-e7c4-4fc4-99bf-8a8502965fc8  # Scragnoth — TMP 253
+adf3a6fe-e234-4c3f-96fc-3eb5eb22c0b8  # Apathy — WTH 33
+35c44137-ddcc-42fa-baff-a0c3785b84ee  # Honor Guard — STH 7
+e6cc97d2-6ad7-45fc-8766-d7297f911057  # Krenko, Mob Boss — RVR 335
+705c1d1d-e6e0-47fe-b642-b1ff0201bbf9  # Charcoal Diamond — 7ED 289
+c63ecd7b-a5e6-4e19-9ca2-dda14754305a  # Dark Privilege — MGB 3
+9890be7f-35af-43b7-b255-25be4ff20dc0  # Aven Shrine — ODY 9
+dfd2628f-63c4-4e19-83ea-26041650faab  # Aphetto Alchemist — ONS 64
+5fec371e-d4ba-439f-b1b8-2aac3f5b36bf  # Scorching Winds — POR 149
+597aea42-43e0-41ed-bfe7-fc92b6b8e680  # Thundercloud Elemental — SCG 54
+56ebc372-aabd-4174-a943-c7bf59e5028d  # Phantom Nishoba — JUD 140
+ab726e7d-171f-48b2-9652-545e17913330  # Serpent Warrior — STH 69
+e6529852-8b3e-4a70-a4a1-029e012231c6  # Goblin Tinkerer — MIR 180
+6c45fd87-7b44-4e1a-b30f-41220b69d9e6  # Windborn Muse — LGN 28
+
+# stratum: frame-2003
+# the 2003 frame, black or white border, not full-art
+c57335b5-30e2-431f-ab50-d5f1981783c3  # Rust Scarab — GTC 130
+0e2d5bff-1e84-4a09-912e-5aa33577b641  # Soul Snuffers — PLST EVE-45
+ae8c9948-b52e-4d07-a72a-99ab6be05cc6  # Skyknight Legionnaire — GTC 197
+64094fda-c6f9-4177-9a21-c919b8dfbf9f  # Shriekmaw — CMD 100
+18f3d99d-f6e7-4633-948b-21dd64d918fa  # Phyrexian Gargantua — 9ED 153
+c5334998-3c84-4b04-a5c2-d66c9d99e93b  # Spined Wurm — M11 197
+c8b32069-a707-4a4b-8379-c097d829bb90  # Mordant Dragon — WWK 85
+f5fd2639-3c95-435d-8e94-cd4e4d069e3e  # Infused Arrows — 5DN 133
+3469d73e-6de1-4b91-83e3-b1714ac29268  # Canyon Minotaur — M14 131
+deaa0b9b-258e-4daf-8fec-ce64864d6bbf  # Cosmic Larva — 5DN 63
+066b6f51-d444-48f7-a7f0-743f2b8d0595  # Sudden Shock — MMA 133
+1d55cdde-5e6b-4cec-9862-84aa39c04082  # Mind Bend — 8ED 92★
+21e79f57-2214-414a-ab34-2b737d4bb972  # Razorgrass Screen — 5DN 145
+9fcdf4df-1900-427b-998f-957754ce1b75  # Portent of Betrayal — THS 133
+3d641aaf-e2ff-4ccb-9e4e-27bbfc31ba8c  # Steel Wall — MRD 248
+
+# stratum: frame-2015
+# the 2015 frame, black or white border, not full-art
+053ab598-06a4-43ae-b9fd-c291bd05642c  # Disruption Protocol — NEO 51
+4598e556-e3e1-469c-8f1a-f4961796e775  # Blighted Fen — F16 4
+786c5b3e-737f-4794-b482-af5f0ee901e5  # Undercellar Myconid — CLB 259
+a28ecd59-9166-473c-bafc-cb3c54c21388  # Bespoke Battlegarb — WOE 122
+d7e2e42a-572a-4a33-869b-d6c9749fbf65  # Charming Scoundrel — PWOE 124s
+d505d319-093d-47af-8ee9-fafae3885aa0  # Living Wish — A25 179
+0f9bb73a-5b4e-4c9b-b0a6-8e531dc27394  # Oread of Mountain's Blaze — THB 146
+7da73230-2562-4e7d-9f03-b0508b9a31e0  # Sentinel of the Pearl Trident — DOM 65
+88523d44-4469-4685-8f59-dbcf255e7fe0  # Tower Geist — INR 93
+67b9fcc4-51d8-410b-9f36-fe6cc45e2b25  # Magma Spray — PLST AKH-141
+de95b80f-c520-4e2d-8afb-03d789cefa69  # Kayla's Reconstruction — PBRO 10s
+92a00c8d-9dac-4edc-b66c-ab3245d80969  # Butcher's Glee — IMA 84
+aae2c082-87b7-41b2-be4c-2f82ef60f951  # Ancestor Dragon — PLST GS1-12
+ee44df88-45a4-46ef-a8bd-f7fb7b9542b8  # Infectious Bloodlust — ORI 152
+3af47f00-2f43-4de9-9a88-966331be83c4  # Sangromancer — C17 123
+
+# stratum: future-showcase
+# the future frame, or a showcase frame effect
+3ef87948-0ad9-4757-a692-2262c8e24367  # Fellwar Stone — MBC 74
+2331cead-5bbc-4ca0-a66c-1a01d74caed5  # Winds of Change — MB2 201
+cbaeb666-181b-4600-8900-6455ac442451  # Control of the Court — MB2 189
+b66cc281-3fa9-4d7b-a32b-41c0a93059ba  # Deepcavern Imp — FUT 83
+d1d8d32d-ebb2-46c2-b909-b7f71d33159e  # Sol Ring — MB2 233
+0b121aba-52c0-4b6c-a7d8-17188b524673  # Sneak Attack — WOT 50
+ba38abbd-97b2-47e0-8cb6-7f4a02843e42  # Super Shredder — TMT 295
+659e8760-c7a8-445d-bfef-7cd445ea67c3  # Oko, Thief of Crowns — OTP 50
+b56d6402-a941-46cc-b1d6-352d5aa5cc3f  # Floodhound — MH2 335
+85f488cf-eb8a-43f6-9ed8-523daba284fa  # Dancing from Dark to Dawn — HOB 231
+0a143471-c144-40b9-9fcf-5c6c9ad45dfa  # Narset, Enlightened Exile — MAT 217
+123d97fd-b5d7-4c9d-b1ed-d84e2ba820fa  # Nahiri, the Unforgiving — ONE 343
+0ba9e2cc-e0a3-4c5a-9ca0-f683ff8b5c94  # Vaultborn Tyrant — BIG 61
+b3d423ca-ccd5-4bf1-9d81-4b6d4ca025ac  # Jirina, Dauntless General — MAT 212
+e3bb16a8-b248-4ad5-ba45-1ed499ca1411  # Elrond, Lord of Rivendell — LTR 799
+
+# stratum: basic-lands
+# one of each basic from HOB, LTR, 7ED and ZNR
+128226f4-a733-4f0a-ab2b-7789cfa8b443  # Plains — HOB 320
+739aaaac-c424-4ea7-a084-62a6fc0438b0  # Island — HOB 195
+c5f590a3-9993-4ac4-a93c-1beb44eda17b  # Swamp — HOB 196
+c49d378e-9549-4320-b3c6-1aeb216d1e98  # Mountain — HOB 192
+5f533364-0f91-4e49-aaeb-83c4c1f6d316  # Forest — HOB 198
+8538a97f-302d-468a-8a6c-50c800d614e5  # Plains — LTR 273
+aa03a3b5-cdc3-40cc-bd45-69ad65809d2f  # Island — LTR 715
+e59eff2f-2f15-4f70-90e5-759de12caf55  # Swamp — LTR 718
+af1b83d9-078b-44dc-a118-4659201f4854  # Mountain — LTR 279
+150d0710-9ecb-4187-a0f8-a70b330c8879  # Forest — LTR 721
+43559560-354d-4147-977f-766b58bca9fa  # Plains — 7ED 344
+a45610b3-9e9b-4ef9-aab2-426f85a6cce3  # Island — 7ED 332
+8838fb77-a484-4323-aa62-c944f3fefa95  # Swamp — 7ED 349★
+5af90ad7-25e9-4a5c-9169-38f33d7640a6  # Mountain — 7ED 338★
+9730c936-a1fc-484d-a9ce-a91804a84609  # Forest — 7ED 328★
+5d918248-85ff-4fea-ac91-aa5466dd2829  # Plains — ZNR 268
+bb695ab9-72dc-4b07-b42d-e2109a5254b6  # Island — ZNR 270
+95a58ce4-e07f-4c9c-98ae-3173d6d63cc5  # Swamp — ZNR 272
+c89b3c3a-3dba-47b3-9620-d4dd754a59e6  # Mountain — ZNR 277
+2b90e88b-60a3-4d1d-bb8c-14633e5005a5  # Forest — ZNR 384
+
+# stratum: borderless-full-art
+# borderless or full-art, not a basic land
+ebc1978e-ba4f-48ed-90e2-9252603f99fe  # Tyrranax Rex — ONE 457
+28c46071-b94c-460e-ab3a-9f9633eee833  # Counterbalance — SLD 1220
+dca66a1b-0acd-4b79-b5fe-16f2930f9c1b  # Sheoldred's Edict — SOA 32
+8380f74f-aa76-42dc-9596-92d651e1c1f6  # Gruul Turf — 2X2 407
+38b54450-0d5c-4c00-9017-44702519b5d9  # Tamiyo's Safekeeping — SLD 2335
+4509adb6-f1ea-4369-9e11-cba60fd5449a  # Radagast the Brown — LTR 740
+eae80537-f355-4aa3-8952-b08f3d1a1e41  # Gandalf, Friend of the Shire — LTR 308
+907a990c-6ee9-44e1-85f9-83b261507308  # Manifold Mouse — BLB 318
+0d855376-c5ff-4981-9605-6c16f213a857  # Elektra, Daughter of the Hand — MSH 326
+40a7e9bb-0772-4539-bbf9-7a95d5e47947  # Think Twice — FDN 315
+c1b5c132-c4d0-42df-bc5b-e7fe0a31a9e7  # Grafdigger's Cage — SLD 324
+75fb5cb6-e8ab-4fd5-a1f3-985de4fda226  # Pyrohemia — SLD 2211
+a9b037f1-3298-4ba8-92a8-0843f6e497d7  # Daze — MP2 12
+8407c498-b972-49fe-b30a-a864c39ddc7a  # Pest Infestation — OTP 30
+2b6b2979-a887-4ad8-b123-4aea916de36a  # Academy Ruins — SLD 1506
+
+# stratum: split-adventure
+# five split cards and five adventures
+8e7dd90a-4f93-43aa-b503-18289fdd571e  # Illusion // Reality — APC 129
+4a9f1e99-9de8-45cb-b035-4f920477e2e5  # Assault // Battery — TSB 106
+feb4b39f-d309-49ba-b427-240b7fdc1099  # Flower // Flourish — GRN 226
+66b3f745-055b-4338-b6f0-7b7281d63afd  # Beck // Call — PLST DGM-123
+b5873efa-d573-4435-81ad-48df2ca5c7f2  # Bedeck // Bedazzle — RNA 221
+d8b82dd5-c0ff-4294-9c09-9064c5e325c4  # Realm-Cloaked Giant // Cast Off — WOC 71
+0c2f40e7-82b0-4847-994d-9326a88c4965  # Hezrou // Demonic Stench — CLB 131
+b218d970-d3a9-4845-8ee9-efad9aff0fdd  # Rimrock Knight // Boulder Rush — ELD 294
+df606cf5-67dc-46f4-8c79-1d2f1d054391  # Virtue of Knowledge // Vantress Visions — WOE 76
+43bb3890-4013-48be-8cb5-54fd8fd8ec52  # Fell Horseman // Deathly Ride — WOE 92
+
+# stratum: double-faced
+# meld front faces — the only physically double-faced layout with top-level image_uris.
+# Transform and modal_dfc printings have none, so the bundle holds no printing of them at all.
+79a840ed-91cf-45ea-bad2-757856e88544  # Argoth, Sanctum of Nature — PBRO 256s
+1d743ad6-6ca2-409a-9773-581cc195dbf2  # Hanweir Battlements — EMN 204
+8aefe8bd-216a-4ec1-9362-3f9dbf7fd083  # Urza, Lord Protector — BRO 225
+f830ede6-ddbf-49b9-80cd-e3dbeccbf208  # Graf Rats — INR 113
+6fccdb60-5fce-4a6e-a709-b986f9a4b653  # Bruna, the Fading Light — INR 14
+04506bad-3856-4184-8dda-941ded60f41a  # Gisela, the Broken Blade — INR 24
+534b042b-1b86-4fc9-be3c-0d0f8c46d881  # Phyrexian Dragon Engine — PBRO 163s
+6c81b141-4c00-4779-b7d4-d0518f733682  # Hanweir Garrison — PEMN 130s
+6e55f2cf-418c-4956-945e-aaa211971135  # Mishra, Claimed by Gix — PBRO 216s
+5a57187c-f0ec-40de-b725-786f787b00a2  # Midnight Scavengers — EMN 96
+
+# stratum: reprints
+# eight cards with 3+ printings each, three printings of four and two of four
+e1f75b44-01a3-47f6-96c9-9ce327111e64  # Greater Mossdog — RAV 169
+08a45585-15e9-4df0-8b10-c6e26b166a20  # Greater Mossdog — PLST MMA-146
+91eac442-8e37-4aba-abf9-464916c39fff  # Greater Mossdog — DDJ 59
+2eebdd18-6930-42e0-b589-fe15820db6e1  # Greenwood Sentinel — M19 187
+ac02c05f-1121-4be4-9cc7-d6854d3cdc5c  # Greenwood Sentinel — J25 666
+e9a1a70d-c146-453e-84c4-71cae4e0afaa  # Greenwood Sentinel — M20 174
+d544553a-6b8b-475b-9d10-a932610bf474  # Damnable Pact — VOC 126
+a3f3a2f5-12ac-45ef-9ff3-076b40643692  # Damnable Pact — PDTK 93s
+1d696b28-bec8-481d-a4ff-fefab93e00c1  # Damnable Pact — C21 139
+55ecf013-130d-4cf3-b47e-54b5fb718878  # Baldin, Century Herdmaster — SLD 428
+ef84fedd-43a9-4c42-9f8a-e8147cc5eea2  # Baldin, Century Herdmaster — SLX 10
+fc018483-69a7-4c4c-adfe-44071f53a7de  # Baldin, Century Herdmaster — TDC 110
+dbdbc518-ab95-4708-b611-d2b88f7daebb  # Runaway Steam-Kin — PGRN 115p
+d8c9c111-fbc7-44e1-94bd-1ca164370623  # Runaway Steam-Kin — GRN 115
+89e3ef53-ccb6-4b8e-a512-c9debf87eecf  # Astrologian's Planisphere — PFIN 46s
+a0f6e2d7-58b5-4a7d-8c42-e25185cd173f  # Astrologian's Planisphere — FIN 581
+25b5887e-ac30-4552-8457-01ae5a196c1c  # Aven Flock — 9ED 4★
+29866d0b-f9be-4284-9d21-03598ef6ae4f  # Aven Flock — ODY 8
+f26f34db-732c-43d4-a6ef-e170538c0235  # Goblin Lore — P02 99
+00e990aa-5124-4e9d-ab4e-178bcda12abd  # Goblin Lore — 10E 208
+
+# stratum: random
+# anything else of normal layout
+5ace3c4e-3287-4975-b4d0-91f009c0cf5b  # Kami of the Hunt — CHK 219
+833fe154-fe11-4bef-8194-812cccacd4fb  # Dr. Madison Li — PIP 1066
+8341d14e-11e0-461d-9b63-aed03c70332d  # Deathbringer Regent — E01 32
+fd00d56a-86bd-41d8-82b6-975404ef8067  # Ulamog, the Defiler — MH3 15
+ba32cf1f-375c-4cc5-9963-c4f9510e3b39  # Lash of the Whip — THS 94
+bbaaa98a-ec40-4ff1-8762-a719cf1c475d  # Nissa, Vital Force — KLD 163
+3e241642-5172-4437-b694-f6aa159d5cd9  # Inspiring Call — FDN 226
+cce365d2-fb8e-481d-b3d0-537f1ba2c760  # Mentor of the Meek — C16 69
+2d8bd585-c5ea-46f8-8e11-f33c067f2f8e  # Faunsbane Troll — WOE 203
+5201bdeb-ba47-459b-ac0d-603367914578  # Blight Rot — ECL 89

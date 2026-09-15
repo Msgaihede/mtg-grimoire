@@ -1,7 +1,9 @@
 # .github — CI and releases
 
-Two workflows, and every rule below was measured live. Full detail, including the proof runs:
-[docs/reference/ci-and-releases.md](../docs/reference/ci-and-releases.md).
+Three workflows — `ci.yml`, `release.yml` and, since 2026-09-15, `scanner-bundle.yml` — and every
+rule below was measured live unless it says otherwise. Full detail, including the proof runs:
+[docs/reference/ci-and-releases.md](../docs/reference/ci-and-releases.md); the scanner bundle's
+record is [card-scanner.md](../docs/reference/card-scanner.md) §10.
 
 ## `ci.yml`
 
@@ -21,6 +23,10 @@ Two workflows, and every rule below was measured live. Full detail, including th
   is the
   fail-safe that makes the lists safe to be wrong in the cheap direction. **Only the "neither"
   arm can wrongly skip work, so it stays small.**
+  **`scanner-bundle.yml` has no arm of its own (2026-09-15)**, so a PR touching it falls to that
+  fail-safe and runs `frontend`, `rust`, `wasm` and `android` — none of which reads the file —
+  and not `powershell`. That errs in the cheap direction; the arm it belongs on is
+  `release.yml`'s "neither", since no job in `ci.yml` reads either file.
 - **The `wasm` job exists because a fully green `npm run verify` can ship a broken web
   target.** The crate is one crate with two targets, and a `use tauri::` added to a module on
   the wasm side of `lib.rs`'s module map compiles on desktop and fails on
@@ -80,12 +86,15 @@ Two workflows, and every rule below was measured live. Full detail, including th
   `crates/card-scanner` is deliberately not a workspace member, so `cargo test` in `src-tauri`
   compiles it and runs none of it — `session::tests` (the `live.html` key census, the panic
   guard, the reader cadence) was fenced by `npm run verify` and by nothing in CI until
-  2026-09-08. One step, Linux leg, `--features cli` to match `verify`. **No `fmt --check` and
+  2026-09-08. One step, Linux leg, `--features cli` to match `verify` — **and a second command
+  in it since 2026-09-15, `--features builder --bins`**, because `cli` does not compile
+  `build-hashes` or `eval` and a break in either was otherwise first seen by
+  `scanner-bundle.yml`, the job that publishes what every release embeds. **No `fmt --check` and
   no `clippy -D warnings` for that package**: it is not rustfmt-clean and carries four
   pre-existing clippy warnings, both measured and listed in
   [card-scanner.md](../docs/reference/card-scanner.md) §8, so either gate would go red on day
   one for something the step is not about.
-- `--locked` on every cargo call in both workflows. `cargo fmt --check` on Linux only;
+- `--locked` on every cargo call in every workflow. `cargo fmt --check` on Linux only;
   `clippy -D warnings` and `cargo test` on both — for `src-tauri` only, per the bullet above.
 
 ## `release.yml`
@@ -100,6 +109,15 @@ Two workflows, and every rule below was measured live. Full detail, including th
 - **The `Cargo.lock` selector must read `@.name.value`, never `@.name`** — release-please parses
   TOML into tagged nodes, so the obvious form matches nothing, and a non-match is a _warning_,
   not an error. `--locked` is what converts that silence into a failed check.
+- **Every build leg runs `npm run scanner:assets` straight after `npm ci`, and a missing asset
+  fails the leg on purpose** (2026-09-15). It downloads the card scanner's hash bundle and both
+  OCR models from the prerelease **`scanner-bundle-v<FORMAT_VERSION>`** — `scanner-bundle-v3`
+  today — into `src-tauri/scanner-assets/`, where `build.rs` embeds them; a release that silently
+  cannot scan is a regression nobody would see until a reader tried. **So `release.yml` depends
+  on `scanner-bundle.yml` having published, and the first release after that workflow landed
+  fails on every leg unless it has been dispatched once on `main`** — on 2026-09-15 the script
+  exits 1 with a 404 sentence naming the missing asset and the workflow. The `GH_TOKEN` on the
+  step is unused: the download is unauthenticated, because the repository is public.
 - **The release is created as a draft** and published only after every platform's assets attach.
   **`force-tag-creation` pairs with that and is not optional**: a draft has no git tag until
   published, and without it release-please's next run replays the whole history into the
@@ -118,3 +136,43 @@ Two workflows, and every rule below was measured live. Full detail, including th
 - **Linux artifacts are built but unverified** — nobody has run a Linux build.
 - Not done, deliberately: no code signing (SmartScreen warns on the installers), and **not**
   GitHub Packages — none of its registry types hosts a desktop installer.
+
+## `scanner-bundle.yml`
+
+Added 2026-09-15 and **not yet run on GitHub** — every rule here is from the file, local checks
+and a live probe of Scryfall, not from a run. The whole record:
+[card-scanner.md](../docs/reference/card-scanner.md) §10.
+
+- **It builds the card scanner's hash bundle from Scryfall's `default_cards`, weekly and on
+  dispatch, and publishes it with both OCR models to the release `scanner-bundle-v<FORMAT_VERSION>`.**
+  Weekly because `actions/cache` evicts an entry unused for seven days, and that cache is what
+  makes a run a new set's few hundred image fetches rather than half an hour and ~1.28 GB.
+- **The version in the tag is `grep -oP`'d out of `crates/card-scanner/src/index.rs`'s
+  `pub const FORMAT_VERSION: u16 = N;`** and a non-match fails the step rather than publishing to
+  `scanner-bundle-v`. `scripts/scanner-assets.mjs` reads the same line; change its shape and both
+  must follow.
+- **Scryfall's descriptor has no `download_uri`** — only `jsonl_download_uri`, a gzipped JSON Lines
+  file (checked live 2026-09-15). `jq -er` refuses a missing field instead of handing `curl` the
+  word `null`, and the job's default shell is `bash` so `pipefail` makes a failed `curl` in a pipe
+  a failed step.
+- **Only `main` publishes.** `workflow_dispatch` runs from any ref and the tag names the format
+  version, not the code, so a branch that changed the hashing without bumping the version would
+  `--clobber` the bundle every release embeds. Elsewhere the job builds, caches and writes a dry-run
+  line to the summary; the ref reaches the script through `env:`, never as an expression.
+- **"Unchanged" is `cmp -s -i 32`, never a whole-file compare** — `built_at` sits in the 32-byte
+  header and differs on every run. A release missing any of the three assets is republished
+  regardless.
+- **Two fences keep a shrunken bundle off the release** (2026-09-15), because every release embeds
+  what this uploads. `build-hashes` exits 1 and writes no bundle when more than **0.5%** of the
+  fetches it attempted failed transiently (`too_many_transient`, unit-tested); and the publish step
+  counts entries as `(size − 32) / 48` for the built and the published bundle and **fails the step
+  without uploading** when the new count is below **99%** of the old, saying both counts in the
+  summary. The second catches what the first cannot see — a short `default_cards`, a bad cache.
+  A deliberate shrink (a format change moves the tag, so it never meets this) has no override.
+- **The synthetic evaluation is `continue-on-error` and must stay so**: it reports and does not
+  gate, and a failure writes its own line to the summary. The condition on that line reads
+  `steps.eval.outcome`, because under `continue-on-error` a failed step's `conclusion` is `success`.
+- **Prerelease and `--latest=false`**, so nothing asking GitHub for the latest release — the in-app
+  updater among them — is handed a bundle.
+- **`release.yml` depends on it having published** (see that section): dispatch it once on `main`
+  before the first release after it lands.

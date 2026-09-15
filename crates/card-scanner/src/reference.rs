@@ -13,6 +13,7 @@
 //! Opening a corpus is optional throughout. A bundle with no corpus beside it still matches;
 //! it simply answers with ids, which is enough to prove the pipeline works.
 
+use crate::filters::ScanFilters;
 use crate::index::{format_uuid, Bundle, Mask, Match, Section, ID_LEN};
 use std::collections::HashMap;
 
@@ -89,10 +90,17 @@ pub struct Reference {
     /// Printing id → oracle id. The key the tracker pools evidence on, so a card's reprints
     /// do not split their own vote.
     oracle: HashMap<[u8; ID_LEN], [u8; ID_LEN]>,
-    /// Normalized card name → one representative printing per distinct name.
+    /// Oracle id → every printing of that card, in the order they were added. A printing the
+    /// corpus gives no oracle is its own card here, keyed by its own id.
     ///
-    /// Names, not printings: OCR reads the name, and every printing of a card shares it. One
-    /// representative is enough because the tracker pools by oracle id anyway.
+    /// What lets a filtered name read ask the question that matters — does this card have
+    /// *any* printing the filters permit — and what Exact's title tier widens a read name to.
+    oracle_printings: HashMap<[u8; ID_LEN], Vec<[u8; ID_LEN]>>,
+    /// Normalized card name → the card's oracle id (the printing's own id when it has none).
+    ///
+    /// Names, not printings: OCR reads the name, and every printing of a card shares it. An
+    /// oracle rather than a representative printing, so a masked lookup can check the card's
+    /// printings against the filters instead of one arbitrary printing of it.
     by_name: HashMap<String, [u8; ID_LEN]>,
     /// `(set, collector number)` to printing — the index the collector line resolves against.
     ///
@@ -108,6 +116,7 @@ impl Reference {
             labels: HashMap::new(),
             art_printings: HashMap::new(),
             oracle: HashMap::new(),
+            oracle_printings: HashMap::new(),
             by_name: HashMap::new(),
             by_set_number: HashMap::new(),
         }
@@ -145,27 +154,81 @@ impl Reference {
         for row in rows.flatten() {
             let (id, illustration_id, label, oracle_id) = row;
             if let Some(raw) = crate::index::parse_uuid(&id) {
-                if let Some(o) = oracle_id.as_deref().and_then(crate::index::parse_uuid) {
-                    self.oracle.insert(raw, o);
-                }
-                if let Some(ill) = illustration_id.as_deref().and_then(crate::index::parse_uuid) {
-                    self.art_printings.entry(ill).or_default().push(label.clone());
-                }
-                self.by_name.entry(crate::ocr::normalize(&label.name)).or_insert(raw);
-                // English first: a non-English printing shares the set and number with its
-                // English counterpart, and `or_insert` would otherwise hand back whichever
-                // language the corpus happened to list first.
-                let key = set_number_key(&label.set, &label.number);
-                if label.lang == "en" {
-                    self.by_set_number.insert(key, raw);
-                } else {
-                    self.by_set_number.entry(key).or_insert(raw);
-                }
-                self.labels.insert(raw, label);
+                self.add_label(
+                    raw,
+                    oracle_id.as_deref().and_then(crate::index::parse_uuid),
+                    illustration_id.as_deref().and_then(crate::index::parse_uuid),
+                    label,
+                );
                 n += 1;
             }
         }
         Ok(n)
+    }
+
+    /// Attach one printing's label — the body of [`Reference::load_labels`], public so a
+    /// caller with no SQLite (a test, the synthetic evaluation) can build a labelled reference.
+    ///
+    /// Adding the same printing twice replaces its label and does not list it twice.
+    pub fn add_label(
+        &mut self,
+        id: [u8; ID_LEN],
+        oracle: Option<[u8; ID_LEN]>,
+        illustration: Option<[u8; ID_LEN]>,
+        label: Label,
+    ) {
+        let fresh = !self.labels.contains_key(&id);
+        let card = oracle.unwrap_or(id);
+        if let Some(o) = oracle {
+            self.oracle.insert(id, o);
+        }
+        if fresh {
+            if let Some(ill) = illustration {
+                self.art_printings.entry(ill).or_default().push(label.clone());
+            }
+            self.oracle_printings.entry(card).or_default().push(id);
+        }
+        self.by_name.entry(crate::ocr::normalize(&label.name)).or_insert(card);
+        // English first: a non-English printing shares the set and number with its English
+        // counterpart, and `or_insert` would otherwise hand back whichever language the corpus
+        // happened to list first.
+        let key = set_number_key(&label.set, &label.number);
+        if label.lang == "en" {
+            self.by_set_number.insert(key, id);
+        } else {
+            self.by_set_number.entry(key).or_insert(id);
+        }
+        self.labels.insert(id, label);
+    }
+
+    /// The mask a set of filters admits: every labelled printing that passes them.
+    ///
+    /// Empty filters are [`Mask::all`], which keeps the unfiltered search on its fast path
+    /// rather than checking 113,375 ids against a set that holds all of them.
+    pub fn mask_for(&self, f: &ScanFilters) -> Mask {
+        if f.is_empty() {
+            return Mask::all();
+        }
+        Mask::allow_only(self.labels.iter().filter(|(_, l)| f.permits(l)).map(|(id, _)| *id))
+    }
+
+    /// Every printing of a card, by its oracle id. Empty for an id the labels never named.
+    pub fn printings_of(&self, oracle: &[u8; ID_LEN]) -> &[[u8; ID_LEN]] {
+        self.oracle_printings.get(oracle).map_or(&[], Vec::as_slice)
+    }
+
+    /// The corpus oracle id for a printing, and nothing when the corpus has none.
+    ///
+    /// **No fallback, unlike [`Reference::oracle_for`].** The tracker needs *some* key to pool
+    /// on and the printing's own id is a fine one; a reader being told "this is the card's
+    /// oracle id" must not be handed a printing id standing in for one.
+    pub fn oracle_id_of(&self, printing: &[u8; ID_LEN]) -> Option<[u8; ID_LEN]> {
+        self.oracle.get(printing).copied()
+    }
+
+    /// Does this card have a printing the mask admits?
+    fn card_permitted(&self, card: &[u8; ID_LEN], mask: &Mask) -> bool {
+        mask.is_unrestricted() || self.printings_of(card).iter().any(|p| mask.permits(p))
     }
 
     /// Resolve a collector-line read to the exact printing it names.
@@ -180,10 +243,25 @@ impl Reference {
     /// pairing that names a real printing wins, which is what turns a wide guess into a
     /// checked answer.
     pub fn lookup_collector(&self, candidates: &[(String, String)]) -> Option<[u8; ID_LEN]> {
-        candidates
-            .iter()
-            .find_map(|(set, number)| self.by_set_number.get(&(set.clone(), number.clone())))
-            .copied()
+        self.lookup_collector_masked(candidates, &Mask::all())
+    }
+
+    /// The same, admitting only a printing the mask permits.
+    ///
+    /// A pairing that names an excluded printing is skipped rather than ending the search, so
+    /// a later pairing that names a permitted one still resolves — the mask narrows what can be
+    /// an answer, it does not make a read worse.
+    pub fn lookup_collector_masked(
+        &self,
+        candidates: &[(String, String)],
+        mask: &Mask,
+    ) -> Option<[u8; ID_LEN]> {
+        candidates.iter().find_map(|(set, number)| {
+            self.by_set_number
+                .get(&(set.clone(), number.clone()))
+                .copied()
+                .filter(|id| mask.permits(id))
+        })
     }
 
     /// Resolve one (set, number) pairing. The debug view uses this to show what each
@@ -228,12 +306,28 @@ impl Reference {
     /// three characters of the read's length are considered, and the distance itself gives up
     /// once it exceeds the budget. Searching 30,000 names unbounded, per frame, at twelve
     /// frames a second, is not a thing that can be done.
+    ///
+    /// Answers with a printing — the card's first — which is the contract `scan.rs` and the
+    /// tracker's observations were written against. See [`Reference::lookup_by_name_masked`]
+    /// for the oracle id.
     pub fn lookup_by_name(&self, read: &str) -> Option<([u8; ID_LEN], u32)> {
+        let (card, edits) = self.lookup_by_name_masked(read, &Mask::all())?;
+        self.printings_of(&card).first().map(|p| (*p, edits))
+    }
+
+    /// The same, admitting only a card with at least one printing the mask permits, and
+    /// answering with that card's oracle id (its printing's own id when the corpus has none).
+    ///
+    /// **An exact read of an excluded card is `None`, not its nearest permitted neighbour.** A
+    /// clean read of "Shock" says the card is Shock; handing back whichever permitted name is
+    /// one edit away would be a confident wrong answer where the honest one is "not in these
+    /// filters".
+    pub fn lookup_by_name_masked(&self, read: &str, mask: &Mask) -> Option<([u8; ID_LEN], u32)> {
         if read.len() < 4 {
             return None;
         }
-        if let Some(id) = self.by_name.get(read) {
-            return Some((*id, 0));
+        if let Some(card) = self.by_name.get(read) {
+            return self.card_permitted(card, mask).then_some((*card, 0));
         }
 
         // One edit per four characters, so a long name tolerates more misreads than a short
@@ -241,14 +335,16 @@ impl Reference {
         // same slip in "Shock" is a different card.
         let budget = (read.len() / 4).clamp(1, 6) as u32;
         let mut best: Option<([u8; ID_LEN], u32)> = None;
-        for (name, id) in &self.by_name {
+        for (name, card) in &self.by_name {
             if name.len().abs_diff(read.len()) > 3 {
                 continue;
             }
             let cap = best.map(|(_, d)| d).unwrap_or(budget + 1);
             if let Some(d) = bounded_edit_distance(name, read, cap.min(budget)) {
-                if best.is_none_or(|(_, b)| d < b) {
-                    best = Some((*id, d));
+                // The mask is checked only for a name that would win, so a filtered read pays
+                // for it on a handful of names rather than on every one within reach.
+                if best.is_none_or(|(_, b)| d < b) && self.card_permitted(card, mask) {
+                    best = Some((*card, d));
                     if d == 0 {
                         break;
                     }
@@ -563,6 +659,136 @@ mod tests {
         // Gives up rather than computing a distance it would only discard.
         assert_eq!(bounded_edit_distance("kitten", "sitting", 2), None);
         assert_eq!(bounded_edit_distance("short", "a much longer string", 3), None);
+    }
+
+    // ---- Filters and the label seam ------------------------------------------------------
+
+    /// A reference whose printings carry labels, attached through `add_label` rather than a
+    /// corpus. Rows are `(printing, oracle, name, set, number, released)`; each printing's
+    /// bundle entry is the hash of `img(printing)`.
+    fn labelled(rows: &[(u8, u8, &str, &str, &str, &str)]) -> Reference {
+        let mut b = BundleBuilder::new(HashKind::DHash, 256);
+        for (p, ..) in rows {
+            b.push(Section::Card, id(*p), &hash_rgb(&img(*p as u32), HashKind::DHash, 256));
+        }
+        let mut r = Reference::new(b.finish(0));
+        for (p, o, name, set, number, released) in rows {
+            r.add_label(
+                id(*p),
+                Some(id(*o)),
+                None,
+                Label {
+                    name: (*name).into(),
+                    set: (*set).into(),
+                    number: (*number).into(),
+                    lang: "en".into(),
+                    released: (*released).into(),
+                },
+            );
+        }
+        r
+    }
+
+    fn three() -> Reference {
+        labelled(&[
+            (1, 10, "Forest", "hob", "193", "2025-01-01"),
+            (2, 10, "Forest", "ltr", "270", "2023-06-23"),
+            (3, 20, "Shock", "hob", "100", "2025-01-01"),
+        ])
+    }
+
+    fn sets(codes: &[&str]) -> ScanFilters {
+        ScanFilters { sets: codes.iter().map(|s| s.to_string()).collect(), ..Default::default() }
+    }
+
+    #[test]
+    fn a_set_filter_permits_exactly_that_sets_printings() {
+        let r = three();
+        let m = r.mask_for(&sets(&["HOB"]));
+        assert!(m.permits(&id(1)) && m.permits(&id(3)) && !m.permits(&id(2)));
+    }
+
+    #[test]
+    fn a_date_range_is_inclusive_at_both_ends() {
+        let r = three();
+        let both = ScanFilters {
+            released_from: Some("2023-06-23".into()),
+            released_to: Some("2025-01-01".into()),
+            ..Default::default()
+        };
+        assert_eq!(r.mask_for(&both).len(), Some(3));
+        let later = ScanFilters { released_from: Some("2023-06-24".into()), ..Default::default() };
+        assert!(!r.mask_for(&later).permits(&id(2)));
+        assert!(r.mask_for(&later).permits(&id(1)));
+        let earlier = ScanFilters { released_to: Some("2024-12-31".into()), ..Default::default() };
+        assert_eq!(r.mask_for(&earlier).len(), Some(1));
+    }
+
+    #[test]
+    fn empty_filters_are_unrestricted() {
+        let r = three();
+        assert!(r.mask_for(&ScanFilters::default()).is_unrestricted());
+    }
+
+    #[test]
+    fn a_name_read_cannot_resolve_to_a_card_with_no_permitted_printing() {
+        let r = three();
+        let ltr = r.mask_for(&sets(&["ltr"]));
+        assert_eq!(r.lookup_by_name_masked("shock", &ltr), None);
+        assert_eq!(r.lookup_by_name_masked("forest", &ltr), Some((id(10), 0)));
+        // And a misread of the excluded card does not wander to a permitted neighbour.
+        assert_eq!(r.lookup_by_name_masked("shocc", &ltr), None);
+        assert_eq!(r.lookup_by_name_masked("shocc", &Mask::all()), Some((id(20), 1)));
+    }
+
+    #[test]
+    fn a_collector_read_skips_a_pairing_that_names_an_excluded_printing() {
+        let r = three();
+        let ltr = r.mask_for(&sets(&["ltr"]));
+        let c = vec![("hob".to_string(), "193".to_string()), ("ltr".to_string(), "270".to_string())];
+        assert_eq!(r.lookup_collector_masked(&c, &ltr), Some(id(2)));
+        assert_eq!(r.lookup_collector_masked(&c, &Mask::all()), Some(id(1)));
+        assert_eq!(r.lookup_collector(&c), Some(id(1)), "the unmasked contract is unchanged");
+    }
+
+    #[test]
+    fn printings_of_lists_every_reprint_of_a_card() {
+        let r = three();
+        assert_eq!(r.printings_of(&id(10)).len(), 2);
+        assert_eq!(r.printings_of(&id(20)), &[id(3)]);
+        assert!(r.printings_of(&id(99)).is_empty());
+    }
+
+    #[test]
+    fn the_unmasked_name_lookup_still_answers_with_a_printing() {
+        // `scan.rs` and the tracker's observations hold printings, so the old contract keeps
+        // its shape: the card's first printing, not its oracle id.
+        let r = three();
+        assert_eq!(r.lookup_by_name("forest"), Some((id(1), 0)));
+        assert_eq!(r.lookup_by_name("shock"), Some((id(3), 0)));
+    }
+
+    #[test]
+    fn oracle_id_of_has_no_fallback_where_oracle_for_does() {
+        let mut r = three();
+        r.add_label(
+            id(4),
+            None,
+            None,
+            Label {
+                name: "Token".into(),
+                set: "thob".into(),
+                number: "1".into(),
+                lang: "en".into(),
+                released: "2025-01-01".into(),
+            },
+        );
+        assert_eq!(r.oracle_id_of(&id(1)), Some(id(10)));
+        assert_eq!(r.oracle_id_of(&id(4)), None);
+        assert_eq!(r.oracle_for(&id(4)), id(4));
+        // A printing with no oracle is its own card for the name lookup.
+        assert_eq!(r.lookup_by_name_masked("token", &Mask::all()), Some((id(4), 0)));
+        assert_eq!(r.printings_of(&id(4)), &[id(4)]);
     }
 
     #[test]

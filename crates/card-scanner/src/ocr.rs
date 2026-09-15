@@ -276,10 +276,28 @@ mod engine {
         /// Fetch them with `scripts/fetch-ocr-models.mjs`; they are not vendored, for the same
         /// reason the hash bundle is not.
         pub fn load(detection: &Path, recognition: &Path) -> anyhow_lite::Result<TitleReader> {
-            let detection_model = rten::Model::load_file(detection)
-                .map_err(|e| format!("detection model {}: {e}", detection.display()))?;
-            let recognition_model = rten::Model::load_file(recognition)
-                .map_err(|e| format!("recognition model {}: {e}", recognition.display()))?;
+            let read = |what: &str, path: &Path| {
+                std::fs::read(path).map_err(|e| format!("{what} model {}: {e}", path.display()))
+            };
+            let (d, r) = (read("detection", detection)?, read("recognition", recognition)?);
+            TitleReader::from_bytes(&d, &r).map_err(|e| {
+                format!("{e} ({} and {})", detection.display(), recognition.display())
+            })
+        }
+
+        /// The same, from the two model files' bytes — an embedded copy, say.
+        ///
+        /// `rten::Model::load` takes an owned buffer, so this copies each model once (~12 MB
+        /// together, once per session). `load_static_slice` would avoid it and would tie the
+        /// signature to `'static`, which a caller holding a file it just read cannot give.
+        pub fn from_bytes(
+            detection: &[u8],
+            recognition: &[u8],
+        ) -> anyhow_lite::Result<TitleReader> {
+            let detection_model = rten::Model::load(detection.to_vec())
+                .map_err(|e| format!("detection model: {e}"))?;
+            let recognition_model = rten::Model::load(recognition.to_vec())
+                .map_err(|e| format!("recognition model: {e}"))?;
             let engine = OcrEngine::new(OcrEngineParams {
                 detection_model: Some(detection_model),
                 recognition_model: Some(recognition_model),

@@ -2,13 +2,18 @@
 
 Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every figure keeps the date and the build it was taken on.
 
-- Two workflows. **`.github/workflows/ci.yml`** gates PRs and pushes to `main`: a `changes`
+- Three workflows — the third, **`scanner-bundle.yml`** (2026-09-15), builds and publishes the
+  card scanner's embedded assets and is recorded in [card-scanner.md](card-scanner.md) §10; this
+  page covers the other two. **`.github/workflows/ci.yml`** gates PRs and pushes to `main`: a `changes`
   router (below), a `frontend`
   job (`npm run build`/`lint`/`test:run`), a `rust` matrix over `windows-latest` +
   `ubuntu-22.04` (`cargo fmt --check` on Linux only, `clippy -D warnings` and `cargo test`
   on both, everything `--locked`, **and since 2026-09-08 the `card-scanner` crate's own suite
   on the Linux leg** — `cargo test --locked --features cli --manifest-path
-  crates/card-scanner/Cargo.toml`, tests only, because that crate is not rustfmt-clean and
+  crates/card-scanner/Cargo.toml`, and since 2026-09-15 a second command in the same step,
+  `cargo test --locked --features builder --bins` against the same manifest, because `cli` does
+  not compile the `build-hashes` and `eval` binaries and a break in either surfaced only in
+  `scanner-bundle.yml` — tests only, because that crate is not rustfmt-clean and
   carries four pre-existing clippy warnings, both listed in
   [card-scanner.md](card-scanner.md) §8; until that step `session::tests` was fenced by
   `npm run verify` and by nothing in CI), a **`wasm`** job (below) and a `powershell` job (below).

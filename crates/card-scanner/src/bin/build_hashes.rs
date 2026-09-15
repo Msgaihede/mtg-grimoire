@@ -25,12 +25,22 @@
 //! # what a re-run would do, without doing it
 //! build-hashes --corpus <corpus.db> --dry-run
 //!
-//! # the real thing
-//! build-hashes --corpus <corpus.db> --out card-hashes-v1.bin
+//! # the real thing, from the app's corpus
+//! build-hashes --corpus <corpus.db> --out card-hashes.bin
 //!
-//! # publish; the tag is fixed and the asset is replaced in place
-//! gh release upload card-hashes card-hashes-v1.bin --clobber
+//! # or from Scryfall's default_cards file, which is what CI has instead of a corpus
+//! build-hashes --bulk default-cards.jsonl --out card-hashes.bin --sections card
 //! ```
+//!
+//! **Publishing is `.github/workflows/scanner-bundle.yml`'s job**, to the release
+//! `scanner-bundle-v<FORMAT_VERSION>` as the asset `card-hashes.bin`, beside the two OCR models.
+//! Release builds download all three from there and embed them.
+//!
+//! **`--bulk` reads what Scryfall serves, which is not what its name suggests.** The bulk-data
+//! descriptor has carried `jsonl_download_uri` and no `download_uri` since 2026-07-20, and the
+//! file behind it is gzipped JSON Lines — so the input is one card object per line once
+//! gunzipped. A JSON array is still accepted, sniffed from the first byte. Either way the file
+//! is streamed one card at a time: it is hundreds of megabytes, and nothing here holds it whole.
 //!
 //! **Every request carries a User-Agent.** `cards.scryfall.io` answers **HTTP 400** without
 //! one — measured 2026-09-01 — and a 400 does not read like a policy refusal, so a build that
@@ -38,11 +48,14 @@
 
 use card_scanner::hash::{hash_rgb, Descriptor, HashKind};
 use card_scanner::index::{BundleBuilder, Section, ID_LEN};
-use clap::Parser;
+use clap::{ArgGroup, Parser};
 use rusqlite::{Connection, OpenFlags};
+use serde::de::{self, SeqAccess, Visitor};
+use serde::Deserializer as _;
+use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
+use std::sync::{mpsc, Mutex};
 use std::time::Instant;
 
 /// Identifies this tool to Scryfall. Their guidance asks for something specific rather than a
@@ -51,10 +64,16 @@ const USER_AGENT: &str = "MTGGrimoire-card-scanner/0.1 (+https://github.com/Msga
 
 #[derive(Parser, Debug)]
 #[command(name = "build-hashes", about = "Build the card-scanner reference bundle")]
+#[command(group(ArgGroup::new("source").required(true).args(["corpus", "bulk"])))]
 struct Args {
     /// The app's `corpus.db`. Opened read-only and never written.
     #[arg(long)]
-    corpus: PathBuf,
+    corpus: Option<PathBuf>,
+    /// Scryfall's `default_cards` bulk file, uncompressed: JSON Lines as Scryfall serves it, or a
+    /// JSON array. Streamed, never read whole. The alternative to `--corpus` for a machine that
+    /// has no app database, which is every CI runner.
+    #[arg(long)]
+    bulk: Option<PathBuf>,
     /// Sidecar holding one row per fetched image. Delete it to force a full rebuild.
     #[arg(long, default_value = "card-hashes-cache.db")]
     cache: PathBuf,
@@ -127,26 +146,153 @@ fn parse_uuid(s: &str) -> Option<[u8; ID_LEN]> {
     card_scanner::index::parse_uuid(s)
 }
 
-/// Read the corpus and produce every (id, url) pair the bundle wants.
-///
-/// The art section is keyed by `illustration_id` and deduplicated here: 117,619 printings
-/// share 50,963 artworks, so fetching per printing would move 2.3× the bytes for exactly the
-/// same set of hashes.
-fn collect_jobs(corpus: &Connection, sections: SectionArg) -> rusqlite::Result<Vec<Job>> {
-    let mut jobs = Vec::new();
-    let mut seen_art = std::collections::HashSet::new();
+/// One printing as the builder reads it: `(id, illustration_id, image_uris)`, the last as the
+/// JSON text the app's `cards.image_uris` column holds. Both sources yield exactly this, so
+/// nothing downstream of [`collect_jobs`] can tell which one a run was built from.
+type Row = (String, Option<String>, String);
 
+/// The corpus source: the query `build-hashes` has always run.
+fn rows_from_corpus(corpus: &Connection) -> rusqlite::Result<Vec<Row>> {
     let mut stmt = corpus.prepare(
         "SELECT id, illustration_id, image_uris FROM cards
          WHERE image_uris IS NOT NULL",
     )?;
-    let rows = stmt.query_map([], |r| {
-        Ok((
-            r.get::<_, String>(0)?,
-            r.get::<_, Option<String>>(1)?,
-            r.get::<_, String>(2)?,
-        ))
-    })?;
+    let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+    rows.collect()
+}
+
+/// The three fields of a Scryfall card object the bundle needs. Every other field is skipped
+/// by the parser without being built.
+#[derive(serde::Deserialize)]
+struct BulkCard {
+    id: String,
+    illustration_id: Option<String>,
+    image_uris: Option<serde_json::Value>,
+}
+
+impl BulkCard {
+    /// `None` for a card with no top-level `image_uris` — a double-faced card keeps its images
+    /// on `card_faces` — which is the row the corpus query's `IS NOT NULL` leaves out too: the
+    /// app's ingest stores only the top-level object in that column.
+    fn into_row(self) -> Option<Row> {
+        let uris = self.image_uris?;
+        Some((self.id, self.illustration_id, uris.to_string()))
+    }
+}
+
+type BulkItem = Result<Row, serde_json::Error>;
+
+const ROWS_DROPPED: &str = "the row reader was dropped";
+
+/// The bulk source, streamed one card at a time.
+///
+/// **A thread, because serde's streaming reads are push-shaped and a caller wants to pull.**
+/// A `SeqAccess` visitor is handed each array element and there is no way to suspend it
+/// between two, so the parse runs on its own thread and sends rows down a bounded channel. The
+/// bound is what keeps memory flat: the parser waits whenever the builder has not caught up.
+fn rows_from_bulk<R: Read + Send + 'static>(reader: R) -> BulkRows {
+    let (tx, rx) = mpsc::sync_channel(1024);
+    let worker = std::thread::spawn(move || {
+        if let Err(e) = read_bulk(BufReader::new(reader), &tx) {
+            let _ = tx.send(Err(e));
+        }
+    });
+    BulkRows { rx, worker: Some(worker) }
+}
+
+/// Parse `reader` as a JSON array or as JSON Lines, whichever its first byte says, and send
+/// every card that has images.
+fn read_bulk<R: BufRead>(
+    mut reader: R,
+    tx: &mpsc::SyncSender<BulkItem>,
+) -> Result<(), serde_json::Error> {
+    // Peek at the first byte that is not whitespace, consuming only the whitespace before it.
+    let is_array = loop {
+        let buf = reader.fill_buf().map_err(serde_json::Error::io)?;
+        if buf.is_empty() {
+            return Ok(());
+        }
+        match buf.iter().position(|b| !b.is_ascii_whitespace()) {
+            Some(i) => {
+                let first = buf[i];
+                reader.consume(i);
+                break first == b'[';
+            }
+            None => {
+                let n = buf.len();
+                reader.consume(n);
+            }
+        }
+    };
+
+    if is_array {
+        let mut de = serde_json::Deserializer::from_reader(reader);
+        (&mut de).deserialize_seq(Cards(tx))?;
+        return de.end();
+    }
+    for card in serde_json::Deserializer::from_reader(reader).into_iter::<BulkCard>() {
+        if let Some(row) = card?.into_row() {
+            tx.send(Ok(row))
+                .map_err(|_| <serde_json::Error as de::Error>::custom(ROWS_DROPPED))?;
+        }
+    }
+    Ok(())
+}
+
+/// Deserializes one array element at a time and sends it on, so the array is never built.
+struct Cards<'a>(&'a mpsc::SyncSender<BulkItem>);
+
+impl<'de> Visitor<'de> for Cards<'_> {
+    type Value = ();
+
+    fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("an array of Scryfall card objects")
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
+        while let Some(card) = seq.next_element::<BulkCard>()? {
+            if let Some(row) = card.into_row() {
+                self.0.send(Ok(row)).map_err(|_| de::Error::custom(ROWS_DROPPED))?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The receiving end of [`rows_from_bulk`].
+struct BulkRows {
+    rx: mpsc::Receiver<BulkItem>,
+    worker: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Iterator for BulkRows {
+    type Item = BulkItem;
+
+    fn next(&mut self) -> Option<BulkItem> {
+        if let Ok(item) = self.rx.recv() {
+            return Some(item);
+        }
+        // **The channel closing is not proof the file ended.** A parser that panicked drops its
+        // sender exactly as one that finished does, and reading that as the end would build and
+        // publish a bundle missing every card after the panic.
+        match self.worker.take()?.join() {
+            Ok(()) => None,
+            Err(_) => Some(Err(de::Error::custom("the bulk reader panicked"))),
+        }
+    }
+}
+
+/// Turn a source's rows into every (id, url) pair the bundle wants.
+///
+/// The art section is keyed by `illustration_id` and deduplicated here: 117,619 printings
+/// share 50,963 artworks, so fetching per printing would move 2.3× the bytes for exactly the
+/// same set of hashes.
+fn collect_jobs<E>(
+    rows: impl IntoIterator<Item = Result<Row, E>>,
+    sections: SectionArg,
+) -> Result<Vec<Job>, E> {
+    let mut jobs = Vec::new();
+    let mut seen_art = std::collections::HashSet::new();
 
     for row in rows {
         let (id, illustration_id, uris) = row?;
@@ -273,6 +419,33 @@ fn fetch_and_hash(job: &Job, kind: HashKind, bits: u16) -> Fetched {
     Fetched::Transient { url: job.url.clone(), why: last }
 }
 
+/// Read whichever source was named into the jobs the bundle wants. The `source` group makes
+/// clap require exactly one of the two, so this never sees neither or both.
+fn read_jobs(args: &Args) -> Result<Vec<Job>, String> {
+    if let Some(path) = &args.bulk {
+        eprintln!("streaming {}…", path.display());
+        let file = std::fs::File::open(path)
+            .map_err(|e| format!("cannot open bulk file {}: {e}", path.display()))?;
+        return collect_jobs(rows_from_bulk(file), args.sections)
+            .map_err(|e| format!("cannot read bulk file {}: {e}", path.display()));
+    }
+
+    let path = args.corpus.as_ref().expect("clap requires --corpus or --bulk");
+    if !path.exists() {
+        return Err(format!("no corpus at {}", path.display()));
+    }
+    let corpus = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
+    )
+    .map_err(|e| format!("cannot open corpus {}: {e}", path.display()))?;
+    eprintln!("reading {}…", path.display());
+    let rows = rows_from_corpus(&corpus).map_err(|e| format!("corpus query failed: {e}"))?;
+    let rows = rows.into_iter().map(Ok::<_, std::convert::Infallible>);
+    let Ok(jobs) = collect_jobs(rows, args.sections);
+    Ok(jobs)
+}
+
 fn main() -> std::process::ExitCode {
     let args = Args::parse();
     if !matches!(args.bits, 128 | 256) {
@@ -293,34 +466,24 @@ fn main() -> std::process::ExitCode {
     let algo = format!("{}@{}", kind.as_str(), card_scanner::index::FORMAT_VERSION);
     let algo = algo.as_str();
 
-    if !args.corpus.exists() {
-        eprintln!("no corpus at {}", args.corpus.display());
-        return std::process::ExitCode::from(1);
-    }
-
-    let corpus = match Connection::open_with_flags(
-        &args.corpus,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
-    ) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("cannot open corpus {}: {e}", args.corpus.display());
-            return std::process::ExitCode::from(1);
-        }
-    };
-
     let started = Instant::now();
-    eprintln!("reading {}…", args.corpus.display());
-    let jobs = match collect_jobs(&corpus, args.sections) {
+    let jobs = match read_jobs(&args) {
         Ok(j) => j,
-        Err(e) => {
-            eprintln!("corpus query failed: {e}");
+        Err(message) => {
+            eprintln!("{message}");
             return std::process::ExitCode::from(1);
         }
     };
     let n_card = jobs.iter().filter(|j| j.section == Section::Card).count();
     let n_art = jobs.len() - n_card;
     eprintln!("  {n_card} printings, {n_art} artworks — {} images in the bundle", jobs.len());
+    // **An empty source is a failure, not a small bundle.** The emit below keeps only ids the
+    // source names, so a source naming none writes a valid, empty bundle — and CI would publish
+    // it over the real one, leaving every release build a scanner that recognises nothing.
+    if jobs.is_empty() {
+        eprintln!("the source names no images; refusing to write an empty bundle");
+        return std::process::ExitCode::from(1);
+    }
 
     let mut cache = match open_cache(&args.cache) {
         Ok(c) => c,
@@ -565,12 +728,32 @@ fn main() -> std::process::ExitCode {
             eprintln!("  …and {} more", transient.len() - 10);
         }
     }
+    // **A run that lost more than a sliver of its fetches writes no bundle and fails.** A transient
+    // failure is left out of the cache and so out of the bundle, and `scanner-bundle.yml` publishes
+    // whatever this writes: an image host that fell over for ten minutes would otherwise ship a
+    // bundle missing every card it could not reach, embedded by every release until next week.
+    if too_many_transient(transient.len(), total) {
+        eprintln!(
+            "\n{} of {total} fetches failed transiently — more than {}% of the fetches attempted — \
+             so no bundle was written. What did fetch is cached; a re-run retries only the rest.",
+            transient.len(),
+            MAX_TRANSIENT_PER_MILLE as f64 / 10.0
+        );
+        return std::process::ExitCode::from(1);
+    }
 
     // ── Emit ──────────────────────────────────────────────────────────────────────
     let cache = cache.into_inner().expect("cache");
     let mut builder = BundleBuilder::new(kind, args.bits);
+    // **Ordered, because CI decides whether to publish by comparing bundles byte for byte.**
+    // `built_at` makes every header differ, so `scanner-bundle.yml` compares everything past
+    // it — which only means "the same hashes" if the same hashes are always written in the same
+    // order. It is the primary key's order, so this costs no sort.
     let mut stmt = cache
-        .prepare("SELECT section, id, hash FROM hashes WHERE algo = ?1 AND bits = ?2")
+        .prepare(
+            "SELECT section, id, hash FROM hashes WHERE algo = ?1 AND bits = ?2
+             ORDER BY section, id",
+        )
         .expect("cache schema");
     let rows = stmt
         .query_map(rusqlite::params![algo, args.bits], |r| {
@@ -625,8 +808,90 @@ fn main() -> std::process::ExitCode {
         if skipped > 0 { format!(", {skipped} cached rows not in this corpus") } else { String::new() }
     );
     eprintln!("  in {:.0}s", started.elapsed().as_secs_f64());
-    eprintln!("\npublish with:");
-    eprintln!("  gh release upload card-hashes {} --clobber", args.out.display());
+    eprintln!(
+        "\nrelease builds embed the asset card-hashes.bin from the release scanner-bundle-v{}, \
+         which .github/workflows/scanner-bundle.yml publishes",
+        card_scanner::index::FORMAT_VERSION
+    );
 
     std::process::ExitCode::SUCCESS
+}
+
+/// How many transient fetch failures per thousand attempted a build tolerates: 0.5%.
+///
+/// A weekly run over a busy image host loses a handful to timeouts and retries them next week; a
+/// run past this lost something bigger than a handful, and its bundle would be short by exactly
+/// the cards it could not reach.
+const MAX_TRANSIENT_PER_MILLE: usize = 5;
+
+/// Did more than [`MAX_TRANSIENT_PER_MILLE`] of the `attempted` fetches fail transiently? Integer
+/// arithmetic, so exactly 0.5% is still a build. Nothing attempted is never too many.
+fn too_many_transient(failed: usize, attempted: usize) -> bool {
+    failed * 1000 > attempted * MAX_TRANSIENT_PER_MILLE
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn more_than_half_a_percent_of_transient_failures_fails_the_build() {
+        assert!(!too_many_transient(0, 0), "a run that fetched nothing failed nothing");
+        assert!(!too_many_transient(0, 113_375));
+        assert!(!too_many_transient(5, 1_000), "exactly 0.5% is still a build");
+        assert!(too_many_transient(6, 1_000));
+        assert!(!too_many_transient(566, 113_375));
+        assert!(too_many_transient(567, 113_375));
+        assert!(too_many_transient(1, 100), "one of a new set's hundred is 1%");
+        assert!(too_many_transient(1, 1));
+    }
+
+    #[test]
+    fn a_bulk_file_yields_the_rows_the_corpus_query_does() {
+        let json = r#"[
+      {"id":"00000000-0000-0000-0000-000000000001","illustration_id":"00000000-0000-0000-0000-0000000000aa",
+       "image_uris":{"small":"https://cards.scryfall.io/small/front/0/0/1.jpg?1"}},
+      {"id":"00000000-0000-0000-0000-000000000002","card_faces":[{}]}
+    ]"#;
+        let rows: Vec<_> = rows_from_bulk(json.as_bytes()).collect::<Result<_, _>>().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, "00000000-0000-0000-0000-000000000001");
+        assert!(rows[0].2.contains("cards.scryfall.io/small"));
+    }
+
+    /// The shape Scryfall actually serves: its bulk descriptor has only a `jsonl_download_uri`,
+    /// so a gunzipped `default_cards` is one object per line rather than an array.
+    #[test]
+    fn a_json_lines_bulk_file_yields_the_same_rows() {
+        let jsonl = concat!(
+            r#"{"id":"00000000-0000-0000-0000-000000000001","illustration_id":"00000000-0000-0000-0000-0000000000aa","image_uris":{"thumb":"https://cards.scryfall.io/thumb/front/0/0/1.webp?1"}}"#,
+            "\n",
+            r#"{"id":"00000000-0000-0000-0000-000000000002","card_faces":[{}]}"#,
+            "\n",
+            r#"{"id":"00000000-0000-0000-0000-000000000003","image_uris":{"thumb":"https://cards.scryfall.io/thumb/front/0/0/3.webp?1"}}"#,
+            "\n",
+        );
+        let rows: Vec<_> = rows_from_bulk(jsonl.as_bytes()).collect::<Result<_, _>>().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].1.as_deref(), Some("00000000-0000-0000-0000-0000000000aa"));
+        assert_eq!(rows[1].0, "00000000-0000-0000-0000-000000000003");
+        assert_eq!(rows[1].1, None);
+
+        let jobs = collect_jobs(rows.into_iter().map(Ok::<_, ()>), SectionArg::Card).unwrap();
+        assert_eq!(jobs.len(), 2);
+        assert!(jobs[1].url.ends_with("/3.webp?1"));
+    }
+
+    /// A download cut off mid-card must fail the build rather than yield the cards before the
+    /// cut, which would build — and publish — a bundle quietly missing the rest.
+    #[test]
+    fn a_truncated_bulk_file_is_an_error_not_a_short_list() {
+        let cut = r#"[{"id":"00000000-0000-0000-0000-000000000001","image_uris":{"thumb":"t"}},{"id":"000"#;
+        let result: Result<Vec<_>, _> = rows_from_bulk(cut.as_bytes()).collect();
+        assert!(result.is_err());
+
+        let cut_lines = "{\"id\":\"00000000-0000-0000-0000-000000000001\",\"image_uris\":{\"thumb\":\"t\"}}\n{\"id\":";
+        let result: Result<Vec<_>, _> = rows_from_bulk(cut_lines.as_bytes()).collect();
+        assert!(result.is_err());
+    }
 }

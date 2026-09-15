@@ -25,10 +25,11 @@
 //! camera simply never starts. Use `adb reverse tcp:7777 tcp:7777`, which makes this server
 //! *be* localhost on the handset. No certificate, no tunnel.
 
+use card_scanner::filters::ScanFilters;
 use card_scanner::index::Bundle;
 use card_scanner::ocr::TitleReader;
 use card_scanner::reference::Reference;
-use card_scanner::session::{FrameOptions, Method, Session, Verdict};
+use card_scanner::session::{FrameOptions, Method, ScanMode, Session, Verdict};
 use clap::Parser;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -129,6 +130,28 @@ fn options_from_query(url: &str) -> FrameOptions {
         },
         decide_at: num("decide", d.decide_at),
         lead_margin: num("margin", d.lead_margin),
+        mode: match q.get("mode").map(String::as_str) {
+            Some("exact") => ScanMode::Exact,
+            _ => ScanMode::Fast,
+        },
+    }
+}
+
+/// The filters, from `/filters?sets=hob,ltr&from=YYYY-MM-DD&to=YYYY-MM-DD`.
+///
+/// An empty or absent value is no bound, which is what a cleared field sends.
+fn filters_from_query(url: &str) -> ScanFilters {
+    let q = query_pairs(url);
+    let bound = |key: &str| q.get(key).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+    ScanFilters {
+        sets: q
+            .get("sets")
+            .map(|s| {
+                s.split(',').map(str::trim).filter(|s| !s.is_empty()).map(String::from).collect()
+            })
+            .unwrap_or_default(),
+        released_from: bound("from"),
+        released_to: bound("to"),
     }
 }
 
@@ -326,6 +349,26 @@ fn handle_frame(
                 out["ocr"]["raw"].as_str().unwrap_or("")
             );
         }
+        // An Exact resolve runs once per card, so its tiers are worth a line each time.
+        if let Some(tiers) = out["resolution"]["tiers"].as_array() {
+            let steps: Vec<String> = tiers
+                .iter()
+                .map(|t| {
+                    format!(
+                        "{} {} ({})",
+                        t["tier"].as_str().unwrap_or("?"),
+                        t["survivors"].as_u64().unwrap_or(0),
+                        t["detail"].as_str().unwrap_or("")
+                    )
+                })
+                .collect();
+            eprintln!(
+                "      resolve #{} {}: {}",
+                out["decision_seq"].as_u64().unwrap_or(0),
+                out["resolution"]["outcome"].as_str().unwrap_or("?"),
+                steps.join(" > ")
+            );
+        }
     }
 
     out
@@ -457,6 +500,18 @@ fn main() {
                 // previous one's evidence to decay.
                 let _ = session.lock().map(|mut s| s.reset());
                 Response::from_string(r#"{"ok":true}"#).with_header(json_header())
+            } else if path == "/filters" {
+                // The filters live on the session, like the tracker, so they hold across frames
+                // until the next call. A refusal is the session's sentence, verbatim.
+                let result = match session.lock() {
+                    Ok(mut s) => s.set_filters(filters_from_query(&url)),
+                    Err(_) => Err("the session lock is poisoned".to_string()),
+                };
+                let value = match result {
+                    Ok(()) => serde_json::json!({ "ok": true, "error": null }),
+                    Err(e) => serde_json::json!({ "ok": false, "error": e }),
+                };
+                Response::from_string(value.to_string()).with_header(json_header())
             } else {
                 Response::from_string("not found").with_status_code(404)
             };
@@ -527,13 +582,25 @@ mod tests {
         // `FrameOptions`' own field names as JSON. Nothing else would catch a key renamed on
         // one side only — the query string has no schema and a JSON field that never arrives
         // silently takes its default.
-        let from_query =
-            options_from_query("/frame?edge=800&method=otsu&decide=12&rule=confidence&stages=1");
+        let from_query = options_from_query(
+            "/frame?edge=800&method=otsu&decide=12&rule=confidence&stages=1&mode=exact",
+        );
         let from_json: FrameOptions = serde_json::from_str(
-            r#"{"work_long_edge":800,"method":"otsu","decide_at":12,"rule":"confidence","stages":true}"#,
+            r#"{"work_long_edge":800,"method":"otsu","decide_at":12,"rule":"confidence","stages":true,"mode":"exact"}"#,
         )
         .expect("json");
         assert_eq!(from_query, from_json);
         assert_eq!(options_from_query("/frame"), FrameOptions::default());
+    }
+
+    #[test]
+    fn the_filters_query_spells_the_filters_json() {
+        let from_query = filters_from_query("/filters?sets=hob,+LTR,&from=2023-06-23&to=");
+        let from_json: ScanFilters =
+            serde_json::from_str(r#"{"sets":["hob","LTR"],"released_from":"2023-06-23"}"#)
+                .expect("json");
+        assert_eq!(from_query, from_json);
+        assert!(filters_from_query("/filters").is_empty());
+        assert!(filters_from_query("/filters?sets=&from=&to=").is_empty());
     }
 }

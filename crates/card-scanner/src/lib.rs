@@ -11,11 +11,15 @@
 pub mod cardness;
 pub mod debug;
 pub mod detect;
+pub mod filters;
 pub mod index;
 pub mod lock;
 pub mod ocr;
 pub mod reference;
+pub mod resolve;
 pub mod session;
+#[cfg(feature = "builder")]
+pub mod synth;
 pub mod track;
 pub mod trim;
 pub mod hash;

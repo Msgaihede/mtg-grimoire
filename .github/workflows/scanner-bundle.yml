@@ -1,0 +1,170 @@
+name: scanner-bundle
+
+# Builds the card scanner's reference bundle from Scryfall's `default_cards` and publishes it,
+# with the two OCR models, to the release `scanner-bundle-v<FORMAT_VERSION>`. Release builds
+# fetch all three from there (`npm run scanner:assets`) and embed them. The design is
+# docs/superpowers/specs/2026-09-15-scanner-modes-and-shipping-design.md §4.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 4 * * 1" # weekly: actions/cache evicts entries unused for 7 days
+
+permissions:
+  contents: write
+
+concurrency:
+  group: scanner-bundle
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    defaults:
+      run:
+        # `bash -eo pipefail`, where a bare `run:` gets `bash -e`. Two steps pipe a download into
+        # another program, and without pipefail a curl that failed is a step that succeeded.
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/card-scanner
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      # The declaration is `u16`. A grep that matches nothing fails the step here, rather than
+      # publishing to `scanner-bundle-v`.
+      - name: Format version
+        id: fv
+        run: |
+          v=$(grep -oP 'pub const FORMAT_VERSION: u16 = \K\d+(?=;)' crates/card-scanner/src/index.rs)
+          echo "v=$v" >> "$GITHUB_OUTPUT"
+          echo "Format version $v — release \`scanner-bundle-v$v\`." >> "$GITHUB_STEP_SUMMARY"
+
+      # **Scryfall's descriptor has no `download_uri`.** It carries `jsonl_download_uri`, to a
+      # gzipped JSON Lines file, and nothing else — checked live on 2026-09-15, and
+      # docs/reference/scryfall.md records the change. So `jq -e` refuses a missing field instead
+      # of handing curl the word `null`, and the file is unzipped for `--bulk` to stream.
+      - name: Scryfall default_cards
+        run: |
+          url=$(curl -sSfL -H 'User-Agent: mtg-grimoire-scanner-bundle' -H 'Accept: application/json' \
+            https://api.scryfall.com/bulk-data/default-cards | jq -er .jsonl_download_uri)
+          curl -sSfL -H 'User-Agent: mtg-grimoire-scanner-bundle' "$url" | gunzip -c > default-cards.jsonl
+          echo "\`default_cards\`: $(stat -c%s default-cards.jsonl) bytes from $url" >> "$GITHUB_STEP_SUMMARY"
+
+      # The fetch cache is what makes a weekly run cost a new set's few hundred fetches rather
+      # than half an hour and 1.28 GB. Keyed on the format version, so a descriptor change starts
+      # from the images a previous version cached and re-hashes them locally. The glob takes the
+      # SQLite `-wal` beside the database, so a run that died mid-write keeps what it wrote.
+      - uses: actions/cache/restore@v6
+        with:
+          path: card-hashes-cache.db*
+          key: scanner-cache-v${{ steps.fv.outputs.v }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: scanner-cache-v${{ steps.fv.outputs.v }}-
+
+      - name: Build the bundle
+        run: >-
+          cargo run --locked --release --bin build-hashes --features builder
+          --manifest-path crates/card-scanner/Cargo.toml --
+          --bulk default-cards.jsonl --cache card-hashes-cache.db --out card-hashes.bin --sections card
+
+      - uses: actions/cache/save@v6
+        if: always()
+        with:
+          path: card-hashes-cache.db*
+          key: scanner-cache-v${{ steps.fv.outputs.v }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: OCR models
+        run: node crates/card-scanner/scripts/fetch-ocr-models.mjs models
+
+      # **A regression fence, not an accuracy claim**: Scryfall renders degraded in software and
+      # fed to both scan modes (`crates/card-scanner/src/bin/eval.rs`). The table lands in the
+      # step summary. Before both publish and dry run, so every dispatch shows what the bundle it
+      # built can do.
+      #
+      # **It reports and does not gate, and `continue-on-error` is what makes that true.** Under
+      # `bash -eo pipefail` a failed step skips everything after it, so without it an unreachable
+      # image host, a compile error or a panic in the evaluation would skip the weekly publish of
+      # a bundle that built fine. A failure is not silent either: the next step says so in the
+      # summary, where the table would have been.
+      - name: Synthetic evaluation
+        id: eval
+        continue-on-error: true
+        run: |
+          cargo run --locked --release --bin eval --features builder --manifest-path crates/card-scanner/Cargo.toml -- \
+            --bundle card-hashes.bin --bulk default-cards.jsonl --models models \
+            --printings crates/card-scanner/eval/printings.txt --cache eval-cache --summary eval.md
+          cat eval.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Synthetic evaluation failed
+        if: steps.eval.outcome == 'failure'
+        run: |
+          echo "**Synthetic evaluation failed — see the log of the \`Synthetic evaluation\` step.** The bundle still goes on to the publish or dry-run step below; the evaluation reports and does not gate." >> "$GITHUB_STEP_SUMMARY"
+
+      # **Prerelease and not latest**, so nothing that asks GitHub for the latest release is ever
+      # handed a bundle — the in-app updater lists releases and drops prereleases.
+      #
+      # **What is compared is everything after the 32-byte header, never the whole file.**
+      # `build-hashes` stamps `built_at` from the clock, so two builds of identical hashes always
+      # differ in bytes 14..22; past the header are the entries, written in key order. A release
+      # missing any of the three assets is republished whatever the comparison says, or one
+      # failed upload would leave release builds without a model for good.
+      #
+      # **Only `main` publishes.** `workflow_dispatch` runs from any ref, and the tag names the
+      # format version rather than the code: a branch that changed the hashing without bumping
+      # `FORMAT_VERSION` would `--clobber` the bundle every later release embeds, from code
+      # nobody reviewed. A dispatch from anywhere else builds, caches and stops here. Its cache
+      # entry is scoped to its own branch and never restored on `main`. The schedule always
+      # runs on the default branch.
+      #
+      # **A bundle more than 1% smaller than the one published is refused, and the step fails.**
+      # `build-hashes` already fails a run that lost more than 0.5% of its fetches, but a bundle
+      # can shrink by other roads — a truncated or partial `default_cards`, a cache restored from
+      # a bad run — and every release embeds what this uploads. Entries are fixed-size past the
+      # 32-byte header: a 16-byte id and a 256-bit descriptor, 48 bytes. Scryfall withdraws a few
+      # printings in a normal week and adds a set; 1% of ~113 k is ~1 100 cards.
+      - name: Dry run (not on main)
+        if: github.ref != 'refs/heads/main'
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          echo "Dry run — not on main (\`$REF\`). Built $(stat -c%s card-hashes.bin) bytes; nothing published." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish if changed
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: scanner-bundle-v${{ steps.fv.outputs.v }}
+          VERSION: ${{ steps.fv.outputs.v }}
+        run: |
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --prerelease --latest=false --title "Scanner bundle v$VERSION" \
+              --notes "Card hashes and OCR models embedded by release builds. Built by scanner-bundle.yml."
+          fi
+          present=$(gh release view "$TAG" --json assets --jq \
+            '[.assets[].name | select(. == "card-hashes.bin" or . == "text-detection.rten" or . == "text-recognition.rten")] | length')
+          have_old=false
+          if gh release download "$TAG" -p card-hashes.bin -O old.bin 2>/dev/null; then
+            have_old=true
+            old_n=$(( ($(stat -c%s old.bin) - 32) / 48 ))
+            new_n=$(( ($(stat -c%s card-hashes.bin) - 32) / 48 ))
+            echo "Entries: $new_n built, $old_n published." >> "$GITHUB_STEP_SUMMARY"
+            # new < 99% of old, in integers.
+            if [ $(( new_n * 100 )) -lt $(( old_n * 99 )) ]; then
+              echo "**Refused to publish: the new bundle has $new_n entries against the $old_n published in \`$TAG\` — below 99% of them.** Nothing was uploaded; the published bundle stands. Check the \`Scryfall default_cards\` and \`Build the bundle\` steps." >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+          fi
+          if [ "$present" = 3 ] && [ "$have_old" = true ] && cmp -s -i 32 old.bin card-hashes.bin; then
+            echo "Bundle unchanged; nothing published." >> "$GITHUB_STEP_SUMMARY"
+          else
+            gh release upload "$TAG" card-hashes.bin models/text-detection.rten models/text-recognition.rten --clobber
+            echo "Published $(stat -c%s card-hashes.bin) bytes to $TAG." >> "$GITHUB_STEP_SUMMARY"
+          fi

@@ -12,7 +12,7 @@ import { applySelect, EMPTY_SELECTION, type Selection, type SelectModifiers } fr
 import { defaultFields } from "@/features/transfer/fields";
 import type { TransferFieldId, TransferSurface } from "@/features/transfer/fields";
 import type { ExportFormat } from "@/features/transfer/formats";
-import type { DeckFinish, DeckVariant } from "./ipc";
+import type { DeckFinish, DeckVariant, ScannerTrayChoice } from "./ipc";
 
 /**
  * The eleven top-level destinations in the sidebar.
@@ -118,14 +118,21 @@ export interface PaneDeckContext {
 }
 
 /**
- * The five developer panels on the Scanner view. `match` is never folded.
+ * The folding developer panels on the Scanner view. `match` is never folded.
  *
  * A closed union rather than {@link CardSelection}'s open string, and for the opposite reason:
  * the set of panels is a fact about one screen that nothing outside this feature adds to, so
- * an exhaustive record is exactly what is wanted — a sixth panel is a compile error at the
- * initial state below until somebody says what it starts as.
+ * an exhaustive record is exactly what is wanted — a new panel is a compile error at the
+ * initial state below until somebody says what it starts as. `tiers` was that compile error
+ * once, when the Exact mode's resolve got a panel of its own.
  */
-export type ScannerPanelId = "controls" | "pipeline" | "budget" | "rectified" | "readouts";
+export type ScannerPanelId =
+  | "controls"
+  | "pipeline"
+  | "budget"
+  | "rectified"
+  | "readouts"
+  | "tiers";
 
 /** How the search results are laid out. */
 export type SearchView = "table" | "grid";
@@ -1021,6 +1028,17 @@ export interface PrintingsRequest {
    * `CardWalkStop` deliberately does not carry it — see {@link AppState.printingsRequest}.
    */
   wish: { id: number } | null;
+  /**
+   * The scanner tray's hand-back; when present a tile press hands the printing back and closes,
+   * and neither the deck nor the wish branch runs.
+   *
+   * **Optional where `wish` is required, and the difference is who builds a request.** `wish` is
+   * spelled at every construction site so that none of them can forget to clear it; this is
+   * spelled at exactly one — the tray's *More printings…* — and a `CardWalkStop` carries none, so
+   * a step inside the modal drops it for `wish`'s own reason: a printing picked for tray row A
+   * must not be handed back after arrowing to card B.
+   */
+  pick?: (p: ScannerTrayChoice) => void;
 }
 
 /**
@@ -1192,8 +1210,8 @@ export const useAppStore = create<AppState>((set) => ({
   // store at all rather than in either of the two components that use it.
   keyMapOpen: false,
   setKeyMapOpen: (keyMapOpen) => set({ keyMapOpen }),
-  // All five folded away on launch. The Scanner's job is the picture and the card it came to,
-  // and every one of these panels is a developer's answer to "why did it come to that" — so the
+  // All folded away on launch. The Scanner's job is the picture and the card it came to, and
+  // every one of these panels is a developer's answer to "why did it come to that" — so the
   // column opens as one heading per question and costs a reader who is only scanning nothing.
   scannerFolds: {
     controls: false,
@@ -1201,6 +1219,7 @@ export const useAppStore = create<AppState>((set) => ({
     budget: false,
     rectified: false,
     readouts: false,
+    tiers: false,
   },
   setScannerFold: (id, open) => set((s) => ({ scannerFolds: { ...s.scannerFolds, [id]: open } })),
   // Art by default: this is a card app, and the table is the view you switch to when you

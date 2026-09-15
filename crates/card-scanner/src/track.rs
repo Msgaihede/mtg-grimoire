@@ -508,6 +508,29 @@ impl Tracker {
         self.other = None;
     }
 
+    /// Decide on `key`, reporting `member` as its printing, without gathering a single vote.
+    ///
+    /// **For a decision reached somewhere else** — Exact mode's resolve, which has already
+    /// weighed a burst of frames and every reader tier. Committing through here rather than
+    /// beside the tracker is what keeps one definition of "the card has left" in the crate: the
+    /// freeze this leaves is the vote rule's own, so `reset_after_misses` frames without the
+    /// card end it exactly as they end a decision the votes reached.
+    ///
+    /// Forces the vote rule, because only votes freeze. The tally is seeded at twice the bar,
+    /// so a bar dragged a little higher does not undo the decision at once, and the member at a
+    /// weight no frame's evidence can approach — a frozen tally takes no evidence anyway, and
+    /// this keeps the resolved printing reported if the freeze is ever lifted by a rule change.
+    pub fn commit_to(&mut self, key: [u8; ID_LEN], member: [u8; ID_LEN]) {
+        self.reset();
+        self.opts.rule = CommitRule::Votes;
+        self.scores.insert(key, self.opts.decide_at * 2.0);
+        self.seen.insert(key, 1);
+        self.members.insert(key, HashMap::from([(member, 1e6)]));
+        self.best_n.insert(key, 0.0);
+        self.leader = Some(key);
+        self.frozen = true;
+    }
+
     /// Feed one frame's candidates where each id is its own group — no card grouping.
     ///
     /// Convenience for callers with no corpus to resolve an oracle id from.
@@ -1673,6 +1696,44 @@ mod tests {
             }
         }
         assert_eq!(at, Some(8));
+    }
+
+    // ---- A decision handed in from outside ----------------------------------------------
+
+    #[test]
+    fn commit_to_freezes_on_the_given_card_and_ten_absent_frames_release_it() {
+        let mut t = Tracker::default(); // Votes rule, reset_after_misses = 10
+        t.commit_to(id(7), id(70));
+        assert!(t.last_committed());
+        for _ in 0..9 {
+            assert!(t.observe(&[]).committed);
+        }
+        assert!(!t.observe(&[]).committed);
+    }
+
+    #[test]
+    fn commit_to_reports_the_member_as_the_leaders_printing() {
+        let mut t = Tracker::default();
+        t.commit_to(id(7), id(70));
+        let s = t.observe(&[Observation::appearance(id(7), id(71), 0.2)]);
+        assert_eq!(s.leader().unwrap().best_member, id(70));
+        assert!(s.frozen && s.committed);
+    }
+
+    #[test]
+    fn commit_to_replaces_whatever_was_being_gathered() {
+        // A resolve decides on its own evidence; a half-built tally for some other card must
+        // neither survive beside it nor contest it.
+        let mut t = Tracker::new(TrackerOptions { rule: CommitRule::Confidence, ..Default::default() });
+        for _ in 0..4 {
+            t.observe_ids(&good(2));
+        }
+        t.commit_to(id(7), id(70));
+        let s = t.observe(&[]);
+        assert!(s.committed && s.frozen);
+        assert_eq!(s.rule, CommitRule::Votes, "a freeze exists only under votes");
+        assert_eq!(s.standings.len(), 1);
+        assert_eq!(s.leader().unwrap().id, id(7));
     }
 
     #[test]

@@ -46,11 +46,14 @@ import syncLiveRs from "../../src-tauri/src/sync_engine/live.rs?raw";
 import wishlistFoldersRs from "../../src-tauri/src/wishlist_folders.rs?raw";
 import wishlistRs from "../../src-tauri/src/wishlist.rs?raw";
 import wishlistOptimizeRs from "../../src-tauri/src/wishlist_optimize.rs?raw";
-// The scanner's seven. Six are in the `card-scanner` crate rather than under `src-tauri/src` —
-// the detector is a library with a CLI of its own, and the shapes the page reads are declared
-// there — and `src-tauri/src/scanner.rs` is the app's own four commands.
+// The scanner's sources. All but one are in the `card-scanner` crate rather than under
+// `src-tauri/src` — the detector is a library with a CLI of its own, and the shapes the page
+// reads are declared there — and `src-tauri/src/scanner.rs` is the app's own commands, with the
+// stored prefs and tray beside them.
 import scannerRs from "../../src-tauri/src/scanner.rs?raw";
 import sessionRs from "../../crates/card-scanner/src/session.rs?raw";
+import resolveRs from "../../crates/card-scanner/src/resolve.rs?raw";
+import filtersRs from "../../crates/card-scanner/src/filters.rs?raw";
 import referenceRs from "../../crates/card-scanner/src/reference.rs?raw";
 import lockRs from "../../crates/card-scanner/src/lock.rs?raw";
 import detectRs from "../../crates/card-scanner/src/detect.rs?raw";
@@ -60,6 +63,7 @@ import ipcSource from "./ipc.ts?raw";
 import { CONDITIONS, CONDITION_NOT_SET } from "@/lib/conditions";
 import { isAndroid } from "@/lib/platform";
 import { DEFAULT_SCANNER_OPTIONS } from "@/features/scanner/scannerOptions";
+import { DEFAULT_SCANNER_PREFS, TRAY_ROWS } from "@/features/scanner/fixtures";
 import {
   AUTO_BRACKET,
   ipc,
@@ -3006,6 +3010,78 @@ describe("ipc argument names match the Rust command signatures", () => {
     await ipc.scannerReset();
     expect(invoke).toHaveBeenCalledWith("scanner_reset");
   });
+
+  /**
+   * **The scanner's filters, prefs and tray** (2026-09-15) — five ordinary named-argument
+   * commands beside the two raw-body ones above, and each carries one of this file's traps.
+   *
+   * The two reads take **no arguments at all**, `home_layout`'s trap: an argument object sent to a
+   * command that declares only the managed state is a deserialisation error and not a type error.
+   * The three writes each take exactly one, and every one is a name a wrapper could plausibly get
+   * wrong from its own side of the wire — `{ tray }` or `{ items }` for the rows, `{ scannerPrefs }`
+   * for the prefs, `{ filter }` for the filters. The quiet one is `scanner_set_filters`: the page
+   * persists the filters only **after** it succeeds, so a parameter Tauri cannot fill is a filter
+   * control that refuses every press, and the sentence it shows is about the wire rather than the
+   * sets the reader picked.
+   *
+   * The crate is read for each command name and each parameter name rather than trusted, because
+   * the wire name *is* the Rust function name and a rename that reaches `desktop.rs`'s
+   * `generate_handler!` compiles clean and ships.
+   */
+  it("reads the scanner prefs and tray with no arguments and writes each under its own name", async () => {
+    // A pass must never be able to mean "the crate was never read".
+    expect(scannerRs.length, "scanner.rs was not read").toBeGreaterThan(1_000);
+
+    const filters = { sets: ["hob", "ltr"], released_from: "2023-06-23", released_to: null };
+    invoke.mockResolvedValue(undefined);
+    await ipc.scannerSetFilters(filters);
+    expect(invoke).toHaveBeenCalledWith("scanner_set_filters", { filters });
+    expect(scannerRs).toMatch(/fn scanner_set_filters\([^)]*\bfilters\s*:\s*ScanFilters/s);
+
+    const prefs = { ...DEFAULT_SCANNER_PREFS, mode: "exact" as const, folderId: 4, developer: true };
+    invoke.mockResolvedValue(prefs);
+    expect(await ipc.scannerPrefs()).toEqual(prefs);
+    expect(invoke).toHaveBeenCalledWith("scanner_prefs");
+    expect(scannerRs).toContain("fn scanner_prefs(");
+
+    invoke.mockResolvedValue(undefined);
+    await ipc.setScannerPrefs(prefs);
+    expect(invoke).toHaveBeenCalledWith("set_scanner_prefs", { prefs });
+    expect(scannerRs).toMatch(/fn set_scanner_prefs\([^)]*\bprefs\s*:\s*ScannerPrefs/s);
+
+    invoke.mockResolvedValue(TRAY_ROWS);
+    expect(await ipc.scannerTray()).toEqual(TRAY_ROWS);
+    expect(invoke).toHaveBeenCalledWith("scanner_tray");
+    expect(scannerRs).toContain("fn scanner_tray(");
+
+    invoke.mockResolvedValue(undefined);
+    await ipc.setScannerTray(TRAY_ROWS);
+    expect(invoke).toHaveBeenCalledWith("set_scanner_tray", { rows: TRAY_ROWS });
+    expect(scannerRs).toMatch(/fn set_scanner_tray\([^)]*\brows\s*:\s*Vec<ScannerTrayRow>/s);
+  });
+
+  /**
+   * **The tray's commit is its own command, and three argument names ride it** (2026-09-15). The
+   * collection import and the stored tray are one transaction there, so a name Tauri cannot fill
+   * is not a half-written commit — it is an Add button that refuses every press. `folderId` is the
+   * one to watch: the Rust parameter is `folder_id`, and Tauri camel-cases a command's arguments,
+   * so `folder_id` on this side would arrive as nothing and file into the root.
+   */
+  it("commits the tray under its own name with the items, the folder and what is left", async () => {
+    expect(scannerRs.length, "scanner.rs was not read").toBeGreaterThan(1_000);
+    const items = [{ cardId: TRAY_ROWS[0].cardId, quantity: 1, finish: "nonfoil" as const, condition: "NM" as const }];
+    const outcome = { added: 1, updated: 0, removed: 0 };
+    invoke.mockResolvedValue(outcome);
+    expect(await ipc.scannerTrayCommit(items, 7, [TRAY_ROWS[1]])).toEqual(outcome);
+    expect(invoke).toHaveBeenCalledWith("scanner_tray_commit", {
+      items,
+      folderId: 7,
+      remaining: [TRAY_ROWS[1]],
+    });
+    expect(scannerRs).toMatch(
+      /fn scanner_tray_commit\([^)]*\bitems\s*:\s*Vec<crate::collection::CollectionImportItem>\s*,\s*folder_id\s*:\s*Option<i64>\s*,\s*remaining\s*:\s*Vec<ScannerTrayRow>/s,
+    );
+  });
 });
 
 it("unwraps the sync:progress payload and returns the unlisten handle", async () => {
@@ -4382,6 +4458,21 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     ["DeckNote", deckNotesRs, "DeckNoteRow"],
     ["DeckNoteCard", deckNotesRs, "DeckNoteCard"],
     ["CardNote", deckNotesRs, "CardNoteRow"],
+    // **The scanner's three stored rows** (2026-09-15) — the only camelCase structs in
+    // `scanner.rs`, because they are this app's `app_meta` rows rather than the detector's JSON,
+    // so they are here and not on `snakeMirrors` below. Here rather than on `mirrors` for
+    // `HomeLayout`'s reason: no picture, and none reaches ten fields.
+    //
+    // The app **sends** all three as well as reading them, which is where a drift is quietest: all
+    // three structs are `#[serde(default)]`, so a renamed `folderId` is not a refusal, it is
+    // `None` — the commit files every scanned card at the root while the picker says a binder —
+    // and a renamed `quantity` on a tray row is `0`, which the write refuses in words for a row
+    // the page believes holds a copy. `ScannerTrayChoice` is nested inside every ambiguous row,
+    // `OptimizePrinting`'s reason: a field renamed one level down leaves the row agreeing while
+    // the picker's candidates arrive `undefined`.
+    ["ScannerPrefs", scannerRs, "ScannerPrefs"],
+    ["ScannerTrayRow", scannerRs, "ScannerTrayRow"],
+    ["ScannerTrayChoice", scannerRs, "ScannerTrayChoice"],
   ];
 
   it.each(plainMirrors)(
@@ -4405,8 +4496,9 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
    *
    * That makes this the third table rather than a longer `plainMirrors`: the `camel` call in
    * both tables above is not decoration, it is the `#[serde(rename_all = "camelCase")]` those
-   * structs carry, and none of these twenty-one does. A scanner row on `plainMirrors` would
-   * fail on every multi-word field for a spelling that is correct.
+   * structs carry, and none of these does. A scanner row on `plainMirrors` would fail on every
+   * multi-word field for a spelling that is correct — except the three stored rows
+   * (`ScannerPrefs` and the tray's two), which *are* camelCase and are on `plainMirrors`.
    *
    * **Most of this list is one command's answer**, because a `Verdict` is a tree of structs and
    * parity on the outer one sees none of it — `OptimizePrinting`'s lesson above, at the scale
@@ -4428,6 +4520,18 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     ["ScannerCollectorTry", sessionRs, "CollectorTry"],
     ["ScannerCollector", sessionRs, "CollectorView"],
     ["ScannerOcr", sessionRs, "OcrView"],
+    // **Modes, filters and the decision** (2026-09-15). `ScannerDecision` is what the page builds a
+    // tray row from, and `ScannerResolution` nests `ScannerChoice` and `ScannerTier` for
+    // `StandingView`'s reason above: a renamed `oracle_id` inside a choice leaves the resolution
+    // agreeing field for field while every candidate a reader picks from arrives unkeyed, and a
+    // tray that groups a card's printings by it groups nothing. `ScanFilters` is the one of these
+    // the app **sends**, and it is `#[serde(default)]` — a renamed `released_from` is not a
+    // refusal, it is no lower bound, and the scanner answers from sets the reader excluded.
+    ["ScannerDecision", sessionRs, "DecisionView"],
+    ["ScannerChoice", resolveRs, "ChoiceView"],
+    ["ScannerTier", resolveRs, "TierView"],
+    ["ScannerResolution", resolveRs, "ResolutionView"],
+    ["ScanFilters", filtersRs, "ScanFilters"],
     ["ScannerLabel", referenceRs, "Label"],
     ["ScannerCandidate", referenceRs, "Candidate"],
     ["ScannerMatch", referenceRs, "MatchReport"],

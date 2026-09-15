@@ -2226,7 +2226,7 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
 ## Card scanner
 
 The whole record, including the pipeline the crate implements:
-[docs/reference/card-scanner.md](../docs/reference/card-scanner.md) — §9 is this side.
+[docs/reference/card-scanner.md](../docs/reference/card-scanner.md) — §9 and §10 are this side.
 
 - **`card-scanner` is a `path` dependency in the non-wasm block and never in the wasm one.** The
   web build has no detector, the page says so, and the wasm clippy job never sees the crate. It
@@ -2241,12 +2241,28 @@ The whole record, including the pipeline the crate implements:
   **The block is seventeen packages rather than the two this bullet names**: those two and
   fifteen more the live pass measured in — the crate itself, `ocrs`, the eleven `rten*` crates
   and `zune-jpeg`/`zune-core`; the manifest's own comment is the list and the reason.
-- **Assets are files in `data/scanner/` and a missing one is a _state_, never an error.** No
-  bundle is a session that detects and rectifies and names nothing (the debug server's own
-  behaviour); no `models/*.rten` pair is a session with no reader. `scanner_status` reports the
-  **exact path it looked at**, because "no bundle" is not an instruction and a path is.
-  **Loading is lazy on the first command and never runs again** — a file placed afterwards needs
-  an app restart, and the page must not offer a Reload that cannot mean anything.
+- **Assets load per asset, first hit wins: a file in `data/scanner/`, then the copy embedded in
+  the binary, then absent — and absent is a _state_, never an error.** No bundle is a session
+  that detects and rectifies and names nothing (the debug server's own behaviour); no
+  `models/*.rten` pair is a session with no reader. The models stay a pair — `file` only when
+  both files exist, otherwise the embedded pair. **A file that is there and will not parse wins
+  over the embedded copy and reports its error**: the reader placed it to test it, and a quiet
+  fallback would hide exactly that file. `scanner_status` reports the **exact path it looked at**
+  and `Asset::source` which of the three answered, because "no bundle" is not an instruction and
+  a path is. **Loading is lazy on the first command and never runs again** — a file placed
+  afterwards needs an app restart, and the page must not offer a Reload that cannot mean anything.
+- **`cfg(scanner_assets)` is on only when all three of `scanner-assets/card-hashes.bin`,
+  `text-detection.rten` and `text-recognition.rten` exist** — `build.rs` decides, `scanner.rs`
+  `include_bytes!`s under it. A bundle embedded without its models, or the reverse, is a
+  half-shipped scanner. Three rules hold it: the `rustc-check-cfg` line sits **above** the wasm
+  early return, or that target meets an unknown cfg; `rerun-if-changed` names the directory and
+  only the files **present**, because a path that does not exist reruns the script on every build
+  — the tracked `scanner-assets/README.md` is what keeps the directory there; and the embedded
+  bytes reach `load` as an `Embedded` argument, never a `cfg!` inside it, so both arms compile and
+  are tested in every build. `npm run scanner:assets` fills the directory from the
+  `scanner-bundle-v<FORMAT_VERSION>` release and `release.yml` fails a leg without them; a dev
+  checkout that never ran it embeds nothing, which is expected.
+  [card-scanner.md](../docs/reference/card-scanner.md) §10.
 - **`scanner_frame` and `scanner_capture` are the only commands in this crate that take a raw
   body**, and each takes two shapes: on desktop the JPEG is `InvokeBody::Raw` with its JSON in a
   header — `x-scanner-options` for the frame, `x-scanner-capture` for the sidecar; on Android
@@ -2271,9 +2287,23 @@ The whole record, including the pipeline the crate implements:
   `FROM cards` — the corpus has to be `main` and there is nothing on the user side to attach.
 - **The scanner's state is `app.manage`d beside `AppState`, not a field inside it.** It is
   optional, desktop/Android only, and shares nothing with the rest of the app but the data
-  directory and that one read. Nothing it does touches either database, so there is **no schema
-  rung**; an app's own command is always callable, so there is **no capability entry**; and the
-  page shows the sentence, so there is **no `error_log` source**.
+  directory and that one read. **The session touches neither database; the reader's scanner
+  prefs and review tray are two `app_meta` rows in `user.db`** (2026-09-15) — `scanner_prefs` and
+  `scanner_tray`, each one JSON value written whole — which is why `scanner_prefs`,
+  `scanner_tray` and their setters take `AppState` and answer before the session has loaded. The
+  setters go through `sync::with_write`, so they answer `db::BUSY` during a sync and the page
+  keeps its rows and retries; `set_scanner_tray` refuses more than 5,000 rows or a row under one
+  copy before it writes. **The tray's commit is `scanner_tray_commit`, and it writes the
+  collection and the remaining tray in one transaction** — `collection::commit_import_with` in
+  `add` mode, with `store_tray` run inside the import's transaction and `remaining` refused on
+  `store_tray`'s terms before the import starts. It is not the import followed by a tray write:
+  that pair left committed rows in the stored tray whenever the app closed, the tray write answered
+  `BUSY`, or an older tray write landed after the commit, and the next Add filed them twice.
+  Neither key is synced, and `app_meta` maps to nothing in the mirror.
+  There is still **no schema rung** (a key in schema v6's table); an app's own command is always
+  callable, so there is **no capability entry**; and the page shows the sentence, so there is
+  **no `error_log` source**. The scanner's commands are registered in `desktop.rs`'s
+  `generate_handler!`, not `lib.rs`.
 
 ## The web target
 
@@ -2340,7 +2370,8 @@ The whole record, including the pipeline the crate implements:
 - **`build.rs` asks `TARGET`, never `cfg!`** — a build script compiles for the host. It returns
   before `tauri_build::build()` for a wasm target and emits `cargo:rustc-check-cfg` for
   `desktop` and `mobile` on the way out, because `#[cfg(desktop)]` in the map would otherwise be
-  an unknown cfg name there.
+  an unknown cfg name there. `scanner_assets`' check-cfg line is emitted **before** that return
+  for the same reason; the cfg itself is only ever set after it (see "Card scanner").
 - **The web target opens the same pair on OPFS** — `db::open_pooled_pair` is `db::open_write`
   with bare names, because the pool is the filesystem. Both files answer `delete` to
   `PRAGMA journal_mode = WAL`, which is why `db::apply_pragmas` returns the journal instead of
@@ -2369,4 +2400,4 @@ The whole record, including the pipeline the crate implements:
 | [sync.md](../docs/reference/sync.md) | `sync_pair/`, `sync_engine/` and the user-schema rungs sync owns, v29 to v31 — the pairing protocol step by step and the six digits; then the fifteen synced tables, how a row is named across devices, the three SQLite facts the capture triggers' shape follows from, §7.3's five rules against the test that proves each, the envelope measured, the relay's endpoints, and what is not built |
 | [web-target.md](../docs/reference/web-target.md) | The browser build — the module map, the OPFS pair, the measured browse and facet, and the first run's open memory failure |
 | [text-mirror.md](../docs/reference/text-mirror.md) | `mirror/` — the layout, the dirty map, why the pruner reads a manifest instead of guessing, what a pass costs measured, and the bugs still open |
-| [card-scanner.md](../docs/reference/card-scanner.md) | `scanner.rs` and the crate behind it — the pipeline and every measurement, the three evidence tiers and their weights, both tracker verdicts, the debug server, and §9's four commands, two body shapes and lazy asset load |
+| [card-scanner.md](../docs/reference/card-scanner.md) | `scanner.rs` and the crate behind it — the pipeline and every measurement, the three evidence tiers and their weights, both tracker verdicts, the debug server, §9's first commands, two body shapes and lazy asset load, and §10's embedded assets and their load order, the filters mask, Fast and Exact, `decision_seq`, the `app_meta` tray and the synthetic evaluation |

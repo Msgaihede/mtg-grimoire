@@ -33,10 +33,14 @@
  *
  * ## What a press means
  *
- * Three answers, decided by what the surface that opened this named — a wishlist row
- * (`printingsRequest.wish`), a deck slot (`printingsRequest.deck`), or neither. They are read in
- * that order, and the fall-through is the last of them:
+ * Four answers, decided by what the surface that opened this named — the scanner tray's hand-back
+ * (`printingsRequest.pick`), a wishlist row (`printingsRequest.wish`), a deck slot
+ * (`printingsRequest.deck`), or none of them. They are read in that order, and the fall-through is
+ * the last of them:
  *
+ * * **From the scanner's tray** — the press *hands the printing back* to the row that asked and
+ *   closes. Nothing is written here: the tray files the answer into its own row, and the collection
+ *   write is the tray's Add press, later.
  * * **From a wishlist row** — the press *repoints the wish* onto that printing, through
  *   `wishlistSetPrinting`, and the modal closes on success. The same gesture as the swap below and
  *   for the same reason; the write is a different one only because a wish is addressed by its own
@@ -719,6 +723,31 @@ function Body({
       // branch, so a refusal cannot be read under a fold's sentence from the press before it.
       setReport(null);
       /**
+       * **A hand-back, and it is read before every other branch.** The scanner's tray opened this
+       * to ask which printing a scanned card is, and it files the answer itself — so the press
+       * writes nothing here, opens no card pane and closes on the spot. A request carrying `pick`
+       * names no deck and no wish (the tray builds it with both `null`), so reading it first
+       * costs nothing today and says which answer wins the day one surface could set two.
+       *
+       * The choice is built from the tile's own printing row: `Printing` carries the set and the
+       * number, and the card's name and oracle id are the request's, because a printing row does
+       * not carry a name at all. A press on a tile the page does not hold is not a press this wall
+       * can produce, and handing back a printing with no set would be a row half one card.
+       */
+      if (request.pick) {
+        const printing = items.find((row) => row.id === cardId);
+        if (printing === undefined) return;
+        request.pick({
+          cardId,
+          oracleId: request.oracleId,
+          name: request.name,
+          setCode: printing.setCode,
+          collectorNumber: printing.collectorNumber,
+        });
+        onDone();
+        return;
+      }
+      /**
        * **A wish, and it is read before the deck slot and before the fall-through.**
        *
        * A reader who opened this from a wishlist row is asking to change *that wish's* printing,
@@ -830,6 +859,7 @@ function Body({
     },
     [
       writing,
+      items,
       wish,
       startRepoint,
       request,

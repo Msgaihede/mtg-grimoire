@@ -1,14 +1,21 @@
-//! The card scanner inside the app: the crate's [`Session`] behind four commands.
+//! The card scanner inside the app: the crate's [`Session`] behind its commands, and the
+//! reader's scanner preferences and review tray beside them.
 //!
 //! **Its own managed state, not a field on `AppState`.** It is optional and desktop/Android
 //! only, it loads lazily, and the only thing it shares with the rest of the app is the data
 //! directory and one read of `corpus.db` for labels. `app.manage` holds it beside `AppState`.
+//! The two exceptions are [`scanner_prefs`] and [`scanner_tray`] (and their setters), which are
+//! `app_meta` rows and so take `AppState` like every other stored preference — they touch no
+//! session and must answer before the session has loaded.
 //!
-//! **Assets are files in `data/scanner/`, and the page names the missing one.** Nothing here
-//! downloads: the bundle has no release asset yet and the models are not ours. A missing bundle
-//! is a session that detects and rectifies and names nothing — the debug server's behaviour —
-//! and a missing model pair is a session with no reader. [`scanner_status`] reports the exact
-//! path it looked at for each, so "no bundle" is never the whole message.
+//! **Assets load per asset, first hit wins: a file in `data/scanner/`, then the copy compiled
+//! into the binary, then absent.** A release build embeds all three under `cfg(scanner_assets)`
+//! (`build.rs` sets it when `src-tauri/scanner-assets/` holds them); a file placed in
+//! `data/scanner/` overrides the embedded copy so a new bundle can be tried without a rebuild.
+//! Nothing here downloads. A missing bundle is a session that detects and rectifies and names
+//! nothing — the debug server's behaviour — and a missing model pair is a session with no reader.
+//! [`scanner_status`] reports the exact path it looked at for each, and [`Asset::source`] says
+//! which of the three answered, so "no bundle" is never the whole message.
 //!
 //! **[`scanner_frame`] is the one command that takes a raw body.** On desktop the JPEG is the
 //! request body and the options are a header; on Android Tauri carries no raw bytes
@@ -23,16 +30,21 @@
 //! [`crate::db::open_read`] does, because `Reference::load_labels` reads an unqualified
 //! `FROM cards` — the corpus is `main` here, and there is nothing on the user side to attach.
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use base64::Engine as _;
+use card_scanner::filters::ScanFilters;
 use card_scanner::index::Bundle;
 use card_scanner::ocr::TitleReader;
 use card_scanner::reference::Reference;
-use card_scanner::session::{FrameOptions, Session, Verdict};
+use card_scanner::session::{FrameOptions, ScanMode, Session, Verdict};
+use rusqlite::Connection;
 use tauri::http::HeaderMap;
 use tauri::ipc::InvokeBody;
+
+use crate::sync::AppState;
 
 pub const BUNDLE_FILE: &str = "card-hashes.bin";
 pub const DETECTION_MODEL: &str = "models/text-detection.rten";
@@ -44,12 +56,92 @@ pub const CAPTURE_HEADER: &str = "x-scanner-capture";
 /// Candidates per frame — the debug server's `--top` default.
 const TOP: usize = 5;
 
+/// The `app_meta` key holding [`ScannerPrefs`], one JSON document written whole. Not synced: a
+/// scanner's mode and defaults are about the device in the reader's hand.
+pub const K_SCANNER_PREFS: &str = "scanner_prefs";
+/// The `app_meta` key holding the review tray, one JSON array written whole. Not synced either:
+/// the tray is a session's worth of cards not yet in the collection, and it reaches another
+/// device only once it has been committed — as ordinary collection rows.
+pub const K_SCANNER_TRAY: &str = "scanner_tray";
+/// The most rows [`store_tray`] keeps. Far past a real scanning session; a fence against a loop
+/// minting rows, not a limit anybody scanning reaches.
+pub const MAX_TRAY_ROWS: usize = 5_000;
+/// A tray row holding no copy is a row the commit would refuse — refused at the write instead,
+/// where the page can still say so beside the row.
+pub const TRAY_ROW_NEEDS_A_COPY: &str = "A tray row needs at least one copy.";
+/// [`MAX_TRAY_ROWS`], in words.
+pub const TRAY_IS_FULL: &str =
+    "The tray holds at most 5,000 rows — add these to the collection first.";
+
+/// Where an asset came from — [`load`]'s order, first hit wins.
+///
+/// `File` also covers a file that is there and did **not** parse: the reader placed it, so its
+/// error is the answer, and quietly falling back to the embedded copy would hide exactly the file
+/// they are trying to test. `Absent` is "nothing to load anywhere".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AssetSource {
+    File,
+    Embedded,
+    Absent,
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Asset {
+    /// The file this load looked at in `data/scanner/` — named even when the asset came out of
+    /// the binary or from nowhere, so the "put it here" sentence always has a path to name.
     pub path: String,
+    /// There was something to load: the file exists, or (for `Embedded`) the binary carries it.
     pub present: bool,
     pub loaded: bool,
     pub error: Option<String>,
+    pub source: AssetSource,
+}
+
+/// The assets compiled into this binary, if any.
+///
+/// **A struct passed to [`load`] rather than a `cfg!` inside it**, the `bool`-parameter rule
+/// `src-tauri/CLAUDE.md` states for every `cfg`: both arms of the load order compile and are
+/// tested on every build, whether or not this one embedded anything.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Embedded {
+    pub bundle: Option<&'static [u8]>,
+    /// Detection, then recognition. A pair because the models load as one or not at all.
+    pub models: Option<(&'static [u8], &'static [u8])>,
+}
+
+#[cfg(scanner_assets)]
+const EMBEDDED_BUNDLE: &[u8] = include_bytes!("../scanner-assets/card-hashes.bin");
+#[cfg(scanner_assets)]
+const EMBEDDED_DETECTION: &[u8] = include_bytes!("../scanner-assets/text-detection.rten");
+#[cfg(scanner_assets)]
+const EMBEDDED_RECOGNITION: &[u8] = include_bytes!("../scanner-assets/text-recognition.rten");
+
+impl Embedded {
+    /// Nothing embedded — a build without `src-tauri/scanner-assets/`, and every test that is
+    /// about files.
+    pub fn none() -> Embedded {
+        Embedded {
+            bundle: None,
+            models: None,
+        }
+    }
+
+    /// What this build carries. `build.rs` sets `cfg(scanner_assets)` only when all three files
+    /// are present, so a bundle is never embedded without its models or the reverse.
+    #[cfg(scanner_assets)]
+    pub fn compiled() -> Embedded {
+        Embedded {
+            bundle: Some(EMBEDDED_BUNDLE),
+            models: Some((EMBEDDED_DETECTION, EMBEDDED_RECOGNITION)),
+        }
+    }
+
+    /// What this build carries: nothing, because `src-tauri/scanner-assets/` was not filled.
+    #[cfg(not(scanner_assets))]
+    pub fn compiled() -> Embedded {
+        Embedded::none()
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -112,32 +204,56 @@ impl ScannerState {
                 &self.dir(),
                 &self.data_dir.join(crate::db::CORPUS_DB),
                 TOP,
+                Embedded::compiled(),
             ));
         }
         Ok(guard)
     }
 }
 
+/// The file at `path`, before anything has been read: `File` when it exists, `Absent` when it
+/// does not. [`load`] moves an absent one to `Embedded` when the binary carries it.
 fn asset(path: &Path) -> Asset {
+    let present = path.is_file();
     Asset {
         path: path.display().to_string(),
-        present: path.is_file(),
+        present,
         loaded: false,
         error: None,
+        source: if present {
+            AssetSource::File
+        } else {
+            AssetSource::Absent
+        },
     }
 }
 
 /// Read the assets and build the session. Every failure is a sentence on its asset, never an
 /// error out of here: the page is useful without a bundle, and it says which file is missing.
-pub fn load(dir: &Path, corpus: &Path, top: usize) -> Loaded {
+///
+/// **Per asset, first hit wins: the file in `dir`, then `embedded`, then absent.** The models
+/// stay a pair — they are `File` only when **both** files exist; one file alone falls through to
+/// the embedded pair (or to nothing), because a lone model reads nothing.
+pub fn load(dir: &Path, corpus: &Path, top: usize, embedded: Embedded) -> Loaded {
     let bundle_path = dir.join(BUNDLE_FILE);
     let mut bundle = asset(&bundle_path);
+    let bytes: Option<Result<Cow<'static, [u8]>, String>> = if bundle.present {
+        Some(
+            std::fs::read(&bundle_path)
+                .map(Cow::Owned)
+                .map_err(|e| e.to_string()),
+        )
+    } else if let Some(b) = embedded.bundle {
+        bundle.present = true;
+        bundle.source = AssetSource::Embedded;
+        Some(Ok(Cow::Borrowed(b)))
+    } else {
+        None
+    };
     let mut labels = 0;
-    let reference = if bundle.present {
-        match std::fs::read(&bundle_path)
-            .map_err(|e| e.to_string())
-            .and_then(|b| Bundle::from_bytes(&b).map_err(|e| e.to_string()))
-        {
+    let reference = match bytes {
+        None => None,
+        Some(read) => match read.and_then(|b| Bundle::from_bytes(&b).map_err(|e| e.to_string())) {
             Ok(b) => {
                 bundle.loaded = true;
                 let mut reference = Reference::new(b);
@@ -170,31 +286,40 @@ pub fn load(dir: &Path, corpus: &Path, top: usize) -> Loaded {
                 bundle.error = Some(e);
                 None
             }
-        }
-    } else {
-        None
+        },
     };
 
     let det_path = dir.join(DETECTION_MODEL);
     let rec_path = dir.join(RECOGNITION_MODEL);
     let mut detection_model = asset(&det_path);
     let mut recognition_model = asset(&rec_path);
-    let reader = if detection_model.present && recognition_model.present {
-        match TitleReader::load(&det_path, &rec_path) {
-            Ok(r) => {
-                detection_model.loaded = true;
-                recognition_model.loaded = true;
-                Some(r)
-            }
-            Err(e) => {
-                let s = e.to_string();
-                detection_model.error = Some(s.clone());
-                recognition_model.error = Some(s);
-                None
-            }
+    let attempt = if detection_model.present && recognition_model.present {
+        Some(TitleReader::load(&det_path, &rec_path))
+    } else if let Some((det, rec)) = embedded.models {
+        // A lone file on disk does not survive this: the pair came out of the binary, so both
+        // assets say so, and a reader who placed one file sees `embedded` rather than a path
+        // that half-worked.
+        for model in [&mut detection_model, &mut recognition_model] {
+            model.present = true;
+            model.source = AssetSource::Embedded;
         }
+        Some(TitleReader::from_bytes(det, rec))
     } else {
         None
+    };
+    let reader = match attempt {
+        None => None,
+        Some(Ok(r)) => {
+            detection_model.loaded = true;
+            recognition_model.loaded = true;
+            Some(r)
+        }
+        Some(Err(e)) => {
+            let s = e.to_string();
+            detection_model.error = Some(s.clone());
+            recognition_model.error = Some(s);
+            None
+        }
     };
 
     Loaded {
@@ -207,6 +332,160 @@ pub fn load(dir: &Path, corpus: &Path, top: usize) -> Loaded {
             scans_dir: dir.join("scans").display().to_string(),
         },
     }
+}
+
+/// How the reader last left the scanner: the mode, the filters, what a new tray row defaults to,
+/// and whether the developer panels are showing. One `app_meta` row, written whole.
+///
+/// **`finish` and `condition` are strings here and `Finish`/`Condition` on the page**, and they
+/// are not validated on write: they are the defaults a tray row is *born* with, and the commit
+/// through `collection_import_commit` is where a grade or a finish the collection does not know is
+/// refused, in its own words. Language is deliberately absent (spec §3 decision 7): a tray row
+/// records none and the collection row takes the import's default.
+///
+/// `#[serde(default)]` on the struct, so a row written by an older build with fewer fields — or a
+/// newer one's missing a field this build has — reads with the rest intact.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ScannerPrefs {
+    pub mode: ScanMode,
+    /// Snake case inside, because [`ScanFilters`] is the crate's and the debug page reads it too.
+    pub filters: ScanFilters,
+    pub finish: String,
+    pub condition: String,
+    /// The folder a commit files into; `None` is the collection's root.
+    pub folder_id: Option<i64>,
+    pub developer: bool,
+}
+
+impl Default for ScannerPrefs {
+    fn default() -> ScannerPrefs {
+        ScannerPrefs {
+            mode: ScanMode::default(),
+            filters: ScanFilters::default(),
+            // `schema::FINISHES` is read by index, never respelled.
+            finish: crate::schema::FINISHES[0].to_owned(),
+            // What a write that names no grade records — not the sentinel, though today they
+            // hold one string; see `collection.rs`.
+            condition: crate::collection::DEFAULT_CONDITION.to_owned(),
+            folder_id: None,
+            developer: false,
+        }
+    }
+}
+
+/// One printing a tray row could be — an `Ambiguous` resolve's candidates, kept on the row so the
+/// reader can pick among them after the camera has moved on.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ScannerTrayChoice {
+    pub card_id: String,
+    pub oracle_id: Option<String>,
+    pub name: String,
+    pub set_code: String,
+    pub collector_number: String,
+}
+
+/// One card waiting in the review tray.
+///
+/// **The row the page built, stored as the page sent it.** `key` is the page's own stable id for
+/// the row; `choices` is non-empty only while the row is still a choice to make; `added_at` is
+/// the page's clock in milliseconds, used for nothing here but kept so a restored tray orders the
+/// way it did.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ScannerTrayRow {
+    pub key: String,
+    pub card_id: String,
+    pub oracle_id: Option<String>,
+    pub name: String,
+    pub set_code: String,
+    pub collector_number: String,
+    pub finish: String,
+    pub quantity: i64,
+    pub choices: Vec<ScannerTrayChoice>,
+    pub added_at: i64,
+}
+
+/// The reader's scanner preferences, or the defaults.
+///
+/// **Every failure is the default** — no row, a row that is not JSON, a row holding the wrong
+/// shape — `home::stored`'s read rule: none of those is worth failing over, and all of them mean
+/// nothing usable was stored.
+pub fn stored_prefs(conn: &Connection) -> ScannerPrefs {
+    crate::app_meta::get_app_meta(conn, K_SCANNER_PREFS)
+        .and_then(|raw| serde_json::from_str::<ScannerPrefs>(&raw).ok())
+        .unwrap_or_default()
+}
+
+/// Remember the reader's scanner preferences.
+pub fn store_prefs(conn: &Connection, prefs: &ScannerPrefs) -> Result<(), String> {
+    let json = serde_json::to_string(prefs)
+        .map_err(|e| format!("could not save the scanner settings: {e}"))?;
+    crate::app_meta::set_app_meta(conn, K_SCANNER_PREFS, &json)
+        .map_err(|e| format!("could not save the scanner settings: {e}"))
+}
+
+/// The review tray as it was last written, or an empty one.
+///
+/// **An unreadable tray is an empty tray, never an error** — the page opens on it before the
+/// camera starts, and a scanner that refused to open over a damaged row would cost the reader the
+/// scanner as well as the tray.
+pub fn stored_tray(conn: &Connection) -> Vec<ScannerTrayRow> {
+    crate::app_meta::get_app_meta(conn, K_SCANNER_TRAY)
+        .and_then(|raw| serde_json::from_str::<Vec<ScannerTrayRow>>(&raw).ok())
+        .unwrap_or_default()
+}
+
+/// Remember the review tray, whole.
+///
+/// Two refusals, both before `app_meta` is touched so a refused write leaves the stored tray
+/// exactly as it was: more than [`MAX_TRAY_ROWS`] rows ([`TRAY_IS_FULL`]), and any row holding
+/// fewer than one copy ([`TRAY_ROW_NEEDS_A_COPY`]) — a row of nothing is a row the commit would
+/// refuse, so it is refused where the page can still fix it.
+pub fn store_tray(conn: &Connection, rows: &[ScannerTrayRow]) -> Result<(), String> {
+    valid_tray(rows)?;
+    let json =
+        serde_json::to_string(rows).map_err(|e| format!("could not save the scanner tray: {e}"))?;
+    crate::app_meta::set_app_meta(conn, K_SCANNER_TRAY, &json)
+        .map_err(|e| format!("could not save the scanner tray: {e}"))
+}
+
+/// [`store_tray`]'s two refusals, askable before anything is written.
+fn valid_tray(rows: &[ScannerTrayRow]) -> Result<(), String> {
+    if rows.len() > MAX_TRAY_ROWS {
+        return Err(TRAY_IS_FULL.to_owned());
+    }
+    if rows.iter().any(|row| row.quantity < 1) {
+        return Err(TRAY_ROW_NEEDS_A_COPY.to_owned());
+    }
+    Ok(())
+}
+
+/// The tray into the collection **and** what is left of it into `app_meta`, in one transaction.
+///
+/// **Why one write and not the import followed by [`store_tray`].** The page used to commit through
+/// `collection_import_commit` and let its debounced tray write catch up afterwards; an app closed
+/// in that window, a `BUSY` on the second write, or an older tray write landing after the commit
+/// each left the committed rows in the stored tray, so the next launch restored them and the next
+/// Add filed the same cards twice. Here the import's rows and the stored tray commit together, so
+/// there is no moment at which the collection holds a card the tray still offers.
+///
+/// The import is [`crate::collection::commit_import_with`] in `add` mode — the collection's own
+/// logic, its own refusals and its own activity row, not a copy. `remaining` is refused on
+/// [`store_tray`]'s terms **before** the import starts, so a tray that could not be stored costs
+/// no rolled-back import; any refusal from either half leaves the collection and the stored tray
+/// exactly as they were.
+pub fn tray_commit(
+    conn: &Connection,
+    items: &[crate::collection::CollectionImportItem],
+    folder_id: Option<i64>,
+    remaining: &[ScannerTrayRow],
+) -> Result<crate::collection::ImportCommitOutcome, String> {
+    valid_tray(remaining)?;
+    crate::collection::commit_import_with(conn, items, "add", folder_id, |tx| {
+        store_tray(tx, remaining)
+    })
 }
 
 /// The frame and its options, from either body shape. See the module doc.
@@ -370,11 +649,494 @@ pub async fn scanner_capture(
         .map_err(|e| format!("the scanner thread failed: {e}"))?
 }
 
+/// Narrow every later frame to these sets and release dates. Loads the session if this is the
+/// first scanner command, because the mask is built from the loaded labels.
+///
+/// **The crate's sentence is the command's error, verbatim** — no labels to filter by, or filters
+/// that match no printing — and a refusal keeps the previous filters in force.
+#[tauri::command]
+pub async fn scanner_set_filters(
+    state: tauri::State<'_, Arc<ScannerState>>,
+    filters: ScanFilters,
+) -> Result<(), String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut guard = state.ensure()?;
+        guard
+            .as_mut()
+            .expect("ensured")
+            .session
+            .set_filters(filters)
+    })
+    .await
+    .map_err(|e| format!("the scanner thread failed: {e}"))?
+}
+
+/// The reader's scanner preferences, or the defaults. **Infallible by signature**,
+/// `home::home_layout`'s contract: the page seeds its controls from this and has nothing better
+/// to do with an error than draw the defaults it already has. `(async)` for that command's reason
+/// — a sync body would take `db_read`'s mutex on the IPC thread.
+#[tauri::command(async)]
+pub fn scanner_prefs(state: tauri::State<'_, Arc<AppState>>) -> ScannerPrefs {
+    stored_prefs(&crate::sync::lock_db_read(state.inner()))
+}
+
+/// Remember the reader's scanner preferences. Answers [`crate::db::BUSY`] if a sync holds the
+/// write connection.
+#[tauri::command]
+pub async fn set_scanner_prefs(
+    state: tauri::State<'_, Arc<AppState>>,
+    prefs: ScannerPrefs,
+) -> Result<(), String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::sync::with_write(&state, |conn| store_prefs(conn, &prefs))
+    })
+    .await
+    .map_err(|e| format!("the scanner settings could not be saved: {e}"))?
+}
+
+/// The review tray as it was last written, or an empty one. Infallible, for [`scanner_prefs`]'
+/// reason.
+#[tauri::command(async)]
+pub fn scanner_tray(state: tauri::State<'_, Arc<AppState>>) -> Vec<ScannerTrayRow> {
+    stored_tray(&crate::sync::lock_db_read(state.inner()))
+}
+
+/// Remember the review tray, whole. The two refusals are [`store_tray`]'s; a busy write connection
+/// answers [`crate::db::BUSY`].
+#[tauri::command]
+pub async fn set_scanner_tray(
+    state: tauri::State<'_, Arc<AppState>>,
+    rows: Vec<ScannerTrayRow>,
+) -> Result<(), String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::sync::with_write(&state, |conn| store_tray(conn, &rows))
+    })
+    .await
+    .map_err(|e| format!("the scanner tray could not be saved: {e}"))?
+}
+
+/// Add the tray's rows to the collection and store what is left of the tray, as one write — see
+/// [`tray_commit`]. Through `with_write_owned`, `collection_import_commit`'s own door, so the facet
+/// index's `owned` dimension moves with the copies and a busy write connection answers
+/// [`crate::db::BUSY`] with nothing written.
+#[cfg(not(target_family = "wasm"))]
+#[tauri::command]
+pub async fn scanner_tray_commit(
+    state: tauri::State<'_, Arc<AppState>>,
+    items: Vec<crate::collection::CollectionImportItem>,
+    folder_id: Option<i64>,
+    remaining: Vec<ScannerTrayRow>,
+) -> Result<crate::collection::ImportCommitOutcome, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::collection_source::with_write_owned(&state, |conn| {
+            tray_commit(conn, &items, folder_id, &remaining)
+        })
+    })
+    .await
+    .map_err(|e| format!("the collection could not be written: {e}"))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app_meta::set_app_meta;
     use tauri::http::HeaderMap;
     use tauri::ipc::InvokeBody;
+
+    /// A valid bundle with no entries, as bytes that live as long as the test binary — the shape
+    /// [`Embedded::bundle`] takes.
+    fn tiny_bundle() -> &'static [u8] {
+        Box::leak(
+            card_scanner::index::BundleBuilder::new(
+                card_scanner::hash::HashKind::DHashChroma32,
+                256,
+            )
+            .finish(0)
+            .to_bytes()
+            .into_boxed_slice(),
+        )
+    }
+
+    /// The table [`K_SCANNER_PREFS`] and [`K_SCANNER_TRAY`] live in, as `schema.rs` builds it —
+    /// `home.rs`' own test helper. Nothing here reads a second table.
+    fn meta() -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute(
+            "CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+            [],
+        )
+        .unwrap();
+        c
+    }
+
+    fn tray_row(key: &str, quantity: i64) -> ScannerTrayRow {
+        ScannerTrayRow {
+            key: key.into(),
+            card_id: "f29ba16f-c8fb-42fe-aabf-87089cb214a7".into(),
+            oracle_id: Some("4457ed35-7c10-48c8-9776-456485fdf070".into()),
+            name: "Lightning Bolt".into(),
+            set_code: "2x2".into(),
+            collector_number: "117".into(),
+            finish: "nonfoil".into(),
+            quantity,
+            choices: vec![ScannerTrayChoice {
+                card_id: "b14fae63-2e82-49c1-8e62-d84a65f27479".into(),
+                oracle_id: Some("4457ed35-7c10-48c8-9776-456485fdf070".into()),
+                name: "Lightning Bolt".into(),
+                set_code: "sta".into(),
+                collector_number: "105".into(),
+            }],
+            added_at: 1_757_900_000_000,
+        }
+    }
+
+    /// The load order's first rung. The embedded bytes are deliberately **not** a bundle, so a
+    /// `loaded` asset proves the file's bytes were the ones parsed — `source` alone would only
+    /// prove which branch set the word.
+    #[test]
+    fn a_file_beats_the_embedded_copy_and_says_so() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let scanner = dir.path().join("scanner");
+        std::fs::create_dir_all(&scanner).expect("mkdir");
+        std::fs::write(scanner.join(BUNDLE_FILE), tiny_bundle()).expect("write");
+        let l = load(
+            &scanner,
+            &dir.path().join("corpus.db"),
+            5,
+            Embedded {
+                bundle: Some(&b"not a bundle"[..]),
+                models: None,
+            },
+        );
+        assert_eq!(l.status.bundle.source, AssetSource::File);
+        assert!(l.status.bundle.present && l.status.bundle.loaded);
+        assert!(l.status.bundle.path.ends_with(BUNDLE_FILE));
+    }
+
+    #[test]
+    fn with_no_file_the_embedded_bundle_loads() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let scanner = dir.path().join("scanner");
+        let l = load(
+            &scanner,
+            &dir.path().join("corpus.db"),
+            5,
+            Embedded {
+                bundle: Some(tiny_bundle()),
+                models: None,
+            },
+        );
+        let b = &l.status.bundle;
+        assert_eq!(b.source, AssetSource::Embedded);
+        assert!(b.present && b.loaded, "{b:?}");
+        // Still the path a file would override it from, so the developer panel can say where.
+        assert!(b.path.ends_with(BUNDLE_FILE), "{}", b.path);
+        assert!(l.session.has_reference());
+        // No models were embedded, so the pair is absent — per asset, not all or nothing.
+        assert_eq!(l.status.detection_model.source, AssetSource::Absent);
+    }
+
+    #[test]
+    fn nothing_anywhere_is_absent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let l = load(
+            &dir.path().join("scanner"),
+            &dir.path().join("corpus.db"),
+            5,
+            Embedded::none(),
+        );
+        for a in [
+            &l.status.bundle,
+            &l.status.detection_model,
+            &l.status.recognition_model,
+        ] {
+            assert_eq!(a.source, AssetSource::Absent, "{a:?}");
+            assert!(!a.present && !a.loaded, "{a:?}");
+        }
+    }
+
+    /// The models are a pair: `File` only when both files are there, and one file alone falls
+    /// through to the embedded pair. Garbage bytes throughout, because no model is in the repo —
+    /// what is under test is which place was read, and a failed parse still says that.
+    #[test]
+    fn the_models_load_as_a_pair_from_one_place() {
+        let garbage: (&'static [u8], &'static [u8]) = (&b"not a model"[..], &b"not a model"[..]);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let scanner = dir.path().join("scanner");
+        std::fs::create_dir_all(scanner.join("models")).expect("mkdir");
+        let embedded = Embedded {
+            bundle: None,
+            models: Some(garbage),
+        };
+
+        // One file on disk: the embedded pair answers, for both.
+        std::fs::write(scanner.join(DETECTION_MODEL), b"on disk").expect("write");
+        let one = load(&scanner, &dir.path().join("corpus.db"), 5, embedded);
+        for a in [&one.status.detection_model, &one.status.recognition_model] {
+            assert_eq!(a.source, AssetSource::Embedded, "{a:?}");
+            assert!(a.present && !a.loaded && a.error.is_some(), "{a:?}");
+        }
+
+        // One file on disk and nothing embedded: nothing loads, and the file that is there says so.
+        let bare = load(&scanner, &dir.path().join("corpus.db"), 5, Embedded::none());
+        assert_eq!(bare.status.detection_model.source, AssetSource::File);
+        assert_eq!(bare.status.recognition_model.source, AssetSource::Absent);
+        assert!(!bare.status.detection_model.loaded && !bare.session.has_reader());
+
+        // Both files on disk: the files answer, for both.
+        std::fs::write(scanner.join(RECOGNITION_MODEL), b"on disk").expect("write");
+        let both = load(&scanner, &dir.path().join("corpus.db"), 5, embedded);
+        for a in [&both.status.detection_model, &both.status.recognition_model] {
+            assert_eq!(a.source, AssetSource::File, "{a:?}");
+        }
+    }
+
+    #[test]
+    fn prefs_round_trip_through_app_meta_and_default_when_unset() {
+        let conn = meta();
+        assert_eq!(stored_prefs(&conn), ScannerPrefs::default());
+        let p = ScannerPrefs {
+            mode: ScanMode::Exact,
+            developer: true,
+            folder_id: Some(4),
+            ..Default::default()
+        };
+        store_prefs(&conn, &p).unwrap();
+        assert_eq!(stored_prefs(&conn), p);
+    }
+
+    #[test]
+    fn a_prefs_row_that_does_not_parse_reads_as_the_default() {
+        let conn = meta();
+        for junk in ["not json", "[]", r#"{"mode":"sideways"}"#] {
+            set_app_meta(&conn, K_SCANNER_PREFS, junk).unwrap();
+            assert_eq!(stored_prefs(&conn), ScannerPrefs::default(), "{junk}");
+        }
+    }
+
+    #[test]
+    fn the_default_row_is_nonfoil_and_ungraded() {
+        let p = ScannerPrefs::default();
+        assert_eq!(p.finish, "nonfoil");
+        assert_eq!(p.condition, "NONE");
+        assert_eq!(p.mode, ScanMode::Fast);
+        assert_eq!(p.folder_id, None);
+        assert!(!p.developer);
+    }
+
+    /// **The rename is the contract, and `ipc.test.ts` cannot see it** — its mirror table camel-cases
+    /// the Rust field names unconditionally, so a dropped `rename_all` stays green there. Read off
+    /// the real wire here instead.
+    #[test]
+    fn prefs_and_tray_rows_travel_under_the_names_the_page_reads() {
+        let p = serde_json::to_value(ScannerPrefs {
+            folder_id: Some(4),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(p["folderId"], 4);
+        assert_eq!(p["mode"], "fast");
+        // The filters keep the crate's snake case inside the camel-case document.
+        assert!(p["filters"].get("released_from").is_some(), "{p}");
+
+        let row = serde_json::to_value(tray_row("k", 1)).unwrap();
+        for key in [
+            "key",
+            "cardId",
+            "oracleId",
+            "name",
+            "setCode",
+            "collectorNumber",
+            "finish",
+            "quantity",
+            "choices",
+            "addedAt",
+        ] {
+            assert!(row.get(key).is_some(), "{key} missing from {row}");
+        }
+        assert!(row["choices"][0].get("collectorNumber").is_some(), "{row}");
+
+        let absent = serde_json::to_value(asset(Path::new("nowhere/card-hashes.bin"))).unwrap();
+        assert_eq!(absent["source"], "absent");
+    }
+
+    #[test]
+    fn a_tray_round_trips_whole() {
+        let conn = meta();
+        assert!(stored_tray(&conn).is_empty());
+        let rows = vec![tray_row("a", 1), tray_row("b", 3)];
+        store_tray(&conn, &rows).unwrap();
+        assert_eq!(stored_tray(&conn), rows);
+        store_tray(&conn, &[]).unwrap();
+        assert!(
+            stored_tray(&conn).is_empty(),
+            "an empty tray is a tray, not a missing row"
+        );
+    }
+
+    #[test]
+    fn a_tray_row_with_zero_quantity_is_refused_with_a_sentence() {
+        let conn = meta();
+        let kept = vec![tray_row("a", 2)];
+        store_tray(&conn, &kept).unwrap();
+
+        let err = store_tray(&conn, &[tray_row("a", 2), tray_row("b", 0)]).unwrap_err();
+        assert_eq!(err, TRAY_ROW_NEEDS_A_COPY);
+        assert_eq!(err, "A tray row needs at least one copy.");
+        assert_eq!(
+            stored_tray(&conn),
+            kept,
+            "a refused write leaves the stored tray as it was"
+        );
+        assert!(store_tray(&conn, &[tray_row("c", -1)]).is_err());
+    }
+
+    #[test]
+    fn a_tray_past_five_thousand_rows_is_refused_with_a_sentence() {
+        let conn = meta();
+        let full = vec![tray_row("r", 1); MAX_TRAY_ROWS];
+        store_tray(&conn, &full).expect("exactly the limit is a tray");
+        let over = vec![tray_row("r", 1); MAX_TRAY_ROWS + 1];
+        assert_eq!(
+            store_tray(&conn, &over).unwrap_err(),
+            "The tray holds at most 5,000 rows — add these to the collection first."
+        );
+        assert_eq!(stored_tray(&conn).len(), MAX_TRAY_ROWS);
+    }
+
+    /// Both halves of a tray commit: one printing in `cards`, and a user side holding the
+    /// collection and `app_meta`. Torn down with the connection.
+    fn pair_with_a_card() -> Connection {
+        let conn = crate::schema::memory_pair();
+        conn.execute(
+            "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
+                rarity,finishes,prices,raw)
+             VALUES ('card-1','o1','Test Card','tst','1','en','normal','common',
+                '[\"nonfoil\"]','{}','{}')",
+            [],
+        )
+        .unwrap();
+        conn
+    }
+
+    fn import_line(card_id: &str, quantity: i64) -> crate::collection::CollectionImportItem {
+        crate::collection::CollectionImportItem {
+            card_id: card_id.into(),
+            quantity,
+            finish: "nonfoil".into(),
+            condition: None,
+            condition_original: None,
+            purchase_price: None,
+            purchase_currency: None,
+            acquired_at: None,
+            acquisition_source: None,
+            notes: None,
+            serial_number: None,
+            altered: false,
+            signed: false,
+            proxy: false,
+            misprint: false,
+            grading: None,
+        }
+    }
+
+    fn copies(conn: &Connection) -> i64 {
+        conn.query_row(
+            "SELECT coalesce(sum(quantity), 0) FROM collection_entries",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_tray_commit_adds_the_rows_and_stores_what_is_left_in_the_same_write() {
+        let conn = pair_with_a_card();
+        store_tray(&conn, &[tray_row("taken", 2), tray_row("left", 1)]).unwrap();
+        let out = tray_commit(
+            &conn,
+            &[import_line("card-1", 2)],
+            None,
+            &[tray_row("left", 1)],
+        )
+        .unwrap();
+        assert_eq!((out.added, out.updated, out.removed), (1, 0, 0));
+        assert_eq!(copies(&conn), 2);
+        assert_eq!(
+            stored_tray(&conn),
+            vec![tray_row("left", 1)],
+            "the committed row is still in the stored tray, so a restart files it twice"
+        );
+    }
+
+    #[test]
+    fn a_refused_tray_commit_leaves_the_collection_and_the_stored_tray_as_they_were() {
+        let conn = pair_with_a_card();
+        let before = vec![tray_row("a", 1), tray_row("b", 1)];
+        store_tray(&conn, &before).unwrap();
+
+        // An unknown card, after a line the import has already written inside its transaction.
+        let err = tray_commit(
+            &conn,
+            &[import_line("card-1", 1), import_line("no-such-card", 1)],
+            None,
+            &[],
+        )
+        .unwrap_err();
+        assert!(err.contains("no-such-card"), "{err}");
+        assert_eq!(copies(&conn), 0, "a refused import kept its first line");
+        assert_eq!(
+            stored_tray(&conn),
+            before,
+            "a refused import emptied the tray"
+        );
+
+        // A remaining tray `store_tray` would refuse is refused before the import writes.
+        let err = tray_commit(
+            &conn,
+            &[import_line("card-1", 1)],
+            None,
+            &[tray_row("z", 0)],
+        )
+        .unwrap_err();
+        assert_eq!(err, TRAY_ROW_NEEDS_A_COPY);
+        assert_eq!(copies(&conn), 0);
+        assert_eq!(stored_tray(&conn), before);
+
+        // And the tray write is inside the import's transaction, not after its commit: a refusal
+        // from that last write takes the imported rows back out with it.
+        let err = crate::collection::commit_import_with(
+            &conn,
+            &[import_line("card-1", 1)],
+            "add",
+            None,
+            |tx| {
+                store_tray(tx, &[])?;
+                Err("the disk filled".to_owned())
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err, "the disk filled");
+        assert_eq!(
+            copies(&conn),
+            0,
+            "the import committed before the tray was written"
+        );
+        assert_eq!(stored_tray(&conn), before);
+    }
+
+    #[test]
+    fn an_unreadable_stored_tray_reads_as_empty_rather_than_failing() {
+        let conn = meta();
+        for junk in ["not json", r#"{"key":"a"}"#, r#"[{"quantity":"many"}]"#] {
+            set_app_meta(&conn, K_SCANNER_TRAY, junk).unwrap();
+            assert!(stored_tray(&conn).is_empty(), "{junk}");
+        }
+    }
 
     #[test]
     fn an_empty_data_dir_names_three_absent_paths_and_still_answers() {
@@ -383,6 +1145,7 @@ mod tests {
             &dir.path().join("scanner"),
             &dir.path().join("corpus.db"),
             5,
+            Embedded::none(),
         );
         let s = &loaded.status;
         assert!(!s.bundle.present && !s.bundle.loaded);
@@ -401,10 +1164,18 @@ mod tests {
         let scanner = dir.path().join("scanner");
         std::fs::create_dir_all(&scanner).expect("mkdir");
         std::fs::write(scanner.join(BUNDLE_FILE), b"nonsense").expect("write");
-        let loaded = load(&scanner, &dir.path().join("corpus.db"), 5);
+        // A good embedded copy is on offer and is **not** taken: the reader placed this file, so
+        // its error is the answer, and falling back would hide the very file under test.
+        let embedded = Embedded {
+            bundle: Some(tiny_bundle()),
+            models: None,
+        };
+        let loaded = load(&scanner, &dir.path().join("corpus.db"), 5, embedded);
         assert!(loaded.status.bundle.present);
         assert!(!loaded.status.bundle.loaded);
         assert!(loaded.status.bundle.error.is_some());
+        assert_eq!(loaded.status.bundle.source, AssetSource::File);
+        assert!(!loaded.session.has_reference());
     }
 
     /// A bundle that parsed with no `corpus.db` beside it: **loaded, and carrying a sentence
@@ -425,7 +1196,7 @@ mod tests {
         std::fs::write(scanner.join(BUNDLE_FILE), empty).expect("write");
 
         let corpus = dir.path().join("corpus.db");
-        let loaded = load(&scanner, &corpus, 5);
+        let loaded = load(&scanner, &corpus, 5, Embedded::none());
         assert!(loaded.status.bundle.present && loaded.status.bundle.loaded);
         assert_eq!(loaded.status.labels, 0);
         let err = loaded

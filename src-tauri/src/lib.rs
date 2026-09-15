@@ -265,8 +265,9 @@ pub mod paths;
 pub mod picked;
 #[cfg(not(target_family = "wasm"))]
 pub mod reconcile;
-/// **The card scanner behind four commands.** Non-wasm for the crate's reason: the web build
-/// has no detector, and the page says so. See `scanner`'s own doc for the two body shapes.
+/// **The card scanner, and its stored preferences and review tray.** Non-wasm for the crate's
+/// reason: the web build has no detector, and the page says so. See `scanner`'s own doc for the
+/// two body shapes and the asset load order. Its commands are registered in `desktop.rs`.
 #[cfg(not(target_family = "wasm"))]
 pub mod scanner;
 #[cfg(not(target_family = "wasm"))]
