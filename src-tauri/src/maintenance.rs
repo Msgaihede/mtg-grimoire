@@ -303,6 +303,21 @@ pub fn prune_activity_log(conn: &Connection) -> rusqlite::Result<usize> {
     crate::activity::prune(conn)
 }
 
+/// Record today's price for every printing the reader owns, at launch — the fourth housekeeping
+/// job, and *logged and left owing* for the other three's reason.
+///
+/// **User file only, like [`prune_activity_log`]**: `price_snapshots` is on the user side and
+/// the prices it reads are resolved into the corpus by unqualified DML, so there is no pragma
+/// here and no `{schema}` to get wrong.
+///
+/// At launch, beside the sync's and the feed refresh's own calls, so that the first launch after
+/// an upgrade already has a baseline day — see [`crate::price_history`]. It is idempotent per day
+/// (insert-or-replace on the day's key), so a launch that follows a sync the same afternoon costs
+/// one statement per marketplace and changes nothing.
+pub fn snapshot_prices(conn: &Connection) -> rusqlite::Result<usize> {
+    crate::price_history::snapshot(conn)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

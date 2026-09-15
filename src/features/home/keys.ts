@@ -36,7 +36,7 @@
  * number: switching marketplace has to re-issue the read rather than re-render a second field
  * that does not exist.
  *
- * ## The one exception
+ * ## The two exceptions
  *
  * {@link activityKey} sits under `["activity"]`, a root **nothing in this app invalidates** —
  * there is no activity mutation, because the feed is a record of every *other* table's writes.
@@ -45,6 +45,13 @@
  * `invalidate` action on any of them into an invalidation of its own key. **That bridge is the
  * widget's and stays there** — it is machinery rather than a key, and its two halves have to be
  * read together. This note is here so the exception is visible from the rule.
+ *
+ * {@link recentCardsKey} sits under {@link RECENT_CARDS_ROOT}, and it is the opposite case: a
+ * root with **exactly one writer**. Opening a card is not a write to the collection, the wishlist
+ * or a deck, so none of their invalidations has any business reaching it — and filing it under
+ * `["collection"]` would refetch the strip after every add while leaving it stale after the one
+ * press that actually changes it. `CardDetailModal`'s recorder invalidates this root when
+ * `record_recent_card` lands, which is the whole of what keeps it fresh.
  *
  * ## What is deliberately not here
  *
@@ -57,6 +64,7 @@
 
 import type { QueryKey } from "@tanstack/react-query";
 
+import type { PriceMoverDirection, PriceMoverWindow } from "@/lib/ipc";
 import type { MarketplaceId } from "@/lib/marketplace";
 
 import type { BreakdownDimension } from "./widgets";
@@ -136,3 +144,40 @@ export const deckValuesKey = (marketplace: MarketplaceId): QueryKey => [
  * keeps it fresh.
  */
 export const activityKey = (limit: number): QueryKey => ["activity", "recent", limit];
+
+/**
+ * How far each set the reader collects is from complete — `ipc.setCompletion`.
+ *
+ * Under `["collection"]` by the module doc's rule: the answer moves when a copy is added, moved or
+ * removed, and every one of those writes already invalidates that root. No marketplace, because
+ * nothing in the answer is priced.
+ */
+export const setCompletionKey: QueryKey = ["collection", "setCompletion"];
+
+/**
+ * The owned printings whose price moved most — `ipc.priceMovers`.
+ *
+ * Under `["collection"]` for both of the reasons that root exists: a copy added or removed changes
+ * which printings are *owned*, and `invalidatePricedQueries` sweeps the same root when a feed lands,
+ * which is also the moment a new price snapshot is taken. **Every segment after the root is part of
+ * the question** — the window picks the baseline, the direction filters, the marketplace decides
+ * every number, and the limit cuts the list — so each one has to be able to re-issue the read.
+ */
+export const priceMoversKey = (
+  range: PriceMoverWindow,
+  direction: PriceMoverDirection,
+  marketplace: MarketplaceId,
+  limit: number,
+): QueryKey => ["collection", "priceMovers", range, direction, marketplace, limit];
+
+/**
+ * The root the recently viewed strip is filed under — the module doc's second exception, and the
+ * prefix `CardDetailModal`'s recorder invalidates. A root of its own because its one writer is
+ * not a collection, wishlist or deck write; see the module doc.
+ */
+export const RECENT_CARDS_ROOT: QueryKey = ["recentCards"];
+
+/** The cards this device opened most recently, at most `limit` — `ipc.recentCards`. The limit is
+ *  in the key for {@link activityKey}'s reason: eight is not the first eight of twenty-four once
+ *  a card has been opened in between. */
+export const recentCardsKey = (limit: number): QueryKey => ["recentCards", "list", limit];

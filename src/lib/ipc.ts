@@ -6219,13 +6219,33 @@ export interface DeckFolderPane {
  * nothing else; this side draws what it knows and carries the rest through untouched.
  */
 export interface HomeWidget {
-  /** Stable across a reorder — the key a drag moves and the row a `config` belongs to. */
+  /** Stable across a move — the key a drag moves and the row a `config` belongs to. */
   id: string;
   /** Which tile this is. See above: **not** `WidgetKind`, deliberately. */
   kind: string;
-  /** How many columns wide, `1` or `2`. The only field of the four Rust bounds by value. */
-  span: number;
-  /** Whatever that kind of tile remembers — a dimension, a marketplace, a row count.
+  /**
+   * Where the tile sits on the page's square-cell grid, in cells from the top-left corner, and how
+   * many cells it covers — layout document **version 2**. Rust bounds each by value and knows
+   * nothing about how many columns a window has: `layout.ts`'s `normalise` is what brings a
+   * document inside the grid it is about to be drawn on.
+   *
+   * A version-1 document carries none of the four, and Rust answers `0` for each; `parseLayout`
+   * reads `w === 0` as "never placed" and lays the widget out from {@link span}.
+   */
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /**
+   * The version-1 width — `1` a column, `2` the whole row. **Written on every version-2 document
+   * and read by nothing in this build except the upgrade from version 1.** It is there for an
+   * *older* build: that one's `home.rs` requires the field, so a document without it would read as
+   * the default layout there, and the reader's next Customize in the old build would overwrite
+   * this build's page. With it, the old build draws the widgets in a row and refuses to save a
+   * version it does not write — the round trip this document has always promised.
+   */
+  span?: number;
+  /** Whatever that kind of tile remembers — a dimension, a title, a density, a row count.
    *  `unknown` rather than a union of every widget's shape for `kind`'s reason: a build that
    *  cannot read a config must still write it back the way it found it. */
   config: unknown;
@@ -6246,10 +6266,79 @@ export interface HomeWidget {
  * them; only a row that is *absent* or unparseable falls back to the six the crate seeds.
  */
 export interface HomeLayout {
-  /** `1` today. Rust **refuses** a write carrying anything else rather than downgrading it, so a
-   *  document from a future build survives an older one untouched. */
+  /** `2` since the cell grid. Rust **refuses** a write carrying anything else rather than
+   *  downgrading it, so a document from a future build survives an older one untouched. */
   version: number;
   widgets: HomeWidget[];
+}
+
+/**
+ * One card the reader opened recently — `recent_cards.rs`'s `RecentCard`.
+ *
+ * The ids are this device's memory, one `app_meta` row, and the name and set are joined off the
+ * corpus at read time: a printing the corpus no longer holds is skipped rather than drawn as a
+ * frame with nothing in it.
+ */
+export interface RecentCard {
+  cardId: string;
+  name: string;
+  setCode: string;
+  /** Unix seconds of the most recent open. */
+  viewedAt: number;
+}
+
+/**
+ * How much of one set the reader owns — `set_completion.rs`'s `SetCompletion`.
+ *
+ * `owned` counts **distinct collector numbers** the collection holds any copy of, in any finish
+ * or language, inside `1..=size`. `size` is Scryfall's `printed_size` and is `null` for a set the
+ * corpus has no printed size for — a corpus that has not synced since the column arrived, or a
+ * set Scryfall publishes none for — in which case `owned` counts every collector number held.
+ * Only sets holding at least one owned card are answered.
+ */
+export interface SetCompletion {
+  setCode: string;
+  name: string;
+  /** `YYYY-MM-DD`, or `null` where Scryfall published none. */
+  releasedAt: string | null;
+  owned: number;
+  size: number | null;
+}
+
+/** Which baseline {@link ipc.priceMovers} measures against. `all` is the oldest snapshot kept. */
+export type PriceMoverWindow = "7d" | "30d" | "all";
+
+/** Which way a mover went. `both` ranks gainers and losers together by the size of the move. */
+export type PriceMoverDirection = "both" | "up" | "down";
+
+/** One owned printing whose price moved — `price_history.rs`'s `PriceMover`. */
+export interface PriceMover {
+  cardId: string;
+  name: string;
+  setCode: string;
+  /** `null` for a printing whose set left the corpus. */
+  setName: string | null;
+  finish: Finish;
+  /** Today's price at the asked marketplace, through `sorting::price_expr`. */
+  now: number;
+  /** The price in the baseline snapshot. */
+  then: number;
+  /** `now - then`, signed. Never `0` — a printing that did not move is not a mover. */
+  delta: number;
+}
+
+/**
+ * The movers, and what they were measured against — `price_history.rs`'s `PriceMovers`.
+ *
+ * `since` is the Unix seconds of the baseline snapshot actually used, `null` when there is no
+ * snapshot old enough to compare against at all. `days` is how many distinct days of snapshots
+ * this marketplace holds, which is what lets the widget tell *nothing moved* from *there is no
+ * history yet* — two sentences a reader must never confuse.
+ */
+export interface PriceMovers {
+  movers: PriceMover[];
+  since: number | null;
+  days: number;
 }
 
 /**
@@ -8643,15 +8732,39 @@ export const ipc = {
   /**
    * Remember the whole page — **the document, not a tile**, so a reorder cannot half land.
    *
-   * The write is the half that validates: a `version` that is not `1`, a blank `id` or `kind`, a
-   * `span` outside `1..=2` and a document over 64 KiB are each refused in a sentence, and a refusal
-   * leaves the stored row exactly as it was. Everything else survives the round trip **including
+   * The write is the half that validates: a `version` that is not `2`, a blank `id` or `kind`, a
+   * footprint outside `home.rs`'s bounds, a `span` outside `1..=2` and a document over 64 KiB are
+   * each refused in a sentence, and a refusal leaves the stored row exactly as it was. Everything else survives the round trip **including
    * what this build does not understand** — an unknown `kind` and its `config` come back verbatim,
    * which is the whole reason {@link HomeWidget} is typed as loosely as it is.
    *
    * Answers `collection::BUSY` under a running sync like every other write.
    */
   setHomeLayout: (layout: HomeLayout) => invoke<void>("set_home_layout", { layout }),
+  /**
+   * The cards this device opened most recently, newest first, at most `limit` (clamped `1..=24`).
+   * Infallible at the far end: a missing or unreadable row is no cards.
+   */
+  recentCards: (limit: number) => invoke<RecentCard[]>("recent_cards", { limit }),
+  /**
+   * Remember that a card was opened. A card already on the list moves to the front rather than
+   * appearing twice, and the list is capped at 24. Answers `collection::BUSY` under a running sync,
+   * which the caller ignores — a missed entry costs one tile on the home page and nothing else.
+   */
+  recordRecentCard: (cardId: string) => invoke<void>("record_recent_card", { cardId }),
+  /** Every set the collection holds a card from, with how much of it is owned. See
+   *  {@link SetCompletion}. */
+  setCompletion: () => invoke<SetCompletion[]>("set_completion"),
+  /**
+   * The owned printings whose price at `marketplace` moved most since the window's baseline
+   * snapshot, largest move first, at most `limit` (clamped `1..=100`). See {@link PriceMovers}.
+   */
+  priceMovers: (
+    window: PriceMoverWindow,
+    direction: PriceMoverDirection,
+    marketplace: MarketplaceId,
+    limit: number,
+  ) => invoke<PriceMovers>("price_movers", { window, direction, marketplace, limit }),
   /**
    * Which view the app opens on, as a stored word — `"home"` for a database nobody has changed.
    *

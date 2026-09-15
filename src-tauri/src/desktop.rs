@@ -19,9 +19,10 @@ use crate::{
     activity, camera, card, collection, collection_alloc, collection_folders, combos, db, deck,
     deck_audit, deck_meta, deck_missing, deck_notes, deck_pull, deck_quick_add, deck_theory,
     deck_tokens, deck_undo, deckpane, decksort, errors, export, flatten, home, images, import,
-    index, listview, markcolors, marketplace, marketplace_feed, mirror, nav, paths, reset, scanner,
-    schema, scryfall, search, searchopen, share, startup, startview, sync, sync_engine, sync_pair,
-    tags, update, wishlist, wishlist_folders, wishlist_optimize, zoom,
+    index, listview, markcolors, marketplace, marketplace_feed, mirror, nav, paths, price_history,
+    recent_cards, reset, scanner, schema, scryfall, search, searchopen, set_completion, share,
+    startup, startview, sync, sync_engine, sync_pair, tags, update, wishlist, wishlist_folders,
+    wishlist_optimize, zoom,
 };
 // **Not in the list above, because this file compiles for Android too.** Its name says
 // `desktop`, but its gate is `cfg(not(target_family = "wasm"))` — desktop *and* mobile — while
@@ -559,6 +560,15 @@ pub fn run() {
             // on. Both reads are infallible by signature — see each module's doc.
             home::home_layout,
             home::set_home_layout,
+            // The Recently viewed widget: the read is infallible by signature, and the write is
+            // the card modal's, which ignores a BUSY — a missed entry costs one tile.
+            recent_cards::recent_cards,
+            recent_cards::record_recent_card,
+            // The Set completion and Price movers widgets: two reads on the read-only
+            // connection. The movers' history is written by the launch, a sync and a feed store,
+            // never by a command — see `price_history`'s doc.
+            set_completion::set_completion,
+            price_history::price_movers,
             startview::start_view,
             startview::set_start_view,
             marketplace_feed::marketplace_feed_refresh,

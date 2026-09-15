@@ -1,27 +1,67 @@
 import { useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, fn, userEvent, waitFor, within } from "storybook/test";
-import type { WidgetProps } from "../widgetProps";
+import { expect, fn, waitFor, within } from "storybook/test";
+import type { HomeWidget } from "@/lib/ipc";
+import { makeFit, spanPx } from "../fit";
+import { WidgetCard } from "../WidgetCard";
+import type { WidgetBodyProps } from "../widgetProps";
+import { widgetDensity } from "../widgetSettings";
 import { ActivityWidget } from "./ActivityWidget";
 
-/** How long a play waits on a freshly opened settings popover. Seconds-scale, because the panel
- *  mounts on the press and the `Dropdown` inside it a commit later; a plain `const`, because CSF
- *  indexes every non-default export as a story. */
-const POPOVER_TIMEOUT = { timeout: 5_000 };
+/** The grid's target cell, so a footprint here is drawn at the size an ordinary window draws it. */
+const CELL = 104;
 
-/** The page's half of every widget's props — see `widgetProps.ts`. */
-const CHROME = {
-  editing: false,
-  onRemove: fn(),
-  onSpan: fn(),
-  onConfig: fn(),
-  onNudge: fn(),
-  dragHandleRef: fn(),
-};
+/** An Activity entry at a footprint. */
+const activityAt = (w: number, h: number, config: unknown = null): HomeWidget => ({
+  id: "activity",
+  kind: "activity",
+  x: 0,
+  y: 0,
+  w,
+  h,
+  config,
+});
 
 /**
- * The widget with a query client that has not fetched — the beat before `activity_recent`
+ * The body inside the card the page draws it in, at its footprint's pixel size.
+ *
+ * The fit is built from the entry, as the page builds it from a measured cell, so a story changes
+ * the box by passing a different `widget` and nothing else. This kind's settings are all registry
+ * rows (`Changes to show`, `Show times`), which the card draws — so there is no `extraSettings`.
+ */
+function Framed({ widget, editing, still, onConfig }: WidgetBodyProps) {
+  const fit = makeFit({
+    w: widget.w,
+    h: widget.h,
+    widthPx: spanPx(widget.w, CELL),
+    heightPx: spanPx(widget.h, CELL),
+    density: widgetDensity(widget),
+  });
+  return (
+    <div style={{ width: fit.widthPx, height: fit.heightPx }}>
+      <WidgetCard
+        widget={widget}
+        fit={fit}
+        editing={editing}
+        still={still}
+        onConfig={onConfig}
+        onRemove={fn()}
+      >
+        <ActivityWidget
+          widget={widget}
+          fit={fit}
+          editing={editing}
+          still={still}
+          onConfig={onConfig}
+        />
+      </WidgetCard>
+    </div>
+  );
+}
+
+/**
+ * The body with a query client that has not fetched — the beat before `activity_recent`
  * answers, which is one of the four sentences this widget insists are four.
  *
  * **A client rather than a fault, because no fault in `.storybook/fake/` reaches a read.**
@@ -35,33 +75,42 @@ const CHROME = {
  * sits at `status: "pending"` — exactly what the widget sees on its first render. Its own client
  * rather than the world's, so nothing here leaks into the story mounted beside it on a docs page.
  */
-function Unanswered({ widget, ...chrome }: WidgetProps) {
+function Unanswered(props: WidgetBodyProps) {
   const [client] = useState(
     () => new QueryClient({ defaultOptions: { queries: { enabled: false } } }),
   );
   return (
     <QueryClientProvider client={client}>
-      <ActivityWidget widget={widget} {...chrome} />
+      <Framed {...props} />
     </QueryClientProvider>
   );
 }
+
+/** The kind's tallest card — room for twenty-six lines, which is the whole of the seeded today and
+ *  the start of yesterday. */
+const TALL = activityAt(4, 8);
 
 const meta = {
   title: "Home/ActivityWidget",
   component: ActivityWidget,
   tags: ["autodocs"],
   args: {
-    // The default layout's entry: one column, no config — which reads 50 changes.
-    widget: { id: "activity", kind: "activity", span: 1, config: null },
-    ...CHROME,
+    // The default layout's entry: three cells by three, no config — which reads 50 changes, with
+    // times. `fit` is only what the body's type requires; `Framed` builds the real one from the
+    // entry.
+    widget: activityAt(3, 3),
+    fit: makeFit({
+      w: 3,
+      h: 3,
+      widthPx: spanPx(3, CELL),
+      heightPx: spanPx(3, CELL),
+      density: "comfortable",
+    }),
+    editing: false,
+    still: false,
+    onConfig: fn(),
   },
-  decorators: [
-    (Story) => (
-      <div className="w-[26rem] max-w-full p-2">
-        <Story />
-      </div>
-    ),
-  ],
+  render: (args) => <Framed {...args} />,
   parameters: {
     docs: {
       description: {
@@ -72,8 +121,12 @@ const meta = {
           "`activityText.ts`'s `activityDays`, the wording its `activityLine` — which hands a " +
           "`deck`-scoped row straight to the deck history's own builder, so a deck line reads " +
           "here character for character as it reads in that dialog. What this file adds is the " +
-          "shape: a scroller, a sticky day header with the day's roll-up, a row, and the four " +
-          "sentences the list has when it is not a list.\n\n" +
+          "shape: a day heading with the day's roll-up, a line, and the four sentences the list " +
+          "has when it is not a list.\n\n" +
+          "**Cut to whole lines against the card.** A line is 27px and a day heading costs one, " +
+          "so each day takes one fewer line than is left and a day with no line left is dropped " +
+          "rather than drawn as a heading over nothing. The query still reads the stored limit, " +
+          "and the roll-up is the whole day as read, not the lines the card had room for.\n\n" +
           "**Two tables read as one.** `activity_recent` is a `UNION ALL` over `activity` and " +
           "`deck_audit`, and their ids collide — so a row is keyed on `scope` plus `id`, and a " +
           "caller keying on the bare number would draw two rows as one with nothing said about " +
@@ -84,15 +137,15 @@ const meta = {
           "invalidations that already follow a write cannot reach it. The bridge lives here: a " +
           "marker query under each of the three write roots, so each always has something to " +
           "match, and one subscription turning an `invalidate` on any of them into an " +
-          "invalidation of this feed.\n\n" +
+          "invalidation of this feed. A catalogue preview (`still`) does not bridge.\n\n" +
           "**The refusal is read before the emptiness**, which is the deck history's rule and " +
           "its reason: a failed read has no rows either, and calling it *nothing has happened " +
           "yet* tells a reader with nine thousand cards that their history is gone. That arm is " +
           "the one this workbench cannot reach — see {@link Unanswered} for why.\n\n" +
-          "**The day's roll-up is drawn `+18 / −4` and spoken as a sentence**, because read " +
-          "literally that string is *plus eighteen slash minus four*. Two counters rather than " +
-          "one signed sum: a day that gained eighteen copies and lost four is not a quiet day, " +
-          "and `+14` says it was.",
+          "**The day's roll-up is drawn as two tinted chips and spoken as a sentence**, because " +
+          "read literally `+18 −4` is *plus eighteen minus four*. Two counters rather than one " +
+          "signed sum: a day that gained eighteen copies and lost four is not a quiet day, and " +
+          "`+14` says it was.",
       },
     },
   },
@@ -102,14 +155,13 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 /**
- * Four days of the seeded world, with the collection, the wishlist and the deck audit
- * interleaved.
+ * The seeded world on the kind's tallest card, with the collection, the wishlist and the deck
+ * audit interleaved.
  *
- * The `play` reads the **accessible** feed. The roll-up beside each day heading is drawn as
- * `+18 / −4` inside an `aria-hidden` span with an `sr-only` sentence beside it, and the sentence
- * is what is asserted — the heading itself deliberately holds the label and nothing else, since
- * a count folded in beside it would compute into the accessible name and a `gap` joins two
- * children with no space at all (`Today3 changes`).
+ * The `play` reads the **accessible** feed. The roll-up beside each day heading is drawn as two
+ * `aria-hidden` chips with an `sr-only` sentence beside them, and the sentence is what is asserted
+ * — the heading itself deliberately holds the label and nothing else, since a count folded in
+ * beside it would compute into the accessible name.
  *
  * The two lines it names are the two this seed is arranged to produce. **A run rather than a
  * card** — a wishlist `add` naming no printing and carrying a `cards` count is the deck's *Send
@@ -121,6 +173,7 @@ type Story = StoryObj<typeof meta>;
  * date, which is a different string every day this suite runs.
  */
 export const ThreeDays: Story = {
+  args: { widget: TALL },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const feed = within(await canvas.findByRole("region", { name: "Activity" }));
@@ -128,7 +181,7 @@ export const ThreeDays: Story = {
     await expect(await feed.findByText("Today")).toBeInTheDocument();
     await expect(feed.getByText("Yesterday")).toBeInTheDocument();
 
-    // The day's copies in and out, spoken. Not `+18 / −4`, which is punctuation read aloud.
+    // The day's copies in and out, spoken. Not the chips, which are punctuation read aloud.
     await expect(feed.getByText("18 copies added, 4 copies removed")).toBeInTheDocument();
 
     // The bulk shape: no card named, a count in the payload, and its own sentence.
@@ -139,28 +192,37 @@ export const ThreeDays: Story = {
 };
 
 /**
- * A feed deeper than the widget reads — 180 rows over twelve days, against a default limit of
- * fifty.
+ * A feed deeper than the card — 180 rows over twelve days, on the kind's default three-by-three.
  *
- * **The widget is deciding where to stop rather than showing everything there is**, which is a
- * state three days of tidying cannot reach and is the whole reason the `large` seed carries an
- * activity table at all. The `play` counts the rows because the count *is* the claim: fifty
- * exactly, out of a hundred and eighty, and the day headings stop wherever the fiftieth row
- * falls.
- *
- * The rows are not virtualised — this is a scroller with a `max-h`, not a `VirtualTable` — so
- * counting them here is a fact about the widget rather than about jsdom's missing layout.
+ * **The widget is deciding where to stop rather than showing everything it read**, which is a
+ * state three days of tidying cannot reach and the reason the `large` seed carries an activity
+ * table at all. The card has room for eight lines; the first day's heading takes one, so it draws
+ * seven of that day's fifteen and no second day. The `play` counts the rows because the count
+ * *is* the claim — and it is a fact about the fit handed down, not about jsdom's missing layout.
  */
-export const CutOffAtTheLimit: Story = {
+export const CutToTheCard: Story = {
   parameters: { fake: { seed: "large" } },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const feed = within(await canvas.findByRole("region", { name: "Activity" }));
 
-    await expect(await feed.findByText("Today")).toBeInTheDocument();
     await waitFor(async () => {
-      await expect(feed.getAllByRole("listitem")).toHaveLength(50);
+      await expect(feed.getAllByRole("listitem")).toHaveLength(7);
     });
+    await expect(feed.getAllByRole("heading", { level: 4 })).toHaveLength(1);
+  },
+};
+
+/** `Show times` switched off: the same lines, no stamps — more of each sentence before it
+ *  truncates on a narrow card. */
+export const WithoutTimes: Story = {
+  args: { widget: activityAt(3, 3, { times: false }) },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const feed = within(await canvas.findByRole("region", { name: "Activity" }));
+
+    await expect(await feed.findByText("Today")).toBeInTheDocument();
+    await expect(canvasElement.querySelector("time")).toBeNull();
   },
 };
 
@@ -197,42 +259,5 @@ export const StillReading: Story = {
     const feed = within(await canvas.findByRole("region", { name: "Activity" }));
     await expect(feed.getByText("Reading recent activity…")).toBeInTheDocument();
     await expect(feed.queryByText("Nothing has happened yet.")).not.toBeInTheDocument();
-  },
-};
-
-/**
- * The settings popover — the one number this widget remembers.
- *
- * Every row it offers is inside `activity_recent`'s own clamp of `1..=500`, so the narrowing in
- * `feedLimit` can only ever fire on a config no press of this control produced — a hand-edited
- * row, or a build that offered a different set. The label is both `id`-associated and
- * `labelledBy`: the first keeps the pointer behaviour a `<label for>` gives, the second states
- * the accessible name outright rather than leaving it to an association a later edit could break.
- */
-export const ChoosingHowMuchToShow: Story = {
-  args: { editing: true },
-  play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement);
-    const feed = within(await canvas.findByRole("region", { name: "Activity" }));
-
-    await userEvent.click(feed.getByRole("button", { name: "Settings for Activity" }));
-    const picker = await waitFor(
-      () => feed.getByRole("button", { name: "Changes to show" }),
-      POPOVER_TIMEOUT,
-    );
-    await expect(picker).toHaveTextContent("50 changes");
-
-    await userEvent.click(picker);
-    await waitFor(async () => {
-      // **Ascending, and deliberately not `sortOptions`' order** — this is one of the app's
-      // documented exemptions, because the order *is* the information: a ladder of amounts read
-      // alphabetically puts 100 above 25, which is a list nobody can walk.
-      await expect(feed.getAllByRole("option").map((row) => row.textContent)).toEqual([
-        "25 changes",
-        "50 changes",
-        "100 changes",
-        "200 changes",
-      ]);
-    }, POPOVER_TIMEOUT);
   },
 };

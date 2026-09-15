@@ -1,7 +1,7 @@
 import { useCallback } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ipc, type HomeLayout } from "@/lib/ipc";
-import { parseLayout } from "./layout";
+import { copy, parseLayout, toStored } from "./layout";
 import { DEFAULT_LAYOUT } from "./widgets";
 
 /**
@@ -21,10 +21,12 @@ export const HOME_LAYOUT_KEY = ["homeLayout"];
  * **The answer is run through {@link parseLayout} on the way in, so a malformed document is the
  * default here as well as in Rust and the page never sees a shape it has to guard.** `home.rs`
  * already folds a missing row, an unparseable row and a row holding something that is not a
- * layout into the six-widget default — but the *webview* can still be handed a document a newer
- * build wrote, one a hand-edit left half-formed, or one entry of six that is not a widget. Every
- * one of those has an answer in `layout.ts` and none of them is an error; parsing at the door is
- * what makes that true for every consumer at once rather than once per widget.
+ * layout into the seeded default — but the *webview* can still be handed a document a newer build
+ * wrote, one a hand-edit left half-formed, one entry that is not a widget, or a version-1 document
+ * from before the grid. Every one of those has an answer in `layout.ts` and none of them is an
+ * error; parsing at the door is what makes that true for every consumer at once rather than once
+ * per widget — and it is where a version-1 row is placed on the grid, so the page never meets a
+ * widget with no cells.
  *
  * `staleTime`/`gcTime: Infinity` for `useNavCollapsed`'s reason, and "for this session" made
  * literal: nothing else writes this row, every change goes through the mutation below which
@@ -43,13 +45,13 @@ const QUERY = {
  * A fresh copy of the seed arrangement.
  *
  * **A copy rather than {@link DEFAULT_LAYOUT} itself**, because what this hook hands out is a
- * document the page reorders, widens and configures. Every function in `layout.ts` answers a new
+ * document the page moves, resizes and configures. Every function in `layout.ts` answers a new
  * object, so nothing *should* reach in and mutate — but the module constant is also what
  * `widgets.test.ts` pins against a literal and what a first launch's fallback is, and one careless
  * splice into it would rewrite both for the rest of the process.
  */
 function seedLayout(): HomeLayout {
-  return { ...DEFAULT_LAYOUT, widgets: DEFAULT_LAYOUT.widgets.map((widget) => ({ ...widget })) };
+  return copy(DEFAULT_LAYOUT);
 }
 
 /**
@@ -65,8 +67,8 @@ function seedLayout(): HomeLayout {
 const FALLBACK_LAYOUT: HomeLayout = seedLayout();
 
 /**
- * The home page's arrangement — which widgets, in what order, at what widths — remembered across
- * restarts.
+ * The home page's arrangement — which widgets, on which cells, at what footprints — remembered
+ * across restarts.
  *
  * TanStack Query rather than the zustand store, for `useNavCollapsed`'s reason repeated whole:
  * `store.ts` scopes itself to UI state and hands anything backed by the database to Query, and
@@ -78,11 +80,11 @@ const FALLBACK_LAYOUT: HomeLayout = seedLayout();
  * and nothing branches on it: `home_layout` is infallible at the far end, so the only failures
  * left are the IPC boundary itself and a `BUSY` under a sync — a state the app spends whole
  * minutes in on a first run. Neither is worth a landing page that will not draw, and the whole
- * cost of falling back is a launch that opens on the six seeded widgets instead of the reader's.
+ * cost of falling back is a launch that opens on the seeded widgets instead of the reader's.
  *
  * **The writes are optimistic, and they are deliberately not rolled back.** The cache is written
- * before the command is sent, so a drag lands where the reader dropped it and a width toggle takes
- * on the press rather than a round trip later — this page is direct manipulation end to end, and a
+ * before the command is sent, so a drag lands where the reader dropped it and a resize takes on
+ * the release rather than a round trip later — this page is direct manipulation end to end, and a
  * card that answers late reads as a card that did not move. And `set_home_layout` can legitimately
  * fail: it answers `BUSY` while a sync holds the write connection, and it *refuses* a document
  * whose version it does not write. Snapping the widgets back under the reader's hand in either
@@ -110,9 +112,9 @@ export function useHomeLayout(): {
    * the default it fell back to is a complete page and there is nothing further to wait for.
    */
   ready: boolean;
-  /** Remember this whole arrangement — the document, not a widget, so a reorder cannot half land. */
+  /** Remember this whole arrangement — the document, not a widget, so a move cannot half land. */
   update: (next: HomeLayout) => void;
-  /** Put the seeded six back, in their seeded order and at their seeded widths. */
+  /** Put the seeded widgets back, on their seeded cells and at their seeded footprints. */
   reset: () => void;
 } {
   const queryClient = useQueryClient();
@@ -134,8 +136,16 @@ export function useHomeLayout(): {
       // The whole document is replaced rather than merged, which is what `layout.ts` is shaped for
       // — every function there takes a layout and answers a new one, so the caller always holds
       // the complete next arrangement and a merge here would have nothing to merge.
-      queryClient.setQueryData(HOME_LAYOUT_KEY, next);
-      startWrite(next);
+      //
+      // **Through `toStored` on the way out, and the cache holds the same document the command
+      // is sent.** That is where every widget is given the version-1 `span` an older build reads
+      // — so a portable copy one release behind still opens this database on a page it can draw —
+      // and doing it here means no gesture on the page has to remember it. The cache takes the
+      // stored form too, rather than the caller's, so "the cache is the reader's page" and "the
+      // row is the reader's page" stay one document rather than two that differ by a field.
+      const stored = toStored(next);
+      queryClient.setQueryData(HOME_LAYOUT_KEY, stored);
+      startWrite(stored);
     },
     [queryClient, startWrite],
   );
@@ -148,7 +158,7 @@ export function useHomeLayout(): {
 
   return {
     // `undefined` is the read still in flight *and* the read that failed, and both mean the same
-    // thing to a page that has to draw: the seeded six. There is nothing further to narrow —
+    // thing to a page that has to draw: the seeded widgets. There is nothing further to narrow —
     // anything the query holds came either from {@link QUERY}, which parsed it, or from
     // {@link update}, which was handed a document `layout.ts` built.
     layout: query.data ?? FALLBACK_LAYOUT,

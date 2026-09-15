@@ -55,7 +55,7 @@ both plus the frontend.
   column exist"**, and the difference is a corpus with no `cards` at all: it owes nothing, because
   only an ingest can put that table back and `migrate_corpus` may stop a launch.
 - **The data folder holds two databases, and which one is `main` is the whole design**
-  (schema 27). `data/user.db` is the reader's — the twenty-eight tables in `schema::TABLES` marked
+  (schema 27). `data/user.db` is the reader's — the twenty-nine tables in `schema::TABLES` marked
   `Side::User`, which nothing outside this app can produce again — and it is what
   `Connection::open` names. `data/corpus.db` is everything a feed or this app's own ladder can
   rebuild, and it is **`ATTACH`ed as `corpus`**, because *you cannot `DETACH main`*: discarding
@@ -158,7 +158,10 @@ both plus the frontend.
   every upgraded one, and a fresh worktree is a fresh install, so nothing else here can see it.
   The single-file ladder is frozen at **v26** — `schema::migrate_single_file`
   climbs to `schema::LEGACY_SINGLE_FILE_VERSION` and stops, and the two files carry their own
-  numbers from there (`USER_SCHEMA_VERSION` **44** since the collection and the wishlist got a
+  numbers from there (`USER_SCHEMA_VERSION` **45** since the home page's price movers got a
+  memory — `price_snapshots`, the twenty-ninth user table, one owned printing's price per
+  marketplace per day, thinned past 35 days and **not** synced, for `activity`'s reason; which is
+  one above the collection and the wishlist getting a
   history — `activity`, the twenty-eighth user table and the first with a pruner, **not** synced
   where `deck_audit` is; it was written as v43 and renumbered the same day because a deck getting
   many notes where it had one column landed on `main` first, which is one rung above
@@ -170,7 +173,8 @@ both plus the frontend.
   which is one above a deck's group
   holding only copies its live list claims at `(card_id, finish)`, itself one above a
   condition learning to say nothing —
-  `CORPUS_SCHEMA_VERSION` **3** since 2026-09-10, deliberately
+  `CORPUS_SCHEMA_VERSION` **4** since 2026-09-15 (`sets.printed_size`, for the home page's set
+  completion, on the same shape gate as the two below it), deliberately
   incomparable and **not to be subtracted from the other**: a user version is "what has been done
   to rows that exist nowhere else", a corpus version is "is this file's shape what this build
   expects". The corpus number stood at 1 from the split until the combo feed's four prose columns

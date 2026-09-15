@@ -402,13 +402,26 @@ fn count_cards(conn: &Connection) -> i64 {
         .unwrap_or(0)
 }
 
-/// Has `sets` never been filled? A failed count reads as "not empty" — if the database
-/// cannot answer, a `/sets` fetch it cannot store either is not the fix.
+/// Does `sets` owe a `/sets` fetch on a run that ingested nothing? A failed count reads as
+/// "no" — if the database cannot answer, a `/sets` fetch it cannot store either is not the fix.
+///
+/// **Two cases, and the second is corpus schema 4's bridge.** An empty table is the original
+/// one. A table with rows and **not one** `printed_size` is every database that fetched its sets
+/// before that column existed: the rung adds the column NULL, `/sets` is its only writer, and
+/// without this arm the Set completion widget would draw no denominator until Scryfall next
+/// rotated the bulk file *and* the ingest reached `/sets`. "Not one" rather than "any NULL",
+/// because Scryfall publishes no printed size for hundreds of real sets (promos, tokens, most
+/// digital ones), so an any-NULL test would re-fetch the set list on every sync forever. After
+/// one successful fetch this is a single indexed-nothing `EXISTS` that answers `false`.
 #[cfg(not(target_family = "wasm"))]
-fn sets_are_empty(conn: &Connection) -> bool {
-    conn.query_row("SELECT count(*) FROM sets", [], |r| r.get::<_, i64>(0))
-        .map(|n| n == 0)
-        .unwrap_or(false)
+fn sets_need_fetch(conn: &Connection) -> bool {
+    conn.query_row(
+        "SELECT NOT EXISTS (SELECT 1 FROM sets)
+             OR NOT EXISTS (SELECT 1 FROM sets WHERE printed_size IS NOT NULL)",
+        [],
+        |r| r.get::<_, bool>(0),
+    )
+    .unwrap_or(false)
 }
 
 /// Bookkeeping shared by every path that returns `Ok` after actually checking: the
@@ -561,8 +574,9 @@ pub fn insert_sets(conn: &mut Connection, sets: &[scryfall::SetRow]) -> rusqlite
     {
         let mut stmt = tx.prepare(
             "INSERT OR REPLACE INTO sets
-                (code, name, arena_code, mtgo_code, set_type, released_at, icon_svg_uri)
-             VALUES (?1,?2,?3,?4,?5,?6,?7)",
+                (code, name, arena_code, mtgo_code, set_type, released_at, icon_svg_uri,
+                 printed_size)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
         )?;
         for s in sets {
             if s.code.trim().is_empty() {
@@ -576,6 +590,7 @@ pub fn insert_sets(conn: &mut Connection, sets: &[scryfall::SetRow]) -> rusqlite
                 s.set_type,
                 s.released_at,
                 s.icon_svg_uri,
+                s.printed_size,
             ])?;
             written += 1;
         }
@@ -797,7 +812,7 @@ async fn finish_unchanged(
 ) -> Result<SyncOutcome, String> {
     let needs_sets = {
         let conn = lock_db(state);
-        sets_are_empty(&conn)
+        sets_need_fetch(&conn)
     };
     if needs_sets {
         emit(app, "sets", 0, 0);
@@ -1246,6 +1261,29 @@ async fn do_sync(
             .map_err(|e| e.to_string())?;
     }
 
+    {
+        // **Today's prices for what the reader owns, now that the swap has put new ones in
+        // `cards`** — the Price movers widget's history. Here, beside the stamps that record the
+        // ingest succeeded, and before `/sets`: a set list that fails to arrive must not also cost
+        // the day its snapshot. Its own transaction on the user file, after every corpus commit
+        // above has landed, so it can never be half of a cross-file one.
+        //
+        // Best-effort by construction: the cards are ingested either way, and a missed day is a
+        // gap in a history that the launch snapshot and the next sync both fill. The row goes to
+        // `error_log` rather than the terminal because a release build has no terminal.
+        let conn = lock_db(state);
+        if let Err(e) = crate::price_history::snapshot(&conn) {
+            crate::errors::record(
+                &conn,
+                crate::errors::Source::Database,
+                "price_snapshot",
+                crate::errors::Kind::Io,
+                &e.to_string(),
+                None,
+            );
+        }
+    }
+
     emit(app, "sets", 0, 0);
     let sets = state
         .client
@@ -1394,6 +1432,7 @@ mod tests {
             set_type: None,
             released_at: None,
             icon_svg_uri: None,
+            printed_size: None,
         }
     }
 
@@ -1534,9 +1573,58 @@ mod tests {
     #[test]
     fn an_empty_sets_table_is_recognised_as_needing_a_backfill() {
         let mut conn = db();
-        assert!(sets_are_empty(&conn));
-        insert_sets(&mut conn, &[set_row("dom", "Dominaria")]).unwrap();
-        assert!(!sets_are_empty(&conn));
+        assert!(sets_need_fetch(&conn));
+        insert_sets(
+            &mut conn,
+            &[crate::scryfall::SetRow {
+                printed_size: Some(269),
+                ..set_row("dom", "Dominaria")
+            }],
+        )
+        .unwrap();
+        assert!(!sets_need_fetch(&conn));
+    }
+
+    /// Corpus schema 4's bridge: a table that was filled before `printed_size` existed holds rows
+    /// and not one size, and that is a fetch owed — while a table where *some* sets have no size
+    /// (every real one: promos and tokens publish none) owes nothing, or `/sets` would be asked on
+    /// every sync for ever.
+    #[test]
+    fn a_sets_table_with_no_printed_size_anywhere_owes_a_fetch_and_one_with_some_does_not() {
+        let mut conn = db();
+        insert_sets(
+            &mut conn,
+            &[
+                set_row("dom", "Dominaria"),
+                set_row("pdom", "Dominaria Promos"),
+            ],
+        )
+        .unwrap();
+        assert!(
+            sets_need_fetch(&conn),
+            "rows from before the column carry no size at all"
+        );
+
+        insert_sets(
+            &mut conn,
+            &[crate::scryfall::SetRow {
+                printed_size: Some(269),
+                ..set_row("dom", "Dominaria")
+            }],
+        )
+        .unwrap();
+        assert!(
+            !sets_need_fetch(&conn),
+            "one published size proves the fetch has run since; the promo set's NULL is Scryfall's"
+        );
+        let size: Option<i64> = conn
+            .query_row(
+                "SELECT printed_size FROM sets WHERE code = 'dom'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(size, Some(269), "and the upsert stores it");
     }
 
     /// The status a UI polls *during* a sync. The header used to go blank for the whole of

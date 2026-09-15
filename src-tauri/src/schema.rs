@@ -410,7 +410,18 @@ pub const LEGACY_SINGLE_FILE_VERSION: i64 = 26;
 /// and a place in the sync spec's §7.3 five rules, and an append-only log is the shape those
 /// rules have the least to say about. Recorded as a known consequence — the home page's
 /// design doc §7 is where it is argued.
-pub const USER_SCHEMA_VERSION: i64 = 44;
+///
+/// **45 (2026-09-15) is `price_snapshots`** — one price per day per marketplace per owned
+/// printing and finish, which is what the home page's Price movers widget measures a move
+/// against. Nothing rebuilds it: a feed publishes *today's* price and no feed publishes the one
+/// the reader's copy had last month, so it is the reader's on [`TABLES`]' question even though
+/// no press of theirs writes a row. **Not synced, and no `sync_uid`**, for `activity`'s reason
+/// and a plainer one: every device takes its own snapshot from the same public prices, so a
+/// synced copy would be two devices writing the same fact under two clocks. `WITHOUT ROWID`,
+/// which puts it in [`crate::db::CrossFileFence`]'s blind spot on purpose —
+/// [`crate::price_history`]'s module doc says why that is safe and what it buys. Soft
+/// `card_id`, no foreign key, for the reason every card id in a user table has none.
+pub const USER_SCHEMA_VERSION: i64 = 45;
 
 /// `corpus.db`'s version, on a number line of its own.
 ///
@@ -419,6 +430,18 @@ pub const USER_SCHEMA_VERSION: i64 = 44;
 /// "is this file's shape what this build expects", and a corpus rung is *allowed* to give up
 /// and rebuild, because what is behind it is a download. Sharing a scale would invite somebody
 /// to subtract them.
+///
+/// **4 (2026-09-15) is `sets.printed_size`** — Scryfall's denominator for a set's printed
+/// collector numbers, the `/280` at the foot of a card, and what the home page's Set completion
+/// widget divides by. It is corpus schema 3's shape exactly, one table over: one
+/// schema-qualified `ALTER TABLE {schema}.sets ADD COLUMN printed_size INTEGER`, **gated on
+/// `PRAGMA {schema}.table_info(sets)` and never on this number** for the reason the paragraph
+/// below spells out, no index and no backfill. **Its only writer is the `/sets` fetch**, which
+/// on desktop runs after an ingest and — since this rung — also whenever the table holds no
+/// printed size at all (`crate::sync`'s `sets_need_fetch`), so the gap between the rung and a
+/// filled column is one sync rather than one Scryfall bulk rotation. The browser build has never
+/// filled `sets`, so there it stays NULL, and `crate::set_completion` reads a NULL as *size
+/// unknown* rather than as zero on every target.
 ///
 /// **3 (2026-09-10) is `cards.produced_mana`** — which colours of mana a printing can *make*,
 /// a field Scryfall has always published and this app parsed past. The deck editor's stats band
@@ -455,7 +478,7 @@ pub const USER_SCHEMA_VERSION: i64 = 44;
 /// on an INSERT naming four columns the table does not have. [`migrate_corpus`] therefore asks
 /// the *shape*; this number is the record of what the shape is, and the thing a future rung
 /// will still want to have moved.
-pub const CORPUS_SCHEMA_VERSION: i64 = 3;
+pub const CORPUS_SCHEMA_VERSION: i64 = 4;
 
 /// Which of the two files a table lives in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -532,6 +555,11 @@ pub const TABLES: &[(&str, Side)] = &[
     // A decision a person made about a tag. `WITHOUT ROWID`, so the update hook cannot see it
     // — see `crate::mirror::watch::install_hook`.
     ("muted_tags", Side::User),
+    // Each day's price for each printing the reader owns (user schema v45), the Price movers
+    // widget's history. Scryfall's and the feeds' rows, but no feed can produce a *past* price
+    // again, so a corpus rebuild that emptied it would take the history with it. Not synced:
+    // every device snapshots the same public prices for itself.
+    ("price_snapshots", Side::User),
     // The clock the capture triggers stamp from (user schema v29). One row, and it is the
     // reader's in the only sense this list asks about: rebuilding it from zero would make
     // every op this device writes next sort *before* ops the other devices already hold.
@@ -3530,7 +3558,7 @@ const COMBO_INDEXES_SQL: &str = "
 /// Public because `VACUUM` needs it. Anything that renumbers `cards`' rowids leaves this
 /// index pointing at the wrong rows, and the failure is silent — see
 /// [`crate::maintenance::convert_to_incremental`], which calls this unconditionally.
-/// The twenty-eight user tables and their forty-five indexes, at [`USER_SCHEMA_VERSION`]'s
+/// The twenty-nine user tables and their forty-six indexes, at [`USER_SCHEMA_VERSION`]'s
 /// shape, with `{schema}` where the file goes.
 ///
 /// **Copied verbatim out of a migrated database's own `sqlite_master`, not retyped from the
@@ -4169,9 +4197,28 @@ CREATE UNIQUE INDEX {schema}.idx_deck_notes_uid ON deck_notes (sync_uid);
 CREATE UNIQUE INDEX {schema}.idx_deck_note_cards_uid ON deck_note_cards (sync_uid);
 
 CREATE INDEX {schema}.idx_activity_recent ON activity (at DESC, id DESC);
+
+CREATE TABLE {schema}.price_snapshots (
+                 -- **Not in `SYNCED_TABLES`, and no `sync_uid` column, on purpose**: every
+                 -- device takes its own snapshot of the same public prices.
+                 -- `YYYY-MM-DD`, UTC, from SQLite's own `date('now')` — never a Rust clock.
+                 day TEXT NOT NULL,
+                 -- The *priced* marketplace: one of the four `sorting::Marketplace` arms, so
+                 -- `cardtrader` (which quotes TCGplayer) is never a key of its own.
+                 marketplace TEXT NOT NULL,
+                 -- Soft, like every card id in a user table: `cards` is dropped on every sync.
+                 card_id TEXT NOT NULL,
+                 finish TEXT NOT NULL CHECK (finish IN ('nonfoil','foil','etched')),
+                 -- In the marketplace's own currency. An unpriced finish has no row, never 0.
+                 price REAL NOT NULL,
+                 PRIMARY KEY (day, marketplace, card_id, finish)
+             ) WITHOUT ROWID;
+
+CREATE INDEX {schema}.idx_price_snapshots_printing
+                 ON price_snapshots (marketplace, card_id, finish, day);
 "#;
 
-/// Create the twenty-eight user tables and their indexes in `schema`, at
+/// Create the twenty-nine user tables and their indexes in `schema`, at
 /// [`USER_SCHEMA_VERSION`]'s shape.
 ///
 /// **One function, two callers, and that is deliberate**: [`crate::split::extract_user_file`]
@@ -4245,7 +4292,7 @@ CREATE TABLE {schema}.cards (
 
 CREATE TABLE {schema}.sets (
                 code TEXT PRIMARY KEY, name TEXT NOT NULL, arena_code TEXT, mtgo_code TEXT,
-                set_type TEXT, released_at TEXT, icon_svg_uri TEXT);
+                set_type TEXT, released_at TEXT, icon_svg_uri TEXT, printed_size INTEGER);
 
 CREATE TABLE {schema}.sync_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
@@ -4717,6 +4764,16 @@ pub fn prepare_database(conn: &Connection) -> rusqlite::Result<()> {
         eprintln!(
             "the home page's activity log could not be trimmed at launch: {e}\nIt will be \
              trimmed at the next launch; nothing else is affected."
+        );
+    }
+    // Logged and left owing for the same reason: a day missing from the price history is a gap
+    // in a widget, and the next sync or feed refresh fills the day anyway. At launch at all so
+    // that a reader's first launch after upgrading already has a baseline — a widget that waits
+    // for the first *sync* to start its clock can go a day with nothing to measure against.
+    if let Err(e) = crate::maintenance::snapshot_prices(conn) {
+        eprintln!(
+            "today's prices could not be recorded at launch: {e}\nThe next sync or price \
+             refresh records them; nothing else is affected."
         );
     }
     Ok(())
@@ -6192,6 +6249,54 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
         tx.commit()?;
     }
 
+    // v45: the price history behind the home page's Price movers widget — one row per day, per
+    // priced marketplace, per `(card_id, finish)` the collection owns. [`crate::price_history`]
+    // is the only writer and the module doc there is the design.
+    //
+    // ⚠️ **Deliberately absent from [`SYNCED_TABLES`], with no `sync_uid`**, for v44's reason
+    // and a plainer one: the rows are a fact about *public* prices on a given day, which every
+    // device in a group can read for itself. A synced copy would be two devices writing one fact
+    // under two clocks, and the op log would carry a few thousand rows a day for nothing.
+    //
+    // **`WITHOUT ROWID`, and the primary key leads with `day`**, because the two writes this
+    // table sees are both day-shaped — today's insert-or-replace and the prune's range delete —
+    // and a rowid table would store the key three times (the row, its autoindex, and the one
+    // index below) where this stores it twice. The cost is [`crate::db::CrossFileFence`]'s blind
+    // spot, and `price_history::snapshot` closes it structurally: it opens a transaction of its
+    // own, which SQLite refuses inside anybody else's, so it can never be the user-file half of
+    // a cross-file commit. The mirror's update hook would map it to nothing anyway.
+    //
+    // **One index, `(marketplace, card_id, finish, day)`**, which is the movers read's only
+    // question: the latest day on or before a cutoff for one printing, one seek each.
+    //
+    // **`CREATE TABLE IF NOT EXISTS`**, so [`tests::UNDO_V45`] is owed for [`tests::UNDO_V14`]'s
+    // quiet reason, as v44's was.
+    if v < 45 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS price_snapshots (
+                 -- **Not in `SYNCED_TABLES`, and no `sync_uid` column, on purpose**: every
+                 -- device takes its own snapshot of the same public prices.
+                 -- `YYYY-MM-DD`, UTC, from SQLite's own `date('now')` — never a Rust clock.
+                 day TEXT NOT NULL,
+                 -- The *priced* marketplace: one of the four `sorting::Marketplace` arms, so
+                 -- `cardtrader` (which quotes TCGplayer) is never a key of its own.
+                 marketplace TEXT NOT NULL,
+                 -- Soft, like every card id in a user table: `cards` is dropped on every sync.
+                 card_id TEXT NOT NULL,
+                 finish TEXT NOT NULL CHECK (finish IN ('nonfoil','foil','etched')),
+                 -- In the marketplace's own currency. An unpriced finish has no row, never 0.
+                 price REAL NOT NULL,
+                 PRIMARY KEY (day, marketplace, card_id, finish)
+             ) WITHOUT ROWID;
+             CREATE INDEX IF NOT EXISTS idx_price_snapshots_printing
+                 ON price_snapshots (marketplace, card_id, finish, day);",
+        )?;
+        // Literal `45`, for the reason every step before it writes its own.
+        tx.execute_batch("PRAGMA main.user_version = 45;")?;
+        tx.commit()?;
+    }
+
     // **The clock, repaired on every launch at every version — and this is not belt-and-braces.**
     //
     // Every capture trigger ends `FROM sync_clock c, sync_identity i, sync_group g`. That is a
@@ -6236,8 +6341,8 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
 /// bare `CREATE TABLE`, so running it over a corpus that has a `cards` in it raises `table
 /// cards already exists` and stops the launch rather than quietly doing nothing. Anything else
 /// is a file with a shape, and the only things these rungs have to say about one are that the
-/// combo feed's three tables may be a version behind and that `cards` may be missing
-/// `produced_mana`.
+/// combo feed's three tables may be a version behind, that `cards` may be missing
+/// `produced_mana` and that `sets` may be missing `printed_size`.
 ///
 /// **Both rungs are gated on the shape and not on `v < CORPUS_SCHEMA_VERSION`, and that is the
 /// trap worth writing down.** `crate::split`'s `finish` stamps [`CORPUS_SCHEMA_VERSION`] — head,
@@ -6291,6 +6396,13 @@ pub(crate) fn migrate_corpus(conn: &Connection) -> rusqlite::Result<()> {
         // `table cards_staging has no column named produced_mana`.
         if produced_mana_is_owed(conn, CORPUS)? {
             add_produced_mana(conn, CORPUS)?;
+        }
+        // Corpus schema 4, the same gate over `sets` for the same two populations. The symptom
+        // a version gate would buy here is louder than schema 3's and arrives sooner: the next
+        // `/sets` fetch raises `table sets has no column named printed_size`, and that fetch is
+        // the last step of every ingest — so the sync would fail *after* downloading the cards.
+        if printed_size_is_owed(conn, CORPUS)? {
+            add_printed_size(conn, CORPUS)?;
         }
     }
     if v < CORPUS_SCHEMA_VERSION {
@@ -6399,6 +6511,42 @@ fn add_produced_mana(conn: &Connection, schema: &str) -> rusqlite::Result<()> {
     conn.execute_batch(&on_schema(
         schema,
         "ALTER TABLE {schema}.cards ADD COLUMN produced_mana TEXT;",
+    ))
+}
+
+/// Whether corpus schema 4's `ALTER` is owed on `sets` in `schema` — [`produced_mana_is_owed`]
+/// one table over, and every one of its reasons.
+///
+/// **Column names and never `sqlite_master`'s text**, and **a `sets` that is not there at all
+/// owes nothing**: `PRAGMA table_info` on a missing table is an empty result, and an
+/// `ALTER TABLE` on one would raise inside [`migrate_corpus`], which may stop a launch. `sets`
+/// is never dropped by a sync — [`crate::sync::insert_sets`] upserts into it — so the missing
+/// case is a hand-edited or half-built file rather than a normal state, which is exactly the
+/// kind of file a launch must survive.
+fn printed_size_is_owed(conn: &Connection, schema: &str) -> rusqlite::Result<bool> {
+    let mut stmt = conn.prepare(&format!("PRAGMA {schema}.table_info(sets)"))?;
+    let names: Vec<String> = stmt
+        .query_map([], |r| r.get::<_, String>(1))?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(!names.is_empty() && !names.iter().any(|n| n == "printed_size"))
+}
+
+/// Corpus schema 4: give `sets` its `printed_size` column.
+///
+/// [`add_produced_mana`]'s shape: schema-qualified through [`on_schema`] (a bare `ALTER TABLE
+/// sets` means `main`, and with the corpus attached it would *succeed* against nothing useful),
+/// one statement, no index — nothing searches on it — and **no backfill, because none is
+/// possible**: the number is Scryfall's `/sets` answer and not anywhere in `cards.raw`. Every
+/// existing row reads NULL until the next fetch, and `crate::set_completion` reads NULL as a size
+/// nobody published.
+///
+/// `INTEGER` and nullable, because Scryfall *omits* the key on a set with no printed run (a
+/// promo set, a token set, most digital ones) rather than sending a zero — and a zero here would
+/// be a denominator that answers every completion with a division nobody can draw.
+fn add_printed_size(conn: &Connection, schema: &str) -> rusqlite::Result<()> {
+    conn.execute_batch(&on_schema(
+        schema,
+        "ALTER TABLE {schema}.sets ADD COLUMN printed_size INTEGER;",
     ))
 }
 
@@ -7342,8 +7490,8 @@ pub(crate) mod tests {
             )
             .unwrap();
         assert_eq!(
-            stray, 28,
-            "the user file holds the twenty-eight and nothing else"
+            stray, 29,
+            "the user file holds the twenty-nine and nothing else"
         );
     }
 
@@ -7420,6 +7568,8 @@ pub(crate) mod tests {
         // away and the ladder's `cards` is the v26 shape and this goes red on that table —
         // which is the same "the rung fired" assertion the line above it makes about `combos`.
         add_produced_mana(&ladder, "main").unwrap();
+        // Corpus schema 4's, after it for the same reason — take it away and `sets` goes red.
+        add_printed_size(&ladder, "main").unwrap();
         let want = dump(&ladder, "main");
 
         let pair = memory_pair();
@@ -7509,8 +7659,8 @@ pub(crate) mod tests {
 
         assert_eq!(
             want.len(),
-            76,
-            "twenty-eight tables, forty-five indexes, and the three `sqlite_autoindex` rows a \n             TEXT PRIMARY KEY brings with it — `sync_devices`, `sync_state`, \n             `sync_peers` and `device_names` are `WITHOUT ROWID`, so each one's TEXT primary key IS the \n             table and brings no index of its own, while `collection_shares` is a rowid table and \n             so brings one. `deck_notes`, `deck_note_cards` and `activity` bring none either: all \n             three are `INTEGER PRIMARY KEY`, which is the rowid itself"
+            78,
+            "twenty-nine tables, forty-six indexes, and the three `sqlite_autoindex` rows a \n             TEXT PRIMARY KEY brings with it — `sync_devices`, `sync_state`, \n             `sync_peers` and `device_names` are `WITHOUT ROWID`, so each one's TEXT primary key IS the \n             table and brings no index of its own, while `collection_shares` is a rowid table and \n             so brings one. `deck_notes`, `deck_note_cards` and `activity` bring none either: all \n             three are `INTEGER PRIMARY KEY`, which is the rowid itself. `price_snapshots` brings none for the `WITHOUT ROWID` reason, and `idx_price_snapshots_printing` is the forty-sixth index"
         );
         for (w, g) in want.iter().zip(got.iter()) {
             assert_eq!(w, g, "{} {} differs from the ladder's", g.0, g.1);
@@ -7584,7 +7734,7 @@ pub(crate) mod tests {
     /// The user side, spelled out. A table moving between the two files is a data migration,
     /// never a diff nobody noticed.
     #[test]
-    fn the_user_side_is_the_twenty_eight_tables_no_feed_can_rebuild() {
+    fn the_user_side_is_the_twenty_nine_tables_no_feed_can_rebuild() {
         let mut user: Vec<&str> = TABLES
             .iter()
             .filter(|(_, s)| *s == Side::User)
@@ -7613,6 +7763,7 @@ pub(crate) mod tests {
                 "device_names",
                 "error_log",
                 "muted_tags",
+                "price_snapshots",
                 "sync_clock",
                 "sync_devices",
                 "sync_group",
@@ -7733,7 +7884,19 @@ pub(crate) mod tests {
     /// `idx_device_names_uid` with it.
     const UNDO_V31: &str = "DROP TABLE IF EXISTS device_names;";
 
-    /// v44's activity log — the newest rewind on the user ladder.
+    /// v45's price history — the newest rewind on the user ladder.
+    ///
+    /// Owed for [`UNDO_V14`]'s **quiet** reason, v44's exactly: the rung is `CREATE TABLE IF NOT
+    /// EXISTS`, so a fixture that left `price_snapshots` standing would climb happily while
+    /// claiming a version that never had it. **It runs first, before [`UNDO_V44`]**, because a
+    /// rewind walks the ladder backwards — and it carries the same prediction v44's doc did: the
+    /// rung after this one collects a line ahead of it.
+    ///
+    /// **The index needs no line of its own**, [`UNDO_V20`]'s rule: `DROP TABLE` takes
+    /// `idx_price_snapshots_printing` with it.
+    const UNDO_V45: &str = "DROP TABLE IF EXISTS price_snapshots;";
+
+    /// v44's activity log — the rewind directly under [`UNDO_V45`].
     ///
     /// Owed for [`UNDO_V14`]'s **quiet** reason rather than [`UNDO_V13`]'s loud one: the rung
     /// is `CREATE TABLE IF NOT EXISTS`, so a fixture that left `activity` standing climbs
@@ -8122,7 +8285,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
+            "{UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
              PRAGMA main.user_version = 28;"
         ))
         .unwrap();
@@ -8154,7 +8317,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 31;"
+            "{UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 31;"
         ))
         .unwrap();
         conn
@@ -8181,7 +8344,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} PRAGMA main.user_version = 33;"
+            "{UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} PRAGMA main.user_version = 33;"
         ))
         .unwrap();
         conn
@@ -8208,7 +8371,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
+            "{UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
         ))
         .unwrap();
         conn
@@ -8232,7 +8395,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} PRAGMA main.user_version = 37;"
+            "{UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} PRAGMA main.user_version = 37;"
         ))
         .unwrap();
         conn
@@ -8253,7 +8416,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} PRAGMA main.user_version = 38;"
+            "{UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} PRAGMA main.user_version = 38;"
         ))
         .unwrap();
         conn
@@ -8274,7 +8437,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} PRAGMA main.user_version = 39;"
+            "{UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} PRAGMA main.user_version = 39;"
         ))
         .unwrap();
         conn
@@ -8295,7 +8458,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V44} {UNDO_V43} {UNDO_V42} PRAGMA main.user_version = 41;"
+            "{UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} PRAGMA main.user_version = 41;"
         ))
         .unwrap();
         conn
@@ -8326,7 +8489,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V44} {UNDO_V43} PRAGMA main.user_version = 42;"
+            "{UNDO_V45} {UNDO_V44} {UNDO_V43} PRAGMA main.user_version = 42;"
         ))
         .unwrap();
         conn
@@ -8346,7 +8509,22 @@ pub(crate) mod tests {
     fn user_file_at_43() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
-        conn.execute_batch(&format!("{UNDO_V44} PRAGMA main.user_version = 43;"))
+        conn.execute_batch(&format!(
+            "{UNDO_V45} {UNDO_V44} PRAGMA main.user_version = 43;"
+        ))
+        .unwrap();
+        conn
+    }
+
+    /// A user file at 44 — the shape every machine carries the day before the home page kept a
+    /// price history, and the only population the v45 rung is *for*.
+    ///
+    /// [`user_file_at_43`]'s construction one rung up, and one rewind does it because v45 is the
+    /// only rung above 44 — which, on the record of the docs above, owes a line to rung 46.
+    fn user_file_at_44() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        create_user_schema(&conn, "main").unwrap();
+        conn.execute_batch(&format!("{UNDO_V45} PRAGMA main.user_version = 44;"))
             .unwrap();
         conn
     }
@@ -8395,7 +8573,7 @@ pub(crate) mod tests {
         // without `{UNDO_V38}` v38 dies at `duplicate column name`; the third tier adds one
         // more, so without `{UNDO_V39}` v39 dies the same way. Newest first.
         conn.execute_batch(&format!(
-            "{UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} PRAGMA main.user_version = 35;"
+            "{UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} PRAGMA main.user_version = 35;"
         ))
         .unwrap();
         seed_v35_groups(&conn);
@@ -8552,7 +8730,7 @@ pub(crate) mod tests {
         .unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 32;"
+            "{UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 32;"
         ))
         .unwrap();
         conn
@@ -8609,7 +8787,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} \
+            "{UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} \
              PRAGMA main.user_version = 27;"
         ))
         .unwrap();
@@ -8987,7 +9165,7 @@ pub(crate) mod tests {
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, USER_SCHEMA_VERSION);
-        assert_eq!(USER_SCHEMA_VERSION, 44);
+        assert_eq!(USER_SCHEMA_VERSION, 45);
     }
 
     /// **It is synced, and `sync_devices` still is not.** The whole point is that a NAME
@@ -9967,7 +10145,7 @@ pub(crate) mod tests {
         .unwrap();
 
         conn.execute_batch(&format!(
-            "{UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
+            "{UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
         ))
         .unwrap();
 
@@ -10054,7 +10232,7 @@ pub(crate) mod tests {
         // The literal, for the reason the two tests below spell out. It is **head**, not this
         // rung's own number — `migrate_user` climbs the whole ladder — so every rung that lands
         // moves it.
-        assert_eq!(version, 44);
+        assert_eq!(version, 45);
         assert_eq!(
             in_group(&conn, DECK_A, "bolt-lea", "nonfoil"),
             2,
@@ -10354,14 +10532,14 @@ pub(crate) mod tests {
         // three tests going red, and 40 → 41 for the share cache, and 41 → 42 for the deck's
         // stats disclosure, and 42 → 43 for the deck's notes, which missed them the same way
         // again — a fan-out where no agent was allowed to run `cargo`, so nothing could tell it
-        // until fan-in — and 43 → 44 for the home page's activity log. **Nine times**, and the
-        // count is the argument.
+        // until fan-in — and 43 → 44 for the home page's activity log, and 44 → 45 for its price
+        // history. **Ten times**, and the count is the argument.
         //
         // ⚠️ **`v41_gives_a_database_the_share_cache` is a fourth assertion of the same kind and
         // is deliberately not counted here** — it is the v41 rung's own test, not one of these
         // three, and it carries no comment of its own. A rung that edits only the three this
         // sentence names leaves that one red. v43 did exactly that.
-        assert_eq!(version, 44);
+        assert_eq!(version, 45);
         assert_eq!(
             in_group(&conn, DECK_A, "bolt-m10", "nonfoil"),
             1,
@@ -10383,7 +10561,7 @@ pub(crate) mod tests {
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
         // The literal, for the reason the test above spells out — head, which every rung moves.
-        assert_eq!(version, 44);
+        assert_eq!(version, 45);
     }
 
     /// The fixture is a real v35 file and not head wearing a v35 label.
@@ -10822,7 +11000,7 @@ pub(crate) mod tests {
         let v: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 44);
+        assert_eq!(v, 45);
         conn.execute(
             "INSERT INTO collection_shares
                  (id, folder_uid, title, owner_name, url, fields, state, updated_at)
@@ -11056,7 +11234,7 @@ pub(crate) mod tests {
         let v: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 44);
+        assert_eq!(v, 45);
 
         assert_eq!(
             has_column(&conn, "decks", "notes"),
@@ -11387,6 +11565,107 @@ pub(crate) mod tests {
         );
     }
 
+    /// The v45 rung over a real v44 file: the table and its one index arrive, the table is
+    /// `WITHOUT ROWID` as the rung argues, and the activity log that was already there is
+    /// untouched.
+    #[test]
+    fn v45_gives_an_existing_database_the_price_history_and_its_index() {
+        let conn = user_file_at_44();
+        conn.execute(
+            "INSERT INTO activity (at, scope, kind, payload, delta)
+             VALUES (1, 'collection', 'add', '{}', 1)",
+            [],
+        )
+        .unwrap();
+
+        migrate_user(&conn).unwrap();
+
+        let sql: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'price_snapshots'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(sql.ends_with("WITHOUT ROWID"), "{sql}");
+        let index: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master
+                  WHERE type = 'index' AND name = 'idx_price_snapshots_printing'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            index.contains("(marketplace, card_id, finish, day)"),
+            "the movers read's one question: {index}"
+        );
+        let activity: i64 = conn
+            .query_row("SELECT count(*) FROM activity", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(activity, 1, "the rung takes nothing away");
+
+        // One row per day per printing per marketplace — a second write on the same key is the
+        // same row, which is what makes a snapshot idempotent per day.
+        conn.execute_batch(
+            "INSERT INTO price_snapshots VALUES ('2026-09-15', 'tcgplayer', 'bolt', 'nonfoil', 1.5);",
+        )
+        .unwrap();
+        assert!(conn
+            .execute_batch(
+                "INSERT INTO price_snapshots VALUES ('2026-09-15', 'tcgplayer', 'bolt', 'nonfoil', 2.0);",
+            )
+            .is_err());
+        assert!(
+            conn.execute_batch(
+                "INSERT INTO price_snapshots VALUES ('2026-09-15', 'tcgplayer', 'bolt', 'gilded', 2.0);",
+            )
+            .is_err(),
+            "the finish CHECK is the three and nothing else"
+        );
+
+        migrate_user(&conn).unwrap();
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, USER_SCHEMA_VERSION, "and twice is once");
+    }
+
+    /// The price history is deliberately not synced — pinned here for `activity`'s reason.
+    #[test]
+    fn the_price_history_is_not_synced_and_carries_no_sync_uid() {
+        assert!(!SYNCED_TABLES.contains(&"price_snapshots"));
+        let conn = memory_pair();
+        assert_eq!(has_column(&conn, "price_snapshots", "sync_uid"), 0);
+    }
+
+    /// The fixture is a real v44 file and not head wearing a v44 label — `CREATE TABLE IF NOT
+    /// EXISTS` cannot fail on the way back up, so this is the only thing that can see a rewind
+    /// that forgot [`UNDO_V45`]. `activity` is probed as *present*, so a chain that also ran
+    /// [`UNDO_V44`] is caught too.
+    #[test]
+    fn the_v44_fixture_carries_none_of_v45() {
+        let conn = user_file_at_44();
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 44);
+        let tables = |name: &str| -> i64 {
+            conn.query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                [name],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(tables("price_snapshots"), 0);
+        assert_eq!(
+            tables("activity"),
+            1,
+            "a v44 file still has v44's own table"
+        );
+    }
+
     /// A v28 file walks up keeping every row it had, and twice is the same as once.
     #[test]
     fn migrating_a_v28_user_file_keeps_its_rows_and_is_idempotent() {
@@ -11477,7 +11756,7 @@ pub(crate) mod tests {
             })
             .collect();
         conn.execute_batch(&format!(
-            "{UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
+            "{UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
              PRAGMA main.user_version = 28;"
         ))
         .unwrap();
@@ -18242,6 +18521,119 @@ pub(crate) mod tests {
             !produced_mana_is_owed(&conn, CORPUS).unwrap(),
             "there is no table to alter, so nothing is owed"
         );
+        migrate_corpus(&conn).expect("a launch must not die over a repair it cannot carry out");
+    }
+
+    // ---- corpus schema 4: a set's printed size ---------------------------------------
+
+    /// A pair whose corpus wears head's version stamp over a `sets` with no `printed_size` —
+    /// [`corpus_missing_produced_mana`]'s construction one table over, and the state every
+    /// converted database and every fresh install is in on the day corpus schema 4 ships.
+    fn corpus_missing_printed_size() -> Connection {
+        let conn = memory_pair();
+        conn.execute_batch(&format!(
+            "ALTER TABLE {CORPUS}.sets DROP COLUMN printed_size;
+             PRAGMA {CORPUS}.user_version = {CORPUS_SCHEMA_VERSION};"
+        ))
+        .unwrap();
+        conn
+    }
+
+    /// Whether `sets` in the corpus carries a column, by name.
+    fn corpus_sets_has(conn: &Connection, column: &str) -> bool {
+        let mut stmt = conn
+            .prepare(&format!("PRAGMA {CORPUS}.table_info(sets)"))
+            .unwrap();
+        let found = stmt
+            .query_map([], |r| r.get::<_, String>(1))
+            .unwrap()
+            .map(Result::unwrap)
+            .any(|n| n == column);
+        found
+    }
+
+    /// **The population a version gate would miss**, for `sets`: head's number over the old
+    /// shape. The failure it would buy is the next `/sets` fetch raising `table sets has no
+    /// column named printed_size` at the tail of an ingest — after the cards had downloaded.
+    /// A set row already there keeps every field it had and reads a NULL size.
+    #[test]
+    fn a_corpus_stamped_at_head_with_no_printed_size_still_gets_it() {
+        let conn = corpus_missing_printed_size();
+        conn.execute(
+            "INSERT INTO sets (code, name, released_at) VALUES ('lea', 'Limited Edition Alpha', '1993-08-05')",
+            [],
+        )
+        .unwrap();
+        let version: i64 = conn
+            .query_row(&format!("PRAGMA {CORPUS}.user_version"), [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, CORPUS_SCHEMA_VERSION);
+        assert!(
+            !corpus_sets_has(&conn, "printed_size"),
+            "the fixture must start without the column or it tests nothing"
+        );
+
+        migrate_corpus(&conn).unwrap();
+
+        assert!(
+            corpus_sets_has(&conn, "printed_size"),
+            "the number said head and the shape did not"
+        );
+        let (name, size): (String, Option<i64>) = conn
+            .query_row(
+                "SELECT name, printed_size FROM sets WHERE code = 'lea'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(name, "Limited Edition Alpha", "the rung moves no row");
+        assert_eq!(size, None, "and invents no size: only `/sets` knows one");
+        // Twice is once — `ADD COLUMN` has no `IF NOT EXISTS`, so an ungated second pass would
+        // stop the launch on every database that is already right.
+        migrate_corpus(&conn).unwrap();
+    }
+
+    /// A fresh corpus is built with the column, rather than climbing to it — the builder and the
+    /// rung are two paths to one shape, which `the_corpus_schema_is_byte_identical_to_what_the_
+    /// ladder_builds` compares byte for byte and this states at the level of the one column.
+    #[test]
+    fn a_fresh_corpus_has_printed_size_and_owes_nothing() {
+        let conn = memory_pair();
+        assert!(corpus_sets_has(&conn, "printed_size"));
+        assert!(!printed_size_is_owed(&conn, CORPUS).unwrap());
+        migrate_corpus(&conn).unwrap();
+        assert!(corpus_sets_has(&conn, "printed_size"));
+    }
+
+    /// ⚠️ **Schema-qualified**, `the_produced_mana_rung_lands_on_the_corpus_and_not_on_the_user_
+    /// file`'s claim for this rung: with a decoy `sets` on the user side, the unqualified spelling
+    /// lands on the wrong file and the qualified one cannot.
+    #[test]
+    fn the_printed_size_rung_lands_on_the_corpus_and_not_on_the_user_file() {
+        let conn = corpus_missing_printed_size();
+        conn.execute_batch("CREATE TABLE main.sets (code TEXT PRIMARY KEY);")
+            .unwrap();
+
+        add_printed_size(&conn, CORPUS).unwrap();
+
+        assert!(corpus_sets_has(&conn, "printed_size"));
+        let user_side: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM pragma_table_info('sets', 'main')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(user_side, 1, "the decoy keeps its one column");
+    }
+
+    /// And a corpus with no `sets` at all owes nothing rather than stopping the launch.
+    #[test]
+    fn a_corpus_with_no_sets_table_owes_the_printed_size_rung_nothing() {
+        let conn = memory_pair();
+        conn.execute_batch(&format!("DROP TABLE {CORPUS}.sets;"))
+            .unwrap();
+        assert!(!printed_size_is_owed(&conn, CORPUS).unwrap());
         migrate_corpus(&conn).expect("a launch must not die over a repair it cannot carry out");
     }
 

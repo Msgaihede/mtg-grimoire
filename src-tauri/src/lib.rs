@@ -147,6 +147,16 @@ pub mod marketplace;
 /// folder, the two `app_meta` settings and the thread — carry the gate inside that module.
 pub mod mirror;
 pub mod nav;
+/// **The home page's Price movers history** — user schema v45, a snapshot of today's price per
+/// owned printing and a read that compares against one. The day is SQLite's `date('now')`, never
+/// `SystemTime::now()`, and nothing in it reaches a filesystem or a network, so the snapshot runs
+/// at a browser launch and after a browser feed store exactly as it does on the desktop.
+pub mod price_history;
+/// **[`home`]'s shape with a list instead of a document** — the cards this device opened most
+/// recently, one `app_meta` row of ids and times, joined with the corpus at read time. Its clock is
+/// SQLite's `unixepoch()` rather than `SystemTime::now()`, which panics here, so it is on the
+/// every-target half of this map with the rest of the view state.
+pub mod recent_cards;
 /// **Three of Settings' four clears, moved here on 2026-08-31** — the deck domain's move a
 /// day earlier, arrived at from the same finding. `clear_collection`, `clear_wishlist` and
 /// `clear_decks` are `&Connection` in and a DTO out; what was holding the whole module on
@@ -161,6 +171,10 @@ pub mod reset;
 pub mod schema;
 pub mod search;
 pub mod searchopen;
+/// **How much of each set the reader owns**, for the home page's Set completion widget. One
+/// grouped `SELECT` over the collection, `cards` and `sets` — no table of its own and nothing a
+/// browser lacks.
+pub mod set_completion;
 /// **Ungated, and only the upload is not.** Rendering a collection folder as a share snapshot
 /// is SQLite in and JSON out — the shape [`search`] has always had — so it builds wherever the
 /// collection does; the publish that puts the bytes on the relay carries its own gate at its

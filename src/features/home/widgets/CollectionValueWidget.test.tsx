@@ -1,5 +1,4 @@
 import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import {
   QueryClient,
   QueryClientProvider,
@@ -7,30 +6,26 @@ import {
   type QueryState,
 } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { pickOption } from "@/test-dropdown";
 import type { BreakdownRow, CollectionSummary, HomeWidget } from "@/lib/ipc";
 import type { MarketplaceId } from "@/lib/marketplace";
 import { MARKETPLACE_FEEDS_KEY, MARKETPLACE_KEY } from "@/lib/useMarketplace";
-import type { WidgetProps } from "../widgetProps";
-import type { BreakdownDimension } from "../widgets";
+import { makeFit, spanPx, type WidgetFit } from "../fit";
 import { collectionBreakdownKey, collectionTotalKey } from "../keys";
-import { CollectionValueWidget } from "./CollectionValueWidget";
+import type { WidgetBodyProps } from "../widgetProps";
+import type { BreakdownDimension } from "../widgets";
+import { collectionDimension, CollectionValueWidget } from "./CollectionValueWidget";
 
 /**
  * Nothing here mocks `@/lib/ipc`, and that is the point rather than a preference: a bare
  * `vi.fn()` standing in for a command types nothing, so a field added to `CollectionSummary` or
- * to `BreakdownRow` would fail at run time inside a render instead of failing `tsc`. The widget
- * exports its two query keys precisely so a test — and Wave 6's stories — seed the cache
- * instead, which is `useHomeLayout`'s own arrangement one folder up.
+ * to `BreakdownRow` would fail at run time inside a render instead of failing `tsc`. The two keys
+ * live in `../keys` precisely so a test — and the stories — seed the cache instead.
  *
  * `staleTime: Infinity` is what makes the seeds *the* answer: a seeded entry is fresh, so no
  * observer ever reaches the real `invoke` (which rejects under jsdom) and every case below is
  * about the data it names rather than about a race with a failing round trip.
  */
 const MARKETPLACE: MarketplaceId = "tcgplayer";
-
-const HEADING = "Collection value";
-const PICKER = `${HEADING} by`;
 
 let client: QueryClient;
 
@@ -66,29 +61,52 @@ function row(over: Partial<BreakdownRow> = {}): BreakdownRow {
   return { key: "common", name: null, cards: 1, value: 0, ...over };
 }
 
-/** The four buckets every priced case below is written against — `$2,100` and `$900` so the
- *  spoken shares are a round 70 % and 30 %, and one bucket the marketplace priced nothing in. */
+/** Three buckets — `$2,100` and `$900` so the spoken shares are a round 70 % and 30 %, and one
+ *  bucket the marketplace priced nothing in. */
 const RARITY_ROWS: BreakdownRow[] = [
   row({ key: "common", cards: 1204, value: 2100 }),
   row({ key: "rare", cards: 120, value: 900 }),
   row({ key: "mythic", cards: 12, value: null }),
 ];
 
-function widget(config: unknown = null, over: Partial<HomeWidget> = {}): HomeWidget {
-  return { id: "collectionValue", kind: "collectionValue", span: 1, config, ...over };
+/** Eleven sets, each a dollar cheaper than the last. */
+const ELEVEN_SETS: BreakdownRow[] = Array.from({ length: 11 }, (_, i) =>
+  row({ key: `s${i}`, name: `Set ${i}`, cards: 2, value: 100 - i }),
+);
+
+function widget(config: unknown = null, w = 2, h = 3): HomeWidget {
+  return { id: "collectionValue", kind: "collectionValue", x: 0, y: 0, w, h, config };
 }
 
-/** Every prop the widget cannot be drawn without, freshly spied per call — a shared spy makes
- *  `toHaveBeenCalledTimes(1)` a fact about vitest's file order. */
-function props(over: Partial<WidgetProps> = {}): WidgetProps {
+/**
+ * A fit on a grid of `cell`-pixel cells — the page's own arithmetic, so a case names a footprint
+ * and a cell size and the whole-row count falls out of `fit.ts` rather than out of this file.
+ *
+ * The four this suite leans on, at comfortable density:
+ * * **2×3 at 104px** — body 286px; figures leave room for 5 bars, no figures 7.
+ * * **2×2 at 68px** — body 98px; the figure line takes it all and room is **0**.
+ * * **4×6 at 104px** — tier 2, a footer, 14 rows of room and two list columns.
+ * * **3×3 at 104px** — tier 1: a list row carries its money at the right, no footer.
+ */
+function fitOf(w: number, h: number, cell = 104): WidgetFit {
+  return makeFit({
+    w,
+    h,
+    widthPx: spanPx(w, cell),
+    heightPx: spanPx(h, cell),
+    density: "comfortable",
+  });
+}
+
+/** Every prop a body is drawn with, freshly spied per call. */
+function props(over: Partial<WidgetBodyProps> = {}): WidgetBodyProps {
+  const drawn = over.widget ?? widget();
   return {
-    widget: widget(),
+    widget: drawn,
+    fit: fitOf(drawn.w, drawn.h),
     editing: false,
+    still: false,
     onConfig: vi.fn(),
-    onRemove: vi.fn(),
-    onSpan: vi.fn(),
-    dragHandleRef: vi.fn(),
-    onNudge: vi.fn(),
     ...over,
   };
 }
@@ -104,8 +122,7 @@ function seed(dimension: BreakdownDimension, rows: BreakdownRow[], total = summa
  *
  * A read that failed is not a value, so there is no data to seed — the cache entry is built and
  * its state written directly. It stays refused because the client above turns `retryOnMount`
- * off; left on, the observer would re-run the read the moment it mounted and this case would be
- * about the real `invoke` failing under jsdom rather than about the sentence the widget draws.
+ * off.
  */
 function seedRefusal(key: QueryKey, message: string): void {
   const state: Partial<QueryState<unknown, Error>> = {
@@ -117,7 +134,7 @@ function seedRefusal(key: QueryKey, message: string): void {
   client.getQueryCache().build(client, { queryKey: key }).setState(state);
 }
 
-function draw(over: Partial<WidgetProps> = {}) {
+function draw(over: Partial<WidgetBodyProps> = {}) {
   return render(
     <QueryClientProvider client={client}>
       <CollectionValueWidget {...props(over)} />
@@ -125,9 +142,15 @@ function draw(over: Partial<WidgetProps> = {}) {
   );
 }
 
-/** The `<dd>` beside a figure's label, which is where the value and its note both live. */
+/** The value line under a figure's label, which is where the number and its note both live. */
 function figure(label: string): HTMLElement {
   return screen.getByText(label).nextElementSibling as HTMLElement;
+}
+
+/** The bars' spoken sentences, in order — the drawing is `aria-hidden`, so this is the whole of
+ *  what the chart says. */
+function sentences(container: HTMLElement): string[] {
+  return Array.from(container.querySelectorAll("li > .sr-only")).map((el) => el.textContent ?? "");
 }
 
 describe("CollectionValueWidget", () => {
@@ -175,9 +198,9 @@ describe("CollectionValueWidget", () => {
   });
 
   /**
-   * **The sentences are the accessible story and the bars are decoration over them**, which is
-   * `StatsCard`'s standing rule — so this is what a screen reader gets and what a test asserts.
-   * Each names the count, the money and the share the (aria-hidden) track is drawing.
+   * **The sentences are the accessible story and the bars are decoration over them** — so this is
+   * what a screen reader gets and what a test asserts. Each names the count, the money and the
+   * share of the whole.
    *
    * The unpriced bucket says so in words rather than carrying an em dash: `"worth —"` read aloud
    * is a punctuation mark, and `null` means this marketplace priced nothing here rather than that
@@ -186,28 +209,44 @@ describe("CollectionValueWidget", () => {
   it("speaks one sentence per bar, naming the count, the money and the share", () => {
     seed("rarity", RARITY_ROWS);
 
-    draw({ widget: widget({ dimension: "rarity" }) });
+    const { container } = draw({ widget: widget({ dimension: "rarity" }) });
 
-    expect(
-      screen.getByText("1,204 cards of Common rarity, worth $2,100.00, 70% of the total"),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText("120 cards of Rare rarity, worth $900.00, 30% of the total"),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText("12 cards of Mythic rarity, with no TCGplayer price"),
-    ).toBeInTheDocument();
+    expect(sentences(container)).toEqual([
+      "1,204 cards of Common rarity, worth $2,100.00, 70% of the total",
+      "120 cards of Rare rarity, worth $900.00, 30% of the total",
+      "12 cards of Mythic rarity, with no TCGplayer price",
+    ]);
+  });
+
+  /** Ranked by money whatever order the rows arrive in, and the unpriced bucket sinks to the foot
+   *  — the order is the information this widget exists to give. */
+  it("ranks the buckets by value, dearest first, with the unpriced ones last", () => {
+    seed("rarity", [
+      row({ key: "mythic", cards: 12, value: null }),
+      row({ key: "rare", cards: 120, value: 900 }),
+      row({ key: "common", cards: 1204, value: 2100 }),
+    ]);
+
+    const { container } = draw({ widget: widget({ dimension: "rarity" }) });
+
+    expect(sentences(container)).toEqual([
+      "1,204 cards of Common rarity, worth $2,100.00, 70% of the total",
+      "120 cards of Rare rarity, worth $900.00, 30% of the total",
+      "12 cards of Mythic rarity, with no TCGplayer price",
+    ]);
   });
 
   /**
    * The total, and the count that keeps it honest. A value that silently omits 7 copies is a
    * number that lies by rounding down, and `unpriced` is counted at the marketplace the value was
    * summed at — so the note travels with the figure rather than standing on its own.
+   *
+   * On a panel rather than a tile, because `WidgetFigures` drops a note on a two-cell tile.
    */
   it("draws the total and the unpriced note beside it", () => {
     seed("rarity", RARITY_ROWS, summary({ value: 3000, unpriced: 7, totalCards: 1336 }));
 
-    draw({ widget: widget({ dimension: "rarity" }) });
+    draw({ widget: widget({ dimension: "rarity" }, 3, 3) });
 
     expect(figure("Value (USD)")).toHaveTextContent("$3,000.00");
     expect(figure("Value (USD)")).toHaveTextContent("7 unpriced");
@@ -219,7 +258,7 @@ describe("CollectionValueWidget", () => {
   it("says nothing about unpriced copies when there are none", () => {
     seed("rarity", RARITY_ROWS, summary({ unpriced: 0 }));
 
-    draw({ widget: widget({ dimension: "rarity" }) });
+    draw({ widget: widget({ dimension: "rarity" }, 3, 3) });
 
     expect(screen.queryByText(/unpriced/)).toBeNull();
   });
@@ -234,66 +273,169 @@ describe("CollectionValueWidget", () => {
     draw({ widget: widget({ dimension: "rarity" }) });
 
     expect(screen.getByText("—")).toBeInTheDocument();
+    expect(screen.queryByText("$0.00")).toBeNull();
   });
 
-  /**
-   * Choosing a dimension writes the config **once**, and writes it by spreading what was stored.
-   *
-   * The spread is the half worth pinning: `widgetConfig` carries through keys this build does not
-   * know about, so replacing the object wholesale is how an older build silently deletes a newer
-   * one's settings. `ranked` stands in for that key here.
-   */
-  it("writes the picked dimension exactly once, keeping the config it did not name", async () => {
-    const user = userEvent.setup();
-    const onConfig = vi.fn();
+  /** Colour buckets are drawn in the colour they are, multicolour in gold; every other dimension
+   *  is the accent, and a rarity says itself with a gem instead. */
+  it("fills a colour bar in its mana colour and multicolour in gold", () => {
+    seed("color", [
+      row({ key: "U", cards: 300, value: 500 }),
+      row({ key: "multi", cards: 90, value: 300 }),
+    ]);
+
+    const { container } = draw({ widget: widget({ dimension: "color" }) });
+
+    const fills = Array.from(container.querySelectorAll<HTMLElement>("li span.h-full")).map(
+      (fill) => fill.style.background,
+    );
+    expect(fills).toEqual(["var(--color-mana-u)", "var(--color-pie-gold)"]);
+  });
+
+  it("puts a rarity gem before a rarity bar's label", () => {
     seed("rarity", RARITY_ROWS);
 
-    draw({ widget: widget({ dimension: "rarity", ranked: true }), onConfig });
-    await pickOption(user, PICKER, "Set");
+    const { container } = draw({ widget: widget({ dimension: "rarity" }) });
 
-    expect(onConfig).toHaveBeenCalledTimes(1);
-    expect(onConfig).toHaveBeenCalledWith({ dimension: "set", ranked: true });
+    // `RarityGem`'s word is its accessible half; one per bar.
+    expect(
+      Array.from(container.querySelectorAll("li .sr-only"))
+        .map((el) => el.textContent)
+        .filter((text) => /^Rarity: \w/.test(text ?? "")),
+    ).toEqual(["Rarity: common", "Rarity: rare", "Rarity: mythic"]);
   });
 
   /**
-   * **`widgetConfig` checks a shape and cannot check a vocabulary**, so a stored
-   * `dimension: "bogus"` passes it as a string — and the backend refuses a fifth word in a
-   * sentence rather than answering it. Narrowing here is what turns a hand-edited row, or a
-   * newer build's word, into the default rather than into a refusal the reader has to read.
+   * **`pickOf` checks a vocabulary where `widgetConfig` only checks a shape**, so a stored
+   * `dimension: "bogus"` reads as the registry's first option — and the backend never sees a
+   * fifth word it would refuse.
    */
   it("falls back to the default dimension when the stored word is not one of the four", () => {
+    expect(collectionDimension(widget({ dimension: "bogus" }))).toBe("rarity");
+    expect(collectionDimension(widget({ dimension: 7 }))).toBe("rarity");
+    expect(collectionDimension(widget(null))).toBe("rarity");
+    expect(collectionDimension(widget({ dimension: "finish" }))).toBe("finish");
+
     seed("rarity", RARITY_ROWS);
-
     draw({ widget: widget({ dimension: "bogus" }) });
-
-    expect(screen.getByRole("button", { name: PICKER })).toHaveTextContent("Rarity");
     expect(screen.getByText("Common")).toBeInTheDocument();
   });
 
   /**
-   * Everything past the eighth bucket is one bar, and the fold keeps both figures — so the bars
-   * still sum to the total above them. `null` contributes nothing and a number lifts the fold out
-   * of `null`, which is `sum()` over a `NULL` one statement lower down.
+   * **The chart is cut to the whole rows the card has, and what does not fit is one `Other`** — so
+   * the bars still sum to the total. A 2×3 tile at 104px cells holds five rows under its figures:
+   * four sets and the fold of the other seven, `null` contributing nothing, a number lifting the
+   * fold out of `null`.
    */
-  it("folds everything past the eighth bucket into one bar that keeps its figures", () => {
-    const rows = Array.from({ length: 11 }, (_, i) =>
-      row({ key: `s${i}`, name: `Set ${i}`, cards: 2, value: 100 - i }),
-    );
-    seed("set", rows);
+  it("cuts the buckets to the room and folds the rest into Other, keeping its figures", () => {
+    seed("set", ELEVEN_SETS);
 
-    draw({ widget: widget({ dimension: "set" }) });
+    const { container } = draw({ widget: widget({ dimension: "set" }) });
 
-    // The three smallest — 92 + 91 + 90 — with their six cards.
+    const spoken = sentences(container);
+    expect(spoken).toHaveLength(5);
     expect(screen.getByText("Other")).toBeInTheDocument();
-    expect(screen.getByText(/^6 cards from every other set, worth \$273\.00/)).toBeInTheDocument();
+    // Sets 4 to 10 — 96 + 95 + … + 90 — with their fourteen cards, of the eleven's $1,045.
+    expect(spoken[4]).toBe("14 cards from every other set, worth $651.00, 62% of the total");
+  });
+
+  /** The same eleven sets with the totals switched off: the figure line's pixels go to the chart,
+   *  and seven rows fit where five did. */
+  it("gives the figure line's room to the chart when totals are switched off", () => {
+    seed("set", ELEVEN_SETS);
+
+    const { container } = draw({ widget: widget({ dimension: "set", figures: false }) });
+
+    expect(screen.queryByText("Value (USD)")).toBeNull();
+    expect(screen.queryByText("Cards")).toBeNull();
+    expect(sentences(container)).toHaveLength(7);
+  });
+
+  /**
+   * **A tile too short for a bar under its figures draws the figures and no bars** — two honest
+   * numbers rather than a bar the card's edge cuts through. Zero is a real answer, and the footer
+   * goes with the chart.
+   */
+  it("draws only the figures on a tile with no room for a bar", () => {
+    seed("rarity", RARITY_ROWS);
+
+    const { container } = draw({
+      widget: widget({ dimension: "rarity" }, 2, 2),
+      fit: fitOf(2, 2, 68),
+    });
+
+    expect(figure("Value (USD)")).toHaveTextContent("$3,000.00");
+    expect(sentences(container)).toEqual([]);
+    expect(container.querySelector("ul")).toBeNull();
+    expect(screen.queryByText(/split by/)).toBeNull();
+  });
+
+  /** One slot draws the dearest bucket alone rather than a lone `Other` — a fold with nothing
+   *  beside it would be the total a second time, in a sentence that does not parse. */
+  it("draws the dearest bucket alone when only one row fits", () => {
+    seed("set", ELEVEN_SETS);
+    // 2×2 at 80px cells: a 122px body, one 32px row under the 74px figure line.
+    const fit = fitOf(2, 2, 80);
+    expect(fit.fitCount(32, 74)).toBe(1);
+
+    const { container } = draw({ widget: widget({ dimension: "set" }, 2, 2), fit });
+
+    expect(sentences(container)).toEqual([
+      "2 cards from Set 0, worth $100.00, 10% of the total",
+    ]);
+  });
+
+  /** `chart: list` draws the buckets as rows — a name and its money — and no bars. */
+  it("draws rows instead of bars when the chart is a list", () => {
+    seed("rarity", RARITY_ROWS);
+
+    const { container } = draw({ widget: widget({ dimension: "rarity", chart: "list" }, 3, 3) });
+
+    expect(sentences(container)).toEqual([]);
+    const rows = screen.getAllByRole("listitem");
+    expect(rows.map((item) => item.textContent)).toEqual([
+      "Common$2,100.00",
+      "Rare$900.00",
+      "Mythic—",
+    ]);
+  });
+
+  /** On a two-cell tile a list row has no width for a name and a figure side by side, so the money
+   *  is the caption under the name, in body ink. */
+  it("moves a list row's money under its name on a two-cell tile", () => {
+    seed("rarity", RARITY_ROWS);
+
+    draw({ widget: widget({ dimension: "rarity", chart: "list" }) });
+
+    const money = screen.getByText("$2,100.00");
+    expect(money.previousElementSibling).toHaveTextContent("Common");
+    expect(money.classList.contains("text-text")).toBe(true);
+  });
+
+  /** A band carries the provenance and the cut at its foot; a tile does not. */
+  it("names the marketplace and the cut in a footer on a band", () => {
+    seed("finish", [row({ key: "nonfoil", cards: 900, value: 700 })]);
+
+    draw({ widget: widget({ dimension: "finish" }, 4, 6) });
+
+    expect(
+      screen.getByText("TCGplayer prices as of the last card-data sync · split by finish"),
+    ).toBeInTheDocument();
+  });
+
+  it("draws no footer on a tile", () => {
+    seed("finish", [row({ key: "nonfoil", cards: 900, value: 700 })]);
+
+    draw({ widget: widget({ dimension: "finish" }) });
+
+    expect(screen.queryByText(/split by/)).toBeNull();
   });
 
   /**
    * The read is in flight: a sentence, and never an empty card that reads as a cleared one.
    *
    * Nothing is seeded, which **is** the state — a query with no cache entry is one that has not
-   * answered. The assertion is synchronous for that reason: what the widget draws on its first
-   * render is the whole of what this case is about.
+   * answered. The assertion is synchronous for that reason.
    */
   it("says it is counting while the reads are in flight", () => {
     draw({ widget: widget({ dimension: "rarity" }) });
@@ -326,5 +468,15 @@ describe("CollectionValueWidget", () => {
       "BUSY: a sync holds the write connection",
     );
     expect(screen.queryByText("Counting your collection…")).toBeNull();
+  });
+
+  /** A catalogue preview is the same drawing, and nothing in it is a control to press. */
+  it("draws nothing pressable, still or not", () => {
+    seed("rarity", RARITY_ROWS);
+
+    draw({ widget: widget({ dimension: "rarity" }), still: true });
+
+    expect(screen.queryAllByRole("button")).toEqual([]);
+    expect(screen.getByText("Common")).toBeInTheDocument();
   });
 });

@@ -24,14 +24,21 @@ function wrapper({ children }: { children: ReactNode }) {
   return createElement(QueryClientProvider, { client }, children);
 }
 
-/** A widget, annotated so the mirror checks the fixture — see the mock note above. */
+/**
+ * A widget, annotated so the mirror checks the fixture — see the mock note above.
+ *
+ * **Already in its stored form** — placed on the grid, and carrying the `span` `toStored` writes
+ * for its width — so a document this hook writes back compares equal to the fixture it was handed.
+ * A fixture without that `span` would make every write assertion below a claim about `toStored`
+ * rather than about the hook.
+ */
 function widget(over: Partial<HomeWidget> = {}): HomeWidget {
-  return { id: "activity", kind: "activity", span: 1, config: null, ...over };
+  return { id: "activity", kind: "activity", x: 0, y: 0, w: 3, h: 3, span: 1, config: null, ...over };
 }
 
-/** A layout, likewise. One widget by default, so a fixture is never mistakable for the seeded six. */
+/** A layout, likewise. One widget by default, so a fixture is never mistakable for the seed. */
 function layout(over: Partial<HomeLayout> = {}): HomeLayout {
-  return { version: 1, widgets: [widget()], ...over };
+  return { version: 2, widgets: [widget()], ...over };
 }
 
 beforeEach(() => {
@@ -39,8 +46,8 @@ beforeEach(() => {
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   // A reader who has customised the page down to one widget, which is the case that proves the row
-  // is read at all rather than the fallback being right by accident — the seeded six are what
-  // every failure below also answers with.
+  // is read at all rather than the fallback being right by accident — the seed is what every
+  // failure below also answers with.
   homeLayout.mockReset().mockResolvedValue(layout());
   setHomeLayout.mockReset().mockResolvedValue(undefined);
 });
@@ -88,7 +95,7 @@ describe("useHomeLayout", () => {
    * with no `widgets` at all is the shape a truncated write leaves. `parseLayout` in the `queryFn`
    * is what makes that one answer for every consumer rather than one per widget.
    */
-  it("reads a document that is not a layout as the seeded six", async () => {
+  it("reads a document that is not a layout as the seed", async () => {
     homeLayout.mockResolvedValue({ version: 1 });
 
     const { result } = renderHook(() => useHomeLayout(), { wrapper });
@@ -98,7 +105,26 @@ describe("useHomeLayout", () => {
   });
 
   /**
-   * **A read that fails is the seeded six and it is `ready`** — never an error, and never a page
+   * **A version-1 row is placed on the grid at the door**, so the page never meets a widget with
+   * no cells. Only the wiring is pinned here — which cells it lands on is `layout.test.ts`'s.
+   */
+  it("reads a version-1 document as a placed version-2 one", async () => {
+    homeLayout.mockResolvedValue({
+      version: 1,
+      widgets: [{ id: "decks", kind: "decks", span: 1, config: null }],
+    });
+
+    const { result } = renderHook(() => useHomeLayout(), { wrapper });
+
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    expect(result.current.layout.version).toBe(2);
+    expect(result.current.layout.widgets).toEqual([
+      expect.objectContaining({ id: "decks", x: 0, y: 0, w: 3, h: 3 }),
+    ]);
+  });
+
+  /**
+   * **A read that fails is the seed and it is `ready`** — never an error, and never a page
    * that waits for ever.
    *
    * `home_layout` is infallible at the far end, so what is left to fail is the IPC boundary and a
@@ -110,7 +136,7 @@ describe("useHomeLayout", () => {
    * The query is driven all the way into `error` rather than merely observed for a beat, so this
    * cannot pass on a read that had not answered yet.
    */
-  it("answers the seeded six, ready, when the row cannot be read at all", async () => {
+  it("answers the seed, ready, when the row cannot be read at all", async () => {
     homeLayout.mockRejectedValue("The database is busy with a sync — try again in a moment.");
 
     const { result } = renderHook(() => useHomeLayout(), { wrapper });
@@ -162,6 +188,37 @@ describe("useHomeLayout", () => {
   });
 
   /**
+   * **Every write carries the version-1 `span` an older build reads, and no caller supplies it.**
+   *
+   * The page hands this hook what `layout.ts` answered, which knows nothing about `span` — a widget
+   * pulled to the whole of an eight-column grid still carries whatever `span` it was parsed with, or
+   * none. `toStored` in {@link useHomeLayout}'s `update` is the one place it is derived, so a
+   * portable copy one release behind opens this row on a page it can still draw. The cache takes
+   * the same document the command is sent: two copies that differed by a field would be two answers
+   * to "what is stored".
+   */
+  it("derives each widget's span on the way out, into the command and the cache alike", async () => {
+    const { result } = renderHook(() => useHomeLayout(), { wrapper });
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    // Written out rather than `widget()` with the field deleted: the fixture factory's whole point
+    // is a `span`, and this one's whole point is not having one.
+    const unspanned: HomeWidget = { id: "wide", kind: "folders", x: 0, y: 0, w: 8, h: 2, config: null };
+    const next = layout({ widgets: [unspanned, widget({ id: "narrow", x: 0, y: 2, span: 2 })] });
+
+    act(() => result.current.update(next));
+
+    const stored = layout({
+      widgets: [
+        { ...unspanned, span: 2 },
+        // A stale `span` is corrected rather than kept: three columns is not the whole row.
+        widget({ id: "narrow", x: 0, y: 2, span: 1 }),
+      ],
+    });
+    await waitFor(() => expect(result.current.layout).toEqual(stored));
+    expect(setHomeLayout).toHaveBeenCalledWith(stored);
+  });
+
+  /**
    * **A refused write keeps the reader's page**, and says nothing.
    *
    * `set_home_layout` answers `BUSY` while a sync holds the write connection, and it refuses a
@@ -185,9 +242,9 @@ describe("useHomeLayout", () => {
     expect(result.current.layout).toEqual(next);
   });
 
-  /** Reset puts the seeded six back, and it goes out on the same optimistic terms every other
-   *  change to this page does. */
-  it("resets to the seeded six, through the same optimistic write", async () => {
+  /** Reset puts the seed back, and it goes out on the same optimistic terms every other change to
+   *  this page does. */
+  it("resets to the seed, through the same optimistic write", async () => {
     const { result } = renderHook(() => useHomeLayout(), { wrapper });
     await waitFor(() => expect(result.current.layout.widgets).toHaveLength(1));
 
@@ -226,7 +283,7 @@ describe("useHomeLayout", () => {
    * the story would flicker onto whatever the fake answered.
    */
   it("opens on an arrangement seeded through the exported key, with no round trip", async () => {
-    const seeded = layout({ widgets: [widget({ id: "folders", kind: "folders", span: 2 })] });
+    const seeded = layout({ widgets: [widget({ id: "folders", kind: "folders", w: 8, h: 2, span: 2 })] });
     client.setQueryData(HOME_LAYOUT_KEY, seeded);
 
     const { result } = renderHook(() => useHomeLayout(), { wrapper });

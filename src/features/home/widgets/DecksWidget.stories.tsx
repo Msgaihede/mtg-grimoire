@@ -1,202 +1,221 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, waitFor, within } from "storybook/test";
-import { DecksWidget } from "./DecksWidget";
+import type { HomeWidget } from "@/lib/ipc";
+import { makeFit, spanPx } from "../fit";
+import { WidgetCard } from "../WidgetCard";
+import { widgetDensity } from "../widgetSettings";
+import { DecksWidget, DecksWidgetSettings } from "./DecksWidget";
 
 /**
- * How long a play waits on something a freshly opened popover has to draw.
+ * How long a play waits on something a freshly opened dropdown has to draw.
  *
- * **Seconds-scale, and not exported.** An `AnchoredPopup` mounts its panel on the press and the
- * dropdown inside it then reads `deck_list` through the fake, so the rows arrive a couple of
- * commits after the click; the default 1 s timeout is what a play that opened one fails on
- * first, and it fails as *the row is not there* rather than as *the row is late*. It is a plain
- * `const` because **CSF indexes every non-default export as a story** — an exported number would
- * become a story whose render is a number.
+ * **Seconds-scale, and not exported.** The rows arrive once `deck_list` answers through the fake,
+ * a couple of commits after the click; the default 1 s timeout fails as *the row is not there*
+ * rather than as *the row is late*. A plain `const` because **CSF indexes every non-default export
+ * as a story**.
  */
 const POPOVER_TIMEOUT = { timeout: 5_000 };
 
-/** The page's half of every widget's props — see `widgetProps.ts`. `fn()` so a play can assert
- *  a press reached the page; Storybook resets them between stories. */
-const CHROME = {
-  editing: false,
-  onRemove: fn(),
-  onSpan: fn(),
-  onConfig: fn(),
-  onNudge: fn(),
-  dragHandleRef: fn(),
-};
+/** The grid's target cell — the size the page aims its columns at. Not exported, for CSF. */
+const CELL = 104;
+
+/** A `decks` widget at a footprint, with a config. */
+function decks(w: number, h: number, config: unknown = null): HomeWidget {
+  return { id: "decks", kind: "decks", x: 0, y: 0, w, h, config };
+}
+
+/**
+ * The body inside the real card, in a box the card's footprint covers at the target cell — so a
+ * story shows exactly the rows the page would draw at that size, and the card's title, chip and
+ * tray are the shipped ones rather than a stand-in.
+ */
+function Framed({ widget, still = false }: { widget: HomeWidget; still?: boolean }) {
+  const widthPx = spanPx(widget.w, CELL);
+  const heightPx = spanPx(widget.h, CELL);
+  const fit = makeFit({
+    w: widget.w,
+    h: widget.h,
+    widthPx,
+    heightPx,
+    density: widgetDensity(widget),
+  });
+  const onConfig = fn();
+  return (
+    <div className="p-2">
+      <div style={{ width: widthPx, height: heightPx }}>
+        <WidgetCard
+          widget={widget}
+          fit={fit}
+          editing={false}
+          still={still}
+          onConfig={onConfig}
+          onRemove={fn()}
+          extraSettings={<DecksWidgetSettings widget={widget} onConfig={onConfig} />}
+        >
+          <DecksWidget widget={widget} fit={fit} editing={false} still={still} onConfig={onConfig} />
+        </WidgetCard>
+      </div>
+    </div>
+  );
+}
 
 const meta = {
   title: "Home/DecksWidget",
-  component: DecksWidget,
+  component: Framed,
   tags: ["autodocs"],
   args: {
-    // The default layout's entry for this kind: one column, and no config at all — which is
-    // what "nothing pinned" is spelled as, and the state every reader meets first.
-    widget: { id: "decks", kind: "decks", span: 1, config: null },
-    ...CHROME,
+    // The default layout's entry for this kind: three cells by three, and no config at all —
+    // which is `Most recent`, the state every reader meets first.
+    widget: decks(3, 3),
   },
-  decorators: [
-    // One column of the wrapping row. `WIDGET_CARD_BOX`'s floor is 22rem, so this is that floor
-    // with a little room — the width the card is drawn at on a 1280 window with six widgets on
-    // the page.
-    (Story) => (
-      <div className="w-[26rem] max-w-full p-2">
-        <Story />
-      </div>
-    ),
-  ],
   parameters: {
     docs: {
       description: {
         component:
-          "Six shortcuts, each opening a deck in one press. **A shortcut and not a second " +
-          "gallery**: `DecksPage` already draws every deck with its colours, its bracket, its " +
-          "context menu and its drags, and this draws the four facts a reader picks a deck by " +
-          "from a landing page — the cover, the name, what it is, and what it is worth.\n\n" +
-          "**Three rules that are easy to get wrong**, and each is visible below. An empty " +
-          "`deckIds` means the six most recently updated and the *backend* already answers " +
-          "that (`deck_list` is `ORDER BY archived ASC, updated_at DESC, id DESC`), so the " +
-          "fallback is a filter and a `slice` and never a sort. A **chosen** set is drawn in " +
-          "the order the reader chose it, which is the one place this widget ignores that " +
-          "order. And archived cuts both ways: excluded from the fallback, drawn when pinned, " +
-          "and labelled either way.\n\n" +
-          "**A missing pin costs nothing and says nothing** — a `deckIds` entry naming a " +
-          "deleted deck is dropped on the way through, and the config is *not* rewritten to " +
-          "match, because a write on render would be a page that edits itself while being " +
-          "read. {@link PinnedDecksGone} is the one case that does earn a sentence: a reader " +
-          "who chose a set and lost all of it is not a reader with no decks.\n\n" +
-          "Every figure comes out of `deck_values` with the marketplace in its key, and " +
-          "`DeckValue.value` is `null` where the marketplace priced *nothing* in that deck — " +
-          "an em dash, never a zero.",
+          "Rows that open a deck in one press. **A shortcut and not a second gallery**: " +
+          "`DecksPage` already draws every deck with its colours, its bracket, its context menu " +
+          "and its drags, and this draws the four facts a reader picks a deck by from a landing " +
+          "page — the cover, the name, what it is, and what it is worth.\n\n" +
+          "**Three scopes.** `Most recent` is `deck_list`'s own order with the archived decks " +
+          "taken out — a filter, never a sort. `Archived too` keeps them, after the live ones. " +
+          "`Pinned` is drawn in the order the reader chose, and says so in words when nothing is " +
+          "pinned rather than drawing the recent decks under a chip that reads `Pinned`.\n\n" +
+          "**What fits is the box's.** A cover needs three cells wide and two tall; the caption " +
+          "needs a panel and a comfortable density; on a two-cell tile the value moves under the " +
+          "name. Every list is cut to whole rows.\n\n" +
+          "Every figure comes out of `deck_values` with the marketplace in its key, and a `null` " +
+          "value is an em dash, never a zero.",
       },
     },
   },
-} satisfies Meta<typeof DecksWidget>;
+} satisfies Meta<typeof Framed>;
 
 export default meta;
 type Story = StoryObj<typeof meta>;
 
 /**
- * Nothing pinned: the decks the reader touched most recently, archived ones left out.
+ * `Most recent`, three by three: covers, captions and values.
  *
- * The seed holds four decks and one of them is archived, so three tiles are drawn — `Modern
- * Goodstuff` first, because `deck_list` answers `updated_at DESC` and that is the deck the seed
- * touched an hour ago.
- *
- * The `play` asserts the tile's **written** name. Its three flex children are separated by a
- * `gap` and no whitespace text node, so a computed name would read `Modern GoodstuffModern · 60
- * cards$120.00`; the widget states the whole sentence in an `aria-label` instead, and that is
- * what a reader driving by voice actually gets.
+ * The seed holds four decks and one of them is archived, so the archived one is not drawn —
+ * "the ones I touched most recently" is about decks in play. The `play` asserts the row's
+ * **written** name, because its flex children would otherwise compute to a name with the words
+ * run together.
  */
 export const Default: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    const decks = within(await canvas.findByRole("region", { name: "Decks" }));
+    const card = within(await canvas.findByRole("region", { name: "Decks" }));
 
     await expect(
-      await decks.findByRole("button", { name: /^Modern Goodstuff · Modern · \d+ cards/ }),
+      await card.findByRole("button", { name: /^Modern Goodstuff · Modern · \d+ cards/ }),
     ).toBeInTheDocument();
-    // The archived deck is not in the fallback — "the ones I touched most recently" is about
-    // decks in play, and a shelf of retired lists would crowd out the ones that are not.
-    await expect(
-      decks.queryByRole("button", { name: /^Old School 93\/94/ }),
-    ).not.toBeInTheDocument();
+    await expect(card.queryByRole("button", { name: /^Old School 93\/94/ })).not.toBeInTheDocument();
   },
 };
 
-/**
- * A reader who has pinned a set, and every deck in it has gone.
- *
- * **Its own sentence, because it is its own situation.** Falling back to the six most recent
- * here would answer a question they did not ask — they chose a set, and every member of it has
- * been deleted. Saying so is what points them at the settings tray.
- */
-export const PinnedDecksGone: Story = {
-  args: {
-    // Two ids no seeded deck carries. The widget drops each in silence and is left with a
-    // chosen set holding nothing, which is the branch this story is about.
-    widget: { id: "decks", kind: "decks", span: 1, config: { deckIds: [901, 902] } },
-  },
+/** `Archived too` on a band: the shelf after the live decks, the chip naming the scope, and the
+ *  price note a band has the room for. */
+export const ArchivedTooOnABand: Story = {
+  args: { widget: decks(4, 4, { scope: "archived" }) },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    const decks = within(await canvas.findByRole("region", { name: "Decks" }));
+    const card = within(await canvas.findByRole("region", { name: "Decks" }));
+
     await expect(
-      await decks.findByText("The decks pinned here are not in this collection any more."),
+      await card.findByRole("button", { name: /^Old School 93\/94 · .* · Archived · / }),
+    ).toBeInTheDocument();
+    await expect(await card.findByText(/prices as of/)).toBeInTheDocument();
+  },
+};
+
+/** A two-cell tile: no cover, no caption, and the value moved under the name. */
+export const Tile: Story = {
+  args: { widget: decks(2, 3) },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const card = within(await canvas.findByRole("region", { name: "Decks" }));
+    await expect(
+      await card.findByRole("button", { name: /^Modern Goodstuff · / }),
+    ).toBeInTheDocument();
+    await expect(card.queryByText(/^Modern · \d+ cards$/)).not.toBeInTheDocument();
+  },
+};
+
+/** Compact, three by two, covers off: one line a row, so more of them fit. */
+export const CompactNoCovers: Story = {
+  args: { widget: decks(3, 2, { density: "compact", art: false }) },
+};
+
+/**
+ * `Pinned`, and every deck in the set has gone.
+ *
+ * **Its own sentence, because it is its own situation.** Falling back to the most recent here
+ * would answer a question the reader did not ask.
+ */
+export const PinnedDecksGone: Story = {
+  args: { widget: decks(3, 3, { scope: "pinned", deckIds: [901, 902] }) },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const card = within(await canvas.findByRole("region", { name: "Decks" }));
+    await expect(
+      await card.findByText("The decks pinned here are not in this collection any more."),
     ).toBeInTheDocument();
   },
 };
 
-/**
- * A database with no decks in it at all — which is a different sentence again, and points at
- * the page where a deck is made rather than at this widget's own settings.
- */
+/** `Pinned` with nothing pinned points at the picker. */
+export const NothingPinned: Story = {
+  args: { widget: decks(3, 3, { scope: "pinned" }) },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const card = within(await canvas.findByRole("region", { name: "Decks" }));
+    await expect(await card.findByText(/^No decks pinned yet/)).toBeInTheDocument();
+  },
+};
+
+/** A database with no decks at all — a different sentence again, pointing at the Decks page. */
 export const NoDecksYet: Story = {
   parameters: { fake: { seed: "empty" } },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    const decks = within(await canvas.findByRole("region", { name: "Decks" }));
+    const card = within(await canvas.findByRole("region", { name: "Decks" }));
     await expect(
-      await decks.findByText("No decks yet — make one on the Decks page and it will show up here."),
+      await card.findByText("No decks yet — make one on the Decks page and it will show up here."),
     ).toBeInTheDocument();
   },
 };
 
-/**
- * Customize on — and this is **the one widget that changes something about itself** when it is.
- *
- * `widgetProps.ts` names the exception at the prop: a reader rearranging the page is not
- * browsing it, and a press that navigated away mid-drag would take the layout they were half way
- * through arranging off the screen. So the tile becomes a preview of itself: the same words, no
- * affordance. The `play` is what pins that — the deck's sentence is still on screen, and it is
- * no longer a button.
- */
-export const Customizing: Story = {
-  args: { editing: true },
+/** A catalogue preview: the same rows as pictures of rows — nothing to press. */
+export const Still: Story = {
+  args: { still: true },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    const decks = within(await canvas.findByRole("region", { name: "Decks" }));
-
-    // The same words the resting tile carries, drawn now as text rather than as a control.
-    await expect(await decks.findByText("Modern Goodstuff")).toBeInTheDocument();
-    await expect(
-      decks.queryByRole("button", { name: /^Modern Goodstuff · Modern/ }),
-    ).not.toBeInTheDocument();
-
-    // And the tray is what edit mode adds instead.
-    await expect(decks.getByRole("button", { name: "Move Decks" })).toBeInTheDocument();
-    await expect(decks.getByRole("button", { name: "Remove Decks" })).toBeInTheDocument();
+    const card = within(await canvas.findByRole("region", { name: "Decks" }));
+    await expect(await card.findByText("Modern Goodstuff")).toBeInTheDocument();
+    await expect(card.queryByRole("button", { name: /^Modern Goodstuff · / })).toBeNull();
   },
 };
 
 /**
- * The pinning control, opened.
+ * The pin picker on its own, as the card's settings popover draws it under `Pinned`.
  *
  * The rows are every deck there is, **sorted by the deck's own name** rather than by the row's
- * label — so the `(archived)` suffix a retired deck carries does not file it under A. The
- * trigger says `Most recent` while nothing is pinned, because that is what the widget is
- * actually doing rather than a count of zero.
- *
- * Everything asserted after the press goes through `waitFor` with a seconds-scale timeout: the
- * panel mounts on the click and the rows arrive once `deck_list` answers through the fake.
+ * label — so the `(archived)` suffix a retired deck carries does not file it under A.
  */
-export const PinningDecks: Story = {
-  args: { editing: true },
+export const PinPicker: Story = {
+  render: () => (
+    <div className="w-[268px] p-2">
+      <DecksWidgetSettings widget={decks(3, 3, { scope: "pinned" })} onConfig={fn()} />
+    </div>
+  ),
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    const decks = within(await canvas.findByRole("region", { name: "Decks" }));
-
-    await userEvent.click(decks.getByRole("button", { name: "Settings for Decks" }));
-    const picker = await waitFor(
-      () => decks.getByRole("button", { name: "Decks to pin" }),
-      POPOVER_TIMEOUT,
-    );
-    await expect(picker).toHaveTextContent("Most recent");
+    const picker = await canvas.findByRole("button", { name: "Decks to pin" });
+    await expect(picker).toHaveTextContent("None pinned");
 
     await userEvent.click(picker);
     await waitFor(async () => {
-      // Alphabetical by the deck's name: Kenrith, Modern, Old School, Rhystic — and the
-      // archived one wears its suffix without being sorted by it.
-      await expect(decks.getAllByRole("option").map((row) => row.textContent?.trim())).toEqual([
+      await expect(canvas.getAllByRole("option").map((row) => row.textContent?.trim())).toEqual([
         expect.stringContaining("Kenrith Two-Drops"),
         expect.stringContaining("Modern Goodstuff"),
         expect.stringContaining("Old School 93/94 (archived)"),
