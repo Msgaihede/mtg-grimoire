@@ -513,6 +513,71 @@ describe("ScannerPage", () => {
     }
   });
 
+  /**
+   * **The same card again while the commit is in flight is a bump, not a new row**, so the row the
+   * commit is filing comes back with one more copy under the same key. The commit filed the three
+   * it saw; the tray has to keep the one it did not. Keeping all four would file three of them a
+   * second time on the next Add, and dropping the row would lose the copy just scanned.
+   */
+  it("keeps only the copies bumped onto a row while the commit was in flight", async () => {
+    const restore = shimVideo();
+    opens();
+    vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
+    const saga = TRAY_ROWS[1]; // Urza's Saga, nonfoil, ×3 — the prefs' default finish
+    vi.mocked(ipc.scannerTray).mockResolvedValue([saga]);
+    const sagaAgain: ScannerVerdict = {
+      ...VERDICTS.decided,
+      decision: {
+        printing: saga.cardId,
+        oracle_id: saga.oracleId,
+        label: { name: saga.name, set: saga.setCode, number: saga.collectorNumber, lang: "en", released: "2021-06-18" },
+        outcome: "resolved",
+        choices: [],
+      },
+    };
+    let land!: (v: ScannerVerdict) => void;
+    vi.mocked(ipc.scannerFrame)
+      .mockResolvedValueOnce(VERDICTS.voting)
+      .mockImplementationOnce(() => new Promise((resolve) => (land = resolve)))
+      .mockImplementation(() => new Promise(() => {}));
+    let answer!: () => void;
+    vi.mocked(ipc.collectionImportCommit).mockImplementationOnce(
+      () => new Promise((resolve) => (answer = () => resolve({ added: 1, updated: 0, removed: 0 }))),
+    );
+    const user = userEvent.setup();
+    try {
+      mount();
+      await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalledTimes(2));
+      await user.click(await within(tray()).findByRole("button", { name: "Add 3 to collection" }));
+      await waitFor(() => expect(ipc.collectionImportCommit).toHaveBeenCalledTimes(1));
+      expect(vi.mocked(ipc.collectionImportCommit).mock.calls[0]?.[0]).toEqual([
+        { cardId: saga.cardId, quantity: 3, finish: "nonfoil", condition: "NONE" },
+      ]);
+
+      land(sagaAgain);
+      // A bump, not a second row: one line, four copies, the same key.
+      await waitFor(() =>
+        expect(within(tray()).getByRole("button", { name: "Add 4 to collection" })).toBeInTheDocument(),
+      );
+      expect(within(tray()).getAllByRole("listitem")).toHaveLength(1);
+      answer();
+
+      await waitFor(() =>
+        expect(within(tray()).getByRole("button", { name: "Add 1 to collection" })).toBeInTheDocument(),
+      );
+      expect(within(tray()).getAllByRole("listitem")).toHaveLength(1);
+      await waitFor(
+        () =>
+          expect(vi.mocked(ipc.setScannerTray).mock.lastCall?.[0]).toEqual([
+            expect.objectContaining({ key: saga.key, cardId: saga.cardId, quantity: 1 }),
+          ]),
+        { timeout: 2000 },
+      );
+    } finally {
+      restore();
+    }
+  });
+
   /** One transaction, all or nothing — so a refusal leaves every row where the reader can fix it. */
   it("keeps every row and shows the sentence when the commit is refused", async () => {
     refused();
