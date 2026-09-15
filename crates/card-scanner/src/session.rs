@@ -469,13 +469,17 @@ pub struct Session {
     leaderless_locked: u32,
     /// Trusted frames with a detection in this stretch. See [`Session::count_stretch`].
     steady: u32,
-    /// An Exact resolve already ran in this stretch. Re-armed only by the stretch breaking.
+    /// An Exact resolve already ran for the card in frame. Cleared only by a re-arm being taken
+    /// (see `rearm_pending`) or a reset.
     attempted: bool,
     /// The last [`EXACT_BURST`] locked frames, in Exact.
     burst: VecDeque<StoredView>,
-    /// The resolve this stretch's Exact decision was made on. Cleared only by the stretch
-    /// breaking, or a reset.
+    /// The resolve the current Exact decision was made on. Only ever `Some` while `attempted`
+    /// is true: the two are set at the resolve and cleared together.
     last_resolution: Option<ResolutionView>,
+    /// The stretch has broken since the last resolve, so `attempted` and `last_resolution`
+    /// clear as soon as the tracker is not committed. See [`Session::count_stretch`].
+    rearm_pending: bool,
 }
 
 impl Session {
@@ -497,6 +501,7 @@ impl Session {
             attempted: false,
             burst: VecDeque::with_capacity(EXACT_BURST + 1),
             last_resolution: None,
+            rearm_pending: false,
         }
     }
 
@@ -556,6 +561,7 @@ impl Session {
         self.attempted = false;
         self.was_committed = false;
         self.last_resolution = None;
+        self.rearm_pending = false;
     }
 
     /// Should the readers run on this frame? In Fast mode, once [`FAST_RESCUE_AFTER`] locked
@@ -571,16 +577,21 @@ impl Session {
     /// this frame found a card, `settled` whether the tracker was committed going into it.
     ///
     /// **A stretch is the run of frames the lock stays trusted, and in Exact one stretch is one
-    /// card.** Only a lock that stops being trusted breaks it — the card has left the frame —
-    /// and a broken stretch forgets its burst, its attempt and its resolution, which is the only
-    /// thing that lets Exact resolve again. A trusted frame whose detector missed changes
-    /// nothing: it neither counts toward the stretch nor ends it.
+    /// card.** Only a lock that stops being trusted breaks it, and a broken stretch forgets its
+    /// burst and its counts. It does not forget the resolve: it *arms* a re-arm
+    /// (`rearm_pending`), which [`Session::record_decision`] takes only once the tracker is no
+    /// longer committed. A one-frame degenerate quad drops the lock for two frames on a card
+    /// that never moved, and the tracker's freeze outlasts that blip — so the decided card is
+    /// neither resolved nor added again, while a card actually taken away releases the freeze
+    /// and lets the next one resolve.
+    ///
+    /// A trusted frame whose detector missed changes nothing: it neither counts toward the
+    /// stretch nor ends it.
     fn count_stretch(&mut self, trusted: bool, detected: bool, settled: bool) {
         if !trusted {
             self.steady = 0;
             self.leaderless_locked = 0;
-            self.attempted = false;
-            self.last_resolution = None;
+            self.rearm_pending = true;
             self.burst.clear();
         } else if detected {
             self.steady += 1;
@@ -596,12 +607,19 @@ impl Session {
     /// decisions where they are made, at the resolve, so a freeze lifting and re-forming inside
     /// one stretch — a hash that prefers another card than the one the reads resolved — can
     /// never decide the held card twice. Either way a commit ends the leaderless run.
+    ///
+    /// A re-arm armed by a broken stretch is taken here, once nothing is committed: the card
+    /// that was decided has gone as far as the tracker is concerned.
     fn record_decision(&mut self, committed: bool) {
         if self.mode == ScanMode::Fast && committed && !self.was_committed {
             self.decision_seq += 1;
         }
         if committed {
             self.leaderless_locked = 0;
+        } else if self.rearm_pending {
+            self.attempted = false;
+            self.last_resolution = None;
+            self.rearm_pending = false;
         }
         self.was_committed = committed;
     }
@@ -942,6 +960,14 @@ impl Session {
             // the tracker does meanwhile. A vote commit that got there first does not block it
             // (`commit_to` replaces that tally); a freeze lifting does not re-arm it.
             ScanMode::Exact => {
+                // A pending re-arm is taken here too, not only after the previous frame's
+                // observation, so a card that left and a new one arriving is resolved on the
+                // first eligible frame whatever changed the tracker's verdict in between.
+                if self.rearm_pending && !settled {
+                    self.attempted = false;
+                    self.last_resolution = None;
+                    self.rearm_pending = false;
+                }
                 self.burst.push_back(StoredView {
                     rectified: rectified.clone(),
                     rectified_180: rectified_180.clone(),
@@ -951,8 +977,11 @@ impl Session {
                 while self.burst.len() > EXACT_BURST {
                     self.burst.pop_front();
                 }
+                // No term for the tracker. `last_resolution` is only ever `Some` while `attempted`
+                // is set, so `!attempted` already says this card has no resolve: a vote commit
+                // that got there first cannot block it, and a card decided by a resolve is held
+                // off by `attempted` alone until a re-arm is taken.
                 if self.steady >= EXACT_STEADY_FRAMES
-                    && (!settled || self.last_resolution.is_none())
                     && !self.attempted
                     && self.burst.len() == EXACT_BURST
                 {
@@ -962,6 +991,9 @@ impl Session {
                     let (resolution, ocr, collector) =
                         run_resolve(r, &self.mask, &views, self.reader.as_ref(), gate);
                     self.attempted = true;
+                    // This stretch's resolve supersedes a re-arm armed by an earlier break;
+                    // left pending, a freeze lifting later in this unbroken stretch would take it.
+                    self.rearm_pending = false;
                     v.ocr = ocr;
                     v.collector = collector;
                     // Committed before this frame's observation, so the frame that resolved is
@@ -1489,7 +1521,7 @@ mod tests {
     }
 
     #[test]
-    fn a_broken_stretch_forgets_the_burst_the_attempt_and_the_resolution() {
+    fn a_broken_stretch_arms_a_rearm_that_waits_for_the_tracker() {
         let mut s = Session::new(None, None, 5);
         let blank = image::RgbImage::new(4, 4);
         s.count_stretch(true, true, false);
@@ -1510,8 +1542,14 @@ mod tests {
         s.count_stretch(false, false, false);
         assert_eq!(s.steady, 0);
         assert!(s.burst.is_empty());
-        assert!(!s.attempted);
-        assert!(s.last_resolution.is_none());
+        assert!(s.rearm_pending);
+        assert!(s.attempted && s.last_resolution.is_some(), "the break re-armed by itself");
+
+        // Taken only once nothing is committed.
+        s.record_decision(true);
+        assert!(s.attempted && s.rearm_pending, "a committed frame took the re-arm");
+        s.record_decision(false);
+        assert!(!s.attempted && s.last_resolution.is_none() && !s.rearm_pending);
     }
 
     #[test]
@@ -1802,20 +1840,44 @@ mod tests {
     }
 
     #[test]
-    fn a_broken_stretch_resolves_again_and_decides_again() {
-        // The card leaves the frame — the lock stops trusting its quad for a single frame — and
-        // a card is held steady again. That is a new card as far as Exact is concerned, even
-        // while the tracker is still frozen on the old one.
+    fn a_lock_blip_on_a_decided_card_does_not_decide_it_again() {
+        // **One degenerate quad drops the lock for two frames on a card that never moved**
+        // (`lock.rs`: a detection that fails to agree puts the lock back to acquiring). The
+        // tracker's freeze outlasts that, so the card is still the decided one: no second
+        // resolve, no second tray row, and no frame where the decision goes blank.
         let mut s = resolved_on_card_three();
-        lost_frame(&mut s);
-        assert!(s.tracker.last_committed(), "the premise: still frozen after one lost frame");
+        for _ in 0..2 {
+            let v = lost_frame(&mut s);
+            assert!(v.decision.is_some(), "a frozen frame inside the blip lost its decision");
+            assert_eq!(v.decision_seq, 1);
+        }
+        for f in 0..12 {
+            let v = locked_frame(&mut s, &card_image(3));
+            assert!(v.resolution.is_none(), "the blip re-resolved the held card on frame {f}");
+            assert_eq!(v.decision_seq, 1);
+            assert!(v.decision.is_some(), "a frozen frame after the blip lost its decision");
+        }
+    }
+
+    #[test]
+    fn a_card_taken_away_lets_the_next_one_resolve() {
+        // The lock breaks, ten empty frames release the freeze — the card has left by the
+        // tracker's own rule — and a card is held steady again: resolved and decided once.
+        let mut s = resolved_on_card_three();
+        for _ in 0..10 {
+            lost_frame(&mut s);
+        }
+        assert!(!s.tracker.last_committed(), "the premise: the freeze released");
         let mut v = locked_frame(&mut s, &card_image(3));
         for _ in 1..EXACT_STEADY_FRAMES {
             assert!(v.resolution.is_none());
             v = locked_frame(&mut s, &card_image(3));
         }
-        assert!(v.resolution.is_some(), "a new stretch did not resolve");
+        assert!(v.resolution.is_some(), "the next card did not resolve");
         assert_eq!(v.decision_seq, 2);
+        for _ in 0..10 {
+            assert_eq!(locked_frame(&mut s, &card_image(3)).decision_seq, 2);
+        }
     }
 
     #[test]
@@ -1858,6 +1920,9 @@ mod tests {
         assert!(v.resolution.is_some(), "the vote commit blocked the resolve");
         assert_eq!(v.decision_seq, 1);
         assert!(v.decision.is_some());
+        // The lost frames armed a re-arm; the resolve supersedes it, or a freeze lifting later
+        // in this unbroken stretch would take it and decide the card again.
+        assert!(!s.rearm_pending, "the resolve left an earlier break's re-arm pending");
         for _ in 0..10 {
             assert_eq!(locked_frame(&mut s, &card).decision_seq, 1);
         }
