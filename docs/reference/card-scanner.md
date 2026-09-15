@@ -1008,6 +1008,33 @@ cycle with the card never leaving the lens**.
     `cards.finishes`, while the tray's per-row finish offers all three. A foil row for a
     nonfoil-only printing commits silently as a foil collection row. `AddToCollection` narrows the
     choice to the target's finishes; the tray does not yet.
+16. **The collector parse offers a modern card's set size as its number.** A post-2015 line prints
+    `051/302`, and `ocr::collector_candidates` splits on the slash and keeps both as
+    three-digit number tokens, so the set-size denominator is offered as a collector number beside
+    the real one. Live on 2026-09-15 a read of Disruption Protocol NEO 51 resolved to `NEO 302`,
+    which is a Forest. The tier refused it — `conflict: NEO 302 is Forest, not among survivors`,
+    the guard that predates round 4 — so nothing wrong was decided, but the one tier that names a
+    printing named the wrong one and contributed nothing. Had a Forest been standing, round 4's
+    margin rule is what would have had to catch it: the pin is only as safe as the survivors are
+    unlike the misread. The fix is in the parse — a number followed by `/` is the number, the one
+    after it is not.
+17. **Filtering to a set the card is not in answers `ambiguous`, not `not_found`.** Live on
+    2026-09-15, an LEA-only filter over that NEO card left 295 printings, 13 inside the whole-card
+    gate, and a resolve of **six LEA cards at 0.246–0.266 normalized** — every one inside the 0.30
+    `max_normalized` gate, none of them the card. The masked title read correctly found no card.
+    A reader who set the wrong filter is asked to pick among six strangers rather than told
+    *No match — try better light, or clear the filters*. The gate was measured over photographs of
+    unfiltered searches (§5); under a narrow mask the nearest surviving neighbours are simply far
+    worse cards that still clear it.
+18. **An ambiguous tray row's provisional name is its first choice, even when the choices span
+    cards.** `tray.ts`'s `rowFromDecision` wears the best choice so the row has a picture and a name
+    while it waits — right when the choices are reprints of one card, misleading when they are six
+    different cards: the row above read *Tropical Island*. It still reads *Pick a printing* and
+    blocks the commit, so nothing wrong is filed.
+19. **Unconfirmed: the Filters popover's set picker may not offer every set.** On the live pass the
+    `SetCombobox` did not render *Kamigawa: Neon Dynasty* among its options — only BOK and PBOK
+    matched `/Kamigawa/` — so the LEA filter above was set over IPC. Not yet checked against the
+    Search page's use of the same component; until it is, a reader may be unable to pick some sets.
 
 Struck 2026-09-08: the two doc comments that quoted a title read at ~250 ms against a ~80 ms
 frame — `session::OCR_EVERY` and `ocr.rs`'s `COLLECTOR_FALLBACKS` — where §4 and §7 measured
@@ -1533,9 +1560,10 @@ tested in every build whether or not it embedded anything.
 trained on HierText and licensed CC-BY-SA 4.0. The app has no about or licence screen, so the
 credit is the repository README's *Third-party data and models*.
 
-The bundle behind every figure in this section was built locally on 2026-09-15 from the dev
-`corpus.db`: **113,494 printings, 5,447,744 B** (`32 + n × 48`), 1,590 s, no failed fetch (the
-ledger does not record the build profile). The first workflow run is the first from `--bulk`.
+The bundle behind every figure in this section — the evaluation and the live pass alike — was
+built on 2026-09-15 by a **release** `build-hashes` from the main checkout's dev `corpus.db`:
+**113,494 printings, 5,447,744 B** (`32 + n × 48`, 5.45 MB), 1,590 s, 0 failed. The first
+workflow run is the first from `--bulk`.
 
 ### Filters
 
@@ -1858,13 +1886,46 @@ scheduled run** — every figure above came through `--corpus`.
 
 ### Measured in the app
 
-**Owed.** The spec's §11 measurements that only the shipped window, a release build or a live
-workflow run can take; none has been taken yet.
+Taken 2026-09-15 on Windows under `npm run tauri dev` — a **debug** build with the manifest's
+dev-profile overrides (§9) — with the three assets **embedded**, against a copy of the main
+checkout's `data/`. `scanner_status` answered bundle and both models `embedded` and loaded, 117,738
+labels, and no asset sentence was drawn. No release build was made this pass, so every figure
+below is a debug figure and none is comparable to §7's release rows.
+
+**Driving it with no camera.** The webcam was replaced in the page rather than on the desk: a
+1280×960 `<canvas>` drawing a cached `display` render on a striped background, whose
+`captureStream()` was patched over `navigator.mediaDevices.getUserMedia`. Two things made that
+work, and each is a trap for the next pass:
+
+- **The patch hands out a fresh stream per call.** `useCamera` stops every track on unmount, so a
+  single shared stream is dead the second time the view mounts, and the page reports a camera
+  that will not start.
+- **The renders go in as data URIs, never `mtgimg.localhost` URLs.** A card image from the
+  protocol is cross-origin to the page, and drawing one taints the canvas, so `captureStream`
+  yields frames nothing can read. Swapping, removing and returning the card is swapping the data
+  URI the canvas draws.
+
+The two filters below were set by calling `scanner_set_filters` directly rather than through the
+popover (see §8 item 19).
+
+| What was done | What happened |
+| --- | --- |
+| Fast, Swords to Plowshares LEA 40 held | decided the **exact printing** and added it **once**; still one tray row after another 15 s held |
+| Exact, card removed, swapped for Disruption Protocol NEO 51, returned | **resolved and added once**. Tiers: filters 113,494 · whole card 47 printings of 37 cards · title a junk read, `no card` · collector `conflict: NEO 302 is Forest, not among survivors` (§8 item 16) · re-rank 1, margin 50 bits |
+| The same card, rotated | the title reader gave a junk read on one clean render and a clean read on the next |
+| Filter `sets: ["zzz"]` | refused, *No printing matches these filters.* |
+| Filter `sets: ["lea"]` over the NEO card | filters 295 · whole card 13 · title `disruption protocol`, no card (masked out, correctly) · **`ambiguous`, six LEA cards** at 0.246–0.266 (§8 item 17). The row read *Pick a printing* over six whole cards, named itself *Tropical Island* (§8 item 18), the header said *1 card to pick*, and Add was disabled |
+| Picked Mox Sapphire, removed a row, pressed *Add 2 to collection* | two collection rows in the **root**, nonfoil ×1; the tray **empty on screen and in `app_meta`**; no alert. No sync group, so nothing left the copy |
+| 900×800 window | the bar wraps, the popover draws over the content, the tray column is fine |
+| 420 px emulation | overflows — at the **shell**, whose nav rail stays 208 px; not in the scanner |
+
+The spec's §11 measurements:
 
 | What | Build | Reading |
 | --- | --- | --- |
-| The exe's size with the assets embedded, against without | release | — |
-| The first `scanner_status` with the embedded bundle, against §9's 798 ms | release / debug | — |
-| An Exact resolve's wall time, with and without the readers finding text | release | — |
-| The bundle workflow's first cold run, and a warm one | CI, `ubuntu-latest` | — |
-| Whether the updater's release lookup can ever return the `scanner-bundle-v3` prerelease | release | — |
+| The exe's size with the assets embedded, against without | release | **Not measured this pass** — no release build was made. The three embedded assets sum to **17,674,596 B**, which bounds the delta |
+| The first `scanner_status` with the embedded bundle, against §9's 798 ms | release / debug | **Not measured this pass** — the call was made and answered, but not timed |
+| An Exact resolve's wall time | debug (dev-profile overrides), 2026-09-15 | **1,316 ms** — NEO 51 unfiltered: a junk title read and a collector read that parsed; **953 ms** — the same card under the LEA filter: a clean title read the mask ruled out. Not measured in release |
+| Frame rate on the fake 1280×960 stream | debug (dev-profile overrides), 2026-09-15 | **2.6–2.8 frames/s** |
+| The bundle workflow's first cold run, and a warm one | CI, `ubuntu-latest` | **Not possible before merge** — `workflow_dispatch` appears only once the file is on `main` |
+| Whether the updater's release lookup can ever return the `scanner-bundle-v3` prerelease | — | **No, by reading the code** — `update::parse_release_page` drops every `prerelease` before anything compares versions. Not verified live |
