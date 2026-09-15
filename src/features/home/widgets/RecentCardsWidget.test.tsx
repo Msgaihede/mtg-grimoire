@@ -161,7 +161,8 @@ describe("RecentCardsWidget", () => {
     draw();
     const height = artHeight(fitFor(4, 2), false);
     const item = screen.getByRole("listitem");
-    expect(item).toHaveStyle({ width: `${Math.round((height * 5) / 7)}px` });
+    // Floored, so the 5:7 frame is never taller than the height it was sized from.
+    expect(item).toHaveStyle({ width: `${Math.floor((height * 5) / 7)}px` });
   });
 
   // A catalogue preview opens nothing and scrolls nothing.

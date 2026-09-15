@@ -106,7 +106,8 @@ export function RecentCardsWidget({ widget, fit, still }: WidgetBodyProps): Reac
   if (cards.length === 0) return <WidgetMessage>{EMPTY}</WidgetMessage>;
 
   const height = artHeight(fit, still);
-  const width = Math.round((height * 5) / 7);
+  // Floored, so the 5:7 frame built from this width is never taller than the height budgeted.
+  const width = Math.floor((height * 5) / 7);
 
   return (
     <ul
@@ -169,7 +170,11 @@ function Tile({
       </span>
       <span
         className="mt-1 block h-4 truncate text-left text-[0.6875rem] leading-4 text-dim"
-        style={{ visibility: named ? "visible" : "hidden" }}
+        // **The tile's own width, spelled out.** Stretched by the button's flex column it measured
+        // 148px under a 106px tile in the shipped window (2026-09-15), because a nowrap line's
+        // min-content is its whole text — so `truncate` clipped nothing and every name ran into the
+        // next tile's.
+        style={{ width, visibility: named ? "visible" : "hidden" }}
       >
         {card.name}
       </span>

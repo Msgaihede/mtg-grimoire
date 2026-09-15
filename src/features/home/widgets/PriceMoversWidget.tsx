@@ -151,7 +151,9 @@ export function PriceMoversWidget({ widget, fit }: WidgetBodyProps): ReactElemen
   const footer = fit.tier >= 2 && fit.h >= 2;
   const shown = query.data.movers.slice(
     0,
-    fit.rowsFit(bare ? BARE_ROW_PX : ROW_PX, footer ? FOOTER_PX : 0),
+    // A tile is bare and still carries a caption — its move goes under the name — so it is counted
+    // at the captioned height, the rule `SetCompletionWidget.rowPx` writes down.
+    fit.rowsFit(bare && fit.tier !== 0 ? BARE_ROW_PX : ROW_PX, footer ? FOOTER_PX : 0),
   );
 
   return (

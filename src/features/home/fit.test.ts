@@ -148,36 +148,36 @@ describe("makeFit", () => {
       compact: false,
       widthPx: 336,
       heightPx: 336,
-      bodyWidthPx: 316,
-      bodyHeightPx: 286,
+      bodyWidthPx: 314,
+      bodyHeightPx: 284,
       rowGap: 6,
       listColumns: 1,
     });
   });
 
-  // Eleven 20px rows and ten 6px gaps are 280px, inside 286; a twelfth needs 306.
+  // Eleven 20px rows and ten 6px gaps are 280px, inside 284 (336 less two border pixels, the 40px title row and 10px of padding); a twelfth needs 306.
   it("counts whole rows, gaps between them and not after the last", () => {
     expect(panel("comfortable").fitCount(20)).toBe(11);
   });
 
   it("packs a compact card tighter: less padding and a 4px gap", () => {
     const fit = panel("compact");
-    expect(fit).toMatchObject({ compact: true, bodyHeightPx: 288, bodyWidthPx: 320, rowGap: 4 });
-    // Twelve rows and eleven gaps are 284px, inside 288; thirteen need 308.
+    expect(fit).toMatchObject({ compact: true, bodyHeightPx: 286, bodyWidthPx: 318, rowGap: 4 });
+    // Twelve rows and eleven gaps are 284px, inside 286; thirteen need 308.
     expect(fit.fitCount(20)).toBe(12);
   });
 
   // A body exactly three rows tall — 20 + 6 + 20 + 6 + 20 = 72 — has to take three. Divided without
   // the trailing gap's allowance it would take two, and one pixel less has to take two.
   it("takes a row that fits to the pixel, and not one a pixel short", () => {
-    const exact = makeFit({ w: 2, h: 2, widthPx: 220, heightPx: 122, density: "comfortable" });
+    const exact = makeFit({ w: 2, h: 2, widthPx: 220, heightPx: 124, density: "comfortable" });
     expect(exact.bodyHeightPx).toBe(72);
     expect(exact.fitCount(20)).toBe(3);
-    const short = makeFit({ w: 2, h: 2, widthPx: 220, heightPx: 121, density: "comfortable" });
+    const short = makeFit({ w: 2, h: 2, widthPx: 220, heightPx: 123, density: "comfortable" });
     expect(short.fitCount(20)).toBe(2);
   });
 
-  // Ten rows and nine gaps are 254px, inside the 256 left after 30px of figures.
+  // Ten rows and nine gaps are 254px, exactly the 254 left after 30px of figures.
   it("takes the reserved pixels off the body first", () => {
     expect(panel("comfortable").fitCount(20, 30)).toBe(10);
     expect(panel("comfortable").linesFit(20, 30)).toBe(10);
@@ -185,7 +185,7 @@ describe("makeFit", () => {
 
   it("uses the one-cell-tall title row and padding", () => {
     const strip = makeFit({ w: 4, h: 1, widthPx: 452, heightPx: 104, density: "comfortable" });
-    expect(strip).toMatchObject({ bodyHeightPx: 64, bodyWidthPx: 436, tier: 2 });
+    expect(strip).toMatchObject({ bodyHeightPx: 62, bodyWidthPx: 434, tier: 2 });
   });
 
   // Zero is a real answer: a card with room for no row draws none rather than one it clips. A list

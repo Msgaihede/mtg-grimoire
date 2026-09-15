@@ -43,9 +43,18 @@ import { pickOf, toggleOn } from "../widgetSettings";
 /** The three orders the registry's `sort` pick offers. */
 export type SetOrder = "complete" | "cards" | "name";
 
-/** A row's height with its caption, and without — the design's two, and what `rowsFit` cuts by. */
-const ROW_PX = 57;
-const BARE_ROW_PX = 42;
+/**
+ * A row's height, by what it carries — the design's four figures (36 bare, 42 with a track, 51 with
+ * a caption, 57 with both) as a sum, and what `rowsFit` cuts by.
+ *
+ * **Asked of the row actually drawn, not of the card's density.** The design keyed it on `bare`
+ * alone, and a two-cell tile is bare *and* moves its figure under the name as a caption — so it was
+ * counted at 42 and drawn at 57, and the shipped window showed a third row cut through its middle
+ * (2026-09-15, catalogue preview).
+ */
+function rowPx(caption: boolean, track: boolean): number {
+  return 36 + (caption ? 15 : 0) + (track ? 6 : 0);
+}
 
 const PENDING = "Counting your sets…";
 export const EMPTY = "No sets yet — the sets your cards come from will appear here.";
@@ -118,7 +127,9 @@ export function SetCompletionWidget({ widget, fit }: WidgetBodyProps): ReactElem
 
   // No caption on a compact card or a two-cell tile: the row keeps its name and its figure.
   const bare = fit.compact || fit.tier === 0;
-  const shown = sortSets(query.data, order).slice(0, fit.rowsFit(bare ? BARE_ROW_PX : ROW_PX));
+  // A tile's figure is its caption; a wider bare row has none.
+  const captioned = fit.tier === 0 || !bare;
+  const shown = sortSets(query.data, order).slice(0, fit.rowsFit(rowPx(captioned, bars)));
 
   return (
     <WidgetRowList fit={fit} label="Sets">

@@ -104,6 +104,9 @@ export interface WidgetFit {
   rowsFit: (rowH: number, reserved?: number) => number;
 }
 
+/** `WidgetCard`'s border, on each edge. */
+export const CARD_BORDER_PX = 1;
+
 /** The title row's height: 32px on a one-cell-tall card, 40px otherwise. */
 export function titleRowPx(h: number): number {
   return h === 1 ? 32 : 40;
@@ -137,8 +140,12 @@ export function makeFit({
   const compact = density === "compact";
   const pad = bodyPadPx(h, compact);
   const rowGap = compact ? 4 : 6;
-  const bodyHeightPx = Math.max(0, heightPx - titleRowPx(h) - pad);
-  const bodyWidthPx = Math.max(0, widthPx - 2 * pad);
+  // The card's own 1px border comes off both axes before anything else does. Left out, the recent
+  // cards strip measured 178.4px of content in a 177px body in the shipped window (2026-09-15) and
+  // grew a vertical scrollbar over a card that fitted on paper.
+  const inner = 2 * CARD_BORDER_PX;
+  const bodyHeightPx = Math.max(0, heightPx - inner - titleRowPx(h) - pad);
+  const bodyWidthPx = Math.max(0, widthPx - inner - 2 * pad);
   const listColumns = Math.max(1, Math.round(widthPx / 240));
   const fitCount = (rowH: number, reserved = 0) =>
     Math.max(0, Math.floor((bodyHeightPx - reserved + rowGap) / (rowH + rowGap)));

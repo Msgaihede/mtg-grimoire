@@ -27,7 +27,7 @@ import type { HomeLayout, HomeWidget } from "@/lib/ipc";
 import { FOCUS } from "@/lib/focus";
 import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
-import { GAP, makeFit, spanPx, type WidgetFit } from "./fit";
+import { makeFit, type WidgetFit } from "./fit";
 import { WidgetCard } from "./WidgetCard";
 import type { WidgetBodyProps } from "./widgetProps";
 import { WIDGETS, type WidgetKind, type WidgetMeta } from "./widgets";
@@ -82,24 +82,23 @@ export function previewBoxWidth(listWidth: number): number {
 }
 
 /**
- * A kind's preview fit: its `def` footprint, at the largest square cell that fits the whole of it
- * inside the preview box.
+ * A kind's preview fit: its `def` footprint for **which** content it carries (the tier), and the
+ * whole preview box for **how much** of it fits.
  *
- * **One cell for both axes**, because a cell is square everywhere on this page — a footprint
- * stretched to fill the box would be a widget no grid can draw. So a wide kind is bounded by the
- * box's width and a tall one by its height, and the card is centred in what is left.
+ * **The card fills the box, as the design's catalogue does, rather than keeping its footprint's
+ * proportions.** Proportions were tried first and measured in the shipped window (2026-09-15,
+ * 1920×1080): a 2×3 kind held to square cells inside a 212px-tall box came out 137px wide, so a
+ * value chart's labels truncated to `R…` and `Oth…` — a preview reading as a broken card, which is
+ * the one thing a catalogue must not show. The tier still comes from the footprint, so a two-cell
+ * kind previews with a tile's content rather than a band's.
  */
 export function previewFit(meta: Pick<WidgetMeta, "def">, boxWidth: number): WidgetFit {
   const [w, h] = meta.def;
-  const cell = Math.max(
-    0,
-    Math.min((boxWidth - GAP * (w - 1)) / w, (PREVIEW_HEIGHT - GAP * (h - 1)) / h),
-  );
   return makeFit({
     w,
     h,
-    widthPx: spanPx(w, cell),
-    heightPx: spanPx(h, cell),
+    widthPx: Math.max(0, boxWidth),
+    heightPx: PREVIEW_HEIGHT,
     density: "comfortable",
   });
 }
@@ -177,10 +176,12 @@ function CatalogueEntry({
       <div
         aria-hidden="true"
         inert
-        className="pointer-events-none flex items-start justify-center overflow-hidden"
+        className="pointer-events-none flex overflow-hidden"
         style={{ height: PREVIEW_HEIGHT }}
       >
-        <div className="flex" style={{ width: fit.widthPx, height: fit.heightPx }}>
+        {/* `grid`, not `flex`: a grid item stretches on both axes, where a flex row sizes the card to
+            its content and a preview came out 166px wide in a 356px box. */}
+        <div className="grid" style={{ width: fit.widthPx, height: fit.heightPx }}>
           <WidgetCard widget={preview} fit={fit} editing={false} still onConfig={ignore} onRemove={ignore}>
             {renderBody({ widget: preview, fit, editing: false, still: true, onConfig: ignore })}
           </WidgetCard>
