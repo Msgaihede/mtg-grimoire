@@ -463,15 +463,18 @@ pub struct Session {
     decision_seq: u64,
     /// Whether the previous observed frame was committed, so a new decision is seen once.
     was_committed: bool,
-    /// Consecutive locked frames with no decision — Fast's rescue counter.
+    /// Locked frames with a detection and no decision — Fast's rescue counter. Reset by a commit,
+    /// and by the stretch breaking on the same definition Exact uses: the lock stops being
+    /// trusted. A trusted frame whose detector missed neither counts nor resets it.
     leaderless_locked: u32,
-    /// Consecutive trusted frames with a detection.
+    /// Trusted frames with a detection in this stretch. See [`Session::count_stretch`].
     steady: u32,
-    /// An Exact resolve already ran in this stretch, for this card.
+    /// An Exact resolve already ran in this stretch. Re-armed only by the stretch breaking.
     attempted: bool,
     /// The last [`EXACT_BURST`] locked frames, in Exact.
     burst: VecDeque<StoredView>,
-    /// The resolve the current Exact decision was made on.
+    /// The resolve this stretch's Exact decision was made on. Cleared only by the stretch
+    /// breaking, or a reset.
     last_resolution: Option<ResolutionView>,
 }
 
@@ -564,39 +567,38 @@ impl Session {
         fast_reader_due(self.mode, self.leaderless_locked, &mut self.seq, committed)
     }
 
-    /// Count one frame into the steady stretch. `locked` is a trusted frame with a detection;
-    /// `settled` whether the tracker was committed going into it.
+    /// Count one frame into the stretch. `trusted` is the lock's verdict, `detected` whether
+    /// this frame found a card, `settled` whether the tracker was committed going into it.
     ///
-    /// Anything else breaks the stretch, and a broken stretch forgets its burst and its
-    /// attempt: the card that comes back may not be the card that left.
-    fn count_stretch(&mut self, locked: bool, settled: bool) {
-        if locked {
+    /// **A stretch is the run of frames the lock stays trusted, and in Exact one stretch is one
+    /// card.** Only a lock that stops being trusted breaks it — the card has left the frame —
+    /// and a broken stretch forgets its burst, its attempt and its resolution, which is the only
+    /// thing that lets Exact resolve again. A trusted frame whose detector missed changes
+    /// nothing: it neither counts toward the stretch nor ends it.
+    fn count_stretch(&mut self, trusted: bool, detected: bool, settled: bool) {
+        if !trusted {
+            self.steady = 0;
+            self.leaderless_locked = 0;
+            self.attempted = false;
+            self.last_resolution = None;
+            self.burst.clear();
+        } else if detected {
             self.steady += 1;
             if !settled {
                 self.leaderless_locked += 1;
             }
-        } else {
-            self.steady = 0;
-            self.leaderless_locked = 0;
-            self.attempted = false;
-            self.burst.clear();
         }
     }
 
     /// The bookkeeping after the tracker has observed a frame.
     ///
-    /// A commit the previous frame did not have is a new decision — in Exact only when a
-    /// resolve made it: the tracker can still reach its own bar on appearance after a
-    /// `NotFound`, and that has no printings to offer. A commit ending lets the next resolve
-    /// run.
+    /// In Fast, a commit the previous frame did not have is a new decision. Exact counts its
+    /// decisions where they are made, at the resolve, so a freeze lifting and re-forming inside
+    /// one stretch — a hash that prefers another card than the one the reads resolved — can
+    /// never decide the held card twice. Either way a commit ends the leaderless run.
     fn record_decision(&mut self, committed: bool) {
-        let decided = self.mode == ScanMode::Fast || self.last_resolution.is_some();
-        if committed && !self.was_committed && decided {
+        if self.mode == ScanMode::Fast && committed && !self.was_committed {
             self.decision_seq += 1;
-        }
-        if !committed && self.was_committed {
-            self.attempted = false;
-            self.last_resolution = None;
         }
         if committed {
             self.leaderless_locked = 0;
@@ -758,7 +760,7 @@ impl Session {
         let trusted = lock_state.is_trusted();
         let held_quad = lock_state.quad;
         v.lock = Some(lock_state);
-        self.count_stretch(trusted && best.is_some(), settled);
+        self.count_stretch(trusted, best.is_some(), settled);
         // Whatever the tracker made of this frame, for the decision bookkeeping at the end.
         let mut tracked: Option<Tracked> = None;
 
@@ -936,9 +938,9 @@ impl Session {
                 let _ = eligible;
             }
             // No per-frame reader. The last few locked frames are kept, and once the lock has
-            // held long enough a resolve reads over all of them — once per card, since a success
-            // freezes the tracker and an attempt holds until the stretch breaks or the decision
-            // ends.
+            // held long enough a resolve reads over all of them — once per stretch, whatever
+            // the tracker does meanwhile. A vote commit that got there first does not block it
+            // (`commit_to` replaces that tally); a freeze lifting does not re-arm it.
             ScanMode::Exact => {
                 self.burst.push_back(StoredView {
                     rectified: rectified.clone(),
@@ -950,7 +952,7 @@ impl Session {
                     self.burst.pop_front();
                 }
                 if self.steady >= EXACT_STEADY_FRAMES
-                    && !settled
+                    && (!settled || self.last_resolution.is_none())
                     && !self.attempted
                     && self.burst.len() == EXACT_BURST
                 {
@@ -971,6 +973,7 @@ impl Session {
                         {
                             self.tracker.commit_to(r.oracle_for(&best), best);
                         }
+                        self.decision_seq += 1;
                         self.last_resolution = Some(resolution.clone());
                     }
                     v.resolution = Some(resolution);
@@ -1323,7 +1326,7 @@ mod tests {
         let mut s = Session::new(None, None, 5);
         assert_eq!(s.mode, ScanMode::Fast);
         for _ in 0..FAST_RESCUE_AFTER {
-            s.count_stretch(true, false);
+            s.count_stretch(true, true, false);
         }
         let due: Vec<bool> = (0..8).map(|_| s.reader_due(false)).collect();
         assert_eq!(due, [true, false, false, false, true, false, false, false]);
@@ -1452,39 +1455,44 @@ mod tests {
     fn fast_mode_runs_no_reader_before_the_eighth_leaderless_locked_frame() {
         let mut s = Session::new(None, None, 5);
         for f in 1..FAST_RESCUE_AFTER {
-            s.count_stretch(true, false);
+            s.count_stretch(true, true, false);
             assert!(!s.reader_due(false), "the reader ran on leaderless locked frame {f}");
         }
-        s.count_stretch(true, false);
+        s.count_stretch(true, true, false);
         assert!(s.reader_due(false), "the rescue never became eligible");
 
-        // A broken stretch starts the count again.
-        s.count_stretch(false, false);
-        s.count_stretch(true, false);
-        assert!(!s.reader_due(false), "a lost lock kept its leaderless count");
+        // The count itself is asserted, not the cadence: with the cadence mid-cycle `reader_due`
+        // answers false whatever the count says, and a check through it passed over a missing
+        // reset.
+        //
+        // A broken stretch — the lock no longer trusted — starts the count again.
+        s.count_stretch(false, false, false);
+        assert_eq!(s.leaderless_locked, 0, "a lost lock kept its leaderless count");
 
-        // So does a commit.
+        // So does a commit, and a committed frame does not count.
         for _ in 0..FAST_RESCUE_AFTER {
-            s.count_stretch(true, false);
+            s.count_stretch(true, true, false);
         }
+        assert_eq!(s.leaderless_locked, FAST_RESCUE_AFTER);
         s.record_decision(true);
-        s.count_stretch(true, true);
-        assert!(!s.reader_due(false), "a commit kept its leaderless count");
+        assert_eq!(s.leaderless_locked, 0, "a commit kept its leaderless count");
+        s.count_stretch(true, true, true);
+        assert_eq!(s.leaderless_locked, 0, "a committed frame counted as leaderless");
 
         // And Exact runs no per-frame reader however long it has gone without a leader.
         let mut s = Session::new(None, None, 5);
         s.mode = ScanMode::Exact;
         for _ in 0..(FAST_RESCUE_AFTER * 3) {
-            s.count_stretch(true, false);
+            s.count_stretch(true, true, false);
             assert!(!s.reader_due(false));
         }
     }
 
     #[test]
-    fn a_broken_stretch_forgets_the_burst_and_the_attempt() {
+    fn a_broken_stretch_forgets_the_burst_the_attempt_and_the_resolution() {
         let mut s = Session::new(None, None, 5);
         let blank = image::RgbImage::new(4, 4);
-        s.count_stretch(true, false);
+        s.count_stretch(true, true, false);
         s.burst.push_back(StoredView {
             rectified: blank.clone(),
             rectified_180: blank,
@@ -1492,11 +1500,48 @@ mod tests {
             cardness: 0.5,
         });
         s.attempted = true;
+        s.last_resolution = Some(ResolutionView {
+            outcome: Outcome::Resolved,
+            choices: Vec::new(),
+            tiers: Vec::new(),
+            elapsed_ms: 0.0,
+        });
         assert_eq!(s.steady, 1);
-        s.count_stretch(false, false);
+        s.count_stretch(false, false, false);
         assert_eq!(s.steady, 0);
         assert!(s.burst.is_empty());
         assert!(!s.attempted);
+        assert!(s.last_resolution.is_none());
+    }
+
+    #[test]
+    fn a_trusted_frame_without_a_detection_does_not_break_the_stretch() {
+        // A detector that misses one frame under a lock that still holds is the same card in
+        // the same place. Breaking the stretch on it would re-arm Exact's resolve mid-card.
+        let mut s = Session::new(None, None, 5);
+        for _ in 0..3 {
+            s.count_stretch(true, true, false);
+        }
+        s.attempted = true;
+        s.burst.push_back(StoredView {
+            rectified: image::RgbImage::new(4, 4),
+            rectified_180: image::RgbImage::new(4, 4),
+            alternates: Vec::new(),
+            cardness: 0.5,
+        });
+        s.count_stretch(true, false, false);
+        assert_eq!((s.steady, s.leaderless_locked), (3, 3), "a missed detection counted or reset");
+        assert!(s.attempted && s.burst.len() == 1, "a missed detection broke the stretch");
+
+        // And through the frame path: two locked frames, a trusted miss, one more — the resolve
+        // runs on that fourth frame, the third to hold a card.
+        let mut s = Session::new(Some(labelled()), None, 5);
+        s.mode = ScanMode::Exact;
+        let card = card_image(3);
+        locked_frame(&mut s, &card);
+        locked_frame(&mut s, &card);
+        assert!(held_frame(&mut s).resolution.is_none());
+        assert!(locked_frame(&mut s, &card).resolution.is_some(), "the miss broke the stretch");
     }
 
     #[test]
@@ -1667,7 +1712,7 @@ mod tests {
     /// no generated image can get through.
     fn locked_frame(s: &mut Session, card: &RgbImage) -> Verdict {
         let settled = s.tracker.last_committed();
-        s.count_stretch(true, settled);
+        s.count_stretch(true, true, settled);
         let mut v =
             Verdict::failed(String::new(), FrameSize { w: 0, h: 0 }, 0.0, true, s.mode, s.decision_seq);
         let t = s.match_locked(&mut v, card, card, &[], 0.5, settled);
@@ -1675,15 +1720,35 @@ mod tests {
         v
     }
 
-    /// A frame with no card in it, the same way.
-    fn empty_frame(s: &mut Session) -> Verdict {
+    /// A frame with no card detected, the same way: under a lock that no longer trusts its quad
+    /// when `trusted` is false — the card has left — or under one still holding when it is true.
+    fn cardless_frame(s: &mut Session, trusted: bool) -> Verdict {
         let settled = s.tracker.last_committed();
-        s.count_stretch(false, settled);
+        s.count_stretch(trusted, false, settled);
         let mut v =
             Verdict::failed(String::new(), FrameSize { w: 0, h: 0 }, 0.0, true, s.mode, s.decision_seq);
         let t = s.tracker.observe(&[]);
         s.conclude(&mut v, Some(&t));
         v
+    }
+
+    fn lost_frame(s: &mut Session) -> Verdict {
+        cardless_frame(s, false)
+    }
+
+    fn held_frame(s: &mut Session) -> Verdict {
+        cardless_frame(s, true)
+    }
+
+    /// An Exact session that has just resolved `card_image(3)` — decision 1.
+    fn resolved_on_card_three() -> Session {
+        let mut s = Session::new(Some(labelled()), None, 5);
+        s.mode = ScanMode::Exact;
+        for _ in 0..EXACT_STEADY_FRAMES {
+            locked_frame(&mut s, &card_image(3));
+        }
+        assert_eq!(s.decision_seq, 1, "the premise: card three resolved");
+        s
     }
 
     #[test]
@@ -1716,19 +1781,86 @@ mod tests {
             assert_eq!(v.decision_seq, 1);
             assert!(v.decision.is_some(), "a committed frame lost its decision");
         }
+    }
 
-        // The card leaves for good — the tracker's own rule says when — and comes back.
-        for _ in 0..10 {
-            empty_frame(&mut s);
+    #[test]
+    fn a_freeze_lifting_inside_one_stretch_does_not_decide_the_card_again() {
+        // **The case Exact exists for.** The reads resolved card three, and the hash prefers
+        // another card on every frame — so under the freeze each frame is a miss, and ten of
+        // them lift it while the lock never lets go. One stretch is one card: no second resolve
+        // and no second decision, however often the tracker lifts and re-forms.
+        let mut s = resolved_on_card_three();
+        let other = card_image(1);
+        let mut lifted = false;
+        for f in 0..40 {
+            let v = locked_frame(&mut s, &other);
+            lifted |= !v.tracked.as_ref().is_some_and(|t| t.committed);
+            assert!(v.resolution.is_none(), "re-resolved inside the stretch on frame {f}");
+            assert_eq!(v.decision_seq, 1, "decided again inside the stretch on frame {f}");
         }
-        assert!(!s.tracker.last_committed());
-        assert_eq!(s.decision_seq, 1);
+        assert!(lifted, "the premise: the freeze lifted at some point");
+    }
+
+    #[test]
+    fn a_broken_stretch_resolves_again_and_decides_again() {
+        // The card leaves the frame — the lock stops trusting its quad for a single frame — and
+        // a card is held steady again. That is a new card as far as Exact is concerned, even
+        // while the tracker is still frozen on the old one.
+        let mut s = resolved_on_card_three();
+        lost_frame(&mut s);
+        assert!(s.tracker.last_committed(), "the premise: still frozen after one lost frame");
+        let mut v = locked_frame(&mut s, &card_image(3));
+        for _ in 1..EXACT_STEADY_FRAMES {
+            assert!(v.resolution.is_none());
+            v = locked_frame(&mut s, &card_image(3));
+        }
+        assert!(v.resolution.is_some(), "a new stretch did not resolve");
+        assert_eq!(v.decision_seq, 2);
+    }
+
+    #[test]
+    fn a_vote_commit_before_any_resolve_still_resolves_and_decides_once() {
+        // A flaky lock: two trusted frames, one lost, over and over. The stretch never reaches
+        // three, but the tracker's votes survive the breaks and commit on their own — which must
+        // not leave the card undecided until it leaves.
+        //
+        // One card alone in the bundle: in `labelled()` the generated gradients sit a couple of
+        // bits apart, so the other card's two printings pool a lead of only 1.19 and the votes
+        // never commit — the premise would fail rather than the behaviour.
+        use crate::hash::{hash_rgb, HashKind};
+        use crate::index::{BundleBuilder, Section};
+        let card = card_image(3);
+        let mut b = BundleBuilder::new(HashKind::DHash, 256);
+        b.push(Section::Card, id(3), &hash_rgb(&card, HashKind::DHash, 256));
+        let mut r = Reference::new(b.finish(0));
+        let label = Label {
+            name: "Card 20".into(),
+            set: "hob".into(),
+            number: "3".into(),
+            lang: "en".into(),
+            released: "2025-01-01".into(),
+        };
+        r.add_label(id(3), Some(id(20)), None, label);
+        let mut s = Session::new(Some(r), None, 5);
+        s.mode = ScanMode::Exact;
+        for _ in 0..4 {
+            locked_frame(&mut s, &card);
+            locked_frame(&mut s, &card);
+            assert!(lost_frame(&mut s).resolution.is_none());
+        }
+        assert!(s.tracker.last_committed(), "the premise: eight votes committed on their own");
+        assert_eq!(s.decision_seq, 0, "a vote commit counted as an Exact decision");
+
         let mut v = locked_frame(&mut s, &card);
         for _ in 1..EXACT_STEADY_FRAMES {
             v = locked_frame(&mut s, &card);
         }
-        assert!(v.resolution.is_some(), "the card came back and was not resolved");
-        assert_eq!(v.decision_seq, 2);
+        assert!(v.resolution.is_some(), "the vote commit blocked the resolve");
+        assert_eq!(v.decision_seq, 1);
+        assert!(v.decision.is_some());
+        for _ in 0..10 {
+            assert_eq!(locked_frame(&mut s, &card).decision_seq, 1);
+        }
     }
 
     #[test]
@@ -1756,7 +1888,7 @@ mod tests {
         for _ in 0..12 {
             assert!(locked_frame(&mut s, &card).resolution.is_none(), "retried inside the stretch");
         }
-        empty_frame(&mut s);
+        lost_frame(&mut s);
         let mut v = locked_frame(&mut s, &card);
         for _ in 1..EXACT_STEADY_FRAMES {
             v = locked_frame(&mut s, &card);
