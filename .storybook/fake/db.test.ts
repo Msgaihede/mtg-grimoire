@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import { invoke, registerCommands, resetCommands } from "./core";
 import {
   ART_TAGGED_PRINTINGS,
+  CLOCK_BASE,
   COMBO_CARD_NAMES,
   ORACLE_TAGGED_NAMES,
   SUPPORTING_SINCE,
@@ -40,6 +41,7 @@ import type {
   FakeDeckCard,
   FakeDeckCategory,
   FakeEntry,
+  FakePriceSnapshot,
   FakeWish,
 } from "./db";
 import { DECK_CATEGORIES } from "./fixtures";
@@ -74,6 +76,9 @@ import { PRINTING_GROUP_BY_OPTIONS } from "@/features/card/printings";
 // The app's own reader, borrowed for one fence: a seeded payload whose keys were misspelled
 // degrades to a sentence rather than an error, so nothing but this would notice.
 import { activityLine } from "@/features/home/activityText";
+// The app's half of the default layout, which the fake spells out rather than imports — so the
+// only thing holding the two together is a test that compares them.
+import { DEFAULT_LAYOUT } from "@/features/home/widgets";
 import type { MarketplaceId } from "@/lib/marketplace";
 import { parseSnapshotValue, SNAPSHOT_VERSION } from "@/lib/shareSnapshot";
 import type { SortSpec } from "@/lib/sort";
@@ -9667,8 +9672,9 @@ describe("the busy fault", () => {
       ownerName: "Ada",
       fields: { condition: false, lang: false, value: false },
       // `set_home_layout`'s own argument, and **valid for `root`'s reason**: that handler has
-      // four refusals of its own — a version it does not write, a blank id, a blank kind, a span
-      // outside the two, and a document over 64 KiB — so a document that tripped any of them
+      // refusals of its own — a version it does not write (version 2 since the cell grid), a
+      // blank id, a blank kind, a footprint or a corner out of bounds, a span outside the two, and
+      // a document over 64 KiB — so a document that tripped any of them
       // would fail this loop by answering that sentence instead of BUSY, which is exactly the
       // ordering mistake this sweep looks for. An **empty** widget list is a layout rather than a
       // degenerate one (it is the state a reader who removed every tile is in), so this is a
@@ -9679,7 +9685,7 @@ describe("the busy fault", () => {
       // `items`. Harmless for their reason: both reach `refuseIfBusy` before they look at an
       // argument, and `"grid"` is non-blank, so the one refusal `set_start_view` has cannot stand
       // in for a refusal about a sync either.
-      layout: { version: 1, widgets: [] },
+      layout: { version: 2, widgets: [] },
     };
     // The five above excluded, this is every command that really takes the write lock —
     // re-counted 2026-08-12 **after a merge in which three branches had each added one**,
@@ -10070,7 +10076,14 @@ describe("the busy fault", () => {
     //
     // **This delta is arithmetic against one tree** — re-run the sweep after the next merge
     // rather than adding to it. 112 was taken by running it and reading `left`.
-    expect(names).toHaveLength(112);
+    //
+    // The home grid then added **one**, 112 → 113, and the feature ships **four** commands:
+    // `record_recent_card` is the only write — the card modal's recorder, on `app_meta` through
+    // `sync::with_write`, so it answers BUSY under a sync for every reason `set_home_layout` does.
+    // `recent_cards`, `set_completion` and `price_movers` are reads and are not in this table.
+    // Its one refusal of its own is a blank id, and `cardId` on the record above is a real
+    // printing, so a handler that looked at the id before the lock could not stand in for BUSY.
+    expect(names).toHaveLength(113);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -15026,27 +15039,27 @@ describe("the home layout", () => {
   /** A layout naming one widget, so a test can say what it is about in one line. */
   function one(over: Partial<HomeWidget> = {}): HomeLayout {
     return {
-      version: 1,
-      widgets: [{ id: "w1", kind: "summary", span: 1, config: null, ...over }],
+      version: 2,
+      widgets: [
+        { id: "w1", kind: "summary", x: 0, y: 0, w: 4, h: 2, span: 1, config: null, ...over },
+      ],
     };
   }
 
-  /** The state every fresh install is in, so it is the one the fallback has to be right about. */
-  it("answers the crate's own six for a row nobody has written", () => {
-    expect(readHandlers(makeDb()).home_layout().widgets.map((w) => w.kind)).toEqual([
-      "summary",
-      "decks",
-      "activity",
-      "collectionValue",
-      "wishlistValue",
-      "folders",
-    ]);
+  /**
+   * The state every fresh install is in, so it is the one the fallback has to be right about —
+   * **pinned against `widgets.ts`'s literal cell for cell**, because the fake spells its copy out
+   * rather than importing it (`DEFAULT_HOME_WIDGETS`' note) and the three copies of this one fact
+   * can only be held together by tests that compare them.
+   */
+  it("answers the crate's own eight for a row nobody has written, cell for cell", () => {
+    expect(readHandlers(makeDb()).home_layout()).toEqual(DEFAULT_LAYOUT);
   });
 
   /**
    * **The feature's central promise.** The widget vocabulary is TypeScript's and appears in no
-   * Rust file, so a document written by a build that knows a seventh widget has to survive a
-   * round trip through one that does not — otherwise a portable app a reader runs two versions of
+   * Rust file, so a document written by a build that knows a tenth widget has to survive a round
+   * trip through one that does not — otherwise a portable app a reader runs two versions of
    * quietly empties its own home page every time they open the older one.
    *
    * The `config` travels with it untouched, which is the half that makes the rule useful: a build
@@ -15066,34 +15079,56 @@ describe("the home layout", () => {
 
   /**
    * **An empty widget list is a layout, not a missing row**, and it is the edge the read rule
-   * turns on: a reader who removed every tile has said something, and handing them the six
-   * defaults back on the next launch would undo it silently, every time, for ever.
+   * turns on: a reader who removed every tile has said something, and handing them the defaults
+   * back on the next launch would undo it silently, every time, for ever.
    */
   it("keeps an empty widget list rather than answering the default", () => {
     const db = makeDb();
-    writeHandlers(db).set_home_layout({ layout: { version: 1, widgets: [] } });
+    writeHandlers(db).set_home_layout({ layout: { version: 2, widgets: [] } });
 
     expect(readHandlers(db).home_layout().widgets).toHaveLength(0);
   });
 
   /**
-   * The four refusals, and **each leaves the row exactly as it stood** — the complement of a read
-   * that validates nothing at all. Without them a layout this build cannot use would look saved,
+   * **`span` is carried for an older build and read by nothing here**, so its absence is legal —
+   * and a document written without one reads back without one, rather than with a width this
+   * fake invented.
+   */
+  it("accepts a widget with no span and hands it back without one", () => {
+    const db = makeDb();
+    const layout = one();
+    delete layout.widgets[0].span;
+    writeHandlers(db).set_home_layout({ layout });
+
+    expect(readHandlers(db).home_layout().widgets[0]).not.toHaveProperty("span");
+  });
+
+  /**
+   * The refusals, and **each leaves the row exactly as it stood** — the complement of a read that
+   * validates nothing at all. Without them a layout this build cannot use would look saved,
    * survive a restart in the table and read back as itself for ever.
    *
-   * A *version* is refused in words rather than downgraded: rewriting a document by rules that do
-   * not apply to it is how a newer build's page comes back wrong with nothing logged.
+   * A *version* is refused in words rather than downgraded — **version 1 included**, since this
+   * build writes geometry a version-1 reader would drop. The low end of the footprint is the one
+   * that matters most: a zero-cell widget is one nobody can see or grab, and it is exactly what a
+   * version-1 row reads as.
    */
-  it("refuses a future version, a blank id, a blank kind and a span outside the two", () => {
+  it("refuses a wrong version, a blank id or kind, a bad footprint, corner or span", () => {
     const db = makeDb();
     writeHandlers(db).set_home_layout({ layout: one({ id: "kept" }) });
 
     const refusals: [HomeLayout, RegExp][] = [
-      [{ ...one(), version: 2 }, /version 2/],
+      [{ ...one(), version: 1 }, /version 1/],
+      [{ ...one(), version: 3 }, /version 3/],
       [one({ id: "  " }), /needs an id/],
       [one({ kind: " " }), /needs a kind/],
-      [one({ span: 0 }), /0 columns wide/],
-      [one({ span: 3 }), /3 columns wide/],
+      [one({ w: 0 }), /0 by 2 cells/],
+      [one({ w: 25 }), /25 by 2 cells/],
+      [one({ h: 41 }), /4 by 41 cells/],
+      [one({ x: 1001 }), /column 1001, row 0/],
+      [one({ y: 10_001 }), /column 0, row 10001/],
+      [one({ span: 0 }), /older layout width of 0/],
+      [one({ span: 3 }), /older layout width of 3/],
     ];
     for (const [layout, sentence] of refusals) {
       expect(() => writeHandlers(db).set_home_layout({ layout })).toThrow(sentence);
@@ -15101,17 +15136,30 @@ describe("the home layout", () => {
     expect(readHandlers(db).home_layout().widgets[0].id).toBe("kept");
   });
 
+  /** Both ends of each bound are inside it: a 24×40 widget at the far corner is a document the
+   *  crate stores. */
+  it("accepts every bound at its own edge", () => {
+    const db = makeDb();
+    const edge = one({ x: 1000, y: 10_000, w: 24, h: 40, span: 2 });
+
+    expect(() => writeHandlers(db).set_home_layout({ layout: edge })).not.toThrow();
+    expect(readHandlers(db).home_layout()).toEqual(edge);
+  });
+
   /** The cap, and the row it refused is still the one that was there — `home::MAX_BYTES`, which
    *  is about a `config` used as a document store rather than about what the table can take. */
   it("refuses a document over the cap and leaves the row alone", () => {
     const db = makeDb();
-    writeHandlers(db).set_home_layout({ layout: { version: 1, widgets: [] } });
+    writeHandlers(db).set_home_layout({ layout: { version: 2, widgets: [] } });
     const fat: HomeLayout = {
-      version: 1,
+      version: 2,
       widgets: Array.from({ length: 4000 }, (_, i) => ({
         id: `w${i}`,
         kind: "summary",
-        span: 1,
+        x: 0,
+        y: i,
+        w: 2,
+        h: 1,
         config: { pad: "x".repeat(64) },
       })),
     };
@@ -15134,6 +15182,290 @@ describe("the home layout", () => {
     layout.widgets[0].kind = "editedAfterTheWrite";
 
     expect(readHandlers(db).home_layout().widgets[0].kind).toBe("summary");
+  });
+});
+
+/**
+ * The Recently viewed strip's two commands — `recent_cards.rs`'s rules, one list in `app_meta`.
+ */
+describe("the recently viewed cards", () => {
+  const SOL_RING = CARDS.find((c) => c.setCode === "c21" && c.collectorNumber === "263")!;
+
+  /** A world holding exactly this list, oldest last. */
+  function viewing(...cardIds: string[]): FakeDb {
+    return makeDb({
+      recentCards: cardIds.map((cardId, i) => ({ cardId, viewedAt: WHEN - i })),
+    });
+  }
+
+  /** Every seed with a collection opens with a strip; `empty` opens on the sentence. The list is
+   *  the collection's printings, newest row first — what a reader who filed them opened. */
+  it("derives a world's list from its collection, newest row first, each printing once", () => {
+    const starter = seed("starter");
+    const newest = [...starter.collectionEntries].sort((a, b) => b.id - a.id)[0];
+    const got = readHandlers(starter).recent_cards({ limit: 24 });
+
+    expect(got[0].cardId).toBe(newest.cardId);
+    expect(new Set(got.map((c) => c.cardId)).size).toBe(got.length);
+    expect(got.length).toBe(new Set(starter.collectionEntries.map((e) => e.cardId)).size);
+    expect(readHandlers(seed("empty")).recent_cards({ limit: 24 })).toEqual([]);
+  });
+
+  it("joins the name and set off the corpus and keeps the list's order", () => {
+    const got = readHandlers(viewing(SOL_RING.id, BOLT.id)).recent_cards({ limit: 8 });
+
+    expect(got).toEqual([
+      { cardId: SOL_RING.id, name: SOL_RING.name, setCode: SOL_RING.setCode, viewedAt: WHEN },
+      { cardId: BOLT.id, name: BOLT.name, setCode: BOLT.setCode, viewedAt: WHEN - 1 },
+    ]);
+  });
+
+  /** A skipped printing does not use up a place: the crate's `LIMIT` sits over the join, so a
+   *  widget asking for two tiles still gets two while the list holds two the corpus knows. */
+  it("skips a printing the corpus no longer holds without spending a place on it", () => {
+    const db = viewing("gone", SOL_RING.id, BOLT.id);
+
+    expect(readHandlers(db).recent_cards({ limit: 2 }).map((c) => c.cardId)).toEqual([
+      SOL_RING.id,
+      BOLT.id,
+    ]);
+    // And the id stays in the row, for the day the card comes back.
+    expect(db.recentCards[0].cardId).toBe("gone");
+  });
+
+  /** The low end is load-bearing: SQLite reads `LIMIT 0` as no rows and a negative as no limit. */
+  it("clamps the limit to one through twenty-four", () => {
+    const ids = CARDS.slice(0, 30).map((c) => c.id);
+    const db = viewing(...ids);
+
+    expect(readHandlers(db).recent_cards({ limit: 0 })).toHaveLength(1);
+    expect(readHandlers(db).recent_cards({ limit: -5 })).toHaveLength(1);
+    expect(readHandlers(db).recent_cards({ limit: 100 })).toHaveLength(24);
+  });
+
+  /** Opening a card again moves it to the front rather than listing it twice. */
+  it("moves a card opened again to the front, stamped above everything before it", () => {
+    const db = viewing(SOL_RING.id, BOLT.id);
+    writeHandlers(db).record_recent_card({ cardId: BOLT.id });
+
+    const got = readHandlers(db).recent_cards({ limit: 8 });
+    expect(got.map((c) => c.cardId)).toEqual([BOLT.id, SOL_RING.id]);
+    expect(got[0].viewedAt).toBeGreaterThan(got[1].viewedAt);
+  });
+
+  it("caps the list at twenty-four and lets the oldest go", () => {
+    const db = viewing(...CARDS.slice(0, 24).map((c) => c.id));
+    writeHandlers(db).record_recent_card({ cardId: CARDS[30].id });
+
+    expect(db.recentCards).toHaveLength(24);
+    expect(db.recentCards[0].cardId).toBe(CARDS[30].id);
+    expect(db.recentCards.map((v) => v.cardId)).not.toContain(CARDS[23].id);
+  });
+
+  /** The one refusal, and the lock is asked first: a blank sent during a sync answers BUSY. */
+  it("refuses a blank id and leaves the list alone, and answers busy before looking", () => {
+    const db = viewing(BOLT.id);
+    expect(() => writeHandlers(db).record_recent_card({ cardId: "  " })).toThrow(
+      "A recently viewed card needs an id, and this one has none.",
+    );
+    expect(db.recentCards.map((v) => v.cardId)).toEqual([BOLT.id]);
+
+    const busy = makeDb({ fault: "busy" });
+    expect(() => writeHandlers(busy).record_recent_card({ cardId: " " })).toThrow(/busy/i);
+    // A read answers through every second of a sync.
+    expect(readHandlers(busy).recent_cards({ limit: 8 })).toEqual([]);
+  });
+});
+
+/** `set_completion` — distinct collector numbers held, against a printed size when there is one. */
+describe("set completion", () => {
+  const at = (set: string, number: string) =>
+    CARDS.find((c) => c.setCode === set && c.collectorNumber === number)!;
+
+  function holding(...rows: Partial<FakeEntry>[]): FakeDb {
+    return makeDb({ collectionEntries: rows.map((r, i) => entry({ id: i + 1, ...r })) });
+  }
+
+  /** A foil and a nonfoil of one number are one card of the set; two numbers are two. */
+  it("counts distinct collector numbers in any finish against the printed size", () => {
+    const db = holding(
+      { cardId: at("mh2", "267").id, finish: "nonfoil" },
+      { cardId: at("mh2", "267").id, finish: "foil" },
+      { cardId: at("mh2", "138").id },
+    );
+
+    expect(readHandlers(db).set_completion()).toEqual([
+      {
+        setCode: "mh2",
+        name: "Modern Horizons 2",
+        releasedAt: at("mh2", "267").releasedAt,
+        owned: 2,
+        size: 303,
+      },
+    ]);
+  });
+
+  /** No printed size is a real state: every number held counts, and the widget draws a count. */
+  it("counts every number held for a set with no printed size", () => {
+    const db = holding({ cardId: at("lea", "161").id }, { cardId: at("lea", "232").id });
+
+    expect(readHandlers(db).set_completion()).toMatchObject([
+      { setCode: "lea", owned: 2, size: null },
+    ]);
+  });
+
+  /** A showcase numbered past the set does not push it towards complete. */
+  it("leaves a number outside the printed size uncounted", () => {
+    const db = holding({ cardId: at("eld", "303").id }, { cardId: at("eld", "115").id });
+
+    expect(readHandlers(db).set_completion()).toMatchObject([
+      { setCode: "eld", owned: 1, size: 269 },
+    ]);
+  });
+
+  /** A row holding nothing is no card of the set, and an orphan has no set to be counted in. */
+  it("answers no set for a zero row or an orphan, and orders by name", () => {
+    const db = holding(
+      { cardId: at("mh2", "267").id, quantity: 0 },
+      { cardId: "gone", setCode: "zzz" },
+      { cardId: at("tmp", "315").id },
+      { cardId: at("dom", "168").id },
+    );
+
+    expect(readHandlers(db).set_completion().map((s) => s.name)).toEqual([
+      "Dominaria",
+      "Tempest",
+    ]);
+  });
+
+  it("answers the starter collection's sets, both kinds, and none for empty", () => {
+    const got = readHandlers(seed("starter")).set_completion();
+
+    expect(got.find((s) => s.setCode === "mh2")).toMatchObject({ owned: 3, size: 303 });
+    expect(got.find((s) => s.setCode === "lea")).toMatchObject({ owned: 2, size: null });
+    expect(readHandlers(seed("empty")).set_completion()).toEqual([]);
+  });
+});
+
+/**
+ * `price_movers` — a baseline snapshot per window, today's price through the collection's own
+ * `price_expr`, and the two figures that tell *no history* from *nothing moved*.
+ *
+ * The fixture is the foil-only Sphinx, whose `usd_foil` is 164.95 — so today's TCGplayer price
+ * is a known number and every delta below is arithmetic rather than a copy of the handler's.
+ */
+describe("the price movers", () => {
+  const DAY = 86_400;
+  const NOW = readHandlers(makeDb()).card_detail({ id: FOIL_ONLY.id })!.finishPrices.foil!;
+
+  function snap(price: number, daysAgo: number, over: Partial<FakePriceSnapshot> = {}) {
+    return {
+      marketplace: "tcgplayer" as MarketplaceId,
+      cardId: FOIL_ONLY.id,
+      finish: "foil" as const,
+      price,
+      takenAt: CLOCK_BASE - daysAgo * DAY,
+      ...over,
+    };
+  }
+
+  function world(
+    history: FakePriceSnapshot[],
+    entries = [entry({ cardId: FOIL_ONLY.id, finish: "foil" })],
+  ) {
+    return makeDb({ collectionEntries: entries, priceHistory: history });
+  }
+
+  const ask = (db: FakeDb, window: string, direction = "both", marketplace = "tcgplayer") =>
+    readHandlers(db).price_movers({ window, direction, marketplace, limit: 100 });
+
+  it("answers no movers, no baseline and no days for a world with no history", () => {
+    expect(ask(world([]), "7d")).toEqual({ movers: [], since: null, days: 0 });
+  });
+
+  /** The newest snapshot at or before the window's start, never a later one. */
+  it("measures a window against the newest snapshot at or before its start", () => {
+    const db = world([snap(NOW, 0), snap(150, 3), snap(100, 8), snap(90, 40)]);
+
+    const week = ask(db, "7d");
+    expect(week.since).toBe(CLOCK_BASE - 8 * DAY);
+    expect(week.days).toBe(4);
+    expect(week.movers).toEqual([
+      {
+        cardId: FOIL_ONLY.id,
+        name: FOIL_ONLY.name,
+        setCode: FOIL_ONLY.setCode,
+        setName: FOIL_ONLY.setName,
+        finish: "foil",
+        now: NOW,
+        then: 100,
+        delta: Math.round((NOW - 100) * 100) / 100,
+      },
+    ]);
+    expect(ask(db, "30d").since).toBe(CLOCK_BASE - 40 * DAY);
+    expect(ask(db, "all").movers[0].then).toBe(90);
+  });
+
+  /** History, but none old enough: the widget's second sentence, so `days` still answers. */
+  it("answers a null baseline with the days it does have when the window reaches past them", () => {
+    expect(ask(world([snap(NOW, 0), snap(150, 3)]), "30d")).toEqual({
+      movers: [],
+      since: null,
+      days: 2,
+    });
+  });
+
+  /** A printing that did not move is not a mover — the *nothing moved* state. */
+  it("leaves out a printing whose price did not move", () => {
+    const got = ask(world([snap(NOW, 0), snap(NOW, 8)]), "7d");
+
+    expect(got.movers).toEqual([]);
+    expect(got.since).not.toBeNull();
+  });
+
+  /** Largest move first, whichever way; a direction filters; another marketplace's history is
+   *  not this one's. */
+  it("ranks by the size of the move, filters by direction and keeps to one marketplace", () => {
+    const bolt = entry({ id: 2, cardId: BOLT_2X2.id, finish: "nonfoil" });
+    const boltNow = readHandlers(makeDb()).card_detail({ id: BOLT_2X2.id })!.finishPrices.nonfoil!;
+    const db = world(
+      [
+        snap(NOW - 10, 8),
+        snap(boltNow + 50, 8, { cardId: BOLT_2X2.id, finish: "nonfoil" }),
+        snap(1, 8, { marketplace: "cardmarket" }),
+      ],
+      [entry({ cardId: FOIL_ONLY.id, finish: "foil" }), bolt],
+    );
+
+    expect(ask(db, "7d").movers.map((m) => m.cardId)).toEqual([BOLT_2X2.id, FOIL_ONLY.id]);
+    expect(ask(db, "7d", "up").movers.map((m) => m.cardId)).toEqual([FOIL_ONLY.id]);
+    expect(ask(db, "7d", "down").movers.map((m) => m.cardId)).toEqual([BOLT_2X2.id]);
+    expect(ask(db, "7d", "both", "cardmarket").days).toBe(1);
+  });
+
+  it("clamps the limit to one through a hundred", () => {
+    const db = world([snap(NOW - 10, 8)]);
+    const got = readHandlers(db).price_movers({ window: "7d", direction: "both", limit: 0 });
+    expect(got.movers).toHaveLength(1);
+  });
+
+  it("reads a window or a direction it does not know as the default, as the crate does", () => {
+    const db = world([]);
+    expect(ask(db, "90d")).toEqual(ask(db, "7d"));
+    expect(ask(db, "constructor")).toEqual(ask(db, "7d"));
+    expect(ask(db, "7d", "sideways")).toEqual(ask(db, "7d", "both"));
+  });
+
+  /** The derived history gives `starter` movers both ways at the default window, and `empty`
+   *  the no-history sentence. */
+  it("gives the starter collection movers both ways and empty no history", () => {
+    const got = ask(seed("starter"), "7d");
+
+    expect(got.days).toBeGreaterThanOrEqual(2);
+    expect(got.since).toBe(CLOCK_BASE - 7 * DAY);
+    expect(got.movers.some((m) => m.delta > 0)).toBe(true);
+    expect(got.movers.some((m) => m.delta < 0)).toBe(true);
+    expect(ask(seed("empty"), "7d")).toEqual({ movers: [], since: null, days: 0 });
   });
 });
 

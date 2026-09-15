@@ -262,6 +262,18 @@ pub const COMMANDS: &[&str] = &[
     // draws the default layout and opens on Home rather than failing to draw the page.
     "home_layout",
     "set_home_layout",
+    // **The Recently viewed widget, both halves.** Both are connection-only — the write takes its
+    // clock from SQLite's `unixepoch()`, never `SystemTime::now()`, which panics on this target —
+    // so neither is a download wearing a command's name. A browser that could read the list and
+    // not write it would draw a widget that never changes.
+    "recent_cards",
+    "record_recent_card",
+    // **The Set completion and Price movers widgets' reads.** Both are one `SELECT` over the
+    // collection and the corpus with no clock of their own beyond SQLite's `date('now')`, so
+    // neither is a download wearing a command's name. The history the movers read is written by
+    // `schema::prepare_database` and `marketplace_feed::store`, both of which a browser reaches.
+    "set_completion",
+    "price_movers",
     "start_view",
     "set_start_view",
     // **The three docked search columns' shared row**, and both halves for `deck_sort`'s reason.
@@ -2237,6 +2249,54 @@ pub fn call(
             )
         }
 
+        // The Recently viewed pair. The read is infallible here too, for `home_layout`'s reason;
+        // the write is `record_now`, which asks SQLite for the time — the desktop command calls
+        // the same function, so the clock cannot differ between targets.
+        "recent_cards" => {
+            let limit: u32 = field(command, args, "limit")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(command, crate::recent_cards::recent(&conn, limit))
+        }
+
+        "record_recent_card" => {
+            let card_id: String = field(command, args, "cardId")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| crate::recent_cards::record_now(c, &card_id))
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "set_completion" => {
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::set_completion::set_completion_of(&conn).map_err(RouteError::Failed)?,
+            )
+        }
+
+        // The marketplace is `optional` and read as the enum, the desktop wrapper's two choices:
+        // an absent one and an unknown one both quote TCGplayer rather than refusing the widget.
+        "price_movers" => {
+            let window: String = field(command, args, "window")?;
+            let direction: String = field(command, args, "direction")?;
+            let marketplace: Option<crate::sorting::Marketplace> =
+                optional(command, args, "marketplace")?;
+            let limit: i64 = field(command, args, "limit")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::price_history::movers(
+                    &conn,
+                    &window,
+                    &direction,
+                    marketplace.unwrap_or_default(),
+                    limit,
+                )
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
         "start_view" => {
             let conn = crate::sync::lock_db_read(state);
             encode(command, crate::startview::stored(&conn))
@@ -3191,6 +3251,60 @@ mod tests {
         assert_eq!(zoom["search"], json!(1.5));
     }
 
+    /// **Recently viewed, round-tripped through the route**, under the argument names `ipc.ts`
+    /// sends. The write is the one that matters on this target: it asks SQLite for the time, and
+    /// a `SystemTime::now()` anywhere on its path would pass every desktop test and panic in the
+    /// browser — so what is pinned here is that the answer carries a real clock, the list's order
+    /// and the corpus join, and that a blank id is refused in words rather than stored.
+    #[test]
+    fn recently_viewed_cards_are_written_and_read_back_through_the_route() {
+        let s = state("web-route-recent-cards");
+
+        assert_eq!(
+            call(&s, "recent_cards", &json!({ "limit": 8 })).unwrap(),
+            json!([])
+        );
+
+        for id in ["1", "not-in-the-corpus", "3"] {
+            call(&s, "record_recent_card", &json!({ "cardId": id })).unwrap();
+        }
+        let out = call(&s, "recent_cards", &json!({ "limit": 8 })).unwrap();
+        let rows = out.as_array().expect("an array of cards");
+        let ids: Vec<&str> = rows.iter().map(|r| r["cardId"].as_str().unwrap()).collect();
+        assert_eq!(ids, ["3", "1"], "newest first, the unknown id skipped");
+        assert_eq!(rows[0]["name"], json!("Sol Ring"));
+        assert_eq!(rows[0]["setCode"], json!("lea"));
+        assert!(rows[0]["viewedAt"].as_i64().unwrap() > 1_577_836_800);
+
+        assert!(matches!(
+            call(&s, "record_recent_card", &json!({ "cardId": "  " })),
+            Err(RouteError::Failed(_))
+        ));
+    }
+
+    /// **Set completion and Price movers through the route**, under the argument names `ipc.ts`
+    /// sends. The movers' `marketplace` may be absent, which quotes TCGplayer rather than refusing,
+    /// and a fixture with no snapshot history answers `since: null` — the widget's "no history
+    /// yet" — rather than an error.
+    #[test]
+    fn set_completion_and_price_movers_answer_through_the_route() {
+        let s = state("web-route-set-completion");
+        assert_eq!(call(&s, "set_completion", &json!({})).unwrap(), json!([]));
+
+        crate::index::fixtures::own(&crate::db::lock_blocking(&s.db), "3", 1);
+        let sets = call(&s, "set_completion", &json!({})).unwrap();
+        assert_eq!(sets[0]["setCode"], json!("lea"));
+        assert_eq!(sets[0]["name"], json!("Limited Edition Alpha"));
+        assert_eq!(sets[0]["owned"], json!(1));
+
+        let args =
+            json!({ "window": "30d", "direction": "down", "marketplace": "manapool", "limit": 12 });
+        let out = call(&s, "price_movers", &args).unwrap();
+        assert_eq!(out, json!({ "movers": [], "since": null, "days": 0 }));
+        let absent = json!({ "window": "7d", "direction": "both", "limit": 5 });
+        assert!(call(&s, "price_movers", &absent).is_ok());
+    }
+
     /// **The folder tree's width and collapse, round-tripped through the route** — the pair beside
     /// the one above, and written separately because the thing to pin here is the *shape* rather
     /// than only the survival: the read answers an object with both fields, `width` is `null`
@@ -3588,7 +3702,7 @@ mod tests {
         // adding cannot survive. 166 is `awk`'s answer over the merged array literal.
         assert_eq!(
             COMMANDS.len(),
-            166,
+            170,
             "update this number when a command is added"
         );
     }

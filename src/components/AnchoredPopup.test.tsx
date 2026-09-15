@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AnchoredPopup } from "./AnchoredPopup";
@@ -94,6 +94,38 @@ describe("AnchoredPopup", () => {
    * leaving has already handed the caret back to its trigger — scrolling to it then would drag
    * the list under whatever the reader has moved on to. `useIsPresent` is the guard.
    */
+  /**
+   * **Contents that shut the panel themselves are handed Escape's own path** — a question's Keep,
+   * a header's ✕. The flag comes down and the caret goes back to the trigger, so a panel closed from
+   * inside leaves the reader exactly where Escape would have. A plain `ReactNode` child is untouched,
+   * which is what every other caller passes.
+   */
+  it("hands a function child a close that returns the caret to the trigger", async () => {
+    render(
+      <AnchoredPopup label="Remove Summary" panelLabel="Remove Summary?" icon={<span aria-hidden />}>
+        {(close) => (
+          <button type="button" onClick={close}>
+            Keep
+          </button>
+        )}
+      </AnchoredPopup>,
+    );
+
+    const trigger = screen.getByRole("button", { name: "Remove Summary" });
+    await userEvent.click(trigger);
+    await userEvent.click(
+      within(await screen.findByRole("dialog", { name: "Remove Summary?" })).getByRole("button", {
+        name: "Keep",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Remove Summary?" })).not.toBeInTheDocument(),
+    );
+    expect(trigger).toHaveFocus();
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+  });
+
   it("does not scroll to a panel that is closing", async () => {
     popup();
     await open();

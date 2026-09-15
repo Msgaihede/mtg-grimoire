@@ -1,111 +1,227 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { WidgetCard, WIDGET_CARD_BOX, WIDGET_CARD_WIDE, type WidgetCardProps } from "./WidgetCard";
 
-const HEADING = "Collection value";
+import type { HomeWidget } from "@/lib/ipc";
 
-/** The four names the edit tray answers to, spelled once so a reword is one edit here. */
-const GRIP = `Move ${HEADING}`;
-const WIDTH = `Full width, ${HEADING}`;
-const SETTINGS = `Settings for ${HEADING}`;
-const REMOVE = `Remove ${HEADING}`;
+import { makeFit } from "./fit";
+import { WidgetCard, type WidgetCardProps } from "./WidgetCard";
+
+const TITLE = "Collection value";
+
+/** The names the card's controls answer to, spelled once so a reword is one edit here. */
+const GRIP = `Move ${TITLE}`;
+const FIELD = `Name for ${TITLE}`;
+const TRAY = `Customize ${TITLE}`;
+const SETTINGS = `Settings for ${TITLE}`;
+const REMOVE = `Remove ${TITLE}`;
+const RESIZE = `Resize ${TITLE}`;
+
+function widget(over: Partial<HomeWidget> = {}): HomeWidget {
+  return {
+    id: "collectionValue",
+    kind: "collectionValue",
+    x: 0,
+    y: 0,
+    w: 2,
+    h: 3,
+    config: null,
+    ...over,
+  };
+}
 
 /**
  * Every prop the card cannot be drawn without, so a case states only the one it is about.
  *
- * A **fresh** set per call rather than one object at module scope: `toHaveBeenCalledTimes(1)`
- * against a shared spy passes or fails by the order vitest happens to run the file in, which is
- * a green suite that means nothing. `NewFolderCard.test.tsx`'s `stubs()` is the precedent.
+ * A **fresh** set per call: `toHaveBeenCalledTimes(1)` against a shared spy passes or fails by the
+ * order vitest runs the file in. The fit is built from the widget's own footprint with `makeFit`,
+ * the page's function, so the card is handed the box it would be handed on a page.
  */
 function props(over: Partial<WidgetCardProps> = {}): WidgetCardProps {
+  const w = over.widget ?? widget();
   return {
-    heading: HEADING,
+    widget: w,
+    fit: makeFit({ w: w.w, h: w.h, widthPx: 220, heightPx: 340, density: "comfortable" }),
     editing: false,
-    span: 1,
-    onRemove: vi.fn(),
-    onSpan: vi.fn(),
-    dragHandleRef: vi.fn(),
+    onDragStart: vi.fn(),
+    onResizeStart: vi.fn(),
     onNudge: vi.fn(),
-    children: <p>Nine thousand cards</p>,
+    onGrow: vi.fn(),
+    onConfig: vi.fn(),
+    onRemove: vi.fn(),
+    children: <button type="button">Nine thousand cards</button>,
     ...over,
   };
 }
 
 describe("WidgetCard", () => {
   /**
-   * The heading is the card's accessible name, so a test, a live pass and a screen reader all
-   * address a widget by what it says rather than by its place in a wrapping row — which is the
-   * one thing about a widget's position a reader is allowed to change.
-   *
-   * A `<section>` with a name is a `region`, which is what `getByRole` is asking for here.
+   * The title is the card's accessible name, so a test, a live pass and a screen reader address a
+   * widget by what it says rather than by where it sits — which is the one thing a reader is free
+   * to change.
    */
-  it("is named by its heading", () => {
-    render(<WidgetCard {...props()} />);
-
-    const card = screen.getByRole("region", { name: HEADING });
+  it("is named by its title — the reader's own, or the kind's", () => {
+    const view = render(<WidgetCard {...props()} />);
+    const card = screen.getByRole("region", { name: TITLE });
     expect(card).toHaveTextContent("Nine thousand cards");
-  });
-
-  /**
-   * At rest a widget is a readout. Every affordance for *rearranging* the page belongs to
-   * Customize, and a card that carried them all the time would put four controls nobody asked
-   * for on a page whose whole job is to be read.
-   */
-  it("draws no edit controls at rest", () => {
-    render(<WidgetCard {...props({ settings: <p>Dimension</p> })} />);
-
-    expect(screen.queryByRole("button", { name: GRIP })).toBeNull();
-    expect(screen.queryByRole("button", { name: WIDTH })).toBeNull();
-    expect(screen.queryByRole("button", { name: SETTINGS })).toBeNull();
-    expect(screen.queryByRole("button", { name: REMOVE })).toBeNull();
-  });
-
-  it("draws the grip, the width toggle, the settings popover and the remove control in edit mode", () => {
-    render(<WidgetCard {...props({ editing: true, settings: <p>Dimension</p> })} />);
-
-    expect(screen.getByRole("button", { name: GRIP })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: WIDTH })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: SETTINGS })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: REMOVE })).toBeInTheDocument();
-  });
-
-  /**
-   * A widget that has nothing to configure draws no settings control at all — greyed would be a
-   * control that reads as broken, and an empty popover is a question with no answers in it.
-   */
-  it("draws no settings control for a widget that has none", () => {
-    render(<WidgetCard {...props({ editing: true })} />);
-
-    expect(screen.queryByRole("button", { name: SETTINGS })).toBeNull();
-    expect(screen.getByRole("button", { name: REMOVE })).toBeInTheDocument();
-  });
-
-  /** The widget's own control is not an edit affordance and is drawn in both modes. */
-  it("keeps the widget's own actions in both modes", () => {
-    const view = render(
-      <WidgetCard {...props({ actions: <button type="button">By rarity</button> })} />,
-    );
-    expect(screen.getByRole("button", { name: "By rarity" })).toBeInTheDocument();
+    expect(within(card).getByRole("heading", { level: 3 })).toHaveTextContent(TITLE);
 
     view.rerender(
-      <WidgetCard
-        {...props({ editing: true, actions: <button type="button">By rarity</button> })}
-      />,
+      <WidgetCard {...props({ widget: widget({ config: { title: "The binder" } }) })} />,
     );
-    expect(screen.getByRole("button", { name: "By rarity" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "The binder" })).toBeInTheDocument();
+  });
+
+  /** At rest a widget is a readout: nothing for rearranging the page is drawn. */
+  it("draws no Customize controls at rest", () => {
+    render(<WidgetCard {...props()} />);
+
+    expect(screen.queryByRole("button", { name: GRIP })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: FIELD })).toBeNull();
+    expect(screen.queryByRole("group", { name: TRAY })).toBeNull();
+    expect(screen.queryByRole("button", { name: SETTINGS })).toBeNull();
+    expect(screen.queryByRole("button", { name: REMOVE })).toBeNull();
+    expect(screen.queryByRole("button", { name: RESIZE })).toBeNull();
+  });
+
+  it("draws the grip, the title field, the tray and the resize corner while customizing", () => {
+    render(<WidgetCard {...props({ editing: true })} />);
+
+    expect(screen.getByRole("button", { name: GRIP })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: FIELD })).toHaveValue(TITLE);
+    const tray = within(screen.getByRole("group", { name: TRAY }));
+    expect(tray.getByRole("button", { name: SETTINGS })).toBeInTheDocument();
+    expect(tray.getByRole("button", { name: REMOVE })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: RESIZE })).toBeInTheDocument();
+  });
+
+  /** A stacked page has no grid to drop on: no grip, no corner — but the card is still renamed,
+   *  configured and removed from its own line. */
+  it("draws no grip and no corner where the page cannot be arranged by pointer", () => {
+    render(<WidgetCard {...props({ editing: true, arrangeable: false })} />);
+
+    expect(screen.queryByRole("button", { name: GRIP })).toBeNull();
+    expect(screen.queryByRole("button", { name: RESIZE })).toBeNull();
+    expect(screen.getByRole("textbox", { name: FIELD })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: TRAY })).toBeInTheDocument();
+  });
+
+  /** A catalogue preview is a picture of a card: no tray even on a page being customised. */
+  it("draws none of Customize's controls on a still preview", () => {
+    render(<WidgetCard {...props({ editing: true, still: true })} />);
+
+    expect(screen.queryByRole("group", { name: TRAY })).toBeNull();
+    expect(screen.queryByRole("button", { name: GRIP })).toBeNull();
+    expect(screen.queryByRole("button", { name: RESIZE })).toBeNull();
+    expect(screen.getByRole("heading", { level: 3 })).toHaveTextContent(TITLE);
+  });
+
+  describe("the title field", () => {
+    /** A draft, written once when the reader is finished with it — never a write per letter. */
+    it("commits a rename on blur, and not before", async () => {
+      const user = userEvent.setup();
+      const onConfig = vi.fn();
+      render(<WidgetCard {...props({ editing: true, onConfig })} />);
+
+      const field = screen.getByRole("textbox", { name: FIELD });
+      await user.clear(field);
+      await user.type(field, "  The binder ");
+      expect(onConfig).not.toHaveBeenCalled();
+      // The card keeps its stored name while the draft is being typed.
+      expect(screen.getByRole("region", { name: TITLE })).toBeInTheDocument();
+
+      await user.tab();
+      expect(onConfig).toHaveBeenCalledTimes(1);
+      expect(onConfig).toHaveBeenCalledWith({ title: "The binder" });
+    });
+
+    it("commits on Enter", async () => {
+      const user = userEvent.setup();
+      const onConfig = vi.fn();
+      render(<WidgetCard {...props({ editing: true, onConfig })} />);
+
+      const field = screen.getByRole("textbox", { name: FIELD });
+      await user.clear(field);
+      await user.type(field, "Worth{Enter}");
+      expect(onConfig).toHaveBeenCalledWith({ title: "Worth" });
+    });
+
+    /** A blank, or the kind's own name typed back in, stores nothing and the kind's name returns. */
+    it("stores no title for a blank or for the kind's own name", async () => {
+      const user = userEvent.setup();
+      const onConfig = vi.fn();
+      render(
+        <WidgetCard
+          {...props({ editing: true, onConfig, widget: widget({ config: { title: "Mine" } }) })}
+        />,
+      );
+
+      const field = screen.getByRole("textbox", { name: FIELD });
+      expect(field).toHaveValue("Mine");
+      await user.clear(field);
+      await user.keyboard("{Enter}");
+      expect(onConfig).toHaveBeenLastCalledWith({ title: undefined });
+      onConfig.mockClear();
+
+      // The mock wrote nothing back, so the field shows `Mine` again.
+      await user.clear(field);
+      await user.type(field, `${TITLE}{Enter}`);
+      expect(onConfig).toHaveBeenCalledTimes(1);
+      expect(onConfig).toHaveBeenLastCalledWith({ title: undefined });
+    });
+
+    /** A field left as it was writes nothing — a blur is not a rename. */
+    it("writes nothing when the name did not change", async () => {
+      const user = userEvent.setup();
+      const onConfig = vi.fn();
+      render(<WidgetCard {...props({ editing: true, onConfig })} />);
+
+      await user.click(screen.getByRole("textbox", { name: FIELD }));
+      await user.tab();
+      await user.type(screen.getByRole("textbox", { name: FIELD }), "{Backspace}e{Enter}");
+      expect(onConfig).not.toHaveBeenCalled();
+    });
+
+    /**
+     * Escape reverts a draft and consumes the press, so it closes nothing else — and with no draft
+     * it leaves the press alone for whatever layer is underneath.
+     */
+    it("reverts a draft on Escape, consuming only a press that had something to undo", async () => {
+      const user = userEvent.setup();
+      const onConfig = vi.fn();
+      render(<WidgetCard {...props({ editing: true, onConfig })} />);
+
+      const field = screen.getByRole("textbox", { name: FIELD });
+      await user.type(field, " draft");
+      expect(field).toHaveValue(`${TITLE} draft`);
+
+      const revert = new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      });
+      fireEvent(field, revert);
+      expect(revert.defaultPrevented).toBe(true);
+      expect(field).toHaveValue(TITLE);
+
+      const nothing = new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      });
+      fireEvent(field, nothing);
+      expect(nothing.defaultPrevented).toBe(false);
+
+      await user.tab();
+      expect(onConfig).not.toHaveBeenCalled();
+    });
   });
 
   /**
-   * **The grip's arrow keys are the whole keyboard reorder**, because `dndManager` ships no
-   * `KeyboardSensor` — a drag-only rearrange is one half the readers do not have.
-   * `categoryDrag.ts`'s grip is the precedent; the axis is left/right because the row is a
-   * wrapping flex line rather than a list.
-   *
-   * Driven from a caret the *reader* can produce — Tab, never `element.focus()` — because a
-   * programmatically focused control tests a caret nobody has.
+   * **The grip's arrow keys are the keyboard's whole move**, because `dndManager` ships no
+   * `KeyboardSensor`. Driven from a caret the reader can produce — Tab — never `element.focus()`.
    */
-  it("writes the move from the grip's arrow keys", async () => {
+  it("moves the card a cell per arrow key from the grip", async () => {
     const user = userEvent.setup();
     const onNudge = vi.fn();
     render(<WidgetCard {...props({ editing: true, onNudge })} />);
@@ -113,139 +229,261 @@ describe("WidgetCard", () => {
     await user.tab();
     expect(document.activeElement).toBe(screen.getByRole("button", { name: GRIP }));
 
-    await user.keyboard("{ArrowLeft}");
-    expect(onNudge).toHaveBeenCalledWith(-1);
-
-    await user.keyboard("{ArrowRight}");
-    expect(onNudge).toHaveBeenCalledWith(1);
-    expect(onNudge).toHaveBeenCalledTimes(2);
+    await user.keyboard("{ArrowLeft}{ArrowDown}{ArrowRight}{ArrowUp}");
+    expect(onNudge.mock.calls).toEqual([
+      [-1, 0],
+      [0, 1],
+      [1, 0],
+      [0, -1],
+    ]);
   });
 
-  /**
-   * The press is consumed, so the browser's own horizontal scroll — and any walk a host binds
-   * over the row — never sees a key the grip has already answered. `defaultPrevented` is what
-   * every handshake in this app reads, `useDismissOnEscape`'s two stacks included.
-   */
-  it("consumes the arrow keys it answers, and leaves the rest alone", () => {
+  it("consumes the arrow keys the grip answers, and leaves the rest alone", () => {
     render(<WidgetCard {...props({ editing: true })} />);
     const grip = screen.getByRole("button", { name: GRIP });
 
-    const left = new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true, cancelable: true });
-    grip.dispatchEvent(left);
-    expect(left.defaultPrevented).toBe(true);
-
-    // A key it does not answer falls through untouched — the grip is not a keyboard trap.
     const up = new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true });
-    grip.dispatchEvent(up);
-    expect(up.defaultPrevented).toBe(false);
+    fireEvent(grip, up);
+    expect(up.defaultPrevented).toBe(true);
+
+    const tab = new KeyboardEvent("keydown", { key: "PageDown", bubbles: true, cancelable: true });
+    fireEvent(grip, tab);
+    expect(tab.defaultPrevented).toBe(false);
   });
 
-  /** The grip is what the host registers as the drag handle, and it hands the element back. */
-  it("hands the grip back through dragHandleRef, and hands back null when edit mode ends", () => {
-    const dragHandleRef = vi.fn();
-    const view = render(<WidgetCard {...props({ editing: true, dragHandleRef })} />);
+  /** The corner is the resize: a press hands the gesture to the page, and never also a move. */
+  it("starts a resize from the corner, and grows by a cell per arrow key", async () => {
+    const user = userEvent.setup();
+    const onResizeStart = vi.fn();
+    const onDragStart = vi.fn();
+    const onGrow = vi.fn();
+    render(<WidgetCard {...props({ editing: true, onResizeStart, onDragStart, onGrow })} />);
 
-    expect(dragHandleRef).toHaveBeenCalledWith(screen.getByRole("button", { name: GRIP }));
+    const corner = screen.getByRole("button", { name: RESIZE });
+    fireEvent.pointerDown(corner);
+    expect(onResizeStart).toHaveBeenCalledTimes(1);
+    expect(onDragStart).not.toHaveBeenCalled();
 
-    view.rerender(<WidgetCard {...props({ editing: false, dragHandleRef })} />);
-    expect(dragHandleRef).toHaveBeenLastCalledWith(null);
+    corner.focus();
+    await user.keyboard("{ArrowRight}{ArrowDown}");
+    expect(onGrow.mock.calls).toEqual([
+      [1, 0],
+      [0, 1],
+    ]);
+  });
+
+  describe("picking the card up", () => {
+    it("starts a drag from a press anywhere on the card while customizing", () => {
+      const onDragStart = vi.fn();
+      render(<WidgetCard {...props({ editing: true, onDragStart })} />);
+
+      fireEvent.pointerDown(screen.getByRole("region", { name: TITLE }));
+      expect(onDragStart).toHaveBeenCalledTimes(1);
+
+      // The grip is where the drag is advertised, so a press on it is a press on the card.
+      fireEvent.pointerDown(screen.getByRole("button", { name: GRIP }));
+      expect(onDragStart).toHaveBeenCalledTimes(2);
+    });
+
+    /** Everything that is a control of its own carries `data-no-drag`, and a press there is a
+     *  press. */
+    it("ignores a press on anything marked data-no-drag", () => {
+      const onDragStart = vi.fn();
+      render(<WidgetCard {...props({ editing: true, onDragStart })} />);
+
+      fireEvent.pointerDown(screen.getByRole("textbox", { name: FIELD }));
+      fireEvent.pointerDown(screen.getByRole("group", { name: TRAY }));
+      fireEvent.pointerDown(screen.getByRole("button", { name: SETTINGS }));
+      fireEvent.pointerDown(screen.getByRole("button", { name: RESIZE }));
+      expect(onDragStart).not.toHaveBeenCalled();
+    });
+
+    it("starts nothing at rest, on a stacked page, or from a secondary press", () => {
+      const onDragStart = vi.fn();
+      const view = render(<WidgetCard {...props({ onDragStart })} />);
+      fireEvent.pointerDown(screen.getByRole("region", { name: TITLE }));
+
+      view.rerender(<WidgetCard {...props({ editing: true, arrangeable: false, onDragStart })} />);
+      fireEvent.pointerDown(screen.getByRole("region", { name: TITLE }));
+
+      view.rerender(<WidgetCard {...props({ editing: true, onDragStart })} />);
+      fireEvent.pointerDown(screen.getByRole("region", { name: TITLE }), { button: 2 });
+
+      expect(onDragStart).not.toHaveBeenCalled();
+    });
   });
 
   /**
-   * The width toggle is a toggle rather than two buttons, so its name never moves and
-   * `aria-pressed` is the whole of what says which state it is in.
+   * **The body is inert while customizing**, so a press on a deck tile falls through to the card
+   * and nothing in the body takes the caret. It is inert on the contents rather than on the
+   * scroller, so a body taller than its card still scrolls.
    */
-  it("toggles the width, and says which state it is in", async () => {
-    const user = userEvent.setup();
-    const onSpan = vi.fn();
-    const view = render(<WidgetCard {...props({ editing: true, onSpan })} />);
-
-    const narrow = screen.getByRole("button", { name: WIDTH });
-    expect(narrow).toHaveAttribute("aria-pressed", "false");
-    await user.click(narrow);
-    expect(onSpan).toHaveBeenCalledWith(2);
-
-    view.rerender(<WidgetCard {...props({ editing: true, span: 2, onSpan })} />);
-    const wide = screen.getByRole("button", { name: WIDTH });
-    expect(wide).toHaveAttribute("aria-pressed", "true");
-    await user.click(wide);
-    expect(onSpan).toHaveBeenLastCalledWith(1);
-  });
-
-  it("removes the widget", async () => {
-    const user = userEvent.setup();
-    const onRemove = vi.fn();
-    render(<WidgetCard {...props({ editing: true, onRemove })} />);
-
-    await user.click(screen.getByRole("button", { name: REMOVE }));
-    expect(onRemove).toHaveBeenCalledTimes(1);
-  });
-
-  /**
-   * **`classList.contains`, never a string match on `className`** — a `hover:` variant makes a
-   * substring assertion vacuous, since `hover:flex-1` contains `flex-1`.
-   *
-   * The two are exclusive: a full-width card must not also carry the narrow card's floor, or a
-   * `min-w-[22rem]` would be a floor under a box that is meant to be the whole line.
-   */
-  it("picks the wide box at span 2 and the narrow one at span 1", () => {
+  it("makes the body inert while customizing, and live at rest", () => {
     const view = render(<WidgetCard {...props()} />);
+    const body = () => screen.getByRole("button", { name: "Nine thousand cards" }).parentElement!;
+    expect(body()).not.toHaveAttribute("inert");
 
-    const narrow = screen.getByRole("region", { name: HEADING });
-    for (const token of WIDGET_CARD_BOX.split(" ")) {
-      expect(narrow.classList.contains(token)).toBe(true);
-    }
-    expect(narrow.classList.contains(WIDGET_CARD_WIDE)).toBe(false);
+    view.rerender(<WidgetCard {...props({ editing: true })} />);
+    expect(body()).toHaveAttribute("inert");
+    // The scroller itself is not, which is what keeps the wheel working.
+    expect(body().parentElement).not.toHaveAttribute("inert");
+    expect(body().parentElement!.classList.contains("overflow-y-auto")).toBe(true);
+  });
 
-    view.rerender(<WidgetCard {...props({ span: 2 })} />);
-    const wide = screen.getByRole("region", { name: HEADING });
-    expect(wide.classList.contains(WIDGET_CARD_WIDE)).toBe(true);
-    for (const token of WIDGET_CARD_BOX.split(" ")) {
-      expect(wide.classList.contains(token)).toBe(false);
-    }
+  /** A still preview clips where a live card scrolls, and its body is inert too. */
+  it("clips a still preview's body rather than scrolling it", () => {
+    render(<WidgetCard {...props({ still: true })} />);
+    const body = screen.getByRole("button", { name: "Nine thousand cards" }).parentElement!;
+    expect(body).toHaveAttribute("inert");
+    expect(body.parentElement!.classList.contains("overflow-y-hidden")).toBe(true);
+    expect(body.parentElement!.classList.contains("overflow-y-auto")).toBe(false);
   });
 
   /**
-   * **`aria-disabled`, never the attribute.** Nothing in the tray greys today, and this is what
-   * keeps it that way by the honest route: a control given the attribute leaves the tab order,
-   * so a reader sweeping the row would find the card's own affordances gone rather than out of
-   * reach.
+   * **The card does not clip** — its popovers open past its edge. `classList.contains`, never a
+   * string match: a `hover:` variant makes a substring assertion vacuous.
+   */
+  it("never clips the card itself", () => {
+    render(<WidgetCard {...props({ editing: true })} />);
+    const card = screen.getByRole("region", { name: TITLE });
+    expect(card.classList.contains("overflow-hidden")).toBe(false);
+  });
+
+  /** The chip is a band's and a row's, never a tile's: at two cells the title needs the room. */
+  it("draws the chip only on a card at least four cells wide", () => {
+    const wide = widget({ w: 4, config: { dimension: "set" } });
+    const view = render(
+      <WidgetCard
+        {...props({
+          widget: wide,
+          fit: makeFit({ w: 4, h: 3, widthPx: 460, heightPx: 340, density: "comfortable" }),
+        })}
+      />,
+    );
+    expect(within(screen.getByRole("region", { name: TITLE })).getByText("Set")).toBeInTheDocument();
+
+    const narrow = widget({ w: 3, config: { dimension: "set" } });
+    view.rerender(
+      <WidgetCard
+        {...props({
+          widget: narrow,
+          fit: makeFit({ w: 3, h: 3, widthPx: 340, heightPx: 340, density: "comfortable" }),
+        })}
+      />,
+    );
+    expect(within(screen.getByRole("region", { name: TITLE })).queryByText("Set")).toBeNull();
+  });
+
+  describe("the settings popover", () => {
+    it("opens the kind's settings, wired to the page's handlers", async () => {
+      const user = userEvent.setup();
+      const onGrow = vi.fn();
+      const onConfig = vi.fn();
+      render(
+        <WidgetCard
+          {...props({
+            editing: true,
+            onGrow,
+            onConfig,
+            widget: widget({ w: 3 }),
+            canGrow: () => true,
+            extraSettings: <p>Pinned decks</p>,
+          })}
+        />,
+      );
+
+      await user.click(screen.getByRole("button", { name: SETTINGS }));
+      const panel = within(await screen.findByRole("dialog", { name: `${TITLE} settings` }));
+
+      await user.click(panel.getByRole("button", { name: `Wider, ${TITLE}` }));
+      expect(onGrow).toHaveBeenCalledWith(1, 0);
+      await user.click(panel.getByRole("button", { name: "Finish" }));
+      expect(onConfig).toHaveBeenCalledWith({ dimension: "finish" });
+      expect(panel.getByText("Pinned decks")).toBeInTheDocument();
+    });
+
+    it("closes from its own ✕ and hands the caret back to the trigger", async () => {
+      const user = userEvent.setup();
+      render(<WidgetCard {...props({ editing: true })} />);
+
+      const trigger = screen.getByRole("button", { name: SETTINGS });
+      await user.click(trigger);
+      const panel = await screen.findByRole("dialog", { name: `${TITLE} settings` });
+      await user.click(within(panel).getByRole("button", { name: "Close settings" }));
+
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog", { name: `${TITLE} settings` })).toBeNull(),
+      );
+      expect(trigger).toHaveFocus();
+    });
+  });
+
+  describe("removing the card", () => {
+    /** The card asks before it goes — its settings go with it, which is not a thing to lose to a
+     *  stray press on a page being rearranged. */
+    it("asks first, and Keep takes nothing off the page", async () => {
+      const user = userEvent.setup();
+      const onRemove = vi.fn();
+      render(<WidgetCard {...props({ editing: true, onRemove })} />);
+
+      const trigger = screen.getByRole("button", { name: REMOVE });
+      await user.click(trigger);
+      expect(onRemove).not.toHaveBeenCalled();
+
+      const question = await screen.findByRole("dialog", { name: `Remove ${TITLE}?` });
+      expect(question).toHaveTextContent(`Take ${TITLE} off the page?`);
+      expect(question).toHaveTextContent(
+        "Its settings go with it. You can add it again from the catalogue.",
+      );
+
+      await user.click(within(question).getByRole("button", { name: "Keep" }));
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog", { name: `Remove ${TITLE}?` })).toBeNull(),
+      );
+      expect(trigger).toHaveFocus();
+      expect(onRemove).not.toHaveBeenCalled();
+    });
+
+    it("removes the card on Remove", async () => {
+      const user = userEvent.setup();
+      const onRemove = vi.fn();
+      render(<WidgetCard {...props({ editing: true, onRemove })} />);
+
+      await user.click(screen.getByRole("button", { name: REMOVE }));
+      const question = await screen.findByRole("dialog", { name: `Remove ${TITLE}?` });
+      await user.click(within(question).getByRole("button", { name: "Remove" }));
+      expect(onRemove).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  /**
+   * **`aria-disabled`, never the attribute.** A control given the attribute leaves the tab order,
+   * so a reader sweeping the card would find its affordances gone rather than out of reach.
    */
   it("greys nothing with the disabled attribute", () => {
-    render(<WidgetCard {...props({ editing: true, settings: <p>Dimension</p> })} />);
-
+    render(<WidgetCard {...props({ editing: true })} />);
     for (const button of screen.getAllByRole("button")) {
       expect(button).not.toHaveAttribute("disabled");
     }
   });
 
   /**
-   * Every control is reachable by keyboard, in the order it is drawn — the widget's own control
-   * first, then the tray. A drag grip a caret cannot reach is a reorder half the readers do not
-   * have, and a settings popover behind one is a configuration only a mouse can change.
+   * Every control is on the tab path, in the order it is drawn.
    *
-   * No assertion about a focus **ring**: this app redefines `focus-visible` as
-   * `&:is(html[data-kbd] *):focus-visible`, so the mark is a fact about modality rather than
-   * about the control, and jsdom applies no stylesheet either way.
+   * The body is given nothing focusable here, and that is jsdom's limit rather than a gap in the
+   * claim: user-event's Tab walk does not read `inert`, so a button in an inert body would be
+   * reached in the suite and skipped in the window. The inert attribute is pinned above instead.
    */
-  it("puts every control on the tab path", async () => {
+  it("puts every control on the tab path, in the order it is drawn", async () => {
     const user = userEvent.setup();
-    render(
-      <WidgetCard
-        {...props({
-          editing: true,
-          settings: <p>Dimension</p>,
-          actions: <button type="button">By rarity</button>,
-        })}
-      />,
-    );
+    render(<WidgetCard {...props({ editing: true, children: <p>Nine thousand cards</p> })} />);
 
     const order = [
-      screen.getByRole("button", { name: "By rarity" }),
       screen.getByRole("button", { name: GRIP }),
-      screen.getByRole("button", { name: WIDTH }),
+      screen.getByRole("textbox", { name: FIELD }),
       screen.getByRole("button", { name: SETTINGS }),
       screen.getByRole("button", { name: REMOVE }),
+      screen.getByRole("button", { name: RESIZE }),
     ];
     for (const control of order) {
       await user.tab();

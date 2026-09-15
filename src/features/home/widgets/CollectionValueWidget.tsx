@@ -2,112 +2,112 @@
  * What the collection is worth, and where the money is — one total, and one bar per bucket of
  * whichever dimension the reader picked.
  *
- * **It is a `Track` chart and deliberately not a `BarChart`, which is the one place this widget
- * departs from the deck stats band it borrows everything else from.** `BarChart` prints
- * `bar.count` on the fill verbatim, so a money figure would appear as `412.37` — unformatted, in
- * no currency, beside a total that says `$412.37` — and its bars are vertical, which puts a set
- * name under a 40px column in a card whose floor is 22rem. The `set` dimension answers one row
- * per set the reader owns a card from, which is hundreds. So the bars run **across**: a word, a
- * track, and the money at the right, eight of them, with everything past the eighth folded into
- * one `Other`. Every rule `StatsCard` states still binds — see the two below.
+ * **A body, not a card.** `WidgetCard` draws the title, the chip that says *Rarity*, and the
+ * settings popover where the dimension, the chart and the totals switch are chosen — the registry
+ * rows `dimension`, `chart` and `figures` in `widgets.ts`. This file reads those three and draws
+ * what fits in the box it was handed, from the shared pieces in `WidgetParts.tsx`.
  *
- * **The whole drawing is `aria-hidden` and each bar carries one `sr-only` sentence.** That is
- * the band's standing rule and the reason there is no `role="img"` and no chart library: the
- * picture is decoration over numbers that are already text. It is also why nothing here is a
- * control — a bar is a `<span>`, and making one narrow the collection is a cross-page feature
- * that is explicitly not in this pass.
+ * **Bars that run across rather than a `BarChart`**, which is the one place this widget departs
+ * from the deck stats band it borrows everything else from. `BarChart` prints `bar.count` on the
+ * fill verbatim, so a money figure would appear as `412.37` — unformatted, in no currency, beside a
+ * total that says `$412.37` — and its bars are vertical, which puts a set name under a 40px column.
+ * The `set` dimension answers one row per set the reader owns a card from, which is hundreds, so
+ * the bars run **across**: a word, a track, and the money at the right, as many as the card has
+ * whole rows for, with everything past the last one folded into one `Other`.
+ *
+ * **The whole drawing is `aria-hidden` and each bar carries one `sr-only` sentence** —
+ * `WidgetBars`' contract, and the band's standing rule: the picture is decoration over numbers
+ * that are already text. Nothing here is a control, and nothing here writes, which is why a
+ * catalogue preview (`still`) needs no branch of its own.
  *
  * **`WishlistValueWidget` is this widget against the other list and is a separate component on
  * purpose** — the two lists' empty states and price notes differ, and the day one of them grows
  * a third figure is the day a shared component grows a flag. Do not merge them.
  */
-import { useMemo, type JSX } from "react";
+import type { ReactElement } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Dropdown } from "@/components/Dropdown/Dropdown";
-import { Figure, FigureRow } from "@/components/Figure";
-import { percent, Track } from "@/features/decks/stats/StatsCard";
+import { percent } from "@/features/decks/stats/StatsCard";
 import { count } from "@/lib/counts";
 import { finishLabel } from "@/lib/finish";
-import { ipc, ipcError, type BreakdownRow, type CollectionSummary } from "@/lib/ipc";
+import {
+  ipc,
+  ipcError,
+  type BreakdownRow,
+  type CollectionSummary,
+  type HomeWidget,
+} from "@/lib/ipc";
 import { MANA_FILL, MANA_KEYS, MANA_LABEL, type ManaKey } from "@/lib/mana";
 import type { Marketplace } from "@/lib/marketplace";
-import { sortOptions } from "@/lib/options";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { collectionBreakdownKey, collectionTotalKey } from "../keys";
-import { widgetConfig, widgetSpan } from "../layout";
-import { WidgetCard } from "../WidgetCard";
-import type { WidgetProps } from "../widgetProps";
-import { BREAKDOWN_DIMENSIONS, WIDGETS, type BreakdownDimension } from "../widgets";
+import {
+  WidgetBars,
+  WidgetFigures,
+  WidgetFooter,
+  WidgetMessage,
+  WidgetRow,
+  WidgetRowList,
+  type WidgetBarItem,
+} from "../WidgetParts";
+import type { WidgetBodyProps } from "../widgetProps";
+import { pickOf, toggleOn } from "../widgetSettings";
+import { BREAKDOWN_DIMENSIONS, type BreakdownDimension } from "../widgets";
 
 /**
- * The card's heading, read off the registry rather than typed here.
- *
- * `WIDGET_META` is a `Record<WidgetKind, …>`, so the row exists by construction and the `??` is
- * what the type system asks for rather than a second opinion about the words — what it buys is
- * that the **Add widget** menu row and the card it adds cannot come to say two different things.
- */
-const HEADING =
-  WIDGETS.find((meta) => meta.kind === "collectionValue")?.label ?? "Collection value";
-
-/**
- * The dimension a widget that has never been configured opens on.
+ * The dimension a widget opens on when nothing usable is stored.
  *
  * Rarity rather than set, because it is the one cut whose buckets are the same handful for every
  * reader — a first launch showing four bars says what the widget is, where a first launch showing
- * eight set codes out of six hundred says what one collection happens to hold.
+ * eight set codes out of six hundred says what one collection happens to hold. It is also the
+ * registry's first option, which is what `pickOf` answers for a word no option carries; this
+ * constant is the answer for the one case `pickOf` cannot reach, a kind this build does not know.
  */
 export const DEFAULT_BREAKDOWN_DIMENSION: BreakdownDimension = "rarity";
 
-/** What this widget remembers. One field today; {@link widgetConfig} carries a newer build's
- *  keys through untouched, which is why the write below spreads the config it read. */
-export interface CollectionValueConfig {
-  dimension: BreakdownDimension;
+/**
+ * Which column this widget groups over — the registry pick, narrowed to the type.
+ *
+ * `pickOf` has already refused a word no option carries (a hand-edited row, a newer build's), so
+ * the lookup here only turns `string | number` into {@link BreakdownDimension} without a cast. A
+ * stored `dimension: "bogus"` sent on would reach `collection_breakdown`'s four `match` arms and
+ * come back as a refusal — a card that reads as broken because of a word nobody can see.
+ */
+export function collectionDimension(widget: HomeWidget): BreakdownDimension {
+  const picked = pickOf(widget, "dimension");
+  return (
+    BREAKDOWN_DIMENSIONS.find((entry) => entry.id === picked)?.id ?? DEFAULT_BREAKDOWN_DIMENSION
+  );
 }
 
-// The two keys this widget reads through live in `../keys` — `collectionTotalKey` is also
-// `SummaryWidget`'s collection figure, and one definition is what keeps the pair one fetch. The
-// argument for the shape of each, `"home"` included, is in that file's module doc.
+/**
+ * The pixels one bar takes, and one single-line row — `WidgetBars`' label line over its 6px track,
+ * and `WidgetRow`'s 20px line in its padding and border. The design's figure, and close enough to
+ * both drawings that a whole-row count against it never clips a bar.
+ */
+const ROW_PX = 32;
 
 /**
- * The picker's rows, built once.
- *
- * Through `sortOptions` like every option list in this app — `widgets.ts` says in as many words
- * that `BREAKDOWN_DIMENSIONS`' own order is the order the record was written in and not the
- * order a reader sees.
+ * A row on a two-cell tile, where the money moves under the name (`WidgetRow`'s doc): a 20px name
+ * and a 16px caption in the same padding. Counting those against {@link ROW_PX} would promise a
+ * row the tile does not have, and the last one would be cut through by the card's edge.
  */
-const DIMENSION_OPTIONS = sortOptions(BREAKDOWN_DIMENSIONS, (entry) => entry.label).map(
-  (entry) => ({
-    value: entry.id,
-    label: entry.label,
-  }),
-);
+const TWO_LINE_ROW_PX = 48;
 
-/**
- * How many bars are drawn before the rest are folded into one.
- *
- * Eight is what a 22rem card holds without the labels truncating, and it is a **cap on the
- * drawing rather than on the read**: the fold keeps every bucket's cards and money, so the bars
- * still sum to the total above them, which is the property `BreakdownRow`'s own doc promises.
- */
-const MAX_BARS = 8;
+/** The figure line's height, comfortable and compact — the design's two numbers. */
+const FIGURES_PX = 74;
+const FIGURES_COMPACT_PX = 62;
+
+/** The footer's line and the gap above it. */
+const FOOTER_PX = 22;
 
 /** The folded bar's key. Not a value any backend dimension answers with — the four vocabularies
  *  are rarity words, colour letters, set codes and finishes — so it cannot collide with a bucket. */
 const OTHER_KEY = "__other__";
 
-/**
- * The width a bar with money in it never falls below.
- *
- * `BarChart`'s `minHeight` rule, one axis over and for its reason: a bucket worth two dollars
- * against a bucket worth two thousand rounds to nothing, and an invisible fill beside a figure
- * that says `$2.00` reads as a bug rather than as a small number. A bucket worth **nothing** —
- * priced at zero, or priced not at all — draws no fill, which is the honest answer.
- */
-const MIN_FILL_PX = 3;
-
 /** Anything that is not a colour bucket. The accent, which is what every chart in the band that
- *  is not about mana is filled with. */
+ *  is not about mana is filled with — and which `WidgetBars` knows to print the money beside in
+ *  dim ink rather than in gold. */
 const NEUTRAL_FILL = "var(--color-accent)";
 
 /** Two or more colours. Gold is what multicolour is in Magic and what this palette already
@@ -119,8 +119,8 @@ const MULTI_FILL = "var(--color-pie-gold)";
 const COLOURLESS_KEY = "c";
 const MULTI_KEY = "multi";
 
-/** One drawn bar: a bucket, worded and coloured. */
-interface ValueBar {
+/** One drawn bucket, worded and coloured — the same record whether it becomes a bar or a row. */
+interface ValueBucket {
   key: string;
   /** The word under the eye — a rarity, a colour, a set's name, a finish. */
   label: string;
@@ -130,6 +130,8 @@ interface ValueBar {
   /** A CSS colour string. **Never a `bg-mana-${key}`** — Tailwind scans source text for whole
    *  class names, so an interpolated one emits no rule at all, silently and only in a build. */
   fill: string;
+  /** The stored rarity word, for the gem before the label — `rarity` buckets only. */
+  rarity?: string;
   /** The tail of the spoken sentence, after the count — `"of Common rarity"`. */
   said: string;
 }
@@ -169,7 +171,7 @@ function capitalised(word: string): string {
  * sentence is written `"{n} cards {said}"`, so a tail beginning with a verb reads *"1 card are
  * commons"* at exactly the count a small bucket puts on screen. And each phrase **names the
  * cut** rather than only the bucket — `Alpha` heard alone after a count is a proper noun with no
- * question attached to it, and the picker that decides which question is being asked is
+ * question attached to it, and the settings popover that decides which question is being asked is
  * somewhere the reader listening is not.
  */
 const SAID: Record<BreakdownDimension, { one: (label: string) => string; rest: string }> = {
@@ -195,59 +197,80 @@ function labelOf(dimension: BreakdownDimension, row: BreakdownRow): string {
 }
 
 /**
- * The buckets, ranked and capped.
+ * The buckets, ranked — biggest money first, with the unpriced buckets last.
  *
- * **Ranked by value, biggest first, with the unpriced buckets last**, and that is one rule for
- * four dimensions rather than four orderings: this widget answers *where is the money*, so the
- * order **is** the information — which is also what makes the fold honest, since what it folds
- * away is always the smallest. A bucket the marketplace could price nothing in has no value to
- * rank by and sinks to the foot, where its em dash sits beside the other em dashes rather than
- * in the middle of the money.
- *
- * The fold keeps both figures: cards are summed, and values are summed **skipping the nulls**, so
- * that a fold holding one priced bucket is worth what that bucket is worth and a fold holding
- * none stays `null` rather than becoming `$0.00`. That is `sum()` over a `NULL` in SQL, and it is
- * the rule `WishlistPage`'s folder subtotals already keep.
+ * **One rule for four dimensions rather than four orderings**: this widget answers *where is the
+ * money*, so the order **is** the information — which is also what makes the fold honest, since
+ * what it folds away is always the smallest. A bucket the marketplace could price nothing in has
+ * no value to rank by and sinks to the foot, where its em dash sits beside the other em dashes
+ * rather than in the middle of the money.
  */
-function foldBars(rows: readonly BreakdownRow[], dimension: BreakdownDimension): ValueBar[] {
+function rankBuckets(rows: readonly BreakdownRow[], dimension: BreakdownDimension): ValueBucket[] {
   const said = SAID[dimension];
-  const ranked = [...rows].sort((a, b) => {
-    if (a.value === null && b.value === null) return b.cards - a.cards;
-    if (a.value === null) return 1;
-    if (b.value === null) return -1;
-    return b.value - a.value || b.cards - a.cards;
-  });
-  const bars: ValueBar[] = ranked.slice(0, MAX_BARS).map((row) => {
-    const label = labelOf(dimension, row);
-    return {
-      key: row.key,
-      label,
-      cards: row.cards,
-      value: row.value,
-      fill: dimension === "color" ? colourFill(row.key) : NEUTRAL_FILL,
-      said: said.one(label),
-    };
-  });
-  const rest = ranked.slice(MAX_BARS);
-  if (rest.length === 0) return bars;
+  return [...rows]
+    .sort((a, b) => {
+      if (a.value === null && b.value === null) return b.cards - a.cards;
+      if (a.value === null) return 1;
+      if (b.value === null) return -1;
+      return b.value - a.value || b.cards - a.cards;
+    })
+    .map((row) => {
+      const label = labelOf(dimension, row);
+      return {
+        key: row.key,
+        label,
+        cards: row.cards,
+        value: row.value,
+        fill: dimension === "color" ? colourFill(row.key) : NEUTRAL_FILL,
+        rarity: dimension === "rarity" ? row.key : undefined,
+        said: said.one(label),
+      };
+    });
+}
+
+/**
+ * The ranked buckets cut to the whole rows the card has, **with what does not fit folded into
+ * one `Other` so the drawn buckets still sum to the total** — the property `BreakdownRow`'s own
+ * doc promises, and the difference between a chart that is shorter and one that is wrong.
+ *
+ * So when the list is longer than the room, the last slot is the fold rather than one more
+ * bucket. The fold keeps both figures: cards are summed, and values are summed **skipping the
+ * nulls**, so a fold holding one priced bucket is worth what that bucket is worth and a fold
+ * holding none stays `null` rather than becoming `$0.00`. That is `sum()` over a `NULL` in SQL,
+ * and the rule `WishlistPage`'s folder subtotals already keep.
+ *
+ * **One slot is the exception, and it draws the largest bucket alone rather than a lone
+ * `Other`.** A fold with nothing beside it is a bar at full width saying *every other rarity* of
+ * no rarity at all — the total a second time, in a sentence that does not parse. The one bucket
+ * it draws speaks its share *of the whole* (the denominator is every row, see the body), so it
+ * claims to be a part and never the sum.
+ */
+function fitBuckets(
+  ranked: readonly ValueBucket[],
+  room: number,
+  dimension: BreakdownDimension,
+): ValueBucket[] {
+  if (ranked.length <= room) return [...ranked];
+  if (room <= 1) return ranked.slice(0, room);
+  const rest = ranked.slice(room - 1);
   return [
-    ...bars,
+    ...ranked.slice(0, room - 1),
     {
       key: OTHER_KEY,
       label: "Other",
-      cards: rest.reduce((total, row) => total + row.cards, 0),
+      cards: rest.reduce((total, bucket) => total + bucket.cards, 0),
       value: rest.reduce<number | null>(
-        (total, row) => (row.value === null ? total : (total ?? 0) + row.value),
+        (total, bucket) => (bucket.value === null ? total : (total ?? 0) + bucket.value),
         null,
       ),
       fill: NEUTRAL_FILL,
-      said: said.rest,
+      said: SAID[dimension].rest,
     },
   ];
 }
 
 /**
- * The sentence one bar is spoken as — the whole of what a screen reader gets, since the drawing
+ * The sentence one bucket is spoken as — the whole of what a screen reader gets, since the drawing
  * beside it is `aria-hidden`.
  *
  * It carries the share as well as the money, because the share is exactly what the **track**
@@ -256,89 +279,29 @@ function foldBars(rows: readonly BreakdownRow[], dimension: BreakdownDimension):
  * no price says so in words instead — `"worth —"` is an em dash read aloud, which is the one
  * place this app's price em dash does not survive being spoken.
  */
-function sentence(bar: ValueBar, total: number, marketplace: Marketplace): string {
-  const cards = `${count(bar.cards)} ${bar.cards === 1 ? "card" : "cards"} ${bar.said}`;
-  if (bar.value === null) return `${cards}, with no ${marketplace.label} price`;
-  const share = total > 0 ? bar.value / total : null;
-  const money = formatPrice(bar.value, marketplace.currency);
+function sentence(bucket: ValueBucket, total: number, marketplace: Marketplace): string {
+  const cards = `${count(bucket.cards)} ${bucket.cards === 1 ? "card" : "cards"} ${bucket.said}`;
+  if (bucket.value === null) return `${cards}, with no ${marketplace.label} price`;
+  const share = total > 0 ? bucket.value / total : null;
+  const money = formatPrice(bucket.value, marketplace.currency);
   return share === null
     ? `${cards}, worth ${money}`
     : `${cards}, worth ${money}, ${percent(share)} of the total`;
 }
 
 /**
- * The bars.
+ * The collection's value, split one of four ways, fitted to its box.
  *
- * **`max` is the caller's and is required rather than defaulted**, which is `BarChart`'s rule
- * kept verbatim: it is the figure every fill is drawn as a fraction of, and a component that
- * quietly took `Math.max` of what it was handed is a component nobody can normalise two charts
- * against. `total` is the separate figure the spoken share is a share *of* — the two are the
- * largest bucket and every bucket added up, and they are never the same question.
+ * **Figures first, chart second**: a small tile is an honest pair of figures, where two bars it has
+ * no room for are two bars drawn through the bottom edge of the card. So the figure line and the
+ * footer are reserved first and the chart gets the whole rows that are left — and **zero is a real
+ * answer**, which draws no chart and no footer rather than one bar the card clips.
  */
-function ValueBars({
-  bars,
-  max,
-  total,
-  marketplace,
-}: {
-  bars: readonly ValueBar[];
-  max: number;
-  total: number;
-  marketplace: Marketplace;
-}): JSX.Element {
-  return (
-    <ul className="flex flex-col gap-2">
-      {bars.map((bar) => (
-        <li key={bar.key}>
-          <span className="sr-only">{sentence(bar, total, marketplace)}</span>
-          {/* Everything below is the picture. It says nothing the sentence above has not already
-              said, which is what the `aria-hidden` here is a claim about. */}
-          <div aria-hidden="true" className="flex flex-col gap-1">
-            <div className="flex items-baseline justify-between gap-2">
-              <span className="min-w-0 truncate text-sm text-text">{bar.label}</span>
-              <span className="shrink-0 font-mono text-sm tabular-nums text-dim">
-                {formatPrice(bar.value, marketplace.currency)}
-              </span>
-            </div>
-            <Track
-              share={max > 0 && bar.value !== null ? bar.value / max : 0}
-              fill={bar.fill}
-              height={6}
-              style={{ minWidth: bar.value !== null && bar.value > 0 ? MIN_FILL_PX : 0 }}
-            />
-          </div>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-/**
- * The collection's value, split one of four ways.
- *
- * @param widget the stored entry. `config.dimension` is read through {@link widgetConfig} and
- * then **narrowed against `BREAKDOWN_DIMENSIONS` here**, because that helper checks a *shape*
- * and cannot check a vocabulary — a stored `dimension: "bogus"` is a string and passes it. The
- * backend refuses a fifth word in a sentence, so an unnarrowed one would cost the reader their
- * bars and hand them a refusal to read.
- */
-export function CollectionValueWidget({
-  widget,
-  editing,
-  onConfig,
-  onRemove,
-  onSpan,
-  dragHandleRef,
-  onNudge,
-}: WidgetProps): JSX.Element {
+export function CollectionValueWidget({ widget, fit }: WidgetBodyProps): ReactElement {
   const { marketplace } = useMarketplace();
-
-  const config = widgetConfig<CollectionValueConfig>(widget, {
-    dimension: DEFAULT_BREAKDOWN_DIMENSION,
-  });
-  const dimension =
-    BREAKDOWN_DIMENSIONS.find((entry) => entry.id === config.dimension)?.id ??
-    DEFAULT_BREAKDOWN_DIMENSION;
+  const dimension = collectionDimension(widget);
+  const asList = pickOf(widget, "chart") === "list";
+  const withFigures = toggleOn(widget, "figures");
 
   const total = useQuery({
     queryKey: collectionTotalKey(marketplace.id),
@@ -352,80 +315,109 @@ export function CollectionValueWidget({
     queryFn: (): Promise<BreakdownRow[]> => ipc.collectionBreakdown(dimension, marketplace.id),
   });
 
-  const bars = useMemo(
-    () => foldBars(breakdown.data ?? [], dimension),
-    [breakdown.data, dimension],
-  );
-  // Reduced rather than spread: `Math.max(...[])` is `-Infinity`, which would draw every fill of
-  // an empty chart at full width. Both figures are computed here and passed down — see
-  // `ValueBars`, where they are two different questions.
-  const max = bars.reduce((tallest, bar) => Math.max(tallest, bar.value ?? 0), 0);
-  const summed = bars.reduce((sum, bar) => sum + (bar.value ?? 0), 0);
-
   const failure = total.error ?? breakdown.error;
+
+  // Three states, three sentences, and the order is what keeps them apart. A refusal wins,
+  // because a card that went on saying "counting" over a read which will never answer is the
+  // one failure a reader cannot act on.
+  if (failure !== null) {
+    return (
+      <WidgetMessage tone="destructive">
+        Your collection could not be read. {ipcError(failure)}
+      </WidgetMessage>
+    );
+  }
+  if (total.data === undefined || breakdown.data === undefined) {
+    return <WidgetMessage>Counting your collection…</WidgetMessage>;
+  }
+
   const summary = total.data;
+  const ranked = rankBuckets(breakdown.data, dimension);
+  // Every bucket, not the drawn ones: the spoken share is a share of the whole, and a fold that
+  // was cut differently on a smaller card must not change what a percentage is of.
+  const whole = ranked.reduce((sum, bucket) => sum + (bucket.value ?? 0), 0);
+
+  const twoLine = asList && fit.tier === 0;
+  const withFooter = fit.tier >= 2 && fit.h >= 2;
+  const reserved =
+    (withFigures ? (fit.compact ? FIGURES_COMPACT_PX : FIGURES_PX) : 0) +
+    (withFooter ? FOOTER_PX : 0);
+  const rowsOfRoom = fit.fitCount(twoLine ? TWO_LINE_ROW_PX : ROW_PX, reserved);
+  // A list is laid out in `listColumns`, so each whole row holds that many buckets; bars are one
+  // to a row whatever the width.
+  const room = asList ? rowsOfRoom * fit.listColumns : rowsOfRoom;
+  const shown = fitBuckets(ranked, room, dimension);
+
+  // Reduced rather than spread: `Math.max(...[])` is `-Infinity`. The widest bar is what every
+  // fill is a fraction of — `WidgetBarItem.share`'s contract — and it is a different question
+  // from `whole`, which the sentence's share is a share *of*.
+  const widest = shown.reduce((tallest, bucket) => Math.max(tallest, bucket.value ?? 0), 0);
+
+  const empty = ranked.length === 0;
+  const charted = !empty && shown.length > 0;
+  const dimensionWord =
+    BREAKDOWN_DIMENSIONS.find((entry) => entry.id === dimension)?.label.toLowerCase() ?? dimension;
+
+  const bars: WidgetBarItem[] = shown.map((bucket) => ({
+    key: bucket.key,
+    label: bucket.label,
+    value: formatPrice(bucket.value, marketplace.currency),
+    share: widest > 0 && bucket.value !== null ? bucket.value / widest : 0,
+    fill: bucket.fill,
+    rarity: bucket.rarity,
+    said: sentence(bucket, whole, marketplace),
+  }));
 
   return (
-    <WidgetCard
-      heading={HEADING}
-      editing={editing}
-      span={widgetSpan(widget)}
-      actions={
-        <Dropdown
-          size="sm"
-          value={dimension}
-          // Narrowed by lookup rather than by a cast, exactly as `CardDistribution`'s own picker
-          // is: a value the list does not hold reaches neither the config nor the wire.
-          onChange={(value) => {
-            const picked = BREAKDOWN_DIMENSIONS.find((entry) => entry.id === value);
-            // **The current config is spread rather than replaced** — `widgetConfig` carries
-            // through keys this build does not know about, and that is what stops an older build
-            // silently deleting a newer one's settings.
-            if (picked) onConfig({ ...config, dimension: picked.id });
-          }}
-          options={DIMENSION_OPTIONS}
-          // Named for what it cuts, never a bare `Dimension`: the wishlist's twin is drawn on the
-          // same page, and two controls sharing one accessible name is a name that identifies
-          // neither.
-          label={`${HEADING} by`}
-        />
-      }
-      onRemove={onRemove}
-      onSpan={onSpan}
-      dragHandleRef={dragHandleRef}
-      onNudge={onNudge}
-    >
-      {/* Three states, three sentences, and the order is what keeps them apart. A refusal wins,
-          because a card that went on saying "counting" over a read which will never answer is the
-          one failure a reader cannot act on. */}
-      {failure !== null ? (
-        <p className="text-sm text-destructive">
-          Your collection could not be read. {ipcError(failure)}
-        </p>
-      ) : total.isPending || breakdown.isPending ? (
-        <p className="text-sm text-dim">Counting your collection…</p>
-      ) : (
-        <>
-          <FigureRow>
-            <Figure
-              label={`Value (${marketplace.currency.toUpperCase()})`}
-              value={formatPrice(summary?.value ?? null, marketplace.currency)}
+    // A fragment: `WidgetCard` lays its body out as a column and owns the gap between the blocks,
+    // so a wrapper here would be a second opinion about a spacing the card already decided.
+    <>
+      {withFigures && (
+        <WidgetFigures
+          fit={fit}
+          divided={charted}
+          figures={[
+            {
+              key: "value",
+              label: `Value (${marketplace.currency.toUpperCase()})`,
+              value: formatPrice(summary.value, marketplace.currency),
               // The count travels with the figure it qualifies: no two marketplaces have the same
               // holes, so this note is about the number beside it and never about another.
-              note={
-                summary && summary.unpriced > 0 ? `${count(summary.unpriced)} unpriced` : undefined
-              }
-              title={pricesAsOf(marketplace)}
-            />
-            <Figure label="Cards" value={count(summary?.totalCards ?? 0)} />
-          </FigureRow>
-          {bars.length > 0 ? (
-            <ValueBars bars={bars} max={max} total={summed} marketplace={marketplace} />
-          ) : (
-            <p className="text-sm text-dim">Nothing in your collection yet.</p>
-          )}
-        </>
+              note: summary.unpriced > 0 ? `${count(summary.unpriced)} unpriced` : undefined,
+              tone: "accent",
+              hint: pricesAsOf(marketplace),
+            },
+            { key: "cards", label: "Cards", value: count(summary.totalCards), tone: "text" },
+          ]}
+        />
       )}
-    </WidgetCard>
+      {empty ? (
+        // Nothing owned yet — a real answer, and a different sentence from counting. Drawn
+        // whatever the room, because a card that has cut its chart *and* its only sentence away
+        // is a card that says nothing at all.
+        <WidgetMessage>Nothing in your collection yet.</WidgetMessage>
+      ) : !charted ? null : asList ? (
+        <WidgetRowList fit={fit}>
+          {bars.map((bar) =>
+            // On a two-cell tile a name and a figure do not fit side by side, so the money moves
+            // under the name in body ink — `WidgetRow`'s own rule for the tile.
+            fit.tier === 0 ? (
+              <WidgetRow key={bar.key} name={bar.label} caption={bar.value} captionStrong />
+            ) : (
+              <WidgetRow key={bar.key} name={bar.label} value={bar.value} />
+            ),
+          )}
+        </WidgetRowList>
+      ) : (
+        <WidgetBars bars={bars} fit={fit} />
+      )}
+      {charted && withFooter && (
+        <WidgetFooter>
+          {/* The provenance sentence with the split word riding after it as a clause, so the
+              sentence's own full stop is dropped rather than left in the middle of the line. */}
+          {pricesAsOf(marketplace).replace(/\.$/, "")} · split by {dimensionWord}
+        </WidgetFooter>
+      )}
+    </>
   );
 }

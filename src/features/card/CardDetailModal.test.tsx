@@ -41,6 +41,8 @@ const marketplaceFeedStatus = vi.fn();
  * wired to a command that cannot answer that way.
  */
 const cardTcgplayerIds = vi.fn();
+/** The home page's Recently viewed recorder — the one write the modal makes on its own. */
+const recordRecentCard = vi.fn();
 
 /**
  * The whole IPC surface this modal reaches, and it is a long list because the modal is the one
@@ -86,6 +88,7 @@ vi.mock("@/lib/ipc", async (original) => ({
     getMarketplace: () => getMarketplace(),
     marketplaceFeedStatus: () => marketplaceFeedStatus(),
     cardTcgplayerIds: (id: string) => cardTcgplayerIds(id),
+    recordRecentCard: (cardId: string) => recordRecentCard(cardId),
   },
 }));
 
@@ -219,6 +222,7 @@ beforeEach(() => {
   // Both products, so a case naming `etched` can be told apart from one naming `foil` by the id
   // the link lands on rather than only by a query parameter. 333 real printings carry both.
   cardTcgplayerIds.mockReset().mockResolvedValue({ productId: 1174, etchedProductId: 484936 });
+  recordRecentCard.mockReset().mockResolvedValue(undefined);
   vi.mocked(openExternal).mockClear();
 });
 
@@ -1414,6 +1418,56 @@ it("says a refused swap rather than swallowing it", async () => {
   await pickBeta();
 
   expect(await screen.findByRole("alert")).toHaveTextContent(/could not use that printing/i);
+});
+
+/**
+ * The Recently viewed recorder. **Counted, not merely called**: the whole claim is *once per
+ * distinct card*, and a recorder that fired on every render would pass a `toHaveBeenCalledWith`
+ * while writing the list on every keystroke in the modal.
+ */
+it("records the card it opens once, and refreshes the strip when the write lands", async () => {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const invalidate = vi.spyOn(qc, "invalidateQueries");
+  useAppStore.getState().setSelectedCardId("c1");
+  // **`reactStrictMode: true`, because the ref is what this is about**: without it a mount effect
+  // runs once whatever the recorder does, and "exactly once" would pass over a recorder with no
+  // guard at all. A `StrictMode` wrapper element does not double-invoke here; the option does.
+  render(
+    <QueryClientProvider client={qc}>
+      <CardDetailModal />
+    </QueryClientProvider>,
+    { reactStrictMode: true },
+  );
+
+  await screen.findByRole("dialog", { name: /lightning bolt/i });
+  await waitFor(() => expect(recordRecentCard).toHaveBeenCalledExactlyOnceWith("c1"));
+  await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["recentCards"] }));
+});
+
+it("records each new card once as the open card changes, and again after a close", async () => {
+  renderModal("c1");
+  await waitFor(() => expect(recordRecentCard).toHaveBeenCalledTimes(1));
+
+  act(() => useAppStore.getState().setSelectedCardId("c2"));
+  await waitFor(() => expect(recordRecentCard).toHaveBeenLastCalledWith("c2"));
+  expect(recordRecentCard).toHaveBeenCalledTimes(2);
+
+  // Closing and opening the same card again is a new open: it moves the card to the front.
+  act(() => useAppStore.getState().setSelectedCardId(null));
+  act(() => useAppStore.getState().setSelectedCardId("c2"));
+  await waitFor(() => expect(recordRecentCard).toHaveBeenCalledTimes(3));
+  expect(recordRecentCard).toHaveBeenLastCalledWith("c2");
+});
+
+it("ignores a refused recording and still draws the card", async () => {
+  // BUSY under a sync is the realistic refusal, and what it costs is one tile on the home page —
+  // never an alert in the card a reader just opened.
+  recordRecentCard.mockRejectedValue(new Error("busy"));
+  renderModal("c1");
+
+  expect(await screen.findByRole("dialog", { name: /lightning bolt/i })).toBeInTheDocument();
+  await waitFor(() => expect(recordRecentCard).toHaveBeenCalledTimes(1));
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });
 
 it("follows the card into the pile a category pick filed it in", async () => {

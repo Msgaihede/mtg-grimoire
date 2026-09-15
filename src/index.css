@@ -709,7 +709,13 @@ html[data-dragging] * {
 
 
 /* ---------------------------------------------------------------------------------------
-   The gold thumb, on **one** scroller: the card modal's printings list.
+   The gold thumb, on the card modal's printings list — **and, since 2026-09-15, on the home
+   page's widget bodies and the widget catalogue**, which the grid redesign (`Widget Home.dc.html`)
+   specifies in as many words: "widget scrollers wear the app's slim bar and gold thumb". The
+   restriction argued below still holds everywhere else, and the home page does not break its
+   premise so much as sit at its edge: every body there cuts its content to whole rows against
+   the card it is drawn in, so a bar appears only on a card too small for what it holds — which
+   is exactly when a reader needs to find it.
 
    Worn together with `.scrollbar-slim` above rather than instead of it — that block owns the
    geometry (the 10px track, the 6px thumb inside a transparent border, the pill radius) and this

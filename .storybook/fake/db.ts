@@ -214,9 +214,12 @@ import type {
   PairingSealedKey,
   PairingStatus,
   PassReport,
+  PriceMover,
+  PriceMovers,
   Printing,
   QrMatrix,
   PrintingTags,
+  RecentCard,
   RelayOutcome,
   RelayStatus,
   ReleaseInfo,
@@ -228,6 +231,7 @@ import type {
   ScannerVerdict,
   SearchRequest,
   SearchSortKey,
+  SetCompletion,
   SetSummary,
   ShareRow,
   SupporterStatus,
@@ -1776,6 +1780,31 @@ export interface FakeDb {
    */
   homeLayout: HomeLayout | null;
   /**
+   * `app_meta.recent_cards` — the cards this device opened most recently, newest first.
+   *
+   * **Ids and times, never names**: the row is this device's memory of *which* printings, and the
+   * name and set are joined off `cards` at read time ({@link readHandlers.recent_cards}), so a
+   * printing the corpus no longer holds is skipped rather than drawn as a frame with nothing in it.
+   * Storing the joined DTO would let a story keep a card the read could never answer.
+   *
+   * **Derived by {@link makeDb} when a world says nothing** — see {@link recentFromCollection} — so
+   * every seed with a collection opens with a strip, and `empty` opens on the sentence.
+   */
+  recentCards: FakeRecentCard[];
+  /**
+   * `price_history` — one row per day a price refresh saw a printing's finish at a marketplace.
+   *
+   * **The table the price movers are measured against**, and a table of facts rather than of
+   * moves: {@link readHandlers.price_movers} compares today's price (`price_expr`, exactly as the
+   * collection prices) against the row a window's baseline lands on. Storing moves would let the
+   * two drift the first time a feed landed.
+   *
+   * **Derived by {@link makeDb} when a world says nothing** — {@link historyFromCollection} — so a
+   * world with a collection has history to measure and `empty` has none, which is the one world
+   * the widget's *no history yet* sentence is reachable from.
+   */
+  priceHistory: FakePriceSnapshot[];
+  /**
    * `app_meta.start_view` — which view the app opens on.
    *
    * A **stored string** and `null` for the row not being there, which is
@@ -1936,6 +1965,26 @@ export interface FakeDeckFolderPane {
   /** Railed down to icons, or open. A `bool`, so no junk state — see
    *  {@link writeHandlers.set_nav_collapsed} for the argument in full. */
   collapsed: boolean;
+}
+
+/** One entry of `app_meta.recent_cards` — a printing and when it was last opened. */
+export interface FakeRecentCard {
+  cardId: string;
+  /** Unix seconds of the most recent open. */
+  viewedAt: number;
+}
+
+/**
+ * One row of `price_history`: what a printing's finish cost at one marketplace when a refresh
+ * looked at it. `takenAt` is Unix seconds, and **one row per day** is the table's grain — a second
+ * refresh on the same day replaces the first rather than adding a snapshot.
+ */
+export interface FakePriceSnapshot {
+  marketplace: MarketplaceId;
+  cardId: string;
+  finish: "nonfoil" | "foil" | "etched";
+  price: number;
+  takenAt: number;
 }
 
 /**
@@ -2464,18 +2513,43 @@ function isStorablePaneWidth(width: number): boolean {
  * how a newer build's page comes back wrong with nothing said anywhere. The **read** has no
  * opinion about it at all — see {@link readHandlers.home_layout}.
  */
-const HOME_LAYOUT_VERSION = 1;
+const HOME_LAYOUT_VERSION = 2;
 
-/** `home::MIN_SPAN` — the narrowest a widget may be, in grid columns. */
+/**
+ * `home::MAX_W` — the widest a widget may be, in cells.
+ *
+ * Wider than any grid the page draws on purpose: how many columns a window has is the page's
+ * question and changes with the window, so a bound tied to one window would refuse a document
+ * another window drew legitimately. A fence against a runaway number, not a layout rule.
+ */
+const MAX_WIDGET_W = 24;
+
+/** `home::MAX_H` — the tallest a widget may be, in cells. {@link MAX_WIDGET_W}'s argument, one axis
+ *  over. */
+const MAX_WIDGET_H = 40;
+
+/** `home::MAX_X` — the furthest right a widget's left edge may sit, in cells. Far past any real
+ *  window: this refuses a coordinate that could only be a bug. */
+const MAX_WIDGET_X = 1000;
+
+/** `home::MAX_Y` — the furthest down a widget's top edge may sit. Ten times {@link MAX_WIDGET_X},
+ *  because a page grows downward and a narrow window stacks every widget into one column. */
+const MAX_WIDGET_Y = 10_000;
+
+/** `home::MIN_SPAN` — the narrowest a **version-1** widget may be, in that version's columns. */
 const MIN_WIDGET_SPAN = 1;
 
-/** `home::MAX_SPAN` — the widest. Two is the whole grid, so this is a fact about the *document*
- *  rather than a preference about layout, which is why it is one of the four things the write
- *  refuses. */
+/**
+ * `home::MAX_SPAN` — the widest a version-1 widget may be.
+ *
+ * **Read by nothing in this build.** `span` rides on a version-2 document for an *older* build,
+ * whose `home.rs` requires the field, so it is bounded by what that build accepts and **only when
+ * present** — an absent `span` is legal, because nothing here needs it.
+ */
 const MAX_WIDGET_SPAN = 2;
 
 /** `home::MAX_BYTES` — the most a serialized layout may be. 64 KiB is orders of magnitude more
- *  than six widgets and their settings, so anything over it is a `config` being used as a
+ *  than a page of widgets and their settings, so anything over it is a `config` being used as a
  *  document store or a bug minting widgets in a loop. */
 const MAX_HOME_LAYOUT_BYTES = 64 * 1024;
 
@@ -2486,8 +2560,8 @@ const NO_WIDGET_ID = "A widget needs an id, and this layout has one without.";
 const NO_WIDGET_KIND = "A widget needs a kind, and this layout has one without.";
 
 /**
- * `home::DEFAULT_LAYOUT` — the six widgets a database nobody has customised answers, as
- * `(id, kind, span)` in order.
+ * `home::DEFAULT_LAYOUT` — the eight widgets a database nobody has customised answers, as
+ * `(id, kind, x, y, w, h)` in order.
  *
  * **Spelled here rather than imported from `features/home/widgets.ts`**, which is
  * {@link AUTO_BRACKET}'s rule and lands as hard on this one as it does on
@@ -2495,7 +2569,8 @@ const NO_WIDGET_KIND = "A widget needs a kind, and this layout has one without."
  * *it* is handed something that is not a layout, so these are two constants that have to agree,
  * in two languages, because they cannot share one across a wire. A fake that read the app's copy
  * would agree with it by construction and could never show the two disagreeing — which is the
- * one thing about this pair worth being able to see. `home.rs`'s table is the one to copy from.
+ * one thing about this pair worth being able to see. `home.rs`'s table is the one to copy from,
+ * and `db.test.ts` pins this one against `widgets.ts`'s literal cell for cell.
  *
  * **These `kind` strings are TypeScript's vocabulary and this table knows nothing about them.**
  * Nothing here compares a stored kind against them; they are the seed and no more, which is the
@@ -2505,14 +2580,26 @@ const NO_WIDGET_KIND = "A widget needs a kind, and this layout has one without."
  * The ids **are** the kinds, because a default layout holds each widget once — a second `decks`
  * widget gets a minted id from the page, and the id is what identifies a widget.
  */
-const DEFAULT_HOME_WIDGETS: readonly (readonly [string, string, number])[] = [
-  ["summary", "summary", 2],
-  ["decks", "decks", 1],
-  ["activity", "activity", 1],
-  ["collectionValue", "collectionValue", 1],
-  ["wishlistValue", "wishlistValue", 1],
-  ["folders", "folders", 2],
-];
+const DEFAULT_HOME_WIDGETS: readonly (readonly [string, string, number, number, number, number])[] =
+  [
+    ["summary", "summary", 0, 0, 4, 2],
+    ["recentCards", "recentCards", 4, 0, 4, 2],
+    ["decks", "decks", 0, 2, 3, 3],
+    ["activity", "activity", 3, 2, 3, 3],
+    ["collectionValue", "collectionValue", 6, 2, 2, 3],
+    ["folders", "folders", 0, 5, 4, 2],
+    ["priceMovers", "priceMovers", 4, 5, 2, 2],
+    ["setCompletion", "setCompletion", 6, 5, 2, 2],
+  ];
+
+/**
+ * `home::legacy_span` — the version-1 width a default widget is written with, which is
+ * `layout.ts`'s `spanFor`: wider than half the narrowest grid (four cells) takes the older build's
+ * whole row, anything else one of its two columns.
+ */
+function legacyHomeSpan(w: number): number {
+  return w > 4 ? MAX_WIDGET_SPAN : MIN_WIDGET_SPAN;
+}
 
 /**
  * {@link DEFAULT_HOME_WIDGETS} as a document — `home::default_layout`.
@@ -2526,9 +2613,64 @@ const DEFAULT_HOME_WIDGETS: readonly (readonly [string, string, number])[] = [
 function defaultHomeLayout(): HomeLayout {
   return {
     version: HOME_LAYOUT_VERSION,
-    widgets: DEFAULT_HOME_WIDGETS.map(([id, kind, span]) => ({ id, kind, span, config: null })),
+    widgets: DEFAULT_HOME_WIDGETS.map(([id, kind, x, y, w, h]) => ({
+      id,
+      kind,
+      x,
+      y,
+      w,
+      h,
+      span: legacyHomeSpan(w),
+      config: null,
+    })),
   };
 }
+
+/** `recent_cards::MAX_RECENT` — how many cards the list remembers, and the most the read answers. */
+const MAX_RECENT_CARDS = 24;
+
+/** `recent_cards::NO_ID`, verbatim. */
+const NO_RECENT_CARD_ID = "A recently viewed card needs an id, and this one has none.";
+
+/**
+ * Scryfall's `printed_size` for the corpus's sets that print one — the denominator on a card's own
+ * collector line, `259/303`.
+ *
+ * **The one fact `set_completion` answers that the fixture cannot derive**: `cards.ts` is generated
+ * from `cards` and a printed size is a column of `sets`. So it is written here, and each number was
+ * checked against the dev corpus on 2026-09-15: every set below holds every collector number from
+ * 1 to its size, and the seven that hold nothing past it (`gtc`, `nph`, `isd`, `emn`, `avr`, `roe`,
+ * `wwk`) end exactly there — the others carry showcase and planeswalker-deck numbers beyond it.
+ *
+ * **A set missing from this table is a real state, not a gap**: Alpha, Tempest, Future Sight and
+ * the Secret Lair print no denominator, and `size: null` is what the widget's `N cards` caption and
+ * em dash are for. `starter` owns cards from both kinds.
+ */
+const SET_PRINTED_SIZES: Readonly<Record<string, number>> = {
+  "2x2": 331,
+  akh: 269,
+  avr: 244,
+  dom: 269,
+  eld: 269,
+  emn: 205,
+  gtc: 249,
+  iko: 274,
+  isd: 264,
+  kld: 264,
+  mh2: 303,
+  nph: 175,
+  roe: 248,
+  wwk: 145,
+  znr: 280,
+};
+
+/** `price_history`'s windows, in days back from today — `null` for `all`, which is the oldest
+ *  snapshot kept rather than a distance. */
+const PRICE_MOVER_WINDOWS: Readonly<Record<string, number | null>> = {
+  "7d": 7,
+  "30d": 30,
+  all: null,
+};
 
 /**
  * `startview::DEFAULT_VIEW` — where the app opens for a reader who has never said.
@@ -2703,7 +2845,7 @@ export function errorLogSeed(now: number = Math.floor(Date.now() / 1000)): Error
  * reason — `update_check` and `update_download` write to it.
  */
 export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
-  return {
+  const db: FakeDb = {
     cards: CARDS,
     collectionEntries: [],
     collectionFolders: [],
@@ -2797,12 +2939,18 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // whole row — both halves are written together and there is no half of one to seed.
     deckFolderPane: null,
     // The home page's own row, and a `null` for the fourth time — a reader who has never moved,
-    // removed or added a widget. `home_layout` answers {@link DEFAULT_HOME_LAYOUT} for that,
-    // which is the six the crate seeds a first launch with, so every home story that says
+    // removed or added a widget. `home_layout` answers {@link DEFAULT_HOME_WIDGETS} for that,
+    // which is the eight the crate seeds a first launch with, so every home story that says
     // nothing about customising opens on the page the app ships. A story that wants a
     // rearranged page — or a widget from a build that has not been written yet — passes the
     // whole document, because that is how the row is written.
     homeLayout: null,
+    // Both empty here and **derived below when the world says nothing** — the only two fields in
+    // this function whose default depends on another. See {@link recentFromCollection} and
+    // {@link historyFromCollection}: a world with a collection opens with a strip of cards and
+    // a history to measure movers against, and a world with none opens on both sentences.
+    recentCards: [],
+    priceHistory: [],
     // The eleventh `app_meta` row and a `null` a third time: a reader who has never chosen a
     // landing view. `start_view` answers `home` for it, which is what the app opens on out of
     // the box and what every story that says nothing about the setting is standing in.
@@ -2878,6 +3026,92 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     fault: null,
     ...init,
   };
+  // **Derived from the world rather than written into a seed**, because both are about the
+  // collection a seed already chose: the cards a reader of that collection has opened, and what
+  // the printings in it have cost over the last few months. A world that passes either field
+  // keeps it verbatim — an empty list included, which is how a test stands in "never opened
+  // anything" on a full collection.
+  if (init.recentCards === undefined) db.recentCards = recentFromCollection(db);
+  if (init.priceHistory === undefined) db.priceHistory = historyFromCollection(db);
+  return db;
+}
+
+/**
+ * The recently viewed list a world with a collection opens with: its printings, **newest row
+ * first**, each once, capped at {@link MAX_RECENT_CARDS} — a reader who filed those cards opened
+ * them on the way. Timed an hour apart back from {@link CLOCK_BASE}, so the order is the order the
+ * rows were added in and nothing renders the time as a date.
+ *
+ * A printing the corpus does not hold is kept, exactly as `recent_cards::record` keeps it: the read
+ * is what skips one, and a list pre-filtered here would hide that from every story.
+ */
+export function recentFromCollection(db: FakeDb): FakeRecentCard[] {
+  const seen = new Set<string>();
+  const out: FakeRecentCard[] = [];
+  for (const e of [...db.collectionEntries].sort((a, b) => b.id - a.id)) {
+    if (seen.has(e.cardId) || out.length === MAX_RECENT_CARDS) continue;
+    seen.add(e.cardId);
+    out.push({ cardId: e.cardId, viewedAt: CLOCK_BASE - out.length * 3_600 });
+  }
+  return out;
+}
+
+/** How many days before {@link CLOCK_BASE} each derived price snapshot was taken. Today's is `0`:
+ *  the refresh that priced the collection also snapshotted it. `7` and `30` are exactly the two
+ *  windows' baselines, and `90` is the oldest price kept. */
+const HISTORY_DAYS: readonly number[] = [0, 1, 2, 7, 14, 30, 60, 90];
+
+/**
+ * A deterministic drift in `-0.3..0.3` for one printing's finish at one marketplace — a stable
+ * hash rather than `Math.random`, so every story on every run draws the same movers.
+ */
+function priceDrift(cardId: string, finish: string, mp: string): number {
+  let h = 2166136261;
+  for (const ch of `${mp}:${cardId}:${finish}`) {
+    h ^= ch.charCodeAt(0);
+    h = Math.imul(h, 16777619);
+  }
+  return (((h >>> 0) % 601) - 300) / 1000;
+}
+
+/**
+ * `price_history` for a world with a collection: one snapshot per {@link HISTORY_DAYS} day for
+ * every owned printing's finish at every marketplace that prices it **today** — today's price is
+ * {@link finishPriceAt}, the collection's own, and each older one walks back along
+ * {@link priceDrift} in proportion to its age, rounded to the cent.
+ *
+ * So a printing up 30 % over ninety days is up about 2 % over the week, a cheap card can round to
+ * no move at all (and is then not a mover, which is `price_movers`' rule), and a finish a
+ * marketplace does not quote has **no rows** — `marketplace_prices`' rule for an unpriced finish,
+ * one table over.
+ */
+export function historyFromCollection(db: FakeDb): FakePriceSnapshot[] {
+  const byId = new Map(db.cards.map((c) => [c.id, c]));
+  const owned = new Map<string, FakeEntry>();
+  for (const e of db.collectionEntries) {
+    if (e.quantity > 0) owned.set(`${e.cardId}:${e.finish}`, e);
+  }
+  const out: FakePriceSnapshot[] = [];
+  // Only a marketplace this app can quote: an unpriced one resolves to TCGplayer at the read, so
+  // snapshots of its own would be a second copy of TCGplayer's under another name.
+  const priced = Object.values(MARKETPLACES).filter((m) => m.priced);
+  for (const { id: mp } of priced) {
+    for (const e of owned.values()) {
+      const now = finishPriceAt(db, byId.get(e.cardId) ?? null, e.finish, mp);
+      if (now === null) continue;
+      const drift = priceDrift(e.cardId, e.finish, mp);
+      for (const days of HISTORY_DAYS) {
+        out.push({
+          marketplace: mp,
+          cardId: e.cardId,
+          finish: e.finish,
+          price: Math.round(now * (1 - (drift * days) / 90) * 100) / 100,
+          takenAt: CLOCK_BASE - days * 86_400,
+        });
+      }
+    }
+  }
+  return out;
 }
 
 /* ------------------------------------------------------------------ small helpers ----- */
@@ -10340,6 +10574,164 @@ export function readHandlers(db: FakeDb) {
     home_layout: (): HomeLayout => db.homeLayout ?? defaultHomeLayout(),
 
     /**
+     * `recent_cards::recent` — the cards this device opened, newest first, joined off `cards`.
+     *
+     * **A printing the corpus does not hold is skipped, and does not use up a place**: the crate
+     * puts the `LIMIT` in the statement over the join, so a widget asking for eight tiles gets
+     * eight whenever the list holds eight the corpus knows. The id stays in the row either way.
+     *
+     * `limit` is clamped to `1..=24` — the low end is load-bearing, because SQLite reads a
+     * negative `LIMIT` as no limit and `0` as no rows. Infallible, like the row it reads.
+     */
+    recent_cards: (args: { limit: number }): RecentCard[] => {
+      const limit = Math.min(MAX_RECENT_CARDS, Math.max(1, Math.trunc(args.limit)));
+      const out: RecentCard[] = [];
+      for (const viewed of db.recentCards) {
+        if (out.length === limit) break;
+        const card = cardById(db, viewed.cardId);
+        if (card === null) continue;
+        out.push({
+          cardId: card.id,
+          name: card.name,
+          setCode: card.setCode,
+          viewedAt: viewed.viewedAt,
+        });
+      }
+      return out;
+    },
+
+    /**
+     * `set_completion` — every set the collection holds a card from, and how much of it.
+     *
+     * `owned` is the **distinct collector numbers** held in any finish, grade or language — a
+     * foil and a nonfoil of one number are one card of the set. With a printed size it counts only
+     * the numbers inside `1..=size`, so a showcase numbered past the set does not push it over
+     * 100 %; with none, every number held. A row at quantity zero holds nothing, and a copy whose
+     * printing left the corpus has no set to be counted in.
+     *
+     * `size` is {@link SET_PRINTED_SIZES}' — the one column of this answer the fixture cannot
+     * derive. Ordered by name; the widget orders for itself.
+     */
+    set_completion: (): SetCompletion[] => {
+      type Held = { name: string; releasedAt: string | null; numbers: Set<string> };
+      const sets = new Map<string, Held>();
+      for (const e of db.collectionEntries) {
+        if (e.quantity <= 0) continue;
+        const card = cardById(db, e.cardId);
+        if (card === null) continue;
+        const row = sets.get(card.setCode) ?? {
+          name: card.setName,
+          releasedAt: card.releasedAt,
+          numbers: new Set<string>(),
+        };
+        const size = SET_PRINTED_SIZES[card.setCode] ?? null;
+        // `set_completion.rs`'s slot rule: a number counts by its **leading digits** when it starts
+        // with one — `123a` fills slot 123 — and not at all when it does not (`★12`), so a set
+        // can never read more than complete.
+        const lead = /^\d+/.exec(card.collectorNumber);
+        const n = lead === null ? NaN : Number(lead[0]);
+        if (size === null) {
+          row.numbers.add(card.collectorNumber);
+        } else if (n >= 1 && n <= size) {
+          row.numbers.add(String(n));
+        }
+        sets.set(card.setCode, row);
+      }
+      return [...sets.entries()]
+        .map(([setCode, row]) => ({
+          setCode,
+          name: row.name,
+          releasedAt: row.releasedAt,
+          owned: row.numbers.size,
+          size: SET_PRINTED_SIZES[setCode] ?? null,
+        }))
+        .sort((a, b) => cmp(a.name, b.name));
+    },
+
+    /**
+     * `price_history::movers` — the owned printings whose price at `marketplace` moved most since
+     * the window's baseline, largest move first.
+     *
+     * **The baseline is the newest snapshot taken at or before the window's start** — seven or
+     * thirty days back from {@link CLOCK_BASE}, the fake's own today — and `all` is the oldest
+     * snapshot kept. `since` is that snapshot's time, or `null` when no snapshot is old enough;
+     * `days` is how many distinct days this marketplace holds at all. Those two are what let the
+     * widget tell *no history yet* from *nothing moved*, so both are answered even when the list
+     * is empty.
+     *
+     * Today's price is {@link finishPriceAt}, the collection's own, so a mover can never disagree
+     * with the row it names. **A printing that did not move is not a mover**, and neither is one
+     * with no price today or none in the baseline. `limit` is clamped to `1..=100`; a window or a
+     * direction this command does not know is refused in words.
+     */
+    price_movers: (args: {
+      window: string;
+      direction: string;
+      marketplace?: string;
+      limit: number;
+    }): PriceMovers => {
+      // **A word this command does not know reads as the default, never a refusal** —
+      // `price_history.rs` parses `window` as 7d and `direction` as both for anything else, so a
+      // newer build's word degrades rather than failing the widget. An own-property test, because
+      // an index alone answers a function for `"constructor"`.
+      const window = Object.prototype.hasOwnProperty.call(PRICE_MOVER_WINDOWS, args.window)
+        ? args.window
+        : "7d";
+      const reach = PRICE_MOVER_WINDOWS[window];
+      const direction = ["both", "up", "down"].includes(args.direction) ? args.direction : "both";
+      const mp = marketplaceOf(args.marketplace);
+      const limit = Math.min(100, Math.max(1, Math.trunc(args.limit)));
+      const history = db.priceHistory.filter((s) => s.marketplace === mp);
+      const days = new Set(history.map((s) => Math.floor(s.takenAt / 86_400))).size;
+      const times = [...new Set(history.map((s) => s.takenAt))].sort((a, b) => a - b);
+      const since =
+        reach === null
+          ? (times[0] ?? null)
+          : ([...times].reverse().find((t) => t <= CLOCK_BASE - reach * 86_400) ?? null);
+      if (since === null) return { movers: [], since: null, days };
+
+      const then = new Map(
+        history
+          .filter((s) => s.takenAt === since)
+          .map((s) => [`${s.cardId}:${s.finish}`, s.price]),
+      );
+      const seen = new Set<string>();
+      const movers: PriceMover[] = [];
+      for (const e of db.collectionEntries) {
+        const key = `${e.cardId}:${e.finish}`;
+        if (e.quantity <= 0 || seen.has(key)) continue;
+        seen.add(key);
+        const card = cardById(db, e.cardId);
+        const now = finishPriceAt(db, card, e.finish, mp);
+        const was = then.get(key);
+        if (card === null || now === null || was === undefined) continue;
+        const delta = Math.round((now - was) * 100) / 100;
+        if (delta === 0) continue;
+        if ((direction === "up" && delta < 0) || (direction === "down" && delta > 0)) {
+          continue;
+        }
+        movers.push({
+          cardId: card.id,
+          name: card.name,
+          setCode: card.setCode,
+          setName: card.setName,
+          finish: e.finish,
+          now,
+          then: was,
+          delta,
+        });
+      }
+      movers.sort(
+        (a, b) =>
+          Math.abs(b.delta) - Math.abs(a.delta) ||
+          cmp(a.name, b.name) ||
+          cmp(a.cardId, b.cardId) ||
+          cmp(a.finish, b.finish),
+      );
+      return { movers: movers.slice(0, limit), since, days };
+    },
+
+    /**
      * `startview::stored` — which view the app opens on, or `home`.
      *
      * {@link readHandlers.deck_sort}'s narrowest-fallback-in-the-file, one row over and for the
@@ -17643,7 +18035,7 @@ export function writeHandlers(db: FakeDb) {
     /**
      * `home::store` — remember the reader's home page.
      *
-     * **Four refusals, and they are the exact complement of a read that has none.**
+     * **Six refusals, and they are the exact complement of a read that has none.**
      * {@link readHandlers.home_layout} discards nothing and validates nothing, so without these
      * a layout this build cannot read back would look saved, survive a restart in the table, and
      * read as itself for ever — the bug `set_printing_group_by`'s note calls the half a fake is
@@ -17668,7 +18060,7 @@ export function writeHandlers(db: FakeDb) {
      *
      * The byte cap is `JSON.stringify`'s length where the crate measures serde's bytes. They
      * differ on non-ASCII and on nothing else a layout contains, and the number is 64 KiB
-     * against six widgets, so what the cap is *for* — a `config` used as a document store, or a
+     * against a page of widgets, so what the cap is *for* — a `config` used as a document store, or a
      * bug minting widgets in a loop — is caught either way.
      *
      * It honours `busy` like every other ordinary write here — `home.rs` takes the write
@@ -17688,10 +18080,32 @@ export function writeHandlers(db: FakeDb) {
       for (const widget of layout.widgets) {
         if (widget.id.trim() === "") throw refuse(NO_WIDGET_ID);
         if (widget.kind.trim() === "") throw refuse(NO_WIDGET_KIND);
-        if (widget.span < MIN_WIDGET_SPAN || widget.span > MAX_WIDGET_SPAN) {
+        // `u32`s at the far end, so a negative or fractional cell is refused by serde before the
+        // body runs. Folded into the bound here, where the crate would answer an argument error:
+        // either way nothing is stored, and a story cannot tell the two refusals apart.
+        const cells = (n: number, lo: number, hi: number) =>
+          Number.isInteger(n) && n >= lo && n <= hi;
+        if (!cells(widget.w, 1, MAX_WIDGET_W) || !cells(widget.h, 1, MAX_WIDGET_H)) {
           throw refuse(
-            `The widget "${widget.id}" asks to be ${widget.span} columns wide. ` +
-              `A widget is ${MIN_WIDGET_SPAN} or ${MAX_WIDGET_SPAN}.`,
+            `The widget "${widget.id}" asks to be ${widget.w} by ${widget.h} cells. ` +
+              `A widget is 1 to ${MAX_WIDGET_W} cells wide and 1 to ${MAX_WIDGET_H} tall.`,
+          );
+        }
+        if (!cells(widget.x, 0, MAX_WIDGET_X) || !cells(widget.y, 0, MAX_WIDGET_Y)) {
+          throw refuse(
+            `The widget "${widget.id}" asks to sit at column ${widget.x}, row ${widget.y}. ` +
+              `A widget starts no further than column ${MAX_WIDGET_X} or row ${MAX_WIDGET_Y}.`,
+          );
+        }
+        // Bounded **only when present**: `span` is carried for an older build and read by nothing
+        // in this one, so an absent one is legal.
+        if (
+          widget.span !== undefined &&
+          (widget.span < MIN_WIDGET_SPAN || widget.span > MAX_WIDGET_SPAN)
+        ) {
+          throw refuse(
+            `The widget "${widget.id}" carries an older layout width of ${widget.span}. ` +
+              `That width is ${MIN_WIDGET_SPAN} or ${MAX_WIDGET_SPAN}.`,
           );
         }
       }
@@ -17706,6 +18120,32 @@ export function writeHandlers(db: FakeDb) {
         version: layout.version,
         widgets: layout.widgets.map((w: HomeWidget) => ({ ...w })),
       };
+    },
+
+    /**
+     * `recent_cards::record_now` — remember that a card was opened.
+     *
+     * **The card goes to the front and any older entry for it comes out**, so the list is a set
+     * ordered by recency, then it is cut to {@link MAX_RECENT_CARDS}. Nothing checks the id
+     * against the corpus: the read skips a printing it cannot join, which is the same answer
+     * without a query on the write path. The one refusal is a blank id.
+     *
+     * The time is `stamp(db)`'s — one past the newest ordering number in the store — rather than
+     * the wall clock, because the derived list is timed back from {@link CLOCK_BASE} and a press
+     * must land *above* it. Nothing renders the number as a date.
+     *
+     * It honours `busy` like every other write here, and **the lock comes first**, as
+     * `sync::with_write` takes it before `record_now` looks at the id. The card modal ignores the
+     * refusal either way.
+     */
+    record_recent_card: (args: { cardId: string }): void => {
+      refuseIfBusy(db);
+      if (args.cardId.trim() === "") throw refuse(NO_RECENT_CARD_ID);
+      const newest = db.recentCards.reduce((n, v) => Math.max(n, v.viewedAt), stamp(db));
+      db.recentCards = [
+        { cardId: args.cardId, viewedAt: newest + 1 },
+        ...db.recentCards.filter((v) => v.cardId !== args.cardId),
+      ].slice(0, MAX_RECENT_CARDS);
     },
 
     /**
