@@ -6450,7 +6450,7 @@ fn rebuild_combo_tables(conn: &Connection, schema: &str) -> rusqlite::Result<()>
 }
 
 /// Bring `data_dir` to a state the app can open: convert if a single file is there, and
-/// replace a corpus that will not open at all.
+/// replace a corpus that will not open at all — or that an earlier session found damaged.
 ///
 /// `Ok(true)` means something was rebuilt or converted. **A corpus that fails to open is a
 /// file to replace, not a failure to report**: that is what having two files buys, and it is
@@ -6463,12 +6463,17 @@ fn rebuild_combo_tables(conn: &Connection, schema: &str) -> rusqlite::Result<()>
 /// which is the whole point of the split stated as code.
 pub fn prepare_data_dir(data_dir: &std::path::Path) -> Result<bool, String> {
     let converted = crate::split::convert(data_dir)?;
-    if corpus_is_readable(data_dir) {
+    let marked = data_dir.join(CORPUS_DAMAGED_MARK).is_file();
+    if !marked && corpus_is_readable(data_dir) {
         return Ok(converted);
     }
     for suffix in ["", "-wal", "-shm"] {
         let _ = std::fs::remove_file(data_dir.join(format!("{}{suffix}", crate::db::CORPUS_DB)));
     }
+    // After the corpus and never before it: a crash between the two leaves a mark over a missing
+    // file, which the next launch deletes again for nothing, where the other order could leave a
+    // damaged corpus with no mark and nothing left to find it until the background check runs.
+    let _ = std::fs::remove_file(data_dir.join(CORPUS_DAMAGED_MARK));
     eprintln!(
         "the card database could not be opened and has been replaced; the next sync \
          will rebuild it. Nothing in your collection, decks or wishlist was touched."
@@ -6476,11 +6481,19 @@ pub fn prepare_data_dir(data_dir: &std::path::Path) -> Result<bool, String> {
     Ok(true)
 }
 
-/// Whether `corpus.db` opens and passes a one-error `quick_check`.
+/// Whether `corpus.db` opens as a database at all: its header and its schema read back.
 ///
-/// Asked by opening it rather than by reading its header, because "can this be opened" has
-/// no cheaper honest answer — and asked *before* the app's own connections exist, so a
-/// corpus that has to be replaced is replaced while nothing is holding it.
+/// **This was a full `PRAGMA quick_check` until 2026-09-15, and that check is still made — just
+/// not here.** It reads every page of the file, which on the real 893 MB corpus was **33.5 s
+/// cold and 2.9 s warm** (debug build, this machine), and it ran on every launch before a window
+/// could draw anything. What it caught beyond this probe is damage *inside* a file whose first
+/// page is sound; [`check_corpus`] now asks that after the app is up, and a damaged answer
+/// becomes [`CORPUS_DAMAGED_MARK`], which [`prepare_data_dir`] reads on the next launch. So the
+/// file is still replaced before any connection holds it — one session later.
+///
+/// Asked by opening it rather than by reading its header bytes, because "can this be opened" has
+/// no cheaper honest answer: `sqlite_master` is what every later statement parses first, and a
+/// file that is not a database, or whose schema page is gone, fails here.
 fn corpus_is_readable(data_dir: &std::path::Path) -> bool {
     let path = data_dir.join(crate::db::CORPUS_DB);
     if !path.is_file() {
@@ -6489,9 +6502,74 @@ fn corpus_is_readable(data_dir: &std::path::Path) -> bool {
     let Ok(conn) = crate::db::open(&path) else {
         return false;
     };
-    conn.query_row("PRAGMA quick_check(1)", [], |r| r.get::<_, String>(0))
-        .map(|answer| answer == "ok")
-        .unwrap_or(false)
+    conn.query_row("SELECT count(*) FROM sqlite_master", [], |r| {
+        r.get::<_, i64>(0)
+    })
+    .is_ok()
+}
+
+/// The file beside `corpus.db` that says a background [`check_corpus`] found it damaged.
+///
+/// **A file rather than an `app_meta` row**, because the one reader is [`prepare_data_dir`], which
+/// runs before any connection exists and must not open `user.db` to find out whether it may
+/// delete `corpus.db`. Its presence is the whole message; its contents are the check's answer, for
+/// whoever opens the folder.
+pub const CORPUS_DAMAGED_MARK: &str = "corpus.db.damaged";
+
+/// What [`check_corpus`] learned.
+#[derive(Debug, PartialEq, Eq)]
+pub enum CorpusCheck {
+    Sound,
+    /// SQLite answered, and the answer was damage — `quick_check`'s first complaint, or the
+    /// corruption error reading the file raised.
+    Damaged(String),
+    /// No answer about the file: it was missing, locked, or the read failed for a reason that
+    /// says nothing about its pages. **Never a reason to delete a corpus.**
+    Unanswered(String),
+}
+
+/// A full `PRAGMA quick_check(1)` over `corpus.db`, on a read-only connection of its own.
+///
+/// The half of [`corpus_is_readable`]'s old job that is too slow for a launch. `desktop::start`
+/// runs it on its own thread once the app is up, and marks the corpus for replacement when it
+/// answers [`CorpusCheck::Damaged`]. **Only an answer about the pages counts as damage**:
+/// `SQLITE_CORRUPT` and `SQLITE_NOTADB` do, while a busy file, an I/O error or a process exiting
+/// mid-read are [`CorpusCheck::Unanswered`] — deleting 893 MB of card data because a laptop lid
+/// closed during the read would cost the reader a resync for nothing.
+///
+/// A read transaction held for the length of the check pins the WAL at its snapshot, so a
+/// concurrent ingest's log grows until the check lets go. That is seconds against an ingest's
+/// minutes, and the checkpoint on exit folds it back.
+pub fn check_corpus(data_dir: &std::path::Path) -> CorpusCheck {
+    let path = data_dir.join(crate::db::CORPUS_DB);
+    if !path.is_file() {
+        return CorpusCheck::Unanswered(format!("{} does not exist", path.display()));
+    }
+    let conn = match crate::db::open_read_only(&path) {
+        Ok(conn) => conn,
+        Err(e) => return classify_check_error(e),
+    };
+    match conn.query_row("PRAGMA quick_check(1)", [], |r| r.get::<_, String>(0)) {
+        Ok(answer) if answer == "ok" => CorpusCheck::Sound,
+        Ok(answer) => CorpusCheck::Damaged(answer),
+        Err(e) => classify_check_error(e),
+    }
+}
+
+fn classify_check_error(e: rusqlite::Error) -> CorpusCheck {
+    use rusqlite::ffi::ErrorCode;
+    match e.sqlite_error_code() {
+        Some(ErrorCode::DatabaseCorrupt | ErrorCode::NotADatabase) => {
+            CorpusCheck::Damaged(e.to_string())
+        }
+        _ => CorpusCheck::Unanswered(e.to_string()),
+    }
+}
+
+/// Leave [`CORPUS_DAMAGED_MARK`] beside the corpus, holding `answer`, so the next launch replaces
+/// it.
+pub fn mark_corpus_damaged(data_dir: &std::path::Path, answer: &str) -> std::io::Result<()> {
+    std::fs::write(data_dir.join(CORPUS_DAMAGED_MARK), answer)
 }
 
 /// The one row [`migrate_single_file`]'s v25 rung seeds into a *user* table.
@@ -7013,6 +7091,111 @@ pub fn swap_combo_staging(conn: &Connection) -> rusqlite::Result<()> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    /// A fresh split pair in a temp folder, with a corpus big enough to have pages past the
+    /// first — a `damage` table of a few hundred pages, checkpointed so they are in the file
+    /// rather than in its log.
+    fn corpus_with_pages() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        crate::split::convert(dir.path()).unwrap();
+        let conn = crate::db::open(&dir.path().join(crate::db::CORPUS_DB)).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE damage (id INTEGER PRIMARY KEY, body TEXT NOT NULL);
+             WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 20000)
+             INSERT INTO damage (id, body) SELECT i, printf('%.200c', 'x') FROM n;",
+        )
+        .unwrap();
+        crate::db::checkpoint_truncate(&conn).unwrap();
+        drop(conn);
+        dir
+    }
+
+    /// Overwrite one whole page in the middle of `corpus.db` — never page one, which holds the
+    /// header and the schema the launch probe reads.
+    fn damage_a_middle_page(dir: &std::path::Path) {
+        use std::io::{Seek, SeekFrom, Write};
+        let path = dir.join(crate::db::CORPUS_DB);
+        let len = std::fs::metadata(&path).unwrap().len();
+        let page = 4096;
+        let offset = (len / 2 / page) * page;
+        assert!(
+            offset >= page * 2,
+            "the fixture corpus is too small to damage past page one"
+        );
+        let mut file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.seek(SeekFrom::Start(offset)).unwrap();
+        file.write_all(&vec![0xFF; page as usize]).unwrap();
+    }
+
+    /// **The launch probe is deliberately blind to this, and the background check is not.** A
+    /// page damaged past the first used to be caught by the `quick_check` every launch ran before
+    /// a window could draw; the probe that replaced it reads only the header and the schema, so
+    /// the file opens and the app starts. What still has to be true is that the damage is
+    /// *found* and that the next launch replaces the file before any connection holds it — which
+    /// is the old guarantee, one session later.
+    #[test]
+    fn a_corpus_damaged_past_its_first_page_starts_and_is_replaced_the_launch_after() {
+        let dir = corpus_with_pages();
+        damage_a_middle_page(dir.path());
+        let corpus = dir.path().join(crate::db::CORPUS_DB);
+        let size = std::fs::metadata(&corpus).unwrap().len();
+
+        assert!(
+            corpus_is_readable(dir.path()),
+            "page one is sound, so the launch probe passes"
+        );
+        assert!(
+            !prepare_data_dir(dir.path()).unwrap(),
+            "and nothing is replaced this launch"
+        );
+        assert_eq!(std::fs::metadata(&corpus).unwrap().len(), size);
+
+        let CorpusCheck::Damaged(answer) = check_corpus(dir.path()) else {
+            panic!("the full check must find a damaged page");
+        };
+        mark_corpus_damaged(dir.path(), &answer).unwrap();
+
+        assert!(
+            prepare_data_dir(dir.path()).unwrap(),
+            "the marked corpus is replaced"
+        );
+        assert!(
+            !dir.path().join(CORPUS_DAMAGED_MARK).exists(),
+            "and the mark goes with it"
+        );
+        assert!(
+            !corpus.exists() || std::fs::metadata(&corpus).unwrap().len() < size,
+            "the damaged file must not survive the launch after the check"
+        );
+        assert!(
+            dir.path().join(crate::db::USER_DB).is_file(),
+            "the reader's file is untouched"
+        );
+    }
+
+    #[test]
+    fn a_sound_corpus_checks_sound_and_a_file_that_is_no_database_checks_damaged() {
+        let dir = corpus_with_pages();
+        assert_eq!(check_corpus(dir.path()), CorpusCheck::Sound);
+
+        std::fs::write(
+            dir.path().join(crate::db::CORPUS_DB),
+            b"not a database at all",
+        )
+        .unwrap();
+        assert!(matches!(check_corpus(dir.path()), CorpusCheck::Damaged(_)));
+    }
+
+    /// Deleting a corpus costs the reader a full resync, so nothing that fails to say anything
+    /// about the pages may count as damage.
+    #[test]
+    fn a_check_with_no_file_to_read_is_unanswered_and_never_damage() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(matches!(
+            check_corpus(dir.path()),
+            CorpusCheck::Unanswered(_)
+        ));
+    }
 
     /// **A pair whose user half is an empty file gets its shape from `prepare_database`.**
     ///

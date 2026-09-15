@@ -257,6 +257,11 @@ pub mod reconcile;
 pub mod scanner;
 #[cfg(not(target_family = "wasm"))]
 pub mod scryfall;
+/// **Whether the background startup has landed, as the webview asks it.** Non-wasm because it is
+/// managed Tauri state and one `#[tauri::command]`; the browser's gate is `WebBoot`, which waits on
+/// its Worker instead. See the module doc for why startup left the UI thread.
+#[cfg(not(target_family = "wasm"))]
+pub mod startup;
 pub mod tags;
 #[cfg(not(target_family = "wasm"))]
 // Desktop only. `open_sized_to_monitor` calls `WebviewWindow::center()`, which tauri

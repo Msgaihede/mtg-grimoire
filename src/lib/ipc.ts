@@ -4808,6 +4808,25 @@ export interface SyncStatus {
   imageStoreFailures: number;
 }
 
+/**
+ * How far the native side has got with opening the data folder — the answer to
+ * `startup_status` and the payload of `startup:changed`.
+ *
+ * **Desktop and Android only.** Opening and migrating the two databases runs on a background
+ * thread so the window can paint and the taskbar can draw its icon, and until it finishes the
+ * shared state every other command reads is not there — so every other command errors. That is
+ * why `boot/DesktopBoot` asks this before it mounts anything that queries. The web target opens
+ * its database in a Worker and has its own gate (`web/WebBoot`).
+ *
+ * It only ever moves `loading → ready` or `loading → failed`, never back. `message` is a
+ * human-written, multi-line sentence naming the folder that would not open, meant to be shown
+ * as it is.
+ */
+export type StartupStatus =
+  | { state: "loading" }
+  | { state: "ready" }
+  | { state: "failed"; message: string };
+
 /** The phases `sync.rs` emits, and the only values `SyncProgressEvent.phase` takes. */
 export type SyncPhase =
   | "checking"
@@ -8209,6 +8228,19 @@ export const ipc = {
   syncStatus: () => invoke<SyncStatus>("sync_status"),
   onSyncProgress: (cb: (e: SyncProgressEvent) => void): Unlisten =>
     core.listen<SyncProgressEvent>("sync:progress", cb),
+  /**
+   * Whether the data folder has finished opening. Answerable before every other command is —
+   * it reads no database — so it is the one thing `boot/DesktopBoot` may ask while the rest
+   * would error. Not routed on the web target.
+   */
+  startupStatus: () => invoke<StartupStatus>("startup_status"),
+  /**
+   * `startup_status`'s fast path: emitted once, when the state leaves `loading`. **Never the
+   * only half** — `listen` registers asynchronously, so an emit that lands between the first
+   * `startupStatus()` and the registration is dropped, and the poll is what catches it.
+   */
+  onStartupChanged: (cb: (e: StartupStatus) => void): Unlisten =>
+    core.listen<StartupStatus>("startup:changed", cb),
   /** A device sync applied or sent something. Call this once — see `useSyncProgress`. */
   onSyncApplied: (cb: (e: RelayOutcome) => void): Unlisten =>
     core.listen<RelayOutcome>("sync:applied", cb),
