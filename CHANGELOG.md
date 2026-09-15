@@ -30,6 +30,21 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.27.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.26.0...v0.27.0) (2026-09-15)
+
+
+### Features
+
+* **scanner:** ship the hashes, Fast and Exact modes, set filters, and a review tray into the collection ([13dba8c](https://github.com/Msgaihede/mtg-grimoire/commit/13dba8c21f0008f561f13f5aaca7e9946e11a39e))
+
+
+### Bug Fixes
+
+* **scanner:** a corrected title read or a misread collector number can no longer name the wrong card in Exact ([64c5810](https://github.com/Msgaihede/mtg-grimoire/commit/64c5810ef5ff04aa7a5b7e3ac5f21bd1dbca57f0))
+* **scanner:** a vote freeze after NotFound does not hold back the next Exact stretch ([68917fa](https://github.com/Msgaihede/mtg-grimoire/commit/68917fa154e84096e5e8cef1607a770a771ba1ba))
+* **scanner:** one physical card is one tray row across settings changes, and a commit and its tray write are one write ([fb6a773](https://github.com/Msgaihede/mtg-grimoire/commit/fb6a77377c76b60cd60f0c9011b40d1164d4bb85))
+* **scanner:** the synthetic evaluation reports without gating the bundle publish ([d56e3e1](https://github.com/Msgaihede/mtg-grimoire/commit/d56e3e1e88b9dc491ea3b842760b4dfdbf39a366))
+
 ## [0.26.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.25.0...v0.26.0) (2026-09-15)
 
 
