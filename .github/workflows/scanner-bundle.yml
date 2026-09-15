@@ -84,7 +84,16 @@ jobs:
       - name: OCR models
         run: node crates/card-scanner/scripts/fetch-ocr-models.mjs models
 
-      # T6 adds the eval step here.
+      # **A regression fence, not an accuracy claim**: Scryfall renders degraded in software and
+      # fed to both scan modes (`crates/card-scanner/src/bin/eval.rs`). It reports and does not
+      # gate — the table lands in the step summary. Before both publish and dry run, so every
+      # dispatch shows what the bundle it built can do.
+      - name: Synthetic evaluation
+        run: |
+          cargo run --locked --release --bin eval --features builder --manifest-path crates/card-scanner/Cargo.toml -- \
+            --bundle card-hashes.bin --bulk default-cards.jsonl --models models \
+            --printings crates/card-scanner/eval/printings.txt --cache eval-cache --summary eval.md
+          cat eval.md >> "$GITHUB_STEP_SUMMARY"
 
       # **Prerelease and not latest**, so nothing that asks GitHub for the latest release is ever
       # handed a bundle — the in-app updater lists releases and drops prereleases.

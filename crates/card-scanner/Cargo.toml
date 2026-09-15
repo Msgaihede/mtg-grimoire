@@ -31,10 +31,12 @@ corpus = ["dep:rusqlite"]
 # `cmake`, `bindgen` and `*-sys` and has none — so it cross-compiles for Android the way
 # the rest of this crate does.
 ocr = ["dep:ocrs", "dep:rten"]
-# The two developer tools — the debug server (`bin/serve.rs`) and the bundle builder. Each
-# turns the app's two on for its own use; neither is ever compiled into the app.
+# The two developer tools — the debug server (`bin/serve.rs`), and the bundle builder with the
+# synthetic evaluation (`bin/build_hashes.rs`, `bin/eval.rs`). Each turns the app's two on for
+# its own use; neither is ever compiled into the app. `builder` takes `ocr` for the evaluation,
+# which runs both modes with their readers: Exact without a collector read is not Exact.
 cli = ["dep:clap", "dep:tiny_http", "corpus", "ocr"]
-builder = ["dep:clap", "dep:ureq", "dep:rayon", "corpus"]
+builder = ["dep:clap", "dep:ureq", "dep:rayon", "corpus", "ocr"]
 
 [dependencies]
 # `webp` is not optional here: every reference image the builder hashes comes from
@@ -79,6 +81,11 @@ required-features = ["cli"]
 [[bin]]
 name = "build-hashes"
 path = "src/bin/build_hashes.rs"
+required-features = ["builder"]
+
+[[bin]]
+name = "eval"
+path = "src/bin/eval.rs"
 required-features = ["builder"]
 
 [profile.release]

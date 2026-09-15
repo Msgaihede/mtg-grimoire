@@ -18,6 +18,8 @@ pub mod ocr;
 pub mod reference;
 pub mod resolve;
 pub mod session;
+#[cfg(feature = "builder")]
+pub mod synth;
 pub mod track;
 pub mod trim;
 pub mod hash;
