@@ -45,7 +45,11 @@ fn main() {
     // directory's line is what notices one arriving: cargo scans a directory it is pointed at.
     let assets = std::path::Path::new("scanner-assets");
     println!("cargo:rerun-if-changed=scanner-assets");
-    let names = ["card-hashes.bin", "text-detection.rten", "text-recognition.rten"];
+    let names = [
+        "card-hashes.bin",
+        "text-detection.rten",
+        "text-recognition.rten",
+    ];
     for n in names {
         if assets.join(n).is_file() {
             println!("cargo:rerun-if-changed=scanner-assets/{n}");
