@@ -39,6 +39,7 @@ import resetRs from "../../src-tauri/src/reset.rs?raw";
 import searchRs from "../../src-tauri/src/search.rs?raw";
 import setCompletionRs from "../../src-tauri/src/set_completion.rs?raw";
 import shareRs from "../../src-tauri/src/share/commands.rs?raw";
+import startupRs from "../../src-tauri/src/startup.rs?raw";
 import startviewRs from "../../src-tauri/src/startview.rs?raw";
 import syncCommandsRs from "../../src-tauri/src/sync_engine/commands.rs?raw";
 import syncLiveRs from "../../src-tauri/src/sync_engine/live.rs?raw";
@@ -76,6 +77,7 @@ import {
   type FeedProgressEvent,
   type OracleTagProgressEvent,
   type RelayOutcome,
+  type StartupStatus,
   type SyncLiveEvent,
   type SyncProgressEvent,
   type TheorySlot,
@@ -3085,6 +3087,48 @@ it("unwraps the sync:progress payload and returns the unlisten handle", async ()
 });
 
 /**
+ * `startup_status` and `startup:changed` — the pair `boot/DesktopBoot` gates the whole app on.
+ *
+ * The gate asks nothing else, so a misspelling on either is not one broken panel: the command
+ * name wrong is a poll that rejects forever and a window that never leaves its loader, and the
+ * event name wrong is a subscriber that hears nothing and hides behind the poll. Both are
+ * pinned here as strings for that reason. The payload is passed through untouched — `message`
+ * is the reader's only account of a folder that would not open.
+ */
+describe("the startup gate's command and event", () => {
+  it("asks for startup status with no arguments", async () => {
+    invoke.mockResolvedValue({ state: "loading" });
+
+    const res = await ipc.startupStatus();
+
+    expect(invoke).toHaveBeenCalledWith("startup_status");
+    expect(res).toEqual({ state: "loading" });
+  });
+
+  it("unwraps the startup:changed payload and returns the unlisten handle", async () => {
+    const unlisten = vi.fn();
+    let emit: ((evt: { payload: StartupStatus }) => void) | undefined;
+    listen.mockImplementation(
+      (_name: string, handler: (evt: { payload: StartupStatus }) => void) => {
+        emit = handler;
+        return Promise.resolve(unlisten);
+      },
+    );
+    const seen: StartupStatus[] = [];
+
+    const stop = ipc.onStartupChanged((e) => seen.push(e));
+    // The core's registration settles on a microtask; the handle must be live by then.
+    await Promise.resolve();
+    emit?.({ payload: { state: "failed", message: "line one\nline two" } });
+
+    expect(listen).toHaveBeenCalledWith("startup:changed", expect.any(Function));
+    expect(seen).toEqual([{ state: "failed", message: "line one\nline two" }]);
+    stop();
+    expect(unlisten).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
  * `sync:applied` and `sync:live` — the connection manager's two events (`sync_engine/live.rs`,
  * `sync_engine/commands.rs`). Same trap as every event name in this file: the string is the
  * whole contract and nothing in the type system holds it, so a subscriber spelling either one
@@ -3181,6 +3225,29 @@ describe("the sync event names agree with the crate that emits them", () => {
   it("emits sync:live on both sides of the boundary", () => {
     expect(syncLiveRs).toContain('app.emit("sync:live"');
     expect(ipcSource).toContain('"sync:live"');
+  });
+});
+
+/**
+ * The startup gate's two names, held to the crate. Both are silent when they drift, and in
+ * opposite ways: a misspelt event is merely a gate that waits for its poll, but a misspelt command
+ * is a poll that rejects forever — and `DesktopBoot` reads a rejection as "still loading", so the
+ * window would show the loader for the rest of the session with nothing in any log.
+ */
+describe("the startup gate's names agree with the crate", () => {
+  it("was read", () => {
+    expect(startupRs.length).toBeGreaterThan(1_000);
+  });
+
+  it("spells the command and the event the way startup.rs does", () => {
+    expect(startupRs).toContain("pub fn startup_status(");
+    expect(startupRs).toContain('pub const CHANGED_EVENT: &str = "startup:changed";');
+    expect(ipcSource).toContain('invoke<StartupStatus>("startup_status")');
+    expect(ipcSource).toContain('core.listen<StartupStatus>("startup:changed"');
+  });
+
+  it("tags the status on the field the page matches", () => {
+    expect(startupRs).toContain('#[serde(tag = "state", rename_all = "camelCase")]');
   });
 });
 

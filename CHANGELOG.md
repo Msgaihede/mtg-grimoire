@@ -30,6 +30,21 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.26.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.25.0...v0.26.0) (2026-09-15)
+
+
+### Features
+
+* **home:** redesign the home page onto a square-cell widget grid ([0859bfa](https://github.com/Msgaihede/mtg-grimoire/commit/0859bfa295e3a939edf61f2babd952703ed80fa4))
+* **home:** redesign the home page onto a square-cell widget grid ([1d5baf0](https://github.com/Msgaihede/mtg-grimoire/commit/1d5baf045bd08b089c90fae376a7abe295832593))
+
+
+### Bug Fixes
+
+* **home:** four faults the live pass found in the grid redesign ([99dca52](https://github.com/Msgaihede/mtg-grimoire/commit/99dca5223c09fca6ad9c56e7f7d3854fa713dfbe))
+* open the databases off the UI thread so the taskbar icon loads ([642d00c](https://github.com/Msgaihede/mtg-grimoire/commit/642d00c9b3c243407a0dc92d4d7c154b8d00541e))
+* open the databases off the UI thread so the taskbar icon loads ([291e656](https://github.com/Msgaihede/mtg-grimoire/commit/291e656805e4e827e7479c6e5d38046a05b5110d))
+
 ## [0.25.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.24.0...v0.25.0) (2026-09-14)
 
 

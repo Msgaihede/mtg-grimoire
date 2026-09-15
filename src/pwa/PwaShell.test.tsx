@@ -53,7 +53,9 @@ describe("where it is mounted", () => {
   it("wraps both roots in main.tsx", () => {
     expect(mainSource).toContain("<PwaShell>");
     expect(mainSource.indexOf("<PwaShell>")).toBeLessThan(mainSource.indexOf("<WebBoot />"));
-    expect(mainSource.indexOf("<PwaShell>")).toBeLessThan(mainSource.indexOf("<App />"));
+    // The desktop root is `DesktopBoot` since the data folder opens on a background thread; it
+    // mounts `App` itself once Rust says the folder is open, so it is inside this wrapper too.
+    expect(mainSource.indexOf("<PwaShell>")).toBeLessThan(mainSource.indexOf("<DesktopBoot />"));
   });
 
   /** One mount: two registrations would be two objects racing to describe one waiting worker. */
