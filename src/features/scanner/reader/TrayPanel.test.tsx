@@ -86,6 +86,15 @@ describe("TrayPanel", () => {
     expect(items[1]).toHaveTextContent("ORI 17");
   });
 
+  it("draws each row as a whole card, never the art crop", () => {
+    const { container } = wrap(<TrayPanel {...props({ rows: [newer] })} />);
+    const images = Array.from(container.querySelectorAll("img"));
+    expect(images).toHaveLength(1);
+    expect(images[0].getAttribute("src")).toContain("/thumb/");
+    expect(images[0].getAttribute("src")).not.toContain("/art/");
+    expect(images[0].className).toContain("object-contain");
+  });
+
   it("names the heading with its count in words", () => {
     wrap(<TrayPanel {...props({ rows: [{ ...newer, quantity: 3 }, older] })} />);
     expect(screen.getByRole("heading", { name: "Scanned cards, 4 copies" })).toBeInTheDocument();

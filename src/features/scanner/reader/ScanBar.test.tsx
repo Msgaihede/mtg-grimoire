@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
@@ -39,11 +39,13 @@ function props(over: Partial<ScanBarProps> = {}): ScanBarProps {
  *  tooltip provider, without which the refusal's tooltip would be bound to nothing. */
 function wrap(ui: ReactElement) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  const provided = (node: ReactElement) => (
     <QueryClientProvider client={client}>
-      <TooltipProvider>{ui}</TooltipProvider>
-    </QueryClientProvider>,
+      <TooltipProvider>{node}</TooltipProvider>
+    </QueryClientProvider>
   );
+  const result = render(provided(ui));
+  return { ...result, rerender: (next: ReactElement) => result.rerender(provided(next)) };
 }
 
 describe("ScanBar", () => {
@@ -78,6 +80,20 @@ describe("ScanBar", () => {
     await user.click(filters);
     expect(screen.queryByRole("dialog", { name: "Filters" })).not.toBeInTheDocument();
     expect(filters).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("closes the Filters popover when filters become unavailable, and does not reopen it after", async () => {
+    const user = userEvent.setup();
+    const { rerender } = wrap(<ScanBar {...props()} />);
+    await user.click(screen.getByRole("button", { name: "Filters: Any set" }));
+    expect(await screen.findByRole("dialog", { name: "Filters" })).toBeInTheDocument();
+
+    rerender(<ScanBar {...props({ filtersDisabled: "Filters need card names, and none are loaded." })} />);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Filters" })).not.toBeInTheDocument());
+
+    rerender(<ScanBar {...props()} />);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(screen.queryByRole("dialog", { name: "Filters" })).not.toBeInTheDocument();
   });
 
   it("turns the developer panels on", async () => {

@@ -37,6 +37,16 @@ describe("tray", () => {
     expect(rows[0]).toMatchObject({ key: "a", addedAt: 7 });
   });
 
+  it("adds a new row rather than bumping one in a different finish", () => {
+    const foil = setFinish(addDecision([], resolved, { finish: "nonfoil" }, 1, "a").rows, "a", "foil");
+    const { rows, bumped } = addDecision(foil, resolved, { finish: "nonfoil" }, 2, "b");
+    expect(bumped).toBe(false);
+    expect(rows.map((r) => [r.key, r.finish, r.quantity])).toEqual([
+      ["b", "nonfoil", 1],
+      ["a", "foil", 1],
+    ]);
+  });
+
   it("bumps only the newest row, never one further down", () => {
     const one = addDecision([], resolved, { finish: "nonfoil" }, 1, "a").rows;
     const two = addDecision(one, ambiguous, { finish: "nonfoil" }, 2, "b").rows;

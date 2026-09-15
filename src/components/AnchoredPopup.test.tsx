@@ -2,6 +2,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AnchoredPopup } from "./AnchoredPopup";
+import { TooltipProvider } from "./tooltip/TooltipProvider";
 
 /**
  * The shell two controls share — the search wall's quick-add and the wishlist's edit — and the
@@ -124,6 +125,105 @@ describe("AnchoredPopup", () => {
     );
     expect(trigger).toHaveFocus();
     expect(trigger).toHaveAttribute("aria-expanded", "false");
+  });
+
+  /**
+   * **A worded trigger wears the caller's box and none of the square's**, and still opens the same
+   * shell. The square's `size-*` and a row's `h-9` are two Tailwind groups, so a trigger that kept
+   * both would be a 24px box with a 36px height request on it.
+   */
+  it("draws a worded trigger in the caller's box, named by its label", async () => {
+    render(
+      <AnchoredPopup
+        label="Filters: Any set"
+        panelLabel="Filters"
+        triggerContent={
+          <>
+            <span>Filters</span>
+            <span>Any set</span>
+          </>
+        }
+        triggerClassName="h-9 px-2.5"
+      >
+        <button type="button">Clear</button>
+      </AnchoredPopup>,
+    );
+
+    const trigger = screen.getByRole("button", { name: "Filters: Any set" });
+    expect(trigger).toHaveTextContent("FiltersAny set");
+    expect(trigger.className).toContain("h-9");
+    expect(trigger.className).not.toContain("size-[");
+    await userEvent.click(trigger);
+    expect(await screen.findByRole("dialog", { name: "Filters" })).toBeInTheDocument();
+  });
+
+  /**
+   * **Refused, the trigger stays in reach and says why** — `aria-disabled` and never the attribute,
+   * the press opens nothing, and the reason is the tooltip a pointer finds.
+   */
+  it("refuses to open with a reason, and stays in the tab order", async () => {
+    const user = userEvent.setup();
+    render(
+      <TooltipProvider>
+        <AnchoredPopup
+          label="Filters: Any set"
+          panelLabel="Filters"
+          triggerContent={<span>Any set</span>}
+          refusal="Filters need card names, and none are loaded."
+        >
+          <button type="button">Clear</button>
+        </AnchoredPopup>
+      </TooltipProvider>,
+    );
+
+    const trigger = screen.getByRole("button", { name: "Filters: Any set" });
+    expect(trigger).toHaveAttribute("aria-disabled", "true");
+    expect(trigger).not.toBeDisabled();
+
+    await user.hover(trigger);
+    expect(await screen.findByRole("tooltip", undefined, { timeout: 2000 })).toHaveTextContent(
+      "Filters need card names, and none are loaded.",
+    );
+
+    await user.click(trigger);
+    expect(screen.queryByRole("dialog", { name: "Filters" })).not.toBeInTheDocument();
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+  });
+
+  /**
+   * **A refusal arriving while the panel is open closes it, and its going away does not reopen
+   * it.** The flag is put down, not hidden: a flag left up would remount the panel the moment the
+   * reason cleared, and the panel's mount effect would pull the caret into a popup nobody opened.
+   */
+  it("closes on a refusal and stays closed when the refusal clears", async () => {
+    const shell = (refusal: string | null) => (
+      <AnchoredPopup
+        label="Filters: Any set"
+        panelLabel="Filters"
+        triggerContent={<span>Any set</span>}
+        refusal={refusal}
+      >
+        <button type="button">Clear</button>
+      </AnchoredPopup>
+    );
+    const { rerender } = render(shell(null));
+    await userEvent.click(screen.getByRole("button", { name: "Filters: Any set" }));
+    expect(await screen.findByRole("dialog", { name: "Filters" })).toBeInTheDocument();
+
+    rerender(shell("Filters need card names, and none are loaded."));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Filters" })).not.toBeInTheDocument(),
+    );
+
+    rerender(shell(null));
+    // A remounted panel would be in the tree on this very render; wait a beat so an effect-driven
+    // reopen would have had its chance too.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(screen.queryByRole("dialog", { name: "Filters" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Filters: Any set" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
   });
 
   it("does not scroll to a panel that is closing", async () => {

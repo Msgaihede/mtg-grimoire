@@ -1,6 +1,7 @@
-import { useCallback, useId, useMemo, useRef, useState } from "react";
+import { useId, useMemo } from "react";
 import { motion } from "motion/react";
-import { ChevronDown, Folder, LoaderCircle, X } from "lucide-react";
+import { ChevronUp, Folder, LoaderCircle, X } from "lucide-react";
+import { AnchoredPopup } from "@/components/AnchoredPopup";
 import { CardImage } from "@/components/CardImage";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
 import type { DropdownOption } from "@/components/Dropdown/types";
@@ -15,7 +16,6 @@ import { FOCUS } from "@/lib/focus";
 import { CARD_ASPECT, cardArtSrc, cardImageUrl } from "@/lib/images";
 import type { ScannerTrayChoice, ScannerTrayRow } from "@/lib/ipc";
 import { DURATION, PRESS, TRANSITION, seconds } from "@/lib/motion";
-import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import {
   pickChoice,
@@ -223,9 +223,12 @@ function TrayRow({
   const waiting = row.choices.length > 0;
   const label = rowLabel(row);
   const printing = printingOf(row);
-  // The frame `PullFromCollectionDialog`'s rows draw: the protocol URL on desktop, and `null` on
-  // the web build — a tray row carries no Scryfall URL, so a browser draws the empty frame below.
-  const art = cardArtSrc(cardImageUrl(row.cardId, 0, "art"));
+  // **The whole card, never the `art` crop.** A crop has no printed frame and so no artist credit,
+  // a tray row carries no artist to name beside one, and the Scanner shows no other full card a
+  // reader could read the credit off — `src/CLAUDE.md`'s art-credit rule, met by its second arm.
+  // `thumb` is the smallest variant that is a whole card. The protocol URL on desktop and `null` on
+  // the web build — a tray row carries no Scryfall URL, so a browser draws the empty slot below.
+  const card = cardArtSrc(cardImageUrl(row.cardId, 0, "thumb"));
 
   return (
     <li className="relative rounded-md px-2 py-2">
@@ -249,18 +252,25 @@ function TrayRow({
         />
       )}
       <div className="relative flex items-start gap-2.5">
-        {/* The `art` crop as decoration beside the name — `aria-hidden`, empty alt and
-            `draggable={false}`, `PullFromCollectionDialog`'s arrangement. Through `CardImage`,
-            never a bare `<img>`: this is a slot, and a pick changes the card in it. */}
-        <span aria-hidden="true" className="mt-0.5 h-8 w-11 shrink-0 overflow-hidden rounded bg-bg">
-          {art !== null && (
+        {/* A 5:7 portrait slot, decoration beside the name — `aria-hidden`, empty alt and
+            `draggable={false}`. Through `CardImage`, never a bare `<img>`: this is a slot, and a
+            pick changes the card in it. `object-contain` rather than `cover`, so not a pixel of
+            the card — the credit line least of all — is ever cropped off at the slot's edge.
+            Not `CardArt`: its no-picture fallback prints the card's name and a status line, which
+            cannot be read in a 36px column and would repeat the name set in type beside it. */}
+        <span
+          aria-hidden="true"
+          className="w-9 shrink-0 overflow-hidden rounded-[3px] bg-bg"
+          style={{ aspectRatio: CARD_ASPECT }}
+        >
+          {card !== null && (
             <CardImage
-              src={art}
+              src={card}
               alt=""
               draggable={false}
               // A plain scroller, so a long tray really is every row mounted.
               loading="lazy"
-              className="size-full object-cover"
+              className="size-full object-contain"
             />
           )}
         </span>
@@ -372,7 +382,7 @@ function ChoiceButton({ choice, onPick }: { choice: ScannerTrayChoice; onPick: (
         style={{ aspectRatio: CARD_ASPECT }}
       >
         {src !== null && (
-          <CardImage src={src} alt="" draggable={false} loading="lazy" className="size-full object-cover" />
+          <CardImage src={src} alt="" draggable={false} loading="lazy" className="size-full object-contain" />
         )}
       </span>
       <span aria-hidden="true" className="truncate text-center font-mono text-[0.625rem] text-dim">
@@ -391,10 +401,10 @@ function ChoiceButton({ choice, onPick }: { choice: ScannerTrayChoice; onPick: (
  * is `CollectionPage`'s and the card menu's arrangement. Out of the tree rather than drawn greyed:
  * no destination in this list is a place the tray could ever land.
  *
- * **Drawn inline, above its button, rather than as a popup of its own.** The footer is the bottom
- * edge of the panel, so a popup here would open downward off the window; inline, the list pushes
- * the rows' scroller up by its own height and the button stays where the reader's pointer is.
- * `MoveToFolder`'s `inline` mode is that shape, role and all.
+ * **`AddToCollection`'s shape one surface over**: `AnchoredPopup` for the layer, `MoveToFolder`
+ * drawn `inline` inside it so the popup stays the one dialog in the tree. **It opens upward**, pinned
+ * by its bottom-left corner and grown from it: the footer is the bottom edge of the tray, so a
+ * panel opening downward would land off the window.
  *
  * **Picking writes nothing but the choice.** The commit is the Add button's; so the list is never
  * pending, and `AddToCollection`'s argument for `pending={false}` holds here word for word.
@@ -409,9 +419,6 @@ function FolderPicker({
   const { query, folders } = useCollectionFolderList();
   const mine = useMemo(() => folders.filter((folder) => folder.kind === "user"), [folders]);
   const nodes = useMemo(() => buildFolderTree(mine, []), [mine]);
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const buttonRef = useRef<HTMLButtonElement>(null);
 
   // A folder another surface deleted reads as the top level, which is where `buildFolderTree`
   // puts a child whose parent is gone. While the list is still loading a named folder has no name
@@ -423,63 +430,48 @@ function FolderPicker({
         ? "…"
         : (mine.find((folder) => folder.id === folderId)?.name ?? ROOT_LABEL);
 
-  const close = useCallback(() => {
-    setOpen(false);
-    buttonRef.current?.focus();
-  }, []);
-  useDismissOnEscape({ layer: "inner", onDismiss: close, enabled: open });
-
   return (
-    <div
-      ref={rootRef}
-      className="flex min-w-0 flex-1 basis-40 flex-col gap-1.5"
-      // Focus leaving the picker closes it, and the boundary is the button *and* the list: a press
-      // on the button while the list is open blurs the list first, and closing there would race
-      // the toggle and reopen what the press meant to shut.
-      onBlur={(e) => {
-        if (open && !rootRef.current?.contains(e.relatedTarget)) setOpen(false);
-      }}
-    >
-      {open && (
-        <div className="rounded-md border border-border bg-bg">
-          <MoveToFolder
-            label="File the scanned cards in a folder"
-            nodes={nodes}
-            currentId={folderId}
-            rootLabel={ROOT_LABEL}
-            inline
-            pending={false}
-            onPick={(id) => {
-              onFolder(id);
-              close();
-            }}
-            // Deliberately nothing: the root above owns "focus left", for the race it describes.
-            onClose={() => {}}
-          />
-        </div>
+    <AnchoredPopup
+      label={`Folder: ${name}`}
+      panelLabel="Choose a folder"
+      align="start"
+      className="min-w-0 flex-1 basis-40"
+      triggerClassName={cn(
+        "inline-flex h-9 w-full min-w-0 items-center gap-2 rounded-md border border-border px-2.5",
+        "text-sm text-dim hover:text-text",
+        PRESS,
       )}
-      <button
-        ref={buttonRef}
-        type="button"
-        aria-expanded={open}
-        aria-label={`Folder: ${name}`}
-        onClick={() => setOpen((o) => !o)}
-        className={cn(
-          "inline-flex h-9 min-w-0 items-center gap-2 rounded-md border border-border px-2.5 text-sm text-dim hover:text-text",
-          PRESS,
-          FOCUS,
-        )}
-      >
-        <Folder className="size-3.5 shrink-0" aria-hidden="true" />
-        <span className="min-w-0 flex-1 truncate text-left text-text">{name}</span>
-        <ChevronDown
-          className={cn(
-            "size-3.5 shrink-0 transition-transform motion-reduce:transition-none",
-            open && "rotate-180",
-          )}
-          aria-hidden="true"
+      triggerContent={
+        <>
+          <Folder className="size-3.5 shrink-0" aria-hidden="true" />
+          <span className="min-w-0 flex-1 truncate text-left text-text">{name}</span>
+          <ChevronUp className="size-3.5 shrink-0" aria-hidden="true" />
+        </>
+      }
+      // Over the trigger rather than under it, and grown from the corner it is pinned by. `p-1`
+      // because `MoveToFolder`'s inline list carries its own inset for its rows' hover.
+      panelClassName="bottom-full top-auto mb-1 w-64 origin-bottom-left p-1"
+    >
+      {(close) => (
+        <MoveToFolder
+          label="File the scanned cards in a folder"
+          nodes={nodes}
+          currentId={folderId}
+          rootLabel={ROOT_LABEL}
+          // Drawn into the popup rather than as a second layer of its own — the role goes with the
+          // box, so the popup stays the one dialog in the tree.
+          inline
+          pending={false}
+          onPick={(id) => {
+            onFolder(id);
+            close();
+          }}
+          // Deliberately nothing: the popup closes itself when focus leaves its root. Wired here it
+          // would fire the moment the popup opened — the list focuses itself as it mounts and the
+          // popup's panel then takes the caret from it, which is focus leaving the list.
+          onClose={() => {}}
         />
-      </button>
-    </div>
+      )}
+    </AnchoredPopup>
   );
 }

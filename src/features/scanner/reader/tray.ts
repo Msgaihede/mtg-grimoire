@@ -82,7 +82,10 @@ export function rowFromDecision(
 /**
  * Put a decision into the tray.
  *
- * **Only the newest row can be bumped, and only by a resolved decision naming its printing.** A
+ * **Only the newest row can be bumped, only by a resolved decision naming its printing, and only
+ * while that row is in the finish a new row would start in.** The collection's grain includes the
+ * finish, so a foil row the reader set by hand and a nonfoil copy scanned after it are two rows in
+ * the binder — counting the second onto the first would file a plain card as a foil one. A
  * card that leaves the frame and comes back is a second copy of the card just scanned — that is
  * the whole of the re-presentation gesture — while the same printing ten cards ago is a reader
  * sorting a pile out of order, and folding it into a row they have scrolled past would move a
@@ -104,7 +107,8 @@ export function addDecision(
     newest !== undefined &&
     d.outcome === "resolved" &&
     newest.choices.length === 0 &&
-    newest.cardId === d.printing
+    newest.cardId === d.printing &&
+    newest.finish === defaults.finish
   ) {
     return {
       rows: [{ ...newest, quantity: newest.quantity + 1, addedAt: now }, ...rows.slice(1)],

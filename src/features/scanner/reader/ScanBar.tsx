@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { AnimatePresence, motion, useIsPresent } from "motion/react";
+import { useId, type ReactNode } from "react";
 import { Bug, ChevronDown } from "lucide-react";
+import { AnchoredPopup } from "@/components/AnchoredPopup";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
 import type { DropdownOption } from "@/components/Dropdown/types";
 import { FILTER_CONTROL, filterChipState } from "@/components/FilterChips";
@@ -10,9 +10,7 @@ import { CONDITION_LABEL, CONDITION_NOT_SET, CONDITIONS, type Condition } from "
 import { FINISH_LABEL, FINISHES, type Finish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
 import type { ScanFilters, ScanMode } from "@/lib/ipc";
-import { LAYER } from "@/lib/layers";
-import { PRESS, PRESS_STILL, popup } from "@/lib/motion";
-import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
+import { PRESS, PRESS_STILL } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import { filterSummary } from "./readerText";
 
@@ -183,24 +181,22 @@ function ModeSwitch({ mode, onMode }: { mode: ScanMode; onMode: (m: ScanMode) =>
 }
 
 /**
- * A trigger on the row and the panel it opens under itself.
+ * A worded trigger on the row and the panel it opens under itself — `AnchoredPopup`, with the
+ * row's box and a caption beside the value.
  *
- * **`AnchoredPopup`'s shell, drawn for a worded trigger.** That component owns exactly this
- * behaviour — anchored rather than portalled for the shipped CSP, Escape through the one ladder
- * with the caret handed back, focus leaving the root closing it, and a fading panel that is a
- * picture rather than a second copy of its form — but its trigger is a 24px glyph with no words,
- * and it has no way to say *not now*. Both of those are this row's whole job, so the behaviour is
- * followed rather than imported; a text trigger and a refusal on that component are the change
- * that would fold this back into it.
- *
- * **Refused, the trigger stays in the tab order and says why.** `aria-disabled` rather than the
- * attribute, and the reason is its tooltip — a Filters button that silently did nothing, or that
- * vanished from the tab order the moment the scanner had no labels, would be a control a reader
- * could not learn the rule of.
+ * **The shell is `AnchoredPopup`'s and nothing about it is re-decided here**: anchored rather than
+ * portalled for the shipped CSP, Escape through the one ladder with the caret handed back, focus
+ * leaving the root closing it, the scroll into view once the entry tween settles, the drag mark,
+ * and the refusal that stays in the tab order with its reason as the tooltip. What this adds is the
+ * row's own 36px box and the two words it prints.
  *
  * **The name is spelled, not computed.** The caption and the value are two elements in a row with
- * a gap between them, which the name algorithm would fuse into one word; an explicit label holds
- * both in the order they are drawn.
+ * a gap between them, which the name algorithm would fuse into one word; the label holds both in
+ * the order they are drawn.
+ *
+ * Pinned by its **left** edge and grown from its top-left corner, under the trigger rather than
+ * over it: both triggers sit at the start of the row or of a wrapped line, so there is nothing to
+ * their left for a panel to open back across.
  */
 function BarPopover({
   caption,
@@ -218,113 +214,36 @@ function BarPopover({
   /** Why the popover cannot open, or `null` when it can. */
   refusal: string | null;
   panelLabel: string;
-  panelClassName?: string;
+  panelClassName: string;
   children: ReactNode;
 }) {
-  const tip = useTooltip();
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const buttonRef = useRef<HTMLButtonElement>(null);
-  const refused = refusal !== null;
-  /** Derived rather than written back: a refusal arriving while the panel is open closes it, and
-   *  the reason going away does not reopen a panel nobody asked for since. */
-  const shown = open && !refused;
-
-  const dismiss = useCallback(() => {
-    setOpen(false);
-    buttonRef.current?.focus();
-  }, []);
-  useDismissOnEscape({ layer: "inner", onDismiss: dismiss, enabled: shown });
-
   return (
-    <div
-      ref={rootRef}
+    <AnchoredPopup
+      label={`${caption}: ${value}`}
+      panelLabel={panelLabel}
+      refusal={refusal}
+      align="start"
       // `min-w-0` so a long summary truncates inside the trigger instead of holding the whole
       // wrapped line at its full width: a flex item's floor is its content otherwise.
-      className="relative min-w-0 max-w-full"
-      onBlur={(e) => {
-        if (shown && !rootRef.current?.contains(e.relatedTarget)) setOpen(false);
-      }}
-    >
-      <button
-        ref={buttonRef}
-        type="button"
-        aria-haspopup="dialog"
-        aria-expanded={shown}
-        aria-disabled={refused || undefined}
-        aria-label={`${caption}: ${value}`}
-        onClick={() => {
-          if (refused) return;
-          setOpen((o) => !o);
-        }}
-        {...tip(refusal)}
-        className={cn(
-          FILTER_CONTROL,
-          "inline-flex max-w-full items-center gap-1.5 px-2.5",
-          FOCUS,
-          filterChipState(active, refused),
-        )}
-      >
-        <span className="shrink-0 text-dim">{caption}</span>
-        <span className="min-w-0 truncate">{value}</span>
-        <ChevronDown className="size-3.5 shrink-0" aria-hidden="true" />
-      </button>
-      <AnimatePresence>
-        {shown && (
-          <PopoverPanel label={panelLabel} className={panelClassName}>
-            {children}
-          </PopoverPanel>
-        )}
-      </AnimatePresence>
-    </div>
-  );
-}
-
-/**
- * The panel — its own component so its contents mount and unmount with it, and so the fade-out
- * reads `useIsPresent` from inside the presence, the only place that answer changes.
- *
- * Pinned by its **left** edge and grown from its top-left corner: both triggers sit at the start of
- * the row or of a wrapped line, so there is nothing to their left for a panel to open back across,
- * and a panel opening rightward from them has the row's own width to land in.
- */
-function PopoverPanel({
-  label,
-  className,
-  children,
-}: {
-  label: string;
-  className?: string;
-  children: ReactNode;
-}) {
-  const ref = useRef<HTMLDivElement>(null);
-  const present = useIsPresent();
-
-  // The caret moves into the layer, so Tab reaches its controls next and Escape has something to
-  // hand back. `preventScroll`, for `AnchoredPopup`'s reason: the panel is still at its entry
-  // scale on this render, and a scroll computed against it lands short.
-  useEffect(() => {
-    ref.current?.focus({ preventScroll: true });
-  }, []);
-
-  return (
-    <motion.div
-      {...popup}
-      ref={ref}
-      tabIndex={-1}
-      role="dialog"
-      aria-label={label}
-      aria-hidden={present ? undefined : true}
-      className={cn(
-        "absolute left-0 top-full mt-1 origin-top-left rounded-lg border border-border bg-surface p-3 text-left shadow-lg",
-        LAYER.popup,
-        !present && "pointer-events-none",
-        // No focus outline: a landing pad, not a control — `src/lib/focus.ts` has the rule.
-        className,
+      className="min-w-0 max-w-full"
+      triggerClassName={cn(
+        FILTER_CONTROL,
+        "inline-flex max-w-full items-center gap-1.5 px-2.5",
+        filterChipState(active, refusal !== null),
       )}
+      triggerContent={
+        <>
+          <span className="shrink-0 text-dim">{caption}</span>
+          <span className="min-w-0 truncate">{value}</span>
+          <ChevronDown className="size-3.5 shrink-0" aria-hidden="true" />
+        </>
+      }
+      // Under the 36px trigger rather than at the square's 28px offset, which would lay the panel
+      // over the bottom of the control that opened it.
+      panelClassName={cn("top-full mt-1", panelClassName)}
     >
       {children}
-    </motion.div>
+    </AnchoredPopup>
   );
 }
 
