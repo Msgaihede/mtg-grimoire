@@ -62,8 +62,19 @@ both plus the frontend.
   a corpus that will not open has to be a delete and a re-`ATTACH`, not a process-wide reopen
   with live connections in the way. `schema::prepare_data_dir` runs before any connection the
   app keeps: it converts a pre-27 `mtg.db` through `split::convert` and replaces a corpus that
-  fails `quick_check`. Measured on a byte copy of the real 788 MB database: 359 ms (debug),
-  a 1.35 MB user file beside a 787 MB corpus, zero `foreign_key_check` violations.
+  will not open **or that carries `schema::CORPUS_DAMAGED_MARK`**. Measured on a byte copy of the
+  real 788 MB database: 359 ms (debug), a 1.35 MB user file beside a 787 MB corpus, zero
+  `foreign_key_check` violations.
+  ⚠️ **The launch no longer runs `PRAGMA quick_check`, and putting it back is putting back the
+  frozen window** (2026-09-15). It read every page of the corpus before any window could draw:
+  **26.4 s** of a 26.5 s startup on a fresh copy of the real 893 MB file, 2.9 s warm (debug,
+  Windows). The launch probe reads `sqlite_master` and nothing else; `schema::check_corpus` runs
+  the full check on a `corpus-check` thread once the app is up, and a damaged answer writes the
+  mark, so the file is still replaced before any connection holds it — one launch later.
+  `schema::tests::a_corpus_damaged_past_its_first_page_starts_and_is_replaced_the_launch_after`
+  is that guarantee. **Only `SQLITE_CORRUPT`/`SQLITE_NOTADB` or a non-`ok` answer is damage**; a
+  missing file or an interrupted read is `Unanswered` and deletes nothing, because a false
+  positive costs the reader a whole resync.
 - **An unqualified name resolves into whichever attached database holds the table, so no
   command changed — but a bare `CREATE`, `DROP`, `ALTER` or `PRAGMA` means `main` and says
   nothing about it.** Every corpus DDL statement is schema-qualified (`schema::on_schema`,
@@ -90,6 +101,10 @@ both plus the frontend.
   `Reference::load_labels` reads an unqualified `FROM cards` and needs the corpus to be `main`.
   It is the only read here that wants *half*, which is why it is the only one that may not use
   the pair. See "Card scanner" below.
+  **`schema::check_corpus` is the second, since 2026-09-15**, and for the opposite reason: it is
+  an integrity check of one *file*, so it opens `corpus.db` alone through `db::open_read_only`
+  and never attaches anything — a `quick_check` on the pair would read the user file too, and
+  a damaged answer has to name the file the mark will delete.
 - `db::configure` sets `PRAGMA auto_vacuum=INCREMENTAL` **before** `journal_mode=WAL` — after
   WAL has materialised the file the pragma is a silent no-op that only a `VACUUM` can apply —
   and it runs **once per schema**, because an attached file inherits neither
@@ -2188,6 +2203,25 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
   outer rect is 16px wider and 9px taller than its client area for the invisible grab margin —
   which is inside the work-area check either way, since both rungs are chosen against the work
   area rather than against the screen.
+- ⚠️ **Nothing slow may run in `setup`, because `setup` runs on the window's own UI thread.**
+  Tauri calls it from the event loop's `Ready` callback (`tauri-2.11.5/src/app.rs:1423`), so for
+  as long as it runs the shown window answers no message at all — measured on 2026-09-15 with a
+  Win32 probe against a built debug binary: `SendMessageTimeout(WM_NULL)` timing out from 10 ms
+  to **26.5 s**, `IsHungAppWindow` true from 5.1 s. **That is what the "taskbar icon does not
+  load" bug was.** Explorer asks a new taskbar button's window for its icon with
+  `WM_GETICON`, times out on a hung thread, draws Windows' generic application icon, and **does
+  not ask again** once the window recovers — a screenshot 4 s after it answered still showed the
+  generic icon, gone when the process was stopped. (`iconBig` answers 0 even when healthy: tao
+  sets only `ICON_SMALL`, and Explorer falls back to `ICON_SMALL2`, which is why the icon was ever
+  right at all.) So `setup` shows the window, installs the camera grant, manages
+  `startup::Startup`, spawns a `startup` thread and returns; `desktop::start` builds `AppState` on
+  that thread and calls `startup::settle(Ready)` **after the last `manage` and the mirror's hook,
+  before the first background task**. Until then every command taking `State<Arc<AppState>>`
+  refuses with "state not managed", which is why `src/boot/DesktopBoot.tsx` mounts nothing that
+  queries until `startup_status` says `ready`. A new piece of managed state a command reaches
+  goes **above** that `settle`; a new background task goes below it. An `init_state` refusal is
+  `StartupStatus::Failed` and the page draws it — it used to be a panic that, in a release build
+  with no console, was a window that vanished.
 
 ## Card scanner
 

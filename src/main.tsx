@@ -1,6 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import App from "./App";
+import { DesktopBoot } from "./boot/DesktopBoot";
 import { installKeyboardModality } from "./lib/keyboardModality";
 import { captureInstallPrompt } from "./pwa/install";
 import { PwaShell } from "./pwa/PwaShell";
@@ -34,15 +34,19 @@ installKeyboardModality(window);
 ReactDOM.createRoot(root).render(
   <React.StrictMode>
     {/* Which root a build gets is the same `define` that picks the core, and it folds away:
-        a Tauri bundle carries no `WebBoot` and no Worker. The web build cannot render `App`
-        directly because its database has to be opened first, and opening it can answer
-        "another tab already has it". */}
+        a Tauri bundle carries no `WebBoot` and no Worker. **Neither build renders `App`
+        directly, and for one reason told twice: its queries need a database that is not open
+        yet.** The web build opens its own in a Worker, and opening it can answer "another tab
+        already has it". Desktop and Android open theirs on a background thread in Rust, so
+        the window can paint while a migration runs — and until that thread finishes, every
+        command `App` asks on its first render errors. `DesktopBoot` holds `App` back until
+        `startup_status` says the folder is open, and draws the caption and a loader meanwhile. */}
     {/* **The service worker's registration, around whichever root this build renders.** It
         is here rather than inside `App` because on the web target `App` is mounted only once
         a corpus exists - so a hook in there does not run until the reader has downloaded
         75 MB, which is the shell's whole purpose deferred behind the one download it exists
         to survive. Measured in a real browser: a first visit had zero registrations while
         the page showed "Build the card database". Inert on desktop. */}
-    <PwaShell>{__CORE__ === "web" ? <WebBoot /> : <App />}</PwaShell>
+    <PwaShell>{__CORE__ === "web" ? <WebBoot /> : <DesktopBoot />}</PwaShell>
   </React.StrictMode>,
 );

@@ -21,7 +21,7 @@ use crate::{
     deck_tokens, deck_undo, deckpane, decksort, errors, export, flatten, home, images, import,
     index, listview, markcolors, marketplace, marketplace_feed, mirror, nav, paths, price_history,
     recent_cards, reset, scanner, schema, scryfall, search, searchopen, set_completion, share,
-    startview, sync, sync_engine, sync_pair, tags, update, wishlist, wishlist_folders,
+    startup, startview, sync, sync_engine, sync_pair, tags, update, wishlist, wishlist_folders,
     wishlist_optimize, zoom,
 };
 // **Not in the list above, because this file compiles for Android too.** Its name says
@@ -658,7 +658,10 @@ pub fn run() {
             sync_engine::commands::sync_review_list,
             sync_engine::commands::sync_review_clear,
             sync_engine::commands::sync_live_foreground,
-            sync_engine::commands::sync_live_state
+            sync_engine::commands::sync_live_state,
+            // Whether the background startup has landed — the one command the page asks before
+            // it mounts anything that needs `AppState`. See `startup`.
+            startup::startup_status
         ])
         .setup(|app| {
             // First, and before anything that can fail: the window is created **hidden**
@@ -684,205 +687,18 @@ pub fn run() {
                 camera::install(&main);
             }
 
-            // Printed as well as returned: a `Box<dyn Error>` out of `setup` reaches the
-            // user as an escaped one-line panic, which turns a multi-line message naming
-            // both candidate folders into something unreadable.
-            let state = Arc::new(init_state(app).inspect_err(|e| eprintln!("{e}"))?);
-            app.manage(state.clone());
-
-            // The scanner's own state, beside `AppState` rather than inside it — it loads
-            // lazily on the first status call and shares nothing but the data directory.
-            app.manage(Arc::new(scanner::ScannerState::new(state.data_dir.clone())));
-
-            // The write-side half of live sync's wake. One `Arc` for the whole process: the
-            // commit hook installed below calls `notify_one` on it, and
-            // `sync_engine::live::spawn`'s `select!` wakes on the same handle — see the
-            // warning on `live::spawn` for why it must be `notify_one` and never
-            // `notify_waiters`. Created here rather than on `AppState` because nothing else
-            // needs to reach it: the two call sites below are the whole of its life.
-            let writes = Arc::new(tokio::sync::Notify::new());
-
-            // Warm the facet index: ~767 ms of full table scan on its own thread and its own
-            // read-only connection, so the window comes up now and the first searches answer
-            // out of `db_read` untouched. Here rather than inside `init_state` because that
-            // returns an `AppState` and this needs the `Arc` — and because it must run after
-            // `prepare_database`, which is the last thing that can change what `cards` is.
-            // Until it lands, `facet_cards` answers `ready: false` and every filter control
-            // stays live. Nothing about it is fatal; the handle is dropped and the thread
-            // runs detached.
-            index::lifecycle::spawn_build(&state);
-
-            // The plain-text mirror, in two halves that must stay in this order. **Desktop
-            // only, and this is the decision rather than a limitation**: the mirror's whole
-            // point is a folder a reader opens in a text editor, syncs with Dropbox or greps,
-            // and on Android that directory is reachable mainly through a file-manager app and
-            // often not by other apps at all. `tauri-plugin-dialog`'s own manifest records
-            // Android support as "partial — Does not support folder picker", so the reader
-            // could not choose the root either.
+            // Everything else happens on a thread of its own, and the window is already up to
+            // wait for it. Tauri calls this closure from inside the event loop, on the window's
+            // own UI thread, so a `setup` that opens and migrates the databases is a window that
+            // cannot answer a message for as long as that takes — measured at 26.5 s on a cold
+            // corpus — and Explorer's `WM_GETICON` is one of the messages. See `startup`.
             //
-            // The module still *compiles* on Android — `AppState` carries
-            // `mirror::watch::{Mask, LastPass}` and six sites construct them — so what is
-            // gated is the hook and the thread, which is the whole of what makes the mirror
-            // do anything. `mirror_status` there answers a mirror that never runs.
-            #[cfg(desktop)]
-            {
-                // First the hook, on `state.db` and **nowhere else**: that is the one
-                // connection every user-facing write in this crate goes through
-                // (`sync::with_write`), and `db_read` is opened read-only so it could never
-                // fire one. It is installed before the thread starts so that nothing written
-                // between here and the first pass can slip past unmarked — though the first
-                // pass is `Dirty::ALL` and would cover it anyway, which is what makes this
-                // ordering cheap insurance rather than a rule.
-                //
-                // The guard is bound rather than left a temporary so it is released before
-                // `spawn`, which is the lifetime it had before the block existed.
-                //
-                // The third argument is the cross-file fence, which arrived with the
-                // user/corpus split: the hook has to be able to tell the mirror which of the
-                // two databases a write landed in.
-                let conn = db::lock_blocking(&state.db);
-                mirror::watch::install_hook(
-                    &conn,
-                    state.mirror.clone(),
-                    state.fence.clone(),
-                    writes.clone(),
-                );
-                drop(conn);
-
-                // Then the thread. Detached and never fatal, exactly like the facet warm-up
-                // above: it runs one full pass now — the whole of what makes the folder
-                // correct after a crash — and then wakes two seconds after the reader stops
-                // editing. It reads through `db_read` and never takes the write connection, so
-                // no press it overlaps can be answered `db::BUSY` by it.
-                mirror::watch::spawn(state.clone());
-            }
-
-            // Here rather than before the builder, and the difference is one rare bug: this
-            // deletes a staged build, and the second instance of a double-click would
-            // otherwise delete the *first* instance's staged update on its way to being
-            // refused. `setup` runs only for the instance that won the single-instance
-            // guard, so what it clears is always its own. (The `.old` a swap leaves is
-            // deleted earlier still, by `await_predecessor`; this is the path that finally
-            // clears one whose successor never got that far.)
-            let exe = std::env::current_exe().unwrap_or_default();
-            // Desktop only: what it deletes is a staged `.new`/`.old` beside the executable,
-            // and on Android that directory is the app's own native-library folder — nothing
-            // ever stages anything there, and `current_exe()` may name a read-only mount.
-            #[cfg(desktop)]
-            update::clean_up(&exe);
-
-            // Decided once here — `Updater::new` probes whether it can write beside the exe
-            // — so a status poll never re-answers a question that cannot change.
-            let updater = Arc::new(update::Updater::new(update_api_base(), exe));
-            app.manage(updater.clone());
-
-            // Launch is never blocked on the network: the window comes up immediately
-            // and this run reports itself through `sync:progress`. The throttle inside
-            // makes it a no-op on all but the first launch of the day.
+            // Managed first, so the page's very first `startup_status` has something to ask.
+            app.manage(startup::Startup::default());
             let handle = app.handle().clone();
-            let sync_state = state.clone();
-            tauri::async_runtime::spawn(async move {
-                if let Err(e) = sync::run_sync(sync_state, handle, false).await {
-                    eprintln!("initial sync failed: {e}");
-                }
-            });
-
-            // The selected marketplace's price feed, if it is one this app downloads and it is
-            // due. Its own task for the update check's reason — three services, three
-            // schedules, and none of them may be the reason another stops running — and
-            // deliberately *only* the selected one: nobody downloads 63.7 MiB for a
-            // marketplace they never picked, which is the whole shape of
-            // `refresh_selected_if_due`. Silent and best-effort; a failure is already in
-            // `error_log` and the honest fallback is the prices already on disk.
-            let feed_state = state.clone();
-            let feed_app = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                marketplace_feed::refresh_selected_if_due(&feed_state, &feed_app).await;
-            });
-
-            // Scryfall's Oracle Tags, if the stored copy is due. Its own task for the same
-            // reason as the two above — a fourth service on a fourth schedule, and none of
-            // them may be the reason another stops running — and deliberately *after* the
-            // card sync is spawned rather than chained onto it: the two write different
-            // tables, both take the connection a batch at a time, and a tag file that never
-            // arrives must cost the corpus nothing. Silent and best-effort; a failure is
-            // already in `error_log` and the honest fallback is categorising by card type,
-            // which is what the app did before this existed.
-            let tags_state = state.clone();
-            let tags_app = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                tags::oracle::refresh_if_due(&tags_state, &tags_app).await;
-            });
-
-            // Scryfall's Art Tags, on a fifth task rather than chained onto the oracle one
-            // above. **They are the same shape of job and that is exactly why they must not
-            // share a task**: the art file is 12.5 MB against the oracle file's 5.85 MB, so
-            // awaiting one before the other would make the bigger download the reason the
-            // smaller taxonomy is late — and on a first run, the reason a deck add is still
-            // categorising by card type minutes after launch. They contend for the write
-            // connection a batch at a time, which is the engine's job and not the launch's.
-            // Silent and best-effort, like every one of its siblings.
-            let art_state = state.clone();
-            let art_app = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                tags::art::refresh_if_due(&art_state, &art_app).await;
-            });
-
-            // Commander Spellbook's combo database, on a sixth task — a sixth service on a
-            // sixth schedule, and none of them may be the reason another stops running. **It
-            // is fetched uninvited, exactly like the two tagger files above it**, which
-            // reverses what this comment argued: that a database which had never seen the file
-            // should wait to be asked, because a bracket estimate can read three signals
-            // instead of four and that is a supported state rather than an error. Supported is
-            // not the same as visible. What the old rule actually bought was a readout quietly
-            // drawn from three signals — no error, no empty state, just a number a little too
-            // low — until the reader found a Refresh button they had no reason to go looking
-            // for. An answer that is wrong in a way nobody can see the cause of is the worse
-            // failure, so the gate is plain staleness now and a first run goes and gets the
-            // file.
-            //
-            // Its own task rather than chained onto either tag refresh above, and that is the
-            // argument those two already make against each other, now covering three files
-            // rather than two: they are the same shape of job, which is exactly why they must
-            // not share a task. Whichever went first would be the reason the others were late
-            // — 27.5 MB gzipped here against the art file's 12.5 MB and the oracle file's
-            // 5.85 MB — and "late" is a deck add still filing by card type, or a bracket still
-            // reading three signals, minutes after launch. They contend for the write
-            // connection a batch at a time, which is the engine's job and not the launch's.
-            // Silent and best-effort, like every one of its siblings: a failure is already in
-            // `error_log` and the honest fallback is the combos already on disk.
-            let combo_state = state.clone();
-            let combo_app = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                combos::refresh_if_due(&combo_state, &combo_app).await;
-            });
-
-            // The daily update check, in its own task rather than chained onto the sync:
-            // the two answer to different services on different schedules, and a Scryfall
-            // failure must not be the reason the app stops noticing its own releases. Its
-            // result is written to `app_meta`, so the ribbon reads it without an event —
-            // which also means nothing is lost if this finishes before the webview is
-            // listening, the trap `sync:progress` has to work around.
-            //
-            // **Desktop only.** On Android the store is what notices a new release, and asking
-            // GitHub would spend a request and an `app_meta` row to learn something the app
-            // cannot act on — `Updater::new` has already answered `InstallKind::Managed`
-            // there, so every asset is refused and every button is hidden.
-            #[cfg(desktop)]
-            {
-                let update_state = state.clone();
-                tauri::async_runtime::spawn(async move {
-                    if let Err(e) = update::check(&update_state, &updater, false).await {
-                        eprintln!("update check failed: {e}");
-                    }
-                });
-            }
-
-            // The relay doorbell. Its own task for the same reason as the five above — five
-            // services, five schedules, and none of them may be the reason another stops
-            // running. It opens no socket at all until this installation is in a group, which
-            // is every installation that has connected nothing.
-            crate::sync_engine::live::spawn(app.handle().clone(), state.clone(), writes.clone());
+            std::thread::Builder::new()
+                .name("startup".to_owned())
+                .spawn(move || start(&handle))?;
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -941,6 +757,275 @@ pub fn run() {
             tauri::RunEvent::Exit => checkpoint_on_exit(app),
             _ => {}
         });
+}
+
+/// Build [`AppState`] and everything hung off it, then start the background services.
+///
+/// Runs on the `startup` thread `setup` spawns, never on the UI thread — see [`startup`]. The
+/// order inside is the order `setup` had, with two things added. [`startup::settle`] goes
+/// **after the last `manage` and the mirror's hook, and before the first background task**:
+/// before it the page has not mounted the app, so no command can run; after it every piece of
+/// state a command reaches is in place, and every write it makes passes the hook. And the corpus
+/// integrity check that used to hold the launch runs behind it, on a thread of its own.
+fn start(app: &tauri::AppHandle) {
+    // A refusal is drawn by the page, under a title bar that can still close the window, and
+    // printed as well for a console that has one. It used to be returned from `setup`, which
+    // Tauri turns into a panic: an escaped one-line message in a debug console, and in a release
+    // build — no console at all — a window that simply vanished.
+    let state = match init_state(app) {
+        Ok(state) => Arc::new(state),
+        Err(message) => {
+            eprintln!("{message}");
+            startup::settle(app, startup::StartupStatus::Failed { message });
+            return;
+        }
+    };
+    app.manage(state.clone());
+
+    // The scanner's own state, beside `AppState` rather than inside it — it loads
+    // lazily on the first status call and shares nothing but the data directory.
+    app.manage(Arc::new(scanner::ScannerState::new(state.data_dir.clone())));
+
+    // The write-side half of live sync's wake. One `Arc` for the whole process: the
+    // commit hook installed below calls `notify_one` on it, and
+    // `sync_engine::live::spawn`'s `select!` wakes on the same handle — see the
+    // warning on `live::spawn` for why it must be `notify_one` and never
+    // `notify_waiters`. Created here rather than on `AppState` because nothing else
+    // needs to reach it: the two call sites below are the whole of its life.
+    let writes = Arc::new(tokio::sync::Notify::new());
+
+    // Warm the facet index: ~767 ms of full table scan on its own thread and its own
+    // read-only connection, so the window comes up now and the first searches answer
+    // out of `db_read` untouched. Here rather than inside `init_state` because that
+    // returns an `AppState` and this needs the `Arc` — and because it must run after
+    // `prepare_database`, which is the last thing that can change what `cards` is.
+    // Until it lands, `facet_cards` answers `ready: false` and every filter control
+    // stays live. Nothing about it is fatal; the handle is dropped and the thread
+    // runs detached.
+    index::lifecycle::spawn_build(&state);
+
+    // The plain-text mirror, in two halves that must stay in this order. **Desktop
+    // only, and this is the decision rather than a limitation**: the mirror's whole
+    // point is a folder a reader opens in a text editor, syncs with Dropbox or greps,
+    // and on Android that directory is reachable mainly through a file-manager app and
+    // often not by other apps at all. `tauri-plugin-dialog`'s own manifest records
+    // Android support as "partial — Does not support folder picker", so the reader
+    // could not choose the root either.
+    //
+    // The module still *compiles* on Android — `AppState` carries
+    // `mirror::watch::{Mask, LastPass}` and six sites construct them — so what is
+    // gated is the hook and the thread, which is the whole of what makes the mirror
+    // do anything. `mirror_status` there answers a mirror that never runs.
+    #[cfg(desktop)]
+    {
+        // First the hook, on `state.db` and **nowhere else**: that is the one
+        // connection every user-facing write in this crate goes through
+        // (`sync::with_write`), and `db_read` is opened read-only so it could never
+        // fire one. It is installed before the thread starts so that nothing written
+        // between here and the first pass can slip past unmarked — though the first
+        // pass is `Dirty::ALL` and would cover it anyway, which is what makes this
+        // ordering cheap insurance rather than a rule.
+        //
+        // The guard is bound rather than left a temporary so it is released before
+        // `spawn`, which is the lifetime it had before the block existed.
+        //
+        // The third argument is the cross-file fence, which arrived with the
+        // user/corpus split: the hook has to be able to tell the mirror which of the
+        // two databases a write landed in.
+        let conn = db::lock_blocking(&state.db);
+        mirror::watch::install_hook(
+            &conn,
+            state.mirror.clone(),
+            state.fence.clone(),
+            writes.clone(),
+        );
+        drop(conn);
+
+        // Then the thread. Detached and never fatal, exactly like the facet warm-up
+        // above: it runs one full pass now — the whole of what makes the folder
+        // correct after a crash — and then wakes two seconds after the reader stops
+        // editing. It reads through `db_read` and never takes the write connection, so
+        // no press it overlaps can be answered `db::BUSY` by it.
+        mirror::watch::spawn(state.clone());
+    }
+
+    // Here rather than before the builder, and the difference is one rare bug: this
+    // deletes a staged build, and the second instance of a double-click would
+    // otherwise delete the *first* instance's staged update on its way to being
+    // refused. `setup` runs only for the instance that won the single-instance
+    // guard, so what it clears is always its own. (The `.old` a swap leaves is
+    // deleted earlier still, by `await_predecessor`; this is the path that finally
+    // clears one whose successor never got that far.)
+    let exe = std::env::current_exe().unwrap_or_default();
+    // Desktop only: what it deletes is a staged `.new`/`.old` beside the executable,
+    // and on Android that directory is the app's own native-library folder — nothing
+    // ever stages anything there, and `current_exe()` may name a read-only mount.
+    #[cfg(desktop)]
+    update::clean_up(&exe);
+
+    // Decided once here — `Updater::new` probes whether it can write beside the exe
+    // — so a status poll never re-answers a question that cannot change.
+    let updater = Arc::new(update::Updater::new(update_api_base(), exe));
+    app.manage(updater.clone());
+
+    // **The page mounts the app on this line**, so everything a command can reach must already
+    // be managed above it — `AppState`, the scanner's state, the updater — and the mirror's hook
+    // must already be on the write connection. What follows is background work that reports
+    // through its own events and polls, exactly as it did when the window waited for it.
+    startup::settle(app, startup::StartupStatus::Ready);
+
+    // The full integrity check `prepare_data_dir` no longer runs before a window can open —
+    // see `schema::check_corpus`. On its own thread and its own read-only connection, never
+    // `db_read`: it reads the whole corpus, which is seconds warm and tens of seconds cold, and
+    // a search queued behind that would be the frozen window this move exists to remove.
+    let check_state = state.clone();
+    let _ = std::thread::Builder::new()
+        .name("corpus-check".to_owned())
+        .spawn(move || check_corpus_in_background(&check_state));
+
+    // Launch is never blocked on the network: the window comes up immediately
+    // and this run reports itself through `sync:progress`. The throttle inside
+    // makes it a no-op on all but the first launch of the day.
+    let handle = app.clone();
+    let sync_state = state.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = sync::run_sync(sync_state, handle, false).await {
+            eprintln!("initial sync failed: {e}");
+        }
+    });
+
+    // The selected marketplace's price feed, if it is one this app downloads and it is
+    // due. Its own task for the update check's reason — three services, three
+    // schedules, and none of them may be the reason another stops running — and
+    // deliberately *only* the selected one: nobody downloads 63.7 MiB for a
+    // marketplace they never picked, which is the whole shape of
+    // `refresh_selected_if_due`. Silent and best-effort; a failure is already in
+    // `error_log` and the honest fallback is the prices already on disk.
+    let feed_state = state.clone();
+    let feed_app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        marketplace_feed::refresh_selected_if_due(&feed_state, &feed_app).await;
+    });
+
+    // Scryfall's Oracle Tags, if the stored copy is due. Its own task for the same
+    // reason as the two above — a fourth service on a fourth schedule, and none of
+    // them may be the reason another stops running — and deliberately *after* the
+    // card sync is spawned rather than chained onto it: the two write different
+    // tables, both take the connection a batch at a time, and a tag file that never
+    // arrives must cost the corpus nothing. Silent and best-effort; a failure is
+    // already in `error_log` and the honest fallback is categorising by card type,
+    // which is what the app did before this existed.
+    let tags_state = state.clone();
+    let tags_app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tags::oracle::refresh_if_due(&tags_state, &tags_app).await;
+    });
+
+    // Scryfall's Art Tags, on a fifth task rather than chained onto the oracle one
+    // above. **They are the same shape of job and that is exactly why they must not
+    // share a task**: the art file is 12.5 MB against the oracle file's 5.85 MB, so
+    // awaiting one before the other would make the bigger download the reason the
+    // smaller taxonomy is late — and on a first run, the reason a deck add is still
+    // categorising by card type minutes after launch. They contend for the write
+    // connection a batch at a time, which is the engine's job and not the launch's.
+    // Silent and best-effort, like every one of its siblings.
+    let art_state = state.clone();
+    let art_app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tags::art::refresh_if_due(&art_state, &art_app).await;
+    });
+
+    // Commander Spellbook's combo database, on a sixth task — a sixth service on a
+    // sixth schedule, and none of them may be the reason another stops running. **It
+    // is fetched uninvited, exactly like the two tagger files above it**, which
+    // reverses what this comment argued: that a database which had never seen the file
+    // should wait to be asked, because a bracket estimate can read three signals
+    // instead of four and that is a supported state rather than an error. Supported is
+    // not the same as visible. What the old rule actually bought was a readout quietly
+    // drawn from three signals — no error, no empty state, just a number a little too
+    // low — until the reader found a Refresh button they had no reason to go looking
+    // for. An answer that is wrong in a way nobody can see the cause of is the worse
+    // failure, so the gate is plain staleness now and a first run goes and gets the
+    // file.
+    //
+    // Its own task rather than chained onto either tag refresh above, and that is the
+    // argument those two already make against each other, now covering three files
+    // rather than two: they are the same shape of job, which is exactly why they must
+    // not share a task. Whichever went first would be the reason the others were late
+    // — 27.5 MB gzipped here against the art file's 12.5 MB and the oracle file's
+    // 5.85 MB — and "late" is a deck add still filing by card type, or a bracket still
+    // reading three signals, minutes after launch. They contend for the write
+    // connection a batch at a time, which is the engine's job and not the launch's.
+    // Silent and best-effort, like every one of its siblings: a failure is already in
+    // `error_log` and the honest fallback is the combos already on disk.
+    let combo_state = state.clone();
+    let combo_app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        combos::refresh_if_due(&combo_state, &combo_app).await;
+    });
+
+    // The daily update check, in its own task rather than chained onto the sync:
+    // the two answer to different services on different schedules, and a Scryfall
+    // failure must not be the reason the app stops noticing its own releases. Its
+    // result is written to `app_meta`, so the ribbon reads it without an event —
+    // which also means nothing is lost if this finishes before the webview is
+    // listening, the trap `sync:progress` has to work around.
+    //
+    // **Desktop only.** On Android the store is what notices a new release, and asking
+    // GitHub would spend a request and an `app_meta` row to learn something the app
+    // cannot act on — `Updater::new` has already answered `InstallKind::Managed`
+    // there, so every asset is refused and every button is hidden.
+    #[cfg(desktop)]
+    {
+        let update_state = state.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = update::check(&update_state, &updater, false).await {
+                eprintln!("update check failed: {e}");
+            }
+        });
+    }
+
+    // The relay doorbell. Its own task for the same reason as the five above — five
+    // services, five schedules, and none of them may be the reason another stops
+    // running. It opens no socket at all until this installation is in a group, which
+    // is every installation that has connected nothing.
+    crate::sync_engine::live::spawn(app.clone(), state.clone(), writes.clone());
+}
+
+/// Run [`schema::check_corpus`] and act on a damaged answer: leave the mark that makes the next
+/// launch replace the corpus, and say so in `error_log`.
+///
+/// **The corpus is not replaced now, and cannot be**: every connection the app keeps has it
+/// attached, and a file the app is holding open is a file Windows will not delete. So this session
+/// goes on with it — a query that reaches a bad page fails on its own terms — and the reader is
+/// told what the next launch will do rather than being asked to do anything.
+///
+/// The log row is best-effort by [`errors::record`]'s own contract, and it waits for the write
+/// connection only as long as a user-facing write would: a sync holding it past that costs the
+/// row, never the mark.
+fn check_corpus_in_background(state: &AppState) {
+    let answer = match schema::check_corpus(&state.data_dir) {
+        schema::CorpusCheck::Sound => return,
+        schema::CorpusCheck::Unanswered(why) => {
+            eprintln!("the card database's integrity check did not finish: {why}");
+            return;
+        }
+        schema::CorpusCheck::Damaged(answer) => answer,
+    };
+    if let Err(e) = schema::mark_corpus_damaged(&state.data_dir, &answer) {
+        eprintln!("the card database is damaged, and marking it for replacement failed: {e}");
+    }
+    if let Some(conn) = db::lock_for(&state.db, db::WRITE_LOCK_WAIT) {
+        errors::record(
+            &conn,
+            errors::Source::Database,
+            "corpus check",
+            errors::Kind::Io,
+            "The card database is damaged. It will be rebuilt from Scryfall the next time the \
+             app starts; your collection, decks and wishlist are not affected.",
+            Some(&answer),
+        );
+    }
 }
 
 /// How long the exit handler will wait for a last push. Two seconds, because the alternative
@@ -1043,7 +1128,7 @@ fn checkpoint_on_exit(app: &tauri::AppHandle) {
 /// so the messages name the paths that were tried. Left unwrapped, the common case
 /// (both candidate folders unwritable) surfaces as SQLite's "unable to open database
 /// file", which says nothing about which folder or why.
-fn init_state(app: &tauri::App) -> Result<AppState, String> {
+fn init_state(app: &tauri::AppHandle) -> Result<AppState, String> {
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(Path::to_path_buf));
