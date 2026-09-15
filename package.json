@@ -21,6 +21,7 @@
     "test:coverage": "vitest run --coverage --testTimeout=30000",
     "test:coverage:rust": "node scripts/coverage-rust.mjs",
     "golden": "node scripts/golden.mjs",
+    "scanner:assets": "node scripts/scanner-assets.mjs",
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build",
     "verify": "npm run build && npm run lint && npm run test:run && cargo test --manifest-path src-tauri/Cargo.toml && cargo test --manifest-path crates/card-scanner/Cargo.toml --features cli"

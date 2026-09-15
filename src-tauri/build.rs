@@ -1,4 +1,9 @@
 fn main() {
+    // Declared before the wasm return, so no target can meet `#[cfg(scanner_assets)]` as an
+    // unknown cfg name — `desktop` and `mobile` below are the same lesson. It is only ever
+    // *set* further down, once the three files it stands for are all on disk.
+    println!("cargo:rustc-check-cfg=cfg(scanner_assets)");
+
     // A build script always compiles for the HOST, so `cfg!(target_family = "wasm")` here
     // would ask about the wrong machine and always be false. `TARGET` is the question.
     //
@@ -29,5 +34,26 @@ fn main() {
         println!("cargo:rustc-check-cfg=cfg(mobile)");
         return;
     }
+
+    // **The three load together or the cfg is off.** A bundle embedded without its models, or
+    // the reverse, is a half-shipped scanner — see the 2026-09-15 scanner spec §4.2.
+    // `npm run scanner:assets` is what puts them here, and the release workflow runs it.
+    //
+    // **`rerun-if-changed` on a path that does not exist reruns this script on every build**,
+    // so the directory line relies on the directory always existing — which is what its tracked
+    // `README.md` is for — and a file gets a line of its own only once it is there. The
+    // directory's line is what notices one arriving: cargo scans a directory it is pointed at.
+    let assets = std::path::Path::new("scanner-assets");
+    println!("cargo:rerun-if-changed=scanner-assets");
+    let names = ["card-hashes.bin", "text-detection.rten", "text-recognition.rten"];
+    for n in names {
+        if assets.join(n).is_file() {
+            println!("cargo:rerun-if-changed=scanner-assets/{n}");
+        }
+    }
+    if names.iter().all(|n| assets.join(n).is_file()) {
+        println!("cargo:rustc-cfg=scanner_assets");
+    }
+
     tauri_build::build()
 }

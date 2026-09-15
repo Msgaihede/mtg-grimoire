@@ -82,6 +82,14 @@ jobs:
       # beforeBuildCommand (`npm run build`), so do not run that here as well.
       - run: npm ci
 
+      # The scanner's hash bundle and OCR models are embedded into the binary (build.rs sets
+      # cfg(scanner_assets)). A release without them cannot scan, so this fails the leg.
+      - name: Scanner assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: npm run scanner:assets
+
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
