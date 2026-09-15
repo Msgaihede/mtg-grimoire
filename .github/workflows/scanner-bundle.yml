@@ -94,7 +94,22 @@ jobs:
       # differ in bytes 14..22; past the header are the entries, written in key order. A release
       # missing any of the three assets is republished whatever the comparison says, or one
       # failed upload would leave release builds without a model for good.
+      #
+      # **Only `main` publishes.** `workflow_dispatch` runs from any ref, and the tag names the
+      # format version rather than the code: a branch that changed the hashing without bumping
+      # `FORMAT_VERSION` would `--clobber` the bundle every later release embeds, from code
+      # nobody reviewed. A dispatch from anywhere else builds, caches and stops here. Its cache
+      # entry is scoped to its own branch and never restored on `main`. The schedule always
+      # runs on the default branch.
+      - name: Dry run (not on main)
+        if: github.ref != 'refs/heads/main'
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          echo "Dry run — not on main (\`$REF\`). Built $(stat -c%s card-hashes.bin) bytes; nothing published." >> "$GITHUB_STEP_SUMMARY"
+
       - name: Publish if changed
+        if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: scanner-bundle-v${{ steps.fv.outputs.v }}
