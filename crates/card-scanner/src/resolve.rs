@@ -161,25 +161,50 @@ pub fn resolve(
     order.sort_by(|a, b| b.cardness.total_cmp(&a.cardness));
 
     // ---- 2 title ---------------------------------------------------------------------------
-    // **A resolved name replaces the survivors rather than narrowing them.** It is the foil
+    // **An exact read replaces the survivors rather than narrowing them.** It is the foil
     // rescue: the hash's candidates may not contain the card at all, so intersecting with them
     // would throw away exactly the answer this tier exists to find.
+    //
+    // **A corrected read only narrows.** Measured on the synthetic evaluation, "datn" read as
+    // Damn for a Plains and "torm" as Worm: a fuzzy match on a short or garbled read names a
+    // real card the hash never suggested, and replacing the survivors with it made Exact wrong
+    // about the card five times in 160 where Fast was never wrong. So a corrected read keeps
+    // the survivors that are that card, and is ignored when none are — unless the whole-card
+    // tier found nothing at all, where the read is the only evidence there is.
+    // The card the title settled on, which the collector tier then has to agree with.
+    let mut title_card: Option<Id> = None;
     let detail = match order.iter().take(2).find_map(|v| readers.title(v)) {
         None => "no read".to_string(),
         Some(text) => match r.lookup_by_name_masked(&text, mask) {
             Some((card, edits)) => {
-                survivors = r
+                let permitted: Vec<Id> = r
                     .printings_of(&card)
                     .iter()
                     .copied()
                     .filter(|p| mask.permits(p))
                     .collect();
-                by_distance(&mut survivors, &best);
-                let name = survivors
+                let name = permitted
                     .first()
                     .and_then(named)
                     .map_or_else(|| format_uuid(&card), |l| l.name);
-                format!("read \"{text}\" → {name} (edits {edits})")
+                let read = format!("read \"{text}\" → {name} (edits {edits})");
+                let narrowed: Vec<Id> = survivors
+                    .iter()
+                    .copied()
+                    .filter(|p| r.oracle_for(p) == card)
+                    .collect();
+                if edits > 0 && !survivors.is_empty() && narrowed.is_empty() {
+                    format!("{read}, not among survivors — ignored")
+                } else {
+                    survivors = if edits == 0 || survivors.is_empty() {
+                        permitted
+                    } else {
+                        narrowed
+                    };
+                    by_distance(&mut survivors, &best);
+                    title_card = Some(card);
+                    read
+                }
             }
             None => format!("read \"{text}\", no card"),
         },
@@ -190,6 +215,11 @@ pub fn resolve(
     // **Only a printing of a card already standing can be pinned.** A misread digit does not
     // produce nonsense, it produces a different real printing (§4), so a read naming another
     // card is recorded as a conflict and left out rather than trusted over everything else.
+    //
+    // **Standing is not enough either.** The basic lands of one set all survive the whole-card
+    // tier together, so a Swamp ZNR 272 misread as 280 named a Forest that was among the
+    // survivors and pinned it. The pinned card must also be the one the title settled on, or —
+    // with no title — the nearest card among the survivors or within the margin of it.
     let pairs = order
         .iter()
         .take(2)
@@ -204,14 +234,41 @@ pub fn resolve(
                 .find(|(s, n)| r.lookup_pair(s, n) == Some(printing))
                 .map_or_else(String::new, |(s, n)| format!("{} {n}", s.to_uppercase()));
             let card = r.oracle_for(&printing);
-            if survivors.iter().any(|p| r.oracle_for(p) == card) {
+            let name = named(&printing).map_or_else(|| format_uuid(&printing), |l| l.name);
+            // A card's distance is its nearest printing among the survivors, in bits.
+            let card_bits = |c: Option<Id>| {
+                survivors
+                    .iter()
+                    .filter(|p| c.is_none_or(|c| r.oracle_for(p) == c))
+                    .filter_map(|p| best.get(p))
+                    .map(|n| (n * bits).round())
+                    .reduce(f32::min)
+            };
+            let behind = match (card_bits(Some(card)), card_bits(None)) {
+                (Some(d), Some(lead)) => Some(d - lead),
+                _ => None,
+            };
+            let agrees = match title_card {
+                Some(t) => t == card,
+                None => behind.is_some_and(|b| b < EXACT_MARGIN_BITS as f32),
+            };
+            if !survivors.iter().any(|p| r.oracle_for(p) == card) {
+                format!("conflict: {at} is {name}, not among survivors")
+            } else if !agrees {
+                match (title_card, behind) {
+                    (Some(_), _) => {
+                        format!("conflict: {at} is {name}, not the card the title read")
+                    }
+                    (None, Some(b)) => {
+                        format!("conflict: {at} is {name}, {b} bits behind the nearest card")
+                    }
+                    (None, None) => format!("conflict: {at} is {name}, which has no distance"),
+                }
+            } else {
                 survivors = vec![printing];
                 let shown =
                     named(&printing).map_or_else(|| format_uuid(&printing), |l| l.display());
                 format!("{at} → {shown}")
-            } else {
-                let shown = named(&printing).map_or_else(|| format_uuid(&printing), |l| l.name);
-                format!("conflict: {at} is {shown}, not among survivors")
             }
         }
     };
@@ -587,6 +644,147 @@ mod tests {
             [format_uuid(&id(1)), format_uuid(&id(2))],
             "best first"
         );
+    }
+
+    #[test]
+    fn a_corrected_read_of_a_card_the_hash_never_suggested_is_ignored() {
+        // "shocc" is Shock at one edit. The hash found only the Plains, so the read is a misread
+        // that happens to be a real card — the synthetic evaluation's "datn" → Damn.
+        let r = eight_cards();
+        let (up, down) = (img(5), img(99));
+        let v = resolve(
+            &r,
+            &Mask::all(),
+            &burst(&up, &down),
+            &reads(Some("shocc"), &[]),
+            TIGHT,
+        );
+        assert_eq!(
+            v.tiers[1].survivors, 1,
+            "the premise: the hash found the Plains"
+        );
+        assert_eq!(
+            v.tiers[2].detail,
+            "read \"shocc\" → Shock (edits 1), not among survivors — ignored"
+        );
+        assert_eq!(v.tiers[2].survivors, 1);
+        assert_eq!(ids(&v), [format_uuid(&id(5))]);
+
+        // A corrected read of a card that *is* among the survivors narrows to it, even when it
+        // is not the nearest one.
+        let r = bits_away(&[0, 3, 20]);
+        let v = resolve(
+            &r,
+            &Mask::all(),
+            &burst(&up, &down),
+            &reads(Some("card 2x"), &[]),
+            GATE,
+        );
+        assert_eq!(
+            v.tiers[1].survivors, 3,
+            "the premise: all three cleared the gate"
+        );
+        assert_eq!(v.tiers[2].detail, "read \"card 2x\" → Card 2 (edits 1)");
+        assert_eq!(ids(&v), [format_uuid(&id(3))]);
+    }
+
+    #[test]
+    fn a_corrected_read_replaces_when_the_hash_found_nothing() {
+        // The foil rescue survives the rule: with nothing inside the gate the read is the only
+        // evidence, corrected or not.
+        let r = eight_cards();
+        let (up, down) = (img(200), img(201));
+        let v = resolve(
+            &r,
+            &Mask::all(),
+            &burst(&up, &down),
+            &reads(Some("shocc"), &[]),
+            TIGHT,
+        );
+        assert_eq!(
+            v.tiers[1].survivors, 0,
+            "the premise: the hash found nothing"
+        );
+        assert_eq!(v.tiers[2].detail, "read \"shocc\" → Shock (edits 1)");
+        assert_eq!(v.outcome, Outcome::Resolved, "{:?}", v.tiers);
+        assert_eq!(ids(&v), [format_uuid(&id(2))]);
+    }
+
+    #[test]
+    fn a_collector_read_of_a_standing_card_far_behind_the_nearest_is_a_conflict() {
+        // Swamp ZNR 272 read as 280: the Forest is among the survivors, twenty bits behind the
+        // Swamp, and no title named it. The number must not pin it.
+        let (up, down) = (img(5), img(99));
+        let r = bits_away(&[0, 20]);
+        let v = resolve(
+            &r,
+            &Mask::all(),
+            &burst(&up, &down),
+            &reads(None, &[("hob", "2")]),
+            GATE,
+        );
+        assert_eq!(
+            v.tiers[1].survivors, 2,
+            "the premise: both cleared the gate"
+        );
+        assert_eq!(
+            v.tiers[3].detail,
+            "conflict: HOB 2 is Card 1, 20 bits behind the nearest card"
+        );
+        assert_eq!(v.tiers[3].survivors, 2, "a conflict changed the survivors");
+        assert_eq!(ids(&v), [format_uuid(&id(1))]);
+
+        // Within the margin of the nearest, the number is what tells them apart.
+        let r = bits_away(&[0, EXACT_MARGIN_BITS - 1]);
+        let v = resolve(
+            &r,
+            &Mask::all(),
+            &burst(&up, &down),
+            &reads(None, &[("hob", "2")]),
+            GATE,
+        );
+        assert_eq!(v.tiers[3].detail, "HOB 2 → Card 1 — HOB 2");
+        assert_eq!(ids(&v), [format_uuid(&id(2))]);
+    }
+
+    #[test]
+    fn a_collector_read_of_the_card_the_title_read_pins_that_printing() {
+        // The title settles the card, and the number picks the printing of it — here the
+        // printing twenty bits behind its reprint, which the distance alone would never choose.
+        let exact = hash_rgb(&img(5), HashKind::DHash, 256);
+        let mut far = exact;
+        for bit in 0..20 {
+            far.words[0] ^= 1 << bit;
+        }
+        let mut b = BundleBuilder::new(HashKind::DHash, 256);
+        b.push(Section::Card, id(1), &exact);
+        b.push(Section::Card, id(2), &far);
+        let mut r = Reference::new(b.finish(0));
+        for (n, set, number) in [(1u8, "hob", "193"), (2, "ltr", "270")] {
+            let label = Label {
+                name: "Forest".into(),
+                set: set.into(),
+                number: number.into(),
+                lang: "en".into(),
+                released: "2025-01-01".into(),
+            };
+            r.add_label(id(n), Some(id(10)), None, label);
+        }
+        let (up, down) = (img(5), img(99));
+        let v = resolve(
+            &r,
+            &Mask::all(),
+            &burst(&up, &down),
+            &reads(Some("forest"), &[("ltr", "270")]),
+            GATE,
+        );
+        assert_eq!(
+            v.tiers[2].survivors, 2,
+            "the premise: the title read both printings in"
+        );
+        assert_eq!(v.tiers[3].detail, "LTR 270 → Forest — LTR 270");
+        assert_eq!(v.outcome, Outcome::Resolved, "{:?}", v.tiers);
+        assert_eq!(ids(&v), [format_uuid(&id(2))]);
     }
 
     #[test]
