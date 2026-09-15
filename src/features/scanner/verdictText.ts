@@ -107,10 +107,17 @@ function didNotLoad(file: string, path: string, error: string): string {
  * put a file where that file already is reads as the app not having looked. And a bundle that
  * loaded may still carry an `error` from the *label* load — no `corpus.db`, or a read that
  * failed — which is not a broken scanner at all: matching works and answers ids.
+ *
+ * **A bundle compiled into the binary draws nothing**, which is every release build: there is no
+ * file to place and nothing broken, and each sentence below is an instruction about
+ * `data/scanner/`. The one sentence an embedded bundle can still earn is the labels' — the names
+ * come out of `corpus.db` and never out of the binary, so embedding cannot lose them and cannot
+ * supply them either.
  */
 export function bundleSentence(status: ScannerStatus | null): string | null {
   if (status === null) return null;
   const bundle = status.bundle;
+  if (bundle.source === "embedded" && bundle.loaded && bundle.error === null) return null;
   if (!bundle.present) {
     return `No reference bundle. Put \`${BUNDLE_FILE}\` at ${bundle.path}. ${RESTART}`;
   }

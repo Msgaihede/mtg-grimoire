@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { ipc, ipcError } from "@/lib/ipc";
-import type { ScannerCollector, ScannerOcr, ScannerOptions, ScannerVerdict } from "./types";
+import type {
+  ScannerCollector,
+  ScannerDecision,
+  ScannerOcr,
+  ScannerOptions,
+  ScannerResolution,
+  ScannerVerdict,
+} from "./types";
 
 /** What the loop has to say: the last verdict, its cost, the running rate, the last failure. */
 export interface ScanLoop {
@@ -17,6 +24,18 @@ export interface ScanLoop {
   lastOcr: ScannerOcr | null;
   /** The last collector-line read, kept for {@link ScanLoop.lastOcr}'s reason. */
   lastCollector: ScannerCollector | null;
+  /**
+   * The last Exact resolve, kept until a frame has **no card** in it.
+   *
+   * A resolve is reported on the one frame it ran on, so `verdict.resolution` is `null` on every
+   * frame after it — and the status line's *Pick a printing below* and the Tiers panel both have
+   * to outlive that frame for as long as the same card is in front of the lens. Latched here
+   * beside the two reads rather than in the page, for their reason: the write lands in the same
+   * batch as the verdict, so a frame still costs one commit. Cleared on a frame whose `quad` is
+   * `null`, because a card that has left takes its resolve with it; and by `clearReads` and a
+   * camera change, like the reads.
+   */
+  lastResolution: ScannerResolution | null;
   roundTripMs: number | null;
   /** Frames per second over the last twenty round trips. `null` until the first answers. */
   rate: number | null;
@@ -72,12 +91,23 @@ export function useScanLoop({
   options,
   sendPx,
   grabFrame = defaultGrabFrame,
+  onDecision,
 }: {
   videoRef: RefObject<HTMLVideoElement | null>;
   live: boolean;
   options: ScannerOptions;
   sendPx: number;
   grabFrame?: GrabFrame;
+  /**
+   * The session decided on a card — called once per new `decision_seq`, with the decision and
+   * the number, and never for a repeat.
+   *
+   * **The first number after the camera starts is a baseline, not news.** A card frozen before a
+   * view switch is still frozen when the camera comes back, and its decision rides every committed
+   * frame; adding on that first frame would re-add the card the tray already holds. Read through a
+   * ref like `options`, so a page passing a fresh closure each render does not restart the pump.
+   */
+  onDecision?: (decision: ScannerDecision, seq: number) => void;
 }): ScanLoop {
   const [verdict, setVerdict] = useState<ScannerVerdict | null>(null);
   const [roundTripMs, setRoundTripMs] = useState<number | null>(null);
@@ -89,8 +119,9 @@ export function useScanLoop({
   // `setVerdict`, so the frame that carried the read still costs exactly one commit.
   const [lastOcr, setLastOcr] = useState<ScannerOcr | null>(null);
   const [lastCollector, setLastCollector] = useState<ScannerCollector | null>(null);
+  const [lastResolution, setLastResolution] = useState<ScannerResolution | null>(null);
 
-  // **Both latches are emptied whenever the camera starts or stops.** A stream that has just
+  // **Every latch is emptied whenever the camera starts or stops.** A stream that has just
   // been opened must not show what the previous one read, and a reader who turned the camera
   // off is owed the same. React's own "adjusting state when a prop changes" pattern rather than
   // an effect: it is applied in this render instead of costing a second pass, and an effect
@@ -100,11 +131,13 @@ export function useScanLoop({
     setWasLive(live);
     setLastOcr(null);
     setLastCollector(null);
+    setLastResolution(null);
   }
 
   const clearReads = useCallback(() => {
     setLastOcr(null);
     setLastCollector(null);
+    setLastResolution(null);
   }, []);
 
   // Latched in a layout effect for `QrScanner`'s reason: the ref has to be current before the
@@ -113,14 +146,22 @@ export function useScanLoop({
   const optionsRef = useRef(options);
   const sendPxRef = useRef(sendPx);
   const grabRef = useRef(grabFrame);
+  const onDecisionRef = useRef(onDecision);
   useLayoutEffect(() => {
     optionsRef.current = options;
     sendPxRef.current = sendPx;
     grabRef.current = grabFrame;
+    onDecisionRef.current = onDecision;
   });
 
   const inFlightRef = useRef(false);
   const tripsRef = useRef<number[]>([]);
+  /**
+   * The `decision_seq` of the last verdict this loop took, or `null` before the first one since the
+   * camera started — which is what makes that first number a baseline. A ref and not state: nothing
+   * draws it, and it has to be current for the very next answer rather than for the next render.
+   */
+  const lastSeqRef = useRef<number | null>(null);
 
   const grab = useCallback(
     async (longEdge: number, quality: number): Promise<Uint8Array | null> => {
@@ -134,6 +175,8 @@ export function useScanLoop({
   useEffect(() => {
     if (!live) return;
     let stopped = false;
+    // A camera that has just started has seen no number yet; see `lastSeqRef`.
+    lastSeqRef.current = null;
 
     async function pump() {
       while (!stopped) {
@@ -178,7 +221,19 @@ export function useScanLoop({
           // on carries `null`, and overwriting with it is the flicker this exists to stop.
           if (answer.ocr !== null) setLastOcr(answer.ocr);
           if (answer.collector !== null) setLastCollector(answer.collector);
+          // A card that has left takes its resolve with it; one still in frame keeps the last.
+          if (answer.quad === null) setLastResolution(null);
+          else if (answer.resolution !== null) setLastResolution(answer.resolution);
           setError(null);
+          // The decision edge. The ref moves on every verdict — a frame that repeats the number
+          // is the frozen card still in front of the lens, and one with no decision is a card
+          // nobody has settled on — and only a number that differs from the last one, on a frame
+          // carrying the decision, is an add.
+          const seenSeq = lastSeqRef.current;
+          lastSeqRef.current = answer.decision_seq;
+          if (seenSeq !== null && answer.decision !== null && answer.decision_seq !== seenSeq) {
+            onDecisionRef.current?.(answer.decision, answer.decision_seq);
+          }
         } catch (e) {
           // The loop does not stop on a failure. A missing bundle rejects every frame the same
           // way, and a reader who fixes it mid-session should see the scanner recover on its
@@ -197,7 +252,17 @@ export function useScanLoop({
     // `videoRef` is stable by construction; everything else the loop reads is behind a ref.
   }, [live, videoRef]);
 
-  return { verdict, lastOcr, lastCollector, roundTripMs, rate, error, grab, clearReads };
+  return {
+    verdict,
+    lastOcr,
+    lastCollector,
+    lastResolution,
+    roundTripMs,
+    rate,
+    error,
+    grab,
+    clearReads,
+  };
 }
 
 /**

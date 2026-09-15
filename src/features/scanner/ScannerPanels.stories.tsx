@@ -3,8 +3,10 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, within } from "storybook/test";
 import { useAppStore, type ScannerPanelId } from "@/lib/store";
 import { READS, STATUS, VERDICTS } from "./fixtures";
+import { NO_RESOLVE, TiersPanel } from "./panels/TiersPanel";
 import { DEFAULT_SCANNER_OPTIONS, DEFAULT_SEND_PX } from "./scannerOptions";
 import { ScannerPanels, type ScannerPanelsProps } from "./ScannerPanels";
+import type { ScannerResolution } from "./types";
 
 /**
  * The column, with the named panels open and the rest folded.
@@ -19,6 +21,12 @@ import { ScannerPanels, type ScannerPanelsProps } from "./ScannerPanels";
  * own version of this reason.
  */
 function Column({ open, ...props }: ScannerPanelsProps & { open: readonly ScannerPanelId[] }) {
+  useFolds(open);
+  return <ScannerPanels {...props} />;
+}
+
+/** The folds, written during render — see {@link Column} for why it has to be then. */
+function useFolds(open: readonly ScannerPanelId[]) {
   useState(() => {
     useAppStore.setState({
       scannerFolds: {
@@ -27,11 +35,19 @@ function Column({ open, ...props }: ScannerPanelsProps & { open: readonly Scanne
         budget: open.includes("budget"),
         rectified: open.includes("rectified"),
         readouts: open.includes("readouts"),
+        tiers: open.includes("tiers"),
       },
     });
   });
+}
 
-  return <ScannerPanels {...props} />;
+/**
+ * The Tiers panel on its own, open — the page draws it under this column rather than inside it,
+ * because it reads the loop's latched resolve and nothing `ScannerPanels` takes.
+ */
+function TiersOpen({ resolution }: { resolution: ScannerResolution | null }) {
+  useFolds(["tiers"]);
+  return <TiersPanel resolution={resolution} />;
 }
 
 /** A story's `render`, naming the panels it wants open. No arguments is every panel folded. */
@@ -248,6 +264,36 @@ export const ControlsOpen: Story = {
     const canvas = within(canvasElement);
     await expect(canvas.getByRole("slider", { name: "decide at" })).toBeInTheDocument();
     await expect(canvas.getByRole("slider", { name: "send px" })).toBeInTheDocument();
+  },
+};
+
+/**
+ * The last Exact resolve, tier by tier: three reprints of Lightning Bolt the margin could not split.
+ *
+ * The title read reached every printing of the card, the collector line read nothing, and the
+ * re-rank left three within the margin of each other — so the outcome is `ambiguous` and the
+ * choices are the three the tray row would ask the reader to pick between, best first. All six
+ * tiers draw, including the ones that changed nothing: "no read" is an answer about the card too.
+ */
+export const Tiers: Story = {
+  render: () => <TiersOpen resolution={VERDICTS.exactAmbiguous.resolution} />,
+  play: async ({ canvasElement }) => {
+    const tiers = within(canvasElement).getByRole("region", { name: "Tiers" });
+    await expect(within(tiers).getByText("ambiguous")).toBeInTheDocument();
+    await expect(within(tiers).getByText("re-rank")).toBeInTheDocument();
+    await expect(within(tiers).getByText("margin 2.8 bits")).toBeInTheDocument();
+    await expect(within(tiers).getByText("113,375")).toBeInTheDocument();
+    await expect(within(tiers).getByText("Lightning Bolt — 2X2 117")).toBeInTheDocument();
+    await expect(within(tiers).getAllByRole("listitem")).toHaveLength(6 + 3);
+  },
+};
+
+/** Before any resolve has run — Fast mode, or Exact with no card held steady yet. */
+export const TiersBeforeAnyResolve: Story = {
+  render: () => <TiersOpen resolution={null} />,
+  play: async ({ canvasElement }) => {
+    const tiers = within(canvasElement).getByRole("region", { name: "Tiers" });
+    await expect(within(tiers).getByText(NO_RESOLVE)).toBeInTheDocument();
   },
 };
 

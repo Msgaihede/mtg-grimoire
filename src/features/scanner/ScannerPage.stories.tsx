@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, within } from "storybook/test";
+import { ipc } from "@/lib/ipc";
+import { DEFAULT_SCANNER_PREFS, TRAY_ROWS } from "./fixtures";
 import { ScannerPage } from "./ScannerPage";
+import type { ScannerPrefs, ScannerTrayRow } from "./types";
 
 /**
  * Denies the camera before `ScannerPage` ever asks for it, and undoes that on unmount.
@@ -39,6 +42,23 @@ function CameraDenied() {
   return <ScannerPage />;
 }
 
+/**
+ * {@link CameraDenied}, over a world whose scanner rows were written first.
+ *
+ * **Written through the commands, not seeded**, because the two rows are `app_meta` values the
+ * fake keeps per world and no seed carries — `FakeDb.scannerTray`'s own doc says a story that
+ * wants rows writes them. `useState`'s initializer for `CameraDenied`'s reason: the fake's
+ * handlers run synchronously inside `invoke`, so the rows are stored before the page's first
+ * query asks for them, and an effect would be one render too late.
+ */
+function Written({ tray, prefs }: { tray?: ScannerTrayRow[]; prefs?: Partial<ScannerPrefs> }) {
+  useState(() => {
+    if (tray !== undefined) void ipc.setScannerTray(tray);
+    if (prefs !== undefined) void ipc.setScannerPrefs({ ...DEFAULT_SCANNER_PREFS, ...prefs });
+  });
+  return <CameraDenied />;
+}
+
 const meta = {
   title: "Scanner/Page",
   component: ScannerPage,
@@ -64,8 +84,8 @@ type Story = StoryObj<typeof meta>;
  * refusal every reader of this story actually meets, and `CameraDenied` above is what makes it
  * the shape jsdom meets too rather than a `TypeError` about a missing API.
  *
- * The panels beside the video are unaffected: `scanner_status` and the fixture verdict answer
- * regardless of the camera, which is what lets the two halves of this view be tested apart.
+ * The bar and the tray beside the video are unaffected: prefs, the tray and `scanner_status` all
+ * answer regardless of the camera, which is what lets the two halves of this view be tested apart.
  */
 export const CameraRefused: Story = {
   play: async ({ canvasElement }) => {
@@ -77,15 +97,68 @@ export const CameraRefused: Story = {
 };
 
 /**
- * The three scanner assets absent, which is every installation's state until a reader places
+ * The three scanner assets absent, which is a build without them embedded until a reader places
  * them — `scannerHandlers`' `scanner_status` names the bundle's own path in the sentence, so
- * the fixture and the panel agree on where "here" is without either hard-coding the other's copy.
+ * the fixture and the page agree on where "here" is without either hard-coding the other's copy.
+ *
+ * The sentence is drawn on the reader's view, under the status line, rather than only in the
+ * Developer panels: a reader who cannot scan anything is owed the path without a switch to find.
+ * With no bundle there are no labels either, so the Filters trigger is out of reach and says why.
  */
 export const AssetsMissing: Story = {
   parameters: { fake: { fault: "scannerMissing" } },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(await canvas.findByText(/No reference bundle\. Put/)).toBeInTheDocument();
+    await expect(
+      await canvas.findByRole("status", { name: "Scanner status" }),
+    ).toHaveTextContent("The scanner has no card hashes loaded");
+  },
+};
+
+/**
+ * A session mid-pile: four rows, newest first — a Lightning Bolt still waiting on one of three
+ * printings, a playset-in-progress of Urza's Saga at ×3, a foil Ancient Tomb, and the Black Lotus
+ * scanned first.
+ *
+ * The Add button counts copies rather than rows and is out of reach while the Bolt is unpicked —
+ * one press files everything, so a press that quietly left a card behind is not one it may make.
+ */
+export const WithTray: Story = {
+  render: () => <Written tray={TRAY_ROWS} />,
+  parameters: { docs: { story: { inline: false, height: "640px" } } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const tray = await canvas.findByRole("region", { name: "Scanned cards" });
+    await expect(await within(tray).findByText("Urza's Saga")).toBeInTheDocument();
+    await expect(
+      within(tray).getByRole("group", { name: "Printings of Lightning Bolt" }),
+    ).toBeInTheDocument();
+    await expect(within(tray).getByRole("button", { name: "Add 6 to collection" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  },
+};
+
+/**
+ * The Developer switch on: today's panels and the Tiers panel, under the tray in the same column.
+ *
+ * Stored rather than pressed, which is the state a reader who left it on comes back to — the
+ * switch is a pref, so the page opens with the panels already there.
+ */
+export const Developer: Story = {
+  render: () => <Written prefs={{ developer: true }} />,
+  parameters: { docs: { story: { inline: false, height: "640px" } } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(await canvas.findByRole("region", { name: "Match" })).toBeInTheDocument();
+    await expect(canvas.getByRole("region", { name: "Tiers" })).toBeInTheDocument();
+    await expect(canvas.getByRole("region", { name: "Scanned cards" })).toBeInTheDocument();
+    await expect(canvas.getByRole("switch", { name: "Developer" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
   },
 };
 

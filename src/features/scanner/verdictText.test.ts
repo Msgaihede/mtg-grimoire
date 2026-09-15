@@ -131,6 +131,39 @@ describe("the sentences", () => {
     for (const sentence of sentences) expect(sentence).toContain(RESTART);
   });
 
+  /**
+   * **A release build is this state, and it draws nothing.** The bundle and both models come out
+   * of the binary with no file overriding them, so there is nothing to place and nothing broken —
+   * every sentence above is an instruction about `data/scanner/`, and none of them applies.
+   */
+  it("says nothing about assets compiled into the binary", () => {
+    expect(bundleSentence(STATUS.embedded)).toBeNull();
+    expect(modelsSentence(STATUS.embedded)).toBeNull();
+  });
+
+  /**
+   * The labels are `corpus.db`'s, not the binary's, so an embedded bundle can lose them exactly as
+   * a placed one can — and that sentence is about the names, which embedding does not supply.
+   */
+  it("still says the names failed on an embedded bundle", () => {
+    const embeddedUnlabelled: ScannerStatus = {
+      ...STATUS.embedded,
+      bundle: { ...STATUS.embedded.bundle, error: STATUS.unlabelled.bundle.error },
+      labels: 0,
+    };
+    expect(bundleSentence(embeddedUnlabelled)).toBe(
+      `Bundle loaded, but its names did not: ${STATUS.unlabelled.bundle.error}. Matches will show ids. ${RESTART}`,
+    );
+  });
+
+  /** An absent bundle keeps its placement sentence whatever else the binary carries. */
+  it("keeps the placement sentence for an absent bundle beside embedded models", () => {
+    const absentBundle: ScannerStatus = { ...STATUS.embedded, bundle: STATUS.missing.bundle };
+    expect(bundleSentence(absentBundle)).toBe(
+      `No reference bundle. Put \`card-hashes.bin\` at ${STATUS.missing.bundle.path}. ${RESTART}`,
+    );
+  });
+
   it("says nothing at all when there is no status yet", () => {
     expect(bundleSentence(null)).toBeNull();
     expect(modelsSentence(null)).toBeNull();

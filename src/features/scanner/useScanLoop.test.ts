@@ -307,6 +307,105 @@ describe("useScanLoop", () => {
     expect(scannerFrame).not.toHaveBeenCalled();
   });
 
+  /**
+   * **`decision_seq` is what makes "one add per card" the session's property**, so the loop's
+   * whole job is to notice it move: a repeat of the same number is a frozen card still in front of
+   * the lens, and a frame with no decision is a card nobody has settled on yet.
+   */
+  it("calls onDecision once per decision_seq change, never on repeats or null decisions", async () => {
+    const onDecision = vi.fn();
+    const second = {
+      ...VERDICTS.decided,
+      decision_seq: 2,
+      decision: { ...VERDICTS.decided.decision!, printing: "plains-2xm-373", label: null },
+    };
+    const answers: ScannerVerdict[] = [
+      VERDICTS.voting, // seq 0, no decision
+      VERDICTS.decided, // seq 1
+      VERDICTS.decided, // seq 1 again, still carrying its decision
+      { ...VERDICTS.voting, decision_seq: 1 }, // seq 1 and nothing decided
+      second, // seq 2
+    ];
+    let n = 0;
+    scannerFrame.mockImplementation(() => {
+      const v = answers[n++];
+      return v === undefined ? deferred<ScannerVerdict>().promise : answersIn(10, v);
+    });
+    mount({ onDecision });
+    await tick(300);
+    expect(scannerFrame).toHaveBeenCalledTimes(answers.length + 1);
+    expect(onDecision).toHaveBeenCalledTimes(2);
+    expect(onDecision.mock.calls[0]).toEqual([VERDICTS.decided.decision, 1]);
+    expect(onDecision.mock.calls[1]).toEqual([second.decision, 2]);
+  });
+
+  /**
+   * A card frozen from before a view switch is still frozen when the camera comes back, and its
+   * decision rides every committed frame — so the first number the loop sees is a baseline rather
+   * than news, or re-opening the Scanner would re-add the card already in the tray.
+   */
+  it("does not call onDecision for the seq it saw when the camera started", async () => {
+    const onDecision = vi.fn();
+    const frozen = { ...VERDICTS.decided, decision_seq: 4 };
+    scannerFrame.mockImplementation(() => answersIn(10, frozen));
+    const videoRef = { current: readyVideo() };
+    const grabFrame = vi.fn(async () => BYTES);
+    const { rerender } = renderHook(
+      ({ live }: { live: boolean }) =>
+        useScanLoop({
+          videoRef,
+          live,
+          options: DEFAULT_SCANNER_OPTIONS,
+          sendPx: DEFAULT_SEND_PX,
+          grabFrame,
+          onDecision,
+        }),
+      { initialProps: { live: true } },
+    );
+    await tick(100);
+    expect(scannerFrame.mock.calls.length).toBeGreaterThan(1);
+    expect(onDecision).not.toHaveBeenCalled();
+
+    // …and the same holds for a camera that stops and starts again on the same frozen card.
+    rerender({ live: false });
+    await tick(60);
+    rerender({ live: true });
+    await tick(100);
+    expect(onDecision).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **A resolve is reported on one frame only**, so the loop latches the last one for the status
+   * line and the Tiers panel — and lets go the moment the card leaves, because a sentence about the
+   * last card must not reach the next one.
+   */
+  it("keeps the last resolution until a frame has no card, and a reset drops it", async () => {
+    const answers: ScannerVerdict[] = [
+      VERDICTS.exactAmbiguous,
+      { ...VERDICTS.exactAmbiguous, resolution: null },
+      VERDICTS.noCard,
+      VERDICTS.exactResolved,
+    ];
+    const gates = answers.map(() => deferred<ScannerVerdict>());
+    let n = 0;
+    scannerFrame.mockImplementation(() => gates[n++]?.promise ?? deferred<ScannerVerdict>().promise);
+    const { result } = mount();
+    await tick();
+    expect(result.current.lastResolution).toBeNull();
+
+    await act(async () => gates[0].resolve(answers[0]));
+    expect(result.current.lastResolution).toEqual(VERDICTS.exactAmbiguous.resolution);
+    await act(async () => gates[1].resolve(answers[1]));
+    expect(result.current.lastResolution).toEqual(VERDICTS.exactAmbiguous.resolution);
+    await act(async () => gates[2].resolve(answers[2]));
+    expect(result.current.lastResolution).toBeNull();
+    await act(async () => gates[3].resolve(answers[3]));
+    expect(result.current.lastResolution).toEqual(VERDICTS.exactResolved.resolution);
+
+    act(() => result.current.clearReads());
+    expect(result.current.lastResolution).toBeNull();
+  });
+
   it("exposes the same grab for a full-resolution capture", async () => {
     scannerFrame.mockReturnValue(deferred<ScannerVerdict>().promise);
     const { result, grabFrame } = mount();

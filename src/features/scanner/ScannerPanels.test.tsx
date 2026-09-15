@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { useAppStore } from "@/lib/store";
+import { useAppStore, type ScannerPanelId } from "@/lib/store";
 import { DEFAULT_SCANNER_OPTIONS, DEFAULT_SEND_PX } from "./scannerOptions";
 import { ScannerPanels, type ScannerPanelsProps } from "./ScannerPanels";
 import { READS, STATUS, VERDICTS } from "./fixtures";
@@ -30,14 +30,18 @@ function props(over: Partial<ScannerPanelsProps> = {}): ScannerPanelsProps {
   };
 }
 
-/** Every panel folded away, which is where the store starts. */
-const ALL_FOLDED = {
-  controls: false,
-  pipeline: false,
-  budget: false,
-  rectified: false,
-  readouts: false,
-} as const;
+/**
+ * Every panel folded away, which is where the store starts.
+ *
+ * **Keyed off the store's own initial record, with every value forced to `false`.** A literal of
+ * the ids broke this file when `tiers` joined the union, eleven times over; reading the keys from
+ * `scannerFolds` means the next panel id arrives folded here without an edit. The values are
+ * forced rather than copied so "all folded" stays what the tests below start from even if the
+ * store ever opens a panel on launch.
+ */
+const ALL_FOLDED = Object.fromEntries(
+  Object.keys(useAppStore.getInitialState().scannerFolds).map((id) => [id, false]),
+) as Record<ScannerPanelId, boolean>;
 
 /**
  * The two reads as the panels take them — **props, not fields of the frame**.

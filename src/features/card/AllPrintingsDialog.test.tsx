@@ -815,6 +815,35 @@ describe("AllPrintingsDialog", () => {
   });
 
   /**
+   * **The fourth thing a press can be: a hand-back.** The scanner's tray asks *which printing is
+   * this card* and files the answer itself, so a press hands the printing back and closes — and
+   * writes nothing, opens no card pane, and repoints nothing on the way.
+   */
+  it("hands the pressed printing back and closes when the request carries a pick", async () => {
+    cardPrintings.mockResolvedValue(page([p("a", "lea"), p("b", "leb")]));
+    const pick = vi.fn();
+    const user = userEvent.setup();
+    renderDialog();
+    open({ cardId: "card-1", oracleId: "o1", name: "Sol Ring", deck: null, pick });
+
+    await user.click(await screen.findByRole("button", { name: /LEB/ }));
+
+    expect(pick).toHaveBeenCalledTimes(1);
+    expect(pick).toHaveBeenCalledWith({
+      cardId: "b",
+      oracleId: "o1",
+      name: "Sol Ring",
+      setCode: "leb",
+      collectorNumber: "233",
+    });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(useAppStore.getState().printingsRequest).toBeNull();
+    expect(useAppStore.getState().selectedCardId).toBeNull();
+    expect(deckSwapPrinting).not.toHaveBeenCalled();
+    expect(wishlistSetPrinting).not.toHaveBeenCalled();
+  });
+
+  /**
    * **The third thing a press can be: repointing a wish.**
    *
    * `request.wish` is `request.deck` one field over — the same mechanism, addressed at a

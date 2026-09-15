@@ -39,7 +39,11 @@ export interface ScannerPanelsProps {
 }
 
 /**
- * The Scanner's right-hand column: what the frame came to, and every knob and figure behind it.
+ * The Scanner's developer panels: what the frame came to, and every knob and figure behind it.
+ *
+ * **Behind the Developer switch, under the tray.** The reader's view never shows a vote, a lead or
+ * a distance, so the page mounts this column only while `prefs.developer` is on, with the Tiers
+ * panel under it — that one reads the loop's latched resolve, which nothing here takes.
  *
  * **Pure and prop-driven, with one exception that is deliberate.** Nothing here holds a camera,
  * a pump or a query — the whole column is a function of the last verdict and the options in

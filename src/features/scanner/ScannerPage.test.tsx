@@ -1,13 +1,15 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { CollectionFolder, ScannerPrefs, ScannerVerdict } from "@/lib/ipc";
 import { WEB_SENTENCE } from "./verdictText";
-import { STATUS, VERDICTS } from "./fixtures";
+import { DEFAULT_SCANNER_PREFS, STATUS, TRAY_ROWS, VERDICTS } from "./fixtures";
 
 vi.mock("@/pwa/target", () => ({ isWebTarget: vi.fn(() => false) }));
 vi.mock("@/lib/ipc", async (orig) => {
   const real = await orig<typeof import("@/lib/ipc")>();
+  const { DEFAULT_SCANNER_PREFS: prefs } = await import("./fixtures");
   return {
     ...real,
     ipc: {
@@ -19,11 +21,21 @@ vi.mock("@/lib/ipc", async (orig) => {
       // app cannot produce — and one that would make every test here fail for the wrong reason.
       scannerReset: vi.fn(async () => {}),
       scannerCapture: vi.fn(async () => ({ saved: "live-7.jpg" })),
+      // The four the reader's half reads and writes. The pump waits for the first two to have
+      // answered — prefs loaded and their filters pushed — so each is a resolved promise by default.
+      scannerPrefs: vi.fn(async () => prefs),
+      setScannerPrefs: vi.fn(async () => {}),
+      scannerSetFilters: vi.fn(async () => {}),
+      scannerTray: vi.fn(async () => []),
+      setScannerTray: vi.fn(async () => {}),
+      collectionImportCommit: vi.fn(async () => ({ added: 1, updated: 0, removed: 0 })),
+      collectionFolderList: vi.fn(async () => []),
     },
   };
 });
 import { isWebTarget } from "@/pwa/target";
 import { ipc } from "@/lib/ipc";
+import { importItems } from "./reader/tray";
 import { ScannerPage } from "./ScannerPage";
 
 function mount() {
@@ -41,6 +53,11 @@ function mediaDevices(getUserMedia: () => Promise<MediaStream>) {
 }
 function refused() {
   mediaDevices(() => Promise.reject(new DOMException("x", "NotAllowedError")));
+}
+
+/** The stored prefs this test starts from — the crate's defaults with `over` on top. */
+function storedPrefs(over: Partial<ScannerPrefs>) {
+  vi.mocked(ipc.scannerPrefs).mockResolvedValue({ ...DEFAULT_SCANNER_PREFS, ...over });
 }
 
 /**
@@ -120,6 +137,15 @@ function opens() {
   );
 }
 
+/** Answers one frame at a time, in order, and parks every frame after the last one. */
+function frames(...verdicts: ScannerVerdict[]) {
+  let n = 0;
+  vi.mocked(ipc.scannerFrame).mockImplementation(() => {
+    const v = verdicts[n++];
+    return v === undefined ? new Promise(() => {}) : Promise.resolve(v);
+  });
+}
+
 /** `useNarrowWindow`'s answer, at read time — the hook keeps no `MediaQueryList`. */
 function windowIsNarrow(narrow: boolean) {
   vi.spyOn(window, "matchMedia").mockImplementation(
@@ -133,19 +159,61 @@ function windowIsNarrow(narrow: boolean) {
   );
 }
 
-/** The layout row: the one element between the `sr-only` heading and the two columns. */
-function row(container: HTMLElement): HTMLElement {
-  const found = container.querySelector("h2 + div");
-  if (found === null) throw new Error("no layout row under the heading");
-  return found as HTMLElement;
+/** The video box — the one the two layout arms size differently. */
+function videoBox(container: HTMLElement): HTMLElement {
+  const box = container.querySelector("video")?.parentElement;
+  if (!box) throw new Error("no video box");
+  return box;
 }
 
-/** The video box — the row's first column, and the one the two arms size differently. */
-function videoBox(container: HTMLElement): HTMLElement {
-  const found = row(container).firstElementChild;
-  if (found === null) throw new Error("no video box in the layout row");
-  return found as HTMLElement;
+/** The layout row: the camera's column and the tray's, side by side or stacked. */
+function row(container: HTMLElement): HTMLElement {
+  const found = videoBox(container).parentElement?.parentElement;
+  if (!found) throw new Error("no layout row around the camera");
+  return found;
 }
+
+/** The detector's own strip, inside the video box. */
+function strip(container: HTMLElement): HTMLElement {
+  const found = videoBox(container).querySelector<HTMLElement>("[aria-live='polite']");
+  if (found === null) throw new Error("no detector strip in the video box");
+  return found;
+}
+
+/** The reader's one line under the camera. */
+function statusLine(): HTMLElement {
+  return screen.getByRole("status", { name: "Scanner status" });
+}
+
+function tray(): HTMLElement {
+  return screen.getByRole("region", { name: "Scanned cards" });
+}
+
+const BINDER: CollectionFolder = {
+  id: 7,
+  parentId: null,
+  name: "Trade binder",
+  kind: "user",
+  deckId: null,
+  sortOrder: 0,
+  locked: false,
+  syncUid: "f7",
+};
+const DECK_GROUP: CollectionFolder = { ...BINDER, id: 9, name: "Burn", kind: "deck", deckId: 4, syncUid: "f9" };
+
+const COMMANDS = [
+  ipc.scannerStatus,
+  ipc.scannerFrame,
+  ipc.scannerReset,
+  ipc.scannerCapture,
+  ipc.scannerPrefs,
+  ipc.setScannerPrefs,
+  ipc.scannerSetFilters,
+  ipc.scannerTray,
+  ipc.setScannerTray,
+  ipc.collectionImportCommit,
+  ipc.collectionFolderList,
+];
 
 let restoreCanvas = () => {};
 beforeEach(() => {
@@ -154,13 +222,11 @@ beforeEach(() => {
 afterEach(() => {
   restoreCanvas();
   vi.restoreAllMocks();
-  // `restoreAllMocks` reaches `vi.spyOn` and nothing else, so the four command mocks keep
-  // whatever the last test queued on them — a `mockReturnValue` outliving its own test is how a
-  // suite becomes order-dependent. `mockReset` puts each back to the implementation its
-  // `vi.fn(…)` was built with, which is the state every test below expects to start from.
-  [ipc.scannerStatus, ipc.scannerFrame, ipc.scannerReset, ipc.scannerCapture].forEach((command) =>
-    vi.mocked(command).mockReset(),
-  );
+  // `restoreAllMocks` reaches `vi.spyOn` and nothing else, so the command mocks keep whatever the
+  // last test queued on them — a `mockReturnValue` outliving its own test is how a suite becomes
+  // order-dependent. `mockReset` puts each back to the implementation its `vi.fn(…)` was built
+  // with, which is the state every test below expects to start from.
+  COMMANDS.forEach((command) => vi.mocked(command).mockReset());
   Object.defineProperty(navigator, "mediaDevices", { value: undefined, configurable: true });
 });
 
@@ -176,14 +242,26 @@ describe("ScannerPage", () => {
     expect(vi.mocked(ipc.scannerStatus)).not.toHaveBeenCalled();
   });
 
-  it("shows the refused camera's sentence in place of the video, and the panels beside it", async () => {
+  it("shows the refused camera's sentence in place of the video, and the missing bundle under it", async () => {
     refused();
     mount();
     expect(
       await screen.findByText("MTG Grimoire needs camera access to scan a card."),
     ).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Match" })).toBeInTheDocument();
     expect(await screen.findByText(/No reference bundle\. Put/)).toBeInTheDocument();
+    // The reader's view: the tray beside the camera, and no developer panel until asked for.
+    expect(tray()).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Match" })).not.toBeInTheDocument();
+  });
+
+  it("says nothing about assets a release build carries inside itself", async () => {
+    refused();
+    vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.embedded);
+    mount();
+    await screen.findByText("MTG Grimoire needs camera access to scan a card.");
+    await waitFor(() => expect(ipc.scannerStatus).toHaveBeenCalled());
+    expect(screen.queryByText(/No reference bundle/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/No OCR models/)).not.toBeInTheDocument();
   });
 
   it("has an sr-only heading, because the ribbon carries the visible title", () => {
@@ -195,42 +273,43 @@ describe("ScannerPage", () => {
   it("reserves the detector's strip whether or not there is a sentence in it", async () => {
     refused();
     const { container } = mount();
-    const strip = container.querySelector("[aria-live='polite']");
-    expect(strip).toBeInTheDocument();
-    expect(strip).toHaveTextContent("");
+    expect(strip(container)).toHaveTextContent("");
     // Two lines of room, kept whether the strip is empty or full, so the video box above it
     // does not change height the moment the detector has something to say.
-    expect(strip).toHaveClass("min-h-[2.5em]");
+    expect(strip(container)).toHaveClass("min-h-[2.5em]");
     await screen.findByText("MTG Grimoire needs camera access to scan a card.");
-    expect(container.querySelector("[aria-live='polite']")).toHaveTextContent("");
+    expect(strip(container)).toHaveTextContent("");
   });
 
-  it("prints the frame's own refusal in that strip", async () => {
+  it("names what the scanner is doing in one line under the camera", async () => {
+    refused();
+    vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
+    mount();
+    await waitFor(() => expect(statusLine()).toHaveTextContent("Point the camera at a card"));
+  });
+
+  it("prints the frame's own refusal in that strip once the developer panels are on", async () => {
     const restore = shimVideo();
     opens();
-    vi.mocked(ipc.scannerFrame).mockResolvedValueOnce(VERDICTS.noCard);
-    vi.mocked(ipc.scannerFrame).mockReturnValue(new Promise(() => {}));
+    storedPrefs({ developer: true });
+    frames(VERDICTS.noCard);
     try {
       const { container } = mount();
-      expect(await screen.findByText(VERDICTS.noCard.error ?? "")).toBeInTheDocument();
-      expect(container.querySelector("[aria-live='polite']")).toHaveTextContent(
-        VERDICTS.noCard.error ?? "",
-      );
+      await waitFor(() => expect(strip(container)).toHaveTextContent(VERDICTS.noCard.error ?? ""));
     } finally {
       restore();
     }
   });
 
-  it("stacks the camera above the panels on a phone and puts them beside it otherwise", () => {
+  it("stacks the camera above the tray on a phone and puts it beside the camera otherwise", () => {
     refused();
     windowIsNarrow(true);
     const narrow = mount();
     expect(row(narrow.container)).toHaveClass("flex-col");
     // The video box is sized by its own aspect ratio here rather than by what is left over. A
     // zero-basis `flex-1` under this scrolling column yields its free space to the `shrink-0`
-    // panels beside it, so `flex-1` on a phone is a camera that collapses to nothing the moment
-    // a developer panel is opened — which is why the class must be absent and not merely
-    // outranked.
+    // tray beside it, so `flex-1` on a phone is a camera that collapses to nothing the moment
+    // the tray grows — which is why the class must be absent and not merely outranked.
     expect(videoBox(narrow.container)).toHaveClass("shrink-0");
     expect(videoBox(narrow.container).classList.contains("flex-1")).toBe(false);
     expect(videoBox(narrow.container).style.aspectRatio).not.toBe("");
@@ -258,8 +337,29 @@ describe("ScannerPage", () => {
     }
   });
 
+  it("shows the Match panel behind the Developer switch, and hides it again", async () => {
+    refused();
+    const user = userEvent.setup();
+    mount();
+    const toggle = await screen.findByRole("switch", { name: "Developer" });
+    expect(screen.queryByRole("region", { name: "Match" })).not.toBeInTheDocument();
+
+    await user.click(toggle);
+    expect(await screen.findByRole("region", { name: "Match" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Tiers" })).toBeInTheDocument();
+    await waitFor(() =>
+      expect(ipc.setScannerPrefs).toHaveBeenLastCalledWith({ ...DEFAULT_SCANNER_PREFS, developer: true }),
+    );
+
+    await user.click(screen.getByRole("switch", { name: "Developer" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("region", { name: "Match" })).not.toBeInTheDocument(),
+    );
+  });
+
   it("hands the reset press straight to the command", async () => {
     refused();
+    storedPrefs({ developer: true });
     mount();
     await userEvent.click(await screen.findByRole("button", { name: "Reset evidence" }));
     expect(vi.mocked(ipc.scannerReset)).toHaveBeenCalled();
@@ -272,25 +372,26 @@ describe("ScannerPage", () => {
    */
   it("puts a refused reset in the strip under the video", async () => {
     refused();
+    storedPrefs({ developer: true });
     vi.mocked(ipc.scannerReset).mockRejectedValueOnce("the scanner state is poisoned");
     const { container } = mount();
     await userEvent.click(await screen.findByRole("button", { name: "Reset evidence" }));
-    await waitFor(() =>
-      expect(container.querySelector("[aria-live='polite']")).toHaveTextContent(
-        "the scanner state is poisoned",
-      ),
-    );
+    await waitFor(() => expect(strip(container)).toHaveTextContent("the scanner state is poisoned"));
   });
 
   it("files a capture under the five fields the sidecar has, read off the last verdict", async () => {
     const restore = shimVideo();
     opens();
-    vi.mocked(ipc.scannerFrame).mockResolvedValueOnce(VERDICTS.decided);
-    vi.mocked(ipc.scannerFrame).mockReturnValue(new Promise(() => {}));
+    storedPrefs({ developer: true });
+    // A bundle that loaded, so the panel names the card rather than standing the placement
+    // sentence where the name would be.
+    vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
+    frames(VERDICTS.decided);
     try {
       mount();
-      // The headline over the video, which is the tell that the verdict has landed.
-      expect(await screen.findByText("Storm of Saruman")).toBeInTheDocument();
+      // The Match panel's head row, which is the tell that the verdict has landed.
+      const match = await screen.findByRole("region", { name: "Match" });
+      expect(await within(match).findByText("Storm of Saruman — LTR 72")).toBeInTheDocument();
       await userEvent.type(
         screen.getByRole("textbox", { name: "What it actually is" }),
         "Storm of Saruman",
@@ -307,6 +408,171 @@ describe("ScannerPage", () => {
         distance: "30",
       });
       expect(await screen.findByText("saved live-7.jpg")).toBeInTheDocument();
+    } finally {
+      restore();
+    }
+  });
+
+  /**
+   * **One row per `decision_seq`, and the number is the whole of the rule.** The decided card
+   * rides every committed frame after the one that decided it, so a page that added on the
+   * *decision* rather than on the number moving would fill the tray with one card nine times a
+   * second.
+   */
+  it("adds a tray row when decision_seq moves, and not again for the same seq", async () => {
+    const restore = shimVideo();
+    opens();
+    vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
+    frames(VERDICTS.voting, VERDICTS.decided, VERDICTS.decided, VERDICTS.decided);
+    try {
+      mount();
+      await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalledTimes(5));
+      const rows = within(tray()).getAllByRole("listitem");
+      expect(rows).toHaveLength(1);
+      expect(within(rows[0]).getByText("Storm of Saruman")).toBeInTheDocument();
+      expect(within(tray()).getByRole("button", { name: "Add 1 to collection" })).toBeInTheDocument();
+      expect(statusLine()).toHaveTextContent("Added Storm of Saruman — LTR 72");
+      // …and the store gets the tray once the quiet window has passed.
+      await waitFor(() => expect(ipc.setScannerTray).toHaveBeenCalled(), { timeout: 2000 });
+      const [written] = vi.mocked(ipc.setScannerTray).mock.lastCall ?? [];
+      expect(written).toHaveLength(1);
+      expect(written?.[0]).toMatchObject({ cardId: "storm-of-saruman-ltr-72", quantity: 1, finish: "nonfoil" });
+    } finally {
+      restore();
+    }
+  });
+
+  /** A new row is born in the Defaults popover's finish — the prefs', not a literal. */
+  it("stamps a new row with the prefs' finish", async () => {
+    const restore = shimVideo();
+    opens();
+    storedPrefs({ finish: "foil" });
+    frames(VERDICTS.voting, VERDICTS.decided);
+    try {
+      mount();
+      await waitFor(() => expect(within(tray()).getAllByRole("listitem")).toHaveLength(1));
+      await waitFor(() => expect(ipc.setScannerTray).toHaveBeenCalled(), { timeout: 2000 });
+      const [written] = vi.mocked(ipc.setScannerTray).mock.lastCall ?? [];
+      expect(written?.[0]?.finish).toBe("foil");
+    } finally {
+      restore();
+    }
+  });
+
+  it("commits the tray in one call, into the prefs' folder, and empties it", async () => {
+    refused();
+    const rows = TRAY_ROWS.slice(1); // the three resolved rows: 3 + 1 + 1 copies
+    vi.mocked(ipc.scannerTray).mockResolvedValue(rows);
+    vi.mocked(ipc.collectionFolderList).mockResolvedValue([BINDER]);
+    storedPrefs({ folderId: BINDER.id, condition: "LP" });
+    const user = userEvent.setup();
+    mount();
+
+    await user.click(await within(tray()).findByRole("button", { name: "Add 5 to collection" }));
+    await waitFor(() => expect(ipc.collectionImportCommit).toHaveBeenCalledTimes(1));
+    expect(ipc.collectionImportCommit).toHaveBeenCalledWith(importItems(rows, "LP"), "add", BINDER.id);
+    expect(await within(tray()).findByText("Cards you scan appear here.")).toBeInTheDocument();
+    await waitFor(() => expect(ipc.setScannerTray).toHaveBeenLastCalledWith([]), { timeout: 2000 });
+  });
+
+  /**
+   * **The camera keeps running while the commit waits for the write connection**, which is
+   * seconds while a sync holds it. A card that lands in that window is a row the commit never saw,
+   * and emptying the tray on the answer would throw it away.
+   */
+  it("keeps a card scanned while the commit was in flight", async () => {
+    const restore = shimVideo();
+    opens();
+    vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
+    const rows = TRAY_ROWS.slice(1);
+    vi.mocked(ipc.scannerTray).mockResolvedValue(rows);
+    let land!: (v: ScannerVerdict) => void;
+    vi.mocked(ipc.scannerFrame)
+      .mockResolvedValueOnce(VERDICTS.voting)
+      .mockImplementationOnce(() => new Promise((resolve) => (land = resolve)))
+      .mockImplementation(() => new Promise(() => {}));
+    let answer!: () => void;
+    vi.mocked(ipc.collectionImportCommit).mockImplementationOnce(
+      () => new Promise((resolve) => (answer = () => resolve({ added: 3, updated: 0, removed: 0 }))),
+    );
+    const user = userEvent.setup();
+    try {
+      mount();
+      await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalledTimes(2));
+      await user.click(await within(tray()).findByRole("button", { name: "Add 5 to collection" }));
+      await waitFor(() => expect(ipc.collectionImportCommit).toHaveBeenCalledTimes(1));
+
+      land(VERDICTS.decided);
+      await waitFor(() => expect(within(tray()).getAllByRole("listitem")).toHaveLength(rows.length + 1));
+      answer();
+
+      await waitFor(() => expect(within(tray()).getAllByRole("listitem")).toHaveLength(1));
+      expect(within(tray()).getByText("Storm of Saruman")).toBeInTheDocument();
+    } finally {
+      restore();
+    }
+  });
+
+  /** One transaction, all or nothing — so a refusal leaves every row where the reader can fix it. */
+  it("keeps every row and shows the sentence when the commit is refused", async () => {
+    refused();
+    const rows = TRAY_ROWS.slice(1);
+    vi.mocked(ipc.scannerTray).mockResolvedValue(rows);
+    vi.mocked(ipc.collectionImportCommit).mockRejectedValueOnce(
+      "no card with the id `x` is in the card database",
+    );
+    const user = userEvent.setup();
+    mount();
+
+    await user.click(await within(tray()).findByRole("button", { name: "Add 5 to collection" }));
+    expect(
+      await within(tray()).findByText("no card with the id `x` is in the card database"),
+    ).toBeInTheDocument();
+    expect(within(tray()).getAllByRole("listitem")).toHaveLength(rows.length);
+    expect(ipc.setScannerTray).not.toHaveBeenCalledWith([]);
+  });
+
+  /**
+   * **A folder that is gone, or that is not the reader's own, is the root.** `collection_import_commit`
+   * accepts a deck's group — the import's deck arm files there on purpose — so a stored id that
+   * now names one would put scanned cards into a deck's box behind the reader's back.
+   */
+  it("files into the root, and stores the root, when the stored folder is not a user folder", async () => {
+    refused();
+    const rows = TRAY_ROWS.slice(1);
+    vi.mocked(ipc.scannerTray).mockResolvedValue(rows);
+    vi.mocked(ipc.collectionFolderList).mockResolvedValue([BINDER, DECK_GROUP]);
+    storedPrefs({ folderId: DECK_GROUP.id });
+    const user = userEvent.setup();
+    mount();
+
+    await waitFor(() =>
+      expect(ipc.setScannerPrefs).toHaveBeenCalledWith({ ...DEFAULT_SCANNER_PREFS, folderId: null }),
+    );
+    await user.click(await within(tray()).findByRole("button", { name: "Add 5 to collection" }));
+    await waitFor(() => expect(ipc.collectionImportCommit).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(ipc.collectionImportCommit).mock.calls[0]?.[2]).toBeNull();
+  });
+
+  it("sends mode: exact on the next frame once Exact is pressed", async () => {
+    const restore = shimVideo();
+    opens();
+    let answer!: (v: ScannerVerdict) => void;
+    vi.mocked(ipc.scannerFrame)
+      .mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)))
+      .mockImplementation(() => new Promise(() => {}));
+    const user = userEvent.setup();
+    try {
+      mount();
+      await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalledTimes(1));
+      expect(vi.mocked(ipc.scannerFrame).mock.calls[0]?.[1].mode).toBe("fast");
+
+      const exact = screen.getByRole("button", { name: "Exact" });
+      await user.click(exact);
+      await waitFor(() => expect(exact).toHaveAttribute("aria-pressed", "true"));
+      answer(VERDICTS.voting);
+      await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalledTimes(2));
+      expect(vi.mocked(ipc.scannerFrame).mock.calls[1]?.[1].mode).toBe("exact");
     } finally {
       restore();
     }
