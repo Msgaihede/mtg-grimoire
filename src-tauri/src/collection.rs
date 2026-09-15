@@ -847,6 +847,23 @@ pub(crate) fn commit_import(
     mode: &str,
     folder_id: Option<i64>,
 ) -> Result<ImportCommitOutcome, String> {
+    commit_import_with(conn, items, mode, folder_id, |_| Ok(()))
+}
+
+/// [`commit_import`], with one more write inside **its** transaction — run after the last item and
+/// the activity row, before the commit — so the import and that write land together or not at
+/// all. A refusal from `also` rolls the whole import back.
+///
+/// **One caller, `scanner::scanner_tray_commit`**, which stores what is left of the review tray
+/// here: written by a second command after this one committed, an app closed in between restored
+/// the rows this had already filed and the next commit filed them twice.
+pub(crate) fn commit_import_with(
+    conn: &Connection,
+    items: &[CollectionImportItem],
+    mode: &str,
+    folder_id: Option<i64>,
+    also: impl FnOnce(&Connection) -> Result<(), String>,
+) -> Result<ImportCommitOutcome, String> {
     // Before the transaction opens, not inside it: a refusal that has already begun a write
     // is a rollback the reader pays for.
     if mode != "add" && mode != "set" {
@@ -956,6 +973,7 @@ pub(crate) fn commit_import(
         copies_after - copies_before,
     )
     .map_err(|e| e.to_string())?;
+    also(&tx)?;
     tx.commit().map_err(|e| e.to_string())?;
 
     Ok(ImportCommitOutcome {

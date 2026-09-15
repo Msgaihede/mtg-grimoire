@@ -964,7 +964,9 @@ cycle with the card never leaving the lens**.
    documented route) and not driven.
 10. **The crate is not `cargo fmt`-clean and carries four clippy warnings**, which is why CI's
     `rust` job runs its **tests only** — `cargo test --locked --features cli --manifest-path
-    crates/card-scanner/Cargo.toml`, on the Linux leg, added 2026-09-08 because until then
+    crates/card-scanner/Cargo.toml`, and since 2026-09-15 `cargo test --locked --features builder
+    --bins` beside it so `build-hashes` and `eval` compile and test too, on the Linux leg; the
+    first was added 2026-09-08 because until then
     `session::tests` (the `live.html` key census, the panic guard, the reader cadence) was
     fenced by `npm run verify` and by nothing in CI at all. Measured the same day:
     `cargo fmt --check` reports diffs (`src/bin/build_hashes.rs` among them) and
@@ -991,7 +993,8 @@ cycle with the card never leaving the lens**.
 13. **A commit can file into a stale folder when the folder list fails to load.** The page treats
     a stored `folderId` that is gone or not the reader's own as the root, but it can only decide
     that once `useCollectionFolderList` has answered; the commit refetches, and if the list still
-    will not load, the stored id goes to `collection_import_commit` as it is. A deleted folder is
+    will not load, the stored id goes to `scanner_tray_commit` — whose import half is
+    `collection_import_commit`'s `commit_import` — as it is. A deleted folder is
     then refused in words — but an id that now names a **deck group** is accepted, because the
     import's deck arm files there on purpose, and scanned cards land in a deck's box.
 14. **A lock lost for ten frames or more on a card still in hand decides that card again.** Under
@@ -1031,10 +1034,14 @@ cycle with the card never leaving the lens**.
     while it waits — right when the choices are reprints of one card, misleading when they are six
     different cards: the row above read *Tropical Island*. It still reads *Pick a printing* and
     blocks the commit, so nothing wrong is filed.
-19. **Unconfirmed: the Filters popover's set picker may not offer every set.** On the live pass the
-    `SetCombobox` did not render *Kamigawa: Neon Dynasty* among its options — only BOK and PBOK
-    matched `/Kamigawa/` — so the LEA filter above was set over IPC. Not yet checked against the
-    Search page's use of the same component; until it is, a reader may be unable to pick some sets.
+19. **Not a bug: the Filters popover's set picker offers every set, a page at a time.** On the live
+    pass the `SetCombobox` did not render *Kamigawa: Neon Dynasty* among its options — only BOK and
+    PBOK matched `/Kamigawa/` — so the LEA filter above was set over IPC, and this item was filed as
+    unconfirmed. The final review measured it on the dev corpus: the picker pages **100 of 988
+    sets** alphabetically, so an unfiltered list simply had not reached *Kamigawa: Neon Dynasty*;
+    typing `neo` or `kamigawa` finds it, and *Show 50 more* walks to every set. The live pass read
+    the first page and nothing else. Kept here, struck through by this sentence, so the next reader
+    who counts a short list does not file it again.
 
 Struck 2026-09-08: the two doc comments that quoted a title read at ~250 ms against a ~80 ms
 frame — `session::OCR_EVERY` and `ocr.rs`'s `COLLECTOR_FALLBACKS` — where §4 and §7 measured
@@ -1510,6 +1517,15 @@ is whole-file 1 and `-i 32` 0; one flipped entry byte and one extra entry are bo
 missing any of the three assets is republished whatever the comparison says**, or one failed upload
 would leave release builds without a model for good.
 
+**A shrunken bundle is refused twice before it can reach a release** (final review). `build-hashes`
+exits 1 and writes no bundle when more than **0.5%** of the fetches it attempted failed transiently —
+a transient failure is left out of the cache and so out of the bundle, and an image host down for
+ten minutes would otherwise publish a bundle missing every card it could not reach
+(`too_many_transient`, a pure function with its own test). And the publish step, when a bundle is
+already published, counts entries as `(size − 32) / 48` for both and **fails without uploading** when
+the new count is below **99%** of the old, with both counts in the summary — the fence for a short
+`default_cards` or a bad cache, which the fetch count cannot see.
+
 **Only `main` publishes.** `workflow_dispatch` runs from any ref and the tag names the format
 version rather than the code, so a branch that changed the hashing without bumping `FORMAT_VERSION`
 would `--clobber` the bundle every later release embeds, from code nobody reviewed. Anywhere else,
@@ -1587,8 +1603,9 @@ would hand straight back what another had excluded.
 `Session::set_filters` lifts the mask for empty filters; refuses with a sentence when there are no
 labels (*Filters need card names, and the scanner has none loaded — it needs corpus.db beside the
 bundle.*) or when nothing survives (*No printing matches these filters.*), keeping the mask already
-in force; and on success **resets the tracker** — evidence gathered against another candidate set is
-evidence about another question. The page disables the Filters control when the status reports no
+in force; and on a change **resets the tracker** — evidence gathered against another candidate set is
+evidence about another question — but not the quad lock, and **not at all for the filters already in
+force** (see *Exact* below, after the re-arm table). The page disables the Filters control when the status reports no
 labels, puts a refused filter back to the last one the session accepted with the sentence inside
 the popover, never persists a refusal, and holds the first frame until the stored filters have
 reached the session. The debug page gained a sets field and two dates posting to `POST /filters`.
@@ -1649,9 +1666,11 @@ Filtering to each card's own set rescued all five. After round 4, at `64c5810e`:
 0 of 160, card-correct 91.9% → 95.0%**, printing 78.8% → 81.2%, and every ambiguous decision holds
 the true printing among its choices (96.6% → 100%). **What the rule costs** is a foil whose hash
 leaves some survivors, none of them the card, read with a typo: it is no longer rescued by the read.
-No test yet pins an *exact* title read replacing non-empty survivors that lack the card — deleting
-the `edits > 0 &&` guard in `resolve.rs` stays green — and a corrected read that narrows applies no
-distance margin where the collector does.
+An *exact* title read replacing non-empty survivors that lack the card is pinned since the final
+review by `an_exact_read_of_a_card_the_hash_never_suggested_replaces_the_survivors` (the Plains in
+frame, `shock` read at 0 edits, Shock resolved): deleting `edits > 0 &&` or `edits == 0 ||` in
+`resolve.rs` now goes red there and nowhere else, which is the gap it closed. A corrected read that
+narrows still applies no distance margin where the collector does.
 
 **After a resolve that found something, the tracker is committed and frozen on it** through
 `Tracker::commit_to(key, member)` — the best choice's oracle id, even when an ambiguous outcome's
@@ -1673,12 +1692,41 @@ rule below is a failure the code before it shipped.** A *stretch* is the run of 
 | The resolve condition has no term for the tracker (`commit_to` replaces a vote tally) | with `!settled` in it, a card the votes committed first was never resolved and never decided |
 | Only a lock that stops being **trusted** breaks a stretch; a trusted frame whose detector missed neither counts nor breaks it | a detection-less frame on a still card would reset the steady count and the burst |
 | A break **arms** `rearm_pending` rather than clearing the attempt, and a resolve's own freeze holds the re-arm back | after round 1 made a break re-arm directly, a two-frame lock blip — one degenerate quad — re-resolved a decided card and put a duplicate row in the tray |
-| The resolve clears `rearm_pending` | a lock that was flaky before the first resolve left the flag set, and a freeze lifting later in the same unbroken stretch took it and decided the card again |
 | The re-arm is taken when `rearm_pending && (!committed \|\| last_resolution.is_none())` | round 2's `!committed` alone held it back behind a freeze the **votes** made after a `not_found`, so that card was never decided until it left |
 | One place takes the re-arm (`record_decision`) | round 2 kept a second copy just before the resolve condition, untested; keeping the two in step is how the regression round 3 fixed came about, so the copy was deleted |
 
+**A row this table used to carry is gone: "the resolve clears `rearm_pending`".** It was round 2's
+fix for a flaky lock leaving the flag set before the first resolve, and round 3's placement made it
+dead: a resolve runs only while `attempted` is false, `last_resolution` is `None` whenever
+`attempted` is, and every observed frame — the untrusted one that arms the flag included — ends in
+`record_decision`, which takes a pending re-arm at once when `last_resolution` is `None`. So the flag
+is already clear at every resolve. The final review deleted the assignment and its assertion
+(`assert!(!s.rearm_pending)`), which could not go red.
+
 What remains is §8 item 14: a lock lost past the freeze's ten frames on a card still in hand
 decides it again.
+
+**A mode switch or a filter change on the card in frame is a second opinion, not a second copy**
+(final review, decision 9). "Fast said Forest, switch to Exact to pin the printing" is one physical
+card, and both settings reset the tracker, so the session decides it again and `decision_seq` moves.
+`DecisionView::replaces_previous` says so: `true` when the previous decision named the same oracle
+card and the quad lock has stayed trusted ever since, and the same answer on every frame of that
+decision. The session remembers the last decision's oracle; **a stretch break forgets it** (the
+`count_stretch` untrusted arm — the card may have changed hands), and so does a Reset press, but a
+mode switch and a real filter change do not. That last half needed one change to what those two
+reset: **they keep the quad lock** (`Session::forget_card`, where `reset` is `forget_card` plus the
+lock and the memory). With the lock reset too, a card that never moved went back to acquiring, its
+re-acquisition frames broke the stretch, and the memory was gone before the second decision could
+be compared with it — a rule no real frame could reach. The lock is geometry; a mode or a filter
+says nothing about where the card is.
+
+**The filters already in force are not a change.** `set_filters` compares with
+`ScanFilters::same_as` — `is_empty`'s blank-bound normalisation, set codes trimmed, case-folded and
+compared as a set — and returns `Ok` without resetting or rebuilding the mask. The page pushes the
+stored filters every time the Scanner mounts, and the loop waits for that; a reset there wiped the
+decided card still on the mat before the first frame, the card decided again, and — past
+`useScanLoop`'s baseline guard, which the moved `decision_seq` defeated — was added a second time.
+Mocked IPC never resets, which is why no page test saw it.
 
 ### `decision_seq` and `decision`
 
@@ -1687,10 +1735,15 @@ on the frame a resolve ran — and the debug page's key census (§9) now scrapes
 **`decision_seq` is what makes one add per card a property of the session rather than of the page's
 timing**: it moves once per Fast commit and once per Exact resolve that found something, and on no
 other frame, so a dropped frame, a re-render or a second listener cannot add a card twice. It
-survives `reset` and a mode switch — a number that went back to one the page had already seen would
+survives `reset` and a mode switch (**and a mode switch or a filter change no longer resets the quad
+lock** — only the tracker, burst and counters — because the replace rule needs the stretch unbroken
+across the switch; a lock reset re-acquired a card that never moved and broke it) — a number that
+went back to one the page had already seen would
 add nothing next time — and a failed or panicked frame still carries it. `decision` is present on
 every committed frame (Fast: the tracker's printing, `resolved`, no choices; Exact: the resolve's
-first choice, its outcome and its choices) and `null` on an Exact commit no resolve made.
+first choice, its outcome and its choices) and `null` on an Exact commit no resolve made. Since the
+final review it also carries `replaces_previous` (*Exact*, above), which the tray reads to replace
+its newest row instead of adding one.
 `useScanLoop` takes the first `decision_seq` after the camera goes live as a baseline and calls
 `onDecision` only for a number that differs on a frame carrying a decision.
 
@@ -1708,11 +1761,27 @@ and the Developer switch; **a tray row records no language**.
 
 **The TanStack cache is the tray, and a refused write keeps it on screen.** `useTray` holds the rows
 in `["scanner", "tray"]` with `staleTime` and `gcTime` both `Infinity` — nothing else writes the row,
-and five minutes on another page must not hand a remount an older stored copy. It writes after
-400 ms of quiet and on unmount; on a refusal it keeps the rows, rewrites the whole tray on the next
-change, and tries **once** more after 1.5 s so a tray nobody touches again survives a restart.
+and five minutes on another page must not hand a remount an older stored copy — and with
+`structuralSharing` off, so `latest()` hands back the very row objects the last write passed in (the
+commit tells an untouched row from one bumped in flight by identity). It writes after 400 ms of
+quiet and on unmount; on a refusal it keeps the rows, rewrites the whole tray on the next change,
+and tries **once** more after 1.5 s so a tray nobody touches again survives a restart.
 `useScannerPrefs` does the same. Neither says anything about `BUSY`: rows scanned during a sync are
 the reader's cards and nothing about them is wrong.
+
+**Every tray write is single-flight, the commit included** (final review). At most one
+`set_scanner_tray` or `scanner_tray_commit` is on the wire; the next waits for it to settle, so they
+reach the backend in the order they were asked for, and a write asked for while another is still
+waiting to go is the same write — it reads the rows when it goes. The queue is one per query client
+rather than per mount, so a view switch with a flush still on the wire does not start a second queue
+beside it. Before this, two writes could land old-after-new, and a debounced write that started
+before a commit could land after it and put the committed rows back.
+
+**Every writer builds on the tray as it is, not as a render drew it.** A decision from the pump, a
+printing handed back by *More printings…*, a commit's answer and — since the final review — every
+edit in the tray panel read `tray.latest()`. `TrayPanel`'s `onRows` takes an **updater**, never an
+array: an edit built from the `rows` prop was one render old, and a stepper pressed between the
+pump's write and the next render wrote the tray back without the card just scanned.
 
 **Newest first, and a bump is the newest row only.** A decision lands at index 0. A resolved
 decision bumps the newest row's quantity instead **only when that row names the same printing, has
@@ -1725,18 +1794,34 @@ out of order, and folding into a row they scrolled past would move a number nobo
 first provisionally; the camera keeps running while it waits, and *More printings…* opens the app's
 all-printings dialog with a `pick` that hands the printing back.
 
-**The commit is one `collection_import_commit(items, "add", folderId)`** — the existing
-one-transaction batch, so the activity log and every write-site rule the import honours hold with no
-second copy. One condition for the whole commit, from the Defaults popover, because condition is a
-judgement about a pile in the hand and not something a camera reads; finish is per row. **All or
-nothing**: a refusal keeps every row and puts the backend's own sentence above them; a success
-removes **only the rows it committed** — the write can wait seconds on `BUSY` while the camera keeps
-running, so a card that landed meanwhile stays, and a row bumped meanwhile keeps only the copies
-added after the snapshot. It invalidates `OWNED_WRITE_KEYS`, the import's own set. **A stored folder
-that is gone or not the reader's own is the root**, and persisted as such once the folder list
-answers — `collection_import_commit` accepts a deck's group, because the import's deck arm files
-there on purpose, so a stale id naming one would put scanned cards in a deck's box. §8 item 13 is
-the case the list never answers.
+**A decision that `replaces_previous` replaces the newest row instead of adding one** — but only when
+that row is the same oracle card, both ids known. It keeps the row's key, quantity and finish (the
+reader's own answers, and the flash's identity) and takes everything that says which printing — the
+id, the names, the set and number, and the choices — from the decision, so a waiting row the
+switch to Exact pinned closes its question. The session's flag alone is not enough: a newest row of
+another card is one the reader removed the card from or scanned past, and it gets an ordinary add.
+The status line says *Updated Forest — LTR 270*, never *Added*.
+
+**The commit is one `scanner_tray_commit(items, folderId, remaining)`** (final review): the
+collection import in `add` mode **and** the tray that is left stored as `scanner_tray`, in one
+transaction. `collection::commit_import_with` is `commit_import` with one more write inside its
+transaction, so the activity log and every write-site rule the import honours hold with no second
+copy; `remaining` is refused on `store_tray`'s terms before the import starts. **Why one write:** the
+page used to commit through `collection_import_commit` and let the debounced tray write catch up, so
+an app closed in those 400 ms, a `BUSY` on that write, or an older tray write landing after the
+commit left the committed rows in the stored tray — the next launch restored them and the next Add
+filed the same cards twice. One condition for the whole commit, from the Defaults popover, because
+condition is a judgement about a pile in the hand and not something a camera reads; finish is per
+row. **All or nothing**: a refusal from either half keeps every row, leaves the collection and the
+stored tray as they were, and puts the backend's own sentence above the rows; a success removes
+**only the rows it committed**. `remaining` is worked out when the commit actually goes out — it
+queues behind any tray write on the wire — and again when it answers, because the camera keeps
+running: a card that landed meanwhile stays and is written behind it, and a row bumped meanwhile
+keeps only the copies added after the snapshot. It invalidates `OWNED_WRITE_KEYS`, the import's own
+set. **A stored folder that is gone or not the reader's own is the root**, and persisted as such
+once the folder list answers — the import accepts a deck's group, because the import's deck arm
+files there on purpose, so a stale id naming one would put scanned cards in a deck's box. §8 item
+13 is the case the list never answers.
 
 **Every tray thumbnail is the whole card, the `thumb` variant in a 5:7 slot with `object-contain`,
 never the `art` crop.** A crop has no printed frame and so no artist credit, a tray row carries no
@@ -1749,7 +1834,8 @@ printings apart is the frame — the set symbol, the border, the treatment.
 developer vocabulary — votes, leads, distances — reaches it. In rank order, each rung a reason the
 later ones cannot be true: *The scanner has no card hashes loaded, so it can find a card but not
 name it.* · *Point the camera at a card* · *No match — try better light, or clear the filters* ·
-*Pick a printing below* · *Added Forest — HOB 193* or *Added Forest again — ×2* · *Hold steady —
+*Pick a printing below* · *Added Forest — HOB 193*, *Added Forest again — ×2* or *Updated Forest —
+LTR 270* · *Hold steady —
 reading the card…* (Exact, locked) · *Hold steady*. The asset sentences sit under it, so a missing
 bundle is still said with the Developer panels off.
 

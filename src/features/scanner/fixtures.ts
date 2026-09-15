@@ -162,6 +162,7 @@ const decided: ScannerVerdict = {
     label: saruman,
     outcome: "resolved",
     choices: [],
+    replaces_previous: false,
   },
   match: {
     section: "full",
@@ -208,7 +209,14 @@ const confidence: ScannerVerdict = {
   tracked: confidenceTracked,
   // Committed, so it carries a decision like every committed frame does.
   decision_seq: 1,
-  decision: { printing: "plains-2xm-373", oracle_id: "plains", label: plains, outcome: "resolved", choices: [] },
+  decision: {
+    printing: "plains-2xm-373",
+    oracle_id: "plains",
+    label: plains,
+    outcome: "resolved",
+    choices: [],
+    replaces_previous: false,
+  },
 };
 
 const noMatch: ScannerVerdict = {
@@ -389,6 +397,7 @@ const exactDecision = (resolution: ScannerResolution): ScannerDecision => ({
   label: resolution.choices[0].label,
   outcome: resolution.outcome,
   choices: resolution.choices,
+  replaces_previous: false,
 });
 
 /** The frame an Exact resolve ran on and came to one printing. */

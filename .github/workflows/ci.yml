@@ -366,9 +366,17 @@ jobs:
       #
       # Linux only, like `cargo fmt` above: the crate has no `cfg`-gated platform paths, so a
       # second leg would compile `ocrs`/`rten` again to prove the same thing.
+      #
+      # **Two commands, because `cli` does not compile the `builder` binaries** (2026-09-15).
+      # `build-hashes` and `eval` sit behind `builder` (`ureq` + `rayon`), so until the second line
+      # a change that broke either — or a test inside them — went red only in
+      # `scanner-bundle.yml`'s weekly run, which is the job that publishes what every release
+      # embeds. `--bins` because the library's own tests already ran in the first command.
       - name: cargo test (card-scanner)
         if: matrix.os == 'ubuntu-22.04'
-        run: cargo test --locked --features cli --manifest-path crates/card-scanner/Cargo.toml
+        run: |
+          cargo test --locked --features cli --manifest-path crates/card-scanner/Cargo.toml
+          cargo test --locked --features builder --bins --manifest-path crates/card-scanner/Cargo.toml
 
   wasm:
     name: wasm

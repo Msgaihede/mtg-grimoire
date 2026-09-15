@@ -728,6 +728,19 @@ fn main() -> std::process::ExitCode {
             eprintln!("  …and {} more", transient.len() - 10);
         }
     }
+    // **A run that lost more than a sliver of its fetches writes no bundle and fails.** A transient
+    // failure is left out of the cache and so out of the bundle, and `scanner-bundle.yml` publishes
+    // whatever this writes: an image host that fell over for ten minutes would otherwise ship a
+    // bundle missing every card it could not reach, embedded by every release until next week.
+    if too_many_transient(transient.len(), total) {
+        eprintln!(
+            "\n{} of {total} fetches failed transiently — more than {}% of the fetches attempted — \
+             so no bundle was written. What did fetch is cached; a re-run retries only the rest.",
+            transient.len(),
+            MAX_TRANSIENT_PER_MILLE as f64 / 10.0
+        );
+        return std::process::ExitCode::from(1);
+    }
 
     // ── Emit ──────────────────────────────────────────────────────────────────────
     let cache = cache.into_inner().expect("cache");
@@ -804,9 +817,34 @@ fn main() -> std::process::ExitCode {
     std::process::ExitCode::SUCCESS
 }
 
+/// How many transient fetch failures per thousand attempted a build tolerates: 0.5%.
+///
+/// A weekly run over a busy image host loses a handful to timeouts and retries them next week; a
+/// run past this lost something bigger than a handful, and its bundle would be short by exactly
+/// the cards it could not reach.
+const MAX_TRANSIENT_PER_MILLE: usize = 5;
+
+/// Did more than [`MAX_TRANSIENT_PER_MILLE`] of the `attempted` fetches fail transiently? Integer
+/// arithmetic, so exactly 0.5% is still a build. Nothing attempted is never too many.
+fn too_many_transient(failed: usize, attempted: usize) -> bool {
+    failed * 1000 > attempted * MAX_TRANSIENT_PER_MILLE
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn more_than_half_a_percent_of_transient_failures_fails_the_build() {
+        assert!(!too_many_transient(0, 0), "a run that fetched nothing failed nothing");
+        assert!(!too_many_transient(0, 113_375));
+        assert!(!too_many_transient(5, 1_000), "exactly 0.5% is still a build");
+        assert!(too_many_transient(6, 1_000));
+        assert!(!too_many_transient(566, 113_375));
+        assert!(too_many_transient(567, 113_375));
+        assert!(too_many_transient(1, 100), "one of a new set's hundred is 1%");
+        assert!(too_many_transient(1, 1));
+    }
 
     #[test]
     fn a_bulk_file_yields_the_rows_the_corpus_query_does() {

@@ -28,6 +28,9 @@ vi.mock("@/lib/ipc", async (orig) => {
       scannerSetFilters: vi.fn(async () => {}),
       scannerTray: vi.fn(async () => []),
       setScannerTray: vi.fn(async () => {}),
+      scannerTrayCommit: vi.fn(async () => ({ added: 1, updated: 0, removed: 0 })),
+      // Mocked so a regression back to it answers rather than reaching the real core — and so the
+      // commit tests can say it is never called.
       collectionImportCommit: vi.fn(async () => ({ added: 1, updated: 0, removed: 0 })),
       collectionFolderList: vi.fn(async () => []),
     },
@@ -211,6 +214,7 @@ const COMMANDS = [
   ipc.scannerSetFilters,
   ipc.scannerTray,
   ipc.setScannerTray,
+  ipc.scannerTrayCommit,
   ipc.collectionImportCommit,
   ipc.collectionFolderList,
 ];
@@ -459,7 +463,12 @@ describe("ScannerPage", () => {
     }
   });
 
-  it("commits the tray in one call, into the prefs' folder, and empties it", async () => {
+  /**
+   * **One call carries the collection's rows and the tray that is left, so neither can land
+   * without the other.** The emptied tray is stored by the commit itself: a debounced write behind
+   * it was what an app closed in the next 400 ms never made, and the committed rows came back.
+   */
+  it("commits the tray in one call, into the prefs' folder, storing the empty tray with it", async () => {
     refused();
     const rows = TRAY_ROWS.slice(1); // the three resolved rows: 3 + 1 + 1 copies
     vi.mocked(ipc.scannerTray).mockResolvedValue(rows);
@@ -469,10 +478,13 @@ describe("ScannerPage", () => {
     mount();
 
     await user.click(await within(tray()).findByRole("button", { name: "Add 5 to collection" }));
-    await waitFor(() => expect(ipc.collectionImportCommit).toHaveBeenCalledTimes(1));
-    expect(ipc.collectionImportCommit).toHaveBeenCalledWith(importItems(rows, "LP"), "add", BINDER.id);
+    await waitFor(() => expect(ipc.scannerTrayCommit).toHaveBeenCalledTimes(1));
+    expect(ipc.scannerTrayCommit).toHaveBeenCalledWith(importItems(rows, "LP"), BINDER.id, []);
+    expect(ipc.collectionImportCommit).not.toHaveBeenCalled();
     expect(await within(tray()).findByText("Cards you scan appear here.")).toBeInTheDocument();
-    await waitFor(() => expect(ipc.setScannerTray).toHaveBeenLastCalledWith([]), { timeout: 2000 });
+    // Nothing is written behind it: the store already holds the empty tray.
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(ipc.setScannerTray).not.toHaveBeenCalled();
   });
 
   /**
@@ -492,7 +504,7 @@ describe("ScannerPage", () => {
       .mockImplementationOnce(() => new Promise((resolve) => (land = resolve)))
       .mockImplementation(() => new Promise(() => {}));
     let answer!: () => void;
-    vi.mocked(ipc.collectionImportCommit).mockImplementationOnce(
+    vi.mocked(ipc.scannerTrayCommit).mockImplementationOnce(
       () => new Promise((resolve) => (answer = () => resolve({ added: 3, updated: 0, removed: 0 }))),
     );
     const user = userEvent.setup();
@@ -500,7 +512,9 @@ describe("ScannerPage", () => {
       mount();
       await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalledTimes(2));
       await user.click(await within(tray()).findByRole("button", { name: "Add 5 to collection" }));
-      await waitFor(() => expect(ipc.collectionImportCommit).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(ipc.scannerTrayCommit).toHaveBeenCalledTimes(1));
+      // What it stores is the tray without the rows it files — none left, at the moment it went out.
+      expect(vi.mocked(ipc.scannerTrayCommit).mock.calls[0]?.[2]).toEqual([]);
 
       land(VERDICTS.decided);
       await waitFor(() => expect(within(tray()).getAllByRole("listitem")).toHaveLength(rows.length + 1));
@@ -508,6 +522,14 @@ describe("ScannerPage", () => {
 
       await waitFor(() => expect(within(tray()).getAllByRole("listitem")).toHaveLength(1));
       expect(within(tray()).getByText("Storm of Saruman")).toBeInTheDocument();
+      // …and the card the commit never saw is written behind it.
+      await waitFor(
+        () =>
+          expect(vi.mocked(ipc.setScannerTray).mock.lastCall?.[0]).toEqual([
+            expect.objectContaining({ cardId: "storm-of-saruman-ltr-72" }),
+          ]),
+        { timeout: 2000 },
+      );
     } finally {
       restore();
     }
@@ -533,6 +555,7 @@ describe("ScannerPage", () => {
         label: { name: saga.name, set: saga.setCode, number: saga.collectorNumber, lang: "en", released: "2021-06-18" },
         outcome: "resolved",
         choices: [],
+        replaces_previous: false,
       },
     };
     let land!: (v: ScannerVerdict) => void;
@@ -541,7 +564,7 @@ describe("ScannerPage", () => {
       .mockImplementationOnce(() => new Promise((resolve) => (land = resolve)))
       .mockImplementation(() => new Promise(() => {}));
     let answer!: () => void;
-    vi.mocked(ipc.collectionImportCommit).mockImplementationOnce(
+    vi.mocked(ipc.scannerTrayCommit).mockImplementationOnce(
       () => new Promise((resolve) => (answer = () => resolve({ added: 1, updated: 0, removed: 0 }))),
     );
     const user = userEvent.setup();
@@ -549,8 +572,8 @@ describe("ScannerPage", () => {
       mount();
       await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalledTimes(2));
       await user.click(await within(tray()).findByRole("button", { name: "Add 3 to collection" }));
-      await waitFor(() => expect(ipc.collectionImportCommit).toHaveBeenCalledTimes(1));
-      expect(vi.mocked(ipc.collectionImportCommit).mock.calls[0]?.[0]).toEqual([
+      await waitFor(() => expect(ipc.scannerTrayCommit).toHaveBeenCalledTimes(1));
+      expect(vi.mocked(ipc.scannerTrayCommit).mock.calls[0]?.[0]).toEqual([
         { cardId: saga.cardId, quantity: 3, finish: "nonfoil", condition: "NONE" },
       ]);
 
@@ -583,7 +606,7 @@ describe("ScannerPage", () => {
     refused();
     const rows = TRAY_ROWS.slice(1);
     vi.mocked(ipc.scannerTray).mockResolvedValue(rows);
-    vi.mocked(ipc.collectionImportCommit).mockRejectedValueOnce(
+    vi.mocked(ipc.scannerTrayCommit).mockRejectedValueOnce(
       "no card with the id `x` is in the card database",
     );
     const user = userEvent.setup();
@@ -595,6 +618,10 @@ describe("ScannerPage", () => {
     ).toBeInTheDocument();
     expect(within(tray()).getAllByRole("listitem")).toHaveLength(rows.length);
     expect(ipc.setScannerTray).not.toHaveBeenCalledWith([]);
+    // Pressed again, it sends the same rows and the same empty remainder — nothing was dropped.
+    await user.click(within(tray()).getByRole("button", { name: "Add 5 to collection" }));
+    await waitFor(() => expect(ipc.scannerTrayCommit).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(ipc.scannerTrayCommit).mock.calls[1]?.[0]).toEqual(importItems(rows, "NONE"));
   });
 
   /**
@@ -615,8 +642,8 @@ describe("ScannerPage", () => {
       expect(ipc.setScannerPrefs).toHaveBeenCalledWith({ ...DEFAULT_SCANNER_PREFS, folderId: null }),
     );
     await user.click(await within(tray()).findByRole("button", { name: "Add 5 to collection" }));
-    await waitFor(() => expect(ipc.collectionImportCommit).toHaveBeenCalledTimes(1));
-    expect(vi.mocked(ipc.collectionImportCommit).mock.calls[0]?.[2]).toBeNull();
+    await waitFor(() => expect(ipc.scannerTrayCommit).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(ipc.scannerTrayCommit).mock.calls[0]?.[1]).toBeNull();
   });
 
   it("sends mode: exact on the next frame once Exact is pressed", async () => {

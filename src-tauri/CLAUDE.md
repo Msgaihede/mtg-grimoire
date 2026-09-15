@@ -2293,7 +2293,13 @@ The whole record, including the pipeline the crate implements:
   `scanner_tray` and their setters take `AppState` and answer before the session has loaded. The
   setters go through `sync::with_write`, so they answer `db::BUSY` during a sync and the page
   keeps its rows and retries; `set_scanner_tray` refuses more than 5,000 rows or a row under one
-  copy before it writes. Neither key is synced, and `app_meta` maps to nothing in the mirror.
+  copy before it writes. **The tray's commit is `scanner_tray_commit`, and it writes the
+  collection and the remaining tray in one transaction** — `collection::commit_import_with` in
+  `add` mode, with `store_tray` run inside the import's transaction and `remaining` refused on
+  `store_tray`'s terms before the import starts. It is not the import followed by a tray write:
+  that pair left committed rows in the stored tray whenever the app closed, the tray write answered
+  `BUSY`, or an older tray write landed after the commit, and the next Add filed them twice.
+  Neither key is synced, and `app_meta` maps to nothing in the mirror.
   There is still **no schema rung** (a key in schema v6's table); an app's own command is always
   callable, so there is **no capability entry**; and the page shows the sentence, so there is
   **no `error_log` source**. The scanner's commands are registered in `desktop.rs`'s

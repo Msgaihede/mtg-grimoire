@@ -12,13 +12,16 @@ import type { ScanFilters, ScanMode, ScannerResolution, ScannerVerdict } from "@
  * The card the tray just took, as the status line words it — `null` until one has landed.
  *
  * `bumpedTo` is the row's new quantity when the add folded into the newest row, and `null` for a
- * row of its own: a second copy reads as a count, a new card as its printing.
+ * row of its own: a second copy reads as a count, a new card as its printing. `replaced` is a
+ * second opinion that rewrote the newest row's printing rather than adding a copy — a switch to
+ * Exact on the card Fast named — and reads as an update, never as another add.
  */
 export type LastAdded = {
   name: string;
   setCode: string;
   collectorNumber: string;
   bumpedTo: number | null;
+  replaced: boolean;
 } | null;
 
 /**
@@ -60,9 +63,12 @@ export function statusLine(
     const printing = [lastAdded.setCode.toUpperCase(), lastAdded.collectorNumber]
       .filter((part) => part !== "")
       .join(" ");
+    // "Updated" rather than "Added": the tray did not grow, and a reader told a card was added
+    // after switching to Exact would go looking for the duplicate.
+    const verb = lastAdded.replaced ? "Updated" : "Added";
     // A card with no label has no printing to name, and "Added Unknown card — " with a dash
     // pointing at nothing reads as a sentence that lost its ending.
-    return printing === "" ? `Added ${lastAdded.name}` : `Added ${lastAdded.name} — ${printing}`;
+    return printing === "" ? `${verb} ${lastAdded.name}` : `${verb} ${lastAdded.name} — ${printing}`;
   }
   if (mode === "exact" && verdict.lock?.phase === "locked" && !committed) {
     return "Hold steady — reading the card…";

@@ -123,6 +123,13 @@ jobs:
       # nobody reviewed. A dispatch from anywhere else builds, caches and stops here. Its cache
       # entry is scoped to its own branch and never restored on `main`. The schedule always
       # runs on the default branch.
+      #
+      # **A bundle more than 1% smaller than the one published is refused, and the step fails.**
+      # `build-hashes` already fails a run that lost more than 0.5% of its fetches, but a bundle
+      # can shrink by other roads — a truncated or partial `default_cards`, a cache restored from
+      # a bad run — and every release embeds what this uploads. Entries are fixed-size past the
+      # 32-byte header: a 16-byte id and a 256-bit descriptor, 48 bytes. Scryfall withdraws a few
+      # printings in a normal week and adds a set; 1% of ~113 k is ~1 100 cards.
       - name: Dry run (not on main)
         if: github.ref != 'refs/heads/main'
         env:
@@ -143,8 +150,19 @@ jobs:
           fi
           present=$(gh release view "$TAG" --json assets --jq \
             '[.assets[].name | select(. == "card-hashes.bin" or . == "text-detection.rten" or . == "text-recognition.rten")] | length')
-          if [ "$present" = 3 ] && gh release download "$TAG" -p card-hashes.bin -O old.bin 2>/dev/null \
-            && cmp -s -i 32 old.bin card-hashes.bin; then
+          have_old=false
+          if gh release download "$TAG" -p card-hashes.bin -O old.bin 2>/dev/null; then
+            have_old=true
+            old_n=$(( ($(stat -c%s old.bin) - 32) / 48 ))
+            new_n=$(( ($(stat -c%s card-hashes.bin) - 32) / 48 ))
+            echo "Entries: $new_n built, $old_n published." >> "$GITHUB_STEP_SUMMARY"
+            # new < 99% of old, in integers.
+            if [ $(( new_n * 100 )) -lt $(( old_n * 99 )) ]; then
+              echo "**Refused to publish: the new bundle has $new_n entries against the $old_n published in \`$TAG\` — below 99% of them.** Nothing was uploaded; the published bundle stands. Check the \`Scryfall default_cards\` and \`Build the bundle\` steps." >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+          fi
+          if [ "$present" = 3 ] && [ "$have_old" = true ] && cmp -s -i 32 old.bin card-hashes.bin; then
             echo "Bundle unchanged; nothing published." >> "$GITHUB_STEP_SUMMARY"
           else
             gh release upload "$TAG" card-hashes.bin models/text-detection.rten models/text-recognition.rten --clobber

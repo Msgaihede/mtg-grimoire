@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { ScannerDecision } from "@/lib/ipc";
 import {
   addDecision,
   importItems,
@@ -16,7 +17,80 @@ import { VERDICTS } from "../fixtures";
 const resolved = VERDICTS.exactResolved.decision!;
 const ambiguous = VERDICTS.exactAmbiguous.decision!;
 
+/** What Fast said about the Bolt in frame: its second printing, resolved, no choices. */
+const fastBolt: ScannerDecision = {
+  ...ambiguous,
+  printing: ambiguous.choices[1].id,
+  label: ambiguous.choices[1].label,
+  outcome: "resolved",
+  choices: [],
+  replaces_previous: false,
+};
+
 describe("tray", () => {
+  describe("a decision that replaces the previous one", () => {
+    it("replaces the newest row's printing and choices, keeping its key, quantity and finish", () => {
+      const fast = addDecision([], fastBolt, { finish: "nonfoil" }, 1, "a").rows;
+      const reader = setQuantity(setFinish(fast, "a", "foil"), "a", 3);
+      const exact = { ...ambiguous, replaces_previous: true };
+      const { rows, bumped, replaced } = addDecision(reader, exact, { finish: "nonfoil" }, 5, "b");
+      expect(replaced).toBe(true);
+      expect(bumped).toBe(false);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        key: "a",
+        quantity: 3,
+        finish: "foil",
+        cardId: ambiguous.choices[0].id,
+        setCode: "2x2",
+        collectorNumber: "117",
+        addedAt: 5,
+      });
+      expect(rows[0].choices.map((c) => c.cardId)).toEqual(ambiguous.choices.map((c) => c.id));
+    });
+
+    it("closes a waiting row's question when the second opinion pins one printing", () => {
+      const waiting = addDecision([], ambiguous, { finish: "nonfoil" }, 1, "a").rows;
+      const pinned: ScannerDecision = { ...fastBolt, printing: ambiguous.choices[2].id, label: ambiguous.choices[2].label, replaces_previous: true };
+      const { rows, replaced } = addDecision(waiting, pinned, { finish: "nonfoil" }, 2, "b");
+      expect(replaced).toBe(true);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ key: "a", cardId: ambiguous.choices[2].id, choices: [] });
+      expect(unresolvedCount(rows)).toBe(0);
+    });
+
+    it("adds normally when the newest row is a different card", () => {
+      const lotus = addDecision([], resolved, { finish: "nonfoil" }, 1, "a").rows;
+      const { rows, bumped, replaced } = addDecision(
+        lotus,
+        { ...fastBolt, replaces_previous: true },
+        { finish: "nonfoil" },
+        2,
+        "b",
+      );
+      expect(replaced).toBe(false);
+      expect(bumped).toBe(false);
+      expect(rows.map((r) => r.key)).toEqual(["b", "a"]);
+      expect(rows[1]).toEqual(lotus[0]);
+    });
+
+    it("never replaces on a card with no oracle id, where sameness cannot be told", () => {
+      const nameless: ScannerDecision = { ...fastBolt, oracle_id: null };
+      const first = addDecision([], nameless, { finish: "nonfoil" }, 1, "a").rows;
+      const other: ScannerDecision = { ...nameless, printing: ambiguous.choices[0].id, replaces_previous: true };
+      const { rows, replaced } = addDecision(first, other, { finish: "nonfoil" }, 2, "b");
+      expect(replaced).toBe(false);
+      expect(rows).toHaveLength(2);
+    });
+
+    it("adds a second printing of the same card when the session did not say it replaces", () => {
+      const first = addDecision([], fastBolt, { finish: "nonfoil" }, 1, "a").rows;
+      const { rows, replaced } = addDecision(first, ambiguous, { finish: "nonfoil" }, 2, "b");
+      expect(replaced).toBe(false);
+      expect(rows).toHaveLength(2);
+    });
+  });
+
   it("adds a resolved decision as a new newest row with the default finish", () => {
     const { rows, bumped } = addDecision([], resolved, { finish: "foil" }, 1, "a");
     expect(bumped).toBe(false);

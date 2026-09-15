@@ -63,6 +63,13 @@ function props(over: Partial<TrayPanelProps> = {}): TrayPanelProps {
   };
 }
 
+/** What the panel's first edit makes of `rows` — `onRows` is handed an updater, never an array. */
+function edit(onRows: ReturnType<typeof vi.fn>, rows: ScannerTrayRow[]): ScannerTrayRow[] {
+  const update = onRows.mock.calls[0]?.[0] as (rows: ScannerTrayRow[]) => ScannerTrayRow[];
+  expect(typeof update).toBe("function");
+  return update(rows);
+}
+
 /** Under the providers the page mounts above it: the folder list is a query, and the add's refusal
  *  is a tooltip that binds to nothing without its provider. */
 function wrap(ui: ReactElement) {
@@ -106,7 +113,7 @@ describe("TrayPanel", () => {
     wrap(<TrayPanel {...props({ onRows })} />);
     await user.click(screen.getByRole("button", { name: "Increase Quantity of Storm of Saruman — LTR 72" }));
     expect(onRows).toHaveBeenCalledTimes(1);
-    const next = onRows.mock.calls[0][0] as ScannerTrayRow[];
+    const next = edit(onRows, [newer, older]);
     expect(next.find((r) => r.key === "newer")?.quantity).toBe(2);
     expect(next.find((r) => r.key === "older")?.quantity).toBe(1);
   });
@@ -126,7 +133,7 @@ describe("TrayPanel", () => {
         name: `${choice.name} — ${choice.setCode.toUpperCase()} ${choice.collectorNumber}`,
       }),
     );
-    const next = onRows.mock.calls[0][0] as ScannerTrayRow[];
+    const next = edit(onRows, [waiting]);
     expect(next[0].cardId).toBe(choice.cardId);
     expect(next[0].choices).toEqual([]);
   });
@@ -196,7 +203,30 @@ describe("TrayPanel", () => {
     const onRows = vi.fn();
     wrap(<TrayPanel {...props({ onRows })} />);
     await user.click(screen.getByRole("button", { name: "Remove Honored Hierarch — ORI 17" }));
-    expect((onRows.mock.calls[0][0] as ScannerTrayRow[]).map((r) => r.key)).toEqual(["newer"]);
+    expect(edit(onRows, [newer, older]).map((r) => r.key)).toEqual(["newer"]);
+  });
+
+  /**
+   * **An edit is applied to the tray as it is, not as this render drew it.** The pump writes a card
+   * between two renders; a stepper pressed in that gap used to write the tray back from `rows`, and
+   * the card just scanned went with it.
+   */
+  it("applies an edit to rows newer than the render it was pressed on", async () => {
+    const user = userEvent.setup();
+    const onRows = vi.fn();
+    wrap(<TrayPanel {...props({ onRows })} />);
+    const justScanned: ScannerTrayRow = { ...base, key: "just-scanned", name: "Lightning Bolt", addedAt: 3 };
+
+    await user.click(screen.getByRole("button", { name: "Remove Honored Hierarch — ORI 17" }));
+    expect(edit(onRows, [justScanned, newer, older]).map((r) => r.key)).toEqual(["just-scanned", "newer"]);
+
+    onRows.mockClear();
+    await user.click(screen.getByRole("button", { name: "Increase Quantity of Storm of Saruman — LTR 72" }));
+    expect(edit(onRows, [justScanned, newer, older]).map((r) => [r.key, r.quantity])).toEqual([
+      ["just-scanned", 1],
+      ["newer", 2],
+      ["older", 1],
+    ]);
   });
 
   it("files into the reader's own folders and never a deck's group", async () => {

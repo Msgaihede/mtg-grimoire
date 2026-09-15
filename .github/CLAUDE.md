@@ -86,7 +86,10 @@ record is [card-scanner.md](../docs/reference/card-scanner.md) §10.
   `crates/card-scanner` is deliberately not a workspace member, so `cargo test` in `src-tauri`
   compiles it and runs none of it — `session::tests` (the `live.html` key census, the panic
   guard, the reader cadence) was fenced by `npm run verify` and by nothing in CI until
-  2026-09-08. One step, Linux leg, `--features cli` to match `verify`. **No `fmt --check` and
+  2026-09-08. One step, Linux leg, `--features cli` to match `verify` — **and a second command
+  in it since 2026-09-15, `--features builder --bins`**, because `cli` does not compile
+  `build-hashes` or `eval` and a break in either was otherwise first seen by
+  `scanner-bundle.yml`, the job that publishes what every release embeds. **No `fmt --check` and
   no `clippy -D warnings` for that package**: it is not rustfmt-clean and carries four
   pre-existing clippy warnings, both measured and listed in
   [card-scanner.md](../docs/reference/card-scanner.md) §8, so either gate would go red on day
@@ -159,6 +162,13 @@ and a live probe of Scryfall, not from a run. The whole record:
 - **"Unchanged" is `cmp -s -i 32`, never a whole-file compare** — `built_at` sits in the 32-byte
   header and differs on every run. A release missing any of the three assets is republished
   regardless.
+- **Two fences keep a shrunken bundle off the release** (2026-09-15), because every release embeds
+  what this uploads. `build-hashes` exits 1 and writes no bundle when more than **0.5%** of the
+  fetches it attempted failed transiently (`too_many_transient`, unit-tested); and the publish step
+  counts entries as `(size − 32) / 48` for the built and the published bundle and **fails the step
+  without uploading** when the new count is below **99%** of the old, saying both counts in the
+  summary. The second catches what the first cannot see — a short `default_cards`, a bad cache.
+  A deliberate shrink (a format change moves the tag, so it never meets this) has no override.
 - **The synthetic evaluation is `continue-on-error` and must stay so**: it reports and does not
   gate, and a failure writes its own line to the summary. The condition on that line reads
   `steps.eval.outcome`, because under `continue-on-error` a failed step's `conclusion` is `success`.

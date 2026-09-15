@@ -6662,6 +6662,13 @@ export interface ScannerDecision {
   label: ScannerLabel | null;
   outcome: ScannerOutcome;
   choices: ScannerChoice[];
+  /**
+   * A second opinion on the card the previous decision named, not a second copy of it: the same
+   * oracle card, with the quad lock trusted throughout — a switch to Exact to pin the printing, or
+   * a filter change, with one card on the mat. The tray **replaces** its newest row rather than
+   * adding one. `false` after the card left the frame, so a second copy still adds.
+   */
+  replaces_previous: boolean;
 }
 
 /** One tier of an Exact resolve and what it left — `TierView` in `resolve.rs`. */
@@ -9490,6 +9497,18 @@ export const ipc = {
    * longer than 5,000 rows, in words, and leaves the stored tray as it was.
    */
   setScannerTray: (rows: ScannerTrayRow[]) => invoke<void>("set_scanner_tray", { rows }),
+  /**
+   * `scanner::scanner_tray_commit`. The tray's rows into the collection (`add` mode, into
+   * `folderId` or the root) **and** `remaining` stored as the tray, in one transaction — so no
+   * restart can bring back a row the collection already holds. Refuses as
+   * {@link ipc.collectionImportCommit} and {@link ipc.setScannerTray} do, and a refusal from either
+   * half leaves the collection and the stored tray both as they were.
+   */
+  scannerTrayCommit: (
+    items: CollectionImportItem[],
+    folderId: number | null,
+    remaining: ScannerTrayRow[],
+  ) => invoke<ImportCommitOutcome>("scanner_tray_commit", { items, folderId, remaining }),
   /**
    * Every share the group has published — `share::commands::share_list`, and the only one of the
    * five that could reconcile against the relay first.

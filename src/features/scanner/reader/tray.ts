@@ -94,6 +94,15 @@ export function rowFromDecision(
  *
  * **A bump refreshes `addedAt`**, because it *is* an add — the row is the newest thing that
  * happened in the tray, and a surface keying a flash on that stamp replays it for the second copy.
+ *
+ * **A decision that `replaces_previous` is a second opinion, not a second copy, and it replaces
+ * the newest row instead of adding one** — but only when that row is the same oracle card, both
+ * ids known. "Fast said Forest, switch to Exact to pin the printing" is one card on the mat, and
+ * adding would file it twice. The row keeps its key, quantity and finish — the reader's own
+ * answers, and the flash's identity — and takes everything that says *which printing* from the
+ * decision, its choices included. The session's flag alone is not enough: a row the reader removed
+ * or scanned past is not the card the session remembers, and replacing it would overwrite a
+ * different card. So a newest row of another card is an ordinary add.
  */
 export function addDecision(
   rows: readonly ScannerTrayRow[],
@@ -101,8 +110,22 @@ export function addDecision(
   defaults: RowDefaults,
   now: number,
   key: string,
-): { rows: ScannerTrayRow[]; bumped: boolean } {
+): { rows: ScannerTrayRow[]; bumped: boolean; replaced: boolean } {
   const newest = rows[0];
+  if (
+    newest !== undefined &&
+    d.replaces_previous &&
+    d.oracle_id !== null &&
+    newest.oracleId !== null &&
+    newest.oracleId === d.oracle_id
+  ) {
+    const fresh = rowFromDecision(d, defaults, now, newest.key);
+    return {
+      rows: [{ ...fresh, quantity: newest.quantity, finish: newest.finish }, ...rows.slice(1)],
+      bumped: false,
+      replaced: true,
+    };
+  }
   if (
     newest !== undefined &&
     d.outcome === "resolved" &&
@@ -113,9 +136,10 @@ export function addDecision(
     return {
       rows: [{ ...newest, quantity: newest.quantity + 1, addedAt: now }, ...rows.slice(1)],
       bumped: true,
+      replaced: false,
     };
   }
-  return { rows: [rowFromDecision(d, defaults, now, key), ...rows], bumped: false };
+  return { rows: [rowFromDecision(d, defaults, now, key), ...rows], bumped: false, replaced: false };
 }
 
 /** The one row a write is about, changed by `change`; every other row is the same object. */

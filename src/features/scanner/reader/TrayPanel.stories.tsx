@@ -14,15 +14,16 @@ import { TrayPanel, type TrayPanelProps } from "./TrayPanel";
  * seed the state and still receive every call, so the Actions panel shows what the page is handed.
  */
 function Held(args: TrayPanelProps) {
-  const [rows, setRows] = useState<readonly ScannerTrayRow[]>(args.rows);
+  const [rows, setRows] = useState<ScannerTrayRow[]>(() => [...args.rows]);
   const [folderId, setFolderId] = useState<number | null>(args.folderId);
   return (
     <TrayPanel
       {...args}
       rows={rows}
-      onRows={(next) => {
-        setRows(next);
-        args.onRows(next);
+      // An updater, as the page applies it: to the rows as they are, not as this render drew them.
+      onRows={(update) => {
+        setRows(update);
+        args.onRows(update);
       }}
       folderId={folderId}
       onFolder={(id) => {

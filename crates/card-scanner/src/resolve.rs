@@ -711,6 +711,31 @@ mod tests {
     }
 
     #[test]
+    fn an_exact_read_of_a_card_the_hash_never_suggested_replaces_the_survivors() {
+        // The foil rescue when the hash did find something: a lamp's glare can put a wrong card
+        // inside the gate as easily as it can leave nothing there. An exact read outranks it —
+        // the corrected-read rule narrows, this one replaces.
+        let r = eight_cards();
+        let (up, down) = (img(5), img(99));
+        let v = resolve(
+            &r,
+            &Mask::all(),
+            &burst(&up, &down),
+            &reads(Some("shock"), &[]),
+            TIGHT,
+        );
+        assert_eq!(
+            v.tiers[1].survivors, 1,
+            "the premise: the hash found the Plains: {:?}",
+            v.tiers
+        );
+        assert_eq!(v.tiers[2].detail, "read \"shock\" → Shock (edits 0)");
+        assert_eq!(v.tiers[2].survivors, 1);
+        assert_eq!(v.outcome, Outcome::Resolved, "{:?}", v.tiers);
+        assert_eq!(ids(&v), [format_uuid(&id(2))]);
+    }
+
+    #[test]
     fn a_collector_read_of_a_standing_card_far_behind_the_nearest_is_a_conflict() {
         // Swamp ZNR 272 read as 280: the Forest is among the survivors, twenty bits behind the
         // Swamp, and no title named it. The number must not pin it.

@@ -288,6 +288,15 @@ pub struct DecisionView {
     pub outcome: Outcome,
     /// Empty in Fast; the resolve's choices, best first, in Exact.
     pub choices: Vec<ChoiceView>,
+    /// **This decision is a second opinion on the card the last one named, not a second copy of
+    /// it** — so the page replaces that row rather than adding one.
+    ///
+    /// True when the previous decision named the same oracle card and the quad lock has stayed
+    /// trusted ever since: the reader switched Fast to Exact to pin the printing, or changed a
+    /// filter, with one physical card on the mat throughout. A stretch break — the card taken
+    /// away, or the lock lost — forgets the previous decision, so the same card presented again
+    /// is `false` and adds. The same on every frame of one decision.
+    pub replaces_previous: bool,
 }
 
 /// What one frame came to. The keys are the debug page's — see the module doc.
@@ -480,6 +489,14 @@ pub struct Session {
     /// The stretch has broken since the last resolve, so `attempted` and `last_resolution`
     /// clear as soon as no resolve's freeze is holding. See [`Session::record_decision`].
     rearm_pending: bool,
+    /// The oracle card the last emitted decision named, held only while the quad lock has stayed
+    /// trusted since — what [`DecisionView::replaces_previous`] is asked against. Cleared by a
+    /// stretch break and by [`Session::reset`]; **kept** through a mode switch and a filter
+    /// change, which is the whole point of it.
+    previous_card: Option<String>,
+    /// `(decision_seq, replaces_previous)` for the decision now standing, so every frame of one
+    /// decision reports the answer its first frame was given.
+    standing: (u64, bool),
 }
 
 impl Session {
@@ -502,6 +519,8 @@ impl Session {
             burst: VecDeque::with_capacity(EXACT_BURST + 1),
             last_resolution: None,
             rearm_pending: false,
+            previous_card: None,
+            standing: (0, false),
         }
     }
 
@@ -509,10 +528,19 @@ impl Session {
     ///
     /// Empty filters always succeed and lift the mask. Anything else needs labels to build a
     /// mask from — a bundle alone knows ids, not sets or dates — and has to admit at least one
-    /// printing; a refusal is a sentence and keeps the filters already in force. Success resets
-    /// the tracker, because evidence gathered against a different candidate set is evidence
-    /// about a different question.
+    /// printing; a refusal is a sentence and keeps the filters already in force. A change resets
+    /// the tracker (not the lock — see [`Session::forget_card`]), because evidence gathered
+    /// against a different candidate set is evidence about a different question.
+    ///
+    /// **The filters already in force are not a change** ([`ScanFilters::same_as`]): nothing is
+    /// reset and the mask is not rebuilt. The page sends the stored filters every time the
+    /// Scanner mounts, and a reset there wiped a decided card still on the mat, which then
+    /// decided again and was added to the tray a second time.
     pub fn set_filters(&mut self, f: ScanFilters) -> Result<(), String> {
+        if f.same_as(&self.filters) {
+            self.filters = f;
+            return Ok(());
+        }
         let mask = if f.is_empty() {
             Mask::all()
         } else {
@@ -529,8 +557,17 @@ impl Session {
         };
         self.mask = mask;
         self.filters = f;
-        self.reset();
+        self.forget_card();
         Ok(())
+    }
+
+    /// Change mode. A switch forgets the card ([`Session::forget_card`]); the same mode again is
+    /// not a switch.
+    fn set_mode(&mut self, mode: ScanMode) {
+        if mode != self.mode {
+            self.mode = mode;
+            self.forget_card();
+        }
     }
 
     /// The filters in force.
@@ -550,11 +587,26 @@ impl Session {
     /// Forget the card: the reader pressed reset, or moved on. So a new card can be started
     /// immediately instead of waiting for the previous one's evidence to decay.
     ///
-    /// Clears the burst, the stretch counters and any resolution too. Not `decision_seq`: see
-    /// the field.
+    /// Clears the burst, the stretch counters and any resolution too, and the previous decision
+    /// a later one could replace — a reader who pressed reset asked for the next decision to be
+    /// news. Not `decision_seq`: see the field.
     pub fn reset(&mut self) {
-        self.tracker.reset();
+        self.forget_card();
         self.lock.reset();
+        self.previous_card = None;
+    }
+
+    /// What a settings change forgets: the tracker's evidence, the burst, the stretch counters
+    /// and any resolution — everything [`Session::reset`] does **except the quad lock and the
+    /// previous decision**.
+    ///
+    /// **The lock is geometry, and a mode or a filter says nothing about where the card is.**
+    /// Resetting it too put the lock back to acquiring on a card that never moved, and the
+    /// untrusted frames of re-acquisition are a stretch break — which forgot the previous
+    /// decision, so "Fast said Forest, switch to Exact to pin the printing" could never be told
+    /// apart from a second Forest and added the card twice.
+    fn forget_card(&mut self) {
+        self.tracker.reset();
         self.burst.clear();
         self.steady = 0;
         self.leaderless_locked = 0;
@@ -593,6 +645,9 @@ impl Session {
             self.leaderless_locked = 0;
             self.rearm_pending = true;
             self.burst.clear();
+            // The card may have changed hands: a decision after this is a new card, never a
+            // second opinion on the last one.
+            self.previous_card = None;
         } else if detected {
             self.steady += 1;
             if !settled {
@@ -652,6 +707,7 @@ impl Session {
                     label: r.and_then(|r| r.label_for(&printing)),
                     outcome: Outcome::Resolved,
                     choices: Vec::new(),
+                    replaces_previous: false,
                 })
             }
             ScanMode::Exact => {
@@ -663,9 +719,25 @@ impl Session {
                     label: first.label.clone(),
                     outcome: res.outcome,
                     choices: res.choices.clone(),
+                    replaces_previous: false,
                 })
             }
         }
+    }
+
+    /// Whether the standing decision replaces the one before it — decided on its first frame
+    /// and repeated on every later one. See [`DecisionView::replaces_previous`].
+    ///
+    /// The first frame of a decision is the first frame carrying one whose `decision_seq` is not
+    /// the standing one. It compares against the previous card and then becomes it.
+    fn replaces_previous(&mut self, d: &DecisionView) -> bool {
+        if self.standing.0 != self.decision_seq {
+            let replaces =
+                d.oracle_id.is_some() && self.previous_card.as_deref() == d.oracle_id.as_deref();
+            self.previous_card = d.oracle_id.clone();
+            self.standing = (self.decision_seq, replaces);
+        }
+        self.standing.1
     }
 
     /// One frame. **Never panics**: the options come from sliders and the image crates assert
@@ -703,10 +775,7 @@ impl Session {
     fn frame_inner(&mut self, jpeg: &[u8], opts: &FrameOptions) -> Verdict {
         // A mode switch forgets the card before anything reads the session, so even a frame
         // that fails to decode reports the mode it was judged in.
-        if opts.mode != self.mode {
-            self.mode = opts.mode;
-            self.reset();
-        }
+        self.set_mode(opts.mode);
         let matcher = self.reference.is_some();
         let decode_started = std::time::Instant::now();
         let source = match image::load_from_memory(jpeg) {
@@ -989,9 +1058,6 @@ impl Session {
                     let (resolution, ocr, collector) =
                         run_resolve(r, &self.mask, &views, self.reader.as_ref(), gate);
                     self.attempted = true;
-                    // This stretch's resolve supersedes a re-arm armed by an earlier break;
-                    // left pending, a freeze lifting later in this unbroken stretch would take it.
-                    self.rearm_pending = false;
                     v.ocr = ocr;
                     v.collector = collector;
                     // Committed before this frame's observation, so the frame that resolved is
@@ -1022,7 +1088,10 @@ impl Session {
     fn conclude(&mut self, v: &mut Verdict, tracked: Option<&Tracked>) {
         if let Some(t) = tracked {
             self.record_decision(t.committed);
-            v.decision = self.decision_view(t);
+            v.decision = self.decision_view(t).map(|mut d| {
+                d.replaces_previous = self.replaces_previous(&d);
+                d
+            });
         }
         v.decision_seq = self.decision_seq;
     }
@@ -1975,9 +2044,6 @@ mod tests {
         assert!(v.resolution.is_some(), "the vote commit blocked the resolve");
         assert_eq!(v.decision_seq, 1);
         assert!(v.decision.is_some());
-        // The lost frames armed a re-arm; the resolve supersedes it, or a freeze lifting later
-        // in this unbroken stretch would take it and decide the card again.
-        assert!(!s.rearm_pending, "the resolve left an earlier break's re-arm pending");
         for _ in 0..10 {
             assert_eq!(locked_frame(&mut s, &card).decision_seq, 1);
         }
@@ -2014,6 +2080,197 @@ mod tests {
             v = locked_frame(&mut s, &card);
         }
         assert!(v.resolution.is_some(), "a new stretch did not try again");
+    }
+
+    // ---- Returning to the scanner, and a second opinion on the card in frame ----------------
+
+    #[test]
+    fn the_filters_already_in_force_leave_a_decided_card_alone() {
+        // The page pushes the stored filters every time the Scanner mounts. With the card still
+        // on the mat, a reset there re-decided it and the tray added it a second time.
+        let mut s = resolved_on_card_three();
+        let card = card_image(3);
+        assert!(s.tracker.last_committed());
+        assert_eq!(s.set_filters(ScanFilters::default()), Ok(()));
+        // A cleared date input sends `""`, not nothing — still the filters in force.
+        let blank = ScanFilters { released_to: Some(String::new()), ..Default::default() };
+        assert_eq!(s.set_filters(blank), Ok(()));
+        assert!(s.tracker.last_committed(), "an unchanged filter wiped the decided card");
+        assert!(s.mask.is_unrestricted());
+        for f in 0..10 {
+            let v = locked_frame(&mut s, &card);
+            assert!(v.resolution.is_none(), "an unchanged filter re-resolved on frame {f}");
+            assert_eq!(v.decision_seq, 1, "an unchanged filter decided again on frame {f}");
+            assert!(v.decision.is_some());
+        }
+
+        // A different filter is a change, and still resets.
+        s.set_filters(sets(&["hob"])).expect("hob has a printing");
+        assert!(!s.tracker.last_committed(), "a real filter change kept the old evidence");
+        let mut v = locked_frame(&mut s, &card);
+        for _ in 1..EXACT_STEADY_FRAMES {
+            v = locked_frame(&mut s, &card);
+        }
+        assert!(v.resolution.is_some(), "the changed filter did not resolve again");
+        assert_eq!(v.decision_seq, 2);
+
+        // And the new filters, spelled differently, are the ones in force now.
+        assert_eq!(s.set_filters(sets(&[" HOB "])), Ok(()));
+        assert!(s.tracker.last_committed(), "the same set in capitals counted as a change");
+        assert_eq!(s.mask.len(), Some(2), "an unchanged filter rebuilt the mask");
+        assert!(locked_frame(&mut s, &card).resolution.is_none());
+        assert_eq!(s.decision_seq, 2);
+    }
+
+    /// Two cards as far apart as a descriptor can be — `card_image(3)` and its negative — each
+    /// the only printing of its own oracle card, both in `hob`. Unlike `labelled()`, whose
+    /// gradients sit a couple of bits apart, each decides on the votes alone in Fast.
+    fn two_far_cards() -> (Reference, RgbImage, RgbImage) {
+        use crate::hash::{hash_rgb, HashKind};
+        use crate::index::{BundleBuilder, Section};
+        let card = card_image(3);
+        let negative = RgbImage::from_fn(card.width(), card.height(), |x, y| {
+            let p = card.get_pixel(x, y).0;
+            image::Rgb([255 - p[0], 255 - p[1], 255 - p[2]])
+        });
+        let mut b = BundleBuilder::new(HashKind::DHash, 256);
+        b.push(Section::Card, id(3), &hash_rgb(&card, HashKind::DHash, 256));
+        b.push(Section::Card, id(4), &hash_rgb(&negative, HashKind::DHash, 256));
+        let mut r = Reference::new(b.finish(0));
+        for (n, oracle) in [(3u8, 20u8), (4, 30)] {
+            let label = Label {
+                name: format!("Card {oracle}"),
+                set: "hob".into(),
+                number: n.to_string(),
+                lang: "en".into(),
+                released: "2025-01-01".into(),
+            };
+            r.add_label(id(n), Some(id(oracle)), None, label);
+        }
+        (r, card, negative)
+    }
+
+    /// Locked frames of `card` until `decision_seq` moves, and the frame it moved on.
+    fn until_decided(s: &mut Session, card: &RgbImage) -> Verdict {
+        let before = s.decision_seq;
+        for _ in 0..40 {
+            let v = locked_frame(s, card);
+            if v.decision_seq != before {
+                return v;
+            }
+        }
+        panic!("the premise: forty locked frames never decided the card");
+    }
+
+    #[test]
+    fn switching_to_exact_on_the_card_fast_decided_replaces_that_decision() {
+        // "Fast said Forest, switch to Exact to pin the printing." One physical card, so the
+        // tray must end with one row — the second decision says it is a second opinion.
+        let (r, card, _) = two_far_cards();
+        let mut s = Session::new(Some(r), None, 5);
+        let fast = until_decided(&mut s, &card);
+        let d = fast.decision.expect("a decision on the deciding frame");
+        assert_eq!(d.oracle_id, Some(format_uuid(&id(20))));
+        assert!(!d.replaces_previous, "the first decision had nothing to replace");
+        // Its later frames repeat its answer rather than comparing the card with itself.
+        for f in 0..3 {
+            let d = locked_frame(&mut s, &card).decision.expect("a frozen frame keeps its decision");
+            assert!(!d.replaces_previous, "frame {f} of the first decision replaced itself");
+        }
+
+        s.set_mode(ScanMode::Exact);
+        let exact = until_decided(&mut s, &card);
+        assert!(exact.resolution.is_some(), "the premise: Exact decided by resolving");
+        assert_eq!(exact.decision_seq, 2);
+        let d = exact.decision.expect("decision");
+        assert_eq!(d.oracle_id, Some(format_uuid(&id(20))));
+        assert!(d.replaces_previous, "a second opinion on the same card read as a second copy");
+        for f in 0..5 {
+            let v = locked_frame(&mut s, &card);
+            assert_eq!(v.decision_seq, 2);
+            let d = v.decision.expect("a frozen frame keeps its decision");
+            assert!(d.replaces_previous, "frame {f} of the same decision changed its answer");
+        }
+
+        // A real filter change is the same kind of settings reset.
+        s.set_filters(sets(&["hob"])).expect("hob admits both cards");
+        let refiltered = until_decided(&mut s, &card);
+        assert!(refiltered.decision.expect("decision").replaces_previous);
+
+        // The JSON key is the page's.
+        let v = locked_frame(&mut s, &card);
+        let json = serde_json::to_value(&v).expect("serialise");
+        assert_eq!(json["decision"]["replaces_previous"], true);
+    }
+
+    #[test]
+    fn the_same_card_after_a_stretch_break_is_a_new_copy() {
+        let (r, card, _) = two_far_cards();
+        let mut s = Session::new(Some(r), None, 5);
+        until_decided(&mut s, &card);
+        s.set_mode(ScanMode::Exact);
+        assert!(until_decided(&mut s, &card).decision.expect("decision").replaces_previous);
+
+        // The card is taken away: the lock breaks and the freeze releases.
+        for _ in 0..10 {
+            lost_frame(&mut s);
+        }
+        let again = until_decided(&mut s, &card);
+        let d = again.decision.expect("decision");
+        assert_eq!(d.oracle_id, Some(format_uuid(&id(20))));
+        assert!(!d.replaces_previous, "a second copy after a break replaced the first");
+
+        // One lost frame is enough, even under a freeze that outlasts it: the lock stopped
+        // trusting the quad, so nothing says the card in frame afterwards is the same one.
+        let mut s = Session::new(Some(two_far_cards().0), None, 5);
+        until_decided(&mut s, &card);
+        lost_frame(&mut s);
+        s.set_mode(ScanMode::Exact);
+        assert!(!until_decided(&mut s, &card).decision.expect("decision").replaces_previous);
+    }
+
+    #[test]
+    fn a_different_card_after_a_mode_switch_replaces_nothing() {
+        let (r, card, negative) = two_far_cards();
+        let mut s = Session::new(Some(r), None, 5);
+        until_decided(&mut s, &card);
+        s.set_mode(ScanMode::Exact);
+        let v = until_decided(&mut s, &negative);
+        let d = v.decision.expect("decision");
+        assert_eq!(d.oracle_id, Some(format_uuid(&id(30))), "the premise: the other card");
+        assert!(!d.replaces_previous, "a different card replaced the one before it");
+
+        // And a decision replaces only the one directly before it: back to the first card, in
+        // the same unbroken stretch, is a change of card again.
+        s.set_mode(ScanMode::Fast);
+        let d = until_decided(&mut s, &card).decision.expect("decision");
+        assert_eq!(d.oracle_id, Some(format_uuid(&id(20))));
+        assert!(!d.replaces_previous);
+    }
+
+    #[test]
+    fn a_mode_switch_keeps_the_quad_lock_and_reset_does_not() {
+        // Through `frame`, where the switch happens. A lock reset here put a card that never
+        // moved back to acquiring, and those untrusted frames are a stretch break — which would
+        // forget the decision a switch to Exact exists to replace.
+        let q = crate::detect::Quad {
+            corners: [(100.0, 100.0), (300.0, 100.0), (300.0, 380.0), (100.0, 380.0)],
+        };
+        let mut s = Session::new(None, None, 5);
+        for _ in 0..3 {
+            s.lock.observe(Some(q));
+        }
+        s.previous_card = Some(format_uuid(&id(20)));
+        let exact = FrameOptions { mode: ScanMode::Exact, ..Default::default() };
+        let v = s.frame(&blank_jpeg(), &exact);
+        assert_eq!(v.mode, ScanMode::Exact);
+        assert!(v.lock.as_ref().is_some_and(LockState::is_trusted), "the switch reset the lock");
+        assert_eq!(s.previous_card, Some(format_uuid(&id(20))), "the switch forgot the card");
+
+        s.reset();
+        assert!(s.previous_card.is_none(), "a Reset press kept the card a decision could replace");
+        let v = s.frame(&blank_jpeg(), &exact);
+        assert!(!v.lock.as_ref().is_some_and(LockState::is_trusted), "reset kept the lock");
     }
 
     #[test]

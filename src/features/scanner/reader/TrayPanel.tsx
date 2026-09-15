@@ -28,7 +28,12 @@ import {
 
 export interface TrayPanelProps {
   rows: readonly ScannerTrayRow[];
-  onRows: (rows: ScannerTrayRow[]) => void;
+  /**
+   * An edit, as a function of the rows — **never** the rows this render drew. The page applies it
+   * to the tray as it is at the moment of the press: the pump writes the newest card between two
+   * renders, and an edit built from `rows` would write the tray back without it.
+   */
+  onRows: (update: (rows: ScannerTrayRow[]) => ScannerTrayRow[]) => void;
   folderId: number | null;
   onFolder: (id: number | null) => void;
   onCommit: () => void;
@@ -76,9 +81,11 @@ function rowLabel(row: ScannerTrayRow): string {
  * tray newest first, and a second ordering here would be a second answer to one question — the
  * first time they disagreed, a bumped row would jump.
  *
- * **Every write goes back as a whole array through `onRows`**, built by that reducer. The panel
- * holds no copy of the rows, so the page is the one owner, and the page is what persists the tray:
- * a crash mid-session loses nothing a reader pressed.
+ * **Every write goes back through `onRows` as a reducer call waiting for its rows**, and the page
+ * hands it the latest. The panel holds no copy of the rows, so the page is the one owner, and the
+ * page is what persists the tray: a crash mid-session loses nothing a reader pressed. An edit built
+ * from `rows` instead was one render old — a card the pump had just added and this panel had not
+ * yet drawn was written away by the next press of a stepper.
  *
  * **The list scrolls and the footer does not.** A reader with forty cards scanned still has the
  * folder and the Add button in view, because those are what the tray is *for*.
@@ -142,10 +149,10 @@ export function TrayPanel({
               key={row.key}
               row={row}
               flash={row.key === flashKey}
-              onQuantity={(q) => onRows(setQuantity(rows, row.key, q))}
-              onFinish={(f) => onRows(setFinish(rows, row.key, f))}
-              onPick={(cardId) => onRows(pickChoice(rows, row.key, cardId))}
-              onRemove={() => onRows(removeRow(rows, row.key))}
+              onQuantity={(q) => onRows((latest) => setQuantity(latest, row.key, q))}
+              onFinish={(f) => onRows((latest) => setFinish(latest, row.key, f))}
+              onPick={(cardId) => onRows((latest) => pickChoice(latest, row.key, cardId))}
+              onRemove={() => onRows((latest) => removeRow(latest, row.key))}
               onMorePrintings={() => onMorePrintings(row)}
             />
           ))}

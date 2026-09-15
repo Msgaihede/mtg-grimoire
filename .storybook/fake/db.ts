@@ -20156,6 +20156,28 @@ export function scannerHandlers(db: FakeDb) {
       if (args.rows.some((row) => row.quantity < 1)) throw refuse(TRAY_ROW_NEEDS_A_COPY);
       db.scannerTray = throughJson(args.rows);
     },
+    /**
+     * `scanner::scanner_tray_commit` — `collection_import_commit` in `add` mode and the stored tray
+     * in one write. The crate refuses `remaining` on `store_tray`'s terms **before** the import, so
+     * this does too; after that the import's own snapshot-and-restore is the rollback, and the tray
+     * is written only once the import has returned.
+     */
+    scanner_tray_commit: (args: {
+      items: CollectionImportItem[];
+      folderId: number | null;
+      remaining: ScannerTrayRow[];
+    }): ImportCommitOutcome => {
+      refuseIfBusy(db);
+      if (args.remaining.length > MAX_TRAY_ROWS) throw refuse(TRAY_IS_FULL);
+      if (args.remaining.some((row) => row.quantity < 1)) throw refuse(TRAY_ROW_NEEDS_A_COPY);
+      const outcome = writeHandlers(db).collection_import_commit({
+        items: args.items,
+        mode: "add",
+        folderId: args.folderId,
+      });
+      db.scannerTray = throughJson(args.remaining);
+      return outcome;
+    },
   } satisfies Record<string, CommandHandler>;
 }
 

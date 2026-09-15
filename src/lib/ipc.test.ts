@@ -3059,6 +3059,29 @@ describe("ipc argument names match the Rust command signatures", () => {
     expect(invoke).toHaveBeenCalledWith("set_scanner_tray", { rows: TRAY_ROWS });
     expect(scannerRs).toMatch(/fn set_scanner_tray\([^)]*\brows\s*:\s*Vec<ScannerTrayRow>/s);
   });
+
+  /**
+   * **The tray's commit is its own command, and three argument names ride it** (2026-09-15). The
+   * collection import and the stored tray are one transaction there, so a name Tauri cannot fill
+   * is not a half-written commit — it is an Add button that refuses every press. `folderId` is the
+   * one to watch: the Rust parameter is `folder_id`, and Tauri camel-cases a command's arguments,
+   * so `folder_id` on this side would arrive as nothing and file into the root.
+   */
+  it("commits the tray under its own name with the items, the folder and what is left", async () => {
+    expect(scannerRs.length, "scanner.rs was not read").toBeGreaterThan(1_000);
+    const items = [{ cardId: TRAY_ROWS[0].cardId, quantity: 1, finish: "nonfoil" as const, condition: "NM" as const }];
+    const outcome = { added: 1, updated: 0, removed: 0 };
+    invoke.mockResolvedValue(outcome);
+    expect(await ipc.scannerTrayCommit(items, 7, [TRAY_ROWS[1]])).toEqual(outcome);
+    expect(invoke).toHaveBeenCalledWith("scanner_tray_commit", {
+      items,
+      folderId: 7,
+      remaining: [TRAY_ROWS[1]],
+    });
+    expect(scannerRs).toMatch(
+      /fn scanner_tray_commit\([^)]*\bitems\s*:\s*Vec<crate::collection::CollectionImportItem>\s*,\s*folder_id\s*:\s*Option<i64>\s*,\s*remaining\s*:\s*Vec<ScannerTrayRow>/s,
+    );
+  });
 });
 
 it("unwraps the sync:progress payload and returns the unlisten handle", async () => {

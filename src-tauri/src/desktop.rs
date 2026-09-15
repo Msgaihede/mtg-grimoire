@@ -650,6 +650,7 @@ pub fn run() {
             scanner::set_scanner_prefs,
             scanner::scanner_tray,
             scanner::set_scanner_tray,
+            scanner::scanner_tray_commit,
             // The relay, the membership and the review queue (spec §6.1, §7.2–§7.4, §7.7 and
             // §10). The panel's two reads, the Connect press, the claim code the reader pastes
             // back, one round trip now, the rows carrying a sentence, clearing one of them, the

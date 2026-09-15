@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type JSX } from "react";
+import { useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCollectionFolderList } from "@/features/collection/useCollectionFolders";
 import type { CollectionFolder, CollectionImportItem } from "@/lib/ipc";
@@ -129,20 +129,14 @@ function LiveScanner() {
   const narrow = useNarrowWindow();
 
   /**
-   * The tray as the last write left it, for the three writers that run outside a render: a
-   * decision from the pump, a printing handed back by the all-printings dialog, and a commit's
-   * answer. Each of those can land after more cards were scanned than the render that built its
-   * closure knew about, so each reads this rather than `tray.rows`. Written by {@link writeRows}
-   * at the moment of the write, and caught up after every render for a load or a remount.
+   * Every tray write goes through here, and every writer builds on `tray.latest()` rather than
+   * `tray.rows`: a decision from the pump, a printing handed back by the all-printings dialog, an
+   * edit in the tray panel and a commit's answer can each land after more cards were scanned than
+   * the render that built its closure knew about. `latest()` is the cache, written synchronously
+   * by the write before it, so two writers in one tick cannot each start from the rows before the
+   * other.
    */
-  const rowsRef = useRef(tray.rows);
-  useLayoutEffect(() => {
-    rowsRef.current = tray.rows;
-  });
-  const writeRows = (rows: ScannerTrayRow[]) => {
-    rowsRef.current = rows;
-    tray.setRows(rows);
-  };
+  const writeRows = (rows: ScannerTrayRow[]) => tray.setRows(rows);
 
   const [lastAdded, setLastAdded] = useState<LastAdded>(null);
   const [flashKey, setFlashKey] = useState<string | null>(null);
@@ -157,14 +151,16 @@ function LiveScanner() {
   /**
    * One card, into the tray — once per `decision_seq`, which the loop is what guarantees.
    *
-   * The reducer decides whether it is a new row or a second copy of the newest; this files the
-   * answer, marks the row for the flash, and remembers what to say about it. The finish is the
+   * The reducer decides whether it is a new row, a second copy of the newest, or a second opinion
+   * that rewrites the newest row's printing (`replaces_previous` — a switch to Exact on the card
+   * Fast named); this files the answer, marks the row for the flash, and remembers what to say
+   * about it. The finish is the
    * Defaults popover's at the moment the card landed, which is why a change there moves only the
    * next card.
    */
   const onDecision = (decision: ScannerDecision) => {
-    const { rows, bumped } = addDecision(
-      rowsRef.current,
+    const { rows, bumped, replaced } = addDecision(
+      tray.latest(),
       decision,
       { finish: prefs.finish },
       Date.now(),
@@ -177,6 +173,7 @@ function LiveScanner() {
       setCode: head.setCode,
       collectorNumber: head.collectorNumber,
       bumpedTo: bumped ? head.quantity : null,
+      replaced,
     });
     setFlashKey(head.key);
     if (flashTimer.current !== null) clearTimeout(flashTimer.current);
@@ -258,16 +255,23 @@ function LiveScanner() {
   const [commitError, setCommitError] = useState<string | null>(null);
 
   /**
-   * The whole tray into the collection, in one `collection_import_commit` — one transaction, so all
-   * or nothing: a refusal keeps every row and puts the sentence above them, and the backend's own
-   * words are the sentence, because they already name what is wrong.
+   * The whole tray into the collection, in one `scanner_tray_commit` — the collection import and
+   * the tray that is left after it, in one transaction, so all or nothing: a refusal keeps every
+   * row and puts the sentence above them, and the backend's own words are the sentence, because
+   * they already name what is wrong.
+   *
+   * **The stored tray moves with the collection, not behind it.** This used to commit and then let
+   * the tray's debounced write catch up; an app closed in that window — or that write refused, or
+   * an older one landing after the commit — restored the committed rows at the next launch, and the
+   * next Add filed them twice. `tray.commit` queues behind any tray write already on the wire and
+   * computes what is left ({@link withoutCommitted}) against the rows as they are when it goes out.
    *
    * The folder is asked about again here rather than trusted from the render: the list may not
    * have answered yet, and this press is the one moment a wrong answer would write.
    */
   const onCommit = () => {
     if (committing) return;
-    const snapshot = rowsRef.current;
+    const snapshot = tray.latest();
     let items: CollectionImportItem[];
     try {
       items = importItems(snapshot, prefs.condition);
@@ -284,8 +288,7 @@ function LiveScanner() {
         // A list that would not load leaves the id to the backend, which refuses a folder that is
         // gone in words; a list that did load has already said whether the id is the reader's.
         const target = folders === undefined || isUserFolder(folders, chosen) ? chosen : null;
-        await ipc.collectionImportCommit(items, "add", target);
-        writeRows(withoutCommitted(rowsRef.current, snapshot));
+        await tray.commit(items, target, (latest) => withoutCommitted(latest, snapshot));
         // The import's own set, for the import's reason: these are copies the collection did not
         // hold a moment ago, and every surface that reads "what is owned" moves with them.
         for (const queryKey of OWNED_WRITE_KEYS) void queryClient.invalidateQueries({ queryKey });
@@ -300,8 +303,9 @@ function LiveScanner() {
   /**
    * *More printings…*: the app's all-printings wall, asked to hand the pressed printing back.
    *
-   * The hand-back reads `rowsRef` rather than the rows this press saw, because the camera keeps
-   * running while the dialog is open and a card scanned meanwhile must not be written away by it.
+   * The hand-back reads `tray.latest()` rather than the rows this press saw, because the camera
+   * keeps running while the dialog is open and a card scanned meanwhile must not be written away by
+   * it.
    */
   const onMorePrintings = (row: ScannerTrayRow) => {
     if (row.oracleId === null) return;
@@ -311,7 +315,7 @@ function LiveScanner() {
       name: row.name,
       deck: null,
       wish: null,
-      pick: (p) => writeRows(setPrinting(rowsRef.current, row.key, p)),
+      pick: (p) => writeRows(setPrinting(tray.latest(), row.key, p)),
     });
   };
 
@@ -453,7 +457,7 @@ function LiveScanner() {
           >
             <TrayPanel
               rows={tray.rows}
-              onRows={writeRows}
+              onRows={(update) => writeRows(update(tray.latest()))}
               folderId={folderId}
               onFolder={(id) => update({ folderId: id })}
               onCommit={onCommit}

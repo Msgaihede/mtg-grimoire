@@ -23,7 +23,7 @@ const resolution = (outcome: ScannerResolution["outcome"]): ScannerResolution =>
 const settled: ScannerVerdict = { ...VERDICTS.exactResolved, quad: VERDICTS.decided.quad, lock: VERDICTS.decided.lock, tracked: VERDICTS.decided.tracked };
 const weighing: ScannerVerdict = { ...VERDICTS.exactResolved, quad: VERDICTS.voting.quad, lock: VERDICTS.voting.lock, tracked: VERDICTS.voting.tracked };
 
-const forest: LastAdded = { name: "Forest", setCode: "hob", collectorNumber: "193", bumpedTo: null };
+const forest: LastAdded = { name: "Forest", setCode: "hob", collectorNumber: "193", bumpedTo: null, replaced: false };
 
 describe("statusLine", () => {
   it("says the scanner cannot name anything while no hashes are loaded, whatever is in frame", () => {
@@ -69,8 +69,18 @@ describe("statusLine", () => {
     );
   });
 
+  it("says a second opinion on the same card updated its row rather than adding one", () => {
+    const pinned: LastAdded = { ...forest, setCode: "ltr", collectorNumber: "270", replaced: true };
+    expect(statusLine(settled, "exact", pinned, true, resolution("resolved"))).toBe(
+      "Updated Forest — LTR 270",
+    );
+    expect(statusLine(settled, "exact", { ...pinned, setCode: "", collectorNumber: "" }, true, null)).toBe(
+      "Updated Forest",
+    );
+  });
+
   it("drops the dash for a card with no printing to name", () => {
-    const unknown: LastAdded = { name: "Unknown card", setCode: "", collectorNumber: "", bumpedTo: null };
+    const unknown: LastAdded = { name: "Unknown card", setCode: "", collectorNumber: "", bumpedTo: null, replaced: false };
     expect(statusLine(settled, "fast", unknown, true, null)).toBe("Added Unknown card");
   });
 

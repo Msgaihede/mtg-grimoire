@@ -444,16 +444,48 @@ pub fn stored_tray(conn: &Connection) -> Vec<ScannerTrayRow> {
 /// fewer than one copy ([`TRAY_ROW_NEEDS_A_COPY`]) — a row of nothing is a row the commit would
 /// refuse, so it is refused where the page can still fix it.
 pub fn store_tray(conn: &Connection, rows: &[ScannerTrayRow]) -> Result<(), String> {
+    valid_tray(rows)?;
+    let json =
+        serde_json::to_string(rows).map_err(|e| format!("could not save the scanner tray: {e}"))?;
+    crate::app_meta::set_app_meta(conn, K_SCANNER_TRAY, &json)
+        .map_err(|e| format!("could not save the scanner tray: {e}"))
+}
+
+/// [`store_tray`]'s two refusals, askable before anything is written.
+fn valid_tray(rows: &[ScannerTrayRow]) -> Result<(), String> {
     if rows.len() > MAX_TRAY_ROWS {
         return Err(TRAY_IS_FULL.to_owned());
     }
     if rows.iter().any(|row| row.quantity < 1) {
         return Err(TRAY_ROW_NEEDS_A_COPY.to_owned());
     }
-    let json =
-        serde_json::to_string(rows).map_err(|e| format!("could not save the scanner tray: {e}"))?;
-    crate::app_meta::set_app_meta(conn, K_SCANNER_TRAY, &json)
-        .map_err(|e| format!("could not save the scanner tray: {e}"))
+    Ok(())
+}
+
+/// The tray into the collection **and** what is left of it into `app_meta`, in one transaction.
+///
+/// **Why one write and not the import followed by [`store_tray`].** The page used to commit through
+/// `collection_import_commit` and let its debounced tray write catch up afterwards; an app closed
+/// in that window, a `BUSY` on the second write, or an older tray write landing after the commit
+/// each left the committed rows in the stored tray, so the next launch restored them and the next
+/// Add filed the same cards twice. Here the import's rows and the stored tray commit together, so
+/// there is no moment at which the collection holds a card the tray still offers.
+///
+/// The import is [`crate::collection::commit_import_with`] in `add` mode — the collection's own
+/// logic, its own refusals and its own activity row, not a copy. `remaining` is refused on
+/// [`store_tray`]'s terms **before** the import starts, so a tray that could not be stored costs
+/// no rolled-back import; any refusal from either half leaves the collection and the stored tray
+/// exactly as they were.
+pub fn tray_commit(
+    conn: &Connection,
+    items: &[crate::collection::CollectionImportItem],
+    folder_id: Option<i64>,
+    remaining: &[ScannerTrayRow],
+) -> Result<crate::collection::ImportCommitOutcome, String> {
+    valid_tray(remaining)?;
+    crate::collection::commit_import_with(conn, items, "add", folder_id, |tx| {
+        store_tray(tx, remaining)
+    })
 }
 
 /// The frame and its options, from either body shape. See the module doc.
@@ -684,6 +716,28 @@ pub async fn set_scanner_tray(
     })
     .await
     .map_err(|e| format!("the scanner tray could not be saved: {e}"))?
+}
+
+/// Add the tray's rows to the collection and store what is left of the tray, as one write — see
+/// [`tray_commit`]. Through `with_write_owned`, `collection_import_commit`'s own door, so the facet
+/// index's `owned` dimension moves with the copies and a busy write connection answers
+/// [`crate::db::BUSY`] with nothing written.
+#[cfg(not(target_family = "wasm"))]
+#[tauri::command]
+pub async fn scanner_tray_commit(
+    state: tauri::State<'_, Arc<AppState>>,
+    items: Vec<crate::collection::CollectionImportItem>,
+    folder_id: Option<i64>,
+    remaining: Vec<ScannerTrayRow>,
+) -> Result<crate::collection::ImportCommitOutcome, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::collection_source::with_write_owned(&state, |conn| {
+            tray_commit(conn, &items, folder_id, &remaining)
+        })
+    })
+    .await
+    .map_err(|e| format!("the collection could not be written: {e}"))?
 }
 
 #[cfg(test)]
@@ -952,6 +1006,127 @@ mod tests {
             "The tray holds at most 5,000 rows — add these to the collection first."
         );
         assert_eq!(stored_tray(&conn).len(), MAX_TRAY_ROWS);
+    }
+
+    /// Both halves of a tray commit: one printing in `cards`, and a user side holding the
+    /// collection and `app_meta`. Torn down with the connection.
+    fn pair_with_a_card() -> Connection {
+        let conn = crate::schema::memory_pair();
+        conn.execute(
+            "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
+                rarity,finishes,prices,raw)
+             VALUES ('card-1','o1','Test Card','tst','1','en','normal','common',
+                '[\"nonfoil\"]','{}','{}')",
+            [],
+        )
+        .unwrap();
+        conn
+    }
+
+    fn import_line(card_id: &str, quantity: i64) -> crate::collection::CollectionImportItem {
+        crate::collection::CollectionImportItem {
+            card_id: card_id.into(),
+            quantity,
+            finish: "nonfoil".into(),
+            condition: None,
+            condition_original: None,
+            purchase_price: None,
+            purchase_currency: None,
+            acquired_at: None,
+            acquisition_source: None,
+            notes: None,
+            serial_number: None,
+            altered: false,
+            signed: false,
+            proxy: false,
+            misprint: false,
+            grading: None,
+        }
+    }
+
+    fn copies(conn: &Connection) -> i64 {
+        conn.query_row(
+            "SELECT coalesce(sum(quantity), 0) FROM collection_entries",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_tray_commit_adds_the_rows_and_stores_what_is_left_in_the_same_write() {
+        let conn = pair_with_a_card();
+        store_tray(&conn, &[tray_row("taken", 2), tray_row("left", 1)]).unwrap();
+        let out = tray_commit(
+            &conn,
+            &[import_line("card-1", 2)],
+            None,
+            &[tray_row("left", 1)],
+        )
+        .unwrap();
+        assert_eq!((out.added, out.updated, out.removed), (1, 0, 0));
+        assert_eq!(copies(&conn), 2);
+        assert_eq!(
+            stored_tray(&conn),
+            vec![tray_row("left", 1)],
+            "the committed row is still in the stored tray, so a restart files it twice"
+        );
+    }
+
+    #[test]
+    fn a_refused_tray_commit_leaves_the_collection_and_the_stored_tray_as_they_were() {
+        let conn = pair_with_a_card();
+        let before = vec![tray_row("a", 1), tray_row("b", 1)];
+        store_tray(&conn, &before).unwrap();
+
+        // An unknown card, after a line the import has already written inside its transaction.
+        let err = tray_commit(
+            &conn,
+            &[import_line("card-1", 1), import_line("no-such-card", 1)],
+            None,
+            &[],
+        )
+        .unwrap_err();
+        assert!(err.contains("no-such-card"), "{err}");
+        assert_eq!(copies(&conn), 0, "a refused import kept its first line");
+        assert_eq!(
+            stored_tray(&conn),
+            before,
+            "a refused import emptied the tray"
+        );
+
+        // A remaining tray `store_tray` would refuse is refused before the import writes.
+        let err = tray_commit(
+            &conn,
+            &[import_line("card-1", 1)],
+            None,
+            &[tray_row("z", 0)],
+        )
+        .unwrap_err();
+        assert_eq!(err, TRAY_ROW_NEEDS_A_COPY);
+        assert_eq!(copies(&conn), 0);
+        assert_eq!(stored_tray(&conn), before);
+
+        // And the tray write is inside the import's transaction, not after its commit: a refusal
+        // from that last write takes the imported rows back out with it.
+        let err = crate::collection::commit_import_with(
+            &conn,
+            &[import_line("card-1", 1)],
+            "add",
+            None,
+            |tx| {
+                store_tray(tx, &[])?;
+                Err("the disk filled".to_owned())
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err, "the disk filled");
+        assert_eq!(
+            copies(&conn),
+            0,
+            "the import committed before the tray was written"
+        );
+        assert_eq!(stored_tray(&conn), before);
     }
 
     #[test]

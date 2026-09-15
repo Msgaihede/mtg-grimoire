@@ -59,6 +59,26 @@ impl ScanFilters {
         true
     }
 
+    /// The same filters, however they were spelled — so re-sending the ones in force is not a
+    /// change. Compared after [`ScanFilters::is_empty`]'s normalisation (a blank set code or a
+    /// blank bound is absent), with set codes as [`ScanFilters::permits`] reads them: trimmed,
+    /// case-insensitive, and a set rather than a list.
+    ///
+    /// **Why it exists** — the page pushes the stored filters every time the Scanner mounts, and
+    /// a `set_filters` that reset on an unchanged value wiped the tracker under the card still on
+    /// the mat, which then decided again and landed in the tray a second time.
+    pub fn same_as(&self, other: &ScanFilters) -> bool {
+        let codes = |f: &ScanFilters| {
+            let mut v: Vec<String> = f.set_codes().map(str::to_ascii_lowercase).collect();
+            v.sort();
+            v.dedup();
+            v
+        };
+        codes(self) == codes(other)
+            && bound(&self.released_from) == bound(&other.released_from)
+            && bound(&self.released_to) == bound(&other.released_to)
+    }
+
     fn set_codes(&self) -> impl Iterator<Item = &str> {
         self.sets.iter().map(|s| s.trim()).filter(|s| !s.is_empty())
     }
@@ -104,6 +124,32 @@ mod tests {
         };
         assert!(f.is_empty());
         assert!(f.permits(&label("ltr", "2023-06-23")));
+    }
+
+    #[test]
+    fn the_same_filters_spelled_differently_are_the_same() {
+        let hob = ScanFilters {
+            sets: vec!["hob".into(), "ltr".into()],
+            released_from: Some("2023-01-01".into()),
+            released_to: None,
+        };
+        let respelled = ScanFilters {
+            sets: vec![" LTR".into(), "".into(), "Hob ".into(), "hob".into()],
+            released_from: Some(" 2023-01-01 ".into()),
+            released_to: Some(String::new()),
+        };
+        assert!(hob.same_as(&respelled));
+        assert!(ScanFilters::default().same_as(&ScanFilters {
+            sets: vec![" ".into()],
+            released_from: Some(String::new()),
+            released_to: None,
+        }));
+
+        let other_set = ScanFilters { sets: vec!["hob".into()], ..hob.clone() };
+        assert!(!hob.same_as(&other_set));
+        let other_date = ScanFilters { released_to: Some("2024-01-01".into()), ..hob.clone() };
+        assert!(!hob.same_as(&other_date));
+        assert!(!hob.same_as(&ScanFilters::default()));
     }
 
     #[test]
