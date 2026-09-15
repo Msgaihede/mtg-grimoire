@@ -11,10 +11,12 @@
 pub mod cardness;
 pub mod debug;
 pub mod detect;
+pub mod filters;
 pub mod index;
 pub mod lock;
 pub mod ocr;
 pub mod reference;
+pub mod resolve;
 pub mod session;
 pub mod track;
 pub mod trim;

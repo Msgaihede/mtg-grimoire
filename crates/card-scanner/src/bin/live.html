@@ -195,6 +195,17 @@
   .pairs .to { text-align:right; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .pairs li.hit .to { color:var(--hit); }
   .pairs li.hit .tok { color:var(--ink); }
+  /* The decision block. The tier list is six rows tall always — a resolve reports every tier
+     — so it is pinned to that and never shifts the panel when a resolve lands. */
+  .decided { margin:10px 0 0; padding-top:9px; border-top:1px solid var(--line); }
+  .decided .name { font-size:13px; font-weight:600; white-space:nowrap; overflow:hidden;
+                   text-overflow:ellipsis; min-height:20px; margin:4px 0 0; }
+  .tiers { list-style:none; margin:6px 0 0; padding:0; display:grid; grid-auto-rows:18px;
+           gap:1px; height:113px; overflow:hidden; font-family:var(--mono); font-size:11px; }
+  .tiers li { display:grid; grid-template-columns:10ch 4ch 1fr; gap:8px; color:var(--ink-3); }
+  .tiers li span:nth-child(2) { text-align:right; font-variant-numeric:tabular-nums; color:var(--ink-2); }
+  .tiers li span:last-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  label.row input[type=text], label.row input[type=date] { width:100%; box-sizing:border-box; }
   .stages { display:grid; grid-template-columns:repeat(3,1fr); gap:7px; }
   .stages figure { margin:0; }
   /* A fixed box with `contain`, so a portrait mask and a landscape one occupy the same
@@ -252,6 +263,19 @@
       </dl>
       <ol class="cands" id="mt-list"></ol>
       <p class="live-guess" id="mt-guess">&mdash;</p>
+      <!-- What the session decided, and the last Exact resolve. `decision_seq` is what the app's
+           tray keys on: a row is added when it moves and never otherwise, so watching it move
+           once per card is the check that one card is one add. -->
+      <div class="decided">
+        <dl class="metrics">
+          <dt>mode</dt><dd id="mt-mode">&mdash;</dd>
+          <dt>decision #</dt><dd id="mt-seq">&mdash;</dd>
+          <dt>decision</dt><dd id="mt-outcome">&mdash;</dd>
+        </dl>
+        <p class="name" id="mt-decided">&mdash;</p>
+        <p class="muted" id="mt-res">no resolve yet</p>
+        <ol class="tiers" id="mt-tiers"></ol>
+      </div>
       <div class="seg" style="margin:10px 0 0">
         <button id="mt-reset" type="button">reset evidence</button>
       </div>
@@ -320,6 +344,22 @@
 
     <div class="card">
       <h2 tabindex="0" role="button" aria-expanded="true">Controls</h2>
+      <!-- Fast votes on the hash and reads the title only after a leaderless stretch; Exact
+           waits for a steady lock and resolves a three-frame burst through every tier. Rides
+           the frame query, so the two can be A/B'd on one held card. -->
+      <div class="seg" id="mode">
+        <button data-v="fast" aria-pressed="true">fast</button>
+        <button data-v="exact" aria-pressed="false">exact</button>
+      </div>
+      <!-- Sets and a release-date range, held by the session until the next apply. Filters
+           need corpus labels; without them the apply answers with the session's sentence. -->
+      <label class="row">sets<input type="text" id="f-sets" placeholder="hob, ltr"><span></span></label>
+      <label class="row">from<input type="date" id="f-from"><span></span></label>
+      <label class="row">to<input type="date" id="f-to"><span></span></label>
+      <div class="seg">
+        <button id="f-apply" type="button">apply filters</button>
+      </div>
+      <p id="f-status" class="live-guess" style="min-height:1.2em;margin:0 0 11px">no filters</p>
       <!-- Two verdicts over one accumulator. Votes add up without decay toward the bar, and
            a decision freezes the tally until reset, the card leaving, or the bar being
            raised above it. Confidence is the two-way contest with the best rival, re-judged
@@ -385,6 +425,7 @@ const opts = () => ({
   rule: document.querySelector('#rule [aria-pressed=true]').dataset.v,
   decide: +$('decide').value,
   margin: (+$('margin').value / 10).toFixed(1),
+  mode: document.querySelector('#mode [aria-pressed=true]').dataset.v,
 });
 
 function segment(container, onChange) {
@@ -397,6 +438,29 @@ function segment(container, onChange) {
 }
 segment($('method'));
 segment($('rule'));
+segment($('mode'));
+
+// The filters are the session's, not the frame's: posted once, held until the next apply.
+// An empty field is no bound, so clearing all three and applying lifts the filters.
+$('f-apply').addEventListener('click', async () => {
+  const el = $('f-status');
+  const q = new URLSearchParams({
+    sets: $('f-sets').value.trim(),
+    from: $('f-from').value,
+    to: $('f-to').value,
+  });
+  el.textContent = 'applying…';
+  try {
+    const res = await fetch('/filters?' + q, { method: 'POST' });
+    const reply = await res.json();
+    const any = $('f-sets').value.trim() || $('f-from').value || $('f-to').value;
+    el.textContent = reply.ok ? (any ? 'filters applied' : 'no filters') : (reply.error ?? 'refused');
+    el.classList.toggle('warn', !reply.ok);
+  } catch (e) {
+    el.textContent = String(e);
+    el.classList.add('warn');
+  }
+});
 segment($('stages-toggle'), (v) => { $('stages-card').hidden = v !== '1'; });
 $('mt-reset').addEventListener('click', () => { fetch('/reset', { method: 'POST' }); });
 
@@ -489,7 +553,7 @@ async function pump() {
     const t0 = performance.now();
     try {
       const q = `edge=${o.edge}&method=${o.method}&lo=${o.lo}&hi=${o.hi}&aspect=${o.aspect}` +
-                `&cardness=${o.cardness}&stages=${o.stages}`;
+                `&cardness=${o.cardness}&stages=${o.stages}&mode=${o.mode}`;
       const res = await fetch('/frame?' + q, { method: 'POST', body: blob });
       const j = await res.json();
       j.round_trip_ms = performance.now() - t0;
@@ -539,6 +603,7 @@ function render(j) {
   $('rect-empty').hidden = !!rect;
 
   renderMatch(j, j.ok, j.matcher);
+  renderDecision(j);
 
   if (j.stages) {
     for (const [k, id] of [['binary', 's-binary'], ['contours', 's-contours'], ['quad', 's-quad']])
@@ -763,6 +828,43 @@ function renderMatch(j, detected, hasBundle) {
   $('mt-guess').textContent = best
     ? `this frame: ${best.label ? best.label.name : best.id.slice(0, 8)} · d=${best.distance}`
     : (detected ? 'this frame: no match' : 'this frame: no card');
+}
+
+// **Held, like the OCR panel.** A resolve runs on one frame per card, so a list cleared on
+// every frame without one would be empty almost always.
+let lastResolution = null;
+
+function renderDecision(j) {
+  if (j.resolution) lastResolution = j.resolution;
+  $('mt-mode').textContent = j.mode ?? '—';
+  $('mt-seq').textContent = j.decision_seq ?? '—';
+  const d = j.decision;
+  $('mt-outcome').textContent = d
+    ? d.outcome.replace('_', ' ') + (d.choices.length > 1 ? ` · ${d.choices.length}` : '')
+    : '—';
+  $('mt-decided').textContent = !d ? '—'
+    : d.label ? `${d.label.name} — ${d.label.set.toUpperCase()} ${d.label.number}`
+    : d.printing.slice(0, 13);
+
+  const res = lastResolution;
+  $('mt-res').textContent = res
+    ? `${res.outcome.replace('_', ' ')} in ${Math.round(res.elapsed_ms)} ms` +
+      (j.resolution ? '' : ' · held from an earlier frame')
+    : 'no resolve yet';
+  const list = $('mt-tiers');
+  list.textContent = '';
+  for (const t of res?.tiers ?? []) {
+    const li = document.createElement('li');
+    const name = document.createElement('span');
+    name.textContent = t.tier;
+    const count = document.createElement('span');
+    count.textContent = String(t.survivors);
+    const detail = document.createElement('span');
+    detail.textContent = t.detail;
+    detail.title = t.detail;
+    li.append(name, count, detail);
+    list.append(li);
+  }
 }
 
 function esc(s) { return s.replace(/[<&]/g, (c) => (c === '<' ? '&lt;' : '&amp;')); }
