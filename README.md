@@ -77,3 +77,11 @@ That covers this app's own code and nothing else. Card data and card images belo
 owners, are fetched from Scryfall at runtime, and are never redistributed from this repository —
 the app credits them the same way it does on screen: **Card images © Wizards of the Coast ·
 Data © Scryfall**.
+
+### Third-party data and models
+
+Release builds embed the card scanner's two text models from
+[ocrs](https://github.com/robertknight/ocrs) —
+[ocrs-models](https://github.com/robertknight/ocrs-models), trained on the HierText dataset and
+licensed **CC-BY-SA 4.0**. The `ocrs` and `rten` crates that run them are
+ordinary dependencies under their own licences.

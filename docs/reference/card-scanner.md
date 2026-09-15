@@ -1,12 +1,15 @@
 # The card scanner: the crate, the pipeline, and what it can prove
 
 Identify a physical Magic card from a camera frame or a photograph, locally. This is the
-record of what exists on the `card-scanner-first-pass` branch — the standalone crate, its
-three tools, the app's Scanner view, and every measurement behind the numbers baked into
-them. The designs it was built against are
-[the 2026-09-01 spec](../superpowers/specs/2026-09-01-card-scanner-design.md) and, for §9,
-[the 2026-09-08 in-app spec](../superpowers/specs/2026-09-08-scanner-in-app-design.md); this
-document is what the code actually does and does not repeat either spec's reasoning where the
+record of the scanner as it stands in this repository — the standalone crate and its tools, the
+app's Scanner view with its two modes and its review tray, the bundle a release build carries
+inside it, and every measurement behind the numbers baked into them. §1–§8 were first written on
+the `card-scanner-first-pass` branch, whose worktree has since been lost with the photographs it
+held (§8). The designs it was built against are
+[the 2026-09-01 spec](../superpowers/specs/2026-09-01-card-scanner-design.md), for §9
+[the 2026-09-08 in-app spec](../superpowers/specs/2026-09-08-scanner-in-app-design.md), and for
+§10 [the 2026-09-15 modes-and-shipping spec](../superpowers/specs/2026-09-15-scanner-modes-and-shipping-design.md);
+this document is what the code actually does and does not repeat any spec's reasoning where the
 code agrees with it.
 
 **Same contract as every other file here: a figure carries its date and its build.** Every
@@ -17,7 +20,9 @@ Accuracy figures over the sample corpus are build-independent and are marked as 
 
 **No accuracy figure here rests on more than eleven labelled photographs.** That is the single
 most important caveat in this document and it is repeated in §8, because three separate times
-a change has looked good on distance and turned out wrong on names.
+a change has looked good on distance and turned out wrong on names. §10's synthetic evaluation
+is not an exception to it: its frames are Scryfall's own renders degraded in software, and its
+table says so in its own header.
 
 ## 1. What it is and where it lives
 
@@ -40,16 +45,19 @@ dependency closure of every candidate crate was walked for `cc`, `cmake`, `bindg
 cross-compiles for `aarch64-linux-android` the way the main crate already does. No OpenCV, no
 Tesseract.
 
-### Three tools, each behind its own feature
+### The tools, each behind its own feature
 
 | Binary | Feature | What it is for |
 | --- | --- | --- |
 | `scan` | `cli` | Run the pipeline over image files and write the numbered debug artifacts. The tool that turns "it seems to work" into a percentage. |
 | `serve` | `cli` | The live camera page, with the whole pipeline visible per frame and every threshold on a slider. |
-| `build-hashes` | `builder` | Build the reference bundle from `corpus.db` and Scryfall's images. Incremental. |
+| `build-hashes` | `builder` | Build the reference bundle from `corpus.db` — or, since 2026-09-15, from Scryfall's bulk file (`--bulk`) — and Scryfall's images. Incremental. |
+| `eval` | `builder` | The synthetic evaluation of both scan modes (§10), added 2026-09-15. |
 
 `cli` = `clap` + `tiny_http` + `corpus` + `ocr`; `builder` = `clap` + `ureq` + `rayon` +
-`corpus`. **`corpus` and `ocr` are separate gates on purpose.** The library can match without
+`corpus` + `ocr` — **`ocr` joined `builder` on 2026-09-15 for `eval`**, whose Exact passes are
+worthless with the readers uninhabited, and the cost is that `build-hashes` now compiles `ocrs`
+and `rten` too. **`corpus` and `ocr` are separate gates on purpose.** The library can match without
 a corpus — it simply answers with Scryfall ids instead of names, which is enough to prove the
 pipeline — and it can match without OCR, which is the tier that costs 12.2 MB of models.
 `tiny_http` is stale (0.12.0, last published 2022-10-06) and taken anyway: it is pure Rust, it
@@ -60,7 +68,7 @@ gets HTTP/1.1 keep-alive and `Content-Length` right, and it is reachable **only*
 
 | Path | What | In git? |
 | --- | --- | --- |
-| `docs/scanner/scans/` | The sample corpus — the instrument every measurement is read off | **No.** Untracked and *not* ignored, checked 2026-09-08 |
+| `docs/scanner/scans/` | The sample corpus — the instrument every measurement is read off | **No.** Untracked and *not* ignored, checked 2026-09-08 — and **lost** with its worktree by 2026-09-15 (§8) |
 | `docs/scanner/card-scanner.md` | The original brief | Yes |
 | `.scanner-bundle/` | The reference bundle, the fetch cache, the OCR models | Ignored |
 | `.scanner-debug/` | `scan --debug-dir` output, ~50 MB a sweep | Ignored |
@@ -913,15 +921,24 @@ cycle with the card never leaving the lens**.
 
 ## 8. Bugs still open, and what the numbers cannot carry
 
-1. **Every accuracy figure in this crate rests on eleven labelled photographs.** The corpus is 43
-   images taken once, only 14 of which yield a name the OCR tier can read cleanly. One card is
-   nine percentage points, and three separate times a change has looked good on distance and
-   wrong on names. Re-tuning against the frames that already work cannot fix that; the
-   add-to-dataset button exists so capturing the frames that do not can. One frame has been
-   captured that way so far.
-2. **The corpus is not in git.** `docs/scanner/scans/` is untracked and not ignored on this
-   branch as of 2026-09-08 — the instrument every measurement above is read off is not versioned
-   with the code that is measured against it.
+1. **Every accuracy figure from a photograph rests on eleven labelled photographs, and nothing
+   can re-read them.** The corpus was 43 images taken once, only 14 of which yielded a name the
+   OCR tier could read cleanly. One card is nine percentage points, and three separate times a
+   change looked good on distance and wrong on names. The figures in §2–§7 stand as a record of
+   what was measured; none of them can be reproduced, and none can be extended to a change made
+   since. **Until new photographs exist, testing is synthetic** — §10's evaluation, over
+   Scryfall's renders, which is a regression fence and never an accuracy claim. The
+   add-to-dataset button still works (the debug server writes `docs/scanner/scans/`, the app
+   `data/scanner/scans/`), and committing a corpus is the pass after one exists.
+2. **The corpus was lost, not merely unversioned.** `docs/scanner/scans/` was untracked and not
+   ignored in the `card-scanner-first-pass` worktree (checked 2026-09-08), and that worktree is
+   now an empty directory; a search of `D:\Code` and the user folders found no copy
+   (2026-09-15). The reference bundle the measurements were taken against, its ~1.28 GB fetch
+   cache and the OCR models were under the same worktree's `.scanner-bundle/` and went with it.
+   The bundle has since been rebuilt and the models refetched (§10); the photographs cannot be.
+   The failure worth keeping is the one this item used to warn about: the instrument every
+   measurement was read off was not versioned with the code measured against it, and the day
+   the directory went, so did the ability to check any of them.
 3. **The confidence rule's committed card can still be reset by ten past-the-gate frames**, because
    only the vote rule's freeze counts presence rather than the gate. The measured Plains
    oscillation was fixed under `CommitRule::Votes`; the confidence rule reaches the same
@@ -956,6 +973,41 @@ cycle with the card never leaving the lens**.
     (`needless_range_loop`), and `serve.rs:519` (`unnecessary_get_then_check`, in the server's
     own tests). Adding either gate is a tidy-up commit rather than a CI change; both would go
     red on day one for something the test step is not about.
+11. **The bundle holds no `transform` or `modal_dfc` printing, so a real double-faced card can
+    never be recognised by appearance.** `build-hashes` keeps only rows with a top-level
+    `image_uris`, and those two layouts carry their images under `card_faces` instead — 1,065
+    and 328 printings in the corpus (counted 2026-09-15 while building §10's evaluation). Its
+    "double-faced" stratum is therefore meld front faces, the one physically double-faced layout
+    with top-level images, and a 100% there says nothing about a Delver of Secrets. A builder
+    limitation that predates §10; the fix is hashing each face.
+12. **Split and adventure face names are not in the name index.** `Reference`'s `by_name` holds
+    the full `a // b` name, so an exact read of a front face never matches exactly and falls
+    through to the fuzzy search. Before 2026-09-15 that fell through to a wrong card —
+    `virtue of knowledge` resolved to Price of Knowledge at four edits and Exact decided it; since
+    §10's corrected-read rule it is ignored when that card is not among the survivors, so the
+    read now confirms nothing rather than naming the wrong card. Indexing face names would let it
+    confirm the right one. (`by_name` also keeps one oracle per normalized name, so a masked lookup
+    answers `None` on a collision whose first oracle the filters exclude.)
+13. **A commit can file into a stale folder when the folder list fails to load.** The page treats
+    a stored `folderId` that is gone or not the reader's own as the root, but it can only decide
+    that once `useCollectionFolderList` has answered; the commit refetches, and if the list still
+    will not load, the stored id goes to `collection_import_commit` as it is. A deleted folder is
+    then refused in words — but an id that now names a **deck group** is accepted, because the
+    import's deck arm files there on purpose, and scanned cards land in a deck's box.
+14. **A lock lost for ten frames or more on a card still in hand decides that card again.** Under
+    the vote rule's freeze (§5 "What ends a freeze") an untrusted frame is observed as empty, so a
+    lock that stays lost past `QuadLock`'s five-frame drop window and on to the freeze's ten
+    releases the decision with the card never having left; the stretch has broken, so the re-arm
+    is taken, and the next steady stretch resolves (Exact) or votes (Fast) and moves
+    `decision_seq` a second time. The tray bumps the row to ×2 — visible and reversible. A
+    two-frame blip does not do this (§10's re-arm rules); a card whose hash names the *same*
+    neighbour for ten frames after a blip does, once, and that residue was accepted by the ruling
+    that shaped those rules.
+15. **`collection_import_commit` accepts a finish the printing is not sold in.** `commit_import`
+    → `add_entry_filed` checks the finish against the three-word enum and `printing_of` reads no
+    `cards.finishes`, while the tray's per-row finish offers all three. A foil row for a
+    nonfoil-only printing commits silently as a foil collection row. `AddToCollection` narrows the
+    choice to the target's finishes; the tray does not yet.
 
 Struck 2026-09-08: the two doc comments that quoted a title read at ~250 ms against a ~80 ms
 frame — `session::OCR_EVERY` and `ocr.rs`'s `COLLECTOR_FALLBACKS` — where §4 and §7 measured
@@ -981,6 +1033,12 @@ the app share one, and the app gained a **Scanner** view that does what the debu
 the app's chrome. **The debug page and its server are unchanged and stay** — they are how the
 scanner is diagnosed when the camera is held by one page at a time, and the app is a second
 caller of the same session rather than a replacement. Nothing is written to the collection.
+
+**This section is the 2026-09-08 landing and §10 moved several of its facts on 2026-09-15**, so
+read the two together: the command table below is the original four and §10's holds the
+commands added since, the assets are no longer files only, the view's panels sit behind a Developer switch beside a review
+tray, "nothing is stored in either database" gave way to two `app_meta` rows, and the Storybook
+handler and story counts are the earlier tree's.
 
 ### The dependency, and why it is not in the wasm block
 
@@ -1062,10 +1120,13 @@ canary for the whole scrape.
 is optional, desktop/Android only, and the only thing it shares with the rest of the app is the
 data directory and one read of `corpus.db`.
 
-**Assets are files in `data/scanner/`, and nothing downloads them.** The bundle has no release
-asset yet and the models are not ours.
+**Assets were files in `data/scanner/` and nothing downloaded them — until 2026-09-15.** A
+release build now carries all three inside the binary, and a file here *overrides* the embedded
+copy rather than being the only source; §10 has the load order, the workflow that publishes the
+assets and the release step that fetches them. Nothing downloads at run time still. The table
+says what each file does when it is placed by hand in a build that embeds nothing.
 
-| Path under `data/scanner/` | Missing means |
+| Path under `data/scanner/` | Missing, with nothing embedded, means |
 | --- | --- |
 | `card-hashes.bin` | a session with **no reference** — it detects and rectifies and names nothing, exactly as the debug server does with no `--bundle` |
 | `models/text-detection.rten` | no reader — the name and collector tiers stand down |
@@ -1359,3 +1420,451 @@ one of those layers found.
 **What the first-call row says.** Loading is lazy and happens once; the page's status query is
 what pays it, on the first visit to the view after a launch. Under a second on either build, so no
 progress state was added for it.
+
+## 10. Modes, filters, the tray and the shipped bundle
+
+Landed 2026-09-15, against
+[the modes-and-shipping spec](../superpowers/specs/2026-09-15-scanner-modes-and-shipping-design.md),
+which answers the four items the in-app spec's §13 deferred less the wasm one. Before it, a release
+build could scan nothing — the view voted on a card, wrote nothing, and asked the reader to drop a
+bundle and two model files into `data/scanner/` by hand. After it, a release build carries all three,
+the reader picks **Fast** or **Exact**, narrows by set and release date, and watches cards collect in
+a review tray that commits to the collection in one press. §9's panels are one switch away.
+
+### The bundle ships inside the release build
+
+**A weekly workflow builds the bundle and publishes it with both models; every release leg
+downloads the three and embeds them.** Git stays free of a 5.4 MB binary that changes with every
+set, and the portable exe stays one file — an asset beside it is a second file to lose.
+
+**`.github/workflows/scanner-bundle.yml` runs on `workflow_dispatch` and Mondays at 04:17 UTC.**
+Weekly and not monthly because `actions/cache` evicts an entry unused for seven days, and the fetch
+cache (`card-hashes-cache.db`, restored under the prefix `scanner-cache-v<FORMAT_VERSION>-`) is what
+makes a run cost a new set's few hundred fetches rather than half an hour and ~1.28 GB (§2). The
+steps, in order: read the format version; fetch Scryfall's `default_cards`; restore the cache; build
+with `--bulk`; save the cache (`if: always()`, and the glob takes SQLite's `-wal`, so a run that
+died mid-write keeps what it wrote); fetch the models; run the synthetic evaluation; then a dry run
+or a publish.
+
+**Scryfall's bulk descriptor has no `download_uri`, and the file is gzipped JSON Lines.** Checked
+live 2026-09-15: `GET https://api.scryfall.com/bulk-data/default-cards` answers
+`jsonl_download_uri` (a `.jsonl.gz`, `compressed_size` 78,259,467) and nothing called
+`download_uri` — the change [scryfall.md](scryfall.md) already records for the app's own ingest. The
+workflow reads it with `jq -er`, so a missing field fails the step rather than handing `curl` the
+word `null`, and gunzips in the shell, so the crate gains no `flate2`. **`--bulk` sniffs the first
+non-whitespace byte**: `[` streams a JSON array one element at a time, anything else goes to
+`serde_json::StreamDeserializer` as JSON Lines. A truncated file is an error rather than a short
+list, and an empty source is refused outright — an empty bundle would otherwise publish over the
+real one. Measured the same day by streaming the real file (630,334,856 B unzipped, dated
+2026-09-14) through a copy of the reader, release: **113,714 rows with `image_uris` in 2.4 s**,
+against 113,494 from the dev `corpus.db`'s five-day-older bulk — the same rows, plus a week of new
+printings.
+
+**The tag is `scanner-bundle-v3`, because `FORMAT_VERSION` is `u16 = 3`.** The workflow `grep -oP`s
+the declaration out of `crates/card-scanner/src/index.rs` and `scripts/scanner-assets.mjs` matches
+the same line; either fails loudly if the line changes shape, rather than publishing to
+`scanner-bundle-v`. **The version is in the tag, not only in the file**: an app built at version 3
+downloads only from `scanner-bundle-v3` and can never embed a version-4 bundle whose descriptors it
+would read as noise — §2's silent mismatch, moved from load time to build time. The header check at
+load stays as the second fence. (The spec said 5; the lost worktree named its files `…-v5.bin`,
+and the constant never left 3.)
+
+**It publishes as a prerelease and not latest**, so nothing that asks GitHub for the latest release
+is handed a bundle. The in-app updater reads `/releases` and `update::parse_release_page` drops
+every prerelease before anything compares versions — a reading of the code; the live check is owed
+below.
+
+**What "unchanged" compares is everything past the 32-byte header, never the whole file.**
+`build-hashes` stamps `built_at` from the clock into header bytes 14..22, so two builds of identical
+hashes always differ; `cmp -s -i 32 old.bin card-hashes.bin` compares the entries, which the emit now
+writes `ORDER BY section, id` — the `WITHOUT ROWID` key's own order, so it costs no sort and stops
+the byte order depending on SQLite's plan. Checked on synthetic pairs: differing only in `built_at`
+is whole-file 1 and `-i 32` 0; one flipped entry byte and one extra entry are both 1. **A release
+missing any of the three assets is republished whatever the comparison says**, or one failed upload
+would leave release builds without a model for good.
+
+**Only `main` publishes.** `workflow_dispatch` runs from any ref and the tag names the format
+version rather than the code, so a branch that changed the hashing without bumping `FORMAT_VERSION`
+would `--clobber` the bundle every later release embeds, from code nobody reviewed. Anywhere else,
+`Dry run (not on main)` writes the built size to the job summary and stops. The branch's cache entry
+is scoped to that branch and never restored on `main`, so the cache cannot be poisoned either; the
+ref reaches the script through `env:`, never pasted in as an expression.
+
+**The release step fails without the assets, on purpose.** `release.yml` runs `npm run
+scanner:assets` on every matrix leg straight after `npm ci`, and a non-zero exit fails the leg: a
+release that silently cannot scan is a regression nobody would see until a reader tried. On
+2026-09-15 that exits **1** with *the release scanner-bundle-v3 has no asset card-hashes.bin (HTTP
+404 …). The scanner-bundle workflow publishes it: …*, because the release has never been published.
+**So the first release after this lands fails on every leg unless `scanner-bundle` has been
+dispatched once on `main`** — and a dispatch button exists only once the workflow file is on `main`.
+
+**`scripts/scanner-assets.mjs`** fetches the three into `src-tauri/scanner-assets/`, which a developer,
+the Android build and the release job all do the same way. A download lands as `<name>.part` and is
+renamed only once whole, because `build.rs` embeds whatever is present and a truncated file would
+ship. A file whose size already equals the response's `content-length` is kept. **It sets
+`process.exitCode` rather than calling `process.exit()`**: on Node 24.16 / Windows, exiting while
+`fetch` still held its socket aborted with `Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)`
+and exit **127**, burying the sentence that said what was wrong. The download is unauthenticated —
+the repository is public.
+
+**`build.rs` sets `cfg(scanner_assets)` only when all three files are on disk.** A bundle embedded
+without its models, or the reverse, is a half-shipped scanner. `cargo:rustc-check-cfg` is declared
+**before** the wasm early return, so no target meets the name as an unknown cfg — `desktop` and
+`mobile` are the same lesson. `rerun-if-changed` names the directory and each file present, and
+**never a path that does not exist**, which would rerun the script on every build; the tracked
+`src-tauri/scanner-assets/README.md` is what keeps the directory there (`.gitignore` takes
+`src-tauri/scanner-assets/*` and re-includes the README). Proven by running the script through four
+cases with `tauri_build::build()` stubbed: none, two of three (no cfg), all three, and a wasm
+`TARGET`. `scanner.rs` then `include_bytes!`s the three under the cfg.
+
+**Load order, per asset, first hit wins: a file in `data/scanner/`, then the embedded copy, then
+absent.** `Asset` gained `source: "file" | "embedded" | "absent"`. An embedded asset reports
+`present: true`, draws nothing on the reader's view, and names itself in the Developer panels. The
+models stay a pair: both are `file` only when both files exist, and one file alone falls through to
+the embedded pair. **A file that is there and will not parse wins over the embedded copy and shows
+its error** — the reader placed it to test it, and quietly falling back would hide exactly the file
+they are testing. The labels still come from `corpus.db`, not the binary, so an embedded bundle
+whose names did not load still gets *Bundle loaded, but its names did not*. The load order is an
+`Embedded` struct passed to `load` rather than a `cfg!` inside it, so both arms compile and are
+tested in every build whether or not it embedded anything.
+
+**The models are not ours to ship unattributed**: `text-detection.rten` and
+`text-recognition.rten` come from [ocrs-models](https://github.com/robertknight/ocrs-models),
+trained on HierText and licensed CC-BY-SA 4.0. The app has no about or licence screen, so the
+credit is the repository README's *Third-party data and models*.
+
+The bundle behind every figure in this section was built locally on 2026-09-15 from the dev
+`corpus.db`: **113,494 printings, 5,447,744 B** (`32 + n × 48`), 1,590 s, no failed fetch (the
+ledger does not record the build profile). The first workflow run is the first from `--bulk`.
+
+### Filters
+
+**Sets and a release-date range, and nothing else.** Language is absent rather than unimplemented
+(spec decision 7): `default_cards` holds one printing per card, English wherever English exists, so
+a language filter would bite only on printings that exist solely in another language.
+`filters::ScanFilters { sets, released_from, released_to }`; set codes compare case-insensitively,
+dates as `YYYY-MM-DD` strings inclusive at both ends. **A blank string is no bound** — a cleared
+HTML date input sends `""`, and every date is `>= ""` while none is `<= ""`, so a cleared *to* would
+match nothing and read as *No printing matches these filters*. A printing with no release date fails
+any date bound and passes a set filter.
+
+**The mask constrains every tier, not only the hash search** — §3 "Match"'s rule, carried to the
+readers. `Reference::mask_for` builds one `Mask` from the labels; the hash search, the title lookup
+and the collector lookup all take it. A title read resolves only to a card with at least one
+permitted printing, and **an exact read of an excluded card is no card** rather than a fuzzy fall to
+its permitted neighbour — a clean *Shock* must not come back as a one-edit cousin. A collector
+pairing that names an excluded printing is skipped and the next pairing tried. Otherwise one tier
+would hand straight back what another had excluded.
+
+`Session::set_filters` lifts the mask for empty filters; refuses with a sentence when there are no
+labels (*Filters need card names, and the scanner has none loaded — it needs corpus.db beside the
+bundle.*) or when nothing survives (*No printing matches these filters.*), keeping the mask already
+in force; and on success **resets the tracker** — evidence gathered against another candidate set is
+evidence about another question. The page disables the Filters control when the status reports no
+labels, puts a refused filter back to the last one the session accepted with the sentence inside
+the popover, never persists a refusal, and holds the first frame until the stored filters have
+reached the session. The debug page gained a sets field and two dates posting to `POST /filters`.
+
+### Fast
+
+**The vote rule over the hash, with the title read held back as a rescue.** A Fast frame is hash
+only until `FAST_RESCUE_AFTER` (8) consecutive trusted frames with a detection and no commit; after
+that `OCR_EVERY` applies as before. A common card decides on the hash in about eight frames, so a
+reader running from the first locked frame spent a third of a second per read on cards that never
+needed one. **Only the title reader runs in Fast** — pinning the printing is what Exact is for — so
+the collector panel fills only on an Exact resolve frame. The counter resets on a commit and when
+the stretch breaks (below). The decision's printing is the tracker's best member; a card decided on
+title reads alone has none, because a name abstains on the printing (§4), so the decision takes the
+card's first permitted printing rather than passing an oracle id off as one.
+
+### Exact
+
+**The same detect, lock and tracker loop, plus a resolve.** The tracker still decides *which card*
+is in front of the lens and still owns "has it left". While in Exact the session keeps the last
+`EXACT_BURST` (3) locked frames' rectified views, and on the first frame where the stretch has held
+`EXACT_STEADY_FRAMES` (3) with no attempt yet for this card, it runs `resolve::resolve` over them —
+synchronously, inside that frame's command. The status line says *Hold steady — reading the card…*
+meanwhile.
+
+**The tiers, as they behave since round 4 (commit `64c5810e`).** Each takes the survivors of the one
+before and records a `detail` in words.
+
+| Tier | Does | Survivors after it |
+| --- | --- | --- |
+| 0 `filters` | the mask | every permitted printing (`N printings`, or `unrestricted`) |
+| 1 `whole_card` | a masked search of every framing of every view, top `EXACT_TOP` (32), inside `max_normalized`; each printing's best distance across the burst is kept for every later tier | those printings (`P printings of C cards`) |
+| 2 `title` | read the most card-like view, and the next only on no read | **exact read** (0 edits): every permitted printing of that card, whether or not tier 1 found it — the foil rescue. **Corrected read** (≥ 1 edit): only the tier-1 survivors that are that card; if none are, the read is **ignored** (`… not among survivors — ignored`); if tier 1 found nothing at all, it replaces, bounded by the lookup's edit budget. No read, or a read naming no card: unchanged |
+| 3 `collector` | read the collector line the same way | a resolved printing pins itself **only if** its card is among the survivors **and** it is the card the title settled on — or, with no title, a card whose nearest surviving printing is less than `EXACT_MARGIN_BITS` (6) behind the nearest card. Otherwise a `conflict: …` detail naming why (`not among survivors`, `not the card the title read`, `N bits behind the nearest card`, `which has no distance`) and survivors unchanged |
+| 4 `re_rank` | best distance per survivor; a survivor a name read brought in is scored by a search restricted to the survivors | the best alone if it leads the second by ≥ 6 bits; otherwise every survivor less than 6 bits behind the best |
+| 5 `classifier` | the trait slot | unchanged (`not implemented`) |
+
+The outcome is `resolved` for one survivor, `ambiguous` for several (best first, reported to
+`EXACT_MAX_CHOICES`, 12), `not_found` for none.
+
+**Rows 2 and 3 were tightened by the synthetic evaluation, and the rule behind both is that Exact
+must never be less right about the card than Fast.** As first built, any resolved name *replaced*
+the survivors and any collector read of a standing card pinned it. On the evaluation's run at
+`68917fa1`, Exact named the **wrong card for 5 of 160** where Fast named none — Demonic Attorney
+3ED, Plains 7ED, Swamp ZNR, Virtue of Knowledge WOE and Kami of the Hunt CHK — and the whole-card
+tier had held the right card each time. Printing each resolve's tiers (a burst is keyed on the
+printing's id, so a five-line list reproduces them exactly) showed two mechanisms:
+
+| What was read | What it named | Why it won |
+| --- | --- | --- |
+| `datn`, for the Plains | Damn, 1 edit | a corrected read replaced the survivors with a card the hash never suggested |
+| `torm` | Worm, 1 edit | the same |
+| `eil of the hunt` | End of the Hunt, 2 edits | the same |
+| `virtue of knowledge` | Price of Knowledge, 4 edits | the same — and an adventure is indexed only under `a // b`, so the exact front-face read fell to fuzzy (§8) |
+| `ZNR 280`, for Swamp ZNR 272 | Forest — ZNR 280 | the Forest was one of `10 printings of 7 cards` the whole-card tier left, so the "another card" conflict never fired |
+
+Filtering to each card's own set rescued all five. After round 4, at `64c5810e`: **Exact wrong card
+0 of 160, card-correct 91.9% → 95.0%**, printing 78.8% → 81.2%, and every ambiguous decision holds
+the true printing among its choices (96.6% → 100%). **What the rule costs** is a foil whose hash
+leaves some survivors, none of them the card, read with a typo: it is no longer rescued by the read.
+No test yet pins an *exact* title read replacing non-empty survivors that lack the card — deleting
+the `edits > 0 &&` guard in `resolve.rs` stays green — and a corrected read that narrows applies no
+distance margin where the collector does.
+
+**After a resolve that found something, the tracker is committed and frozen on it** through
+`Tracker::commit_to(key, member)` — the best choice's oracle id, even when an ambiguous outcome's
+choices span cards, because the freeze only has to know that *a* card is being held — so §5's rules
+for ending a freeze are the one definition of "left" for both modes. `commit_to` seeds the tally at
+twice `decide_at`, so dragging the debug page's slider above that lifts the freeze; since round 1
+that no longer re-arms anything. `not_found` commits nothing. **Exact always judges by votes**,
+whatever rule the page asked for: under the confidence rule the next frame's `set_options` lifted
+the `commit_to` freeze, the rule could not commit (`seen` 1 < 5), and every second frame was a new
+resolve and a new decision.
+
+**One resolve and one decision per card took three fix rounds after the first review, and each
+rule below is a failure the code before it shipped.** A *stretch* is the run of frames the quad lock stays trusted.
+
+| Rule | The failure that produced it |
+| --- | --- |
+| Exact counts `decision_seq` **at the resolve**, never on the tracker's committed edge | a card the tracker had already committed on votes before its resolve never crossed the edge, so it was resolved and never decided |
+| A freeze releasing inside a stretch does **not** re-arm the resolve | a hash preferring a different card than the reads resolved lifted and re-formed the freeze inside one stretch, and each release re-armed — one held card decided more than once |
+| The resolve condition has no term for the tracker (`commit_to` replaces a vote tally) | with `!settled` in it, a card the votes committed first was never resolved and never decided |
+| Only a lock that stops being **trusted** breaks a stretch; a trusted frame whose detector missed neither counts nor breaks it | a detection-less frame on a still card would reset the steady count and the burst |
+| A break **arms** `rearm_pending` rather than clearing the attempt, and a resolve's own freeze holds the re-arm back | after round 1 made a break re-arm directly, a two-frame lock blip — one degenerate quad — re-resolved a decided card and put a duplicate row in the tray |
+| The resolve clears `rearm_pending` | a lock that was flaky before the first resolve left the flag set, and a freeze lifting later in the same unbroken stretch took it and decided the card again |
+| The re-arm is taken when `rearm_pending && (!committed \|\| last_resolution.is_none())` | round 2's `!committed` alone held it back behind a freeze the **votes** made after a `not_found`, so that card was never decided until it left |
+| One place takes the re-arm (`record_decision`) | round 2 kept a second copy just before the resolve condition, untested; keeping the two in step is how the regression round 3 fixed came about, so the copy was deleted |
+
+What remains is §8 item 14: a lock lost past the freeze's ten frames on a card still in hand
+decides it again.
+
+### `decision_seq` and `decision`
+
+Four verdict keys joined the snake-case set — `mode`, `decision_seq`, `decision`, and `resolution`
+on the frame a resolve ran — and the debug page's key census (§9) now scrapes all four.
+**`decision_seq` is what makes one add per card a property of the session rather than of the page's
+timing**: it moves once per Fast commit and once per Exact resolve that found something, and on no
+other frame, so a dropped frame, a re-render or a second listener cannot add a card twice. It
+survives `reset` and a mode switch — a number that went back to one the page had already seen would
+add nothing next time — and a failed or panicked frame still carries it. `decision` is present on
+every committed frame (Fast: the tracker's printing, `resolved`, no choices; Exact: the resolve's
+first choice, its outcome and its choices) and `null` on an Exact commit no resolve made.
+`useScanLoop` takes the first `decision_seq` after the camera goes live as a baseline and calls
+`onDecision` only for a number that differs on a frame carrying a decision.
+
+### The tray
+
+**Two `app_meta` keys, each one JSON value written whole: `scanner_prefs` and `scanner_tray`.** No
+schema rung — a key in schema v6's table — and neither is synced: a scanner's mode and defaults are
+about the device in the reader's hand, and a tray reaches another device only once committed, as
+ordinary collection rows. `app_meta` maps to nothing in the mirror, and nothing in either changes a
+mirrored file. Both writes go through `sync::with_write`, so **both answer `BUSY` while a sync holds
+the write connection**; `set_scanner_tray` also refuses more than 5,000 rows and any row under one
+copy, before writing. A stored value that does not parse reads as the defaults or an empty tray.
+`ScannerPrefs` is the mode, the filters, the finish and condition a new row starts with, the folder,
+and the Developer switch; **a tray row records no language**.
+
+**The TanStack cache is the tray, and a refused write keeps it on screen.** `useTray` holds the rows
+in `["scanner", "tray"]` with `staleTime` and `gcTime` both `Infinity` — nothing else writes the row,
+and five minutes on another page must not hand a remount an older stored copy. It writes after
+400 ms of quiet and on unmount; on a refusal it keeps the rows, rewrites the whole tray on the next
+change, and tries **once** more after 1.5 s so a tray nobody touches again survives a restart.
+`useScannerPrefs` does the same. Neither says anything about `BUSY`: rows scanned during a sync are
+the reader's cards and nothing about them is wrong.
+
+**Newest first, and a bump is the newest row only.** A decision lands at index 0. A resolved
+decision bumps the newest row's quantity instead **only when that row names the same printing, has
+no pick pending, and is in the finish a new row would start in** — the collection's grain includes
+the finish, so a foil row set by hand and a plain copy scanned after it are two rows in the binder,
+and counting one onto the other would file a plain card as a foil. (The spec said "same printing";
+the finish was added before implementation.) The same printing ten cards ago is a reader sorting
+out of order, and folding into a row they scrolled past would move a number nobody is looking at. An
+**ambiguous** decision becomes a row carrying every candidate as small cards to press, wearing the
+first provisionally; the camera keeps running while it waits, and *More printings…* opens the app's
+all-printings dialog with a `pick` that hands the printing back.
+
+**The commit is one `collection_import_commit(items, "add", folderId)`** — the existing
+one-transaction batch, so the activity log and every write-site rule the import honours hold with no
+second copy. One condition for the whole commit, from the Defaults popover, because condition is a
+judgement about a pile in the hand and not something a camera reads; finish is per row. **All or
+nothing**: a refusal keeps every row and puts the backend's own sentence above them; a success
+removes **only the rows it committed** — the write can wait seconds on `BUSY` while the camera keeps
+running, so a card that landed meanwhile stays, and a row bumped meanwhile keeps only the copies
+added after the snapshot. It invalidates `OWNED_WRITE_KEYS`, the import's own set. **A stored folder
+that is gone or not the reader's own is the root**, and persisted as such once the folder list
+answers — `collection_import_commit` accepts a deck's group, because the import's deck arm files
+there on purpose, so a stale id naming one would put scanned cards in a deck's box. §8 item 13 is
+the case the list never answers.
+
+**Every tray thumbnail is the whole card, the `thumb` variant in a 5:7 slot with `object-contain`,
+never the `art` crop.** A crop has no printed frame and so no artist credit, a tray row carries no
+artist to name beside one, and the Scanner shows no other full card a reader could read the credit
+off — [`src/CLAUDE.md`](../../src/CLAUDE.md)'s art-credit rule, met by its second arm. The candidate
+cards on an ambiguous row are whole cards for a second reason: reprints share art, and what tells two
+printings apart is the frame — the set symbol, the border, the treatment.
+
+**The status line under the camera is the reader's whole view of the session**, and none of the
+developer vocabulary — votes, leads, distances — reaches it. In rank order, each rung a reason the
+later ones cannot be true: *The scanner has no card hashes loaded, so it can find a card but not
+name it.* · *Point the camera at a card* · *No match — try better light, or clear the filters* ·
+*Pick a printing below* · *Added Forest — HOB 193* or *Added Forest again — ×2* · *Hold steady —
+reading the card…* (Exact, locked) · *Hold steady*. The asset sentences sit under it, so a missing
+bundle is still said with the Developer panels off.
+
+### The Developer switch and the Tiers panel
+
+**§9's panels moved behind a Developer switch at the end of the bar, stored in `scanner_prefs`.**
+Off, the column beside the camera is the tray alone, and the detector's per-frame refusal
+(*examined 365 contours*) is not drawn; a loop failure and a refused reset still are, for everyone.
+On, §9's panels sit under the tray in the same scrolling column, joined by **Tiers**: the last
+resolve's six tiers in the pipeline's order — survivors beside each tier's own words — and the
+choices it ended on, each with its distance or *name read* for a printing only a read reached. It is
+the **last** resolve rather than this frame's, latched in `useScanLoop` beside `lastOcr` and cleared
+when a frame has no quad, because a resolve is reported on the one frame it ran on and the panel has
+to outlive that frame for as long as the card is still in front of the lens.
+
+`live.html` gained a fast/exact control on the frame query and a block in the Match panel for mode,
+decision number, the decision and the last resolve's tiers; `check-live-page.mjs` passes over it.
+Storybook's `scannerHandlers` answers the new commands from `FakeDb.scannerPrefs` and
+`FakeDb.scannerTray`, both writes honour the `busy` fault, and a `sets` entry of `zzz` is refused as
+*No printing matches these filters.*
+
+### The synthetic evaluation
+
+> **What its numbers are.** The pixels are Scryfall's own renders, the same art the bundle was
+> hashed from at a different size, so appearance accuracy will read higher than any camera. The
+> table is a fence against a regression and a way to set the two thresholds below — never a
+> claim about a real scan.
+
+— spec §5, verbatim. Neither threshold moved: `EXACT_MARGIN_BITS` is still its initial 6 and
+`FAST_RESCUE_AFTER` 8.
+
+**`eval` exists because the photographs are gone** (§8), and nothing else stands between a change to
+the pipeline and a silent regression in either mode. It sits behind `builder`. For each of the 160
+Scryfall ids in `crates/card-scanner/eval/printings.txt` — 15 per frame era across five eras, 20
+basic lands (one of each basic from HOB, LTR, 7ED and ZNR), 15 borderless or full-art, 10 split or
+adventure, 10 double-faced (meld fronts, §8 item 11), 20 reprints and 10 random, all English and
+non-digital — it fetches the render once into a cache, makes a burst, and feeds it to three passes:
+**Fast**, **Exact**, and **Exact filtered to the printing's own set**, each stopping at the first
+frame whose `decision_seq` moved.
+
+- **The render is `image_uris.display`, not `large`.** The app's `corpus.db` stores `thumb`, `grid`,
+  `display` and `art`; `display` is Scryfall's documented replacement for `large` at the same
+  672×936, and reading the same key from `--bulk` keeps a local run and CI's on the same pixels.
+  Never `thumb`, which the bundle is hashed from, so a match is not a byte-identical lookup.
+- **A burst is 12 frames of 1280×720 from seed 7** (`synth::burst`): one base pose — a perspective
+  warp, any rotation, the card's height at 25–70% of the short edge, a flat, value-noise or
+  wood-like background, a white-balance and exposure shift, one specular glare, a Gaussian blur up
+  to σ 1.6, JPEG at q60–90 — jittered per frame by at most 1.5% of the short edge and a degree of
+  turn, which is what a hand does; unrelated poses would measure the lock rather than the matcher. A 64-bit SplitMix64 seeded `seed ^ card_index`, where the index is the
+  first 8 bytes of the printing id, so editing the list moves only the rows it edits. **Byte-identical
+  per platform, not across platforms**: `sin`, `cos` and `exp` come from the platform's maths library.
+- **A fresh `Session` per card per pass**, because `Session::reset` keeps the reader cadence counter
+  by design and a reused session's Fast rescue would depend on the cards before it. The labels and
+  model bytes load once and are attached per session; `labels_agree` checks once per run that the
+  result matches `Reference::load_labels`.
+- **`--jobs` workers**, half the logical cores by default. The accuracy columns do not depend on the
+  count; **the mean-ms column does** — a figure under load, never a latency. On one worker a six-card
+  trial read Fast 355 ms and Exact 564 ms a frame; at twelve, about 677 and 1,560.
+- In the workflow the step is `continue-on-error` and a failure writes a line where the table would
+  have been: **it reports and does not gate**, so an unreachable image host or a panic cannot skip
+  the weekly publish of a bundle that built fine. CI fetches the 160 renders on every run; nothing
+  caches `eval-cache` there.
+
+**Before round 4** — Windows, release, 2026-09-15, HEAD `68917fa1`, 160 printings, 12 frames each at
+1280 px, seed 7, against the 113,494-printing bundle, 12 workers, renders cached, 383 s wall.
+Percentages are of n; an ambiguous decision is judged on its first choice, and the bracket is the
+share of the ambiguous whose choices held the true printing. Wrong card is decided less card-correct.
+
+| pass | decided % | card ✓ % | wrong card | printing ✓ % | ambiguous % (true in choices %) | not found % | median frames | mean ms |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Fast | 90.6 | 90.6 | 0 | 73.8 | — | — | 10 | 677 |
+| Exact | 95.0 | 91.9 | **5** | 78.8 | 36.9 (96.6) | 0.6 | 5 | 1560 |
+| Exact + own set | 95.0 | 95.0 | 0 | 91.2 | 7.5 (100.0) | 0.6 | 5 | 1502 |
+
+**After round 4** — the same, at HEAD `64c5810e`, 388 s wall:
+
+| pass | decided % | card ✓ % | wrong card | printing ✓ % | ambiguous % (true in choices %) | not found % | median frames | mean ms |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Fast | 90.6 | 90.6 | 0 | 75.6 | — | — | 10 | 661 |
+| Exact | 95.0 | **95.0** | **0** | 81.2 | 36.2 (100.0) | 0.6 | 5 | 1577 |
+| Exact + own set | 95.0 | 95.0 | 0 | 91.2 | 7.5 (100.0) | 0.6 | 5 | 1510 |
+
+And after round 4 by stratum (same run):
+
+| pass | stratum | n | decided % | card ✓ % | printing ✓ % | ambiguous % (true in choices %) | not found % | median frames | mean ms |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Fast | frame-1993 | 15 | 86.7 | 86.7 | 73.3 | — | — | 8 | 567 |
+| Fast | frame-1997 | 15 | 100.0 | 100.0 | 93.3 | — | — | 10 | 670 |
+| Fast | frame-2003 | 15 | 93.3 | 93.3 | 80.0 | — | — | 9.5 | 669 |
+| Fast | frame-2015 | 15 | 86.7 | 86.7 | 73.3 | — | — | 10 | 670 |
+| Fast | future-showcase | 15 | 80.0 | 80.0 | 73.3 | — | — | 10 | 712 |
+| Fast | basic-lands | 20 | 90.0 | 90.0 | 65.0 | — | — | 10 | 704 |
+| Fast | borderless-full-art | 15 | 66.7 | 66.7 | 66.7 | — | — | 10 | 588 |
+| Fast | split-adventure | 10 | 100.0 | 100.0 | 60.0 | — | — | 8 | 686 |
+| Fast | double-faced | 10 | 100.0 | 100.0 | 100.0 | — | — | 9 | 606 |
+| Fast | reprints | 20 | 100.0 | 100.0 | 75.0 | — | — | 7 | 694 |
+| Fast | random | 10 | 100.0 | 100.0 | 80.0 | — | — | 7.5 | 690 |
+| Exact | frame-1993 | 15 | 93.3 | 93.3 | 86.7 | 33.3 (100.0) | 0.0 | 5 | 1965 |
+| Exact | frame-1997 | 15 | 100.0 | 100.0 | 93.3 | 20.0 (100.0) | 0.0 | 5 | 2075 |
+| Exact | frame-2003 | 15 | 93.3 | 93.3 | 66.7 | 40.0 (100.0) | 0.0 | 5 | 1804 |
+| Exact | frame-2015 | 15 | 100.0 | 100.0 | 80.0 | 53.3 (100.0) | 0.0 | 5 | 1424 |
+| Exact | future-showcase | 15 | 93.3 | 93.3 | 86.7 | 6.7 (100.0) | 0.0 | 5 | 1373 |
+| Exact | basic-lands | 20 | 95.0 | 95.0 | 80.0 | 30.0 (100.0) | 0.0 | 5 | 1405 |
+| Exact | borderless-full-art | 15 | 73.3 | 73.3 | 73.3 | 6.7 (100.0) | 6.7 | 5 | 1079 |
+| Exact | split-adventure | 10 | 100.0 | 100.0 | 80.0 | 50.0 (100.0) | 0.0 | 5 | 1509 |
+| Exact | double-faced | 10 | 100.0 | 100.0 | 100.0 | 40.0 (100.0) | 0.0 | 5 | 1384 |
+| Exact | reprints | 20 | 100.0 | 100.0 | 75.0 | 65.0 (100.0) | 0.0 | 5 | 1943 |
+| Exact | random | 10 | 100.0 | 100.0 | 80.0 | 60.0 (100.0) | 0.0 | 5 | 1398 |
+| Exact + own set | frame-1993 | 15 | 93.3 | 93.3 | 93.3 | 0.0 (—) | 0.0 | 5 | 1779 |
+| Exact + own set | frame-1997 | 15 | 100.0 | 100.0 | 100.0 | 0.0 (—) | 0.0 | 5 | 1758 |
+| Exact + own set | frame-2003 | 15 | 93.3 | 93.3 | 93.3 | 0.0 (—) | 0.0 | 5 | 1707 |
+| Exact + own set | frame-2015 | 15 | 100.0 | 100.0 | 93.3 | 13.3 (100.0) | 0.0 | 5 | 1501 |
+| Exact + own set | future-showcase | 15 | 93.3 | 93.3 | 86.7 | 6.7 (100.0) | 0.0 | 5 | 1276 |
+| Exact + own set | basic-lands | 20 | 95.0 | 95.0 | 80.0 | 30.0 (100.0) | 0.0 | 5 | 1570 |
+| Exact + own set | borderless-full-art | 15 | 73.3 | 73.3 | 73.3 | 6.7 (100.0) | 6.7 | 5 | 1023 |
+| Exact + own set | split-adventure | 10 | 100.0 | 100.0 | 100.0 | 0.0 (—) | 0.0 | 5 | 1510 |
+| Exact + own set | double-faced | 10 | 100.0 | 100.0 | 100.0 | 0.0 (—) | 0.0 | 5 | 1454 |
+| Exact + own set | reprints | 20 | 100.0 | 100.0 | 95.0 | 10.0 (100.0) | 0.0 | 5 | 1774 |
+| Exact + own set | random | 10 | 100.0 | 100.0 | 100.0 | 0.0 (—) | 0.0 | 5 | 1246 |
+
+**Fast's printing figure moved 73.8% → 75.6% between the two runs with no change to the Fast path**
+— Fast never calls `resolve` — while HEAD gained the evaluation's own commit and a merge of `main`.
+Three cards moved and nobody has found which change moved them, so **the evaluation's reproducibility
+is unverified**: until a same-HEAD double run agrees with itself, read a difference of a few cards
+between two runs as noise rather than as a regression or a fix.
+
+Three things the tables cannot say. **Fast's decided rate is partly the burst length**: its median is
+10 frames of 12 — three to lock, eight votes — so the evaluation cannot tell "needed a thirteenth
+frame" from "wrong". **Eight cards were undecided in every pass** of the pre-round-4 run (Tobias
+Andrion, Skyknight Legionnaire, Control of the Court, Swamp HOB, Counterbalance SLD, Elektra, Pest
+Infestation, Tyrranax Rex — the last `not found` in Exact), most likely the detector or the lock on
+hard synthetic poses; nobody has looked. And **the first `--bulk` evaluation is the workflow's first
+scheduled run** — every figure above came through `--corpus`.
+
+### Measured in the app
+
+**Owed.** The spec's §11 measurements that only the shipped window, a release build or a live
+workflow run can take; none has been taken yet.
+
+| What | Build | Reading |
+| --- | --- | --- |
+| The exe's size with the assets embedded, against without | release | — |
+| The first `scanner_status` with the embedded bundle, against §9's 798 ms | release / debug | — |
+| An Exact resolve's wall time, with and without the readers finding text | release | — |
+| The bundle workflow's first cold run, and a warm one | CI, `ubuntu-latest` | — |
+| Whether the updater's release lookup can ever return the `scanner-bundle-v3` prerelease | release | — |

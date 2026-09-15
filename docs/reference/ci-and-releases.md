@@ -2,7 +2,9 @@
 
 Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every figure keeps the date and the build it was taken on.
 
-- Two workflows. **`.github/workflows/ci.yml`** gates PRs and pushes to `main`: a `changes`
+- Three workflows — the third, **`scanner-bundle.yml`** (2026-09-15), builds and publishes the
+  card scanner's embedded assets and is recorded in [card-scanner.md](card-scanner.md) §10; this
+  page covers the other two. **`.github/workflows/ci.yml`** gates PRs and pushes to `main`: a `changes`
   router (below), a `frontend`
   job (`npm run build`/`lint`/`test:run`), a `rust` matrix over `windows-latest` +
   `ubuntu-22.04` (`cargo fmt --check` on Linux only, `clippy -D warnings` and `cargo test`

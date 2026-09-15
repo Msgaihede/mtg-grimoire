@@ -1,7 +1,9 @@
 # Scanner modes, filters, a review tray, and the bundle shipped — design
 
 **Date:** 2026-09-15
-**Status:** approved in conversation; spec under review
+**Status:** approved in conversation; implemented 2026-09-15. Facts that turned out wrong are
+corrected in place and marked *(corrected)*; what was built is recorded in
+[`docs/reference/card-scanner.md`](../../reference/card-scanner.md) §10.
 **Scope:** the four items [the in-app spec](2026-09-08-scanner-in-app-design.md) §13 deferred,
 less the wasm one — the reference bundle and the OCR models ship inside the app, the scanner
 gains a **Fast** and an **Exact** mode, candidates can be narrowed by **set** and **release
@@ -33,7 +35,7 @@ Checked 2026-09-15 unless stated.
 | Fact | Value |
 | --- | --- |
 | The sample corpus | **Gone.** `docs/scanner/scans/` was untracked in the `card-scanner-first-pass` worktree, which is now an empty directory; a search of `D:\Code` and the user folders finds no copy. The bundle, its 1.28 GB fetch cache and the models went with it |
-| The bundle | `card-hashes-v5.bin`, 5,442,032 bytes, 113,375 printings, card section only (§2). `FORMAT_VERSION` 5 |
+| The bundle | `card-hashes-v5.bin`, 5,442,032 bytes, 113,375 printings, card section only (§2). *(corrected)* `FORMAT_VERSION` is `u16 = 3` in `index.rs` — the `v5` was the lost worktree's file name, not the constant |
 | What `build-hashes` reads | `SELECT id, illustration_id, image_uris FROM cards WHERE image_uris IS NOT NULL` against a `corpus.db` — CI has no corpus |
 | A full build from empty | 168,582 images at ~93/s, roughly half an hour, ~1.28 GB of thumbs cached (§2) |
 | The models | `text-detection.rten` 2.5 MB + `text-recognition.rten` 9.7 MB from `https://ocrs-models.s3-accelerate.amazonaws.com`; trained on HierText, **CC-BY-SA 4.0** (ocrs-models README) |
@@ -72,23 +74,27 @@ new set's few hundred fetches instead of half an hour and 1.28 GB.
 
 1. Fetch Scryfall's `default_cards` bulk file (resolve `download_uri` from
    `https://api.scryfall.com/bulk-data/default-cards`, with a `User-Agent` — §2 records the 400
-   `cards.scryfall.io` answers without one).
+   `cards.scryfall.io` answers without one). *(corrected)* The descriptor has no `download_uri`:
+   it serves only `jsonl_download_uri`, a **gzipped JSON Lines** file (checked live 2026-09-15), so
+   the workflow reads that and gunzips it.
 2. Restore the fetch cache, keyed `scanner-cache-v<FORMAT_VERSION>` with a restore prefix, so a
    descriptor change re-hashes cached images rather than refetching them (§2 "The incremental
    cache").
 3. `cargo run --release --bin build-hashes --features builder -- --bulk default-cards.json --out
    card-hashes-v<FORMAT_VERSION>.bin`. **`--bulk` is new**: it streams the JSON array (the file is
    hundreds of megabytes; it is never held whole) and yields the same `(id, illustration_id,
-   image_uris)` rows the `--corpus` query does. `--corpus` stays.
+   image_uris)` rows the `--corpus` query does. `--corpus` stays. *(corrected)* It streams JSON
+   Lines as well as an array, told apart by the first non-whitespace byte, because Scryfall serves
+   only the former.
 4. Fetch both models with `crates/card-scanner/scripts/fetch-ocr-models.mjs`.
 5. Run the synthetic evaluation (§5) and write its table to the job summary.
 6. Publish to the release **`scanner-bundle-v<FORMAT_VERSION>`** — created if absent,
    **prerelease and not latest**, assets replaced with `--clobber` — but only when the bundle's
    bytes differ from the asset already there.
 
-**The format version is in the tag, not only in the file.** An app built at version 5 downloads
-from `scanner-bundle-v5` and cannot pick up a version 6 bundle whose descriptors it would read as
-noise — the silent-mismatch §2 exists to prevent, moved from load time to build time. The
+**The format version is in the tag, not only in the file.** An app built at version 3 downloads
+from `scanner-bundle-v3` *(corrected — this read 5 and 6)* and cannot pick up a version 4 bundle
+whose descriptors it would read as noise — the silent-mismatch §2 exists to prevent, moved from load time to build time. The
 header check at load stays as the second fence.
 
 **Prerelease and not latest** so nothing that asks GitHub for the latest release — the in-app
@@ -137,7 +143,9 @@ A new binary, **`eval`**, behind the `builder` feature (it needs `ureq` and the 
   borderless and full-art printings (§3 "Detect"), split and double-faced cards, and several
   reprints of one card (§5 "Group by oracle id").
 - **The source image is Scryfall's `large` render**, never the `small` thumb the bundle is hashed
-  from, so a match is not a byte-identical lookup.
+  from, so a match is not a byte-identical lookup. *(corrected)* It is the `display` render:
+  `corpus.db` stores `thumb`, `grid`, `display` and `art` and no `large`, and `display` is
+  Scryfall's documented replacement for it at the same 672×936.
 - **Each card becomes a burst of 12 frames**, generated from a fixed seed: a perspective warp,
   a rotation anywhere in 360°, a scale putting the card at 25–70% of the frame, a procedural
   background (flat, noise, wood-like stripes), a white-balance and exposure shift, one specular
@@ -227,6 +235,11 @@ three locked frames, which it keeps in a ring buffer while in Exact.
 | 4 re-rank | the best distance each survivor achieves across the burst | the best printing alone if it leads the second by `EXACT_MARGIN_BITS` (initially 6, set by the eval); otherwise every printing within that margin of the best |
 | 5 classifier | the existing trait slot; no implementation | unchanged |
 
+*(As built, rows 2 and 3 were tightened after the synthetic evaluation caught Exact naming the
+wrong card: a corrected title read only narrows the tier-1 survivors and is ignored when none is
+that card, and a collector read pins only the card the title settled on or one within
+`EXACT_MARGIN_BITS` of the nearest — the reference doc's §10.)*
+
 **The outcome** is one of:
 
 - `Resolved { printing }` — one survivor.
@@ -276,7 +289,9 @@ fence (§9) keeps holding: every new key it reads is in the verdict.
 | `scanner_prefs` / `set_scanner_prefs` | — / `ScannerPrefs` | | **new** — `home_layout` / `set_home_layout`'s shape |
 | `scanner_tray` / `set_scanner_tray` | — / `ScannerTrayRow[]` | | **new** |
 
-The four new ones are `#[cfg(not(target_family = "wasm"))]` like their siblings. Prefs and tray
+The four new ones are `#[cfg(not(target_family = "wasm"))]` like their siblings. *(corrected)*
+There are five new commands, and they are registered in `src-tauri/src/desktop.rs`'s
+`generate_handler!` beside the scanner's existing four — not in `lib.rs`. Prefs and tray
 are two `app_meta` keys, `scanner_prefs` and `scanner_tray`, each one JSON value written whole.
 No schema rung, and neither is a synced table, so nothing here reaches the relay.
 
@@ -310,7 +325,8 @@ finish, a quantity stepper, **Change printing** (the existing all-printings dial
 `Ambiguous` row reads *Pick a printing* and lays its candidates out as small images to click; the
 camera keeps running while it waits, so an unresolved row never stops the next card. A re-added
 card that is already the newest row with the same printing bumps its quantity instead of adding
-a row, and the flash says ×2. At the foot, a folder picker and **Add N to collection**, disabled
+a row, and the flash says ×2. *(As built, the finish has to match too — the collection's grain
+includes it, so bumping a plain copy onto a foil row would file it as foil.)* At the foot, a folder picker and **Add N to collection**, disabled
 while any row is unpicked or the tray is empty.
 
 **The Developer switch** shows today's panels (§9 "The view") and a new **Tiers** panel: the last
@@ -361,7 +377,8 @@ committed into a real folder of the dev database — then those rows deleted (ro
 3. An Exact resolve's wall time, release, with and without the readers finding text.
 4. The eval's first table, both modes, and the two thresholds it sets.
 5. The bundle workflow's first cold run and a warm one.
-6. Whether the updater's release lookup can ever return the `scanner-bundle-v5` prerelease.
+6. Whether the updater's release lookup can ever return the `scanner-bundle-v3` prerelease
+   *(corrected — this read `v5`)*.
 
 ## 12. Deliberately not in this pass
 
