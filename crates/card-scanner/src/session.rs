@@ -478,7 +478,7 @@ pub struct Session {
     /// is true: the two are set at the resolve and cleared together.
     last_resolution: Option<ResolutionView>,
     /// The stretch has broken since the last resolve, so `attempted` and `last_resolution`
-    /// clear as soon as the tracker is not committed. See [`Session::count_stretch`].
+    /// clear as soon as no resolve's freeze is holding. See [`Session::record_decision`].
     rearm_pending: bool,
 }
 
@@ -576,14 +576,14 @@ impl Session {
     /// Count one frame into the stretch. `trusted` is the lock's verdict, `detected` whether
     /// this frame found a card, `settled` whether the tracker was committed going into it.
     ///
-    /// **A stretch is the run of frames the lock stays trusted, and in Exact one stretch is one
-    /// card.** Only a lock that stops being trusted breaks it, and a broken stretch forgets its
-    /// burst and its counts. It does not forget the resolve: it *arms* a re-arm
-    /// (`rearm_pending`), which [`Session::record_decision`] takes only once the tracker is no
-    /// longer committed. A one-frame degenerate quad drops the lock for two frames on a card
-    /// that never moved, and the tracker's freeze outlasts that blip — so the decided card is
-    /// neither resolved nor added again, while a card actually taken away releases the freeze
-    /// and lets the next one resolve.
+    /// **A stretch is the run of frames the lock stays trusted.** Only a lock that stops being
+    /// trusted breaks it, and a broken stretch forgets its burst and its counts. It does not
+    /// forget the resolve: it *arms* a re-arm (`rearm_pending`), which
+    /// [`Session::record_decision`] takes unless a resolve's own freeze is still holding. So one
+    /// card can span two stretches: a one-frame degenerate quad drops the lock for two frames on
+    /// a card that never moved, the freeze outlasts that blip, and the decided card is neither
+    /// resolved nor added again — while a card actually taken away releases the freeze and lets
+    /// the next one resolve.
     ///
     /// A trusted frame whose detector missed changes nothing: it neither counts toward the
     /// stretch nor ends it.
@@ -608,15 +608,19 @@ impl Session {
     /// one stretch — a hash that prefers another card than the one the reads resolved — can
     /// never decide the held card twice. Either way a commit ends the leaderless run.
     ///
-    /// A re-arm armed by a broken stretch is taken here, once nothing is committed: the card
-    /// that was decided has gone as far as the tracker is concerned.
+    /// A re-arm armed by a broken stretch is taken here, on every observed frame, unless a
+    /// freeze **a resolve made** is still holding — that is the decided card, blipped. A freeze
+    /// the votes made after a `NotFound` holds nothing back: that card was never decided, and
+    /// "the next steady stretch tries again" (spec §6.4). This is the only place a re-arm is
+    /// taken; a verdict changed between frames by `set_options` is seen here one frame later.
     fn record_decision(&mut self, committed: bool) {
         if self.mode == ScanMode::Fast && committed && !self.was_committed {
             self.decision_seq += 1;
         }
         if committed {
             self.leaderless_locked = 0;
-        } else if self.rearm_pending {
+        }
+        if self.rearm_pending && (!committed || self.last_resolution.is_none()) {
             self.attempted = false;
             self.last_resolution = None;
             self.rearm_pending = false;
@@ -956,18 +960,12 @@ impl Session {
                 let _ = eligible;
             }
             // No per-frame reader. The last few locked frames are kept, and once the lock has
-            // held long enough a resolve reads over all of them — once per stretch, whatever
-            // the tracker does meanwhile. A vote commit that got there first does not block it
-            // (`commit_to` replaces that tally); a freeze lifting does not re-arm it.
+            // held long enough a resolve reads over all of them — once, until a re-arm is taken
+            // (see `Session::record_decision`). A vote commit that got there first does not
+            // block it (`commit_to` replaces that tally). A freeze lifting inside an unbroken
+            // stretch does not re-arm it; after a break, a resolved card's freeze releasing is
+            // what does.
             ScanMode::Exact => {
-                // A pending re-arm is taken here too, not only after the previous frame's
-                // observation, so a card that left and a new one arriving is resolved on the
-                // first eligible frame whatever changed the tracker's verdict in between.
-                if self.rearm_pending && !settled {
-                    self.attempted = false;
-                    self.last_resolution = None;
-                    self.rearm_pending = false;
-                }
                 self.burst.push_back(StoredView {
                     rectified: rectified.clone(),
                     rectified_180: rectified_180.clone(),
@@ -1856,6 +1854,63 @@ mod tests {
             assert!(v.resolution.is_none(), "the blip re-resolved the held card on frame {f}");
             assert_eq!(v.decision_seq, 1);
             assert!(v.decision.is_some(), "a frozen frame after the blip lost its decision");
+        }
+    }
+
+    #[test]
+    fn a_vote_freeze_after_a_not_found_does_not_hold_back_the_next_stretch() {
+        // Spec §6.4: "NotFound commits nothing; the next steady stretch tries again." The card
+        // was badly framed for the burst, then steadied, and the tracker's own votes committed
+        // and froze on it. That freeze was not made by a resolve, so it must not keep the card
+        // undecided for as long as it is held: one lock break, and the next stretch resolves.
+        use crate::hash::{hash_rgb, HashKind};
+        use crate::index::{BundleBuilder, Section};
+        let card = card_image(3);
+        let mut b = BundleBuilder::new(HashKind::DHash, 256);
+        b.push(Section::Card, id(3), &hash_rgb(&card, HashKind::DHash, 256));
+        let mut r = Reference::new(b.finish(0));
+        let label = Label {
+            name: "Card 20".into(),
+            set: "hob".into(),
+            number: "3".into(),
+            lang: "en".into(),
+            released: "2025-01-01".into(),
+        };
+        r.add_label(id(3), Some(id(20)), None, label);
+        let mut s = Session::new(Some(r), None, 5);
+        s.mode = ScanMode::Exact;
+
+        // The burst sees the card's negative: every gradient comparison flipped, nothing inside
+        // the gate.
+        let negative = RgbImage::from_fn(card.width(), card.height(), |x, y| {
+            let p = card.get_pixel(x, y).0;
+            image::Rgb([255 - p[0], 255 - p[1], 255 - p[2]])
+        });
+        let mut v = locked_frame(&mut s, &negative);
+        for _ in 1..EXACT_STEADY_FRAMES {
+            v = locked_frame(&mut s, &negative);
+        }
+        let res = v.resolution.as_ref().expect("the burst resolved");
+        assert_eq!(res.outcome, Outcome::NotFound, "the premise: {:?}", res.tiers);
+
+        for _ in 0..8 {
+            assert!(locked_frame(&mut s, &card).resolution.is_none());
+        }
+        assert!(s.tracker.last_committed(), "the premise: the votes committed and froze");
+        assert_eq!(s.decision_seq, 0);
+
+        lost_frame(&mut s);
+        let mut v = locked_frame(&mut s, &card);
+        for _ in 1..EXACT_STEADY_FRAMES {
+            assert!(v.resolution.is_none());
+            v = locked_frame(&mut s, &card);
+        }
+        let res = v.resolution.as_ref().expect("the vote freeze held back the next stretch");
+        assert_eq!(res.outcome, Outcome::Resolved, "{:?}", res.tiers);
+        assert_eq!(v.decision_seq, 1);
+        assert!(v.decision.is_some());
+        for _ in 0..10 {
+            assert_eq!(locked_frame(&mut s, &card).decision_seq, 1);
         }
     }
 
