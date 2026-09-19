@@ -167,9 +167,12 @@ queries that makes stale.** The repository's standing boundary, applied.
   only place a *reader's press* reaches these tables at all:
   - `muted_tags` — `tag_mute` and `tag_unmute`;
   - `sync_devices` and `device_names` — `sync_device_rename`;
-  - `price_snapshots`, `sync_state`, `sync_peers` — **not marked**: the app writes them itself (a
-    day's prices, a sync cursor, a watermark) and no window's press does, so no window is behind
-    another about them.
+  - `sync_state` — `sync_patreon_claim` and `sync_group_leave`. **The first draft listed it as
+    written only by the app, and that was wrong**: it is also a sync cursor and a token cache the
+    app rewrites on every trip, but Connect and Leave are presses that change what the Sync panel
+    draws, and a second window's panel would otherwise stay on the old membership;
+  - `price_snapshots`, `sync_peers` — **not marked**: the app writes them itself (a day's prices, a
+    peer watermark) and no window's press does, so no window is behind another about them.
 
   A test enumerates every `WITHOUT ROWID` table in `main.sqlite_master` against those two lists, so
   a seventh goes red until somebody decides.
@@ -179,10 +182,13 @@ queries that makes stale.** The repository's standing boundary, applied.
   most one permit, so a commit storm is one wake.
 - **The emitter.** A task spawned in `start()`, desktop only:
   1. await `changes_wake`, then sleep **50 ms** so a burst of commits is one event;
-  2. **take and drop the write lock** (`db::lock_for`, `WRITE_LOCK_WAIT`) — the commit hook fires
-     *before* the commit is durable, and the commit happens under that mutex, so acquiring it is a
-     barrier that proves the commit that rang has finished. On timeout, emit anyway;
-  3. `take()` the bits — always, so nothing stale is waiting when a second window opens;
+  2. **take the bits while holding the write lock** (`db::lock_for`, `WRITE_LOCK_WAIT`) — the commit
+     hook fires *before* the commit is durable, and the commit happens under that mutex, so holding
+     it proves the commit that rang has finished. **The take happens under the lock, not after it**,
+     and the first draft had it after: a transaction that began in the gap between the drop and the
+     take would have its bit taken before its own commit, and that commit would then find nothing
+     pending and ring nothing — a write no other window ever hears about. On timeout, take anyway.
+     Taken always, even with one window, so nothing stale is waiting when a second one opens;
   4. if the bits are non-zero **and** `app.webview_windows().len() >= 2`, `app.emit("db:changed",
      DbChanged { tables })`.
 
@@ -215,6 +221,14 @@ asserting against it.
 - **Every invalidation carries a predicate that spares the per-window keys**, and the prefix match
   is why it has to: deck sort is `["decks", "sort"]`, under the `["decks"]` root every deck write
   refreshes, so without the predicate an edit in window A would pull A's sort into window B.
+- **⚠️ A read that writes is a refresh loop, and the writing window is inside it.** Every window —
+  the writer included — refetches on the event, so a query whose command writes the table its own
+  key is refreshed by writes, emits, refetches and writes again, forever. `share_list` is one: it
+  reconciles `collection_shares` against the relay on every read, so **`collection_shares` maps to
+  nothing**, and a second window's share badges catch up on its own next read. An audit of every
+  query's command on 2026-09-19 found no other; two reads write once and settle
+  (`sync_pairing_status` minting the identity, the scanner's stale-folder correction). A new
+  command that writes on read must be checked against this map before it ships.
 
 ### `app_meta`: which rows follow
 
@@ -223,12 +237,21 @@ live**, and every key not on it stays per window:
 
 | Follows live | Stays per window |
 | --- | --- |
-| `START_VIEW_KEY`, `HOME_LAYOUT_KEY`, `["scanner","prefs"]`, `["scanner","tray"]`, `MARKETPLACE_KEY`, `MARK_COLORS_KEY`, `RECENT_CARDS_ROOT`, `["decks","lastFormat"]`, `MIRROR_KEY` | card zoom, list/grid and flatten (store state seeded once at launch, never a query), `NAV_COLLAPSED_KEY`, `SEARCH_OPEN_KEY`, `FOLDER_PANE_KEY`, `["decks","sort"]`, `DECK_SEARCH_TAB_KEY`, `PRINTING_GROUP_BY_KEY` |
+| `START_VIEW_KEY`, `HOME_LAYOUT_KEY`, `MARKETPLACE_KEY`, `MARK_COLORS_KEY`, `RECENT_CARDS_ROOT`, `["decks","lastFormat"]`, `MIRROR_KEY` — and `["scanner","prefs"]`, `["scanner","tray"]` as `SINGLE_WRITER_KEYS`, below | card zoom, list/grid and flatten (store state seeded once at launch, never a query), `NAV_COLLAPSED_KEY`, `SEARCH_OPEN_KEY`, `FOLDER_PANE_KEY`, `["decks","sort"]`, `DECK_SEARCH_TAB_KEY`, `PRINTING_GROUP_BY_KEY` |
 
 Refetching the follow-live keys is what closes the whole-value race: every window writes the home
 layout, the scanner tray and the scanner prefs **from fresh data**. A view-pref write in one window
 still triggers the `app_meta` entry; the follow-live keys refetch to the same values and the
 per-window keys are untouched, which is the point.
+
+**⚠️ The scanner's two keys are single-writer, and refetching them where they are live loses
+cards.** `useTray` holds scanned cards in its cache and writes them 400 ms after scanning pauses; a
+refetch inside that gap — and *any* `app_meta` write triggers one, the scanning window's own
+included — replaces the cache with the older stored rows, and the pending write then stores those.
+The lease (§5) guarantees only the owning window has these queries active, so on an `app_meta`
+change an **active** `["scanner","tray"]` / `["scanner","prefs"]` query is left alone entirely, and
+an **inactive** one is *removed* — a window that later takes the lease reads fresh from scratch
+rather than drawing stale rows while a background refetch runs.
 
 **A marketplace change needs no follow-on work, and the first draft said it did.** Every
 price-bearing query carries the marketplace **in its key** (`src/CLAUDE.md`), so once window B's
