@@ -677,9 +677,10 @@ pub fn run() {
             // The scanner, its prefs and its tray. The session's state is managed separately
             // below — see scanner.rs; the prefs and the tray are `app_meta` rows on `AppState`.
             scanner::scanner_status,
-            // Whether another window holds the session — one window scans at a time, on a lease
-            // its frames renew — asked without taking it, so a second window's Scanner view can
-            // say so before it opens a camera. See `scanner::LEASE`.
+            // Whether another window holds the scanner — one window scans at a time, on a lease
+            // renewed by the open view's heartbeat, its frames and every tray or prefs write —
+            // asked without taking it, so a second window's Scanner view can say so before it
+            // opens a camera. See `scanner::LEASE`.
             scanner::scanner_elsewhere,
             // The mounted view's heartbeat: it takes the lease, so the view holds the scanner from
             // its first render whatever its camera is doing.

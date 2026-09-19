@@ -88,11 +88,12 @@ deliberately**: no screenshots are stored.
   `card_image_uri` answers `null` for every printing and "Copy card image" copies nothing;
   `scannerMissing` is the three scanner assets never having been placed, which is every
   installation's state until a reader does; and `scannerElsewhere` is another window holding the
-  scanner's two-second lease, so `scanner_elsewhere` answers `true` and the Scanner view draws one
+  scanner's two-second lease, so `scanner_elsewhere` answers `true` — and `scanner_hold`, the
+  mounted view's heartbeat, refuses with the lease's sentence — and the Scanner view draws one
   sentence and opens no camera. **It is a fault rather than a seed because what it stands in for
   is a second window**, and a story is one window (`window_new` only answers, `window_count` is
   always one) — and it is not a failure because the lease lapses on its own once the other
-  window stops sending frames.
+  window's view has gone and its tray and prefs writes have landed.
   **`patreonDeclined`, `patreonLapsed` and `patreonGroupEntitled` are the other three, and they
   are the three supporter states no press can reach.** Connecting *is* reachable — paste a claim
   code, press Connect — so there is neither fault nor seed for it; what a reader can never

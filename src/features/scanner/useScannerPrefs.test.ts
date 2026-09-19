@@ -161,10 +161,11 @@ describe("useScannerPrefs", () => {
 
   /**
    * **A BUSY write keeps the prefs in memory and says nothing** — a sync holds the write
-   * connection for seconds, and the reader's switch has not failed, it is waiting. One more try
-   * after a short delay is what makes a change nobody follows up survive a restart.
+   * connection for seconds, and the reader's switch has not failed, it is waiting. Trying again
+   * after a short delay is what makes a change nobody follows up survive a restart; a try that
+   * lands is the last.
    */
-  it("keeps the prefs through a BUSY write and tries once more after a short delay", async () => {
+  it("keeps the prefs through a BUSY write, tries again after a short delay, and stops once it lands", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     setScannerPrefs.mockRejectedValueOnce(BUSY);
     const { result } = mount();
@@ -187,7 +188,7 @@ describe("useScannerPrefs", () => {
     expect(setScannerPrefs).toHaveBeenLastCalledWith({ ...DEFAULT_SCANNER_PREFS, developer: true });
     expect(result.current.filterError).toBeNull();
 
-    // Once more and no further: a write that is still refused waits for the next change.
+    // The try landed, so nothing more goes out.
     await act(async () => {
       await vi.advanceTimersByTimeAsync(PREFS_RETRY_MS * 5);
     });
@@ -197,9 +198,9 @@ describe("useScannerPrefs", () => {
   /**
    * **The lease's refusal is `BUSY`'s twin.** `set_scanner_prefs` answers `OPEN_ELSEWHERE` while
    * another window holds the scanner, which says nothing about the prefs: they stay as the reader
-   * set them, nothing reverts, and the one more try goes out on the same schedule.
+   * set them, nothing reverts, and the write is tried again on the same schedule.
    */
-  it("keeps the prefs through a write refused as open elsewhere, and tries once more like BUSY", async () => {
+  it("keeps the prefs through a write refused as open elsewhere, and tries again like BUSY", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     scannerPrefs.mockResolvedValue(STORED);
     setScannerPrefs.mockRejectedValueOnce(SCANNER_OPEN_ELSEWHERE);
@@ -306,33 +307,106 @@ describe("useScannerPrefs under another window's refresh", () => {
     expect(setScannerPrefs).toHaveBeenLastCalledWith({ ...STORED, developer: true });
   });
 
-  /** A sync outlasts one retry; the change is still nowhere but here until a write lands. */
-  it("keeps them after the one more try is refused too, and drops them once a write has landed", async () => {
+});
+
+/**
+ * **A prefs write still owed is tried until it lands** — for a sync and for another window's lease
+ * alike, once an interval and never faster, stopping when a write lands, a newer write supersedes
+ * it, or the cache entry is gone. Every try is `set_scanner_prefs`, the lease-gated command, so the
+ * window holding an unsaved change holds the scanner the whole time.
+ */
+describe("useScannerPrefs retrying until the write lands", () => {
+  it.each([
+    ["a sync", BUSY],
+    ["another window's lease", SCANNER_OPEN_ELSEWHERE],
+  ])("keeps trying a write refused by %s, once an interval, until it lands", async (_, refusal) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    scannerPrefs.mockResolvedValue(STORED);
+    setScannerPrefs.mockRejectedValue(refusal);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { result, unmount } = mount(qc);
+    await advance(0);
+    act(() => result.current.update({ developer: true }));
+    await advance(0);
+    unmount();
+    expect(setScannerPrefs, "the premise: the write was refused").toHaveBeenCalledTimes(1);
+
+    for (let tries = 2; tries <= 8; tries += 1) {
+      await advance(PREFS_RETRY_MS - 1);
+      expect(setScannerPrefs, "a try went out before its interval").toHaveBeenCalledTimes(tries - 1);
+      await advance(1);
+      expect(setScannerPrefs, `try ${tries} did not go out`).toHaveBeenCalledTimes(tries);
+      expect(setScannerPrefs).toHaveBeenLastCalledWith({ ...STORED, developer: true });
+      refreshForTables(qc, ["app_meta"]);
+      expect(qc.getQueryData(PREFS), "the prefs were dropped while their write was still refused").toEqual({
+        ...STORED,
+        developer: true,
+      });
+    }
+
+    setScannerPrefs.mockResolvedValue(undefined);
+    await advance(PREFS_RETRY_MS);
+    expect(setScannerPrefs).toHaveBeenCalledTimes(9);
+    await advance(PREFS_RETRY_MS * 10);
+    expect(setScannerPrefs, "a try went out after one had landed").toHaveBeenCalledTimes(9);
+    refreshForTables(qc, ["app_meta"]);
+    expect(qc.getQueryCache().find({ queryKey: PREFS, exact: true })).toBeUndefined();
+  });
+
+  /** A refusal no wait changes gets the one more try it always had, and no loop. */
+  it("gives any other refusal one more try and no further", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    scannerPrefs.mockResolvedValue(STORED);
+    setScannerPrefs.mockRejectedValue("the scanner state is poisoned");
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { result, unmount } = mount(qc);
+    await advance(0);
+    act(() => result.current.update({ developer: true }));
+    await advance(0);
+    unmount();
+    await advance(PREFS_RETRY_MS * 10);
+    expect(setScannerPrefs).toHaveBeenCalledTimes(2);
+    refreshForTables(qc, ["app_meta"]);
+    expect(qc.getQueryData(PREFS)).toEqual({ ...STORED, developer: true });
+  });
+
+  it("stops trying once the cache entry has gone, rather than storing the defaults", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     scannerPrefs.mockResolvedValue(STORED);
     setScannerPrefs.mockRejectedValue(BUSY);
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const first = mount(qc);
+    const { result, unmount } = mount(qc);
     await advance(0);
-    act(() => first.result.current.update({ developer: true }));
-    await advance(PREFS_RETRY_MS * 5);
-    expect(setScannerPrefs, "the premise: the write and its retry were both refused").toHaveBeenCalledTimes(2);
-    first.unmount();
-
-    refreshForTables(qc, ["app_meta"]);
-    expect(qc.getQueryData(PREFS)).toEqual({ ...STORED, developer: true });
-
-    setScannerPrefs.mockResolvedValue(undefined);
-    const second = mount(qc);
+    act(() => result.current.update({ developer: true }));
     await advance(0);
-    expect(second.result.current.prefs).toEqual({ ...STORED, developer: true });
-    act(() => second.result.current.update({ mode: "exact" }));
-    await advance(0);
-    expect(setScannerPrefs).toHaveBeenLastCalledWith({ ...STORED, developer: true, mode: "exact" });
-    second.unmount();
+    unmount();
+    await advance(PREFS_RETRY_MS * 2);
+    expect(setScannerPrefs).toHaveBeenCalledTimes(3);
 
-    refreshForTables(qc, ["app_meta"]);
-    expect(qc.getQueryCache().find({ queryKey: PREFS, exact: true })).toBeUndefined();
+    qc.removeQueries({ queryKey: PREFS });
+    await advance(PREFS_RETRY_MS * 10);
+    expect(setScannerPrefs).toHaveBeenCalledTimes(3);
+  });
+
+  /** A change while the tries wait carries the whole row, so it takes the tries over. */
+  it("lets a newer change take the tries over, without a second loop", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    scannerPrefs.mockResolvedValue(STORED);
+    setScannerPrefs.mockRejectedValue(BUSY);
+    const { result } = mount();
+    await advance(0);
+    act(() => result.current.update({ developer: true }));
+    await advance(PREFS_RETRY_MS);
+    expect(setScannerPrefs).toHaveBeenCalledTimes(2);
+
+    act(() => result.current.update({ mode: "exact" }));
+    await advance(0);
+    expect(setScannerPrefs).toHaveBeenCalledTimes(3);
+    for (let tries = 4; tries <= 8; tries += 1) {
+      await advance(PREFS_RETRY_MS);
+      expect(setScannerPrefs, "two loops were running").toHaveBeenCalledTimes(tries);
+      expect(setScannerPrefs).toHaveBeenLastCalledWith({ ...STORED, developer: true, mode: "exact" });
+    }
   });
 });
 

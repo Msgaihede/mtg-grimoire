@@ -4,15 +4,15 @@ import { registerUnsavedCheck } from "@/lib/crossWindow";
 import { ipc, ipcError } from "@/lib/ipc";
 import type { ScanFilters, ScannerPrefs } from "./types";
 import { SCANNER_ELSEWHERE_KEY, SCANNER_ELSEWHERE_POLL_MS } from "./useScannerElsewhere";
-import { SCANNER_OPEN_ELSEWHERE } from "./verdictText";
+import { refusalPasses, SCANNER_OPEN_ELSEWHERE } from "./verdictText";
 
 /** The one cache entry the prefs live in — the query's key and every write's. */
 const PREFS_KEY = ["scanner", "prefs"] as const;
 
 /**
- * This client's prefs writes: how many are on the wire, a number for the newest one sent, the
- * refused write's one more try if it is waiting, and whether the newest write was refused with
- * nothing landed since.
+ * This client's prefs writes: how many are on the wire, a number for the newest one sent, a refused
+ * write's next try if it is waiting, and whether the newest write was refused with nothing landed
+ * since.
  *
  * **Per query client rather than per mount**, `useTray`'s queue's reason: the view that scheduled
  * a retry is usually gone by the time it runs, and `crossWindow.ts` asks about a client, not a
@@ -39,8 +39,9 @@ function writesFor(qc: QueryClient): PrefsWrites {
 /**
  * **Whether this client's prefs hold a change the store has not confirmed** — what `crossWindow.ts`
  * asks before it drops an idle prefs entry on another window's `app_meta` change. A write on the
- * wire, a retry waiting, or the newest write refused with nothing landed since: that last is a sync
- * outlasting the one more try, `useTray`'s `hasUnsavedTray` has the whole case.
+ * wire, a try waiting, or the newest write refused with nothing landed since: a sync or another
+ * window's lease keeps the first two true for as long as it lasts, and the last is a refusal no
+ * wait changes, after its one more try — `useTray`'s `hasUnsavedTray` has the whole case.
  */
 function hasUnsavedPrefs(qc: QueryClient): boolean {
   const writes = prefsWrites.get(qc);
@@ -69,12 +70,14 @@ export const SCANNER_PREFS_BEFORE_LOAD: ScannerPrefs = {
 };
 
 /**
- * How long a refused write waits before its one more try.
+ * How long a refused write waits before it is tried again.
  *
- * `set_scanner_prefs` refuses only with `db::BUSY`, which is a sync holding the write connection
- * — seconds, not minutes. A second and a half is long enough for the ordinary tail of an ingest
- * and short enough that a reader who flips a switch and quits straight away still has it next
- * launch.
+ * `set_scanner_prefs` refuses with `db::BUSY` while a sync holds the write connection and with
+ * `OPEN_ELSEWHERE` while another window holds the scanner. A second and a half is long enough for
+ * the ordinary tail of an ingest and short enough that a reader who flips a switch and quits
+ * straight away still has it next launch. **It is also what holds the lease**: every try admits
+ * this window first, so it has to stay under `scanner::LEASE`'s two seconds for a window with an
+ * unsaved change to keep the scanner through a sync that runs for minutes.
  */
 export const PREFS_RETRY_MS = 1500;
 
@@ -124,8 +127,10 @@ function current(qc: QueryClient): ScannerPrefs {
  * **A write that fails keeps the prefs in memory and says nothing.** `set_scanner_prefs` refuses
  * with BUSY while a sync holds the write connection and with `OPEN_ELSEWHERE` while another window
  * holds the scanner, and neither is about the prefs: nothing reverts, the next change writes the
- * whole row again, and one more try after {@link PREFS_RETRY_MS} is what keeps a change nobody
- * follows up. **No write stores what is not there**: each reads the cache as it goes out, and with
+ * whole row again, and **the write is tried every {@link PREFS_RETRY_MS} until it lands** — through
+ * a sync that runs for minutes, each try renewing this window's lease — which is what keeps a
+ * change nobody follows up. A refusal no wait changes gets one more try and no further. **No write
+ * stores what is not there**: each reads the cache as it goes out, and with
  * no entry — the view gone, the entry dropped — it is skipped rather than storing the defaults
  * {@link current} draws before a load.
  *
@@ -207,20 +212,32 @@ export function useScannerPrefs(): ScannerPrefsState {
         },
       );
     };
+    /**
+     * After a refused write: nothing more once a newer write has gone out, since it carries the
+     * whole row and is trying on its own account; another try after {@link PREFS_RETRY_MS} for as
+     * long as the refusal is one that passes, each on its own interval, so the loop can never run
+     * faster than that; and one more try, no further, for any other refusal. At most one try is
+     * ever waiting — `writes.retry` is a single slot, and a newer change clears it.
+     */
+    const settle = (e: unknown, seq: number, retried: boolean) => {
+      if (seq !== writes.sent || writes.retry !== null) return;
+      if (retried && !refusalPasses(ipcError(e))) return;
+      writes.retry = setTimeout(() => {
+        writes.retry = null;
+        attempt(true);
+      }, PREFS_RETRY_MS);
+    };
+    /** One write, and what follows it if it is refused. `write` numbers it synchronously. */
+    const attempt = (retried: boolean) => {
+      const going = write();
+      const seq = writes.sent;
+      going.catch((e: unknown) => settle(e, seq, retried));
+    };
     if (writes.retry !== null) {
       clearTimeout(writes.retry);
       writes.retry = null;
     }
-    write().catch(() => {
-      // A newer write has already been sent and carries the whole row; this one is superseded.
-      if (writes.retry !== null) return;
-      writes.retry = setTimeout(() => {
-        writes.retry = null;
-        // Once more and no further — a write still refused waits for the next change, and stays
-        // unsaved (`writes.refused`) until one lands.
-        write().catch(() => {});
-      }, PREFS_RETRY_MS);
-    });
+    attempt(false);
   }, [qc, persistable]);
 
   const push = useCallback(

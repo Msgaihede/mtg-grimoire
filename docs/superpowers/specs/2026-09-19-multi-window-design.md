@@ -268,15 +268,27 @@ prefs over the row. So `crossWindow.ts` keeps a small registry, `registerUnsaved
 which `useTray` and `useScannerPrefs` fill at module load — `lib` imports nothing from `features` —
 and the removal skips a key whose check says unsaved. Such an entry is left exactly as it is: not
 removed, and not invalidated either, since an invalidated idle query refetches on its next mount.
-**"Unsaved" is a write queued, on the wire, or waiting to retry — and, beyond the ruling's wording,
-the newest write refused with nothing landed since.** A first sync holds the write connection for
-minutes and outlasts the one more try, after which nothing is queued, on the wire or waiting while
-the card is still in the cache and nowhere else; without that term the removal loses it the moment
-the sync ends and any window writes `app_meta`. The cost, accepted: if another window takes the
-lease meanwhile and stores a tray of its own, this window's kept entry does not know those rows,
-and its next change writes over them — the same last-writer-wins the refresh exists to narrow,
-now only after a write was refused outright. **Retries never write what is not there**: every
-write reads the cache as it goes out, and a missing entry skips the write.
+**"Unsaved" is a write queued, on the wire, or waiting to retry — or the newest write refused with
+nothing landed since** (the last term ruled in on review, 2026-09-19). **And a write refused by a
+sync or by another window's lease is retried until it lands** (§5 item 3): every
+`TRAY_RETRY_MS` / `PREFS_RETRY_MS` (1.5 s, under the two-second lease), stopping only when a write
+lands, a newer change takes the tries over, or the cache entry is gone. So through a first sync
+that runs for minutes the first two terms stay true on their own, and every try renews the lease —
+the window with unsaved cards keeps the scanner until they are stored, and no second window can
+open a tray read from a row about to change under it. The first draft of this paragraph recorded
+the opposite as an accepted cost — retries exhausted after one more try, the lease lapsing, another
+window storing a tray, and this window's kept entry writing over it — and the retry loop is what
+closes it. **What remains, stated precisely**:
+- **Process death** before a write lands loses the unsaved cards, as it always did.
+- **A refusal that no wait changes** — a tray row of nothing, a tray past its limit — gets one more
+  try and no loop, because retrying it forever would hold the lease for good. Its rows stay unsaved
+  (the third term keeps the entry), the lease lapses, and if another window then stores a tray this
+  window's next change writes over it. The page cannot produce either refusal today.
+- **A gap longer than the lease between two tries** — a hidden window whose timers the webview
+  throttles past two seconds — lets the lease lapse while a write is still owed. Unmeasured.
+
+**Retries never write what is not there**: every write reads the cache as it goes out, and a
+missing entry skips the write and ends the tries.
 
 **A marketplace change needs no follow-on work, and the first draft said it did.** Every
 price-bearing query carries the marketplace **in its key** (`src/CLAUDE.md`), so once window B's
@@ -327,8 +339,14 @@ unchanged key — and that already reaches every window, because `marketplace:pr
      whose pending or retrying writes have not landed keeps the scanner until they do, and another
      window meanwhile sees the sentence. The reads — `scanner_prefs`, `scanner_tray`,
      `scanner_status` — stay ungated. A write refused with `OPEN_ELSEWHERE` is treated like `BUSY`:
-     the hook keeps its rows and retries on its existing schedule, and never reverts, never writes
-     defaults, never drops rows.
+     the hook keeps its rows, never reverts, never writes defaults, never drops rows — and **both
+     refusals are retried until the write lands**, once every `TRAY_RETRY_MS` / `PREFS_RETRY_MS`
+     (1.5 s, which is what keeps it under the two-second lease), never faster, stopping only when
+     a write lands, a newer change takes the tries over, or the cache entry is gone. Every try goes
+     through the lease-gated command, so it renews the lease: a window with unsaved cards holds the
+     scanner through a sync of any length. `verdictText.ts`' `refusalPasses` is the test, and its
+     `DB_BUSY` is pinned against `db.rs`. Any other refusal — the tray's two, which no wait changes —
+     gets one more try and no loop, since a loop there would hold the lease for good.
    **A lease rather than a claim/release pair, and this reverses the first draft.** Claim on mount
    and release on unmount looks simpler and is not: Tauri gives no ordering guarantee between two
    IPC calls, and `main.tsx`'s `StrictMode` mounts every effect twice in development, so
@@ -389,7 +407,10 @@ unchanged key — and that already reaches every window, because `marketplace:pr
 - The scanner's "open in another window" state, as a story and a test; the mounted view's
   heartbeat (on mount, once a poll, stopped on unmount, every refused beat re-asking the gate); the
   gate's recovery poll opening the live view once the lease lapses; a tray or prefs retry that finds
-  its entry gone writing nothing.
+  its entry gone writing nothing; a tray or prefs write refused by a sync (or the lease) through
+  seven tries, once an interval and never sooner, kept through another window's refresh after each,
+  landing once the refusal clears and sending nothing after; any other refusal getting one more try
+  only; and a newer change taking the tries over without a second loop.
 - **Mutate, then run** — for the `app_meta` split and the table map, break the code and watch the
   test go red; a green suite is not the evidence.
 
