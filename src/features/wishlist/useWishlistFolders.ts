@@ -40,8 +40,8 @@ export function useWishlistFolderList() {
 }
 
 /**
- * The wishlist's filing cabinet: every folder there is, the four writes that shape them, and
- * the per-folder summary a folder card is drawn from.
+ * The wishlist's filing cabinet: every folder there is, the writes that shape them, the two that
+ * empty them of wishes, and the per-folder summary a folder card is drawn from.
  *
  * **The folder list itself comes from {@link useWishlistFolderList}**, which this composes rather
  * than repeats — see there for why the summary below is something a caller opts into.
@@ -173,10 +173,58 @@ export function useWishlistFolders() {
    * **Its wishes are not deleted**, and a confirmation must say so: they surface at the root,
    * filed nowhere and otherwise exactly as they were. Its **sub-folders are**, by cascade. An id
    * that resolves to nothing is a success: the caller wanted that folder gone.
+   *
+   * {@link removeWithWishes} is the other answer to the same question, and the confirmation offers
+   * both.
    */
   const remove = useMutation({
     mutationFn: (id: number) => ipc.wishlistFolderDelete(id),
     ...writes,
+  });
+
+  /**
+   * **The two writes here that delete wishes rather than file them**, and so the two that settle
+   * further than `writes` does: the whole `["wishlist"]` root **and** the card search.
+   *
+   * The search for the wishlist page's `settleWhole` reason: a result row draws `wishlisted`, a
+   * heart on every printing of a card somebody wants, and after either of these presses a card
+   * may be wanted nowhere at all. Every other write in this hook moves a wish between drawers or
+   * moves a drawer, which changes no heart — a `remove` above surfaces its wishes at the root
+   * still wanted — so `writes` stays narrow and only these two widen it.
+   *
+   * On error as well as on success, `writes`' rule: a refusal is a busy database or a folder
+   * another surface has already deleted, and the second must not leave a tree drawing a node that
+   * is gone.
+   */
+  const settleWishes = () => {
+    void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
+    void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+  };
+  const wishWrites = { onSuccess: settleWishes, onError: settleWishes };
+
+  /**
+   * Empty a folder of the wishes filed **directly** in it, and keep the folder. Answers how many
+   * went.
+   *
+   * **Its sub-folders and their wishes are untouched** — a clear is about the level the reader is
+   * looking at, and the drawers inside it are levels of their own. A folder that is gone is
+   * refused in words (`That folder is not there any more.`).
+   */
+  const clear = useMutation({
+    mutationFn: (id: number) => ipc.wishlistFolderClear(id),
+    ...wishWrites,
+  });
+
+  /**
+   * Delete a folder, every folder inside it **and every wish filed anywhere in that sub-tree** —
+   * {@link remove} with the wishes going too, which is the whole difference and the reason it is a
+   * second button rather than a checkbox on the first. Answers how many wishes went; a folder that
+   * is gone is refused in words where `remove` calls it a success, because the likeliest way it
+   * went is `remove` itself, which left its wishes at the root.
+   */
+  const removeWithWishes = useMutation({
+    mutationFn: (id: number) => ipc.wishlistFolderDeleteWithWishes(id),
+    ...wishWrites,
   });
 
   return {
@@ -192,6 +240,8 @@ export function useWishlistFolders() {
     move,
     reorder,
     remove,
+    clear,
+    removeWithWishes,
   };
 }
 

@@ -7298,6 +7298,20 @@ export const ipc = {
    */
   wishlistFolderDelete: (id: number) => invoke<void>("wishlist_folder_delete", { id }),
   /**
+   * Delete {@link ipc.wishlistFolderDelete}'s whole reach **and the wishes in it** — the folder,
+   * every folder inside it, and every wish filed anywhere in that sub-tree. Answers how many
+   * wishes went. A folder that is gone is **refused** in words, unlike its sibling's success: the
+   * likeliest way it went is the plain delete, which left its wishes at the root.
+   */
+  wishlistFolderDeleteWithWishes: (id: number) =>
+    invoke<number>("wishlist_folder_delete_with_wishes", { id }),
+  /**
+   * Empty a folder of the wishes filed **directly** in it, and keep the folder. Its sub-folders
+   * and every wish in them are untouched — this is the level the reader is looking at, not the
+   * tree under it. Answers how many wishes went; a folder that is gone is refused in words.
+   */
+  wishlistFolderClear: (id: number) => invoke<number>("wishlist_folder_clear", { id }),
+  /**
    * Move a wish to a folder — `folderId: null` is the root wishlist, a real destination and
    * not an omission.
    *

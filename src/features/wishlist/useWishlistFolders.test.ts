@@ -10,6 +10,8 @@ const wishlistFolderRename = vi.hoisted(() => vi.fn());
 const wishlistFolderMove = vi.hoisted(() => vi.fn());
 const wishlistFolderReorder = vi.hoisted(() => vi.fn());
 const wishlistFolderDelete = vi.hoisted(() => vi.fn());
+const wishlistFolderClear = vi.hoisted(() => vi.fn());
+const wishlistFolderDeleteWithWishes = vi.hoisted(() => vi.fn());
 const wishlistFolderSummary = vi.hoisted(() => vi.fn());
 // `useWishlistFolders` reads `useMarketplace()`, which is the real hook here rather than a
 // fake — so its own queries need answers too. `marketplaceFeedStatus` is never asserted on;
@@ -25,6 +27,8 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     wishlistFolderMove,
     wishlistFolderReorder,
     wishlistFolderDelete,
+    wishlistFolderClear,
+    wishlistFolderDeleteWithWishes,
     wishlistFolderSummary,
     getMarketplace,
     marketplaceFeedStatus,
@@ -73,6 +77,9 @@ beforeEach(() => {
     .mockReset()
     .mockResolvedValue([{ ...STAPLES, parentId: null, sortOrder: 0 }, { ...WANTS, sortOrder: 1 }]);
   wishlistFolderDelete.mockReset().mockResolvedValue(undefined);
+  // How many wishes went — the only thing either command answers.
+  wishlistFolderClear.mockReset().mockResolvedValue(3);
+  wishlistFolderDeleteWithWishes.mockReset().mockResolvedValue(4);
   wishlistFolderSummary.mockReset().mockResolvedValue([WANTS_SUMMARY, STAPLES_SUMMARY]);
   // Matches `DEFAULT_MARKETPLACE`, so a test that does not care about marketplace settles with
   // no observable change from the hook's own initial guess.
@@ -296,5 +303,60 @@ describe("useWishlistFolders", () => {
     await waitFor(() =>
       expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist", "folders"] }),
     );
+  });
+
+  /**
+   * **The two writes that delete wishes, and the one place this hook reaches past `["wishlist"]`.**
+   *
+   * A search row draws a `wishlisted` heart per printing, so a wish gone from the list is a heart
+   * that has to go from the search wall too — every other write here only moves wishes between
+   * drawers and leaves every heart where it was. Both roots are asserted for each command, because
+   * dropping the second is a heart still drawn over a card nobody wants any more, and nothing else
+   * in this file would go red for it.
+   */
+  it.each([
+    ["clear", wishlistFolderClear, 3],
+    ["removeWithWishes", wishlistFolderDeleteWithWishes, 4],
+  ] as const)(
+    "%s deletes by id and re-reads the wishlist and the card search",
+    async (name, command, went) => {
+      const { result } = renderHook(() => useWishlistFolders(), { wrapper });
+      await waitFor(() => expect(result.current.folders).toHaveLength(2));
+      const invalidate = vi.spyOn(client, "invalidateQueries");
+
+      await expect(result.current[name].mutateAsync(1)).resolves.toBe(went);
+
+      expect(command).toHaveBeenCalledWith(1);
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] });
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cards", "search"] });
+    },
+  );
+
+  /** A refusal re-reads both roots too — `clear` refuses a folder another surface has already
+   *  deleted, and the tree must not go on drawing it. */
+  it("re-reads the wishlist and the card search when a clear is refused", async () => {
+    wishlistFolderClear.mockRejectedValue("That folder is not there any more.");
+    const { result } = renderHook(() => useWishlistFolders(), { wrapper });
+    await waitFor(() => expect(result.current.folders).toHaveLength(2));
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    await expect(result.current.clear.mutateAsync(1)).rejects.toBe(
+      "That folder is not there any more.",
+    );
+
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] }));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cards", "search"] });
+  });
+
+  /** The other half of the claim above: a plain `remove` leaves every wish still wanted, at the
+   *  root, so it has no heart to take down and must not throw away the search wall for one. */
+  it("leaves the card search alone after a plain folder delete", async () => {
+    const { result } = renderHook(() => useWishlistFolders(), { wrapper });
+    await waitFor(() => expect(result.current.folders).toHaveLength(2));
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    await result.current.remove.mutateAsync(1);
+
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["cards", "search"] });
   });
 });

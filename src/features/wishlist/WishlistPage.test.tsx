@@ -47,6 +47,10 @@ const wishlistFolderRename = vi.hoisted(() => vi.fn());
 const wishlistFolderMove = vi.hoisted(() => vi.fn());
 const wishlistFolderReorder = vi.hoisted(() => vi.fn());
 const wishlistFolderDelete = vi.hoisted(() => vi.fn());
+// The two folder writes that delete wishes (issue #471) — a card's `Clear…`, and the delete
+// question's second answer.
+const wishlistFolderClear = vi.hoisted(() => vi.fn());
+const wishlistFolderDeleteWithWishes = vi.hoisted(() => vi.fn());
 const wishlistSetFolder = vi.hoisted(() => vi.fn());
 // The price sweep (issue #352). Two commands and one dialog — the plan writes nothing, and only
 // the ticked rows reach the apply.
@@ -81,6 +85,8 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     wishlistFolderMove,
     wishlistFolderReorder,
     wishlistFolderDelete,
+    wishlistFolderClear,
+    wishlistFolderDeleteWithWishes,
     wishlistSetFolder,
     wishlistOptimizePlan,
     wishlistOptimizeApply,
@@ -524,6 +530,9 @@ beforeEach(() => {
   // reaches nothing here and the empty array is the honest fixture.
   wishlistFolderReorder.mockReset().mockResolvedValue([]);
   wishlistFolderDelete.mockReset().mockResolvedValue(undefined);
+  // How many wishes went, which is all either command answers.
+  wishlistFolderClear.mockReset().mockResolvedValue(1);
+  wishlistFolderDeleteWithWishes.mockReset().mockResolvedValue(3);
   wishlistSetFolder.mockReset().mockResolvedValue({ id: 7, quantity: 4, removed: false });
   // A wishlist already on its cheapest printings, which is what every block but the price sweep's
   // is about — so the dialog is drawable everywhere and reaches nothing unless a case presses it.
@@ -2509,13 +2518,139 @@ describe("the folders", () => {
     await userEvent.click(within(menu).getByRole("menuitem", { name: /Delete/ }));
 
     const question = await screen.findByText(
-      "Its wishes move back to your wishlist; folders inside it are deleted.",
+      "Its wishes can move back to your wishlist or be deleted with it; " +
+        "folders inside it are deleted either way.",
     );
     expect(drawnAboveTheWall(question)).toBe(true);
 
     await userEvent.click(screen.getByRole("button", { name: "Delete folder" }));
 
     expect(wishlistFolderDelete).toHaveBeenCalledWith(1);
+    // The answer that keeps every wish reaches only the write that keeps them.
+    expect(wishlistFolderDeleteWithWishes).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **The delete question's second answer, and the one that takes the wishes with it** (issue
+   * #471). It is a second button rather than a checkbox on the first, so a reader who presses
+   * `Delete folder` from habit still keeps every wish — and this is where the two presses are
+   * held to two different writes.
+   */
+  it("deletes a folder and every wish in it from the second answer", async () => {
+    wrap(<WishlistPage />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Manage Ordered" }));
+    await userEvent.click(
+      within(await screen.findByRole("menu")).getByRole("menuitem", { name: /Delete/ }),
+    );
+    const question = await screen.findByRole("group", { name: "Delete Ordered" });
+
+    await userEvent.click(
+      within(question).getByRole("button", { name: "Delete folder and wishes" }),
+    );
+
+    expect(wishlistFolderDeleteWithWishes).toHaveBeenCalledWith(1);
+    expect(wishlistFolderDelete).not.toHaveBeenCalled();
+    // Answered, so the question goes — `dismiss` on success, as the plain delete does.
+    await waitFor(() =>
+      expect(screen.queryByRole("group", { name: "Delete Ordered" })).not.toBeInTheDocument(),
+    );
+  });
+
+  /**
+   * **`Clear…` empties a drawer and keeps it, and its question states the number** — the one
+   * figure the card cannot show. `Ordered`'s card reads `3 wishes`, its own recursive total, while
+   * a clear takes only the one filed directly in it; `Backordered`'s two are what the second
+   * sentence promises are left alone.
+   */
+  it("clears a folder of its own wishes from the card, and says which ones go", async () => {
+    wrap(<WishlistPage />);
+    // The summary has answered, so the count in the question is a count and not a guess.
+    await screen.findByRole("button", { name: /^Ordered folder, 3 wishes/ });
+
+    await userEvent.click(screen.getByRole("button", { name: "Manage Ordered" }));
+    const row = within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Clear…" });
+    expect(row).not.toHaveAttribute("aria-disabled");
+    await userEvent.click(row);
+
+    const question = await screen.findByRole("group", { name: "Clear Ordered" });
+    expect(drawnAboveTheWall(question)).toBe(true);
+    expect(within(question).getByText("Clear “Ordered”?")).toBeInTheDocument();
+    expect(
+      within(question).getByText(
+        "Its 1 wish filed directly in it is removed from your wishlist. " +
+          "Folders inside it keep theirs.",
+      ),
+    ).toBeInTheDocument();
+
+    await userEvent.click(within(question).getByRole("button", { name: "Clear folder" }));
+
+    expect(wishlistFolderClear).toHaveBeenCalledWith(1);
+    await waitFor(() =>
+      expect(screen.queryByRole("group", { name: "Clear Ordered" })).not.toBeInTheDocument(),
+    );
+  });
+
+  /** The count agrees with its verb, and a drawer with no drawers of its own is not told its
+   *  sub-folders keep anything — there are none to keep it. */
+  it("says a sub-folder's own count, and names no folders inside one that has none", async () => {
+    wrap(<WishlistPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /^Ordered folder/ }));
+
+    await userEvent.click(await screen.findByRole("button", { name: "Manage Backordered" }));
+    await userEvent.click(
+      within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Clear…" }),
+    );
+
+    const question = await screen.findByRole("group", { name: "Clear Backordered" });
+    expect(
+      within(question).getByText("Its 2 wishes filed directly in it are removed from your wishlist."),
+    ).toBeInTheDocument();
+    expect(question).not.toHaveTextContent("Folders inside it keep theirs.");
+  });
+
+  /**
+   * **Greyed on an answer, with its reason.** `Someday` has no summary row — the read groups the
+   * wishes, so an empty drawer is absent rather than zeroed — and once that summary is in, a clear
+   * there could only answer `0`. The row's name carries the reason as well as the label, this
+   * repo's convention for a greyed row, so it is found by the label and its name asserted whole.
+   */
+  it("greys Clear… on a folder with nothing filed directly in it, and says why", async () => {
+    const user = userEvent.setup();
+    wrap(<WishlistPage />);
+    await screen.findByRole("button", { name: "Someday folder, 0 wishes" });
+
+    await user.click(screen.getByRole("button", { name: "Manage Someday" }));
+    const row = within(await screen.findByRole("menu")).getByRole("menuitem", { name: /^Clear…/ });
+    expect(row).toHaveAttribute("aria-disabled", "true");
+    expect(row).toHaveAccessibleName(/Nothing filed directly here/);
+
+    await user.click(row);
+    expect(screen.queryByRole("group", { name: "Clear Someday" })).not.toBeInTheDocument();
+    expect(wishlistFolderClear).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **A silence is not an answer.** Before the summary is in, a missing row means nothing, so the
+   * row stays live and the question names *which* wishes without guessing how many — a greyed row
+   * over a drawer the summary simply had not counted yet would refuse a press that works.
+   */
+  it("keeps Clear… live before the summary answers, and counts nothing it has not been told", async () => {
+    wishlistFolderSummary.mockReturnValue(new Promise(() => {}));
+    wrap(<WishlistPage />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Manage Someday" }));
+    const row = within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Clear…" });
+    expect(row).not.toHaveAttribute("aria-disabled");
+    await userEvent.click(row);
+
+    const question = await screen.findByRole("group", { name: "Clear Someday" });
+    expect(
+      within(question).getByText("The wishes filed directly in it are removed from your wishlist."),
+    ).toBeInTheDocument();
+
+    await userEvent.click(within(question).getByRole("button", { name: "Clear folder" }));
+    expect(wishlistFolderClear).toHaveBeenCalledWith(3);
   });
 
   /**

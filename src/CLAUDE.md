@@ -556,8 +556,8 @@ Every one of these has its measurement and its story in
   is both, and **the border is the whole of what tells them apart**, on the dashed rule above: the
   create tile stays **solid** because it is still a control, the renaming card stays **dashed**
   because it is already a container, and both go `border-accent` while open. The strip survives
-  for `Move to folder…` and `Delete…` alone — neither is a name typed on a line, and neither has a
-  tile of its own. **The caret's return is the part a new naming tile must not reinvent**: the
+  for `Move to folder…` and `Delete…` — plus the wishlist's `Clear…` since issue #471 — and for
+  nothing else: none of them is a name typed on a line, and none has a tile of its own. **The caret's return is the part a new naming tile must not reinvent**: the
   page's `dismiss` focuses the element it remembered as the opener, and here that element is
   exactly what the field replaced, so by then it is a detached node whose `focus()` is a silent
   no-op. `useFolderFieldReturn(open)` is the fix — the host refs the control React renders in the
