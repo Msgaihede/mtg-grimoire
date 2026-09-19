@@ -1308,6 +1308,18 @@ export interface FakeUpdate {
  * the files. With no bundle there are no labels, so `scanner_set_filters` refuses any filter but
  * the empty one, in the crate's words.
  *
+ * **`scannerElsewhere`** is another window holding the scanner's lease, so `scanner_elsewhere`
+ * answers `true` and the Scanner view draws one sentence and opens no camera. It is a fault rather
+ * than a seed for `wishGone`'s reason — what it stands in for is a **second window**, and a story
+ * is one window and cannot open another ({@link windowHandlers} answers `window_count` with one),
+ * so no press here can put the lease in anybody else's hands. It is not a failure either: the lease
+ * is renewed by the other window's frames and lapses two seconds after they stop, which is why the
+ * view asks again each second rather than drawing a refusal. **Only `scanner_elsewhere` reads it.**
+ * The crate's four session commands refuse with `OPEN_ELSEWHERE` while the lease is held, and the
+ * fake does not teach them to: a view told `true` asks for no camera and no prefs, so none of them
+ * is ever sent from this state, and a refusal no story can reach would be one more sentence to keep
+ * in step with `scanner.rs` for nothing.
+ *
  * **`shareLapsed`** is a shared collection link that has gone dark, and it is `pairingReadError`'s
  * split one feature over: **the one refusal in the viewer's flow a reader cannot produce by
  * typing.** Every other way `share_open` fails is reachable from the paste box — a pasted
@@ -1349,6 +1361,7 @@ export type Fault =
   | "patreonGroupEntitled"
   | "wishGone"
   | "scannerMissing"
+  | "scannerElsewhere"
   | "shareLapsed";
 
 /**
@@ -20115,6 +20128,8 @@ export function scannerHandlers(db: FakeDb) {
   return {
     /** `scanner::scanner_status`. */
     scanner_status: (): ScannerStatus => (db.fault === "scannerMissing" ? STATUS.missing : STATUS.present),
+    /** `scanner::scanner_elsewhere` — whether another window holds the scanner's lease. */
+    scanner_elsewhere: (): boolean => db.fault === "scannerElsewhere",
     /** `scanner::scanner_frame`. */
     scanner_frame: (): ScannerVerdict => VERDICTS.decided,
     /** `scanner::scanner_reset`. */
@@ -20178,6 +20193,21 @@ export function scannerHandlers(db: FakeDb) {
       db.scannerTray = throughJson(args.remaining);
       return outcome;
     },
+  } satisfies Record<string, CommandHandler>;
+}
+
+/* --------------------------------------------------------------------- the windows ---- */
+
+/**
+ * The window commands. A story is one window and cannot open another, so `window_new` only
+ * answers and `window_count` is always one.
+ */
+export function windowHandlers() {
+  return {
+    /** `desktop::window_new`. */
+    window_new: (): void => undefined,
+    /** `desktop::window_count`. */
+    window_count: (): number => 1,
   } satisfies Record<string, CommandHandler>;
 }
 
@@ -20248,14 +20278,15 @@ export function pluginHandlers() {
 }
 
 /**
- * Reads ∪ writes ∪ the scanner ∪ the plugins: the whole command table, which is what a story
- * registers.
+ * Reads ∪ writes ∪ the scanner ∪ the windows ∪ the plugins: the whole command table, which is
+ * what a story registers.
  *
  * The first two halves close over the one `db`, so a write is visible to the next read — the
  * property that makes a story clickable rather than a snapshot. The scanner table mirrors no
  * table: it reads `db.fault` and keeps its own two `app_meta` rows (prefs and the tray), and
- * touches none of the reader's cards. The plugin table takes **no store** at all — it mirrors no
- * table and no module in the crate.
+ * touches none of the reader's cards. The window table and the plugin table take **no store** at
+ * all — the windows are the process's rather than the database's, and the plugins mirror no table
+ * and no module in the crate.
  */
 export function allHandlers(db: FakeDb) {
   return {
@@ -20263,6 +20294,7 @@ export function allHandlers(db: FakeDb) {
     ...journalled(db, writeHandlers(db)),
     ...undoHandlers(db),
     ...scannerHandlers(db),
+    ...windowHandlers(),
     ...pluginHandlers(),
   };
 }
