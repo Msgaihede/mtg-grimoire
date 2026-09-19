@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { DesktopBoot } from "./boot/DesktopBoot";
 import { installKeyboardModality } from "./lib/keyboardModality";
+import { installNativeDragGuard } from "./lib/nativeDrag";
 import { captureInstallPrompt } from "./pwa/install";
 import { PwaShell } from "./pwa/PwaShell";
 import { WebBoot } from "./web/WebBoot";
@@ -30,6 +31,12 @@ captureInstallPrompt(window);
 // property of the *window* rather than of any tree — one listener set for both roots below, and
 // for whatever remounts under them.
 installKeyboardModality(window);
+
+// Before React for the same reason, and never torn down either: this app starts no native drag
+// (every drag is dnd-kit's pointer gesture), so the only one the page could begin is a text
+// selection pulled out of place — issue #473, which took the whole window with it. The guard is
+// a property of the window, not of any view. `lib/nativeDrag.ts` has the reading.
+installNativeDragGuard(window);
 
 ReactDOM.createRoot(root).render(
   <React.StrictMode>

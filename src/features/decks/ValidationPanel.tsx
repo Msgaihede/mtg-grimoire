@@ -371,6 +371,9 @@ function Findings({
       className={cn(
         "absolute right-0 top-9 w-80 max-w-[calc(100vw-2rem)] rounded-lg border",
         "border-border bg-bg/95 p-3 text-xs shadow-lg",
+        // Findings are sentences a reader may want to copy, and the editor this hangs inside
+        // refuses text selection at its root (issue #473) — so the panel says so for itself.
+        "select-text",
         // The scale grows from the corner the panel is pinned by, which is the whole of what
         // `popup` leaves to its consumer: a panel that grew from its own middle would read as
         // unrelated to the chip it hangs off. `left-0` above is why this corner and not another.

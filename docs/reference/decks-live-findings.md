@@ -2163,3 +2163,49 @@ which is what the design does and what the other five headers in the band alread
 order in the DOM whatever flexbox does with them on screen, and every assertion about either one
 passes. It is this file's own centring rule in its general form: a pairing fault names **two**
 elements, and measuring either one of them reports nothing wrong.
+
+## Issue #473 — a text selection that took the window, 2026-09-19, `npm run tauri dev` (debug), 1920×1080, a copy of the real db
+
+The report: *"While moving a card, I accidentally highlighted header text and then selected more
+content by clicking and dragging. This resulted in a soft lock"* — no input anywhere, and no way to
+close a window whose caption is drawn by the page. Driven over CDP with raw
+`Input.dispatchMouseEvent` press/move/release, a capture-phase logger on `document`, on the Azula
+deck in Stacks.
+
+### What reproduced
+
+- **The selection.** A press-drag from the `Drawpower` heading to the `Sideboard` heading selected
+  **4 280** characters; a press on the `Maybeboard` heading dragged left over the `Drawpower` stack
+  selected **3 861**, with the card under the pointer opened by the stack's hover — the report's
+  screenshot, picture for picture. The renderer stayed responsive throughout: no long task, every
+  injected move acknowledged in ≤20 ms.
+- **The native drag.** A press *inside* that selection on a heading or a count line, then a pull,
+  logged `dragstart` and **`pointercancel`** straight after — the page handing the pointer to the
+  operating system's drag loop. The same press on a **card** inside the selection logged no
+  `dragstart` at all and started the card's dnd-kit drag instead, because `PointerSensor` refuses a
+  native `dragstart` only during a press on one of its own draggables. That split is why the report
+  reads as intermittent.
+
+### What did not, and why
+
+**The loop itself.** Input injected over CDP never enters WebView2's OS drag loop: the drag ended on
+the injected release, and a DB-free IPC (`plugin:app|version`) answered in **2–4 ms** throughout a
+seven-second hold (control: 2–29 ms with no drag). A `list_sets` probe timed out during one hold and
+then took **29.5 s** with no drag at all, which was the corpus sync holding the database, not the
+drag — a probe that touches the database is not a responsiveness probe while a sync runs. Driving
+the physical mouse was started and **abandoned**: the reader was using it on another monitor
+(`GetLastInputInfo` read 0–109 ms idle), so the last step — the window going unresponsive — is the
+report's and not a measurement.
+
+### After the fix
+
+- Every desk surface computes `user-select: none` (the editor's section, a heading, a card, the
+  ledger); both gestures above select **0** characters and fire no `selectstart`.
+- A real selection pulled in the page logs `dragstart #text [prevented]` and **no
+  `pointercancel`** — the pointer stays with the page and the `pointerup` arrives. Note the target:
+  a **text node**, which is why the guard resolves a node to its parent before asking `closest`.
+- A card dragged into the Sideboard took it from 4 to 5 — dnd-kit untouched.
+- Text is still selectable where it is read: **24** characters of the History dialog's subtitle and
+  **47** of a format-check finding, both computing `user-select: text`.
+- **Not driven live**: the text-field exemption. React reset the filter field's value when it was
+  set from outside, so there was nothing selected to pull; `nativeDrag.test.ts` is its only proof.
