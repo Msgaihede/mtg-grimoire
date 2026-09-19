@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -32,7 +32,16 @@ vi.mock("@/features/settings/HiddenTagsPanel", () => ({
 vi.mock("@/features/settings/MarketplacePanel", () => ({
   MarketplacePanel: stub("panel:prices"),
 }));
-vi.mock("@/features/settings/UpdatePanel", () => ({ UpdatePanel: stub("panel:update") }));
+/**
+ * **The one stub that reads a prop**, because the one prop this page computes for a panel is
+ * the window count and nothing else on the page draws it. `data-windows` rather than text, so
+ * `getByText("panel:update")` goes on finding it exactly as the other seven are found.
+ */
+vi.mock("@/features/settings/UpdatePanel", () => ({
+  UpdatePanel: ({ windows }: { windows?: number }) => (
+    <div data-windows={windows}>panel:update</div>
+  ),
+}));
 // `isWebTarget` reads `__CORE__`, a build-time constant vitest fixes at "tauri" — so the web
 // answer is only reachable by mocking the module, which its own doc says.
 vi.mock("@/pwa/target", () => ({ isWebTarget: vi.fn(() => false) }));
@@ -53,7 +62,11 @@ vi.mock("@/features/settings/WebStoragePanel", () => ({
  * itself — it is the only thing on this page not behind a stub — and both facts it draws come
  * out of that single answer.
  */
-const backend = vi.hoisted(() => ({ syncStatus: null as SyncStatus | null }));
+const backend = vi.hoisted(() => ({
+  syncStatus: null as SyncStatus | null,
+  /** What `window_count` answers, for `useWindowCount` and the Update panel's hint. */
+  windowCount: 1,
+}));
 
 /**
  * The page's hooks all reach the backend through the one `ipc` object, so one mock covers
@@ -90,6 +103,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     {
       get: (_target, name) => {
         if (name === "syncStatus") return vi.fn(() => Promise.resolve(backend.syncStatus));
+        if (name === "windowCount") return vi.fn(() => Promise.resolve(backend.windowCount));
         if (name === "onSyncLive") return vi.fn(() => () => {});
         if (name === "syncLiveState") return vi.fn(() => Promise.resolve("off"));
         return vi.fn().mockResolvedValue(null);
@@ -132,6 +146,7 @@ function pretendAndroid() {
 afterEach(async () => {
   delete (navigator as unknown as Record<string, unknown>).userAgent;
   backend.syncStatus = null;
+  backend.windowCount = 1;
   /**
    * **Put back, because two tests below set it and neither used to.** While the `false` case
    * happened to run last that cost nothing; it made the file order-dependent, and a new test
@@ -266,6 +281,22 @@ describe("the Updates panel is drawn on every target", () => {
     await pickGroup("Storage and data");
     expect(screen.getByText("panel:cache")).toBeInTheDocument();
     expect(screen.getByText("panel:webstorage")).toBeInTheDocument();
+  });
+
+  /**
+   * **This page is the panel's only caller, so the prop has no other test that can see it.**
+   * `UpdatePanel.test.tsx` hands `windows` in itself and stays green whatever this page passes,
+   * and nothing else here reads `window_count` — so deleting `windows={windows}` would take the
+   * restart hint away from every reader with a second window open with no suite noticing.
+   */
+  it("hands the panel the window count it polled", async () => {
+    backend.windowCount = 2;
+
+    render(wrap(<SettingsPage update={NO_UPDATE} />));
+
+    await waitFor(() =>
+      expect(screen.getByText("panel:update")).toHaveAttribute("data-windows", "2"),
+    );
   });
 
   it("is on the page when the build is not the web one", async () => {

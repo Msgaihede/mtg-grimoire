@@ -1310,7 +1310,10 @@ export interface FakeUpdate {
  *
  * **`scannerElsewhere`** is another window holding the scanner's lease, so `scanner_elsewhere`
  * answers `true` and the Scanner view draws one sentence and opens no camera. It is a fault rather
- * than a seed for `wishGone`'s reason — what it stands in for is a **second window**, and a story
+ * than a seed for the reason `wishGone`'s *"what the fault stands in for is the second window"*
+ * gives, and **not** for the sentence above that one, which is that entry's alone: nothing here
+ * has to be there on the read and gone on the re-read. What this one stands in for is a **second
+ * window**, and a story
  * is one window and cannot open another ({@link windowHandlers} answers `window_count` with one),
  * so no press here can put the lease in anybody else's hands. It is not a failure either: the lease
  * is renewed by the other window's open view and lapses two seconds after it goes, which is why the

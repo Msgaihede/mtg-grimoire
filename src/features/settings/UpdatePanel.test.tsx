@@ -499,6 +499,20 @@ describe("UpdatePanel", () => {
       expect(button).toHaveAccessibleDescription("Restarting closes all 3 windows.");
     });
 
+    /**
+     * **Two is where the rule starts, so two is the case that has to be pinned.** Three and one
+     * bracket the rule without meeting it: a `windows > 1` narrowed to `windows > 2` keeps both
+     * of them green and takes the hint away from every reader with exactly a second window open,
+     * which is the commonest way to have more than one.
+     */
+    it("says it at exactly two, the first count the rule covers", () => {
+      render(
+        <UpdatePanel update={update({ action: "install" })} history={history()} windows={2} />,
+      );
+      const button = screen.getByRole("button", { name: /Restart to finish/ });
+      expect(button).toHaveAccessibleDescription("Restarting closes all 2 windows.");
+    });
+
     it("says nothing at one window", () => {
       render(<UpdatePanel update={update({ action: "install" })} history={history()} />);
       expect(screen.queryByText(/closes all/)).not.toBeInTheDocument();

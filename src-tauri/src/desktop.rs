@@ -1,6 +1,8 @@
 //! Everything that only exists when there is a Tauri window: the command registry, the
 //! app's startup, and the commands that have no module of their own. (This said *seventeen*
-//! while there were ten; `grep '#\[tauri::command\]'` is the count, and it is not kept here.)
+//! while there were ten; `grep -c '^#\[tauri::command\]'` is the count, and it is not kept here.
+//! **Anchor it** — `generate_handler!`'s own comment below names the attribute, so the
+//! unanchored grep answers one more than there are commands.)
 //!
 //! Split out of `lib.rs` so that the crate's *module map* is the only thing at the root.
 //! `lib.rs` is then readable as the one place that says what compiles where, and this file

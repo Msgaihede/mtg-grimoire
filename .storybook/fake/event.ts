@@ -24,7 +24,11 @@
  * `db:changed` (`DbChanged`, subscribed once by `useCrossWindowRefresh`). **That last one is
  * emitted only while two or more windows are open**, so a single-window session never sees it —
  * and a story is one window (`window_count` answers one here), so it never hears it either unless
- * it calls `emitFake` itself. A story drives any of them with `emitFake`.
+ * it calls `emitFake` itself. **And driving that one reaches the listener without changing
+ * anything a story can see**: `useCrossWindowRefresh` invalidates the module-level `queryClient`
+ * from `@/lib/query`, never the client the story's own `QueryClientProvider` holds — so the
+ * subscription is what an `emitFake` here proves, and the refresh is `useCrossWindowRefresh`'s
+ * own suite's. A story drives any of them with `emitFake`.
  *
  * `UnlistenFn` is not re-exported and does not need to be: `ipc.ts` imports it as
  * `type UnlistenFn`, which the transform erases, so the alias never has to answer for it at
