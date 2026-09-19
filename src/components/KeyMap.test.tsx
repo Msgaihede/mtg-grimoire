@@ -1,9 +1,14 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Caps, KEY_MAP_LABEL, KeyMap } from "@/components/KeyMap";
 import type { Shortcut } from "@/lib/shortcuts";
 import { useAppStore } from "@/lib/store";
+import { isWebTarget } from "@/pwa/target";
+
+// `isWebTarget` reads `__CORE__`, which vitest fixes at "tauri", so the one case below that is
+// about the web build can only get there by mocking the module — its own doc says so.
+vi.mock("@/pwa/target", () => ({ isWebTarget: vi.fn(() => false) }));
 
 /**
  * The panel with a trigger, which is the only shape it has: {@link KeyMap} takes the button as
@@ -52,6 +57,7 @@ function readingOf(label: string): string {
 
 beforeEach(() => {
   useAppStore.setState(useAppStore.getInitialState());
+  vi.mocked(isWebTarget).mockReturnValue(false);
 });
 
 describe("KeyMap", () => {
@@ -154,6 +160,29 @@ describe("KeyMap", () => {
 
     expect(capsFor("Resize the cards")).toEqual(["Ctrl", "Scroll"]);
     expect(capsFor("Pick more than one card")).toEqual(["Ctrl", "Click", "Shift", "Click"]);
+  });
+
+  /**
+   * **A second window exists only on the desktop, so its row is drawn only there.** The catalogue
+   * carries it on every build and `shownOn` is the filter; this pair is what holds the panel to
+   * applying it, since `shortcuts.test.ts` can only say what the filter answers, not that anybody
+   * asks. Both halves, because a panel that never drew the row passes the second on its own.
+   */
+  it("lists Ctrl+Shift+N for a new window on the desktop", () => {
+    useAppStore.setState({ keyMapOpen: true });
+    render(<Harness />);
+
+    expect(capsFor("Open a new window")).toEqual(["Ctrl", "Shift", "N"]);
+  });
+
+  it("leaves the new-window row off the web build, where nothing binds it", () => {
+    vi.mocked(isWebTarget).mockReturnValue(true);
+    useAppStore.setState({ keyMapOpen: true });
+    render(<Harness />);
+
+    expect(screen.queryByText("Open a new window")).not.toBeInTheDocument();
+    // The section is still drawn, so this is the one row filtered rather than the panel empty.
+    expect(screen.getByText("Show this list")).toBeInTheDocument();
   });
 
   /**

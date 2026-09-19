@@ -1,3 +1,5 @@
+import { isWebTarget } from "@/pwa/target";
+
 /**
  * Which platform this page is running on, for the two places the answer changes what is drawn.
  *
@@ -22,4 +24,12 @@
  */
 export function isAndroid(userAgent: string = navigator.userAgent): boolean {
   return userAgent.includes("Android");
+}
+
+/**
+ * The desktop shell — neither the browser build nor a phone. What a desktop-only chord asks: a
+ * second window exists only here (a phone runs one task per app; a browser tab is its own app).
+ */
+export function isDesktop(): boolean {
+  return !isWebTarget() && !isAndroid();
 }

@@ -9,12 +9,13 @@
  *
  * **Module-level state, unlike `core.ts` and `event.ts`, and the difference is not an
  * oversight.** Those two are per-world because a story's *backend* is its own — two docs-page
- * stories can hold different databases. There is exactly one window, on the desk and here, and
- * a per-world window would let a docs page show two stories disagreeing about whether the app
- * is maximized. What that costs is the thing `scope.ts` exists to prevent, so `resetWindow` is
- * provided and `installWorld` calls it: state that outlives a story is state the next story
- * inherits.
+ * stories can hold different databases. A page has exactly one window — its own, on the desk
+ * and here, however many others the desk has open — and a per-world window would let a docs
+ * page show two stories disagreeing about whether the app is maximized. What that costs is the
+ * thing `scope.ts` exists to prevent, so `resetWindow` is provided and `installWorld` calls it:
+ * state that outlives a story is state the next story inherits.
  */
+import { listen } from "./event";
 
 type ResizeListener = () => void;
 
@@ -45,6 +46,7 @@ const state: FakeWindowState = {
  */
 export function getCurrentWindow() {
   return {
+    label: "main",
     async minimize(): Promise<void> {
       state.minimizeCount += 1;
     },
@@ -61,6 +63,14 @@ export function getCurrentWindow() {
     async onResized(cb: ResizeListener): Promise<() => void> {
       state.listeners.add(cb);
       return () => state.listeners.delete(cb);
+    },
+    /**
+     * `Window.listen` — an event aimed at this window. There is one window here, so it is the
+     * fake bus's `listen`, which is also what keeps `TitleBar`'s `emitFake(SNAP_HOVER_EVENTS…)`
+     * stories and tests reaching the button.
+     */
+    async listen<T>(event: string, cb: (e: { payload: T }) => void): Promise<() => void> {
+      return listen(event, cb);
     },
   };
 }

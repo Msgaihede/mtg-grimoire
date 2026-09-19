@@ -1,4 +1,5 @@
 import { CircleArrowUp, CircleCheck, Download, ExternalLink, RefreshCw } from "lucide-react";
+import { useId } from "react";
 import { GrimoireMark } from "@/components/GrimoireMark";
 import type { InstallKind } from "@/lib/ipc";
 import type { ReleaseHistory } from "@/lib/useReleaseHistory";
@@ -83,10 +84,16 @@ function Bar({ done, total }: { done: number; total: number }) {
 export function UpdatePanel({
   update,
   history,
+  windows = 1,
 }: {
   update: Update;
   /** Every release the last check saw — see {@link VersionHistory}. */
   history: ReleaseHistory;
+  /**
+   * How many windows the restart will close. A restart is the process, and every window is in
+   * it, so past one the Restart button says so — see {@link PrimaryAction}.
+   */
+  windows?: number;
 }) {
   const { status, progress, busy, action, error } = update;
   const release = status?.available ?? null;
@@ -238,7 +245,7 @@ export function UpdatePanel({
           {selfUpdating && (
             <>
               <div className="flex flex-wrap items-center gap-3">
-                <PrimaryAction update={update} />
+                <PrimaryAction update={update} windows={windows} />
                 {action !== "unavailable" && (
                   <button
                     type="button"
@@ -310,9 +317,15 @@ export function UpdatePanel({
  * Same verb through the whole flow: "Download 6.4 MB" produces a bar, and only once the
  * bytes are on disk and verified does the button become "Restart to finish". Nothing
  * restarts the app until that second, deliberate press.
+ *
+ * **Past one window, that press says it closes all of them** — and says it as the button's own
+ * description, so a reader who tabs to it hears the cost with the name rather than having to
+ * find a sentence elsewhere on the page. Worth saying because only one window comes back after
+ * the restart; a hint and not a dialog, because the press is already the second, deliberate one.
  */
-function PrimaryAction({ update }: { update: Update }) {
+function PrimaryAction({ update, windows }: { update: Update; windows: number }) {
   const { status, action, busy } = update;
+  const hintId = useId();
   const gold =
     "border-accent/60 text-accent hover:bg-accent/10 disabled:hover:bg-transparent";
 
@@ -330,16 +343,30 @@ function PrimaryAction({ update }: { update: Update }) {
   }
   if (action === "install") {
     return (
-      <button
-        type="button"
-        onClick={update.install}
-        disabled={busy}
-        aria-busy={busy || undefined}
-        className={cn(BUTTON, gold)}
-      >
-        <CircleArrowUp className="size-4" aria-hidden="true" />
-        Restart to finish
-      </button>
+      <>
+        <button
+          type="button"
+          onClick={update.install}
+          disabled={busy}
+          aria-busy={busy || undefined}
+          aria-describedby={windows > 1 ? hintId : undefined}
+          className={cn(BUTTON, gold)}
+        >
+          <CircleArrowUp className="size-4" aria-hidden="true" />
+          Restart to finish
+        </button>
+        {/* **A line of its own under the buttons, by `order-last basis-full`**, which is this
+            repo's way of breaking a wrapping row. This component draws into the parent's
+            `flex-wrap` row beside View on GitHub, so a wrapper holding the button over the hint
+            would either centre that neighbour against two lines or, since the sentence is wider
+            than the button, push it right by the difference. The hint still follows the button
+            in the DOM, which is the order a screen reader walks. */}
+        {windows > 1 && (
+          <p id={hintId} className="order-last basis-full text-sm text-dim">
+            Restarting closes all {windows} windows.
+          </p>
+        )}
+      </>
     );
   }
   return (

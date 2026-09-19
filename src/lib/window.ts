@@ -17,7 +17,6 @@
  * fifth here means adding its permission there, and the reverse: a granted permission nothing
  * on this page calls is a widening nobody asked for.
  */
-import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 /** Send the window to the taskbar. */
@@ -31,7 +30,7 @@ export async function toggleMaximizeWindow(): Promise<void> {
 }
 
 /**
- * Close the window, which ends the process.
+ * Close this window. The app ends when its last window closes.
  *
  * `close()` rather than `destroy()`: it fires the `CloseRequested` event, which is the hook a
  * future "you have unsaved changes" gate would need. Nothing listens today, so the two behave
@@ -95,11 +94,17 @@ export const SNAP_HOVER_EVENTS = {
  * and `App` test reach the real `@tauri-apps/api/event` and flood the run with unhandled
  * rejections while still passing — 336 of them, which is the shape of a mock boundary in the
  * wrong place.
+ *
+ * **On its own window, never app-wide.** The snap-layout plugin emits to one window's label. A
+ * global `listen` hears every label, so with two windows open, hovering one maximize button lit
+ * both. `getCurrentWindow().listen` is the same subscription narrowed to this window's label,
+ * which is also why this needs no permission beyond the one the global form already used.
  */
 export async function onSnapHover(cb: (hovering: boolean) => void): Promise<() => void> {
+  const win = getCurrentWindow();
   const offs = await Promise.all([
-    listen(SNAP_HOVER_EVENTS.enter, () => cb(true)),
-    listen(SNAP_HOVER_EVENTS.leave, () => cb(false)),
+    win.listen(SNAP_HOVER_EVENTS.enter, () => cb(true)),
+    win.listen(SNAP_HOVER_EVENTS.leave, () => cb(false)),
   ]);
   return () => {
     for (const off of offs) off();

@@ -25,6 +25,7 @@ import type { Update } from "@/lib/useUpdate";
 import { useErrorLog } from "@/lib/useErrorLog";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { useReleaseHistory } from "@/lib/useReleaseHistory";
+import { useWindowCount } from "@/lib/useWindowCount";
 import { cn } from "@/lib/utils";
 import { isWebTarget } from "@/pwa/target";
 
@@ -131,6 +132,9 @@ export function SettingsPage({ update }: { update: Update }) {
   const log = useErrorLog();
   const marketplace = useMarketplace();
   const history = useReleaseHistory(update.status?.lastCheckAt ?? null);
+  // How many windows a restart would close, for the Update panel's hint. Polled while this page
+  // is open and not at all otherwise, which is the whole of why it is here and not in `AppShell`.
+  const windows = useWindowCount();
   const cache = useLocalCache();
   const danger = useDangerZone();
   const hidden = useHiddenTags();
@@ -253,7 +257,9 @@ export function SettingsPage({ update }: { update: Update }) {
             they verify a checksum, unpack a zip beside a running `.exe` and relaunch it — and
             `update::pick_asset` answers `None` for `web` and `managed`, so the panel offers no
             button that reaches one. */}
-        {shown("updates") && <UpdatePanel update={update} history={history} />}
+        {shown("updates") && (
+          <UpdatePanel update={update} history={history} windows={windows} />
+        )}
 
         {/* **The only panel under `Card data`, and it was the first of two.** `CombosPanel` sat
             directly under this one on the argument that it was the same kind of thing — both

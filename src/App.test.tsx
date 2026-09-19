@@ -81,6 +81,9 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     // a rejection anything can catch. `"off"` is the resting state every installation that has
     // paired nothing is in, which is every fixture in this file.
     onSyncApplied: vi.fn().mockReturnValue(() => {}),
+    // Multi-window's one listener, `useCrossWindowRefresh` — mounted beside the two above and
+    // mocked for their reason. Nothing emits it here: a test is one window.
+    onDbChanged: vi.fn().mockReturnValue(() => {}),
     onSyncLive: vi.fn().mockReturnValue(() => {}),
     syncLiveState: vi.fn().mockResolvedValue("off"),
     syncLiveForeground: vi.fn().mockResolvedValue(undefined),

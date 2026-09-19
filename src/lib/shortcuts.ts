@@ -55,6 +55,11 @@ export interface Shortcut {
    * state and nobody else's.
    */
   range?: boolean;
+  /**
+   * Bound and listed only in the desktop build. A chord for something the platform cannot do is a
+   * row that promises a key nothing binds — which is the drift this module exists to end.
+   */
+  desktopOnly?: boolean;
 }
 
 /**
@@ -142,6 +147,17 @@ export const SHORTCUTS: Record<ShortcutScope, readonly Shortcut[]> = {
       ],
     },
     { id: "keyMap", label: "Show this list", chords: [{ key: "F1" }] },
+    {
+      id: "newWindow",
+      label: "Open a new window",
+      /**
+       * VS Code's New Window chord, and Ctrl+N is left alone for a "new thing" a view may want.
+       * Relaunching the app does the same, which is what Windows' middle-click on the taskbar icon
+       * is — see `window::open_new`.
+       */
+      chords: [{ key: "n", ctrl: true, shift: true }],
+      desktopOnly: true,
+    },
     { id: "dismiss", label: "Close what is open", chords: [{ key: "Escape" }] },
     {
       id: "contextMenu",
@@ -258,6 +274,11 @@ export function matchesChord(chord: Chord, e: KeyboardEvent): boolean {
  */
 export function matchesShortcut(s: Shortcut, e: KeyboardEvent): boolean {
   return s.chords.some((chord) => matchesChord(chord, e));
+}
+
+/** Whether a row is drawn and bound in this build. `desktop` is `isDesktop()` at the call site. */
+export function shownOn(row: Shortcut, desktop: boolean): boolean {
+  return row.desktopOnly !== true || desktop;
 }
 
 /**
