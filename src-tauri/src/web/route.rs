@@ -208,6 +208,8 @@ pub const COMMANDS: &[&str] = &[
     "wishlist_folder_move",
     "wishlist_folder_reorder",
     "wishlist_folder_delete",
+    "wishlist_folder_clear",
+    "wishlist_folder_delete_with_wishes",
     "wishlist_set_folder",
     // The card pane. `card_detail` is the command the reader reported on 2026-08-29.
     "card_detail",
@@ -1868,6 +1870,26 @@ pub fn call(
             )
         }
 
+        "wishlist_folder_clear" => {
+            let id: i64 = field(command, args, "id")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| crate::wishlist_folders::clear_folder(c, id))
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "wishlist_folder_delete_with_wishes" => {
+            let id: i64 = field(command, args, "id")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::wishlist_folders::delete_folder_and_wishes(c, id)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
         "wishlist_set_folder" => {
             let id: i64 = field(command, args, "id")?;
             let folder_id: Option<i64> = optional(command, args, "folderId")?;
@@ -3137,6 +3159,91 @@ mod tests {
         assert_eq!(items[0]["quantity"], json!(1));
     }
 
+    /// **A wishlist drawer's two deleting writes (issue #471), routed and advertised**, each
+    /// reading the one `id` key and answering a bare count of wishes. Membership is asserted for
+    /// [`the_note_commands_are_both_routed_and_advertised`]'s reason: an arm left out of
+    /// `COMMANDS` answers a [`call`] and is still invisible to the page.
+    #[test]
+    fn a_wishlist_folder_is_cleared_and_deleted_with_its_wishes_through_the_route() {
+        let s = state("web-route-wishlist-folder-clears");
+        for name in [
+            "wishlist_folder_clear",
+            "wishlist_folder_delete_with_wishes",
+        ] {
+            assert!(
+                COMMANDS.contains(&name),
+                "`{name}` is an arm the page is never told about"
+            );
+        }
+        let folder = |name: &str| {
+            call(&s, "wishlist_folder_create", &json!({ "name": name })).unwrap()["id"]
+                .as_i64()
+                .expect("a folder answers its id")
+        };
+        let ordered = folder("Ordered");
+        let someday = folder("Someday");
+        {
+            let conn = crate::db::lock_blocking(&s.db);
+            conn.execute(
+                "INSERT INTO wishlist_entries
+                    (oracle_id, name, quantity, folder_id, created_at, updated_at)
+                 VALUES ('o1', 'Bolt', 2, ?1, 0, 0),
+                        ('o2', 'Bear', 1, ?1, 0, 0),
+                        ('o3', 'Lotus', 1, ?2, 0, 0)",
+                rusqlite::params![ordered, someday],
+            )
+            .unwrap();
+        }
+
+        assert_eq!(
+            call(&s, "wishlist_folder_clear", &json!({ "id": ordered })).unwrap(),
+            json!(2),
+            "two wishes, not three copies"
+        );
+        assert_eq!(
+            call(
+                &s,
+                "wishlist_folder_delete_with_wishes",
+                &json!({ "id": someday })
+            )
+            .unwrap(),
+            json!(1)
+        );
+
+        let folders = call(&s, "wishlist_folder_list", &json!({})).unwrap();
+        let ids: Vec<i64> = folders
+            .as_array()
+            .expect("a list of folders")
+            .iter()
+            .map(|f| f["id"].as_i64().unwrap())
+            .collect();
+        assert_eq!(
+            ids,
+            vec![ordered],
+            "the cleared drawer stays, the deleted one goes"
+        );
+        // The route hands the refusal on in the write's own words — both writes refuse a
+        // drawer that is gone, where the plain delete answers it as a success.
+        assert_eq!(
+            call(&s, "wishlist_folder_clear", &json!({ "id": someday })).unwrap_err(),
+            RouteError::Failed(crate::deck_meta::FOLDER_GONE.into())
+        );
+        assert_eq!(
+            call(
+                &s,
+                "wishlist_folder_delete_with_wishes",
+                &json!({ "id": someday })
+            )
+            .unwrap_err(),
+            RouteError::Failed(crate::deck_meta::FOLDER_GONE.into())
+        );
+        let conn = crate::db::lock_blocking(&s.db);
+        let left: i64 = conn
+            .query_row("SELECT count(*) FROM wishlist_entries", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(left, 0, "every wish seeded was in one of the two drawers");
+    }
+
     /// **The command the reader reported.** On 2026-08-29, tapping a card on the phone gave
     /// *"Could not read this card — unknown command `card_detail`"*. This is that call, on the
     /// route that now answers it.
@@ -3702,7 +3809,7 @@ mod tests {
         // adding cannot survive. 166 is `awk`'s answer over the merged array literal.
         assert_eq!(
             COMMANDS.len(),
-            170,
+            172,
             "update this number when a command is added"
         );
     }

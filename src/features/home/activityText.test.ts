@@ -325,6 +325,31 @@ describe("activityLine — the wishlist's eight", () => {
     });
   });
 
+  /**
+   * **One drawer's clear names the drawer** (issue #471) — a folder's `Clear…` and a delete that
+   * takes the wishes both write the whole-list clear's kind and `cards` key, plus `folder`. The
+   * folder is the detail and not the sentence, `bulkAddLine`'s `in` clause, so the two kinds of
+   * clear read as one act at two grains; and the whole-list wipe above, which carries no `folder`
+   * key, is exactly as it was.
+   */
+  it("names the folder a wishlist folder's clear emptied", () => {
+    expect(entryLine("wishlist", "clear", { cards: 4, folder: "Ordered" }, -4)).toEqual({
+      text: "Cleared 4 cards from your wishlist",
+      detail: "in Ordered",
+    });
+    expect(entryLine("wishlist", "clear", { cards: 1, folder: "Ordered" }, -1)).toEqual({
+      text: "Cleared 1 card from your wishlist",
+      detail: "in Ordered",
+    });
+  });
+
+  /** A `null` or empty folder is no folder — `folderClause`'s rule — so a row that somehow
+   *  carried one reads as the whole-list clear rather than as `in ` with nothing after it. */
+  it("draws no folder for a clear whose folder is null or empty", () => {
+    expect(entryLine("wishlist", "clear", { cards: 4, folder: null }, -4).detail).toBeNull();
+    expect(entryLine("wishlist", "clear", { cards: 4, folder: "" }, -4).detail).toBeNull();
+  });
+
   /** The two cabinets' sentences are the same eight acts about two places, so the one thing that
    *  must never be true is that a pair of them reads the same. */
   it("words every one of the sixteen differently from its opposite number", () => {

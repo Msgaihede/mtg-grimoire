@@ -6,9 +6,10 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
+  type ReactNode,
 } from "react";
 import { useMutation, useQueryClient, type InfiniteData } from "@tanstack/react-query";
-import { FolderInput, Pencil, TrendingDown, Trash2 } from "lucide-react";
+import { Eraser, FolderInput, Pencil, TrendingDown, Trash2 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import type { MenuItem } from "@/components/menu/types";
 import { useContextMenu } from "@/components/menu/useContextMenu";
@@ -26,7 +27,7 @@ import { ImportDialog } from "@/features/transfer/import/ImportDialog";
 import type { SearchCardDrag } from "@/features/search/searchCardDrag";
 import { FilterBar, type FilterLabels, type TrayCell } from "@/features/search/FilterBar";
 import { NewFolderCard } from "@/components/NewFolderCard";
-import { count } from "@/lib/counts";
+import { count, plural, verb } from "@/lib/counts";
 import { DROP_MARK_ROOM } from "@/lib/dropMarks";
 import type { FolderDrag, FolderEdge } from "@/lib/folderDrag";
 import { reorderedLevel } from "@/lib/folderOrder";
@@ -134,13 +135,15 @@ const TABLE_FLOOR = 610;
  * **No id lives in here that is not read.** `deleteFolder` carries its folder because — unlike
  * the gallery's, which asks about the folder the reader is *standing in* — this question is
  * always asked about a folder **card**, one level down from where the reader is, and there is
- * nothing else on the page holding which one.
+ * nothing else on the page holding which one. `clearFolder` carries its own for the same reason:
+ * it is asked from the same card's `⋯`.
  */
 type Panel =
   | { kind: "newFolder"; parentId: number | null }
   | { kind: "renameFolder"; folderId: number }
   | { kind: "moveFolder"; folderId: number }
   | { kind: "deleteFolder"; folderId: number }
+  | { kind: "clearFolder"; folderId: number }
   | null;
 
 /** What a folder card draws — the recursive total, summed by {@link subtotalsOf}. */
@@ -501,7 +504,8 @@ export function WishlistPage() {
    *
    * **`["wishlist"]` rather than the three keys under it**, because it covers the list, the
    * folder list and the summary at every marketplace at once, and because that is the shape of
-   * the eleven other wishlist writes in this app: `useWishlistFolders`' four, the card menu's
+   * the other wishlist writes in this app: `useWishlistFolders`' (whose two wish-deleting ones
+   * take the card search too, for the reason below), the card menu's
    * add, the deck sweeps'. One page inventing a narrower settle is how the three fell out of step
    * in the first place.
    *
@@ -1071,13 +1075,40 @@ export function WishlistPage() {
           },
         },
         { kind: "separator", id: "before-delete" },
+        // `Eraser` beside `Trash2` for the deck category menu's reason: what a clear takes is the
+        // writing and not the page, and two trash cans in one menu would read as one row drawn
+        // twice.
+        {
+          kind: "action",
+          id: "clear",
+          label: "Clear…",
+          Icon: Eraser,
+          // **Greyed only on an answer, never on a silence.** `folders.summary` is direct per
+          // folder and a folder with no direct wishes has no row in it at all, so a missing row
+          // means "nothing filed directly here" — but only once the summary has answered. Before
+          // that it means nothing and the row stays live: the backend answers a clear of an empty
+          // level with `0`, which is harmless, where a row greyed on a guess refuses a press that
+          // would have worked. A drawer whose wishes are all in its sub-folders greys too, since
+          // those are exactly what a clear leaves alone.
+          ...(folders.summaryQuery.data !== undefined &&
+          (folders.summary.get(folder.id)?.wishes ?? 0) === 0
+            ? { disabled: true, reason: "Nothing filed directly here" }
+            : {}),
+          onSelect: () => {
+            folders.clear.reset();
+            open({ kind: "clearFolder", folderId: folder.id }, openerRef.current);
+          },
+        },
         {
           kind: "action",
           id: "delete",
           label: "Delete…",
           Icon: Trash2,
           onSelect: () => {
+            // Both answers the confirmation offers: a refusal from either last time is not news
+            // about this one.
             folders.remove.reset();
+            folders.removeWithWishes.reset();
             open({ kind: "deleteFolder", folderId: folder.id }, openerRef.current);
           },
         },
@@ -1100,7 +1131,19 @@ export function WishlistPage() {
         },
       };
     },
-    [menu, menuKey, menuClick, open, folders.rename, folders.move, folders.remove],
+    [
+      menu,
+      menuKey,
+      menuClick,
+      open,
+      folders.rename,
+      folders.move,
+      folders.remove,
+      folders.removeWithWishes,
+      folders.clear,
+      folders.summary,
+      folders.summaryQuery.data,
+    ],
   );
 
   /**
@@ -1323,6 +1366,8 @@ export function WishlistPage() {
     folders.move,
     folders.reorder,
     folders.remove,
+    folders.removeWithWishes,
+    folders.clear,
   ]);
   const empty = rows.length === 0;
   // **The trail is drawn only where there is a cabinet to walk.** At the root of a wishlist
@@ -1591,7 +1636,7 @@ export function WishlistPage() {
             </div>
           )}
 
-          {/* **One strip for the two folder layers that are still layers, and it is not a placement
+          {/* **One strip for the folder layers that are still layers, and it is not a placement
               decision so much as the only place there is.** Every other anchored layer in this app
               hangs off a `relative` wrapper around its own trigger; the trigger here is a folder
               card's `⋯`, and a card has nowhere to hang a panel — one that hosted one would also
@@ -1606,8 +1651,12 @@ export function WishlistPage() {
               bordered box above the wall could only repeat what that tile already says. Moving and
               deleting have no such tile: the answer to "into which folder" is a list of the *other*
               folders, and the answer to "delete this?" is a sentence about what happens to the
-              wishes inside. Neither fits on a 62px card, and neither is a name typed on a line. */}
-          {(openPanel?.kind === "moveFolder" || openPanel?.kind === "deleteFolder") && (
+              wishes inside. Neither fits on a 62px card, and neither is a name typed on a line.
+              Clearing joined them on the second argument: "clear this?" is a sentence about which
+              wishes go. */}
+          {(openPanel?.kind === "moveFolder" ||
+            openPanel?.kind === "deleteFolder" ||
+            openPanel?.kind === "clearFolder") && (
             <div className="w-full max-w-sm shrink-0 rounded-lg border border-border bg-surface p-2 text-xs">
               {openPanel.kind === "moveFolder" && (
                 <MoveToFolder
@@ -1645,10 +1694,33 @@ export function WishlistPage() {
               {openPanel.kind === "deleteFolder" && (
                 <DeleteFolderConfirm
                   name={folderNameOf(openPanel.folderId) ?? "this folder"}
-                  pending={folders.remove.isPending}
+                  // Either answer in flight holds both buttons: a second press while the first is
+                  // on its way would be a different write racing it to the same folder.
+                  pending={folders.remove.isPending || folders.removeWithWishes.isPending}
                   onConfirm={() =>
                     folders.remove.mutate(openPanel.folderId, { onSuccess: dismiss })
                   }
+                  onConfirmWithWishes={() =>
+                    folders.removeWithWishes.mutate(openPanel.folderId, { onSuccess: dismiss })
+                  }
+                  onCancel={dismiss}
+                  onClose={close}
+                />
+              )}
+
+              {openPanel.kind === "clearFolder" && (
+                <ClearFolderConfirm
+                  name={folderNameOf(openPanel.folderId) ?? "this folder"}
+                  // Direct, the summary's own grain and exactly what a clear takes — and `null`
+                  // until the summary has answered, rather than a `0` it has not said.
+                  wishes={
+                    folders.summaryQuery.data === undefined
+                      ? null
+                      : (folders.summary.get(openPanel.folderId)?.wishes ?? 0)
+                  }
+                  hasChildren={folders.folders.some((f) => f.parentId === openPanel.folderId)}
+                  pending={folders.clear.isPending}
+                  onConfirm={() => folders.clear.mutate(openPanel.folderId, { onSuccess: dismiss })}
                   onCancel={dismiss}
                   onClose={close}
                 />
@@ -1967,37 +2039,56 @@ export function WishlistPage() {
   );
 }
 
+/** A destructive answer in a folder question — outlined in the destructive colour, filled on
+ *  hover, and dimmed while a write is in flight. */
+const DESTRUCTIVE_ANSWER = cn(
+  "rounded-md border border-destructive px-2 py-1 text-destructive",
+  "transition-colors duration-150 hover:bg-destructive hover:text-bg",
+  "disabled:opacity-50 motion-reduce:transition-none",
+  FOCUS,
+);
+
+/** The way out of a folder question, which is never disabled — backing out is always possible. */
+const CANCEL_ANSWER = cn(
+  "rounded-md border border-border px-2 py-1 text-dim",
+  "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
+  FOCUS,
+);
+
 /**
- * The question a reader will guess wrong, and the sentence that answers it.
+ * What every destructive question about a folder card shares: the layer, the question, the
+ * sentence under it, and `Cancel` after whatever answers the caller draws.
  *
- * **Deleting a folder does not delete the wishes in it.** `wishlist_entries.folder_id` is
- * `ON DELETE SET NULL`, so they surface at the root — filed nowhere and otherwise exactly as they
- * were, still on the shopping list, still counted. `wishlist_folders.parent_id` is
- * `ON DELETE CASCADE` **on itself**, so the folders inside *do* go. The two cascades point
- * opposite ways and the confirmation says both, in that order: the reassuring half first, because
- * the fear is what stops the press.
+ * **One shell because the two questions are one layer**, and a focus or blur rule that reached one
+ * of them and not the other would be the strip behaving two ways for one reason no reader could
+ * name. The caret moves into the layer as it does for every other one in the app, so Escape has
+ * something to hand back and Tab reaches the answers next; a click away closes it without taking
+ * the caret back (`close`, not `dismiss` — the reader is already somewhere else), **except while
+ * a write is in flight**, so the press that is on its way is not stranded with nothing on screen
+ * saying so.
  *
- * One sentence rather than the deck gallery's counted pair, because the two lists are counted
- * differently: a folder card's own face already says how many wishes are in the drawer, in the
- * recursive number this page summed for it, so a confirmation repeating it would be the same
- * figure twice with two chances to disagree.
+ * The answer row wraps: the strip is `max-w-sm` and never wider, and three buttons are a row of
+ * fixed-width controls that has to survive the narrowest box it is drawn in.
  */
-function DeleteFolderConfirm({
-  name,
+function FolderQuestion({
+  label,
+  question,
+  explanation,
   pending,
-  onConfirm,
   onCancel,
   onClose,
+  children,
 }: {
-  name: string;
+  label: string;
+  question: string;
+  explanation: string;
   pending: boolean;
-  onConfirm: () => void;
   onCancel: () => void;
   onClose: () => void;
+  /** The destructive answers, in the order they are offered. */
+  children: ReactNode;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
-  // The caret moves into the layer, as it does for every other one in the app, so Escape has
-  // something to hand back and Tab reaches the two answers next.
   useEffect(() => {
     panelRef.current?.focus();
   }, []);
@@ -2007,44 +2098,143 @@ function DeleteFolderConfirm({
       ref={panelRef}
       tabIndex={-1}
       role="group"
-      aria-label={`Delete ${name}`}
+      aria-label={label}
       className={cn("rounded-md", FOCUS)}
       onBlur={(e) => {
         if (pending) return;
         if (!panelRef.current?.contains(e.relatedTarget)) onClose();
       }}
     >
-      <p>Delete “{name}”?</p>
-      <p className="mt-1 leading-relaxed text-dim">
-        Its wishes move back to your wishlist; folders inside it are deleted.
-      </p>
-      <div className="mt-2 flex gap-2">
-        <button
-          type="button"
-          onClick={onConfirm}
-          disabled={pending}
-          className={cn(
-            "rounded-md border border-destructive px-2 py-1 text-destructive",
-            "transition-colors duration-150 hover:bg-destructive hover:text-bg",
-            "disabled:opacity-50 motion-reduce:transition-none",
-            FOCUS,
-          )}
-        >
-          Delete folder
-        </button>
-        <button
-          type="button"
-          onClick={onCancel}
-          className={cn(
-            "rounded-md border border-border px-2 py-1 text-dim",
-            "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
-            FOCUS,
-          )}
-        >
+      <p>{question}</p>
+      <p className="mt-1 leading-relaxed text-dim">{explanation}</p>
+      <div className="mt-2 flex flex-wrap gap-2">
+        {children}
+        <button type="button" onClick={onCancel} className={CANCEL_ANSWER}>
           Cancel
         </button>
       </div>
     </div>
+  );
+}
+
+/**
+ * The question a reader will guess wrong, and the sentence that answers it — which now has two
+ * answers.
+ *
+ * **Deleting a folder does not have to delete the wishes in it.** `Delete folder` sets
+ * `wishlist_entries.folder_id` to `NULL`, so they surface at the root — filed nowhere and otherwise
+ * exactly as they were, still on the shopping list, still counted. `Delete folder and wishes`
+ * takes them too, every wish anywhere in the sub-tree (issue #471). `wishlist_folders.parent_id`
+ * is `ON DELETE CASCADE` **on itself**, so the folders inside go on either press. The sentence
+ * says all of it in one breath, the reassuring half first, because the fear is what stops the
+ * press — and the second button sits *after* the first so the answer that loses nothing is still
+ * the one a reader meets first.
+ *
+ * One sentence rather than the deck gallery's counted pair, because the two lists are counted
+ * differently: a folder card's own face already says how many wishes are in the drawer, in the
+ * recursive number this page summed for it, so a confirmation repeating it would be the same
+ * figure twice with two chances to disagree. That recursive number is also exactly what the
+ * second button takes, so it needs no restating either.
+ */
+function DeleteFolderConfirm({
+  name,
+  pending,
+  onConfirm,
+  onConfirmWithWishes,
+  onCancel,
+  onClose,
+}: {
+  name: string;
+  /** Either delete in flight — both buttons are held while one is on its way. */
+  pending: boolean;
+  onConfirm: () => void;
+  onConfirmWithWishes: () => void;
+  onCancel: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <FolderQuestion
+      label={`Delete ${name}`}
+      question={`Delete “${name}”?`}
+      explanation={
+        "Its wishes can move back to your wishlist or be deleted with it; " +
+        "folders inside it are deleted either way."
+      }
+      pending={pending}
+      onCancel={onCancel}
+      onClose={onClose}
+    >
+      <button type="button" onClick={onConfirm} disabled={pending} className={DESTRUCTIVE_ANSWER}>
+        Delete folder
+      </button>
+      <button
+        type="button"
+        onClick={onConfirmWithWishes}
+        disabled={pending}
+        className={DESTRUCTIVE_ANSWER}
+      >
+        Delete folder and wishes
+      </button>
+    </FolderQuestion>
+  );
+}
+
+/**
+ * Emptying a folder, and keeping it — the wishes filed **directly** in it go, and nothing else.
+ *
+ * **Unlike {@link DeleteFolderConfirm}, this one states its number**, and the argument there is
+ * the reason here, read the other way. The card's face carries the *recursive* total, and this
+ * press takes only the direct wishes — so on a drawer with sub-folders the two numbers differ,
+ * and the number this press will actually take is new information a reader cannot get from the
+ * card. `wishes` is `null` while the summary has not answered, and the sentence then says which
+ * wishes without guessing how many.
+ *
+ * **The sub-folders are named only where there are some.** They keep their wishes — a clear is
+ * the level on screen, not the tree under it — and saying so over a drawer that holds no drawers
+ * would be answering a question nobody could have asked.
+ */
+function ClearFolderConfirm({
+  name,
+  wishes,
+  hasChildren,
+  pending,
+  onConfirm,
+  onCancel,
+  onClose,
+}: {
+  name: string;
+  /** The wishes filed directly in the folder, or `null` before the summary has answered. */
+  wishes: number | null;
+  hasChildren: boolean;
+  pending: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+  onClose: () => void;
+}) {
+  const direct =
+    wishes === null
+      ? "The wishes filed directly in it are removed from your wishlist."
+      : wishes === 0
+        ? // Reachable only when the summary answered after the question opened, since the menu
+          // row greys at zero — but an honest sentence costs one line and "Its 0 wishes … are
+          // removed" is not one.
+          "Nothing is filed directly in it."
+        : `Its ${plural(wishes, "wish", "wishes")} filed directly in it ` +
+          `${verb(wishes, "is", "are")} removed from your wishlist.`;
+
+  return (
+    <FolderQuestion
+      label={`Clear ${name}`}
+      question={`Clear “${name}”?`}
+      explanation={hasChildren ? `${direct} Folders inside it keep theirs.` : direct}
+      pending={pending}
+      onCancel={onCancel}
+      onClose={onClose}
+    >
+      <button type="button" onClick={onConfirm} disabled={pending} className={DESTRUCTIVE_ANSWER}>
+        Clear folder
+      </button>
+    </FolderQuestion>
   );
 }
 
