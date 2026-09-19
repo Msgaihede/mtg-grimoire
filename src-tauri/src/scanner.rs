@@ -29,10 +29,17 @@
 //! every search behind it. It opens `corpus.db` *directly* rather than the pair
 //! [`crate::db::open_read`] does, because `Reference::load_labels` reads an unqualified
 //! `FROM cards` — the corpus is `main` here, and there is nothing on the user side to attach.
+//!
+//! **One window scans at a time, and it holds the session by a [`LEASE`] its frames renew.** The
+//! process has one session and every window can open the Scanner view, so the four session
+//! commands take the calling webview and refuse any other window with [`OPEN_ELSEWHERE`] until
+//! the holder has sent nothing for two seconds. [`scanner_elsewhere`] asks the same question
+//! without taking anything; the prefs and the tray are not the session and take no lease.
 
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use card_scanner::filters::ScanFilters;
@@ -176,9 +183,54 @@ pub struct Loaded {
     pub status: ScannerStatus,
 }
 
+/// What a second window's scanner hears, and what its page draws. `verdictText.ts`'s
+/// `SCANNER_OPEN_ELSEWHERE` is the same string and `ipc.test.ts` pins this line.
+pub const OPEN_ELSEWHERE: &str = "The scanner is open in another window.";
+
+/// How long a window holds the scanner after its last session command.
+///
+/// **A lease the frames renew, never a claim and a release.** A claim on mount and a release on
+/// unmount would race: Tauri does not order two IPC calls, and `main.tsx`'s `StrictMode` mounts
+/// every effect twice, so *claim, release, claim* can land as *claim, claim, release* and leave a
+/// scanner on screen owning nothing. A reload runs no unmount at all, and a closed window none
+/// either. The camera sends frames many times a second while the view is open and none once it is
+/// not, so two seconds after the owner leaves, reloads or closes, the scanner is free — with no
+/// hook for any of the three.
+pub const LEASE: Duration = Duration::from_secs(2);
+
+/// Which window last used the session, and when.
+#[derive(Debug)]
+struct Lease {
+    label: String,
+    at: Instant,
+}
+
+/// Admit `label` if the lease is free, already its own, or lapsed — and renew it. A refusal
+/// renews nothing.
+fn take_lease(owner: &mut Option<Lease>, label: &str, now: Instant) -> bool {
+    if held_by_another(owner, label, now) {
+        return false;
+    }
+    *owner = Some(Lease {
+        label: label.to_owned(),
+        at: now,
+    });
+    true
+}
+
+/// Whether a window other than `label` holds a live lease. Takes nothing.
+fn held_by_another(owner: &Option<Lease>, label: &str, now: Instant) -> bool {
+    matches!(owner, Some(held)
+        if held.label != label && now.saturating_duration_since(held.at) < LEASE)
+}
+
 pub struct ScannerState {
     data_dir: PathBuf,
     loaded: Mutex<Option<Loaded>>,
+    /// The window holding the session, if any — [`ScannerState::admit`] takes and renews it.
+    /// A mutex of its own rather than a field inside `loaded`, so a refusal never waits behind a
+    /// frame the holder is still decoding.
+    owner: Mutex<Option<Lease>>,
 }
 
 impl ScannerState {
@@ -186,7 +238,30 @@ impl ScannerState {
         ScannerState {
             data_dir,
             loaded: Mutex::new(None),
+            owner: Mutex::new(None),
         }
+    }
+
+    /// Admit the calling window to the session, or refuse with [`OPEN_ELSEWHERE`].
+    pub fn admit(&self, label: &str) -> Result<(), String> {
+        let mut owner = self
+            .owner
+            .lock()
+            .map_err(|_| "the scanner state is poisoned".to_string())?;
+        if take_lease(&mut owner, label, Instant::now()) {
+            Ok(())
+        } else {
+            Err(OPEN_ELSEWHERE.to_owned())
+        }
+    }
+
+    /// Whether another window holds the scanner — what a second window's page asks before it opens
+    /// a camera it would only be refused.
+    pub fn elsewhere(&self, label: &str) -> bool {
+        self.owner
+            .lock()
+            .map(|owner| held_by_another(&owner, label, Instant::now()))
+            .unwrap_or(false)
     }
 
     fn dir(&self) -> PathBuf {
@@ -614,7 +689,11 @@ pub async fn scanner_status(
 pub async fn scanner_frame(
     state: tauri::State<'_, Arc<ScannerState>>,
     request: tauri::ipc::Request<'_>,
+    webview: tauri::Webview,
 ) -> Result<Verdict, String> {
+    // Admitted before the body is read, so a refused frame costs no decode — a second window
+    // with its camera already open would otherwise pay one per frame to be told no.
+    state.admit(webview.label())?;
     let (jpeg, opts) = frame_payload(request.body(), request.headers())?;
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -626,7 +705,11 @@ pub async fn scanner_frame(
 }
 
 #[tauri::command]
-pub async fn scanner_reset(state: tauri::State<'_, Arc<ScannerState>>) -> Result<(), String> {
+pub async fn scanner_reset(
+    state: tauri::State<'_, Arc<ScannerState>>,
+    webview: tauri::Webview,
+) -> Result<(), String> {
+    state.admit(webview.label())?;
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let mut guard = state.ensure()?;
@@ -641,7 +724,9 @@ pub async fn scanner_reset(state: tauri::State<'_, Arc<ScannerState>>) -> Result
 pub async fn scanner_capture(
     state: tauri::State<'_, Arc<ScannerState>>,
     request: tauri::ipc::Request<'_>,
+    webview: tauri::Webview,
 ) -> Result<Captured, String> {
+    state.admit(webview.label())?;
     let (jpeg, sidecar) = capture_payload(request.body(), request.headers())?;
     let scans = state.dir().join("scans");
     tauri::async_runtime::spawn_blocking(move || write_capture(&scans, &jpeg, &sidecar))
@@ -658,7 +743,9 @@ pub async fn scanner_capture(
 pub async fn scanner_set_filters(
     state: tauri::State<'_, Arc<ScannerState>>,
     filters: ScanFilters,
+    webview: tauri::Webview,
 ) -> Result<(), String> {
+    state.admit(webview.label())?;
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let mut guard = state.ensure()?;
@@ -670,6 +757,16 @@ pub async fn scanner_set_filters(
     })
     .await
     .map_err(|e| format!("the scanner thread failed: {e}"))?
+}
+
+/// Whether another window holds the scanner. Asked by a second window's Scanner view, once a
+/// second while the answer is yes. Takes nothing — only the four session commands take the lease.
+#[tauri::command]
+pub fn scanner_elsewhere(
+    state: tauri::State<'_, Arc<ScannerState>>,
+    webview: tauri::Webview,
+) -> bool {
+    state.elsewhere(webview.label())
 }
 
 /// The reader's scanner preferences, or the defaults. **Infallible by signature**,
@@ -1330,5 +1427,71 @@ mod tests {
         assert_eq!(v["votes"], "8.0");
         assert_eq!(v["image"], saved.saved);
         assert!(v["captured_at_epoch"].is_number());
+    }
+
+    #[test]
+    fn a_free_lease_is_taken_and_its_holder_readmitted() {
+        let t0 = Instant::now();
+        let mut owner = None;
+        assert!(take_lease(&mut owner, "main", t0));
+        assert!(take_lease(
+            &mut owner,
+            "main",
+            t0 + Duration::from_millis(1)
+        ));
+    }
+
+    #[test]
+    fn another_window_is_refused_inside_the_lease_and_admitted_after_it() {
+        let t0 = Instant::now();
+        let mut owner = None;
+        assert!(take_lease(&mut owner, "main", t0));
+        assert!(!take_lease(
+            &mut owner,
+            "window-2",
+            t0 + Duration::from_millis(1999)
+        ));
+        assert!(take_lease(&mut owner, "window-2", t0 + LEASE));
+        assert_eq!(owner.map(|lease| lease.label).as_deref(), Some("window-2"));
+    }
+
+    /// A refused frame must not keep the lease alive, or a second window asking every frame would
+    /// hold the first one's lease open forever on its behalf.
+    #[test]
+    fn a_refusal_does_not_renew_the_holders_lease() {
+        let t0 = Instant::now();
+        let mut owner = None;
+        assert!(take_lease(&mut owner, "main", t0));
+        assert!(!take_lease(
+            &mut owner,
+            "window-2",
+            t0 + Duration::from_secs(1)
+        ));
+        assert!(take_lease(&mut owner, "window-2", t0 + LEASE));
+    }
+
+    #[test]
+    fn asking_never_takes_the_lease() {
+        let t0 = Instant::now();
+        let mut owner = None;
+        assert!(
+            !held_by_another(&owner, "window-2", t0),
+            "a free scanner is nobody's"
+        );
+        assert!(take_lease(&mut owner, "main", t0));
+        assert!(held_by_another(
+            &owner,
+            "window-2",
+            t0 + Duration::from_secs(1)
+        ));
+        assert!(
+            !held_by_another(&owner, "main", t0),
+            "a window is not elsewhere to itself"
+        );
+        assert!(
+            !held_by_another(&owner, "window-2", t0 + LEASE),
+            "a lapsed lease is free"
+        );
+        assert_eq!(owner.map(|lease| lease.label).as_deref(), Some("main"));
     }
 }
