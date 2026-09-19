@@ -34,13 +34,17 @@
 //! **One window scans at a time, and it holds the scanner by a [`LEASE`] it keeps renewing.** The
 //! process has one session and every window can open the Scanner view, so every command that
 //! *uses* the scanner takes the calling webview and refuses any other window with
-//! [`OPEN_ELSEWHERE`] until the holder has sent nothing for two seconds: the four session
-//! commands, [`scanner_hold`] — the mounted view's heartbeat, which is what holds it while the
-//! camera is still starting or has failed — and the three writes of the prefs and the tray. Those
-//! three are not the session, and they take the lease anyway: a window whose tray write is still
-//! waiting out a sync keeps the scanner until the write lands, so no second window can open a tray
-//! read from a row that is about to change under it. [`scanner_elsewhere`] asks the same question
-//! without taking anything, and the three reads take nothing either.
+//! [`OPEN_ELSEWHERE`] while the holder has a command still running, and for two seconds after its
+//! last one settled: the four session commands, [`scanner_hold`] — the mounted view's heartbeat,
+//! which is what holds it while the camera is still starting or has failed — and the three writes
+//! of the prefs and the tray. **An admission holds the scanner until its command settles**
+//! ([`LeaseGuard`]), not only at the moment it was let in. Those three writes are not the session,
+//! and they take the lease anyway: a tray write waiting up to five seconds for the write connection
+//! holds the scanner the whole time, and the page's next try comes 1.5 s after the last one
+//! settled — inside the two seconds — so a window with an unsaved tray keeps the scanner until the
+//! write lands, and no second window can open a tray read from a row that is about to change under
+//! it. [`scanner_elsewhere`] asks the same question without taking anything, and the three reads
+//! take nothing either.
 
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
@@ -193,16 +197,25 @@ pub struct Loaded {
 /// `SCANNER_OPEN_ELSEWHERE` is the same string and `ipc.test.ts` pins this line.
 pub const OPEN_ELSEWHERE: &str = "The scanner is open in another window.";
 
-/// How long a window holds the scanner after the last command it admitted.
+/// How long a window holds the scanner after its last admitted command **settled** — and it holds
+/// it without limit while any of them is still running, however long that takes.
+///
+/// **Settled, not admitted, and that is a correction.** The lease used to be stamped at admission
+/// only, so a tray write that waited five seconds for the write connection before answering `BUSY`
+/// let its own lease lapse at two: a second window got through the gate and read a tray the first
+/// window's write was about to change. [`LeaseGuard`] counts a command in flight until it returns,
+/// and re-stamps the lease when it does.
 ///
 /// **A lease the view keeps renewing, never a claim and a release.** A claim on mount and a release
 /// on unmount would race: Tauri does not order two IPC calls, and `main.tsx`'s `StrictMode` mounts
 /// every effect twice, so *claim, release, claim* can land as *claim, claim, release* and leave a
 /// scanner on screen owning nothing. A reload runs no unmount at all, and a closed window none
 /// either. So the mounted view renews it instead: [`scanner_hold`] on mount and once a second
-/// after, whatever the camera is doing, and every frame and every prefs or tray write besides —
-/// and all of that stops when the view does, so two seconds after the owner leaves, reloads or
-/// closes, the scanner is free with no hook for any of the three.
+/// after, whatever the camera is doing, and every frame and every prefs or tray write besides. The
+/// heartbeat and the frames stop when the view does, and a write the view left owed stops once it
+/// lands; a reload or a closed window stops all of it, and a command already running still settles
+/// and releases. So two seconds after the owner's last command settles, the scanner is free, with
+/// no hook for any of the three.
 ///
 /// **The heartbeat, not the frames, is what makes it "the view is open".** The lease used to be
 /// renewed by the frames alone, and a view with its camera still starting — or refused, or
@@ -210,30 +223,86 @@ pub const OPEN_ELSEWHERE: &str = "The scanner is open in another window.";
 /// both had the tray on screen, each writing it whole over the other.
 pub const LEASE: Duration = Duration::from_secs(2);
 
-/// Which window last used the session, and when.
+/// Which window holds the scanner, when it last admitted or settled a command, and how many of
+/// its admitted commands have not settled yet.
 #[derive(Debug)]
 struct Lease {
     label: String,
     at: Instant,
+    /// Admitted commands still running. **Above zero the lease is held whatever its age** — see
+    /// [`held_by_another`].
+    in_flight: u32,
 }
 
-/// Admit `label` if the lease is free, already its own, or lapsed — and renew it. A refusal
-/// renews nothing.
+/// Admit `label` if the lease is free, already its own, or lapsed and idle — renewing it and
+/// counting one more command in flight. A refusal renews and counts nothing. Every admission is
+/// owed exactly one [`release_lease`], which [`LeaseGuard`]'s drop is.
 fn take_lease(owner: &mut Option<Lease>, label: &str, now: Instant) -> bool {
     if held_by_another(owner, label, now) {
         return false;
     }
-    *owner = Some(Lease {
-        label: label.to_owned(),
-        at: now,
-    });
+    match owner.as_mut() {
+        Some(held) if held.label == label => {
+            held.at = now;
+            held.in_flight += 1;
+        }
+        _ => {
+            *owner = Some(Lease {
+                label: label.to_owned(),
+                at: now,
+                in_flight: 1,
+            })
+        }
+    }
     true
 }
 
-/// Whether a window other than `label` holds a live lease. Takes nothing.
+/// One of `label`'s admitted commands has settled: count it out and re-stamp the lease, so its two
+/// seconds run from completion rather than from admission.
+///
+/// **Only `label`'s own lease is touched.** Another window can hold the scanner by now only if this
+/// one's lease went idle and lapsed first — so a release arriving after that is a stray, and must
+/// neither count down the new holder's commands nor move its clock.
+fn release_lease(owner: &mut Option<Lease>, label: &str, now: Instant) {
+    if let Some(held) = owner.as_mut().filter(|held| held.label == label) {
+        held.in_flight = held.in_flight.saturating_sub(1);
+        held.at = now;
+    }
+}
+
+/// Whether a window other than `label` holds the scanner: a command of its still running, or its
+/// last one settled less than [`LEASE`] ago. Takes nothing.
 fn held_by_another(owner: &Option<Lease>, label: &str, now: Instant) -> bool {
     matches!(owner, Some(held)
-        if held.label != label && now.saturating_duration_since(held.at) < LEASE)
+        if held.label != label
+            && (held.in_flight > 0 || now.saturating_duration_since(held.at) < LEASE))
+}
+
+/// An admitted command's hold on the scanner, from admission until the command settles.
+///
+/// **Kept alive across the command's whole body, the awaited `spawn_blocking` included** — bind it
+/// as `let _lease = …`, never `let _ = …`, which drops it on the spot. A tray write can wait five
+/// seconds for the write connection before it answers `BUSY`; a lease stamped once at entry lapsed
+/// under it at two, and a second window got through the gate to read a tray about to change.
+/// Dropping it — the command returning, failing, or its future being dropped — is
+/// [`release_lease`].
+#[derive(Debug)]
+#[must_use = "the scanner is held only while the guard lives"]
+pub struct LeaseGuard<'a> {
+    owner: &'a Mutex<Option<Lease>>,
+    label: String,
+}
+
+impl Drop for LeaseGuard<'_> {
+    /// Never panics: a poisoned lock is recovered rather than unwrapped, because this runs during
+    /// unwinding as well and a panic there aborts the process.
+    fn drop(&mut self) {
+        let mut owner = self
+            .owner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        release_lease(&mut owner, &self.label, Instant::now());
+    }
 }
 
 pub struct ScannerState {
@@ -259,14 +328,18 @@ impl ScannerState {
         }
     }
 
-    /// Admit the calling window to the session, or refuse with [`OPEN_ELSEWHERE`].
-    pub fn admit(&self, label: &str) -> Result<(), String> {
+    /// Admit the calling window, or refuse with [`OPEN_ELSEWHERE`]. The answer is the command's
+    /// hold on the scanner, and it lasts exactly as long as the [`LeaseGuard`] does.
+    pub fn admit(&self, label: &str) -> Result<LeaseGuard<'_>, String> {
         let mut owner = self
             .owner
             .lock()
             .map_err(|_| "the scanner state is poisoned".to_string())?;
         if take_lease(&mut owner, label, Instant::now()) {
-            Ok(())
+            Ok(LeaseGuard {
+                owner: &self.owner,
+                label: label.to_owned(),
+            })
         } else {
             Err(OPEN_ELSEWHERE.to_owned())
         }
@@ -709,8 +782,9 @@ pub async fn scanner_frame(
     webview: tauri::Webview,
 ) -> Result<Verdict, String> {
     // Admitted before the body is read, so a refused frame costs no decode — a second window
-    // with its camera already open would otherwise pay one per frame to be told no.
-    state.admit(webview.label())?;
+    // with its camera already open would otherwise pay one per frame to be told no. The guard is
+    // held through the decode, so a slow frame cannot let the lease lapse under itself.
+    let _lease = state.admit(webview.label())?;
     let (jpeg, opts) = frame_payload(request.body(), request.headers())?;
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -726,7 +800,7 @@ pub async fn scanner_reset(
     state: tauri::State<'_, Arc<ScannerState>>,
     webview: tauri::Webview,
 ) -> Result<(), String> {
-    state.admit(webview.label())?;
+    let _lease = state.admit(webview.label())?;
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let mut guard = state.ensure()?;
@@ -743,7 +817,7 @@ pub async fn scanner_capture(
     request: tauri::ipc::Request<'_>,
     webview: tauri::Webview,
 ) -> Result<Captured, String> {
-    state.admit(webview.label())?;
+    let _lease = state.admit(webview.label())?;
     let (jpeg, sidecar) = capture_payload(request.body(), request.headers())?;
     let scans = state.dir().join("scans");
     tauri::async_runtime::spawn_blocking(move || write_capture(&scans, &jpeg, &sidecar))
@@ -762,7 +836,7 @@ pub async fn scanner_set_filters(
     filters: ScanFilters,
     webview: tauri::Webview,
 ) -> Result<(), String> {
-    state.admit(webview.label())?;
+    let _lease = state.admit(webview.label())?;
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let mut guard = state.ensure()?;
@@ -791,13 +865,15 @@ pub fn scanner_elsewhere(
 /// page answers by asking the gate again. See [`LEASE`] for why the frames were not enough.
 ///
 /// Sync, like [`scanner_elsewhere`]: it takes the `owner` mutex for a comparison and a store and
-/// touches no database and no session, so there is nothing here to move off the IPC thread.
+/// touches no database and no session, so there is nothing here to move off the IPC thread. Its
+/// guard settles as it returns, which re-stamps the lease — a heartbeat is a command with no body.
 #[tauri::command]
 pub fn scanner_hold(
     state: tauri::State<'_, Arc<ScannerState>>,
     webview: tauri::Webview,
 ) -> Result<(), String> {
-    state.admit(webview.label())
+    let _settled = state.admit(webview.label())?;
+    Ok(())
 }
 
 /// The reader's scanner preferences, or the defaults. **Infallible by signature**,
@@ -812,11 +888,13 @@ pub fn scanner_prefs(state: tauri::State<'_, Arc<AppState>>) -> ScannerPrefs {
 /// Remember the reader's scanner preferences. Answers [`crate::db::BUSY`] if a sync holds the
 /// write connection, and [`OPEN_ELSEWHERE`] if another window holds the scanner.
 ///
-/// **Admitted before the database is touched, and the admission is the point.** The row is written
-/// whole, so only the window holding the scanner may write it — and a write the page is still
-/// retrying renews the lease, which keeps the scanner in the window that has something unsaved
-/// until it lands. The page treats this refusal as it treats `BUSY`: it keeps what it has and
-/// tries again, and never reverts.
+/// **Admitted before the database is touched, and held until the write settles — the admission is
+/// the point.** The row is written whole, so only the window holding the scanner may write it. The
+/// guard lives through the whole of `with_write`, which can wait five seconds for the write
+/// connection before it answers `BUSY` — longer than [`LEASE`] — so the scanner stays this
+/// window's for as long as its write is waiting, and for two seconds after it settles, which is
+/// long enough for the page's next try. The page treats this refusal as it treats `BUSY`: it keeps
+/// what it has, tries again until the write lands, and never reverts.
 #[tauri::command]
 pub async fn set_scanner_prefs(
     state: tauri::State<'_, Arc<AppState>>,
@@ -824,7 +902,7 @@ pub async fn set_scanner_prefs(
     prefs: ScannerPrefs,
     webview: tauri::Webview,
 ) -> Result<(), String> {
-    scanner.admit(webview.label())?;
+    let _lease = scanner.admit(webview.label())?;
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         crate::sync::with_write(&state, |conn| store_prefs(conn, &prefs))
@@ -842,7 +920,7 @@ pub fn scanner_tray(state: tauri::State<'_, Arc<AppState>>) -> Vec<ScannerTrayRo
 
 /// Remember the review tray, whole. The two refusals are [`store_tray`]'s; a busy write connection
 /// answers [`crate::db::BUSY`], and another window holding the scanner [`OPEN_ELSEWHERE`] —
-/// admitted first, for [`set_scanner_prefs`]' reason.
+/// admitted first and held until the write settles, for [`set_scanner_prefs`]' reason.
 #[tauri::command]
 pub async fn set_scanner_tray(
     state: tauri::State<'_, Arc<AppState>>,
@@ -850,7 +928,7 @@ pub async fn set_scanner_tray(
     rows: Vec<ScannerTrayRow>,
     webview: tauri::Webview,
 ) -> Result<(), String> {
-    scanner.admit(webview.label())?;
+    let _lease = scanner.admit(webview.label())?;
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         crate::sync::with_write(&state, |conn| store_tray(conn, &rows))
@@ -864,9 +942,10 @@ pub async fn set_scanner_tray(
 /// index's `owned` dimension moves with the copies and a busy write connection answers
 /// [`crate::db::BUSY`] with nothing written.
 ///
-/// **Admitted first, like the tray's own write**: `remaining` is the tray written whole, and a
-/// window that has lost the scanner is a window whose tray may be older than the stored one — its
-/// commit would file rows another window has already filed, and store a tray over theirs.
+/// **Admitted first and held until it settles, like the tray's own write**: `remaining` is the tray
+/// written whole, and a window that has lost the scanner is a window whose tray may be older than
+/// the stored one — its commit would file rows another window has already filed, and store a tray
+/// over theirs.
 #[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn scanner_tray_commit(
@@ -877,7 +956,7 @@ pub async fn scanner_tray_commit(
     remaining: Vec<ScannerTrayRow>,
     webview: tauri::Webview,
 ) -> Result<crate::collection::ImportCommitOutcome, String> {
-    scanner.admit(webview.label())?;
+    let _lease = scanner.admit(webview.label())?;
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         crate::collection_source::with_write_owned(&state, |conn| {
@@ -1480,29 +1559,45 @@ mod tests {
         assert!(v["captured_at_epoch"].is_number());
     }
 
+    /// One command from `label` at `at` that settled in the same instant — admitted and released
+    /// together, which is what every lease test here meant before an admission could be in flight.
+    fn used(owner: &mut Option<Lease>, label: &str, at: Instant) -> bool {
+        let admitted = take_lease(owner, label, at);
+        if admitted {
+            release_lease(owner, label, at);
+        }
+        admitted
+    }
+
+    /// How many of the holder's admitted commands have not settled.
+    fn in_flight(state: &ScannerState) -> u32 {
+        state
+            .owner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+            .map_or(0, |lease| lease.in_flight)
+    }
+
     #[test]
     fn a_free_lease_is_taken_and_its_holder_readmitted() {
         let t0 = Instant::now();
         let mut owner = None;
-        assert!(take_lease(&mut owner, "main", t0));
-        assert!(take_lease(
-            &mut owner,
-            "main",
-            t0 + Duration::from_millis(1)
-        ));
+        assert!(used(&mut owner, "main", t0));
+        assert!(used(&mut owner, "main", t0 + Duration::from_millis(1)));
     }
 
     #[test]
     fn another_window_is_refused_inside_the_lease_and_admitted_after_it() {
         let t0 = Instant::now();
         let mut owner = None;
-        assert!(take_lease(&mut owner, "main", t0));
-        assert!(!take_lease(
+        assert!(used(&mut owner, "main", t0));
+        assert!(!used(
             &mut owner,
             "window-2",
             t0 + Duration::from_millis(1999)
         ));
-        assert!(take_lease(&mut owner, "window-2", t0 + LEASE));
+        assert!(used(&mut owner, "window-2", t0 + LEASE));
         assert_eq!(owner.map(|lease| lease.label).as_deref(), Some("window-2"));
     }
 
@@ -1512,33 +1607,122 @@ mod tests {
     fn a_refusal_does_not_renew_the_holders_lease() {
         let t0 = Instant::now();
         let mut owner = None;
-        assert!(take_lease(&mut owner, "main", t0));
-        assert!(!take_lease(
-            &mut owner,
-            "window-2",
-            t0 + Duration::from_secs(1)
-        ));
-        assert!(take_lease(&mut owner, "window-2", t0 + LEASE));
+        assert!(used(&mut owner, "main", t0));
+        assert!(!used(&mut owner, "window-2", t0 + Duration::from_secs(1)));
+        assert!(used(&mut owner, "window-2", t0 + LEASE));
     }
 
     /// **The holder's own admissions renew the lease**, which is the whole of what lets a mounted
-    /// view hold the scanner on a heartbeat: taken at t0 and renewed at t0 + 1.5 s, it is still
-    /// the holder's at t0 + 2.5 s — half a second past where a lease taken once would have lapsed.
+    /// view hold the scanner on a heartbeat: used at t0 and again at t0 + 1.5 s, it is still the
+    /// holder's at t0 + 2.5 s — half a second past where a lease used once would have lapsed.
     #[test]
     fn the_holders_own_admissions_renew_the_lease() {
+        let t0 = Instant::now();
+        let mut owner = None;
+        assert!(used(&mut owner, "main", t0));
+        assert!(used(&mut owner, "main", t0 + Duration::from_millis(1500)));
+        assert!(
+            !used(&mut owner, "window-2", t0 + Duration::from_millis(2500)),
+            "a renewal did not move the lease's clock"
+        );
+        assert_eq!(owner.map(|lease| lease.label).as_deref(), Some("main"));
+    }
+
+    /// **An admitted command holds the scanner until it settles, however long that takes.** A tray
+    /// write waits up to `WRITE_LOCK_WAIT` (5 s) for the write connection before it can answer
+    /// `BUSY`, which is longer than the lease: stamped once at entry, the lease lapsed under the
+    /// write, and a second window got through the gate and read a tray about to change.
+    #[test]
+    fn a_command_in_flight_holds_the_lease_past_its_two_seconds() {
+        let t0 = Instant::now();
+        let mut owner = None;
+        assert!(take_lease(&mut owner, "main", t0));
+        for later in [LEASE, LEASE * 3, Duration::from_secs(60)] {
+            assert!(
+                held_by_another(&owner, "window-2", t0 + later),
+                "free under a command still in flight, {later:?} in"
+            );
+            assert!(!take_lease(&mut owner, "window-2", t0 + later), "{later:?}");
+        }
+        assert!(
+            !held_by_another(&owner, "main", t0 + LEASE * 3),
+            "a window is not elsewhere to itself"
+        );
+        assert!(
+            take_lease(&mut owner, "main", t0 + LEASE * 3),
+            "the holder is readmitted beside its own command"
+        );
+    }
+
+    /// **Settling re-stamps the lease, so it runs its two seconds from completion.** A write
+    /// admitted at t0 that answers at t0 + 5 s holds the scanner until t0 + 7 s — which is what
+    /// lets the page's next try, 1.5 s after the answer, find the scanner still its own.
+    #[test]
+    fn settling_restamps_so_the_lease_runs_from_completion() {
+        let t0 = Instant::now();
+        let done = t0 + Duration::from_secs(5);
+        let mut owner = None;
+        assert!(take_lease(&mut owner, "main", t0));
+        release_lease(&mut owner, "main", done);
+        assert!(!take_lease(
+            &mut owner,
+            "window-2",
+            done + Duration::from_millis(1999)
+        ));
+        assert!(take_lease(&mut owner, "window-2", done + LEASE));
+    }
+
+    /// **The count balances across one window's overlapping commands.** A frame decoding while a
+    /// tray write waits for the lock is two admissions; the first to settle must not free the
+    /// scanner under the second.
+    #[test]
+    fn overlapping_commands_from_one_window_hold_it_until_the_last_settles() {
         let t0 = Instant::now();
         let mut owner = None;
         assert!(take_lease(&mut owner, "main", t0));
         assert!(take_lease(
             &mut owner,
             "main",
-            t0 + Duration::from_millis(1500)
+            t0 + Duration::from_millis(100)
         ));
+        release_lease(&mut owner, "main", t0 + Duration::from_secs(1));
         assert!(
-            !take_lease(&mut owner, "window-2", t0 + Duration::from_millis(2500)),
-            "a renewal did not move the lease's clock"
+            !take_lease(&mut owner, "window-2", t0 + Duration::from_secs(10)),
+            "the first to settle freed the scanner under the second"
         );
-        assert_eq!(owner.map(|lease| lease.label).as_deref(), Some("main"));
+        let last = t0 + Duration::from_secs(11);
+        release_lease(&mut owner, "main", last);
+        assert!(!take_lease(
+            &mut owner,
+            "window-2",
+            last + Duration::from_millis(1999)
+        ));
+        assert!(take_lease(&mut owner, "window-2", last + LEASE));
+    }
+
+    /// **A release is its own window's and nobody else's.** Another window can take the scanner
+    /// only once this one's lease is idle and lapsed; a release for this window arriving after that
+    /// must neither count down the new holder's commands nor move its clock.
+    #[test]
+    fn a_late_release_never_touches_another_windows_lease() {
+        let t0 = Instant::now();
+        let mut owner = None;
+        assert!(used(&mut owner, "main", t0));
+        let taken = t0 + LEASE;
+        assert!(
+            take_lease(&mut owner, "window-2", taken),
+            "an idle, lapsed lease is free"
+        );
+        release_lease(&mut owner, "main", taken + Duration::from_secs(1));
+        let held = owner.as_ref().expect("held");
+        assert_eq!(
+            (held.label.as_str(), held.at, held.in_flight),
+            ("window-2", taken, 1)
+        );
+        assert!(
+            !take_lease(&mut owner, "main", taken + LEASE * 5),
+            "the new holder's command is still in flight"
+        );
     }
 
     /// The refusal the page matches on is the sentence and nothing else — `verdictText.ts`'s
@@ -1548,10 +1732,55 @@ mod tests {
     fn a_refused_admission_is_exactly_the_open_elsewhere_sentence() {
         let dir = tempfile::tempdir().expect("tempdir");
         let state = ScannerState::new(dir.path().to_path_buf());
-        assert_eq!(state.admit("main"), Ok(()));
-        assert_eq!(state.admit("window-2"), Err(OPEN_ELSEWHERE.to_owned()));
+        let _held = state.admit("main").expect("a free scanner admits");
+        assert_eq!(
+            state.admit("window-2").err(),
+            Some(OPEN_ELSEWHERE.to_owned())
+        );
         assert!(state.elsewhere("window-2"));
         assert!(!state.elsewhere("main"));
+    }
+
+    /// **The guard is the command's hold.** While any of the holder's guards lives another window
+    /// is refused, and each drop settles exactly one command.
+    #[test]
+    fn an_admission_holds_the_scanner_for_as_long_as_its_guard_lives() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state = ScannerState::new(dir.path().to_path_buf());
+        let frame = state.admit("main").expect("a free scanner admits");
+        let write = state.admit("main").expect("the holder is readmitted");
+        assert_eq!(in_flight(&state), 2);
+        assert!(state.admit("window-2").is_err());
+        drop(frame);
+        assert_eq!(in_flight(&state), 1);
+        assert!(state.elsewhere("window-2"));
+        drop(write);
+        assert_eq!(in_flight(&state), 0);
+        assert_eq!(
+            state.admit("window-2").err(),
+            Some(OPEN_ELSEWHERE.to_owned()),
+            "settling re-stamps the lease: two more seconds from now"
+        );
+    }
+
+    /// A guard dropped over a poisoned lock settles its command rather than panicking — `drop`
+    /// runs during unwinding too, and a panic there aborts the process.
+    #[test]
+    fn a_guard_dropped_over_a_poisoned_lock_does_not_panic() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state = ScannerState::new(dir.path().to_path_buf());
+        let held = state.admit("main").expect("admitted");
+        let poisoner = std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    let _owner = state.owner.lock();
+                    panic!("poisoning the scanner's lease on purpose");
+                })
+                .join()
+        });
+        assert!(poisoner.is_err() && state.owner.is_poisoned());
+        drop(held);
+        assert_eq!(in_flight(&state), 0, "the drop did not settle the command");
     }
 
     #[test]
@@ -1562,7 +1791,7 @@ mod tests {
             !held_by_another(&owner, "window-2", t0),
             "a free scanner is nobody's"
         );
-        assert!(take_lease(&mut owner, "main", t0));
+        assert!(used(&mut owner, "main", t0));
         assert!(held_by_another(
             &owner,
             "window-2",

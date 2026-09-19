@@ -286,19 +286,34 @@ nothing landed since** (the last term ruled in on review, 2026-09-19). **And a w
 sync or by another window's lease is retried until it lands** (§5 item 3): every
 `TRAY_RETRY_MS` / `PREFS_RETRY_MS` (1.5 s, under the two-second lease), stopping only when a write
 lands, a newer change takes the tries over, or the cache entry is gone. So through a first sync
-that runs for minutes the first two terms stay true on their own, and every try renews the lease —
-the window with unsaved cards keeps the scanner until they are stored, and no second window can
-open a tray read from a row about to change under it. The first draft of this paragraph recorded
-the opposite as an accepted cost — retries exhausted after one more try, the lease lapsing, another
-window storing a tray, and this window's kept entry writing over it — and the retry loop is what
-closes it. **What remains, stated precisely**:
-- **Process death** before a write lands loses the unsaved cards, as it always did.
+that runs for minutes the first two terms stay true on their own, and the lease never lapses under
+them: **each try holds the scanner from its admission until it settles** — the whole of the up to
+five seconds `with_write` waits before answering `BUSY` included — the lease runs its two seconds
+from that settlement, and the next try goes out 1.5 s after the answer, inside them (ruled
+2026-09-19, round 3; §5 item 3). The window with unsaved cards keeps the scanner until they are
+stored, and no second window can open a tray read from a row about to change under it. The first
+draft of this paragraph recorded the opposite as an accepted cost — retries exhausted after one
+more try, the lease lapsing, another window storing a tray, and this window's kept entry writing
+over it — and the retry loop is what closes it. So did the second, without saying so: it had every
+try *renew* the lease, which was stamped at admission only, so a single try that waited five
+seconds for the write connection let its own lease lapse at two while it was still running.
+**What remains, stated precisely**:
+- **Process death** before a write lands loses the unsaved cards, as it always did. A command that
+  is running when its window closes or reloads still settles and releases; the lease is free two
+  seconds after that.
 - **A refusal that no wait changes** — a tray row of nothing, a tray past its limit — gets one more
   try and no loop, because retrying it forever would hold the lease for good. Its rows stay unsaved
-  (the third term keeps the entry), the lease lapses, and if another window then stores a tray this
-  window's next change writes over it. The page cannot produce either refusal today.
-- **A gap longer than the lease between two tries** — a hidden window whose timers the webview
-  throttles past two seconds — lets the lease lapse while a write is still owed. Unmeasured.
+  (the third term keeps the entry), the lease lapses two seconds after that try settles, and if
+  another window then stores a tray this window's next change writes over it. The page cannot
+  produce either refusal today.
+- **A gap longer than the lease between one try settling and the next going out** — a hidden
+  window whose timers the webview throttles past two seconds — lets the lease lapse while a write
+  is still owed. The try that is *running* cannot lapse any more; the gap after it still can.
+  Unmeasured.
+- **A command that never settles holds the scanner for good.** The in-flight count has no age, by
+  design. Every write is bounded — `with_write` answers `BUSY` after five seconds — but a
+  `spawn_blocking` that hangs (a decode, a database call wedged below the lock) would keep every
+  other window on the sentence until the process exits. Nothing today is known to hang.
 
 **Retries never write what is not there**: every write reads the cache as it goes out, and a
 missing entry skips the write and ends the tries.
@@ -326,13 +341,26 @@ unchanged key — and that already reaches every window, because `marketplace:pr
    second, deliberate press (`UpdatePanel.test.tsx:85`). One window comes back after the restart;
    restoring the rest is out of scope.
 3. **The card scanner is held by one window, as a lease the window using it keeps renewing.**
-   `ScannerState` gains an owner: a window label and the moment it last admitted a command. Every
-   command that *uses* the scanner takes the calling webview from Tauri and is admitted only if the
-   lease is free, already theirs, or **older than two seconds**; otherwise it refuses with
-   `OPEN_ELSEWHERE`, *"The scanner is open in another window."* A new `scanner_elsewhere` answers
-   the same question without taking the lease. A second window's scanner view asks it, shows that
-   sentence and nothing else — no camera, no tray, no takeover — and asks again each second until
-   the lease lapses.
+   `ScannerState` gains an owner: a window label, the moment it last admitted **or settled** a
+   command, and how many of its admitted commands are still running. Every command that *uses* the
+   scanner takes the calling webview from Tauri and is admitted only if the lease is free, already
+   theirs, or **idle and older than two seconds**; otherwise it refuses with `OPEN_ELSEWHERE`,
+   *"The scanner is open in another window."* A new `scanner_elsewhere` answers the same question
+   without taking the lease. A second window's scanner view asks it, shows that sentence and
+   nothing else — no camera, no tray, no takeover — and asks again each second until the lease
+   lapses.
+   **An admitted command holds the lease until it settles** (ruled 2026-09-19, round 3, amending
+   the first draft's "the moment it last admitted a command"). `admit` answers a `LeaseGuard` that
+   the command keeps alive across its whole body, the awaited `spawn_blocking` included: while any
+   is alive the lease is held **whatever its age**, and each one's drop counts it out and re-stamps
+   the lease, so the two seconds run from **completion**, not from admission. The drop touches the
+   lease only if it is still the same window's — another window can hold it by then only because
+   this one's went idle and lapsed first, and a late release must neither count down the new
+   holder's commands nor move its clock — and it recovers a poisoned lock rather than panicking.
+   What it corrects: a tray write waits up to five seconds for the write connection before answering
+   `BUSY`, so a lease stamped at admission lapsed under the write at two, and a second window got
+   through the gate to read a tray about to change. The same holds for a write that *lands* after a
+   long wait.
    **The lease means "this window is using the scanner", and three things renew it** (ruled
    2026-09-19, amending the first draft's "a lease the frames renew"):
    - **A heartbeat while the view is mounted.** `scanner_hold(webview)` admits and does nothing
@@ -354,10 +382,12 @@ unchanged key — and that already reaches every window, because `marketplace:pr
      `scanner_status` — stay ungated. A write refused with `OPEN_ELSEWHERE` is treated like `BUSY`:
      the hook keeps its rows, never reverts, never writes defaults, never drops rows — and **both
      refusals are retried until the write lands**, once every `TRAY_RETRY_MS` / `PREFS_RETRY_MS`
-     (1.5 s, which is what keeps it under the two-second lease), never faster, stopping only when
-     a write lands, a newer change takes the tries over, or the cache entry is gone. Every try goes
-     through the lease-gated command, so it renews the lease: a window with unsaved cards holds the
-     scanner through a sync of any length. `verdictText.ts`' `refusalPasses` is the test, and its
+     (1.5 s after the last try answered, which is what keeps it under the two-second lease), never
+     faster, stopping only when a write lands, a newer change takes the tries over, or the cache
+     entry is gone. Every try goes through the lease-gated command, so it holds the scanner from
+     admission until it settles, and the next one is admitted inside the two seconds that settlement
+     leaves: a window with unsaved cards holds the scanner without a gap through a sync of any
+     length, for as long as its timers fire on time. `verdictText.ts`' `refusalPasses` is the test, and its
      `DB_BUSY` is pinned against `db.rs`. Any other refusal — the tray's two, which no wait changes —
      gets one more try and no loop, since a loop there would hold the lease for good.
    **A lease rather than a claim/release pair, and this reverses the first draft.** Claim on mount
@@ -366,8 +396,10 @@ unchanged key — and that already reaches every window, because `marketplace:pr
    *claim, release, claim* can arrive as *claim, claim, release* and leave a mounted scanner owning
    nothing. A reload runs no unmount at all, so a claim also needed a page-load hook, and a closed
    window a `Destroyed` hook. A lease the view renews needs none of the three: the heartbeat, the
-   frames and the writes all stop when the view leaves, reloads or closes, and two seconds later
-   the lease is free. The pairing QR scanner is short-lived and unaffected; every window has the
+   frames and the writes all stop when the view leaves, reloads or closes, a command already
+   running still settles and releases, and two seconds after the last one settles the lease is
+   free. The in-flight count is not a claim: it is taken and given back by one command inside one
+   process, by a guard's drop, and never crosses an IPC boundary. The pairing QR scanner is short-lived and unaffected; every window has the
    camera grant (§3).
 4. **Deck undo** needs no change. The cursor is per deck in the database, the redo stack is per
    window, a stale redo is refused, and the undo button refreshes through §4. Ctrl+Z in either
@@ -404,7 +436,13 @@ unchanged key — and that already reaches every window, because `marketplace:pr
 - **Scanner lease**: a free lease is taken; the holder is re-admitted; the holder's own admissions
   renew it (taken at t0, renewed at t0 + 1.5 s, still refusing another label at t0 + 2.5 s);
   another label is refused inside two seconds and admitted after; `elsewhere` never takes the
-  lease; the refusal is exactly `OPEN_ELSEWHERE`.
+  lease; the refusal is exactly `OPEN_ELSEWHERE`. A command in flight holds the lease past two
+  seconds, however long it runs, and another label is refused throughout; its settling re-stamps,
+  so the lease runs two seconds from completion; the count balances across overlapping commands
+  from one window, held until the last settles; a release arriving after another window took an
+  idle, lapsed lease touches nothing of that window's; an admission holds for exactly as long as
+  its guard lives; and a guard dropped over a poisoned lock does not panic. The in-flight term, the
+  re-stamp, the label check and the count were each mutated and caught.
 
 ### TypeScript
 

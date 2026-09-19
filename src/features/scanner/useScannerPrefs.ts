@@ -75,9 +75,11 @@ export const SCANNER_PREFS_BEFORE_LOAD: ScannerPrefs = {
  * `set_scanner_prefs` refuses with `db::BUSY` while a sync holds the write connection and with
  * `OPEN_ELSEWHERE` while another window holds the scanner. A second and a half is long enough for
  * the ordinary tail of an ingest and short enough that a reader who flips a switch and quits
- * straight away still has it next launch. **It is also what holds the lease**: every try admits
- * this window first, so it has to stay under `scanner::LEASE`'s two seconds for a window with an
- * unsaved change to keep the scanner through a sync that runs for minutes.
+ * straight away still has it next launch. **It is also what keeps the lease unbroken**: each try
+ * holds the scanner from admission until it settles — a `BUSY` answer comes after up to five
+ * seconds' wait for the write connection — and the lease runs two seconds from that settlement, so
+ * the next try, this long after the answer, has to stay under `scanner::LEASE` for a window with an
+ * unsaved change to keep the scanner from one try to the next.
  */
 export const PREFS_RETRY_MS = 1500;
 
@@ -128,8 +130,9 @@ function current(qc: QueryClient): ScannerPrefs {
  * with BUSY while a sync holds the write connection and with `OPEN_ELSEWHERE` while another window
  * holds the scanner, and neither is about the prefs: nothing reverts, the next change writes the
  * whole row again, and **the write is tried every {@link PREFS_RETRY_MS} until it lands** — through
- * a sync that runs for minutes, each try renewing this window's lease — which is what keeps a
- * change nobody follows up. A refusal no wait changes gets one more try and no further. **No write
+ * a sync that runs for minutes, each try holding the scanner until it settles and the next going
+ * out inside the two seconds the lease runs after that — which is what keeps a change nobody
+ * follows up. A refusal no wait changes gets one more try and no further. **No write
  * stores what is not there**: each reads the cache as it goes out, and with
  * no entry — the view gone, the entry dropped — it is skipped rather than storing the defaults
  * {@link current} draws before a load.

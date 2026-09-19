@@ -71,10 +71,12 @@ export const TRAY_QUIET_MS = 400;
 
 /**
  * How long a refused write waits before it is tried again — `useScannerPrefs`' `PREFS_RETRY_MS`, for
- * its reason: BUSY is usually a sync's tail, which is seconds. **The interval is also what holds the
- * lease**: every try goes through `set_scanner_tray`, which admits this window first, so a window
- * whose tray is still owed renews its two-second lease on every try — which is why this has to stay
- * under `scanner::LEASE`.
+ * its reason: BUSY is usually a sync's tail, which is seconds. **The interval is also what keeps the
+ * lease unbroken**: every try goes through `set_scanner_tray`, which admits this window and holds
+ * the scanner until the try settles — through the up-to-five-seconds wait for the write connection
+ * that ends in `BUSY` — and the lease then runs two seconds from that settlement. The next try goes
+ * out this long after the answer, so it has to stay under `scanner::LEASE` for a window whose tray
+ * is still owed to hold the scanner from one try to the next.
  */
 export const TRAY_RETRY_MS = 1500;
 
@@ -137,9 +139,11 @@ export interface TrayState {
  * neither says anything about the rows, and rows scanned meanwhile are the reader's cards. So the
  * tray stays on screen and **the write is tried again every {@link TRAY_RETRY_MS} until it lands** —
  * through a first sync that runs for minutes, not just once — stopping early only when a newer
- * change takes the tries over or there are no rows left to write. Each try renews this window's
- * lease, so the window with unsaved cards keeps the scanner until they are stored, and no second
- * window can open a tray read from a row about to change under it. A refusal that no wait changes
+ * change takes the tries over or there are no rows left to write. Each try holds the scanner from
+ * the moment it is admitted until it settles — through the whole of a BUSY wait — and the next one
+ * goes out inside the two seconds the lease runs after that, so the window with unsaved cards keeps
+ * the scanner until they are stored, and no second window can open a tray read from a row about to
+ * change under it. A refusal that no wait changes
  * gets one more try and no further; its rows stay unsaved until the next change.
  *
  * **No write stores what is not there.** Every write reads the cache as it goes out, and a cache
