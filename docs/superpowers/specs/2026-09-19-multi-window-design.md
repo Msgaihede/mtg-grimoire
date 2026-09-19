@@ -132,11 +132,11 @@ run exactly once, at the real exit. The only edit is `closeWindow`'s doc comment
 
 ### Window count
 
-A `window_count` command and a `windows:changed` event. Tauri's `WindowEvent` has no "created"
-arm, so the event is emitted by `open_new` after `show()` and by `on_window_event` on `Destroyed`
-— the config's first window predates any listener and needs neither. `useWindowCount()` reads the
-command once and listens to the event. Its one reader is the update button (§5); the refresh gate
-(§4) asks `app.webview_windows().len()` directly.
+A `window_count` command, and **no event**. Its one reader is the Update panel's hint (§5), a
+panel a reader has open for seconds, so `useWindowCount()` polls it every two seconds while mounted
+rather than the app growing a `windows:changed` event and two emit sites for it. The refresh gate
+(§4) asks `app.webview_windows().len()` directly. On the web target the command is not routed, so
+the hook answers `1` without asking.
 
 ---
 
@@ -147,24 +147,36 @@ queries that makes stale.** The repository's standing boundary, applied.
 
 ### Rust: `changes.rs`
 
-- **The mask.** `Changes`: an `AtomicU64`, one bit per table in the **user** database, indexed by a
-  fixed, sorted `&'static [&str]`. `mark(db, table)` ignores anything not in `main`, finds the bit
-  by binary search and does one `fetch_or`. No allocation, no lock, no call back into SQLite — the
-  constraints `mirror/watch.rs`'s module doc already states for a hook.
-- **Riding the existing hook.** SQLite allows one update hook per connection, so `install_hook`
-  (`mirror/watch.rs:225`) gains the `Changes` handle and its closure calls `changes.mark(db, table)`
-  beside `marker.note(db)` and the mirror's `mask.mark`. The corpus never sets a bit, so a Scryfall
-  ingest, a feed refresh or a tag download emits nothing.
+- **The mask.** `Changes`: an `AtomicU64`, one bit per table in the **user** database, indexed by
+  the user side of `schema::TABLES` — built and sorted once, in `Changes::new`, so the hook itself
+  only reads it. `mark(db, table)` ignores anything not in `main`, finds the bit by binary search and
+  does one `fetch_or`. No allocation, no lock, no call back into SQLite — the constraints
+  `mirror/watch.rs`'s module doc already states for a hook. It lives on `AppState` beside `mirror`,
+  gated the same way.
+- **Riding the existing hook.** SQLite allows one update hook per connection, so the hook's closure
+  calls `changes.mark(db, table)` beside `marker.note(db)` and the mirror's `mask.mark`. It is a new
+  `install_hook_with_changes`, and `install_hook` keeps its signature by delegating with a throwaway
+  `Changes` — `install_hook` has nineteen callers and eighteen of them are test fixtures that have no
+  use for the mask. The corpus never sets a bit, so a Scryfall ingest, a feed refresh or a tag
+  download emits nothing.
 - **The six tables the hook cannot see.** `update_hook` does not fire for `WITHOUT ROWID` tables,
   and six user tables are: `muted_tags`, `sync_devices`, `sync_state`, `sync_peers`,
-  `device_names`, `price_snapshots`. Each is either **marked explicitly at its write sites**
-  (`changes.mark_table(…)`) or **listed as invisible to the UI**; a test enumerates every
-  `WITHOUT ROWID` table in `main.sqlite_master` against that decision, so a seventh goes red until
-  somebody makes one. Expected: the first, second, fifth and sixth marked; `sync_state` and
-  `sync_peers` invisible.
-- **The wake.** The existing commit hook (`mirror/watch.rs:254`) already rings live sync's
-  `Notify`; it rings a second one, `changes_wake`. `notify_one` stores at most one permit, so a
-  commit storm is one wake.
+  `device_names`, `price_snapshots`. Their write sites are dozens of functions that take a bare
+  `&Connection`, so a mark there would thread `Changes` through modules that have no business with
+  it. **The mark is at the command instead**, after its write has committed — which is also the
+  only place a *reader's press* reaches these tables at all:
+  - `muted_tags` — `tag_mute` and `tag_unmute`;
+  - `sync_devices` and `device_names` — `sync_device_rename`;
+  - `price_snapshots`, `sync_state`, `sync_peers` — **not marked**: the app writes them itself (a
+    day's prices, a sync cursor, a watermark) and no window's press does, so no window is behind
+    another about them.
+
+  A test enumerates every `WITHOUT ROWID` table in `main.sqlite_master` against those two lists, so
+  a seventh goes red until somebody decides.
+- **The wake.** `Changes` carries its own `tokio::sync::Notify`. The existing commit hook
+  (`mirror/watch.rs:254`) rings it **only when a bit is set**, so a Scryfall ingest's thousands of
+  corpus commits wake nothing; a command's explicit mark rings it itself. `notify_one` stores at
+  most one permit, so a commit storm is one wake.
 - **The emitter.** A task spawned in `start()`, desktop only:
   1. await `changes_wake`, then sleep **50 ms** so a burst of commits is one event;
   2. **take and drop the write lock** (`db::lock_for`, `WRITE_LOCK_WAIT`) — the commit hook fires
@@ -182,10 +194,12 @@ queries that makes stale.** The repository's standing boundary, applied.
 ### One table list, both sides
 
 The user tables live in **one committed file**, `src/lib/userTables.json`. A Rust test asserts it
-equals `main.sqlite_master`'s tables and `changes.rs`'s index list; TypeScript imports it, and the
-table→query map is typed `Record<UserTable, …>` over its entries — so a migration that adds a table
-is a red Rust test, and a table nobody mapped is a `tsc` error. This is the same shape as the export
-golden corpus: one committed file, both suites asserting against it.
+equals the user side of `schema::TABLES`, which is what `Changes` indexes; a Vitest test asserts the
+table→query map's keys equal it. So a migration that adds a table is a red Rust test, and a table
+nobody mapped is a red Vitest test. **Not a `tsc` error, and this corrects the first draft**: a
+JSON import types as `string[]`, so a `Record` over its entries is a `Record<string, …>` and checks
+nothing. This is the same shape as the export golden corpus: one committed file, both suites
+asserting against it.
 
 ### TypeScript: `useCrossWindowRefresh`
 
@@ -195,8 +209,12 @@ golden corpus: one committed file, both suites asserting against it.
   `invalidateQueries({ queryKey }, { cancelRefetch: false })`. The writing window hears its own
   event too; it has already invalidated, and `cancelRefetch: false` makes the second invalidation
   join that fetch rather than cancel and restart it.
-- The map lives beside `OWNED_WRITE_KEYS` in `src/lib/query.ts`. `collection_entries`, for one,
+- The map lives in `src/lib/crossWindow.ts`, beside `query.ts`, and each table's entry is **the
+  union of what that table's own mutations already invalidate** — `collection_entries`, for one,
   maps to exactly `OWNED_WRITE_KEYS`, because that is already the list a collection write owes.
+- **Every invalidation carries a predicate that spares the per-window keys**, and the prefix match
+  is why it has to: deck sort is `["decks", "sort"]`, under the `["decks"]` root every deck write
+  refreshes, so without the predicate an edit in window A would pull A's sort into window B.
 
 ### `app_meta`: which rows follow
 
@@ -205,38 +223,52 @@ live**, and every key not on it stays per window:
 
 | Follows live | Stays per window |
 | --- | --- |
-| `START_VIEW_KEY`, `HOME_LAYOUT_KEY`, `["scanner","prefs"]`, `["scanner","tray"]`, `MARKETPLACE_KEY`, the mark colours, `["recentCards"]` | card zoom, list/grid, flatten, `NAV_COLLAPSED_KEY`, `SEARCH_OPEN_KEY`, the folder pane, deck sort, the deck search panel, `PRINTING_GROUP_BY_KEY` |
+| `START_VIEW_KEY`, `HOME_LAYOUT_KEY`, `["scanner","prefs"]`, `["scanner","tray"]`, `MARKETPLACE_KEY`, `MARK_COLORS_KEY`, `RECENT_CARDS_ROOT`, `["decks","lastFormat"]`, `MIRROR_KEY` | card zoom, list/grid and flatten (store state seeded once at launch, never a query), `NAV_COLLAPSED_KEY`, `SEARCH_OPEN_KEY`, `FOLDER_PANE_KEY`, `["decks","sort"]`, `DECK_SEARCH_TAB_KEY`, `PRINTING_GROUP_BY_KEY` |
 
 Refetching the follow-live keys is what closes the whole-value race: every window writes the home
 layout, the scanner tray and the scanner prefs **from fresh data**. A view-pref write in one window
 still triggers the `app_meta` entry; the follow-live keys refetch to the same values and the
 per-window keys are untouched, which is the point.
 
-⚠️ **A setting whose local setter runs follow-on work must run it on a refetch too.** Changing the
-marketplace in window A calls `invalidatePricedQueries` in A (`useMarketplace.ts:163`); window B
-only refetches `MARKETPLACE_KEY`, and its priced queries would go on showing the old marketplace. So
-a follow-live hook with follow-on work runs it when its value **changes**, whoever changed it. The
-plan's census of the follow-live keys decides which others carry work; the marketplace is the one
-known today.
+**A marketplace change needs no follow-on work, and the first draft said it did.** Every
+price-bearing query carries the marketplace **in its key** (`src/CLAUDE.md`), so once window B's
+`MARKETPLACE_KEY` refetches, B's priced queries are *new* keys and fetch on their own.
+`invalidatePricedQueries` exists for the other case — a feed refresh that rewrites prices under an
+unchanged key — and that already reaches every window, because `marketplace:progress` is an
+`app.emit`.
 
 ---
 
 ## 5. The remaining one-window assumptions
 
 1. **Snap hover.** `onSnapHover` switches from the global `listen` to
-   `getCurrentWebviewWindow().listen(…)`, so a hover over one window's maximize button lights only
-   that window's. It is the only window-targeted event the page listens to; everything else the app
-   emits is meant for every window.
+   `getCurrentWindow().listen(…)`, so a hover over one window's maximize button lights only that
+   window's. `getCurrentWindow` rather than `getCurrentWebviewWindow` because
+   `@tauri-apps/api/window` is the specifier `.storybook/main.ts` and the tests already alias to a
+   fake; a new specifier would reach the real module from every story. It is the only
+   window-targeted event the page listens to; everything else the app emits is meant for every
+   window.
 2. **Restart to finish.** When `useWindowCount() >= 2`, the Update panel's "Restart to finish"
    button carries a hint that it closes all *N* windows. No dialog — the button is already the
    second, deliberate press (`UpdatePanel.test.tsx:85`). One window comes back after the restart;
    restoring the rest is out of scope.
-3. **The card scanner is owned by one window.** `ScannerState` gains an owner: the label of the
-   window whose scanner view claimed it, supplied by Tauri to the commands. A second window's
-   scanner view shows **"The scanner is open in another window"** and nothing else — no takeover.
-   Ownership is released when the owning view unmounts, when its window is `Destroyed`, and when a
-   window's page loads (a reload runs no unmount, so without this a reload could strand the lock).
-   The pairing QR scanner is short-lived and unaffected; every window has the camera grant (§3).
+3. **The card scanner is held by one window, as a lease the frames renew.** `ScannerState` gains
+   an owner: a window label and the moment it last used the session. The four session commands —
+   `scanner_frame`, `scanner_capture`, `scanner_reset`, `scanner_set_filters` — take the calling
+   webview from Tauri and are admitted only if the lease is free, already theirs, or **older than two
+   seconds**; otherwise they refuse with `OPEN_ELSEWHERE`, *"The scanner is open in another
+   window."* A new `scanner_elsewhere` answers the same question without taking the lease. A second
+   window's scanner view asks it, shows that sentence and nothing else — no camera, no tray, no
+   takeover — and asks again each second until the lease lapses.
+   **A lease rather than a claim/release pair, and this reverses the first draft.** Claim on mount
+   and release on unmount looks simpler and is not: Tauri gives no ordering guarantee between two
+   IPC calls, and `main.tsx`'s `StrictMode` mounts every effect twice in development, so
+   *claim, release, claim* can arrive as *claim, claim, release* and leave a mounted scanner owning
+   nothing. A reload runs no unmount at all, so a claim also needed a page-load hook, and a closed
+   window a `Destroyed` hook. A lease the camera renews at its frame rate needs none of the three:
+   the owner stops sending frames when it leaves the view, reloads or closes, and two seconds later
+   the lease is free. The pairing QR scanner is short-lived and unaffected; every window has the
+   camera grant (§3).
 4. **Deck undo** needs no change. The cursor is per deck in the database, the redo stack is per
    window, a stale redo is refused, and the undo button refreshes through §4. Ctrl+Z in either
    window undoes that deck's most recent change, which is what one deck with two views should mean.
@@ -263,21 +295,21 @@ known today.
 
 ### Rust
 
-- **`changes.rs`**: the index list equals `userTables.json` equals `main.sqlite_master`; every
-  `WITHOUT ROWID` user table is on exactly one side of the explicit-mark decision; a write through
-  the hooked connection sets its table's bit; a corpus write sets none; `take` clears; muting a tag
-  sets `muted_tags`.
-- **The emit decision**: bits and a window count in, emit or not out.
+- **`changes.rs`**: `userTables.json` equals the user side of `schema::TABLES`; every
+  `WITHOUT ROWID` user table is on exactly one of the two lists; a write through the hooked
+  connection sets its table's bit and rings; a corpus write sets none and rings nothing; `take`
+  clears; `mark_table` sets and rings.
+- **The emit decision**: tables and a window count in, emit or not out.
 - **Placement**: the cascade and its clamp, beside `opening_size`'s tests.
-- **Scanner ownership**: claim; refusal from another label; release on unmount, on `Destroyed`, on
-  page load.
+- **Scanner lease**: a free lease is taken; the holder is re-admitted; another label is refused
+  inside two seconds and admitted after; `elsewhere` never takes the lease.
 
 ### TypeScript
 
-- The table map: an `app_meta` change **never** invalidates a per-window key and **does**
-  invalidate every follow-live key. `tsc` covers "every table is mapped".
+- The table map: every user table is mapped (Vitest, against the JSON); an `app_meta` change
+  **never** invalidates a per-window key and **does** invalidate every follow-live key; a deck write
+  does not refresh `["decks","sort"]`.
 - `useCrossWindowRefresh`: an event invalidates the mapped keys with `cancelRefetch: false`.
-- The marketplace follow-on work runs on a refetched change.
 - `newWindow` is in the catalogue and the key map on desktop, and absent on web and Android.
 - `onSnapHover` listens on its own window.
 - The Update panel's hint appears at two windows and not at one.
