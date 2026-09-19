@@ -18,6 +18,7 @@ vi.mock("@/lib/platform", () => ({ isAndroid: vi.fn(() => false) }));
 // TypeScript only quotes it, so the quote is what can rot.
 import activityRs from "../../src-tauri/src/activity.rs?raw";
 import cardRs from "../../src-tauri/src/card.rs?raw";
+import changesRs from "../../src-tauri/src/changes.rs?raw";
 import collectionRs from "../../src-tauri/src/collection.rs?raw";
 import collectionFoldersRs from "../../src-tauri/src/collection_folders.rs?raw";
 import combosRs from "../../src-tauri/src/combos.rs?raw";
@@ -31,6 +32,7 @@ import deckPullRs from "../../src-tauri/src/deck_pull.rs?raw";
 import deckQuickAddRs from "../../src-tauri/src/deck_quick_add.rs?raw";
 import deckTheoryRs from "../../src-tauri/src/deck_theory.rs?raw";
 import deckTokensRs from "../../src-tauri/src/deck_tokens.rs?raw";
+import desktopRs from "../../src-tauri/src/desktop.rs?raw";
 import homeRs from "../../src-tauri/src/home.rs?raw";
 import markcolorsRs from "../../src-tauri/src/markcolors.rs?raw";
 import priceHistoryRs from "../../src-tauri/src/price_history.rs?raw";
@@ -64,6 +66,7 @@ import { CONDITIONS, CONDITION_NOT_SET } from "@/lib/conditions";
 import { isAndroid } from "@/lib/platform";
 import { DEFAULT_SCANNER_OPTIONS } from "@/features/scanner/scannerOptions";
 import { DEFAULT_SCANNER_PREFS, TRAY_ROWS } from "@/features/scanner/fixtures";
+import { SCANNER_OPEN_ELSEWHERE } from "@/features/scanner/verdictText";
 import {
   AUTO_BRACKET,
   ipc,
@@ -72,6 +75,7 @@ import {
   type CardCombosPage,
   type CardNote,
   type ComboProgress,
+  type DbChanged,
   type DeckNote,
   type DeckTokenRow,
   type FeedProgressEvent,
@@ -3271,6 +3275,52 @@ describe("the startup gate's names agree with the crate", () => {
 
   it("tags the status on the field the page matches", () => {
     expect(startupRs).toContain('#[serde(tag = "state", rename_all = "camelCase")]');
+  });
+});
+
+/**
+ * Multi-window's four names. Each is a string on both sides with nothing in either type system
+ * holding them together — a subscriber spelling the event differently hears nothing, forever.
+ */
+describe("multi-window's cross-boundary names", () => {
+  it("subscribes to db:changed and hands the payload through unwrapped", async () => {
+    const unlisten = vi.fn();
+    let emit: ((evt: { payload: DbChanged }) => void) | undefined;
+    listen.mockImplementation((_name: string, handler: (evt: { payload: DbChanged }) => void) => {
+      emit = handler;
+      return Promise.resolve(unlisten);
+    });
+    const seen: DbChanged[] = [];
+    const stop = await ipc.onDbChanged((e) => seen.push(e));
+    emit?.({ payload: { tables: ["decks"] } });
+
+    expect(listen).toHaveBeenCalledWith("db:changed", expect.any(Function));
+    expect(seen).toEqual([{ tables: ["decks"] }]);
+    stop();
+    expect(unlisten).toHaveBeenCalledTimes(1);
+    expect(changesRs).toContain('pub const DB_CHANGED: &str = "db:changed";');
+    expect(changesRs).toContain("pub tables: Vec<&'static str>,");
+  });
+
+  it("opens and counts windows by the Rust commands' names, with no arguments", async () => {
+    invoke.mockResolvedValue(undefined);
+    await ipc.windowNew();
+    expect(invoke).toHaveBeenCalledWith("window_new");
+    invoke.mockResolvedValue(2);
+    expect(await ipc.windowCount()).toBe(2);
+    expect(invoke).toHaveBeenCalledWith("window_count");
+    expect(desktopRs).toContain("async fn window_new(");
+    expect(desktopRs).toContain("fn window_count(");
+  });
+
+  it("asks the scanner lease by its Rust name, and quotes its refusal", async () => {
+    invoke.mockResolvedValue(true);
+    expect(await ipc.scannerElsewhere()).toBe(true);
+    expect(invoke).toHaveBeenCalledWith("scanner_elsewhere");
+    expect(scannerRs).toContain("pub fn scanner_elsewhere(");
+    // Built from the page's own constant, so the sentence the page draws and the one Rust refuses
+    // with are tied here rather than agreeing by hand.
+    expect(scannerRs).toContain(`pub const OPEN_ELSEWHERE: &str = "${SCANNER_OPEN_ELSEWHERE}";`);
   });
 });
 

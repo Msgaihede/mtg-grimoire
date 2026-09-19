@@ -6158,6 +6158,14 @@ export interface RelayOutcome {
 }
 
 /**
+ * `changes::DbChanged` — which user tables a commit wrote. Sent to every window, and only while
+ * two or more are open; `useCrossWindowRefresh` turns it into invalidations.
+ */
+export interface DbChanged {
+  tables: string[];
+}
+
+/**
  * The six tables that can hold a `needs_review` sentence.
  *
  * A closed union, like {@link ErrorSource} and for the same reason: `Record<ReviewTable, string>`
@@ -8493,6 +8501,17 @@ export const ipc = {
   /** A device sync applied or sent something. Call this once — see `useSyncProgress`. */
   onSyncApplied: (cb: (e: RelayOutcome) => void): Unlisten =>
     core.listen<RelayOutcome>("sync:applied", cb),
+  /** `changes::DB_CHANGED`. Call this once — `useCrossWindowRefresh` does. */
+  onDbChanged: (cb: (e: DbChanged) => void): Unlisten => core.listen<DbChanged>("db:changed", cb),
+  /** `desktop::window_new` — open another window beside this one (Ctrl+Shift+N). Desktop only. */
+  windowNew: () => invoke<void>("window_new"),
+  /** `desktop::window_count` — how many windows are open. */
+  windowCount: () => invoke<number>("window_count"),
+  /**
+   * `scanner::scanner_elsewhere` — whether another window holds the scanner's lease. Takes
+   * nothing; only the session commands take it.
+   */
+  scannerElsewhere: () => invoke<boolean>("scanner_elsewhere"),
   /** The relay socket's state. Call this once. */
   onSyncLive: (cb: (e: SyncLiveEvent) => void): Unlisten =>
     core.listen<SyncLiveEvent>("sync:live", cb),
