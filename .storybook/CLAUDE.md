@@ -21,9 +21,19 @@ deliberately**: no screenshots are stored.
   nothing about the one file that can drift from that capability.
 - **The window fake keeps module state where the other three keep per-world state**, and that is
   the honest model rather than an oversight: a story's *backend* is its own, and two docs-page
-  stories may hold different databases — but there is one window, on the desk and here. What it
+  stories may hold different databases — but **a story is one window**. What it
   costs is exactly what `scope.ts` exists to prevent, so `installWorld` calls `resetWindow()`
   beside the store reset. A story that maximized the window must not leave the next one maximized.
+  ⚠️ **"one window, on the desk and here" is what this said until 2026-09-20, and the first half
+  stopped being true**: the app opens as many as the reader asks for — Ctrl+Shift+N, or relaunching
+  the exe — each with its own webview and its own query cache
+  ([multi-window.md](../docs/reference/multi-window.md)). Nothing about the fake's shape changes,
+  because the workbench still draws one: `window_new` answers and opens nothing, `window_count` is
+  always one, and `getCurrentWindow().listen` is the same per-window subscription drawn in the one
+  window there is. **What a second window would show is a `fault`, never a second window** — the
+  `scannerElsewhere` fault below is the whole of that vocabulary, and a story that wants to say
+  *another window is doing this* reaches for the same shape rather than teaching the fake to open
+  one.
 - **The fake stores table rows and derives DTOs** (`fake/db.ts`), because `ownedQuantity` means
   three different things. A fake that stored DTOs would make all three agree, and
   teach a reader a model the app does not have. (It was **four** until 2026-09-08: `WishRow`

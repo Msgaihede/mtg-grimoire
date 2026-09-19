@@ -127,6 +127,15 @@ on that list — which is the correction worth keeping.
 | `window.rs` (whole module) | `open_sized_to_monitor` calls `WebviewWindow::center()`, which tauri declares `#[cfg(desktop)]`. |
 | `focus_existing_window` (`lib.rs`) | `WebviewWindow::unminimize()` is `#[cfg(desktop)]` too. **The plan predicted the `--await-predecessor` block here and was wrong** — that block compiles fine on Android. |
 
+⚠️ **That third row is history since 2026-09-20: `focus_existing_window` is deleted.** A relaunch
+opens another window rather than bringing one forward, so the single-instance callback spawns
+`window::open_new` — which is inside `window.rs`, already the row above, and gated by the same
+`#[cfg(desktop)]`. So **this list is two rows on the current tree**, and the second row's *reason*
+is one function wider: `open_new` reaches `WebviewWindowBuilder::from_config` and `set_position`
+as well as `center()`. The **must-not-run** list below gained a row at the same time.
+[multi-window.md](multi-window.md) is the record, and the phone is unaffected — Android runs one
+task per application, so there is no second window for any of it to open.
+
 ### Must not run (compiles everywhere)
 
 | Site | Why |
@@ -135,6 +144,7 @@ on that list — which is the correction worth keeping.
 | The mirror's `install_hook` + `spawn` | The mirror's point is a folder a reader greps or syncs; Android's app directory is not that, and `tauri-plugin-dialog` has no folder picker there. **The renderer is not gated** — see the archive below. |
 | `update::clean_up` and the daily update check | Nothing stages a build beside the executable, and the store is what notices a release. |
 | `tauri_plugin_snap_layout` | No caption to park an overlay over. The crate itself compiles everywhere. |
+| `changes::spawn_emitter` (2026-09-20) | The cross-window refresh, which has nobody to tell: one task per application is one window, and it emits only past two. The `changes` module itself compiles here (it is gated off wasm, not off mobile) and **nothing marks its mask either** — the mask rides the mirror's `update_hook`, and that install is inside the same `#[cfg(desktop)]` block as the row above. |
 
 **`mirror/`, `transfer/` and `update.rs` still compile on Android, and that is not a violation
 of the spec's ⛔.** `AppState` carries `mirror::watch::{Mask, LastPass}` and six sites construct

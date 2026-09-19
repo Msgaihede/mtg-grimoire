@@ -821,9 +821,13 @@ own first-run sync (**117 606 cards**), which means schema **v28 arrived through
 > really does reach the handler. A test that asserts the attribute proves the styling; only
 > pressing it proves the refusal. It refused.
 
-**What a single window structurally cannot show, and what is therefore still owed.**
-`tauri-plugin-single-instance` gives a second copy exit code 0 and no window, so **no pass on one
-machine can complete a pairing** — everything past "read their answer" needs two devices. The
+**What a single machine structurally cannot show, and what is therefore still owed.**
+`tauri-plugin-single-instance` gives a second copy exit code 0 and no process of its own, so **no
+pass on one machine can complete a pairing** — everything past "read their answer" needs two
+devices. ⚠️ **A second *window* is not a second device and cannot stand in for one**
+([multi-window.md](multi-window.md)): since 2026-09-20 a relaunch opens one, but every window in
+that process shares the one `AppState`, the one write connection and therefore the one
+`sync_identity` — so two windows pairing would be one device reading its own invite. The
 crossed halves ([§the two blobs](#the-two-blobs)) are covered by
 `two_databases_pair_and_agree_on_the_key`, which drives two connections in one process; that is
 the strongest evidence available until a second device exists, and the Android build merged on

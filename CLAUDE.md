@@ -226,6 +226,7 @@ number to compare against.
 | [card-scanner.md](docs/reference/card-scanner.md) | The crate, the pipeline and every measurement behind it, the three evidence tiers and their weights, both tracker verdicts and the failures that shaped them, the debug server and how to drive it without a camera, and the app's Scanner view — plus the bundle a release build embeds and the weekly workflow that publishes it, the set and date filters, Fast and Exact with the six tiers and the eval that tightened two of them, one decision per card and the failures behind each of its rules, the `app_meta` review tray, and **a synthetic evaluation that is a regression fence and never an accuracy claim** |
 | [frontend-design.md](docs/reference/frontend-design.md) | The ribbon, card images, foil, layers, tables, the Settings rail and its two lopsided flex numbers |
 | [keyboard-shortcuts.md](docs/reference/keyboard-shortcuts.md) | The chord catalogue — the fence and the four rows outside it, exact modifier matching and the two chords it narrowed away, where the text-field yield lives, and the live pass that proved the panel needs no `LAYER` rung |
+| [multi-window.md](docs/reference/multi-window.md) | More than one window on one collection — why a second *process* stays refused and a second window costs nothing, the cascade and its two traps, the commit-driven change mask with both of the update hook's blind spots, the table map and the fence that keeps a view preference per window, the scanner's lease and what renews it, and a live pass that measured every one of them |
 | [motion.md](docs/reference/motion.md) | `motion@13.1.0` — the timing scale, reduced motion, and **two forbidden APIs** |
 | [storybook.md](docs/reference/storybook.md) | The workbench and its fake, in full |
 | [live-ui-verification.md](docs/reference/live-ui-verification.md) | The CDP harness contract — `scripts/cdp.mjs` and its traps |
@@ -252,9 +253,13 @@ number to compare against.
   leaves the old bundle inside the old exe — exiting 0. `touch src-tauri/src/main.rs` first, and
   stop the app before rebuilding or the link fails with `Access is denied. (os error 5)`.
   `npm run tauri dev` does not have this problem, which is why it is the command above.
-- **A portable copy exits silently if any other instance is running** —
-  `tauri-plugin-single-instance` gives it exit code 0, no window and no stderr, and a dev build
-  counts.
+- **A second launch does not start a second app — it opens another window in the one already
+  running.** `tauri-plugin-single-instance` still gives the new process exit code 0, no window and
+  no stderr, and a dev build still counts; what changed on 2026-09-20 is what the *first* process
+  does about it. **So a dev build launched from another worktree opens a window in the running
+  app, showing the RUNNING worktree's frontend** — a window that looks like yours and renders
+  somebody else's branch. The `app` lock still prevents it; see the `running-the-app` skill and
+  [multi-window.md](docs/reference/multi-window.md).
 - **Every measured claim in this repo was measured on Windows. Nobody has run a Linux build.**
   Name the build (debug or release) in any figure you add; the same measurement can differ by ~8×.
 

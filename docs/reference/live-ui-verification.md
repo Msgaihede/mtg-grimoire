@@ -15,6 +15,7 @@ npm run tauri dev
 with code 0, no window and no stderr — the `running-the-app` skill owns that protocol.
 
 Then from another shell, `scripts/cdp.mjs` (no dependencies, Node's built-in WebSocket):
+`pages` ·
 `eval` · `click <css>` · `text <visible text>` · `key Escape` · `press Enter [css]` · `type` ·
 `drag <source css> <target css>` · `pull <css> <dx> [dy]` ·
 `hover <css> [--rest ms] [--probe expr]` ·
@@ -32,6 +33,23 @@ modifier state comes from. On `press` it lands on the click Chromium synthesises
 the app mid-pass and every later interaction goes unwatched while the file still exists and
 still holds its `attached` line. Re-attach after any relaunch, and check the line count.
 
+- **The app has more than one window since 2026-09-20, and `/json/list` cannot tell them
+  apart.** Ctrl+Shift+N and a relaunch each open another window in the same process
+  ([multi-window.md](multi-window.md)), and every one of them has the same URL and the same
+  title — so with two open, the "first `page` target" this harness used to take is an arbitrary
+  one. **`pages` lists them** (index, target id, title, url, one per line) and **`CDP_PAGE`
+  picks one**, as an index or as a target id; with several open and no `CDP_PAGE` set, a
+  warning goes to stderr naming the page it chose.
+  ⚠️ **Pin a multi-step pass by target id, never by index.** `/json/list` may reorder by
+  activity, so index 0 can be a different window between two commands — and because the two
+  windows are identical to every probe you have, a pass that drifts between them reads as the
+  app losing state rather than as the harness changing subject. The multi-window live pass
+  (2026-09-20) was driven entirely with `CDP_PAGE` set to an id. A window also takes a moment
+  to exist: for the length of a new window's boot its target is still `about:blank`, and events
+  the app emits arrive there seconds late.
+  **The URL check below still works and answers about a *worktree*, not a window**: every
+  window in one process serves the same frontend, so one target reading
+  `http://localhost:1420/` means the whole process is that dev server's.
 - **A built app embeds `dist/` at compile time, so a frontend-only edit does not reach a
   `tauri build` binary.** `npm run tauri build` re-runs Vite, writes a new `dist/assets/
 index-<hash>.js` — and then cargo sees no Rust source change, skips the crate, and **leaves
@@ -185,7 +203,11 @@ index-<hash>.js` — and then cargo sees no Rust source change, skips the crate,
   **exit code 0xffffffff and no panic, no stderr and nothing in the console recording**, and the
   relaunch then exited **0** (single-instance) while `/json/list` went on answering — from the
   *other* worktree's window. Every `cdp.mjs` command kept working and was driving somebody else's
-  branch. **The tell is the page target's URL and it costs one call**: `http://localhost:1420/` is
+  branch. **Since 2026-09-20 it is worse in one specific way**: that relaunch still exits 0, and
+  the running app now answers it by **opening another window** — so the other worktree gains a
+  window showing *its* frontend, `pages` grows a line, and the thing that looks most like "my app
+  started" is the strongest evidence that it did not. **The tell is the page target's URL and it
+  costs one call**: `http://localhost:1420/` is
   a `tauri dev` window and yours; `http://tauri.localhost/` is a built binary serving its embedded
   `dist/`. Check it before the first gesture, and ask which worktree the process came from —
   `Get-Process mtg-grimoire | Select-Object Id, Path` is enough, and `Get-CimInstance Win32_Process

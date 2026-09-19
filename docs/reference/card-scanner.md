@@ -1148,7 +1148,7 @@ so a `j.`-only scrape yielded 20 keys without it and deleting `Verdict::ocr` wou
 green while blanking the page's OCR panel. `ocr` is therefore asserted for **by name** as the
 canary for the whole scrape.
 
-### `src-tauri/src/scanner.rs` — four commands
+### `src-tauri/src/scanner.rs` — the first four commands
 
 `ScannerState` is `app.manage`d beside `AppState` in `.setup()`, not a field on it: the scanner
 is optional, desktop/Android only, and the only thing it shares with the rest of the app is the
@@ -1213,6 +1213,11 @@ Each is `async`, answered on `spawn_blocking`, and returns `Result<T, String>` w
 for an error. No schema rung: nothing is stored in either database. No capability entry: an
 app's own command is always callable. No `error_log` source: the page shows the sentence.
 
+**Those four are the ones §9 shipped, and the module has more now** — the filters push, the prefs
+and tray pair with the tray's commit (§10), and the lease's two (below). **Do not count them from
+this page**: `grep '#\[tauri::command\]' src-tauri/src/scanner.rs` answers it, and a count is a
+fact about a tree that every open branch disagrees about.
+
 **Two body shapes for one command, and Tauri's own doc is the reason.**
 `tauri::ipc::Request`'s documentation says raw bytes are accepted "on all platforms except
 Android", and Android's WebView hands a scheme handler no POST body either — so on the phone a
@@ -1268,6 +1273,78 @@ The Android leg needs none of it: a JSON body is UTF-8.
 `scanner_capture` writes `live-<epoch>.jpg` and its `.json` sidecar into `data/scanner/scans/`,
 the same names and fields the debug server writes into `docs/scanner/scans/`, so a frame
 captured in the app can be copied into the repository's dataset unchanged.
+
+### One window scans at a time
+
+The process has **one** session, and since 2026-09-20 the app opens as many windows as the reader
+asks for ([multi-window.md](multi-window.md)). Every window can walk to the Scanner, so the session
+is held by one of them as a **lease**: `scanner::LEASE`, two seconds, and a command from any other
+window is refused with `scanner::OPEN_ELSEWHERE` — *"The scanner is open in another window."*, the
+same string as `verdictText.ts`'s `SCANNER_OPEN_ELSEWHERE`, pinned across the boundary by
+`ipc.test.ts`.
+
+**What a second window sees is one sentence and nothing else.** `ScannerPage` asks
+`scanner_elsewhere` — which answers the question and takes nothing — *before* it mounts the live
+view, so a refused window opens **no camera**, mounts neither `useTray` nor `useScannerPrefs`, and
+draws that sentence plus *"It opens here once that window leaves the Scanner or closes."* It asks
+again every `SCANNER_ELSEWHERE_POLL_MS` (one second) while the answer is yes, so it opens on its own
+once the lease lapses. **The gate's query is `gcTime: 0`**, and `staleTime: 0` is not enough: a
+stale `false` still in the cache is an answer, and the view would come back on it, mount the camera
+at once, and only then hear from the refetch that another window had taken the scanner in between.
+
+**Three things renew the lease, and the first is the correction the rest of this rests on.**
+
+- **A heartbeat while the view is mounted.** `scanner_hold` admits and does nothing else;
+  `LiveScanner` calls it on mount and once a second after, **whatever the camera is doing**, and
+  clears the interval on unmount. ⚠️ **The frames alone were not enough**: a view whose camera was
+  starting slowly, refused or failed sent none, so its lease lapsed in two seconds and a second
+  window got through the gate with the first one's tray still live — each writing the tray whole
+  over the other, and an Add in the stale one filing committed rows twice. **Every** refused beat
+  re-asks the gate, not only the first of a run.
+- **The four session commands** — `scanner_frame`, `scanner_capture`, `scanner_reset`,
+  `scanner_set_filters`.
+- **Every prefs and tray write** — `set_scanner_prefs`, `set_scanner_tray`, `scanner_tray_commit`.
+  They are not the session and they take the lease anyway, so a window whose writes have not landed
+  keeps the scanner until they do. The three **reads** (`scanner_prefs`, `scanner_tray`,
+  `scanner_status`) take nothing.
+
+⚠️ **An admitted command holds the lease until it _settles_, not from the moment it was let in.**
+`admit` answers a `LeaseGuard` the command keeps alive across its whole body, the awaited
+`spawn_blocking` included: while one is alive the lease is held **whatever its age**, and each drop
+counts it out and re-stamps the lease, so the two seconds run from completion. What that corrects:
+a tray write waits up to five seconds for the write connection before answering `BUSY`, so a lease
+stamped at admission lapsed *under its own write* at two, and a second window got through the gate
+to read a tray about to change. A drop touches the lease only if it is still that window's — by then
+another window can hold it only because this one's went idle and lapsed first — and it recovers a
+poisoned lock rather than panicking.
+
+**A refusal a wait can clear is retried until the write lands, which is what keeps the lease
+unbroken.** `refusalPasses` is the test and it passes exactly two sentences: `db::BUSY` (pinned
+against `db.rs`, so a reworded crate sentence goes red rather than turning every sync into a
+refusal the tray gives up on) and `OPEN_ELSEWHERE`. Neither says anything about the rows, and both
+end on their own. The next try goes out `TRAY_RETRY_MS` / `PREFS_RETRY_MS` — 1.5 s — **after the
+last one answered**, which has to stay under the two-second lease: every try goes through the
+lease-gated command, holds the scanner from admission until it settles, and the next is admitted
+inside the two seconds that settlement leaves. **Any other refusal gets one more try and no loop**
+— a tray row of nothing, a tray past its limit, neither of which a wait changes — because retrying
+one for ever would hold the lease for good.
+
+**The lease is also why a cross-window refresh may not touch these two `app_meta` rows while they
+are live.** Only the holder mounts `useTray` and `useScannerPrefs`, so a live `["scanner","tray"]`
+is always the owner's and nobody else has anything newer; an idle one is dropped rather than
+refetched, **unless its hook reports something unsaved**, because an idle entry is where a card
+waits out a write the view left behind. [multi-window.md](multi-window.md) §4 has that half.
+
+**Measured in the window** (debug, `npm run tauri dev`, 2026-09-20, on a data copy with no bundle
+and no models — so the view says so, and still holds the lease): window 1 on the Scanner, window 2's
+`scanner_elsewhere` answered **`true`** and its page carried **zero** `<video>` elements; window 1
+navigated away and window 2 switched to the live scanner at **+2 346 ms**, which is the two-second
+lease plus up to one second of the gate's poll. Handing it back the other way behaved the same. And
+with window 1 **minimized** — or fully covered — the lease never lapsed: `scanner_elsewhere`
+answered `true` on **340 of 340** one-second polls over 340 s, with window 1's own 1 s timer keeping
+gaps of 991–1010 ms throughout, well past the ~5 minutes at which Chromium's intensive throttling
+would bite. WebView2 reports a minimized window's page as `visibilityState: "visible"`, so the
+renderer never sees a hidden page at all.
 
 ### The IPC seam
 
@@ -1764,10 +1841,21 @@ in `["scanner", "tray"]` with `staleTime` and `gcTime` both `Infinity` — nothi
 and five minutes on another page must not hand a remount an older stored copy — and with
 `structuralSharing` off, so `latest()` hands back the very row objects the last write passed in (the
 commit tells an untouched row from one bumped in flight by identity). It writes after 400 ms of
-quiet and on unmount; on a refusal it keeps the rows, rewrites the whole tray on the next change,
-and tries **once** more after 1.5 s so a tray nobody touches again survives a restart.
+quiet and on unmount; on a refusal it keeps the rows and rewrites the whole tray on the next change.
 `useScannerPrefs` does the same. Neither says anything about `BUSY`: rows scanned during a sync are
 the reader's cards and nothing about them is wrong.
+
+**A refusal a wait can clear is retried until the write lands, where this used to try once more and
+stop** (2026-09-20). One more try covered a sync's tail and nothing longer, and that was written
+down here as an accepted cost — until the scanner's lease made it a correctness problem rather than
+a durability one: a tray still owed to the row is what holds the scanner, so tries that run out
+lapse the lease, let another window store a tray, and leave this window's kept cache to write over
+it. So the two sentences `refusalPasses` admits (`DB_BUSY`, and the lease's) loop every
+`TRAY_RETRY_MS` / `PREFS_RETRY_MS` — 1.5 s after the last answer, never sooner — stopping only when
+a write lands, a newer change takes the tries over, or the cache entry is gone; **every other
+refusal still gets one more try and no loop**, because looping on one no wait can clear would hold
+the scanner for good. A retry that finds its entry gone writes nothing. *One window scans at a
+time*, in §9, is the rest of it.
 
 **Every tray write is single-flight, the commit included** (final review). At most one
 `set_scanner_tray` or `scanner_tray_commit` is on the wire; the next waits for it to settle, so they
