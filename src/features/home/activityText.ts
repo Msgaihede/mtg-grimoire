@@ -308,12 +308,20 @@ function bulkAddLine(p: Record<string, unknown>, cabinet: Cabinet): ActivityLine
   };
 }
 
-/** The one row a clear writes — `reset::clear_collection` and `clear_wishlist`, which are the
- *  other half of the bulk rule above. */
+/**
+ * The one row a clear writes, which are the other half of the bulk rule above —
+ * `reset::clear_collection` and `clear_wishlist` for a whole cabinet, and since issue #471 the
+ * wishlist's two folder presses that delete wishes: a folder's `Clear…`, and a delete that takes
+ * the wishes with it.
+ *
+ * **The folder is the detail, {@link bulkAddLine}'s `in` clause**, so a drawer's clear reads
+ * `Cleared 4 cards from your wishlist` / `in Ordered` and a whole-list wipe — whose payload carries
+ * no `folder` key — keeps its detail empty, since the sentence already says everything went.
+ */
 function clearLine(p: Record<string, unknown>, cabinet: Cabinet): ActivityLine {
   return {
     text: `Cleared ${counted(numberField(p.cards), "card")} from ${cabinet.place}`,
-    detail: null,
+    detail: folderClause("in", p.folder),
   };
 }
 

@@ -3490,6 +3490,105 @@ describe("the wishlist's folders", () => {
     ]);
   });
 
+  /**
+   * The two presses that **do** throw wishes away (issue #471), and the fixture is built so each
+   * of their three boundaries has a wish on both sides of it: a direct wish against a sub-folder's
+   * (clear's), a sub-tree two levels deep against a sibling drawer (the delete's), and the root
+   * against everything (both).
+   *
+   * **Every wish is the same card**, deliberately. A handler that deleted by card rather than by
+   * folder would take the lot, and one that re-filed at the root and merged — the plain delete's
+   * shape — would leave the root row's quantity grown rather than the other rows gone. The two
+   * pinned printings in `Ordered` are what keep two wishes in one drawer on two grains.
+   */
+  function stocked(): FakeDb {
+    return makeDb({
+      wishlistFolders: [
+        { id: 1, parentId: null, name: "Ordered", sortOrder: 0 },
+        { id: 2, parentId: 1, name: "Backordered", sortOrder: 0 },
+        { id: 3, parentId: 2, name: "Lost in the post", sortOrder: 0 },
+        { id: 4, parentId: null, name: "Someday", sortOrder: 1 },
+      ],
+      wishlistEntries: [
+        wish({ id: 1, oracleId: BOLT.oracleId, folderId: null }),
+        wish({ id: 2, cardId: BOLT.id, folderId: 1 }),
+        wish({ id: 3, cardId: BOLT_2X2.id, folderId: 1 }),
+        wish({ id: 4, oracleId: BOLT.oracleId, folderId: 2 }),
+        wish({ id: 5, oracleId: BOLT.oracleId, folderId: 3 }),
+        wish({ id: 6, oracleId: BOLT.oracleId, folderId: 4 }),
+      ],
+    });
+  }
+
+  it("clears the wishes filed directly in a folder, and keeps the folder and everything else", () => {
+    const db = stocked();
+    // The number a folder card drew before the press, because `wishlist_folder_summary` is
+    // direct per folder too — so the confirmation and the answer are the same figure.
+    const drawn = readHandlers(db).wishlist_folder_summary({}).find((r) => r.folderId === 1)!;
+    expect(drawn.wishes).toBe(2);
+
+    expect(writeHandlers(db).wishlist_folder_clear({ id: 1 })).toBe(2);
+    // The drawer stands, and so does every drawer beneath it.
+    expect(db.wishlistFolders.map((f) => f.id)).toEqual([1, 2, 3, 4]);
+    // `Backordered`'s and `Lost in the post`'s wishes are theirs to clear, not this press's.
+    expect(db.wishlistEntries.map((w) => w.id)).toEqual([1, 4, 5, 6]);
+  });
+
+  it("answers 0 for a folder with nothing filed directly in it, and deletes nothing", () => {
+    // `Ordered` holds nothing of its own; its child holds one. Empty is an answer, not a refusal.
+    const db = filing({ wishlistEntries: [wish({ id: 1, oracleId: BOLT.oracleId, folderId: 2 })] });
+    expect(writeHandlers(db).wishlist_folder_clear({ id: 1 })).toBe(0);
+    expect(db.wishlistEntries.map((w) => w.id)).toEqual([1]);
+    expect(db.wishlistFolders).toHaveLength(2);
+  });
+
+  /**
+   * **The opposite call from `wishlist_folder_delete`'s on the same id**, and on purpose: a clear
+   * names a drawer that is meant to stand afterwards, so `0` for one that has gone would tell a
+   * reader on a stale tile that it had been emptied when it had been deleted.
+   */
+  it("refuses to clear a folder that is not there, in words, and changes nothing", () => {
+    const db = stocked();
+    expect(() => writeHandlers(db).wishlist_folder_clear({ id: 404 })).toThrow(
+      /^That folder is not there any more\.$/,
+    );
+    expect(db.wishlistEntries).toHaveLength(6);
+  });
+
+  it("deletes a folder with its whole sub-tree and every wish in it, and nothing else", () => {
+    const db = stocked();
+    // Two direct, one a level down and one two levels down.
+    expect(writeHandlers(db).wishlist_folder_delete_with_wishes({ id: 1 })).toBe(4);
+    // The sibling drawer survives, and the three that went are the three the cascade reaches.
+    expect(db.wishlistFolders.map((f) => f.id)).toEqual([4]);
+    // The root wish is untouched — quantity included, which is what fails a handler that
+    // re-filed the sub-tree at the root and merged instead of deleting it.
+    expect(db.wishlistEntries).toEqual([
+      expect.objectContaining({ id: 1, folderId: null, quantity: 1 }),
+      expect.objectContaining({ id: 6, folderId: 4, quantity: 1 }),
+    ]);
+
+    // And the folders it takes are the folders `wishlist_folder_delete` takes: one walk, so the
+    // two presses on the same drawer cannot disagree about which drawers it reaches.
+    const plain = stocked();
+    writeHandlers(plain).wishlist_folder_delete({ id: 1 });
+    expect(plain.wishlistFolders).toEqual(db.wishlistFolders);
+  });
+
+  /**
+   * **Refused, like the clear and unlike the plain delete** — the likeliest way the drawer went
+   * is the plain delete, which surfaced its wishes at the root, and a quiet `0` would close the
+   * confirmation over wishes the reader asked to be rid of.
+   */
+  it("refuses to delete a folder with its wishes when it is not there, and changes nothing", () => {
+    const db = stocked();
+    expect(() => writeHandlers(db).wishlist_folder_delete_with_wishes({ id: 404 })).toThrow(
+      /^That folder is not there any more\.$/,
+    );
+    expect(db.wishlistFolders.map((f) => f.id)).toEqual([1, 2, 3, 4]);
+    expect(db.wishlistEntries.map((w) => w.id)).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
   it("merges when the destination already holds the same card, and names the survivor", () => {
     const db = filing({
       wishlistEntries: [
@@ -10083,7 +10182,18 @@ describe("the busy fault", () => {
     // `recent_cards`, `set_completion` and `price_movers` are reads and are not in this table.
     // Its one refusal of its own is a blank id, and `cardId` on the record above is a real
     // printing, so a handler that looked at the id before the lock could not stand in for BUSY.
-    expect(names).toHaveLength(113);
+    //
+    // Clearing a wishlist folder (issue #471) then added **two**, 113 → 115:
+    // `wishlist_folder_clear` and `wishlist_folder_delete_with_wishes` take `sync::with_write`
+    // like the four folder writes beside them, and neither has a read half. Both are worth this
+    // loop: each has a refusal of its own — a folder that is not there — and `id: 1` on the
+    // record above names no wishlist folder in this world, so a handler that looked the folder
+    // up before taking the lock would refuse in the wrong words, and the `/busy/i` match is what
+    // tells the two apart.
+    //
+    // **This delta is arithmetic against one tree** — re-run the sweep after the next merge
+    // rather than adding to it. 115 was taken by running it and reading `left`.
+    expect(names).toHaveLength(115);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
