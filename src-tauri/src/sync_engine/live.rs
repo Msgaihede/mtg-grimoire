@@ -744,6 +744,7 @@ mod tests {
             mirror,
             mirror_status: Mutex::new(crate::mirror::watch::LastPass::default()),
             fence,
+            changes: Default::default(),
             pairing: Mutex::new(None),
         })
     }

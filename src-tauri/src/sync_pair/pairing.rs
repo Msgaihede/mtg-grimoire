@@ -905,13 +905,22 @@ pub async fn sync_device_rename(
     name: String,
 ) -> Result<(), String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let marks = state.clone();
+    let out = tauri::async_runtime::spawn_blocking(move || {
         sync::with_write(&state, |conn| {
             identity::rename_device(conn, &device_id, &name).map_err(err)
         })
     })
     .await
-    .map_err(|e| format!("could not rename that device: {e}"))?
+    .map_err(|e| format!("could not rename that device: {e}"))?;
+    // `identity::rename_device` writes `sync_devices` and `device_names`, and both are
+    // `WITHOUT ROWID`, which the update hook never sees — so the other windows hear about a
+    // rename from here. See `crate::changes::MARKED_BY_COMMAND`.
+    if out.is_ok() {
+        marks.changes.mark_table("sync_devices");
+        marks.changes.mark_table("device_names");
+    }
+    out
 }
 
 /// Remove a device, in the four steps whose **order is the whole of the fix**.
@@ -1040,7 +1049,8 @@ async fn leave_group_now(conn: &Connection) -> Result<(), String> {
 #[tauri::command]
 pub async fn sync_group_leave(state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let marks = state.clone();
+    let out = tauri::async_runtime::spawn_blocking(move || {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -1048,7 +1058,15 @@ pub async fn sync_group_leave(state: tauri::State<'_, Arc<AppState>>) -> Result<
         sync::with_write(&state, |conn| runtime.block_on(leave_group_now(conn)))
     })
     .await
-    .map_err(|e| format!("could not leave that group: {e}"))?
+    .map_err(|e| format!("could not leave that group: {e}"))?;
+    // `entitlement::clear` empties the grant's `sync_state` rows, and `sync_state` is
+    // `WITHOUT ROWID`, which the update hook never sees — so the other windows hear about a
+    // departure from here. The best-effort publish runs *before* the local writes, so `Ok` is
+    // exactly "the clear committed". See `crate::changes::MARKED_BY_COMMAND`.
+    if out.is_ok() {
+        marks.changes.mark_table("sync_state");
+    }
+    out
 }
 
 #[cfg(test)]

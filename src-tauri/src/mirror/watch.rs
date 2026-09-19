@@ -6,6 +6,9 @@
 //!   update and delete in this crate goes through [`crate::sync::with_write`] on that
 //!   connection, so the hook sees every user write with the table's name — and no command
 //!   has to remember to tell the mirror anything, nor can one added next year forget to.
+//!   **The same hook marks the other windows' mask too** ([`install_hook_with_changes`], and
+//!   [`crate::changes`] for why): SQLite allows one update hook per connection, so everything
+//!   that needs to hear about a row rides this one.
 //! * [`surface_of`] turns that table name into the surfaces it could have changed, or into
 //!   `None` for the great majority of tables that change nothing a reader's files show.
 //! * [`spawn`] starts the thread that watches the mask, waits for the writing to stop, and
@@ -13,8 +16,9 @@
 //!
 //! **The hook is the cheapest thing that could work, and it has to be.** It fires inside
 //! SQLite's own callback, on the writer's thread, while the write connection's mutex is
-//! held: it does one `fetch_or` on an atomic and returns. No allocation, no lock, and
-//! nothing that could call back into the database — which SQLite forbids from a hook anyway.
+//! held: it does one `fetch_or` on an atomic for the mirror, one binary search and one more
+//! `fetch_or` for the window mask, and returns. No allocation, no lock, and nothing that could
+//! call back into the database — which SQLite forbids from a hook anyway.
 //!
 //! **It is an over-approximation on purpose, twice over.** The hook fires per *row* and
 //! before the transaction commits, so a rolled-back write still marks the mask, and one
@@ -222,17 +226,47 @@ fn dirty_of(bits: u8) -> Option<Dirty> {
 /// Zone's three clears still mark: each of them empties a table other rows point at with
 /// `ON DELETE CASCADE`. The tests at the bottom of this file are what keep that true, rather
 /// than a claim about SQLite's release notes.
+///
+/// **This is [`install_hook_with_changes`] with a window mask nobody reads.** Every caller but
+/// the app's own startup is a test fixture, and none of them has a use for the cross-window
+/// refresh — so they keep this signature and the startup takes the other one.
 pub fn install_hook(
     conn: &Connection,
     mask: Arc<Mask>,
     fence: Arc<crate::db::CrossFileFence>,
     writes: Arc<tokio::sync::Notify>,
 ) {
+    install_hook_with_changes(
+        conn,
+        mask,
+        fence,
+        writes,
+        Arc::new(crate::changes::Changes::default()),
+    );
+}
+
+/// [`install_hook`], plus the other windows' mask — see [`crate::changes`].
+///
+/// **One function and not a second installer, for the fence's reason**: SQLite allows one
+/// update hook and one commit hook per connection, so a `changes` hook installed on its own
+/// would silently take the mirror's, the fence's and live sync's off. It is a parameter here
+/// rather than a change to [`install_hook`]'s signature because only the app's startup has a
+/// [`crate::sync::AppState`] whose `changes` somebody reads.
+pub fn install_hook_with_changes(
+    conn: &Connection,
+    mask: Arc<Mask>,
+    fence: Arc<crate::db::CrossFileFence>,
+    writes: Arc<tokio::sync::Notify>,
+    changes: Arc<crate::changes::Changes>,
+) {
     // **The fence rides in the mirror's hook because SQLite allows exactly one update hook
     // per connection**, which is the rule stated two paragraphs up: a second `install_hook`
     // replaces rather than adds, so a second *installer* would silently take this one off.
     // That is why the two live in one function rather than in two.
     let marker = fence.clone();
+    // The window mask rides here for the same reason, and at the hook's own price: one binary
+    // search and one `fetch_or`, no allocation and no lock — see `crate::changes::Changes::mark`.
+    let marking = changes.clone();
     // The `Result` is `Err` only for a connection this crate never makes — one already lent
     // out, or borrowed from a shared handle — so there is nothing to recover, and refusing to
     // start the app over a mirror that will not notice edits would be the wrong trade. A
@@ -240,6 +274,7 @@ pub fn install_hook(
     if let Err(e) = conn.update_hook(Some(
         move |_action: rusqlite::hooks::Action, db: &str, table: &str, _rowid: i64| {
             marker.note(db);
+            marking.mark(db, table);
             if let Some(d) = surface_of(table) {
                 mask.mark(d);
             }
@@ -249,6 +284,7 @@ pub fn install_hook(
     }
     let settling = fence.clone();
     let settling_writes = writes.clone();
+    let ringing = changes;
     // Both of these fail for the one reason the update hook does, and with the same answer:
     // a fence that could not be installed costs a diagnostic, never a launch.
     let _ = conn.commit_hook(Some(move || {
@@ -284,6 +320,12 @@ pub fn install_hook(
         //
         // `notify_one` does not block and cannot fail, which is what a commit hook requires.
         settling_writes.notify_one();
+        // **The other windows' bell, riding the same hook for the same reason** — see
+        // `crate::changes`. Rung only when a user table was written, so a Scryfall ingest's
+        // corpus commits wake nothing.
+        if ringing.pending() {
+            ringing.ring();
+        }
         // **Never true.** A commit hook that answered `true` would abort the commit, which
         // would turn a diagnostic into data loss over a bug in this fence.
         false
@@ -612,6 +654,7 @@ mod tests {
             mirror: Arc::new(Mask::default()),
             mirror_status: std::sync::Mutex::new(LastPass::default()),
             fence: std::sync::Arc::new(crate::db::CrossFileFence::new()),
+            changes: Default::default(),
             pairing: std::sync::Mutex::new(None),
         }
     }
@@ -748,6 +791,64 @@ mod tests {
             writes.notified().now_or_never().is_none(),
             "a rollback must not notify the write wake"
         );
+    }
+
+    /// The other windows' half of the hook, end to end: a user write through the hooked
+    /// connection sets its table's bit **and** the commit rings — through
+    /// [`install_hook_with_changes`], which is the one the app's startup takes.
+    #[test]
+    fn a_user_write_through_the_hooked_connection_marks_the_window_mask_and_rings() {
+        let conn = migrated_memory_db();
+        let changes = Arc::new(crate::changes::Changes::new());
+        install_hook_with_changes(
+            &conn,
+            Arc::new(Mask::default()),
+            Arc::new(crate::db::CrossFileFence::new()),
+            Arc::new(tokio::sync::Notify::new()),
+            changes.clone(),
+        );
+        crate::app_meta::set_app_meta(&conn, "anything", "at all").unwrap();
+        tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap()
+            .block_on(async {
+                tokio::time::timeout(std::time::Duration::from_millis(100), changes.notified())
+                    .await
+                    .expect("the commit must ring the other windows' bell");
+            });
+        assert_eq!(changes.take(), vec!["app_meta"]);
+    }
+
+    /// The row that keeps a Scryfall ingest from waking anything: a corpus commit sets no bit,
+    /// and the commit hook rings only when a bit is set.
+    #[test]
+    fn a_corpus_write_through_the_hooked_connection_rings_nothing() {
+        let conn = migrated_memory_db();
+        let changes = Arc::new(crate::changes::Changes::new());
+        install_hook_with_changes(
+            &conn,
+            Arc::new(Mask::default()),
+            Arc::new(crate::db::CrossFileFence::new()),
+            Arc::new(tokio::sync::Notify::new()),
+            changes.clone(),
+        );
+        conn.execute(
+            "INSERT OR REPLACE INTO sets (code, name) VALUES ('zzz', 'probe')",
+            [],
+        )
+        .unwrap();
+        let rang = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap()
+            .block_on(async {
+                tokio::time::timeout(std::time::Duration::from_millis(50), changes.notified())
+                    .await
+                    .is_ok()
+            });
+        assert!(!rang, "a corpus commit must not wake the emitter");
+        assert!(changes.take().is_empty());
     }
 
     /// The mirror still sees every write it is supposed to, now that half the schema is in

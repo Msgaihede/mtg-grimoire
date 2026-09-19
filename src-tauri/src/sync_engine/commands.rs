@@ -374,7 +374,8 @@ pub async fn sync_patreon_claim(
     code: String,
 ) -> Result<SupporterStatus, String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let marks = state.clone();
+    let out = tauri::async_runtime::spawn_blocking(move || {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -386,7 +387,15 @@ pub async fn sync_patreon_claim(
         })
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+    // The grant is `sync_state` rows, and `sync_state` is `WITHOUT ROWID`, which the update hook
+    // never sees — so the other windows' Sync panels hear about a claim from here. `claim` writes
+    // them only after the relay has answered, so `Ok` is exactly "the grant is stored". See
+    // `crate::changes::MARKED_BY_COMMAND`.
+    if out.is_ok() {
+        marks.changes.mark_table("sync_state");
+    }
+    out
 }
 
 /// One round trip now.

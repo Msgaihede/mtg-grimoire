@@ -168,13 +168,20 @@ pub async fn tag_mute(
     slug: String,
 ) -> Result<(), String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let marks = state.clone();
+    let out = tauri::async_runtime::spawn_blocking(move || {
         crate::sync::with_write(&state, |conn| {
             mute(conn, &namespace, &tag_id, &slug, super::unix_now())
         })
     })
     .await
-    .map_err(|e| format!("the tag could not be muted: {e}"))?
+    .map_err(|e| format!("the tag could not be muted: {e}"))?;
+    // `muted_tags` is `WITHOUT ROWID`, which the update hook never sees — so the other windows
+    // hear about a mute from here. See `crate::changes::MARKED_BY_COMMAND`.
+    if out.is_ok() {
+        marks.changes.mark_table("muted_tags");
+    }
+    out
 }
 
 /// Offer a tag again.
@@ -186,11 +193,17 @@ pub async fn tag_unmute(
     tag_id: String,
 ) -> Result<(), String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let marks = state.clone();
+    let out = tauri::async_runtime::spawn_blocking(move || {
         crate::sync::with_write(&state, |conn| unmute(conn, &namespace, &tag_id))
     })
     .await
-    .map_err(|e| format!("the tag could not be unmuted: {e}"))?
+    .map_err(|e| format!("the tag could not be unmuted: {e}"))?;
+    // `tag_mute`'s reason: the hook cannot see `muted_tags`, so the command is the mark.
+    if out.is_ok() {
+        marks.changes.mark_table("muted_tags");
+    }
+    out
 }
 
 /// Everything the reader has hidden, for the Settings list that gives it back.
