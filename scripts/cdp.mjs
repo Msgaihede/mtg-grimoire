@@ -11,6 +11,7 @@
 //
 // Then, from another shell:
 //
+//     node scripts/cdp.mjs pages                     # one line per window; CDP_PAGE=<n> picks
 //     node scripts/cdp.mjs eval "document.title"
 //     node scripts/cdp.mjs click "button[aria-label='Add Lightning Bolt to collection']"
 //     node scripts/cdp.mjs text "Wishlist"            # click the first element with this text
@@ -32,8 +33,8 @@
 const PORT = process.env.CDP_PORT ?? "9222";
 const BASE = `http://127.0.0.1:${PORT}`;
 
-/** The app's page target. WebView2 also lists workers and about:blank helpers. */
-async function pageTarget() {
+/** Every page target — one per window. WebView2 also lists workers and about:blank helpers. */
+async function pageTargets() {
   let list;
   try {
     list = await (await fetch(`${BASE}/json/list`)).json();
@@ -43,9 +44,33 @@ async function pageTarget() {
         `$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=${PORT}" first.`,
     );
   }
-  const page = list.find((t) => t.type === "page" && t.webSocketDebuggerUrl);
-  if (!page) throw new Error(`no page target among ${list.length} targets`);
-  return page;
+  return list.filter((t) => t.type === "page" && t.webSocketDebuggerUrl);
+}
+
+/**
+ * The page to drive. Every window has the same URL and title, so with two open the choice is
+ * arbitrary unless `CDP_PAGE` names one — an index into `pages`' list, or a target id.
+ */
+async function pageTarget() {
+  const pages = await pageTargets();
+  if (pages.length === 0) throw new Error("no page target is open");
+  const want = process.env.CDP_PAGE;
+  if (want !== undefined) {
+    const hit = /^\d+$/.test(want) ? pages[Number(want)] : pages.find((p) => p.id === want);
+    if (!hit) {
+      throw new Error(
+        `CDP_PAGE=${want} names none of the ${pages.length} pages — "node scripts/cdp.mjs pages" lists them`,
+      );
+    }
+    return hit;
+  }
+  if (pages.length > 1) {
+    console.error(
+      `cdp.mjs: ${pages.length} windows are open; driving page 0 (${pages[0].id}). ` +
+        `Set CDP_PAGE to choose — "node scripts/cdp.mjs pages" lists them.`,
+    );
+  }
+  return pages[0];
 }
 
 /** One connection, with `send` returning the matching reply and `on` for events. */
@@ -194,6 +219,12 @@ async function main() {
   const modifiers =
     (argv.includes("--shift") ? SHIFT : 0) | (argv.includes("--ctrl") ? CTRL : 0);
   const args = argv.filter((a) => a !== "--shift" && a !== "--ctrl");
+  // Lists the windows rather than driving one, so it needs no connection.
+  if (cmd === "pages") {
+    const pages = await pageTargets();
+    pages.forEach((p, i) => console.log(`${i}\t${p.id}\t${p.title}\t${p.url}`));
+    return;
+  }
   const cdp = await connect();
   try {
     switch (cmd) {
@@ -741,7 +772,7 @@ async function main() {
 
       default:
         console.error(
-          "usage: cdp.mjs <eval|click|text|key|press|hover|type|drag|pull|size|media|shot|console> " +
+          "usage: cdp.mjs <pages|eval|click|text|key|press|hover|type|drag|pull|size|media|shot|console> " +
             "[args]\n" +
             "  --shift / --ctrl on click/text/press/key hold that modifier for the gesture\n" +
             `  key takes one of: ${Object.keys(KEYS).join(", ")}\n` +
