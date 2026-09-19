@@ -6,7 +6,8 @@
 //! directory and one read of `corpus.db` for labels. `app.manage` holds it beside `AppState`.
 //! The two exceptions are [`scanner_prefs`] and [`scanner_tray`] (and their setters), which are
 //! `app_meta` rows and so take `AppState` like every other stored preference — they touch no
-//! session and must answer before the session has loaded.
+//! session and must answer before the session has loaded. The setters take this state as well,
+//! for its lease and nothing else; asking whose the lease is loads no asset.
 //!
 //! **Assets load per asset, first hit wins: a file in `data/scanner/`, then the copy compiled
 //! into the binary, then absent.** A release build embeds all three under `cfg(scanner_assets)`
@@ -30,11 +31,16 @@
 //! [`crate::db::open_read`] does, because `Reference::load_labels` reads an unqualified
 //! `FROM cards` — the corpus is `main` here, and there is nothing on the user side to attach.
 //!
-//! **One window scans at a time, and it holds the session by a [`LEASE`] its frames renew.** The
-//! process has one session and every window can open the Scanner view, so the four session
-//! commands take the calling webview and refuse any other window with [`OPEN_ELSEWHERE`] until
-//! the holder has sent nothing for two seconds. [`scanner_elsewhere`] asks the same question
-//! without taking anything; the prefs and the tray are not the session and take no lease.
+//! **One window scans at a time, and it holds the scanner by a [`LEASE`] it keeps renewing.** The
+//! process has one session and every window can open the Scanner view, so every command that
+//! *uses* the scanner takes the calling webview and refuses any other window with
+//! [`OPEN_ELSEWHERE`] until the holder has sent nothing for two seconds: the four session
+//! commands, [`scanner_hold`] — the mounted view's heartbeat, which is what holds it while the
+//! camera is still starting or has failed — and the three writes of the prefs and the tray. Those
+//! three are not the session, and they take the lease anyway: a window whose tray write is still
+//! waiting out a sync keeps the scanner until the write lands, so no second window can open a tray
+//! read from a row that is about to change under it. [`scanner_elsewhere`] asks the same question
+//! without taking anything, and the three reads take nothing either.
 
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
@@ -187,15 +193,21 @@ pub struct Loaded {
 /// `SCANNER_OPEN_ELSEWHERE` is the same string and `ipc.test.ts` pins this line.
 pub const OPEN_ELSEWHERE: &str = "The scanner is open in another window.";
 
-/// How long a window holds the scanner after its last session command.
+/// How long a window holds the scanner after the last command it admitted.
 ///
-/// **A lease the frames renew, never a claim and a release.** A claim on mount and a release on
-/// unmount would race: Tauri does not order two IPC calls, and `main.tsx`'s `StrictMode` mounts
+/// **A lease the view keeps renewing, never a claim and a release.** A claim on mount and a release
+/// on unmount would race: Tauri does not order two IPC calls, and `main.tsx`'s `StrictMode` mounts
 /// every effect twice, so *claim, release, claim* can land as *claim, claim, release* and leave a
 /// scanner on screen owning nothing. A reload runs no unmount at all, and a closed window none
-/// either. The camera sends frames many times a second while the view is open and none once it is
-/// not, so two seconds after the owner leaves, reloads or closes, the scanner is free — with no
-/// hook for any of the three.
+/// either. So the mounted view renews it instead: [`scanner_hold`] on mount and once a second
+/// after, whatever the camera is doing, and every frame and every prefs or tray write besides —
+/// and all of that stops when the view does, so two seconds after the owner leaves, reloads or
+/// closes, the scanner is free with no hook for any of the three.
+///
+/// **The heartbeat, not the frames, is what makes it "the view is open".** The lease used to be
+/// renewed by the frames alone, and a view with its camera still starting — or refused, or
+/// failed — sent none: its lease lapsed in two seconds, a second window got through the gate, and
+/// both had the tray on screen, each writing it whole over the other.
 pub const LEASE: Duration = Duration::from_secs(2);
 
 /// Which window last used the session, and when.
@@ -227,9 +239,14 @@ fn held_by_another(owner: &Option<Lease>, label: &str, now: Instant) -> bool {
 pub struct ScannerState {
     data_dir: PathBuf,
     loaded: Mutex<Option<Loaded>>,
-    /// The window holding the session, if any — [`ScannerState::admit`] takes and renews it.
-    /// A mutex of its own rather than a field inside `loaded`, so a refusal never waits behind a
-    /// frame the holder is still decoding.
+    /// The window holding the scanner, if any — [`ScannerState::admit`] takes and renews it.
+    ///
+    /// **A mutex of its own rather than a field inside `loaded`, because the cheap commands must
+    /// never wait behind a frame.** `loaded` is held for the whole of a decode, and
+    /// [`scanner_elsewhere`] and [`scanner_hold`] are asked every second from every window on the
+    /// Scanner view, the holder's own heartbeat among them: behind that lock a heartbeat would
+    /// queue for a decode, and a slow one could let the very lease it was renewing lapse. A
+    /// refusal not waiting behind the holder's frame is the same property from the other side.
     owner: Mutex<Option<Lease>>,
 }
 
@@ -760,13 +777,27 @@ pub async fn scanner_set_filters(
 }
 
 /// Whether another window holds the scanner. Asked by a second window's Scanner view, once a
-/// second while the answer is yes. Takes nothing — only the four session commands take the lease.
+/// second while the answer is yes. Takes nothing — see the module doc for the commands that do.
 #[tauri::command]
 pub fn scanner_elsewhere(
     state: tauri::State<'_, Arc<ScannerState>>,
     webview: tauri::Webview,
 ) -> bool {
     state.elsewhere(webview.label())
+}
+
+/// Take or renew the calling window's lease, and nothing else — the mounted Scanner view's
+/// heartbeat, sent on mount and once a second after. Refuses with [`OPEN_ELSEWHERE`], which the
+/// page answers by asking the gate again. See [`LEASE`] for why the frames were not enough.
+///
+/// Sync, like [`scanner_elsewhere`]: it takes the `owner` mutex for a comparison and a store and
+/// touches no database and no session, so there is nothing here to move off the IPC thread.
+#[tauri::command]
+pub fn scanner_hold(
+    state: tauri::State<'_, Arc<ScannerState>>,
+    webview: tauri::Webview,
+) -> Result<(), String> {
+    state.admit(webview.label())
 }
 
 /// The reader's scanner preferences, or the defaults. **Infallible by signature**,
@@ -779,12 +810,21 @@ pub fn scanner_prefs(state: tauri::State<'_, Arc<AppState>>) -> ScannerPrefs {
 }
 
 /// Remember the reader's scanner preferences. Answers [`crate::db::BUSY`] if a sync holds the
-/// write connection.
+/// write connection, and [`OPEN_ELSEWHERE`] if another window holds the scanner.
+///
+/// **Admitted before the database is touched, and the admission is the point.** The row is written
+/// whole, so only the window holding the scanner may write it — and a write the page is still
+/// retrying renews the lease, which keeps the scanner in the window that has something unsaved
+/// until it lands. The page treats this refusal as it treats `BUSY`: it keeps what it has and
+/// tries again, and never reverts.
 #[tauri::command]
 pub async fn set_scanner_prefs(
     state: tauri::State<'_, Arc<AppState>>,
+    scanner: tauri::State<'_, Arc<ScannerState>>,
     prefs: ScannerPrefs,
+    webview: tauri::Webview,
 ) -> Result<(), String> {
+    scanner.admit(webview.label())?;
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         crate::sync::with_write(&state, |conn| store_prefs(conn, &prefs))
@@ -801,12 +841,16 @@ pub fn scanner_tray(state: tauri::State<'_, Arc<AppState>>) -> Vec<ScannerTrayRo
 }
 
 /// Remember the review tray, whole. The two refusals are [`store_tray`]'s; a busy write connection
-/// answers [`crate::db::BUSY`].
+/// answers [`crate::db::BUSY`], and another window holding the scanner [`OPEN_ELSEWHERE`] —
+/// admitted first, for [`set_scanner_prefs`]' reason.
 #[tauri::command]
 pub async fn set_scanner_tray(
     state: tauri::State<'_, Arc<AppState>>,
+    scanner: tauri::State<'_, Arc<ScannerState>>,
     rows: Vec<ScannerTrayRow>,
+    webview: tauri::Webview,
 ) -> Result<(), String> {
+    scanner.admit(webview.label())?;
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         crate::sync::with_write(&state, |conn| store_tray(conn, &rows))
@@ -819,14 +863,21 @@ pub async fn set_scanner_tray(
 /// [`tray_commit`]. Through `with_write_owned`, `collection_import_commit`'s own door, so the facet
 /// index's `owned` dimension moves with the copies and a busy write connection answers
 /// [`crate::db::BUSY`] with nothing written.
+///
+/// **Admitted first, like the tray's own write**: `remaining` is the tray written whole, and a
+/// window that has lost the scanner is a window whose tray may be older than the stored one — its
+/// commit would file rows another window has already filed, and store a tray over theirs.
 #[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn scanner_tray_commit(
     state: tauri::State<'_, Arc<AppState>>,
+    scanner: tauri::State<'_, Arc<ScannerState>>,
     items: Vec<crate::collection::CollectionImportItem>,
     folder_id: Option<i64>,
     remaining: Vec<ScannerTrayRow>,
+    webview: tauri::Webview,
 ) -> Result<crate::collection::ImportCommitOutcome, String> {
+    scanner.admit(webview.label())?;
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         crate::collection_source::with_write_owned(&state, |conn| {
@@ -1468,6 +1519,39 @@ mod tests {
             t0 + Duration::from_secs(1)
         ));
         assert!(take_lease(&mut owner, "window-2", t0 + LEASE));
+    }
+
+    /// **The holder's own admissions renew the lease**, which is the whole of what lets a mounted
+    /// view hold the scanner on a heartbeat: taken at t0 and renewed at t0 + 1.5 s, it is still
+    /// the holder's at t0 + 2.5 s — half a second past where a lease taken once would have lapsed.
+    #[test]
+    fn the_holders_own_admissions_renew_the_lease() {
+        let t0 = Instant::now();
+        let mut owner = None;
+        assert!(take_lease(&mut owner, "main", t0));
+        assert!(take_lease(
+            &mut owner,
+            "main",
+            t0 + Duration::from_millis(1500)
+        ));
+        assert!(
+            !take_lease(&mut owner, "window-2", t0 + Duration::from_millis(2500)),
+            "a renewal did not move the lease's clock"
+        );
+        assert_eq!(owner.map(|lease| lease.label).as_deref(), Some("main"));
+    }
+
+    /// The refusal the page matches on is the sentence and nothing else — `verdictText.ts`'s
+    /// `SCANNER_OPEN_ELSEWHERE` is compared against it byte for byte, so a prefix, a wrapper or a
+    /// second sentence would be a window that never learns it was refused.
+    #[test]
+    fn a_refused_admission_is_exactly_the_open_elsewhere_sentence() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state = ScannerState::new(dir.path().to_path_buf());
+        assert_eq!(state.admit("main"), Ok(()));
+        assert_eq!(state.admit("window-2"), Err(OPEN_ELSEWHERE.to_owned()));
+        assert!(state.elsewhere("window-2"));
+        assert!(!state.elsewhere("main"));
     }
 
     #[test]

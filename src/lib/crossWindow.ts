@@ -8,9 +8,11 @@
  * the first one did. `userTables.json` is the one list both suites read: a table added in Rust
  * without an entry here is a red test in `crossWindow.test.ts`.
  *
- * **View preferences stay per window, and a predicate is what keeps them there.** Deck sort is
- * `["decks", "sort"]`, under the `["decks"]` root every deck write refreshes; without the predicate
- * an edit in window A would pull A's sort into window B.
+ * **View preferences stay per window, and two fences keep them there.** A per-window key must not
+ * sit under any root a table maps to — `crossWindow.test.ts` fails one that does — because the
+ * *writing* window's own invalidations carry no predicate: deck sort sat at `["decks", "sort"]`,
+ * and every deck write a window made re-read whichever order another window had pressed last. It
+ * is `["deckSort"]` now. The predicate below is the second fence, for this refresh alone.
  */
 import type { Query, QueryClient, QueryKey } from "@tanstack/react-query";
 import { OWNED_WRITE_KEYS, RELAY_KEY, REVIEW_KEY, SYNC_KEY } from "./query";
@@ -39,7 +41,7 @@ export const PER_WINDOW_KEYS: readonly QueryKey[] = [
   ["navCollapsed"],
   ["searchOpen"],
   ["deckFolderPane"],
-  ["decks", "sort"],
+  ["deckSort"],
   ["deckSearchTab"],
   ["printingGroupBy"],
 ];
@@ -49,8 +51,10 @@ export const PER_WINDOW_KEYS: readonly QueryKey[] = [
  * touch while they are live: the scanner's prefs and its review tray.
  *
  * **The scanner lease is what makes them single-writer.** Only the window holding it mounts
- * `useTray` and `useScannerPrefs` — `ScannerPage` refuses before either hook in any other — so a
- * live query under these keys is always the owner's, and nobody else has anything newer.
+ * `useTray` and `useScannerPrefs` — `ScannerPage` refuses before either hook in any other — and a
+ * mounted view holds it on a heartbeat whatever its camera is doing, while every prefs and tray
+ * write takes it too. So a live query under these keys is always the owner's, nobody else has
+ * anything newer, and a window whose writes have not landed keeps the scanner until they do.
  *
  * **Refreshing the owner's would lose cards.** Its cache *is* the tray: `useTray` holds a card it
  * has just scanned only there, and stores the whole tray 400 ms after scanning pauses. The owner
@@ -61,12 +65,44 @@ export const PER_WINDOW_KEYS: readonly QueryKey[] = [
  *
  * So {@link refreshForTables} leaves a live query here alone, and **removes** an idle one — a
  * window that takes the lease later then reads the stored row from scratch, rather than drawing a
- * stale tray while a background refetch catches up.
+ * stale tray while a background refetch catches up — **unless its hook reports something
+ * unsaved** ({@link registerUnsavedCheck}). An idle entry is also where a card waits out a write
+ * the view left behind: leave the Scanner during a sync and the flush answers `BUSY`, and dropping
+ * the entry then either loses the card or hands the retry nothing to write, so it stores `[]` or
+ * the default prefs over the row. Such an entry is left exactly as it is — not removed, and not
+ * invalidated either, since an invalidated idle query refetches on its next mount.
  */
 export const SINGLE_WRITER_KEYS: readonly QueryKey[] = [
   ["scanner", "prefs"],
   ["scanner", "tray"],
 ];
+
+/** Whether `client` holds rows under one single-writer key that its store has not confirmed. */
+type UnsavedCheck = (client: QueryClient) => boolean;
+
+const unsavedChecks = new Map<string, UnsavedCheck>();
+
+/**
+ * Let the hook that owns a single-writer key say whether this client has anything under it that
+ * is not yet stored — a write queued, on the wire, waiting to retry, or refused with nothing
+ * landed since.
+ *
+ * **The hooks call this at module load and `lib` imports nothing from `features`**, so the
+ * dependency runs the one way this folder allows. A key nobody registered reports nothing unsaved,
+ * which is right: a hook that was never loaded has never put anything in the cache. Answers the
+ * function that takes the check back out, which is what a test needs and the app never calls.
+ */
+export function registerUnsavedCheck(key: QueryKey, check: UnsavedCheck): () => void {
+  const id = JSON.stringify(key);
+  unsavedChecks.set(id, check);
+  return () => {
+    if (unsavedChecks.get(id) === check) unsavedChecks.delete(id);
+  };
+}
+
+function hasUnsaved(client: QueryClient, key: QueryKey): boolean {
+  return unsavedChecks.get(JSON.stringify(key))?.(client) ?? false;
+}
 
 const DECKS: readonly QueryKey[] = [["decks"]];
 
@@ -170,11 +206,13 @@ export function keysForTables(tables: readonly string[]): QueryKey[] {
 
 /**
  * Invalidate what another window's write made stale, sparing the per-window keys — and settle the
- * single-writer keys the one safe way: a live one untouched, an idle one dropped
- * ({@link SINGLE_WRITER_KEYS} has why).
+ * single-writer keys the one safe way: a live one untouched, an idle one dropped unless its hook
+ * still holds something unsaved ({@link SINGLE_WRITER_KEYS} has why).
  *
  * `cancelRefetch: false` because the writing window hears the event too, after already refreshing
- * itself: this joins that fetch rather than cancelling and restarting it.
+ * itself: this joins that fetch rather than cancelling and restarting it. **The cost lands in the
+ * other window**: a read it already had in flight from before the commit is joined as well, and
+ * can settle on pre-commit data that stays on screen until the next trigger refreshes it.
  */
 export function refreshForTables(client: QueryClient, tables: readonly string[]): void {
   for (const queryKey of keysForTables(tables)) {
@@ -189,7 +227,9 @@ export function refreshForTables(client: QueryClient, tables: readonly string[])
     client.removeQueries({
       queryKey,
       predicate: (query: Query) =>
-        under(SINGLE_WRITER_KEYS, query.queryKey) && query.getObserversCount() === 0,
+        under(SINGLE_WRITER_KEYS, query.queryKey) &&
+        query.getObserversCount() === 0 &&
+        !hasUnsaved(client, query.queryKey),
     });
   }
 }

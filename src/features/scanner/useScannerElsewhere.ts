@@ -1,12 +1,14 @@
 import { useQuery } from "@tanstack/react-query";
 import { ipc } from "@/lib/ipc";
 
-export const SCANNER_ELSEWHERE_KEY = ["scanner", "elsewhere"];
+export const SCANNER_ELSEWHERE_KEY = ["scanner", "elsewhere"] as const;
 
 /**
  * How often a window the lease is refusing asks again — the gate's poll, and the pace at which
- * `useScannerPrefs` re-sends a filter push the lease turned away. Half the lease's two seconds, so
- * a window that let go is noticed within one lapse.
+ * `useScannerPrefs` re-sends a filter push the lease turned away — **and the heartbeat's pace**, at
+ * which a mounted view renews its own lease (`ScannerPage`'s `scanner_hold`). Half the lease's two
+ * seconds, so a window that let go is noticed within one lapse, and a window that is still there
+ * renews twice inside one.
  */
 export const SCANNER_ELSEWHERE_POLL_MS = 1000;
 

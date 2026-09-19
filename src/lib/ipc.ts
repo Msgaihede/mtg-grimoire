@@ -8512,6 +8512,13 @@ export const ipc = {
    * nothing; only the session commands take it.
    */
   scannerElsewhere: () => invoke<boolean>("scanner_elsewhere"),
+  /**
+   * `scanner::scanner_hold` — take or renew this window's scanner lease, and nothing else. The
+   * mounted Scanner view's heartbeat, sent on mount and every `SCANNER_ELSEWHERE_POLL_MS` while it
+   * stays, so the view holds the scanner whatever its camera is doing. Refuses with
+   * `SCANNER_OPEN_ELSEWHERE` when another window holds it.
+   */
+  scannerHold: () => invoke<void>("scanner_hold"),
   /** The relay socket's state. Call this once. */
   onSyncLive: (cb: (e: SyncLiveEvent) => void): Unlisten =>
     core.listen<SyncLiveEvent>("sync:live", cb),

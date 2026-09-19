@@ -219,8 +219,15 @@ asserting against it.
   union of what that table's own mutations already invalidate** — `collection_entries`, for one,
   maps to exactly `OWNED_WRITE_KEYS`, because that is already the list a collection write owes.
 - **Every invalidation carries a predicate that spares the per-window keys**, and the prefix match
-  is why it has to: deck sort is `["decks", "sort"]`, under the `["decks"]` root every deck write
-  refreshes, so without the predicate an edit in window A would pull A's sort into window B.
+  is why it has to. **The predicate is the second fence, and the first is that no per-window key
+  sits under a root any table maps to** — a Vitest test fails one that does. This amends the first
+  draft, which put deck sort at `["decks", "sort"]` and relied on the predicate alone: the predicate
+  guards this refresh, but the *writing* window's own invalidations carry none, so every deck write
+  a window made re-read the `deck_sort` row, which with two windows holds whichever window pressed
+  last. Deck sort is `DECK_SORT_KEY`, `["deckSort"]`, off that root; nothing had depended on the
+  prefix (a data reset leaves the row alone and no invalidation named the key), and a press now
+  writes the cache as well as the row, so a gallery coming back after opening a deck draws the
+  press rather than the launch read.
 - **⚠️ A read that writes is a refresh loop, and the writing window is inside it.** Every window —
   the writer included — refetches on the event, so a query whose command writes the table its own
   key is refreshed by writes, emits, refetches and writes again, forever. `share_list` is one: it
@@ -237,7 +244,7 @@ live**, and every key not on it stays per window:
 
 | Follows live | Stays per window |
 | --- | --- |
-| `START_VIEW_KEY`, `HOME_LAYOUT_KEY`, `MARKETPLACE_KEY`, `MARK_COLORS_KEY`, `RECENT_CARDS_ROOT`, `["decks","lastFormat"]`, `MIRROR_KEY` — and `["scanner","prefs"]`, `["scanner","tray"]` as `SINGLE_WRITER_KEYS`, below | card zoom, list/grid and flatten (store state seeded once at launch, never a query), `NAV_COLLAPSED_KEY`, `SEARCH_OPEN_KEY`, `FOLDER_PANE_KEY`, `["decks","sort"]`, `DECK_SEARCH_TAB_KEY`, `PRINTING_GROUP_BY_KEY` |
+| `START_VIEW_KEY`, `HOME_LAYOUT_KEY`, `MARKETPLACE_KEY`, `MARK_COLORS_KEY`, `RECENT_CARDS_ROOT`, `["decks","lastFormat"]`, `MIRROR_KEY` — and `["scanner","prefs"]`, `["scanner","tray"]` as `SINGLE_WRITER_KEYS`, below | card zoom, list/grid and flatten (store state seeded once at launch, never a query), `NAV_COLLAPSED_KEY`, `SEARCH_OPEN_KEY`, `FOLDER_PANE_KEY`, `DECK_SORT_KEY` (`["deckSort"]`, off the `["decks"]` root — below), `DECK_SEARCH_TAB_KEY`, `PRINTING_GROUP_BY_KEY` |
 
 Refetching the follow-live keys is what closes the whole-value race: every window writes the home
 layout, the scanner tray and the scanner prefs **from fresh data**. A view-pref write in one window
@@ -252,6 +259,24 @@ The lease (§5) guarantees only the owning window has these queries active, so o
 change an **active** `["scanner","tray"]` / `["scanner","prefs"]` query is left alone entirely, and
 an **inactive** one is *removed* — a window that later takes the lease reads fresh from scratch
 rather than drawing stale rows while a background refetch runs.
+
+**An inactive one is removed only when its hook reports nothing unsaved** (ruled 2026-09-19,
+amending the paragraph above). An idle entry is also where a card waits out a write the view left
+behind: leave the Scanner during a sync, the unmount's flush answers `BUSY`, and dropping the entry
+then either loses the card or hands the pending retry nothing, so it stores `[]` or the default
+prefs over the row. So `crossWindow.ts` keeps a small registry, `registerUnsavedCheck(key, check)`,
+which `useTray` and `useScannerPrefs` fill at module load — `lib` imports nothing from `features` —
+and the removal skips a key whose check says unsaved. Such an entry is left exactly as it is: not
+removed, and not invalidated either, since an invalidated idle query refetches on its next mount.
+**"Unsaved" is a write queued, on the wire, or waiting to retry — and, beyond the ruling's wording,
+the newest write refused with nothing landed since.** A first sync holds the write connection for
+minutes and outlasts the one more try, after which nothing is queued, on the wire or waiting while
+the card is still in the cache and nowhere else; without that term the removal loses it the moment
+the sync ends and any window writes `app_meta`. The cost, accepted: if another window takes the
+lease meanwhile and stores a tray of its own, this window's kept entry does not know those rows,
+and its next change writes over them — the same last-writer-wins the refresh exists to narrow,
+now only after a write was refused outright. **Retries never write what is not there**: every
+write reads the cache as it goes out, and a missing entry skips the write.
 
 **A marketplace change needs no follow-on work, and the first draft said it did.** Every
 price-bearing query carries the marketplace **in its key** (`src/CLAUDE.md`), so once window B's
@@ -275,21 +300,42 @@ unchanged key — and that already reaches every window, because `marketplace:pr
    button carries a hint that it closes all *N* windows. No dialog — the button is already the
    second, deliberate press (`UpdatePanel.test.tsx:85`). One window comes back after the restart;
    restoring the rest is out of scope.
-3. **The card scanner is held by one window, as a lease the frames renew.** `ScannerState` gains
-   an owner: a window label and the moment it last used the session. The four session commands —
-   `scanner_frame`, `scanner_capture`, `scanner_reset`, `scanner_set_filters` — take the calling
-   webview from Tauri and are admitted only if the lease is free, already theirs, or **older than two
-   seconds**; otherwise they refuse with `OPEN_ELSEWHERE`, *"The scanner is open in another
-   window."* A new `scanner_elsewhere` answers the same question without taking the lease. A second
-   window's scanner view asks it, shows that sentence and nothing else — no camera, no tray, no
-   takeover — and asks again each second until the lease lapses.
+3. **The card scanner is held by one window, as a lease the window using it keeps renewing.**
+   `ScannerState` gains an owner: a window label and the moment it last admitted a command. Every
+   command that *uses* the scanner takes the calling webview from Tauri and is admitted only if the
+   lease is free, already theirs, or **older than two seconds**; otherwise it refuses with
+   `OPEN_ELSEWHERE`, *"The scanner is open in another window."* A new `scanner_elsewhere` answers
+   the same question without taking the lease. A second window's scanner view asks it, shows that
+   sentence and nothing else — no camera, no tray, no takeover — and asks again each second until
+   the lease lapses.
+   **The lease means "this window is using the scanner", and three things renew it** (ruled
+   2026-09-19, amending the first draft's "a lease the frames renew"):
+   - **A heartbeat while the view is mounted.** `scanner_hold(webview)` admits and does nothing
+     else; `LiveScanner` calls it on mount and every `SCANNER_ELSEWHERE_POLL_MS` (one second) while
+     mounted, and clears the interval on unmount. Frames alone were not enough: a view whose camera
+     was starting slowly, refused or failed sent none, so its lease lapsed in two seconds and a
+     second window got through the gate with the first one's tray still live — each writing the
+     tray whole over the other, and an Add in the stale one filing committed rows twice. The first
+     filter push also took the lease before the camera was live, so a camera start over two
+     seconds could hand the scanner back and forth between two windows on the Scanner view. **Every**
+     refused beat re-asks the gate (invalidates `SCANNER_ELSEWHERE_KEY`), not only the first of a
+     run.
+   - **The four session commands** — `scanner_frame`, `scanner_capture`, `scanner_reset`,
+     `scanner_set_filters` — as before.
+   - **Every tray and prefs write.** `set_scanner_prefs`, `set_scanner_tray` and
+     `scanner_tray_commit` take the webview and admit before they touch the database, so a window
+     whose pending or retrying writes have not landed keeps the scanner until they do, and another
+     window meanwhile sees the sentence. The reads — `scanner_prefs`, `scanner_tray`,
+     `scanner_status` — stay ungated. A write refused with `OPEN_ELSEWHERE` is treated like `BUSY`:
+     the hook keeps its rows and retries on its existing schedule, and never reverts, never writes
+     defaults, never drops rows.
    **A lease rather than a claim/release pair, and this reverses the first draft.** Claim on mount
    and release on unmount looks simpler and is not: Tauri gives no ordering guarantee between two
    IPC calls, and `main.tsx`'s `StrictMode` mounts every effect twice in development, so
    *claim, release, claim* can arrive as *claim, claim, release* and leave a mounted scanner owning
    nothing. A reload runs no unmount at all, so a claim also needed a page-load hook, and a closed
-   window a `Destroyed` hook. A lease the camera renews at its frame rate needs none of the three:
-   the owner stops sending frames when it leaves the view, reloads or closes, and two seconds later
+   window a `Destroyed` hook. A lease the view renews needs none of the three: the heartbeat, the
+   frames and the writes all stop when the view leaves, reloads or closes, and two seconds later
    the lease is free. The pairing QR scanner is short-lived and unaffected; every window has the
    camera grant (§3).
 4. **Deck undo** needs no change. The cursor is per deck in the database, the redo stack is per
@@ -324,19 +370,26 @@ unchanged key — and that already reaches every window, because `marketplace:pr
   clears; `mark_table` sets and rings.
 - **The emit decision**: tables and a window count in, emit or not out.
 - **Placement**: the cascade and its clamp, beside `opening_size`'s tests.
-- **Scanner lease**: a free lease is taken; the holder is re-admitted; another label is refused
-  inside two seconds and admitted after; `elsewhere` never takes the lease.
+- **Scanner lease**: a free lease is taken; the holder is re-admitted; the holder's own admissions
+  renew it (taken at t0, renewed at t0 + 1.5 s, still refusing another label at t0 + 2.5 s);
+  another label is refused inside two seconds and admitted after; `elsewhere` never takes the
+  lease; the refusal is exactly `OPEN_ELSEWHERE`.
 
 ### TypeScript
 
 - The table map: every user table is mapped (Vitest, against the JSON); an `app_meta` change
-  **never** invalidates a per-window key and **does** invalidate every follow-live key; a deck write
-  does not refresh `["decks","sort"]`.
+  **never** invalidates a per-window key and **does** invalidate every follow-live key; no
+  per-window key sits under a root any table maps to, so a deck write — this window's or another's
+  — does not refresh `DECK_SORT_KEY`; an idle tray or prefs whose hook reports something unsaved is
+  kept, and dropped once it reports nothing.
 - `useCrossWindowRefresh`: an event invalidates the mapped keys with `cancelRefetch: false`.
 - `newWindow` is in the catalogue and the key map on desktop, and absent on web and Android.
 - `onSnapHover` listens on its own window.
 - The Update panel's hint appears at two windows and not at one.
-- The scanner's "open in another window" state, as a story and a test.
+- The scanner's "open in another window" state, as a story and a test; the mounted view's
+  heartbeat (on mount, once a poll, stopped on unmount, every refused beat re-asking the gate); the
+  gate's recovery poll opening the live view once the lease lapses; a tray or prefs retry that finds
+  its entry gone writing nothing.
 - **Mutate, then run** — for the `app_meta` split and the table map, break the code and watch the
   test go red; a green suite is not the evidence.
 

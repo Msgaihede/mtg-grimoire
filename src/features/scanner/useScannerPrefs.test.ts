@@ -20,9 +20,20 @@ vi.mock("@/lib/ipc", async (original) => ({
   },
 }));
 
+import { refreshForTables } from "@/lib/crossWindow";
 import { SCANNER_ELSEWHERE_POLL_MS } from "./useScannerElsewhere";
 import { PREFS_RETRY_MS, SCANNER_PREFS_BEFORE_LOAD, useScannerPrefs } from "./useScannerPrefs";
 import { SCANNER_OPEN_ELSEWHERE } from "./verdictText";
+
+/** The prefs' cache entry, spelled as `crossWindow.ts`' `SINGLE_WRITER_KEYS` spells it. */
+const PREFS = ["scanner", "prefs"];
+
+/** The clock moved by `ms`, with every promise that settles on the way drained. */
+async function advance(ms: number) {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(ms);
+  });
+}
 
 /** `db::BUSY`, verbatim — the one refusal `set_scanner_prefs` has. */
 const BUSY = "The card database is busy finishing a sync. Try that again in a moment.";
@@ -181,6 +192,147 @@ describe("useScannerPrefs", () => {
       await vi.advanceTimersByTimeAsync(PREFS_RETRY_MS * 5);
     });
     expect(setScannerPrefs).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * **The lease's refusal is `BUSY`'s twin.** `set_scanner_prefs` answers `OPEN_ELSEWHERE` while
+   * another window holds the scanner, which says nothing about the prefs: they stay as the reader
+   * set them, nothing reverts, and the one more try goes out on the same schedule.
+   */
+  it("keeps the prefs through a write refused as open elsewhere, and tries once more like BUSY", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    scannerPrefs.mockResolvedValue(STORED);
+    setScannerPrefs.mockRejectedValueOnce(SCANNER_OPEN_ELSEWHERE);
+    const { result } = mount();
+    await advance(0);
+    expect(result.current.loaded).toBe(true);
+
+    act(() => result.current.update({ developer: true }));
+    await advance(0);
+    expect(setScannerPrefs).toHaveBeenCalledTimes(1);
+    expect(result.current.prefs).toEqual({ ...STORED, developer: true });
+    expect(result.current.filterError).toBeNull();
+
+    await advance(PREFS_RETRY_MS);
+    expect(setScannerPrefs).toHaveBeenCalledTimes(2);
+    expect(setScannerPrefs).toHaveBeenLastCalledWith({ ...STORED, developer: true });
+    expect(result.current.prefs).toEqual({ ...STORED, developer: true });
+  });
+
+  /**
+   * **A retry never writes what is not there.** With the view gone and its cache entry dropped,
+   * `current()` answers the defaults it draws before a load — and written, those would replace the
+   * reader's stored mode, filters and folder with the crate's.
+   */
+  it("skips a retry that finds its cache entry gone, rather than storing the defaults", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    scannerPrefs.mockResolvedValue(STORED);
+    setScannerPrefs.mockRejectedValueOnce(BUSY);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { result, unmount } = mount(qc);
+    await advance(0);
+    act(() => result.current.update({ developer: true }));
+    await advance(0);
+    expect(setScannerPrefs, "the premise: the write was refused").toHaveBeenCalledTimes(1);
+    unmount();
+    qc.removeQueries({ queryKey: PREFS });
+
+    await advance(PREFS_RETRY_MS);
+    expect(setScannerPrefs).toHaveBeenCalledTimes(1);
+  });
+
+  /** …and the write a filter push owes once the session takes it is the same write. */
+  it("persists nothing for an accepted filter push whose cache entry has gone", async () => {
+    scannerPrefs.mockResolvedValue(STORED);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { result, unmount } = mount(qc);
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    let accept!: () => void;
+    scannerSetFilters.mockReturnValueOnce(new Promise<void>((resolve) => (accept = resolve)));
+    act(() => result.current.update({ filters: ZZZ }));
+    unmount();
+    qc.removeQueries({ queryKey: PREFS });
+
+    await act(async () => accept());
+    expect(setScannerPrefs).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A refused push puts the cache back to the filters the session holds — and with no cache left,
+   * "back" would build one out of the defaults, which the next visit would draw and the next change
+   * would store.
+   */
+  it("puts nothing in the cache for a refused filter push whose entry has gone", async () => {
+    scannerPrefs.mockResolvedValue(STORED);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { result, unmount } = mount(qc);
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    let refuse!: (e: unknown) => void;
+    scannerSetFilters.mockReturnValueOnce(new Promise<void>((_, reject) => (refuse = reject)));
+    act(() => result.current.update({ filters: ZZZ }));
+    unmount();
+    qc.removeQueries({ queryKey: PREFS });
+
+    await act(async () => refuse(REFUSED));
+    expect(qc.getQueryData(PREFS)).toBeUndefined();
+  });
+});
+
+/**
+ * **What another window's refresh may do with prefs this window has left.** `crossWindow.ts` drops
+ * an idle prefs entry on every `app_meta` change, and asks this hook first whether anything in it
+ * is unsaved — the real refresh against the real hook, because the failure is the pair of them.
+ */
+describe("useScannerPrefs under another window's refresh", () => {
+  it("keeps idle prefs whose refused write is waiting to retry, and the retry stores them", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    scannerPrefs.mockResolvedValue(STORED);
+    setScannerPrefs.mockRejectedValueOnce(BUSY);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { result, unmount } = mount(qc);
+    await advance(0);
+    act(() => result.current.update({ developer: true }));
+    await advance(0);
+    unmount();
+
+    refreshForTables(qc, ["app_meta"]);
+    expect(qc.getQueryData(PREFS), "the refresh dropped prefs the store does not hold").toEqual({
+      ...STORED,
+      developer: true,
+    });
+
+    await advance(PREFS_RETRY_MS);
+    expect(setScannerPrefs).toHaveBeenCalledTimes(2);
+    expect(setScannerPrefs).toHaveBeenLastCalledWith({ ...STORED, developer: true });
+  });
+
+  /** A sync outlasts one retry; the change is still nowhere but here until a write lands. */
+  it("keeps them after the one more try is refused too, and drops them once a write has landed", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    scannerPrefs.mockResolvedValue(STORED);
+    setScannerPrefs.mockRejectedValue(BUSY);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const first = mount(qc);
+    await advance(0);
+    act(() => first.result.current.update({ developer: true }));
+    await advance(PREFS_RETRY_MS * 5);
+    expect(setScannerPrefs, "the premise: the write and its retry were both refused").toHaveBeenCalledTimes(2);
+    first.unmount();
+
+    refreshForTables(qc, ["app_meta"]);
+    expect(qc.getQueryData(PREFS)).toEqual({ ...STORED, developer: true });
+
+    setScannerPrefs.mockResolvedValue(undefined);
+    const second = mount(qc);
+    await advance(0);
+    expect(second.result.current.prefs).toEqual({ ...STORED, developer: true });
+    act(() => second.result.current.update({ mode: "exact" }));
+    await advance(0);
+    expect(setScannerPrefs).toHaveBeenLastCalledWith({ ...STORED, developer: true, mode: "exact" });
+    second.unmount();
+
+    refreshForTables(qc, ["app_meta"]);
+    expect(qc.getQueryCache().find({ queryKey: PREFS, exact: true })).toBeUndefined();
   });
 });
 

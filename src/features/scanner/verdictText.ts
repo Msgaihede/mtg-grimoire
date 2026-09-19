@@ -15,9 +15,10 @@ export const SURE_DISTANCE = 0.3;
 export const WEB_SENTENCE = RAW_CALL_UNAVAILABLE;
 
 /**
- * What a second window's Scanner view says while another window holds the camera. The same string
- * as `scanner::OPEN_ELSEWHERE`, which is also how a refused frame reads — `ipc.test.ts` pins the
- * Rust half.
+ * What a second window's Scanner view says while another window holds the scanner. The same string
+ * as `scanner::OPEN_ELSEWHERE`, which is also how every command the lease refuses reads — a frame,
+ * the view's heartbeat, a prefs or tray write — so the page matches on it byte for byte;
+ * `ipc.test.ts` pins the Rust half.
  */
 export const SCANNER_OPEN_ELSEWHERE = "The scanner is open in another window.";
 

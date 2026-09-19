@@ -18,6 +18,8 @@ vi.mock("@/lib/ipc", async (orig) => {
       // The lease, free: every test but the ones that say otherwise is a window with the scanner to
       // itself, which is also the only state the page had before there was more than one window.
       scannerElsewhere: vi.fn(async () => false),
+      // The mounted view's heartbeat, accepted: the lease is this window's for as long as it stays.
+      scannerHold: vi.fn(async () => {}),
       scannerFrame: vi.fn(),
       // `async` rather than a bare `vi.fn()`: the real command answers a promise and the page
       // now attaches a rejection handler to it, so a mock returning `undefined` is a shape the
@@ -43,6 +45,7 @@ import { isWebTarget } from "@/pwa/target";
 import { ipc } from "@/lib/ipc";
 import { importItems } from "./reader/tray";
 import { ScannerPage } from "./ScannerPage";
+import { SCANNER_ELSEWHERE_POLL_MS } from "./useScannerElsewhere";
 
 function mount() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -210,6 +213,7 @@ const DECK_GROUP: CollectionFolder = { ...BINDER, id: 9, name: "Burn", kind: "de
 const COMMANDS = [
   ipc.scannerStatus,
   ipc.scannerElsewhere,
+  ipc.scannerHold,
   ipc.scannerFrame,
   ipc.scannerReset,
   ipc.scannerCapture,
@@ -681,8 +685,67 @@ describe("ScannerPage", () => {
   });
 });
 
+/**
+ * **A mounted view holds the scanner, whatever its camera is doing.** The lease used to be renewed
+ * by frames alone, and a view whose camera was refused, failing or slow to start sent none — so it
+ * lapsed in two seconds and a second window got through the gate with this one's tray still on
+ * screen. Every test here uses the refused camera for exactly that reason: no frame is ever sent.
+ */
+describe("ScannerPage holding the scanner", () => {
+  it("holds it from the first render and once a poll after, with no frame ever sent", async () => {
+    refused();
+    mount();
+    await waitFor(() => expect(ipc.scannerHold).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(ipc.scannerHold).toHaveBeenCalledTimes(2), {
+      timeout: SCANNER_ELSEWHERE_POLL_MS * 2,
+    });
+    expect(ipc.scannerFrame).not.toHaveBeenCalled();
+  });
+
+  it("stops holding it once the view has gone", async () => {
+    refused();
+    const { unmount } = mount();
+    await waitFor(() => expect(ipc.scannerHold).toHaveBeenCalled());
+    unmount();
+    const held = vi.mocked(ipc.scannerHold).mock.calls.length;
+    await new Promise((resolve) => setTimeout(resolve, SCANNER_ELSEWHERE_POLL_MS * 1.5));
+    expect(ipc.scannerHold).toHaveBeenCalledTimes(held);
+  });
+
+  /**
+   * **Every refused beat asks the gate again, not only the first.** A re-ask that fired once per
+   * run of refusals — the frame loop's, which keys on its error string not changing — could be
+   * spent on an answer that was still "free" a moment before the other window took the lease, and
+   * then never be asked again while the view went on being refused.
+   */
+  it("asks the gate again on every refused beat", async () => {
+    refused();
+    vi.mocked(ipc.scannerHold).mockRejectedValue(SCANNER_OPEN_ELSEWHERE);
+    mount();
+    await waitFor(() => expect(ipc.scannerHold).toHaveBeenCalledTimes(2), {
+      timeout: SCANNER_ELSEWHERE_POLL_MS * 2,
+    });
+    // The first ask, then one for each refused beat — the gate still says "free" here, so the
+    // view stays, and each refusal has to be asked about on its own.
+    await waitFor(() =>
+      expect(vi.mocked(ipc.scannerElsewhere).mock.calls.length).toBeGreaterThanOrEqual(3),
+    );
+  });
+
+  /** A refusal that is not the lease's is not a question for the gate. */
+  it("does not ask the gate about a beat refused for another reason", async () => {
+    refused();
+    vi.mocked(ipc.scannerHold).mockRejectedValue("the scanner state is poisoned");
+    mount();
+    await waitFor(() => expect(ipc.scannerHold).toHaveBeenCalledTimes(2), {
+      timeout: SCANNER_ELSEWHERE_POLL_MS * 2,
+    });
+    expect(ipc.scannerElsewhere).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("ScannerPage with another window holding the scanner", () => {
-  it("says so, and asks for no camera and no prefs", async () => {
+  it("says so, and asks for no camera, no prefs and no lease", async () => {
     const getUserMedia = vi.fn(() => Promise.reject(new DOMException("x", "NotAllowedError")));
     mediaDevices(getUserMedia);
     vi.mocked(ipc.scannerElsewhere).mockResolvedValueOnce(true);
@@ -690,6 +753,27 @@ describe("ScannerPage with another window holding the scanner", () => {
     expect(await screen.findByText(SCANNER_OPEN_ELSEWHERE)).toBeInTheDocument();
     expect(getUserMedia).not.toHaveBeenCalled();
     expect(ipc.scannerPrefs).not.toHaveBeenCalled();
+    expect(ipc.scannerHold).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **The gate's recovery poll** — asked each second while the answer is "elsewhere", so the view
+   * opens on its own once the other window lets go, and only then starts holding the scanner.
+   */
+  it("opens the live view on its own once the other window lets go", async () => {
+    refused();
+    vi.mocked(ipc.scannerElsewhere).mockResolvedValueOnce(true);
+    mount();
+    expect(await screen.findByText(SCANNER_OPEN_ELSEWHERE)).toBeInTheDocument();
+    expect(
+      await screen.findByText(
+        "MTG Grimoire needs camera access to scan a card.",
+        {},
+        { timeout: SCANNER_ELSEWHERE_POLL_MS * 2 },
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(SCANNER_OPEN_ELSEWHERE)).not.toBeInTheDocument();
+    await waitFor(() => expect(ipc.scannerHold).toHaveBeenCalled());
   });
 
   /** The lease can change hands between the ask and the first session command. */

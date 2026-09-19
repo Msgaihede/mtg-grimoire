@@ -9,9 +9,22 @@
  * decks.
  */
 import { useCallback, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ipc } from "@/lib/ipc";
 import { DEFAULT_DECK_SORT, formatDeckSort, parseDeckSort, type DeckSort } from "./deckSort";
+
+/**
+ * The cache entry the gallery's order lives in — **deliberately not under `["decks"]`.**
+ *
+ * It sat at `["decks", "sort"]` from the day it landed, and nothing depended on the prefix: a data
+ * reset leaves the `deck_sort` row alone, and no invalidation anywhere names the key. What the
+ * prefix did do was get the row re-read by every deck write the window made — harmless with one
+ * window, where the row only ever held this window's own press, and wrong with two, where it holds
+ * whichever window pressed last (spec §2 decision 4: the order is a view preference, per window).
+ * `crossWindow.ts`' `PER_WINDOW_KEYS` names this constant and its test fails any per-window key a
+ * table's write can reach.
+ */
+export const DECK_SORT_KEY = ["deckSort"] as const;
 
 /**
  * The reader's order, and the one way to change it.
@@ -24,16 +37,22 @@ import { DEFAULT_DECK_SORT, formatDeckSort, parseDeckSort, type DeckSort } from 
  *
  * ## Why a local override rather than the query's own answer
  *
- * The read is `staleTime: Infinity` because nothing else on earth writes this row — it changes
- * only when this hook writes it — so there is nothing for the cache to go stale against and no
- * refetch that could ever answer differently. What the cache *cannot* do is answer instantly: a
- * press that waited for `set_deck_sort` and then a re-read would leave the wall in the old order
- * for a round trip, and a sort control that answers late reads as a control that did not take.
- * So the press is the truth for the rest of the session and the row is only how it is
- * remembered.
+ * The read is `staleTime: Infinity` and `gcTime: Infinity` because **the row is read once, at
+ * launch, and after that this window's own presses are the only thing that may move its order.**
+ * Another window writes the same row, and its press is that window's order rather than this
+ * one's; so nothing here re-reads it — not a deck write, not a refresh from another window, and
+ * not a gallery coming back after five minutes away, which is what the default `gcTime` would
+ * have done. What the cache *cannot* do is answer instantly: a press that waited for
+ * `set_deck_sort` and then a re-read would leave the wall in the old order for a round trip, and a
+ * sort control that answers late reads as a control that did not take. So the press is the truth
+ * for the rest of the session and the row is only how it is remembered.
  *
  * That also settles the race the other way round: a launch read that lands *after* an early
  * press does not undo it, because the override wins whatever the query eventually says.
+ *
+ * **The press also writes the cache**, because the override does not outlive the gallery: opening
+ * a deck unmounts it, and a gallery that came back to the launch read put the wall back in the
+ * order the reader had just changed.
  *
  * ## What it does about failure, which is nothing
  *
@@ -50,18 +69,25 @@ import { DEFAULT_DECK_SORT, formatDeckSort, parseDeckSort, type DeckSort } from 
  * another write anyway.
  */
 export function useDeckSort(): { sort: DeckSort; setSort: (next: DeckSort) => void } {
+  const queryClient = useQueryClient();
   const [pressed, setPressed] = useState<DeckSort | null>(null);
 
   const query = useQuery({
-    queryKey: ["decks", "sort"],
+    queryKey: DECK_SORT_KEY,
     queryFn: () => ipc.deckSort(),
     staleTime: Infinity,
+    gcTime: Infinity,
   });
 
-  const setSort = useCallback((next: DeckSort) => {
-    setPressed(next);
-    void ipc.setDeckSort(formatDeckSort(next)).catch(() => {});
-  }, []);
+  const setSort = useCallback(
+    (next: DeckSort) => {
+      setPressed(next);
+      const stored = formatDeckSort(next);
+      queryClient.setQueryData<string>(DECK_SORT_KEY, stored);
+      void ipc.setDeckSort(stored).catch(() => {});
+    },
+    [queryClient],
+  );
 
   // `undefined` is the read in flight *and* the read that failed, and the gallery draws the same
   // thing for both: today's order. `parseDeckSort` handles everything else, including the word a

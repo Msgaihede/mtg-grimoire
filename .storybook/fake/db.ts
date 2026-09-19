@@ -1313,12 +1313,14 @@ export interface FakeUpdate {
  * than a seed for `wishGone`'s reason — what it stands in for is a **second window**, and a story
  * is one window and cannot open another ({@link windowHandlers} answers `window_count` with one),
  * so no press here can put the lease in anybody else's hands. It is not a failure either: the lease
- * is renewed by the other window's frames and lapses two seconds after they stop, which is why the
- * view asks again each second rather than drawing a refusal. **Only `scanner_elsewhere` reads it.**
- * The crate's four session commands refuse with `OPEN_ELSEWHERE` while the lease is held, and the
- * fake does not teach them to: a view told `true` asks for no camera and no prefs, so none of them
- * is ever sent from this state, and a refusal no story can reach would be one more sentence to keep
- * in step with `scanner.rs` for nothing.
+ * is renewed by the other window's open view and lapses two seconds after it goes, which is why the
+ * view asks again each second rather than drawing a refusal. **Two handlers read it**:
+ * `scanner_elsewhere`, and `scanner_hold` — the heartbeat, which refuses in the crate's words
+ * because it is the other half of the same question, asked by taking. The crate's session commands
+ * and its prefs and tray writes refuse with `OPEN_ELSEWHERE` too, and the fake does not teach them
+ * to: a view told `true` asks for no camera and no prefs, so none of them is ever sent from this
+ * state, and a refusal no story can reach would be one more sentence to keep in step with
+ * `scanner.rs` for nothing.
  *
  * **`shareLapsed`** is a shared collection link that has gone dark, and it is `pairingReadError`'s
  * split one feature over: **the one refusal in the viewer's flow a reader cannot produce by
@@ -20108,6 +20110,8 @@ const FILTERS_NEED_NAMES =
   "Filters need card names, and the scanner has none loaded — it needs corpus.db beside the bundle.";
 /** The crate's `Session::set_filters` refusal for filters no printing survives. */
 const NO_PRINTING_MATCHES = "No printing matches these filters.";
+/** `scanner.rs`' `OPEN_ELSEWHERE`, verbatim — `verdictText.ts`' `SCANNER_OPEN_ELSEWHERE`. */
+const OPEN_ELSEWHERE = "The scanner is open in another window.";
 
 /** A copy through JSON, which is what `app_meta` stores — so a story holding the object it was
  *  handed cannot reach back into the row, and a row cannot hold anything JSON would not. */
@@ -20130,6 +20134,15 @@ export function scannerHandlers(db: FakeDb) {
     scanner_status: (): ScannerStatus => (db.fault === "scannerMissing" ? STATUS.missing : STATUS.present),
     /** `scanner::scanner_elsewhere` — whether another window holds the scanner's lease. */
     scanner_elsewhere: (): boolean => db.fault === "scannerElsewhere",
+    /**
+     * `scanner::scanner_hold` — the mounted view's heartbeat. It refuses exactly where
+     * `scanner_elsewhere` answers yes, because the two read one lease: under `scannerElsewhere`
+     * the gate never mounts the live view, and a story that reached this anyway is told what the
+     * crate would tell it.
+     */
+    scanner_hold: (): void => {
+      if (db.fault === "scannerElsewhere") throw refuse(OPEN_ELSEWHERE);
+    },
     /** `scanner::scanner_frame`. */
     scanner_frame: (): ScannerVerdict => VERDICTS.decided,
     /** `scanner::scanner_reset`. */

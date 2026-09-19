@@ -11,7 +11,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 }));
 
 import { DEFAULT_DECK_SORT } from "./deckSort";
-import { useDeckSort } from "./useDeckSort";
+import { DECK_SORT_KEY, useDeckSort } from "./useDeckSort";
 
 let client: QueryClient;
 function wrapper({ children }: { children: ReactNode }) {
@@ -44,7 +44,7 @@ describe("useDeckSort", () => {
     deckSort.mockRejectedValue(new Error("BUSY"));
     const { result } = renderHook(() => useDeckSort(), { wrapper });
 
-    await waitFor(() => expect(client.getQueryState(["decks", "sort"])?.status).toBe("error"));
+    await waitFor(() => expect(client.getQueryState(DECK_SORT_KEY)?.status).toBe("error"));
 
     expect(result.current.sort).toEqual(DEFAULT_DECK_SORT);
   });
@@ -144,8 +144,8 @@ describe("useDeckSort", () => {
     expect(result.current.sort).toEqual({ key: "format", desc: false });
   });
 
-  /** Nothing else on earth writes this row, so there is nothing for the cache to go stale
-   *  against — a second mount reads the answer already in hand rather than the database again. */
+  /** Only this window's own presses may move its order — another window writes the same row, for
+   *  itself — so a second mount reads the answer already in hand rather than the database again. */
   it("reads the row once per session", async () => {
     const first = renderHook(() => useDeckSort(), { wrapper });
     await waitFor(() => expect(first.result.current.sort).toEqual({ key: "name", desc: false }));
@@ -153,6 +153,44 @@ describe("useDeckSort", () => {
     const second = renderHook(() => useDeckSort(), { wrapper });
     await waitFor(() => expect(second.result.current.sort).toEqual({ key: "name", desc: false }));
 
+    expect(deckSort).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * **The order is this window's, and the window's own deck writes must not re-read it.** Every
+   * deck write invalidates the `["decks"]` root, and with two windows the stored row is whichever
+   * window pressed last — so a key under that root pulled another window's order in on this
+   * window's next edit.
+   */
+  it("is not read again by the window's own deck writes", async () => {
+    const { result } = renderHook(() => useDeckSort(), { wrapper });
+    await waitFor(() => expect(result.current.sort).toEqual({ key: "name", desc: false }));
+
+    // Another window presses; the row changes under this one.
+    deckSort.mockResolvedValue("cards:desc");
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: ["decks"] });
+    });
+
+    expect(deckSort).toHaveBeenCalledTimes(1);
+    expect(result.current.sort).toEqual({ key: "name", desc: false });
+  });
+
+  /**
+   * **A press outlives the gallery.** Opening a deck unmounts the gallery and its override with
+   * it, so the cache is what the gallery comes back to — and until something re-read the row, that
+   * was the launch read, putting the wall back in the order the reader had just changed. The press
+   * writes the cache as well as the row, which is also what keeps a remount off the row another
+   * window may have written since.
+   */
+  it("comes back to the last press, not the launch read, when the gallery remounts", async () => {
+    const first = renderHook(() => useDeckSort(), { wrapper });
+    await waitFor(() => expect(first.result.current.sort).toEqual({ key: "name", desc: false }));
+    act(() => first.result.current.setSort({ key: "cards", desc: true }));
+    first.unmount();
+
+    const second = renderHook(() => useDeckSort(), { wrapper });
+    expect(second.result.current.sort).toEqual({ key: "cards", desc: true });
     expect(deckSort).toHaveBeenCalledTimes(1);
   });
 });

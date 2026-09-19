@@ -3322,6 +3322,21 @@ describe("multi-window's cross-boundary names", () => {
     // with are tied here rather than agreeing by hand.
     expect(scannerRs).toContain(`pub const OPEN_ELSEWHERE: &str = "${SCANNER_OPEN_ELSEWHERE}";`);
   });
+
+  /**
+   * **The heartbeat takes the lease and sends nothing else.** A mounted Scanner view calls it on
+   * mount and once a poll while it stays — the argument object is the trap: the command declares
+   * only the managed state and the calling webview, so `{}` or `{ label }` sent from here is a
+   * deserialisation error on every beat, and a view whose every beat is refused re-asks the gate
+   * forever and never scans.
+   */
+  it("holds the scanner lease by the heartbeat's Rust name, with no arguments", async () => {
+    invoke.mockResolvedValue(undefined);
+    await ipc.scannerHold();
+    expect(invoke).toHaveBeenCalledWith("scanner_hold");
+    expect(scannerRs).toContain("pub fn scanner_hold(");
+    expect(desktopRs).toContain("scanner::scanner_hold,");
+  });
 });
 
 /**

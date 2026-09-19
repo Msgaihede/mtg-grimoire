@@ -18,7 +18,7 @@ import { DEFAULT_SCANNER_OPTIONS, DEFAULT_SEND_PX } from "./scannerOptions";
 import type { ScannerDecision, ScannerOptions, ScannerTrayRow } from "./types";
 import { useCamera } from "./useCamera";
 import { useScanLoop } from "./useScanLoop";
-import { SCANNER_ELSEWHERE_KEY, useScannerElsewhere } from "./useScannerElsewhere";
+import { SCANNER_ELSEWHERE_KEY, SCANNER_ELSEWHERE_POLL_MS, useScannerElsewhere } from "./useScannerElsewhere";
 import { useScannerPrefs } from "./useScannerPrefs";
 import { useTray } from "./useTray";
 import { bundleSentence, modelsSentence, SCANNER_OPEN_ELSEWHERE, WEB_SENTENCE } from "./verdictText";
@@ -110,9 +110,10 @@ function WebSentence() {
 }
 
 /**
- * One window scans at a time (spec §5.3): the scanner is a lease another window's frames renew.
- * Asked before `LiveScanner` mounts, so a second window never opens a camera only to be refused.
- * A failed ask is treated as "free" — the frames are the real gate and will refuse if it is not.
+ * One window scans at a time (spec §5.3): the scanner is a lease the window using it keeps
+ * renewing. Asked before `LiveScanner` mounts, so a second window never opens a camera only to be
+ * refused. A failed ask is treated as "free" — the live view's heartbeat is the real gate and asks
+ * again the moment it is refused.
  */
 function ScannerGate() {
   const elsewhere = useScannerElsewhere();
@@ -161,6 +162,34 @@ function LiveScanner() {
     staleTime: Infinity,
   });
   const narrow = useNarrowWindow();
+
+  /**
+   * **The heartbeat: this view holds the scanner from its first render, whatever its camera is
+   * doing.** `scanner_hold` on mount and once a poll while mounted, cleared on unmount — so the lease
+   * is renewed by the view being here rather than by frames, which a camera still starting, refused
+   * or failed never sends. Without it a view with no frames let its lease lapse in two seconds, a
+   * second window got through the gate, and both had the tray on screen; and the first push of the
+   * filters took the lease before the camera was live, so a slow camera could hand the scanner back
+   * and forth between two windows on the Scanner view.
+   *
+   * **Every refusal asks the gate again, not only the first** — which flips it to the sentence and
+   * unmounts this view. Keyed on nothing but the refusal itself, so a run of them is a run of asks:
+   * the frame loop's re-ask below fires once per run of refused frames, and a run that began while
+   * the gate still said "free" could leave a mounted view sending refused frames at full rate. Any
+   * other failure says nothing about the lease and is left to the frame loop's own line.
+   */
+  useEffect(() => {
+    const hold = () => {
+      ipc.scannerHold().catch((e: unknown) => {
+        if (ipcError(e) === SCANNER_OPEN_ELSEWHERE) {
+          void queryClient.invalidateQueries({ queryKey: SCANNER_ELSEWHERE_KEY });
+        }
+      });
+    };
+    hold();
+    const beat = setInterval(hold, SCANNER_ELSEWHERE_POLL_MS);
+    return () => clearInterval(beat);
+  }, [queryClient]);
 
   /**
    * Every tray write goes through here, and every writer builds on `tray.latest()` rather than
@@ -230,9 +259,11 @@ function LiveScanner() {
 
   // **A refused frame is the lease saying another window has the scanner** — it took it in the
   // moment between this window's ask and this frame. Asking again flips the gate to the sentence,
-  // which unmounts this view and stops the camera. A refused *filter push* asks the same question
-  // from inside `useScannerPrefs`, which is where that refusal has to be told apart from a real one
-  // — so `filterError` never carries this sentence and is not read here.
+  // which unmounts this view and stops the camera. This is the fast path and not the guarantee: it
+  // fires once per run of refused frames, and the heartbeat above is what asks on every refusal. A
+  // refused *filter push* asks the same question from inside `useScannerPrefs`, which is where that
+  // refusal has to be told apart from a real one — so `filterError` never carries this sentence and
+  // is not read here.
   const refusedElsewhere = loop.error === SCANNER_OPEN_ELSEWHERE;
   useEffect(() => {
     if (refusedElsewhere) void queryClient.invalidateQueries({ queryKey: SCANNER_ELSEWHERE_KEY });

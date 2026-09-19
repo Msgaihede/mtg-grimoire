@@ -681,6 +681,9 @@ pub fn run() {
             // its frames renew — asked without taking it, so a second window's Scanner view can
             // say so before it opens a camera. See `scanner::LEASE`.
             scanner::scanner_elsewhere,
+            // The mounted view's heartbeat: it takes the lease, so the view holds the scanner from
+            // its first render whatever its camera is doing.
+            scanner::scanner_hold,
             scanner::scanner_frame,
             scanner::scanner_reset,
             scanner::scanner_capture,
