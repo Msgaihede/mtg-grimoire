@@ -166,13 +166,22 @@ async fn error_log_list(
 #[tauri::command]
 async fn error_log_clear(state: tauri::State<'_, Arc<AppState>>) -> Result<usize, String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let marks = state.clone();
+    let out = tauri::async_runtime::spawn_blocking(move || {
         sync::with_write(&state, |conn| {
             errors::clear(conn).map_err(|e| format!("could not clear the error log: {e}"))
         })
     })
     .await
-    .map_err(|e| format!("could not clear the error log: {e}"))?
+    .map_err(|e| format!("could not clear the error log: {e}"))?;
+    // `errors::clear` is a bare `DELETE FROM error_log`, and the table has no triggers and no
+    // foreign key names it — so SQLite truncates it without visiting a row and the update hook
+    // hears nothing. The other windows' logs hear about a clear from here. See `crate::changes`'
+    // module doc, and the `mirror::watch` test that pins the blind spot.
+    if out.is_ok() {
+        marks.changes.mark_table("error_log");
+    }
+    out
 }
 
 /// Open the release on github.com, for the install kinds that cannot update in place.

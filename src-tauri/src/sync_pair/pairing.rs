@@ -1057,16 +1057,20 @@ pub async fn sync_group_leave(state: tauri::State<'_, Arc<AppState>>) -> Result<
             .map_err(|e| e.to_string())?;
         sync::with_write(&state, |conn| runtime.block_on(leave_group_now(conn)))
     })
-    .await
-    .map_err(|e| format!("could not leave that group: {e}"))?;
-    // `entitlement::clear` empties the grant's `sync_state` rows, and `sync_state` is
-    // `WITHOUT ROWID`, which the update hook never sees — so the other windows hear about a
-    // departure from here. The best-effort publish runs *before* the local writes, so `Ok` is
-    // exactly "the clear committed". See `crate::changes::MARKED_BY_COMMAND`.
-    if out.is_ok() {
-        marks.changes.mark_table("sync_state");
+    .await;
+    // **Three marks, because the update hook hears none of what a departure writes.**
+    // `identity::leave_group` empties `sync_devices`, which is `WITHOUT ROWID`, and `sync_group`
+    // with a bare `DELETE` on a table no trigger and no foreign key touches — so SQLite truncates it
+    // and visits no row. `entitlement::clear` then empties the grant's `sync_state` rows,
+    // `WITHOUT ROWID` again. See `crate::changes`' module doc for both blind spots.
+    //
+    // **Marked whatever the answer, because `Err` does not mean nothing was written**: the
+    // departure commits before the clear runs, so a failed clear answers an error over a group
+    // this device has already left. Over-marking costs another window one refetch (spec §4).
+    for table in ["sync_devices", "sync_group", "sync_state"] {
+        marks.changes.mark_table(table);
     }
-    out
+    out.map_err(|e| format!("could not leave that group: {e}"))?
 }
 
 #[cfg(test)]

@@ -851,6 +851,105 @@ mod tests {
         assert!(changes.take().is_empty());
     }
 
+    /// **The hook's second blind spot, pinned beside its other tests because it has no census.**
+    /// `error_log` has no triggers and no foreign key names it, so a bare `DELETE FROM` takes
+    /// SQLite's truncate optimisation and the update hook never hears a row go: the rows are gone
+    /// and the window mask is clean. That is why `error_log_clear` and *Leave group* (whose
+    /// `DELETE FROM sync_group` is the same shape) each mark by hand — see `crate::changes`' module
+    /// doc. The census for `WITHOUT ROWID` tables can be read off the schema; this blind spot is
+    /// a property of a statement, so the next bare `DELETE` on a trigger-less, key-less user table
+    /// owes its command a mark and nothing will say so but this.
+    ///
+    /// If SQLite ever starts reporting a truncate, this goes red and the hand marks become
+    /// redundant rather than wrong.
+    #[test]
+    fn a_bare_delete_on_a_table_with_no_triggers_or_foreign_keys_marks_nothing() {
+        let conn = migrated_memory_db();
+        let changes = Arc::new(crate::changes::Changes::new());
+        install_hook_with_changes(
+            &conn,
+            Arc::new(Mask::default()),
+            Arc::new(crate::db::CrossFileFence::new()),
+            Arc::new(tokio::sync::Notify::new()),
+            changes.clone(),
+        );
+        crate::errors::record(
+            &conn,
+            crate::errors::Source::Database,
+            "probe",
+            crate::errors::Kind::Io,
+            "a row to clear",
+            None,
+        );
+        assert_eq!(
+            changes.take(),
+            vec!["error_log"],
+            "an insert is a row the hook does see"
+        );
+        assert_eq!(
+            crate::errors::clear(&conn).unwrap(),
+            1,
+            "the clear really did delete the row"
+        );
+        assert!(
+            !changes.pending(),
+            "and the hook heard nothing of it — the truncate optimisation"
+        );
+    }
+
+    /// **Every other clear a press reaches is seen, which is why none of them marks by hand.**
+    /// `reset.rs` empties seven user tables with bare `DELETE`s, and a foreign key names each of
+    /// them — so foreign-key processing, which every connection this crate opens switches on,
+    /// turns the truncate optimisation off and the hook hears every row. In the app the capture
+    /// triggers on those tables would do the same; this fixture installs none, so it shows the
+    /// keys alone are enough.
+    #[test]
+    fn the_three_clears_in_reset_reach_the_window_mask() {
+        let conn = migrated_memory_db();
+        conn.execute_batch(
+            "INSERT INTO collection_entries
+                (card_id,set_code,collector_number,lang,finish,quantity,created_at,updated_at)
+             VALUES ('bolt-lea','lea','161','en','nonfoil',1,0,0);
+             INSERT INTO wishlist_folders (name, sort_order, created_at, updated_at)
+             VALUES ('Ordered', 0, 0, 0);
+             INSERT INTO wishlist_entries (oracle_id, name, quantity, created_at, updated_at)
+             VALUES ('o1', 'Lightning Bolt', 1, 0, 0);
+             INSERT INTO deck_folders (name, sort_order, created_at, updated_at)
+             VALUES ('Brews', 0, 0, 0);
+             INSERT INTO decks (name, format_key, created_at, updated_at)
+             VALUES ('Burn', 'casual', 0, 0);
+             INSERT INTO deck_labels (name, name_key, color, created_at, updated_at)
+             VALUES ('Keeper', 'keeper', '#4aab08', 0, 0);",
+        )
+        .unwrap();
+        let changes = Arc::new(crate::changes::Changes::new());
+        install_hook_with_changes(
+            &conn,
+            Arc::new(Mask::default()),
+            Arc::new(crate::db::CrossFileFence::new()),
+            Arc::new(tokio::sync::Notify::new()),
+            changes.clone(),
+        );
+        crate::reset::clear_collection(&conn).unwrap();
+        crate::reset::clear_wishlist(&conn).unwrap();
+        crate::reset::clear_decks(&conn).unwrap();
+        let taken = changes.take();
+        for table in [
+            "collection_entries",
+            "collection_folders",
+            "wishlist_entries",
+            "wishlist_folders",
+            "decks",
+            "deck_folders",
+            "deck_labels",
+        ] {
+            assert!(
+                taken.contains(&table),
+                "{table} was cleared and no other window was told: {taken:?}"
+            );
+        }
+    }
+
     /// The mirror still sees every write it is supposed to, now that half the schema is in
     /// another file — and it still sees none of the ones it is not.
     #[test]

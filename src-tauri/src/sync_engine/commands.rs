@@ -386,16 +386,18 @@ pub async fn sync_patreon_claim(
             Ok(supporter_status(conn))
         })
     })
-    .await
-    .map_err(|e| e.to_string())?;
+    .await;
     // The grant is `sync_state` rows, and `sync_state` is `WITHOUT ROWID`, which the update hook
-    // never sees — so the other windows' Sync panels hear about a claim from here. `claim` writes
-    // them only after the relay has answered, so `Ok` is exactly "the grant is stored". See
+    // never sees — so the other windows' Sync panels hear about a claim from here. See
     // `crate::changes::MARKED_BY_COMMAND`.
-    if out.is_ok() {
-        marks.changes.mark_table("sync_state");
-    }
-    out
+    //
+    // **Marked whatever the answer, because `Err` does not mean nothing was written.**
+    // `entitlement::store_grant` commits the grant in a transaction of its own and `store_status`
+    // runs after it, so a claim can answer an error over a grant that is stored. Over-marking costs
+    // another window one refetch (spec §4); under-marking costs it a panel reading *Not connected*
+    // over a live membership.
+    marks.changes.mark_table("sync_state");
+    out.map_err(|e| e.to_string())?
 }
 
 /// One round trip now.

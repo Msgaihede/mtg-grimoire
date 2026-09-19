@@ -136,8 +136,9 @@ export const TABLE_KEYS: Readonly<Record<string, readonly QueryKey[]>> = {
   sync_ops: [],
   sync_peers: [],
   // The membership lives here (`entitlement::SUPPORTER_STATUS`), and *Connect Patreon*'s claim is
-  // a press that writes it and settles three keys under `["sync"]`. Rust does not mark this table
-  // today (spec §4 — `WITHOUT ROWID`), so the entry says what a mark would owe.
+  // a press that writes it and settles three keys under `["sync"]`. The table is `WITHOUT ROWID`,
+  // which the update hook never sees, so Rust marks it by hand from that command and from *Leave
+  // group* (`changes::MARKED_BY_COMMAND`).
   sync_state: [SYNC_KEY],
   // Every search row and every printing draws `wishlisted` (`["cards"]`, `["card"]` — the
   // *Clear wishlist* roots), and a deck's missing plan lists the wishes each shortfall could take
