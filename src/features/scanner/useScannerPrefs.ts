@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { ipc, ipcError } from "@/lib/ipc";
 import type { ScanFilters, ScannerPrefs } from "./types";
+import { SCANNER_ELSEWHERE_KEY, SCANNER_ELSEWHERE_POLL_MS } from "./useScannerElsewhere";
+import { SCANNER_OPEN_ELSEWHERE } from "./verdictText";
 
 /** The one cache entry the prefs live in — the query's key and every write's. */
 const PREFS_KEY = ["scanner", "prefs"] as const;
@@ -43,7 +45,10 @@ export interface ScannerPrefsState {
   loaded: boolean;
   /** Applied at once; persisted whole. A `filters` change persists only once the session takes it. */
   update: (patch: Partial<ScannerPrefs>) => void;
-  /** The last `scanner_set_filters` refusal, in the crate's words, or `null`. */
+  /**
+   * The last `scanner_set_filters` refusal, in the crate's words, or `null` — never the lease's,
+   * which is about another window rather than about the filters.
+   */
   filterError: string | null;
 }
 
@@ -77,6 +82,17 @@ function current(qc: QueryClient): ScannerPrefs {
  * **A write that fails keeps the prefs in memory and says nothing.** `set_scanner_prefs` refuses
  * only with BUSY while a sync holds the write connection; the next change writes the whole row
  * again, and one more try after {@link PREFS_RETRY_MS} is what keeps a change nobody follows up.
+ *
+ * **A push the scanner's lease refuses is not answered at all.** `scanner_set_filters` also
+ * refuses with `OPEN_ELSEWHERE` while another window holds the scanner, and that says nothing about
+ * these filters. Treated as an ordinary refusal it put the filters back to none in a cache that
+ * outlives the view, so the next visit pushed none and the next write stored none over the row. So
+ * that refusal reverts nothing, marks nothing settled, keeps `loaded` false — no frame goes out
+ * under filters the session does not have — and puts no sentence in the popover. It asks the
+ * scanner gate again instead, which is what tells the reader and unmounts this view; and in case
+ * the other window let go in between and the view stays, the push goes out again each
+ * {@link SCANNER_ELSEWHERE_POLL_MS} — while mounted and never after, since an accepted push is the
+ * lease, taken.
  */
 export function useScannerPrefs(): ScannerPrefsState {
   const qc = useQueryClient();
@@ -99,6 +115,18 @@ export function useScannerPrefs(): ScannerPrefsState {
   const seqRef = useRef(0);
   const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pushedOnMountRef = useRef(false);
+  /** A push the lease refused, waiting to go out again; cleared by a newer push and on unmount. */
+  const elsewhereRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Whether the view is still here — a refusal landing after it has gone schedules nothing. */
+  const mountedRef = useRef(false);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (elsewhereRef.current !== null) clearTimeout(elsewhereRef.current);
+      elsewhereRef.current = null;
+    };
+  }, []);
 
   /**
    * The filters a write may carry: the accepted ones; before any push has settled, the stored
@@ -129,27 +157,44 @@ export function useScannerPrefs(): ScannerPrefsState {
 
   const push = useCallback(
     (filters: ScanFilters, persistOnAccept: boolean) => {
-      const seq = ++seqRef.current;
-      ipc.scannerSetFilters(filters).then(
-        () => {
-          acceptedRef.current = filters;
-          settledRef.current = true;
-          if (seq !== seqRef.current) return;
-          setFilterError(null);
-          setSynced(true);
-          if (persistOnAccept) persist();
-        },
-        (e: unknown) => {
-          settledRef.current = true;
-          if (seq !== seqRef.current) return;
-          setFilterError(ipcError(e));
-          setSynced(true);
-          // Back to what the session is actually searching under. Drawn and never re-sent: the
-          // session already holds it, and a second push's success would clear the sentence the
-          // reader has not read yet.
-          qc.setQueryData<ScannerPrefs>(PREFS_KEY, { ...current(qc), filters: persistable() });
-        },
-      );
+      const send = () => {
+        const seq = ++seqRef.current;
+        // A newer push supersedes one the lease turned away that is still waiting to go again.
+        if (elsewhereRef.current !== null) {
+          clearTimeout(elsewhereRef.current);
+          elsewhereRef.current = null;
+        }
+        ipc.scannerSetFilters(filters).then(
+          () => {
+            acceptedRef.current = filters;
+            settledRef.current = true;
+            if (seq !== seqRef.current) return;
+            setFilterError(null);
+            setSynced(true);
+            if (persistOnAccept) persist();
+          },
+          (e: unknown) => {
+            const sentence = ipcError(e);
+            if (sentence === SCANNER_OPEN_ELSEWHERE) {
+              // Another window holds the scanner: not an answer about these filters, so nothing
+              // below happens — see the hook's doc. Ask the gate again, and send again later.
+              if (seq !== seqRef.current || !mountedRef.current) return;
+              void qc.invalidateQueries({ queryKey: SCANNER_ELSEWHERE_KEY });
+              elsewhereRef.current = setTimeout(send, SCANNER_ELSEWHERE_POLL_MS);
+              return;
+            }
+            settledRef.current = true;
+            if (seq !== seqRef.current) return;
+            setFilterError(sentence);
+            setSynced(true);
+            // Back to what the session is actually searching under. Drawn and never re-sent: the
+            // session already holds it, and a second push's success would clear the sentence the
+            // reader has not read yet.
+            qc.setQueryData<ScannerPrefs>(PREFS_KEY, { ...current(qc), filters: persistable() });
+          },
+        );
+      };
+      send();
     },
     [qc, persist, persistable],
   );

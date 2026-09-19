@@ -14,6 +14,13 @@ export const SURE_DISTANCE = 0.3;
  */
 export const WEB_SENTENCE = RAW_CALL_UNAVAILABLE;
 
+/**
+ * What a second window's Scanner view says while another window holds the camera. The same string
+ * as `scanner::OPEN_ELSEWHERE`, which is also how a refused frame reads — `ipc.test.ts` pins the
+ * Rust half.
+ */
+export const SCANNER_OPEN_ELSEWHERE = "The scanner is open in another window.";
+
 function aspectOk(v: ScannerVerdict): boolean {
   return v.ok && v.score !== null && Math.abs(v.score.aspect - CARD_ASPECT) / CARD_ASPECT < 0.08;
 }

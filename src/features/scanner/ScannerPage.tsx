@@ -18,9 +18,10 @@ import { DEFAULT_SCANNER_OPTIONS, DEFAULT_SEND_PX } from "./scannerOptions";
 import type { ScannerDecision, ScannerOptions, ScannerTrayRow } from "./types";
 import { useCamera } from "./useCamera";
 import { useScanLoop } from "./useScanLoop";
+import { SCANNER_ELSEWHERE_KEY, useScannerElsewhere } from "./useScannerElsewhere";
 import { useScannerPrefs } from "./useScannerPrefs";
 import { useTray } from "./useTray";
-import { bundleSentence, modelsSentence, WEB_SENTENCE } from "./verdictText";
+import { bundleSentence, modelsSentence, SCANNER_OPEN_ELSEWHERE, WEB_SENTENCE } from "./verdictText";
 
 /**
  * How long a row that just landed stays marked as the one to flash.
@@ -75,9 +76,14 @@ function withoutCommitted(
  * The Scanner view: the reader's bar across the top, the camera and one line saying what it is
  * doing, and the review tray beside it — with today's developer panels one switch away.
  *
- * **Dispatched above the hooks.** On the web target there is no detector, so the whole view is
- * one sentence and nothing below this line runs: no camera is asked for, no command is called,
- * and no `useQuery` is conditional — `BackupPanel`'s shape, for `BackupPanel`'s reason.
+ * **Dispatched above the hooks, and gated below the dispatch.** On the web target there is no
+ * detector, so the whole view is one sentence and nothing below this line runs: no camera is asked
+ * for, no command is called, and no `useQuery` is conditional — `BackupPanel`'s shape, for
+ * `BackupPanel`'s reason. On the desktop {@link ScannerGate} stands between that dispatch and the
+ * live view, because one window scans at a time and whether another holds the scanner has to be
+ * answered *before* the camera is asked for — the live view's own hooks open it as they mount. So
+ * the question is a component of its own with one query in it, and the live view mounts only once
+ * the answer is "free".
  *
  * **The camera and the panels are two halves on purpose.** `useCamera` and `useScanLoop` own
  * the stream and the pump; `ScanBar`, `TrayPanel` and `ScannerPanels` are pure and take what
@@ -91,7 +97,7 @@ function withoutCommitted(
  * this view.
  */
 export function ScannerPage(): JSX.Element {
-  return isWebTarget() ? <WebSentence /> : <LiveScanner />;
+  return isWebTarget() ? <WebSentence /> : <ScannerGate />;
 }
 
 function WebSentence() {
@@ -99,6 +105,34 @@ function WebSentence() {
     <section className="flex h-full flex-col gap-3">
       <h2 className="sr-only">Scanner</h2>
       <p className="text-dim">{WEB_SENTENCE}</p>
+    </section>
+  );
+}
+
+/**
+ * One window scans at a time (spec §5.3): the scanner is a lease another window's frames renew.
+ * Asked before `LiveScanner` mounts, so a second window never opens a camera only to be refused.
+ * A failed ask is treated as "free" — the frames are the real gate and will refuse if it is not.
+ */
+function ScannerGate() {
+  const elsewhere = useScannerElsewhere();
+  if (elsewhere.data === true) return <ElsewhereSentence />;
+  if (elsewhere.isPending) {
+    return (
+      <section className="flex h-full flex-col gap-3">
+        <h2 className="sr-only">Scanner</h2>
+      </section>
+    );
+  }
+  return <LiveScanner />;
+}
+
+function ElsewhereSentence() {
+  return (
+    <section className="flex h-full flex-col gap-3">
+      <h2 className="sr-only">Scanner</h2>
+      <p>{SCANNER_OPEN_ELSEWHERE}</p>
+      <p className="text-dim">It opens here once that window leaves the Scanner or closes.</p>
     </section>
   );
 }
@@ -193,6 +227,16 @@ function LiveScanner() {
     sendPx,
     onDecision,
   });
+
+  // **A refused frame is the lease saying another window has the scanner** — it took it in the
+  // moment between this window's ask and this frame. Asking again flips the gate to the sentence,
+  // which unmounts this view and stops the camera. A refused *filter push* asks the same question
+  // from inside `useScannerPrefs`, which is where that refusal has to be told apart from a real one
+  // — so `filterError` never carries this sentence and is not read here.
+  const refusedElsewhere = loop.error === SCANNER_OPEN_ELSEWHERE;
+  useEffect(() => {
+    if (refusedElsewhere) void queryClient.invalidateQueries({ queryKey: SCANNER_ELSEWHERE_KEY });
+  }, [refusedElsewhere, queryClient]);
 
   /**
    * **A folder that is gone, or that is not the reader's own, is the root.** The id is stored and

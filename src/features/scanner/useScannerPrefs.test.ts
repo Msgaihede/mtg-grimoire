@@ -20,7 +20,9 @@ vi.mock("@/lib/ipc", async (original) => ({
   },
 }));
 
+import { SCANNER_ELSEWHERE_POLL_MS } from "./useScannerElsewhere";
 import { PREFS_RETRY_MS, SCANNER_PREFS_BEFORE_LOAD, useScannerPrefs } from "./useScannerPrefs";
+import { SCANNER_OPEN_ELSEWHERE } from "./verdictText";
 
 /** `db::BUSY`, verbatim — the one refusal `set_scanner_prefs` has. */
 const BUSY = "The card database is busy finishing a sync. Try that again in a moment.";
@@ -29,8 +31,11 @@ const REFUSED = "No printing matches these filters.";
 const HOB: ScanFilters = { sets: ["hob"], released_from: null, released_to: null };
 const ZZZ: ScanFilters = { sets: ["zzz"], released_from: null, released_to: null };
 
-function mount() {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+/** A reader who narrowed the scanner last session — the row a wrong revert would erase. */
+const STORED: ScannerPrefs = { ...DEFAULT_SCANNER_PREFS, filters: HOB };
+
+/** One client per test unless a test passes its own, which is how a view comes back to a cache. */
+function mount(qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
   const wrapper = ({ children }: { children: ReactNode }) =>
     createElement(QueryClientProvider, { client: qc }, children);
   return renderHook(() => useScannerPrefs(), { wrapper });
@@ -176,5 +181,109 @@ describe("useScannerPrefs", () => {
       await vi.advanceTimersByTimeAsync(PREFS_RETRY_MS * 5);
     });
     expect(setScannerPrefs).toHaveBeenCalledTimes(2);
+  });
+});
+
+/**
+ * **The lease's refusal is not an answer about the filters.** `scanner_set_filters` refuses with
+ * `OPEN_ELSEWHERE` when another window holds the scanner, which says nothing about whether these
+ * filters match a printing — so none of what an ordinary refusal does may follow from it.
+ */
+describe("useScannerPrefs while another window holds the scanner", () => {
+  it("keeps the stored filters and writes them, not none, beside a later change", async () => {
+    scannerPrefs.mockResolvedValue(STORED);
+    let refuse!: (e: unknown) => void;
+    scannerSetFilters.mockReturnValueOnce(new Promise<void>((_, reject) => (refuse = reject)));
+    const { result } = mount();
+    await waitFor(() => expect(scannerSetFilters).toHaveBeenCalledWith(HOB));
+    await act(async () => refuse(SCANNER_OPEN_ELSEWHERE));
+
+    expect(result.current.prefs.filters).toEqual(HOB);
+    // The gate's sentence is what tells the reader, not the filter popover's.
+    expect(result.current.filterError).toBeNull();
+    // Still held: the session has not got these filters, so no frame may go out under none.
+    expect(result.current.loaded).toBe(false);
+
+    act(() => result.current.update({ developer: true }));
+    await waitFor(() => expect(setScannerPrefs).toHaveBeenCalled());
+    expect(setScannerPrefs).toHaveBeenLastCalledWith({ ...STORED, developer: true });
+  });
+
+  /** The cache outlives the view (`gcTime: Infinity`), so a revert there is what the next visit draws. */
+  it("hands a view that comes back the stored filters to push, not none", async () => {
+    scannerPrefs.mockResolvedValue(STORED);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    let refuse!: (e: unknown) => void;
+    scannerSetFilters.mockReturnValueOnce(new Promise<void>((_, reject) => (refuse = reject)));
+    const first = mount(qc);
+    await waitFor(() => expect(scannerSetFilters).toHaveBeenCalledTimes(1));
+    await act(async () => refuse(SCANNER_OPEN_ELSEWHERE));
+    first.unmount();
+
+    const second = mount(qc);
+    await waitFor(() => expect(second.result.current.loaded).toBe(true));
+    expect(scannerSetFilters).toHaveBeenLastCalledWith(HOB);
+    expect(second.result.current.prefs.filters).toEqual(HOB);
+  });
+
+  /**
+   * The other window can let go in the moment between the refusal and the gate's second ask, and
+   * then the view stays. Held until the session has the filters, it would never scan — so the push
+   * goes out again at the gate's own pace until the session answers it.
+   */
+  it("sends the refused push again while mounted, and loads once the session takes it", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    scannerPrefs.mockResolvedValue(STORED);
+    scannerSetFilters.mockRejectedValueOnce(SCANNER_OPEN_ELSEWHERE);
+    const { result } = mount();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(scannerSetFilters).toHaveBeenCalledTimes(1);
+    expect(result.current.loaded).toBe(false);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SCANNER_ELSEWHERE_POLL_MS);
+    });
+    expect(scannerSetFilters).toHaveBeenCalledTimes(2);
+    expect(scannerSetFilters).toHaveBeenLastCalledWith(HOB);
+    expect(result.current.loaded).toBe(true);
+    expect(result.current.prefs.filters).toEqual(HOB);
+    // Still the mount's own push, answered late: a reading of the row, not a change to it.
+    expect(setScannerPrefs).not.toHaveBeenCalled();
+  });
+
+  /** A view that has gone must not push again — an accepted push is the lease, taken. */
+  it("sends nothing again once the view has gone", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    scannerSetFilters.mockRejectedValueOnce(SCANNER_OPEN_ELSEWHERE);
+    const { unmount } = mount();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(scannerSetFilters).toHaveBeenCalledTimes(1);
+    unmount();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SCANNER_ELSEWHERE_POLL_MS * 5);
+    });
+    expect(scannerSetFilters).toHaveBeenCalledTimes(1);
+  });
+
+  /** …including when the refusal itself only lands after the view has gone. */
+  it("sends nothing again when the refusal lands after the view has gone", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let refuse!: (e: unknown) => void;
+    scannerSetFilters.mockReturnValueOnce(new Promise<void>((_, reject) => (refuse = reject)));
+    const { unmount } = mount();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(scannerSetFilters).toHaveBeenCalledTimes(1);
+    unmount();
+    await act(async () => refuse(SCANNER_OPEN_ELSEWHERE));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SCANNER_ELSEWHERE_POLL_MS * 5);
+    });
+    expect(scannerSetFilters).toHaveBeenCalledTimes(1);
   });
 });
