@@ -175,7 +175,16 @@ queries that makes stale.** The repository's standing boundary, applied.
     peer watermark) and no window's press does, so no window is behind another about them.
 
   A test enumerates every `WITHOUT ROWID` table in `main.sqlite_master` against those two lists, so
-  a seventh goes red until somebody decides.
+  a seventh goes red until somebody decides. Connect and Leave mark **whatever their outcome**:
+  each can answer `Err` over a write that already committed, and over-marking is accepted.
+- **The second blind spot: a bare `DELETE`.** A `DELETE FROM t` with no `WHERE`, on a table with no
+  triggers and no foreign keys, is SQLite's truncate optimisation, and the update hook does not fire
+  for it either. **Nothing enumerates this one** — it is a property of a statement, not of a table —
+  so the sweep was done by hand on 2026-09-19 and two presses reach it: `error_log_clear`
+  (`errors::clear`) marks `error_log`, and `sync_group_leave` also marks `sync_group` and
+  `sync_devices`. The seven Danger Zone clears in `reset.rs` are seen, because foreign keys turn the
+  optimisation off; a `mirror/watch.rs` test runs all three clears to prove it, and another pins the
+  blind spot itself on `error_log`. A new unconditional `DELETE` a press reaches owes the same check.
 - **The wake.** `Changes` carries its own `tokio::sync::Notify`. The existing commit hook
   (`mirror/watch.rs:254`) rings it **only when a bit is set**, so a Scryfall ingest's thousands of
   corpus commits wake nothing; a command's explicit mark rings it itself. `notify_one` stores at
@@ -187,13 +196,17 @@ queries that makes stale.** The repository's standing boundary, applied.
      it proves the commit that rang has finished. **The take happens under the lock, not after it**,
      and the first draft had it after: a transaction that began in the gap between the drop and the
      take would have its bit taken before its own commit, and that commit would then find nothing
-     pending and ring nothing — a write no other window ever hears about. On timeout, take anyway.
-     Taken always, even with one window, so nothing stale is waiting when a second one opens;
-  4. if the bits are non-zero **and** `app.webview_windows().len() >= 2`, `app.emit("db:changed",
+     pending and ring nothing — a write no other window ever hears about. **On timeout it peeks
+     rather than takes**: the bits are read for the event and left set, so the transaction still
+     holding the lock rings again when it commits and the next locked take clears them. (The first
+     draft took anyway, which cleared exactly that transaction's bit.) One window or several, every
+     take goes through the lock, so nothing stale is waiting when a second window opens;
+  3. if the bits are non-zero **and** `app.webview_windows().len() >= 2`, `app.emit("db:changed",
      DbChanged { tables })`.
 
-  Step 4's decision is a pure function and is what the tests pin. **With one window open nothing is
-  ever emitted**, so a single-window session is byte-for-byte today's.
+  Step 3's decision is a pure function and is what the tests pin. **With one window open nothing is
+  ever emitted**, so a single-window session's *pages* see exactly what they saw before; what it
+  costs is the emitter taking the write lock once per burst of user writes.
 - **Over-marking is accepted.** A rolled-back write still set its bits, exactly as the mirror's mask
   does; the cost is one refetch of data that did not change.
 
