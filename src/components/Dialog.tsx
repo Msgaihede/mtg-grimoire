@@ -610,6 +610,13 @@ function Panel({
         // a layout to whether an animation is at rest.
         className={cn(
           "flex max-h-full max-w-full flex-col bg-bg shadow-2xl",
+          // **`select-text`, because a dialog is read and the view it opens over may not be.**
+          // The deck editor refuses text selection at its root (issue #473) and mounts every one
+          // of its dialogs inside that root, where a panel with no opinion inherits the refusal —
+          // a reader could not copy a history line or an import error. Said on the shell rather
+          // than per host so a dialog added to that editor tomorrow is readable by construction;
+          // everywhere else it is what `auto` already resolves to, so no other dialog moves.
+          "select-text",
           // **The frame is the scrim's fold seen from the other side** (2026-09-03): below `sm`
           // the panel fills the glass, so there is no window left for a corner to be rounded
           // against and no edge for a border to separate it from. A radius and a hairline drawn

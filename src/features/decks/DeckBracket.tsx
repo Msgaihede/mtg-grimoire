@@ -408,6 +408,9 @@ function Advisory({
         // on this scroller is a horizontal scrollbar the editor must never have.
         "absolute right-0 top-9 w-72 max-w-[calc(100vw-2rem)] rounded-lg border",
         "border-border bg-bg/95 p-3 text-xs shadow-lg",
+        // `ValidationPanel`'s reason, one control over: a combo's name is worth copying, and the
+        // editor around this panel refuses text selection at its root (issue #473).
+        "select-text",
         // The scale grows from the corner the panel is pinned by — one that grew from its own
         // middle would read as unrelated to the button it hangs off.
         "origin-top-right",

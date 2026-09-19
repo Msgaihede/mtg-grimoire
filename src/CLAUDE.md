@@ -242,6 +242,18 @@ Every one of these has its measurement and its story in
   two more entries on `READS` — so a diff that touches it is a diff about the view's promise. It stays total only while the calls are made **in** the swept
   files, which is why that view writes its own paging loop rather than importing a helper that
   would take the callback elsewhere.
+- **This app starts no native drag, and `lib/nativeDrag.ts` refuses every one the page would
+  begin** (issue #473, 2026-09-19). Every drag is dnd-kit's pointer gesture and `CardImage` is
+  `draggable={false}`, so the native drags left were accidents: a **text selection** pulled out of
+  place, a link, a stray image. dnd-kit refuses a native `dragstart` only during a press on one of
+  *its* draggables, so a selection pulled from a heading or a price line went straight to the
+  operating system's drag loop — measured as `dragstart` then `pointercancel` — and the reader lost
+  the whole window. `installNativeDragGuard` is installed once in `main.tsx`, capture phase on the
+  window, and exempts one source: a drag that starts **inside a text field**, where moving text is
+  editing and ProseMirror keeps drag state of its own. A file dragged *in* from the desktop fires
+  no `dragstart` here, so no import is touched. **A future feature that wants a native drag source
+  has to widen that exemption on purpose**, not discover the refusal; `nativeDrag.test.ts` also
+  fences the `main.tsx` call, since nothing in the suite loads the entry point.
 - **`pointer-events` inherits, so a `title` or an SVG `<title>` inside anything
   `pointer-events-none` is a tooltip that can never be shown — and nothing goes red.** A hit
   target is invisible to the DOM, so no test sees it either. `FoilOverlay`'s chip is

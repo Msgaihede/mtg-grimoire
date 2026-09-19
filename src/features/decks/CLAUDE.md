@@ -3245,6 +3245,20 @@ layer.
     per row, because the mutation only bites *across* rows. If the code accumulates over a list,
     the fixture has to be a list.
 
+- **The editor is not selectable text, and four shells opt back in** (issue #473, 2026-09-19).
+  `DeckEditor`'s root is `select-none`: a press anywhere that is not a card — a pile heading, a
+  price line, the gap between piles — used to start a text selection, and across a Stacks desk that
+  was **~4 200 characters** painted blue (measured over CDP, debug build, the report's own
+  screenshot reproduced). A second press inside it began a native drag of the selection, which
+  `lib/nativeDrag.ts` now refuses app-wide; this rule takes the selection away where the report
+  found it. **What a reader reads rather than handles says `select-text` at its own shell**:
+  `Dialog`'s panel (every overlay here is mounted *inside* the editor's section, so a panel with
+  no opinion inherits the refusal), `ValidationPanel`, `DeckBracket`'s panel, and the notes band's
+  body. Fields need nothing — an `<input>` and a `contenteditable` edit their own text whatever an
+  ancestor says. **A new surface in this editor that holds prose opts in the same way**, and a new
+  dialog gets it for free from the shell. The card modal, the context menu and the tooltips are
+  drawn at the app root and were never inside the refusal.
+
 - **A deck card is the whole card, and the app's marks are overlays on it.** The picture _is_ the
   card, so `deckCardName` on the button is the **only** name a screen reader gets — but the app
   draws a **printed-card frame under it** (name, cost, type line) that the picture paints over,

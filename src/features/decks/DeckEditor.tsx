@@ -3946,7 +3946,19 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       // an arrow can reach the editor root itself — so the outline ringed the entire builder,
       // piles and rail and all, on any keystroke. The piles and cards inside keep theirs.
       // `src/lib/focus.ts` has the rule.
-      className={cn("relative flex h-full min-h-0 flex-col gap-3")}
+      //
+      // **`select-none` because this editor is a thing a reader handles, not text they read**
+      // (issue #473). Every press on a card is a drag, and a press anywhere else — a pile heading,
+      // a price line, the gap between two piles — used to start a text selection instead: across a
+      // Stacks desk that is ~4 200 characters of headings and card frames painted blue, measured
+      // in the shipped window. A second press inside it began a native drag of the selection, and
+      // the reader lost the window. The drag is refused app-wide (`lib/nativeDrag.ts`); this takes
+      // the selection away where the report found it. Fields are untouched — an `<input>` and a
+      // `contenteditable` edit their own text whatever an ancestor says — and **the surfaces a
+      // reader reads rather than handles opt back in at their own shell**: `Dialog`'s panel (every
+      // overlay below is mounted *inside* this section and would inherit the refusal),
+      // `ValidationPanel` and `DeckBracket` on the ledger line, and the notes band's body.
+      className={cn("relative flex h-full min-h-0 flex-col gap-3 select-none")}
     >
       {/* The four quick destinations, drawn across the top of this scroller for the length of a
           drag and at no other time. **The first child on purpose**: it is `sticky top-0`, so it
