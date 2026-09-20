@@ -22,10 +22,10 @@ use crate::{
     activity, camera, card, collection, collection_alloc, collection_folders, combos, db, deck,
     deck_audit, deck_meta, deck_missing, deck_notes, deck_pull, deck_quick_add, deck_theory,
     deck_tokens, deck_undo, deckpane, decksort, errors, export, flatten, home, images, import,
-    index, listview, markcolors, marketplace, marketplace_feed, mirror, nav, paths, price_history,
-    recent_cards, reset, scanner, schema, scryfall, search, searchopen, set_completion, share,
-    startup, startview, sync, sync_engine, sync_pair, tags, update, wishlist, wishlist_folders,
-    wishlist_optimize, zoom,
+    index, listview, markcolors, marketplace, marketplace_feed, mirror, nav, new_printings, paths,
+    price_history, recent_cards, reset, scanner, schema, scryfall, search, searchopen,
+    set_completion, share, startup, startview, sync, sync_engine, sync_pair, tags, update,
+    wishlist, wishlist_folders, wishlist_optimize, zoom,
 };
 // **Not in the list above, because this file compiles for Android too.** Its name says
 // `desktop`, but its gate is `cfg(not(target_family = "wasm"))` — desktop *and* mobile — while
@@ -608,6 +608,12 @@ pub fn run() {
             // never by a command — see `price_history`'s doc.
             set_completion::set_completion,
             price_history::price_movers,
+            // The New printings widget: the feed, and the cursor that puts its gold dots out.
+            // The read is two `SELECT`s on the read-only connection; the write takes its clock
+            // from the caller, never `SystemTime::now()` — `recent_cards`' rule, and the reason
+            // both halves compile for the browser too.
+            new_printings::new_printings,
+            new_printings::mark_new_printings_seen,
             startview::start_view,
             startview::set_start_view,
             marketplace_feed::marketplace_feed_refresh,

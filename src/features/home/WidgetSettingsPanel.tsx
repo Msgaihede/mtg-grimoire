@@ -10,9 +10,11 @@
  *
  * **Every write is a patch, never a whole config** (`ConfigPatch`): the page merges the fields and
  * keeps every key it was not handed, a newer build's included. Two keys are written as *absence*
- * rather than as a word, and both are the registry's rule stated at its one writer: a switch that
- * is on stores nothing (only `false` is off, so a reader who changed nothing sees the widget's
- * whole face), and the comfortable density stores nothing (only `"compact"` is a density).
+ * rather than as a word, and both are the registry's rule stated at its one writer: a switch at
+ * **its own default** stores nothing, whichever way round that default runs — on for a toggle
+ * that names no `dflt` (so a reader who changed nothing sees the widget's whole face), off for a
+ * kind whose row names `dflt: false` — and the comfortable density stores nothing (only
+ * `"compact"` is a density).
  *
  * A kind this build cannot draw gets the footprint and the density and nothing else — its picks
  * and switches are a newer build's vocabulary, and a row guessing at them would write words that
@@ -171,7 +173,8 @@ export function WidgetSettingsPanel({
       {meta !== null && meta.toggles.length > 0 && (
         <Group label="Show">
           {meta.toggles.map((toggle) => {
-            const on = toggleOn(widget, toggle.key);
+            const dflt = toggle.dflt ?? true;
+            const on = toggleOn(widget, toggle.key, dflt);
             return (
               <label key={toggle.key} className="flex items-center justify-between gap-2 py-px">
                 <span className={cn("text-[0.8125rem]", on ? "text-text" : "text-dim")}>
@@ -180,8 +183,9 @@ export function WidgetSettingsPanel({
                 <input
                   type="checkbox"
                   checked={on}
-                  // Off is stored as `false` and on as nothing — see the module doc.
-                  onChange={() => onConfig({ [toggle.key]: on ? false : undefined })}
+                  // **The default is stored as absence, whichever way round it runs** — see the
+                  // module doc.
+                  onChange={() => onConfig({ [toggle.key]: !on === dflt ? undefined : !on })}
                   className={cn("size-3.5 accent-accent", FOCUS)}
                 />
               </label>

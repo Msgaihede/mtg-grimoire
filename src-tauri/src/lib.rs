@@ -147,6 +147,11 @@ pub mod marketplace;
 /// folder, the two `app_meta` settings and the thread — carry the gate inside that module.
 pub mod mirror;
 pub mod nav;
+/// **The home page's New printings feed** — reprints of cards the reader's watched decks already
+/// hold, newest first. Two `SELECT`s over `deck_cards` and the corpus plus one `app_meta` row for
+/// the *seen* cursor; no table of its own, no filesystem and no network, and its only clock is
+/// SQLite's `date('now')` — so it answers in a browser exactly as it does on the desktop.
+pub mod new_printings;
 /// **The home page's Price movers history** — user schema v45, a snapshot of today's price per
 /// owned printing and a read that compares against one. The day is SQLite's `date('now')`, never
 /// `SystemTime::now()`, and nothing in it reaches a filesystem or a network, so the snapshot runs
