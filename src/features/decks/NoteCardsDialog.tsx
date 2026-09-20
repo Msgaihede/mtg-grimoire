@@ -2,9 +2,17 @@
  * Which cards a note is about — `PullFromCollectionDialog`'s grammar, over the deck's own cards.
  *
  * **A fourth spelling of "pick some cards in a dialog" is a fourth thing to keep in step**, so the
- * row below is that dialog's row character for character: a `size-4 accent-accent` checkbox named
- * for its card, the 44×32 art frame, a `min-w-0 flex-1` column with the name over a `text-[0.7rem]`
- * line, and the count right-aligned in mono.
+ * row below is that dialog's row: a `size-4 accent-accent` checkbox named for its card, the 44×32
+ * art frame, a `min-w-0 flex-1` column with the name over a `text-[0.7rem]` line, and the count
+ * right-aligned in mono beside its `sr-only` twin.
+ *
+ * **Three things diverge, each argued at its own site rather than here.** The checkbox takes
+ * `FOCUS_INSET` where the pull dialog takes `FOCUS`, and the list's scroller is `relative` where
+ * that one is not — an outline standing 2px proud of a control in a clipped box is painted in the
+ * clipped region, and an `sr-only` span with no positioned ancestor stretches the document. Both
+ * are `src/CLAUDE.md` rules with a shipped failure behind them, and the pull dialog is on the wrong
+ * side of both. The third is the art frame's `border border-border`: a frame here can legitimately
+ * be empty, and an unbordered empty box is a gap in the row rather than a picture that is missing.
  *
  * **No Save, because ticking is the write.** Each tick calls `note_card_attach` or
  * `note_card_detach` the moment it lands, which is what the row actions did before this dialog
@@ -15,7 +23,12 @@
  * about a card *in this deck*. A card that later leaves the deck keeps its note — deliberately,
  * because a note about a card you cut is the note most worth keeping — so this list narrows what
  * can be *added* and never what is already named. A named card the deck no longer holds is drawn
- * at the head of the list, ticked, with an empty frame.
+ * at the head of the list, ticked, saying so under its name — **and keeping its picture**, which
+ * is the opposite of the natural guess. `attachments_by_note` resolves each named card's printing
+ * over the *whole corpus* (`src-tauri/src/deck_notes.rs`: `ORDER BY (dc.card_id IS NULL), c.id` —
+ * a printing this deck holds first, any printing otherwise), so cutting a card takes its deck row
+ * and not its art. The frame is empty only for the orphan whose oracle id the corpus knows no
+ * printing of at all.
  */
 import { useEffect, useId, useMemo, useRef, useState, type JSX } from "react";
 import { CardImage } from "@/components/CardImage";
@@ -179,17 +192,40 @@ function Picker({
    * The rungs, counted over {@link offered} and deliberately not over `attachable` alone.
    *
    * A chip's count is a promise about how many rows pressing it draws, so `All` has to count the
-   * strays the list puts above the deck. A stray's bucket is {@link OTHER}, which is the bucket an
-   * orphan printing already lands in — *we cannot say what type this is* — so the two share a chip
-   * honestly rather than the strays inventing one of their own.
+   * strays the list puts above the deck. A stray's bucket is {@link OTHER}, which is honest for a
+   * card whose type nothing here knows — the `DeckNoteCard` it is built from carries no type line —
+   * rather than the strays inventing a rung of their own.
+   *
+   * It is deliberately **not** the orphan printing's bucket, which is what this comment said until
+   * a reviewer read `attachableCards`: that function **drops** every row with a null `oracleId`,
+   * and a null `oracleId` is exactly what an orphan is. `Other` reaches this list through a token
+   * or a scheme, and through these strays.
    */
   const chips = useMemo(() => typeChipCounts(offered, named.length), [offered, named.length]);
+
+  /**
+   * The rung actually in force, which is not always the one the reader pressed.
+   *
+   * **A type rung is drawn only where the deck has cards of that type, and the rows behind one can
+   * go while it is pressed.** Untick the last stray with `Other` pressed and that chip is gone on
+   * the next render: the radiogroup is left with no `aria-checked="true"` rung at all, over a list
+   * saying *No card in this deck matches* — a filter nothing on screen can turn off, which is the
+   * shape of thing a reader reports as the dialog having broken. `Named` at zero is the milder
+   * version of it, since that rung is drawn at zero and merely empties the list.
+   *
+   * **Read here rather than written back**, which is `DeckEditor`'s rule for a `defaultCategoryId`
+   * naming a pile the deck no longer has: there is nothing to repair — the reader's press was
+   * legal when they made it — so the fallback is a *read*, and `All` is where the list already is.
+   */
+  const activeChip = chips.some((c) => c.key === chip) ? chip : ALL_CHIP;
 
   const rows = offered.filter(
     (row) =>
       (needle === "" || row.name.toLowerCase().includes(needle)) &&
-      (chip === ALL_CHIP ||
-        (chip === NAMED_CHIP ? namedIds.has(row.oracleId) : row.typeBucket.toLowerCase() === chip)),
+      (activeChip === ALL_CHIP ||
+        (activeChip === NAMED_CHIP
+          ? namedIds.has(row.oracleId)
+          : row.typeBucket.toLowerCase() === activeChip)),
   );
 
   return (
@@ -231,7 +267,7 @@ function Picker({
                 key={rung.key}
                 type="button"
                 role="radio"
-                aria-checked={chip === rung.key}
+                aria-checked={activeChip === rung.key}
                 // **Named outright, because the visible name does not survive being computed.**
                 // The label and the count are two elements separated by a `gap`, which is CSS and
                 // not a text node — so the accessible name concatenates to `Land1`, which a screen
@@ -244,7 +280,7 @@ function Picker({
                 className={cn(
                   "flex h-8 shrink-0 items-center gap-1.5 rounded-md border px-3 text-xs",
                   "transition-colors duration-150 motion-reduce:transition-none",
-                  chip === rung.key
+                  activeChip === rung.key
                     ? "border-accent text-accent"
                     : "border-border text-dim hover:border-accent hover:text-accent",
                   FOCUS,
@@ -329,14 +365,23 @@ function Picker({
 /**
  * One card the note may name: whether it names it, what the card is, and how many the deck holds.
  *
- * **A stray is the same row with two of its three facts withheld.** The synthesised choice carries
+ * **A stray is the same row with three of its facts withheld.** The synthesised choice carries
  * `setCode: ""`, `collectorNumber: ""` and `copies: 0`, and none of those is a fact about the
- * card — so drawing them prints a bare ` · ` and a `0×`, both of which read as statements the app
- * is in no position to make. The bucket is the third and the one most easily missed: `Other` is
- * what {@link OTHER} means for a row whose printing has gone, which is true enough for a chip and
- * is *not* a type anybody assigned this card. So the whole line is replaced for a stray by the one
- * thing that is true of it — {@link CUT_FROM_DECK}, which is also what explains the empty frame
- * beside it.
+ * card: drawn, they are a bare ` · `, a `0×` and an `sr-only` twin saying the deck holds none of
+ * it.
+ *
+ * **The third is the one most easily missed, because guarding the other two leaves it standing.**
+ * `typeBucket` is {@link OTHER}, which a `DeckNoteCard` never said — it carries no type line at
+ * all — so a row guarded only on `setCode !== ""` and `copies > 0` reads `Goblin PiledriverOther`:
+ * a bucket nobody assigned, printed as though it were the card's own. So the whole line is
+ * replaced for a stray by the one thing that is true of it, {@link CUT_FROM_DECK}.
+ *
+ * **The frame beside it is usually a real picture, and that is worth stating because the opposite
+ * is the natural guess.** `attachments_by_note` (`src-tauri/src/deck_notes.rs`) resolves a printing
+ * over the *whole corpus* — `ORDER BY (dc.card_id IS NULL), c.id`, so a printing the deck holds
+ * first and any printing otherwise — so a card cut from the deck keeps its `cardId` **and** its
+ * `imageUris`. A deck row leaving does not take the art with it. `cardId` is absent, and the frame
+ * therefore empty, only for the orphan whose oracle id the corpus knows no printing of at all.
  *
  * The guard is `stray` and never `row.setCode !== ""`: the sentinels are the symptom and being cut
  * from the deck is the reason, and a row that guarded on the symptom would silently start drawing
@@ -356,6 +401,10 @@ function Row({
   stray: boolean;
   onToggle: (on: boolean) => void;
 }): JSX.Element {
+  // **`=== ""` and not the brief's `=== null`**, which could not compile: `NoteCardChoice.cardId`
+  // is a `string`, so {@link Picker}'s `strays` spells a missing printing `?? ""`. The branch is
+  // reached only by the orphan the corpus knows no printing of — see this component's doc for why
+  // a card merely *cut from the deck* still has one.
   const art =
     row.cardId === "" ? null : cardArtSrc(cardImageUrl(row.cardId, 0, "art"), row.imageUris?.art);
 
@@ -392,8 +441,9 @@ function Row({
             `draggable={false}`, which is the pull dialog's arrangement for the pull dialog's
             reasons. Through `CardImage`, never a bare `<img>`: this is a *slot*, and a browser
             paints an `<img>`'s last decoded frame until the new src decodes, so the picture would
-            lag the name by the length of the fetch. A stray whose `cardId` went with the deck row
-            draws the empty frame rather than no frame, so the column of names stays a column. */}
+            lag the name by the length of the fetch. A stray keeps its picture, so this frame is
+            full on the ordinary one and empty only for an orphan — and the empty box is *drawn*
+            rather than omitted, so the column of names stays a column either way. */}
         <span
           aria-hidden="true"
           className="mt-0.5 h-8 w-11 shrink-0 overflow-hidden rounded border border-border bg-surface"

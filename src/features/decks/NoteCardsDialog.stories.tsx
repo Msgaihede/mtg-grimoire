@@ -119,9 +119,12 @@ const meta = {
           "thing a note can name, so a `Land` chip beside a list showing one Land row would be " +
           "two numbers for one fact. Each chip spells its count into its own `aria-label`, " +
           "because a label and a count separated by a CSS `gap` compute to `Land1`.\n\n" +
-          "**A card the deck no longer holds is still named.** It is drawn at the head of the " +
-          "list, ticked, with an empty frame — and with the one thing that is true of it where " +
-          "its printing would have been, rather than a lone separator and a `0×`.",
+          "**A card the deck no longer holds is still named**, and it keeps its picture. " +
+          "`attachments_by_note` resolves a printing over the *whole corpus*, so cutting a card " +
+          "takes its deck row and not its art — the row is drawn at the head of the list, " +
+          "ticked, with its crop, and with the one thing that is true of it where its printing " +
+          "would have been. An empty frame is the rarer shape: an orphan the corpus knows no " +
+          "printing of at all.",
       },
     },
   },
@@ -173,6 +176,12 @@ export const NothingNamed: Story = {
     await expect(args.onAttach).toHaveBeenCalledWith("o-forest");
     await expect(canvas.queryByRole("button", { name: "Save" })).toBeNull();
     await expect(canvas.queryByRole("button", { name: "Cancel" })).toBeNull();
+
+    // The needle, in its *positive* half. A story that only ever asserted an absence would be
+    // satisfied by a filter that hides everything, which is what a broken needle does.
+    await userEvent.type(canvas.getByRole("searchbox"), "lot");
+    await expect(canvas.getByRole("checkbox", { name: /Black Lotus/ })).toBeInTheDocument();
+    await expect(canvas.queryByRole("checkbox", { name: /Forest/ })).toBeNull();
   },
 };
 
@@ -231,14 +240,21 @@ export const NarrowedToALand: Story = {
 };
 
 /**
- * **A card the deck no longer holds, drawn at the head of the list and still ticked.**
+ * **A card the deck no longer holds, drawn at the head of the list, still ticked — and still
+ * showing its picture.**
  *
  * This is the footer's standing sentence made visible: cutting a card never takes the note with
- * it. The row is synthesised from the `DeckNoteCard` the note carries, which has no printing at
- * all — so `setCode`, `collectorNumber` and `copies` are empty strings and a zero, and none of
- * them is a fact about the card. Unguarded the row reads `Goblin Piledriver · Other0×`: a lone
- * separator, a bucket nobody assigned, and a count of nothing. It says what is true of it
- * instead, which is also what explains the empty frame beside it.
+ * it. **The crop is the half that surprises**, and it is why this story carries a corpus card id
+ * rather than a bare name: `attachments_by_note` (`src-tauri/src/deck_notes.rs`) resolves each
+ * named card's printing over the *whole corpus* — a printing the deck holds first, any printing
+ * otherwise — so a `DeckNoteCard` for a cut card still carries a `cardId` and its `imageUris`.
+ * {@link NamesACardWithNoPrinting} is the other shape, and it is the rare one.
+ *
+ * What the note genuinely has no answer for is the **printing, the type and the count**, so
+ * `setCode`, `collectorNumber` and `copies` are synthesised as empty strings and a zero. Drawn,
+ * they are a lone separator and a `0×`; guarded on only those two, the bucket nobody assigned is
+ * still standing and the row reads `Ancient TombOther`. So the whole line is replaced by the one
+ * thing that is true of it.
  *
  * It is at the **head** so the unticking press is reachable without hunting: the deck's own cards
  * are sorted by name and a cut card sorts nowhere in particular.
@@ -246,13 +262,19 @@ export const NarrowedToALand: Story = {
 export const NamesACardTheDeckCut: Story = {
   args: {
     named: [
-      namedCard({ oracleId: "o-piledriver", name: "Goblin Piledriver" }),
+      // A printing the workbench corpus has and {@link ATTACHABLE} does not — which is exactly
+      // what the backend hands back for a card this deck has stopped playing.
+      namedCard({
+        oracleId: "o-tomb",
+        name: "Ancient Tomb",
+        cardId: "30e401e3-282b-4524-87e1-c6cd50cd6d00",
+      }),
       namedCard({ oracleId: "o-bolt", name: "Lightning Bolt", cardId: ATTACHABLE[4]!.cardId }),
     ],
   },
   play: async ({ canvas, args }) => {
     const stray = await canvas.findByRole("checkbox", {
-      name: "Name Goblin Piledriver in Mana base",
+      name: "Name Ancient Tomb in Mana base",
     });
     await expect(stray).toBeChecked();
 
@@ -261,12 +283,44 @@ export const NamesACardTheDeckCut: Story = {
     await expect(row.textContent).not.toContain("·");
     await expect(row.textContent).not.toContain("×");
 
+    // The picture is there, which is the whole point of this fixture carrying a corpus id.
+    await expect(row.querySelector("img")).not.toBeNull();
+
     // First in the list, above every card the deck does hold.
     const rows = canvas.getAllByRole("checkbox");
     await expect(rows[0]).toBe(stray);
 
     // And the one press it is there for still works.
     await userEvent.click(stray);
-    await expect(args.onDetach).toHaveBeenCalledWith("o-piledriver");
+    await expect(args.onDetach).toHaveBeenCalledWith("o-tomb");
+  },
+};
+
+/**
+ * **The one stray whose frame really is empty: a card the corpus knows no printing of.**
+ *
+ * `DeckNoteCard.cardId` is null only when `attachments_by_note`'s corpus-wide subquery found
+ * nothing at all — never because a deck row went, which is {@link NamesACardTheDeckCut}. In the
+ * app that is an oracle id the corpus has stopped carrying; here it is a `namedCard` with no id.
+ *
+ * **The box is still drawn.** An omitted frame would put this row's name in a different column
+ * from every other row's, so the empty bordered box is the mark of a missing picture rather than
+ * a gap in the row — which is also the whole reason this frame carries a `border border-border`
+ * where `PullFromCollectionDialog`'s does not.
+ */
+export const NamesACardWithNoPrinting: Story = {
+  args: {
+    named: [namedCard({ oracleId: "o-piledriver", name: "Goblin Piledriver" })],
+  },
+  play: async ({ canvas }) => {
+    const orphan = await canvas.findByRole("checkbox", {
+      name: "Name Goblin Piledriver in Mana base",
+    });
+    await expect(orphan).toBeChecked();
+
+    const row = orphan.closest("li")!;
+    await expect(row).toHaveTextContent("No longer in this deck");
+    await expect(row.querySelector("img")).toBeNull();
+    await expect(row.querySelector('[aria-hidden="true"]')).not.toBeNull();
   },
 };
