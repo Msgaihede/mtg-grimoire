@@ -5,12 +5,15 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
 - Data dir is `<exe dir>/data`, falling back to `%APPDATA%/com.mtggrimoire.app/data`.
   **Under `tauri dev` the exe is `src-tauri/target/debug/`, so the databases are
   `src-tauri/target/debug/data/user.db` and `corpus.db`** — not `src-tauri/data/`, and
-  **not one file since schema 27**: the reader's **twenty-nine** tables are `main` and the
+  **not one file since schema 27**: the reader's **thirty** tables are `main` and the
   rebuildable **twenty-five** are `ATTACH`ed as `corpus`. (Eighteen against twenty-five at the
   split itself; the user side is what has grown since, and this line said eighteen until user
-  schema v43, twenty-seven until v44 and twenty-eight until v45 — a count in prose that no build checks, which is the rot
-  this file's own header warns about. Both halves are `grep -c 'Side::User'` and
-  `grep -c 'Side::Corpus'` over `schema::TABLES`; count them, never add to the number above.)
+  schema v43, twenty-seven until v44, twenty-eight until v45 and twenty-nine until v46 — a count in prose that no build checks, which is the rot
+  this file's own header warns about. Both halves are
+  `grep -c '^\s*("[a-z_]*", Side::User),'` and the same with `Side::Corpus` over
+  `schema.rs`; **a bare `grep -c 'Side::User'` over-counts**, because `mod tests` matches the
+  enum by name four more times. Count them, never add to the number above; `src/lib/userTables.json`
+  is the same thirty and a Rust test holds the two equal.)
   A folder still holding a single
   `mtg.db` is converted at the next launch by `split::convert`, which never touches that
   file until the new one is safely renamed into place. Delete that `data/` folder to force
@@ -568,8 +571,9 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   **v29 is sync's own rung and it is the widest one on either ladder.** It adds `sync_uid` with a
   unique index to **the eleven tables that were on the census then** — this line said "all twelve"
   until 2026-09-07 and was wrong in both directions, since the rung's own `ALTER TABLE`s are
-  eleven (spelled out below) and the census is **fifteen** now: `device_names` joined
-  at v31, `deck_tokens` at v37, and `deck_notes` and `deck_note_cards` at v43, and each carries
+  eleven (spelled out below) and the census is **sixteen** now: `device_names` joined
+  at v31, `deck_tokens` at v37, `deck_notes` and `deck_note_cards` at v43, and `sticky_notes` at
+  v46, and each carries
   the column in its own `CREATE TABLE` rather than through this rung. It also adds `needs_review` to the three folder tables,
   the op log (`sync_ops`, `sync_clock`, `sync_state`, `sync_peers`), and it **rebuilds
   `error_log`** so `source` can be `'relay'` — that vocabulary is inside a `CHECK` and SQLite
@@ -960,6 +964,32 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   ~10 µs a row weighed — **2.4 s** to weigh 104 000 already-thinned rows and delete nothing — so the
   day's first snapshot weighs only the rows that crossed the 35-day line since the previous
   snapshot day, which for a daily reader is one day's rows.
+  **v46 adds `sticky_notes`, the reader's own prose on the home page** (2026-09-20,
+  [issue #479](https://github.com/Msgaihede/mtg-grimoire/issues/479)) — one table and one index,
+  `idx_sticky_notes_uid`, and the **thirtieth** user table: `(id, title, body, color, pinned,
+  sort_order, created_at, updated_at, sync_uid)`, drawn by the home page's tenth widget kind,
+  `stickyNotes`. The head shape is now thirty tables and forty-seven indexes — both re-counted off
+  the `USER_SCHEMA_SQL` literal in the commit that moved them, never reached by adding one, and the
+  `want.len()` beside them is 80 rather than 81 because an `INTEGER PRIMARY KEY` brings no
+  `sqlite_autoindex` row.
+  **It is synced, where the two rungs above it are not**, and the difference is the only thing
+  that decides it: `activity` and `price_snapshots` are machine-generated, while this is typing —
+  a reader who writes a note on the desktop and finds it missing on the laptop has lost prose
+  rather than a preference, which is v43's argument for `deck_notes` verbatim. **No grain index,
+  uid only**, also `deck_notes`': two devices each typing a note about the same thing must stay
+  two notes. It is the **sixteenth** synced table; [sync.md](sync.md) is the record, including
+  the correction that its empty `parents` is the *fourth* on that census and not the first.
+  ⚠️ **`color` carries no CHECK, and that is a sync decision rather than laxity** — but the rule
+  is *not* that a synced column may not carry one, since `collection_entries.condition`,
+  `deck_cards.variant`, `deck_tokens.state` and five more enumerated columns on synced tables do.
+  Those vocabularies are Magic's or this app's own model and
+  only a rung adds to them, where **a note's colour is a palette the page owns and expects to
+  grow**: a constraint here would make a build that adds a sixth colour emit rows an older build
+  refuses *at apply*, and a refused row is a failed apply rather than a note that arrives looking
+  wrong. Rust stores the string it is handed; the page maps an unknown word to `slate`.
+  **`sort_order` is monotonic and never dense**: a delete leaves a hole, `reorder_notes` lets an
+  unknown id consume a position, and neither is repaired — the column answers *before or after*
+  and nothing more.
   **v25 makes the collection's folders the physical ledger of where every card sits.** It inserts
   the single `Recently removed` folder and one `deck` folder per deck (**archived decks
   included** — archiving is a flag and an archived deck still holds its cards), converts every

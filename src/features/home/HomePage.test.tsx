@@ -3,7 +3,9 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
+import { DEFAULT_SECTION_ZOOMS, DEFAULT_ZOOM, ZOOM_SECTIONS } from "@/lib/cardZoom";
 import { ipc, type HomeLayout, type HomeWidget } from "@/lib/ipc";
+import { useAppStore } from "@/lib/store";
 import type { WidgetFit } from "./fit";
 import { CUSTOMIZE_HINT, HOME_CANVAS_ATTR, HOME_WIDGET_ATTR, HomePage } from "./HomePage";
 import { HOME_LAYOUT_KEY } from "./useHomeLayout";
@@ -14,8 +16,8 @@ import { DEFAULT_LAYOUT, widgetMeta, type WidgetKind } from "./widgets";
  * widget body stubbed**, so this file is about the page.
  *
  * What a body draws, what it reads and what it does with the box it is given is each body's own
- * suite's; nine of them fetching through `ipc` here would make every assertion below wait on nine
- * queries it is not about. The stub records what the page *handed* each body — the fit, `editing`,
+ * suite's; every one of them fetching through `ipc` here would make every assertion below wait on a
+ * queue of queries it is not about. The stub records what the page *handed* each body — the fit, `editing`,
  * `still` — which is the page's half of that contract and the half only this file can see.
  *
  * **The arrangement is seeded into the query cache rather than mocked into `ipc`**, `HOME_LAYOUT_KEY`
@@ -57,6 +59,22 @@ vi.mock("./widgets/WishlistValueWidget", () => ({ WishlistValueWidget: stubs.bod
 vi.mock("./widgets/RecentCardsWidget", () => ({ RecentCardsWidget: stubs.body }));
 vi.mock("./widgets/SetCompletionWidget", () => ({ SetCompletionWidget: stubs.body }));
 vi.mock("./widgets/PriceMoversWidget", () => ({ PriceMoversWidget: stubs.body }));
+vi.mock("./widgets/StickyNotesWidget", () => ({ StickyNotesWidget: stubs.body }));
+
+/**
+ * **The one mock whose settings stub says something.**
+ *
+ * Both of the page's switches are over `widget.kind`, which is a free `string` with a `default`
+ * arm — so a missing `case` compiles, type-checks and draws `UnknownWidgetBody` in silence. The
+ * shared settings stub renders `null`, which cannot tell "drawn" from "not drawn"; this one is a
+ * sentence the test near the top of this file looks for. **Not `"New printings settings"`**: the
+ * popover's own heading is `` `${title} settings` ``, so that wording matches two elements and the
+ * query throws for a reason that has nothing to do with the wiring.
+ */
+vi.mock("./widgets/NewPrintingsWidget", () => ({
+  NewPrintingsWidget: stubs.body,
+  NewPrintingsWidgetSettings: () => "the new printings pickers",
+}));
 
 /* ------------------------------------------------------------ the measured canvas ------- */
 
@@ -93,6 +111,9 @@ beforeEach(() => {
     },
   });
   write = spyOnWrite();
+  // A **copy** of `DEFAULT_SECTION_ZOOMS`, never the constant itself — `store.ts` says why: a case
+  // that wrote through it would hand every later suite a dashboard somebody else had zoomed.
+  useAppStore.setState({ cardZoom: { ...DEFAULT_SECTION_ZOOMS }, zoomPulse: 0, zoomSection: null });
 });
 
 afterEach(() => {
@@ -187,6 +208,33 @@ describe("HomePage", () => {
       ).toBeInTheDocument();
     }
     expect(screen.getAllByRole("region")).toHaveLength(DEFAULT_LAYOUT.widgets.length);
+  });
+
+  /**
+   * **The one wiring on this page that nothing but a test can catch.**
+   *
+   * Both switches — {@link renderBody} and {@link renderExtraSettings} — are over `widget.kind`,
+   * which is a free `string` and has a `default` arm on purpose (a kind a newer build wrote must
+   * draw *something*). So a `case` this build owns and forgets is not a type error, not a lint
+   * error and not a failing test: the card simply draws the *this came from a newer build*
+   * placeholder for a kind this build can draw, and the settings popover simply has no section in
+   * it. Both halves are asserted here, and both are asserted **negatively as well** — the
+   * placeholder's own sentence must be absent — because "the body rendered" and "the right body
+   * rendered" are two different claims when a fallback exists.
+   *
+   * Verified by deleting each `case` in turn: the first expectation fails without the `renderBody`
+   * arm and the last without the `renderExtraSettings` one.
+   */
+  it("draws the new printings body and its settings through the page's two switches", async () => {
+    const user = userEvent.setup();
+    mount(layoutOf(widget({ id: "np", kind: "newPrintings", w: 3, h: 3 })));
+
+    expect(screen.getByText("Body of np")).toBeInTheDocument();
+    expect(screen.queryByText(/came from a newer version/)).toBeNull();
+
+    await customize(user);
+    await user.click(screen.getByRole("button", { name: "Settings for New printings" }));
+    expect(await screen.findByText("the new printings pickers")).toBeInTheDocument();
   });
 
   it("places each box on its own cells and hands its body the footprint in pixels", () => {
@@ -289,8 +337,8 @@ describe("HomePage", () => {
 
   /**
    * **A preview is the real body, told it is still.** Still is the body's promise to write nothing
-   * and open nothing, and the preview box is out of the accessibility tree — so nine pictures of
-   * widgets are not nine more regions with nine sets of controls.
+   * and open nothing, and the preview box is out of the accessibility tree — so a catalogue of
+   * pictures of widgets is not that many more regions with that many sets of controls.
    */
   it("draws each catalogue preview as a still body outside the accessibility tree", async () => {
     const user = userEvent.setup();
@@ -453,5 +501,176 @@ describe("HomePage", () => {
     // likely to want off the page.
     await customize(user);
     expect(screen.getByRole("button", { name: `Remove ${titleOf("timeMachine")}` })).toBeInTheDocument();
+  });
+
+  /* ----------------------------------------------------------------------- the zoom ------- */
+
+  /**
+   * Ctrl+wheel on the dashboard, and the two coordinate spaces it puts the page in.
+   *
+   * **1374px is chosen so both readings of the canvas are whole numbers**, which is the only reason
+   * a width this specific appears here: at 100% it is eleven columns of exactly 114px, and at 150%
+   * its local canvas is 916px — eight columns of exactly 104px, the grid's own `TARGET_CELL`. Every
+   * figure below is one of those four, so a failure names which of them moved rather than landing
+   * three decimals from an expectation nobody can read.
+   *
+   * **jsdom implements no `zoom` at all** — it parses the property into the style object and lays
+   * nothing out with it. So these cases are about the half of the mechanism that is arithmetic: the
+   * division that turns a measured canvas into a local one, and the multiplication that turns
+   * pointer travel back. What the property itself does to a painted box was measured in a browser
+   * (see `HomePage.tsx`'s module doc) and cannot be asserted here.
+   */
+  describe("the zoom", () => {
+    /** The box carrying the CSS `zoom` — the canvas's only child. */
+    function gridBox(container: HTMLElement): HTMLElement {
+      const canvas = container.querySelector<HTMLElement>(`[${HOME_CANVAS_ATTR}]`);
+      if (canvas === null) throw new Error("no canvas");
+      const box = canvas.firstElementChild;
+      if (!(box instanceof HTMLElement)) throw new Error("the canvas has no zoom box");
+      return box;
+    }
+
+    /** A ctrl+wheel over the page — the gesture, not a store write. Returns the event, so a case
+     *  can ask whether the page took it off WebView2. */
+    function ctrlWheel(container: HTMLElement, deltaY: number): WheelEvent {
+      const section = container.querySelector("section");
+      if (section === null) throw new Error("no page section");
+      const event = new WheelEvent("wheel", { bubbles: true, cancelable: true, ctrlKey: true, deltaY });
+      act(() => {
+        section.dispatchEvent(event);
+      });
+      return event;
+    }
+
+    function zoomTo(zoom: number): void {
+      act(() => useAppStore.setState({ cardZoom: { ...DEFAULT_SECTION_ZOOMS, home: zoom } }));
+    }
+
+    /**
+     * **The gesture is caught on the whole page, and it steps this section alone.**
+     *
+     * `preventDefault` is the load-bearing half: without it WebView2 applies its own page zoom on
+     * top, scaling the sidebar and the ribbon out from under a reader who was pointing here.
+     */
+    it("steps the home zoom on a ctrl+wheel anywhere on the page, and takes the gesture off the window", () => {
+      const { container } = mount(layoutOf(A, B), 1374);
+
+      const event = ctrlWheel(container, -100);
+
+      expect(event.defaultPrevented).toBe(true);
+      expect(useAppStore.getState().cardZoom.home).toBe(1.1);
+
+      ctrlWheel(container, 100);
+      ctrlWheel(container, 100);
+      expect(useAppStore.getState().cardZoom.home).toBe(0.9);
+
+      // The other walls are swept out of `ZOOM_SECTIONS` rather than named, so a section added
+      // after this was written is covered by it rather than quietly left out.
+      for (const section of ZOOM_SECTIONS.filter((s) => s !== "home")) {
+        expect(useAppStore.getState().cardZoom[section]).toBe(DEFAULT_ZOOM);
+      }
+    });
+
+    /** A wheel with no modifier is the page scrolling, and must reach the scroller untouched. */
+    it("leaves a wheel without ctrl alone", () => {
+      const { container } = mount(layoutOf(A), 1374);
+      const section = container.querySelector("section");
+      const event = new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -100 });
+      act(() => void section?.dispatchEvent(event));
+
+      expect(event.defaultPrevented).toBe(false);
+      expect(useAppStore.getState().cardZoom.home).toBe(DEFAULT_ZOOM);
+    });
+
+    /**
+     * **The zoom goes on the grid box and never on the canvas**, which is what keeps the measured
+     * width in true pixels — the division below has nothing to divide if the ruler is scaled too.
+     */
+    it("carries the zoom on the grid box, leaving the measured canvas unscaled", () => {
+      const { container } = mount(layoutOf(A), 1374);
+      const canvas = container.querySelector<HTMLElement>(`[${HOME_CANVAS_ATTR}]`);
+
+      expect(canvas?.style.zoom).toBe("");
+      expect(gridBox(container).style.zoom).toBe("1");
+
+      zoomTo(1.5);
+      expect(canvas?.style.zoom).toBe("");
+      expect(gridBox(container).style.zoom).toBe("1.5");
+    });
+
+    /**
+     * **The whole of what a zoom does to the arrangement**: the canvas is asked about in local
+     * pixels, so the columns fall and the cells hold their size — and the stored document is not
+     * touched, exactly as a narrowed window does not touch it.
+     */
+    it("takes columns away as the zoom goes up, and writes nothing doing it", () => {
+      const { container } = mount(layoutOf(widget({ id: "a", kind: "decks", x: 9, w: 2 })), 1374);
+
+      // 1374px is eleven columns of 114px, so x: 9 is the last pair that fits and sits as stored.
+      expect(boxFor(container, "a").style.gridColumn).toBe("10 / span 2");
+      expect((handed.get("a")?.fit as WidgetFit).widthPx).toBe(2 * 114 + 12);
+
+      zoomTo(1.5);
+
+      // 916 local px is eight columns of 104 — `normalise` pulls x: 9 in to the last free pair.
+      expect(boxFor(container, "a").style.gridColumn).toBe("7 / span 2");
+      expect((handed.get("a")?.fit as WidgetFit).widthPx).toBe(2 * 104 + 12);
+      expect(storedWidget("a")?.x).toBe(9);
+      expect(write).not.toHaveBeenCalled();
+
+      // And back: a zoom is a way of looking at the page, not a change to it.
+      zoomTo(1);
+      expect(boxFor(container, "a").style.gridColumn).toBe("10 / span 2");
+    });
+
+    /**
+     * **The correction, and the one thing here that would fail silently without a case.**
+     *
+     * A pointer's `clientX` is viewport pixels and a cell is the grid's own, so one cell of travel
+     * at 150% is 174px on screen against 116 in the grid. Divided by the bare step, this drag would
+     * read as one and a half cells and round to two.
+     */
+    it("reads a drag in painted pixels and lands it on the cell the pointer is over", async () => {
+      const user = userEvent.setup();
+      const { container } = mount(layoutOf(widget({ id: "a", kind: "future-a", x: 0, w: 2 })), 1374);
+      zoomTo(1.5);
+      await customize(user);
+
+      const card = screen.getByRole("region", { name: titleOf("future-a") });
+      fireEvent(card, new MouseEvent("pointerdown", { bubbles: true, button: 0, clientX: 0, clientY: 0 }));
+      // One cell: 104 local px and a 12px gap, painted at 150%.
+      fireEvent(window, new MouseEvent("pointermove", { clientX: 116 * 1.5, clientY: 0 }));
+
+      // The card follows the pointer, and follows it by the *local* offset — the transform is
+      // applied inside the zoom, so an undivided one would carry it half a cell too far.
+      expect(boxFor(container, "a").style.transform).toBe("translate(116px, 0px)");
+      fireEvent(window, new MouseEvent("pointerup"));
+
+      await waitFor(() => expect(storedWidget("a")).toEqual(expect.objectContaining({ x: 1, y: 0 })));
+    });
+
+    /**
+     * **The stack is reachable from both directions**, which is `HomePage.tsx`'s reading of
+     * `CELL_MIN`: the floor is about whether the grid has room to be a grid in its own units, and
+     * the zoom is what changes how many of those units there are.
+     */
+    it("stacks a grid zoomed past its column floor, and lays a stacked page back out on a zoom out", () => {
+      // 1032px is nine columns of 104px — a grid.
+      const { container } = mount(layoutOf(A, B), 1032);
+      expect(boxFor(container, "a").style.gridColumn).toBe("1 / span 2");
+
+      // 516 local px cannot go under eight columns, so it goes under a readable cell instead: 54px.
+      zoomTo(2);
+      expect(boxFor(container, "a").style.gridColumn).toBe("");
+
+      // The other way. 600px stacks at life size — eight columns of 64.5px — and zooming out buys
+      // the local canvas the width the window never had.
+      zoomTo(1);
+      resizeCanvas(600);
+      expect(boxFor(container, "a").style.gridColumn).toBe("");
+
+      zoomTo(0.5);
+      expect(boxFor(container, "a").style.gridColumn).toBe("1 / span 2");
+    });
   });
 });

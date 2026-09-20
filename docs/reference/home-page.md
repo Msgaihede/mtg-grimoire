@@ -122,7 +122,17 @@ ever chosen. **Only an absent row and an unparseable one are the default**;
 `layout.test.ts`'s *"keeps an empty widget list rather than restoring the default"* pins the
 webview's, because both sides have a fallback and either alone would undo the reader's choice.
 
-## 3. The nine widgets
+## 3. The ten widgets
+
+⚠️ **The catalogue and the default layout are two different lists, and the heading above counts
+the first.** `WIDGET_META` is what the Add-widget catalogue offers; `DEFAULT_LAYOUT` is what a
+first launch is handed. A kind may be in the catalogue and not in the layout, and three now are:
+`wishlistValue`, which has never been on a first launch, and `newPrintings` and `stickyNotes`,
+which landed within a day of each other and joined the catalogue alone because either one would
+break the rectangle. So the sentence below still names **eight** widgets in an eight-by-seven
+rectangle and is correct as written, and `DEFAULT_LAYOUT`'s three copies — `widgets.ts`,
+`home.rs` and the Storybook fake — did not move. Counting the table above and editing that literal
+to match is the mistake this note exists to stop.
 
 The default layout fills an eight-by-seven rectangle exactly, so a first launch shows no hole:
 `summary` 0,0 4×2 · `recentCards` 4,0 4×2 · `decks` 0,2 3×3 · `activity` 3,2 3×3 ·
@@ -132,7 +142,8 @@ two sets of decks is a layout to build rather than a case to refuse, and `newWid
 that does not collide.
 
 **Every kind declares what a reader can change about it in `widgets.ts`**: a default, minimum and
-maximum footprint, `picks` (one of several) and `toggles` (on/off, stored only as `false`), and the
+maximum footprint, `picks` (one of several) and `toggles` (on/off, **storing nothing at their own default**, which
+is on unless the row names `dflt: false`), and the
 `chip` — which pick's label is drawn beside a wide card's title. The settings popover is built from
 that row, so a kind grows a setting by adding a row rather than by the panel learning a special
 case. Three settings belong to every kind and are not rows: the footprint (two size steppers), the
@@ -150,6 +161,8 @@ stores nothing). All of it lives in `config` — the extension rule below.
 | `recentCards` | the cards this device opened last, as a strip of card faces that open the card | `{ count: 4·6·8, names }` |
 | `setCompletion` | every set the reader holds a card from, and how much of it | `{ sort: complete·cards·name, bars }` |
 | `priceMovers` | owned printings whose price moved most over a window | `{ window: 7d·30d·all, direction: both·up·down }` |
+| `stickyNotes` | the reader's own notes, as a board of tinted tiles or a pad of stacked sheets | `{ layout: board·pad, dates, strip, pinned }` |
+| `newPrintings` | reprints of cards the watched decks hold, in release-day groups | `{ scope: all·chosen, deckIds, window: 30·90·365, langs: en·all·chosen, langIds, virtual, theory, basics }` |
 
 **A config written before the grid keeps its meaning.** `dimension` and `limit` kept their keys
 rather than taking the design's `scope`, and a `decks` config holding pins but no `scope` reads as
@@ -184,12 +197,24 @@ invalidates. The dashboard therefore refreshes after an add, a move, a rename or
 **no mutation anywhere learning a new key**, where a `["home", …]` root would have needed every one
 of those writes to grow a line and a `staleTime` would have hidden whichever was forgotten.
 
-**The one exception is `activityKey`**, under `["activity"]` — a root nothing invalidates, because
-there is no activity mutation: the feed is a record of every *other* table's writes.
-`ActivityWidget` bridges it itself, and **both halves are load-bearing**: it subscribes to the
-query cache and turns an `invalidate` action under any of the three write roots into an
-invalidation of its own key, *and* it holds a marker query under each root so the signal exists at
-all — `invalidateQueries` dispatches nothing when it matches no cached query.
+**The exceptions are the keys whose table no other query in this app reads**, and there is no
+number to write down here: `keys.ts`'s own doc comments are the list, and each one says at its
+declaration why the rule had nothing to point at. `activityKey` is the interesting one and the
+rest are not.
+
+**`activityKey`**, under `["activity"]`, is a root nothing invalidates, because there is no
+activity mutation: the feed is a record of every *other* table's writes. `ActivityWidget` bridges
+it itself, and **both halves are load-bearing**: it subscribes to the query cache and turns an
+`invalidate` action under any of the three write roots into an invalidation of its own key, *and*
+it holds a marker query under each root so the signal exists at all — `invalidateQueries`
+dispatches nothing when it matches no cached query.
+
+**`recentCardsKey` and `stickyNotesKey` need none of that machinery**, and the difference is worth
+having: every writer of either table is in one file, so the mutation that changes the data
+invalidates the key beside it. `stickyNotesKey` is `["stickyNotes"]`, the exact value
+`crossWindow.ts` maps `sticky_notes` to, so a note written in the other window lands here as
+well — and filing it under `["collection"]` to obey the rule would have re-read every note after
+each add to the binder while leaving it stale after the four presses that actually change one.
 
 ## 4. The grid is measured in JavaScript, and still not a container query
 
@@ -224,6 +249,98 @@ not `overflow-hidden` — the settings and remove popovers anchor inside its tit
 its edge, so clipping lives on the body scroller alone; and a grid box has **no z-index and no
 transform at rest**, so a card's `LAYER.popup` panel paints over the cards after it. Only the box
 being dragged is transformed and raised, and no popover is open while it is.
+
+### Ctrl+scroll zooms it, and it is the app's only CSS `zoom` (2026-09-20, issue #480)
+
+`home` is a `ZOOM_SECTIONS` entry like any other — same sixteen-stop ladder, same badge, same
+`app_meta` row, same trailing 400ms write — and the **only** one that is not a multiplier on a
+tile's width. It could not be. Every other section draws pictures, where `scaled(170, zoom)` *is*
+the question; a widget is a box of type, and a bigger box at the same type size is not a zoomed
+dashboard but the same dashboard showing **more** small rows. That is the reverse of the gesture: a
+reader rolling the wheel forward is asking for less on screen, more legibly.
+
+So the number is spent as a CSS `zoom` on the grid box. Chromium implements it as a **layout**
+scale rather than a paint one — measured in a browser on 2026-09-20, a 900px canvas holding a
+`zoom: 1.5` child lays that child out at **600** local px, paints it at **900**, and a 12px rule
+inside it paints at **18px**. Cells, cards, titles, figures, rows and chips all move together, and
+nothing in `fit.ts` had to learn the word.
+
+**What the page owes it is one division and one multiplication.**
+
+* The canvas is measured **outside** the zoom — the box carrying `HOME_CANVAS_ATTR` is never scaled
+  — and `columnsFor`/`cellFor` are asked about `width / zoom`, the width the grid actually lays out
+  in. **Fewer columns fall straight out of that**, which is the whole of "zooming takes tiles away".
+  Measuring *inside* the zoom would have worked too (`clientWidth` on a zoomed box answers in local
+  units — measured, 600 against a 900px parent), and is refused because it makes the arithmetic
+  depend on a browser behaviour **no test in this repo can see**: jsdom parses `zoom` into the style
+  object and lays nothing out with it. The division is the half that stays testable, and three
+  mutations of it are caught by `HomePage.test.tsx`.
+* A pointer event's `clientX` is in **viewport** pixels while `cell` and `GAP` are in the grid's own,
+  so a drag divides its travel by `step * zoom` and the dragged box's `transform` divides by `zoom`.
+  Without either, a widget dragged at 150% travels half again as many cells as the pointer did —
+  out from under the hand holding it. This is the one thing here that fails *silently*, so it has a
+  case of its own, a mutation behind it, and a live drag below.
+
+**The stack is reachable from both directions, and that is the honest reading of `CELL_MIN`.** The
+floor is not about painted pixels — a reader who zooms out has *asked* for small cells, and refusing
+them would make the gesture's one direction do nothing. It is about whether the grid has room to be
+a grid **in its own units**. The column count bottoms out at `GRID_MIN_COLUMNS`, so past that point
+zooming in cannot take a column away and takes local pixels off every cell instead: eight columns of
+a 900px window are 64px each at 150%, which is a widget body about ten characters wide however large
+the characters are. One widget per row at full width, type at the size asked for, is the right answer
+to that gesture. It runs the other way too — zooming *out* of a window narrow enough to stack at 100%
+widens the local canvas past the floor and lays the grid back out.
+
+**The gesture is caught on the whole page section, not on the canvas**, which is where this departs
+from `DecksPage`. That page puts its listener on the scrolling tiles and deliberately not on the
+view, because a ctrl+wheel over its folder tree is a gesture about navigation chrome. This page has
+no such chrome — a header row of three buttons, and empty desk under the last widget — and a wheel
+that misses the canvas does not do nothing: **it falls through to WebView2's own page zoom**, scaling
+the sidebar, the ribbon and the title bar. Covering the section makes "ctrl+wheel on the dashboard"
+one answer instead of two. (The same `preventDefault` is why this is `useCardZoomGesture` and not an
+`onWheel` prop: React registers `wheel` passively, and a passive listener's `preventDefault` does
+nothing at all.)
+
+**Rust needed no change.** `zoom.rs` stores section name to multiplier and says outright that the
+words are TypeScript's vocabulary; a new section is a new key in a row it already round-trips.
+
+#### Driven in the shipped window, 2026-09-20 (dev build, 1920x1080, 1672px canvas)
+
+| zoom | local canvas | painted canvas | columns | first widget, painted |
+| --- | --- | --- | --- | --- |
+| 0.5 | 3344 | 1672 | **28** | 234x114 |
+| 1 | 1657 | 1657 | **14** | 465x226 |
+| 1.5 | 1105 | 1657 | **9** | 726x354 |
+| 2 | 829 | 1657 | **8** | 817x396 |
+
+Five synthetic ctrl+wheel events on the section stepped 100% to 150% and every one came back
+`defaultPrevented`. `devicePixelRatio` and `visualViewport.scale` both stayed **1** across the
+ladder, which is the measurement that says the *app* did not zoom — the sidebar, the ribbon and the
+title bar are the same size in the 100% and 150% screenshots. A real `Input.dispatchMouseEvent`
+drag of **186px** at 150% — one painted cell, where a local cell is 124px — moved a widget exactly
+**one** row. Undivided it would have moved two, which is the defect the multiplication above exists
+to prevent.
+
+**The trap, and it would read as a bug in this feature.** `getComputedStyle(el).fontSize` on
+anything inside the zoom answers in **local** units — the Summary heading reports `15px` at every
+stop — so a probe that measures type that way concludes the words did not scale. They did: the same
+heading's `getBoundingClientRect().height` went **24 to 36** from 100% to 150%, exactly 1.5x.
+Measure a painted rect, never a computed length.
+
+**The two things that cross the zoom boundary were measured and both are correct.** A widget's
+settings popover is `absolute` inside its own trigger, so it scales with the card and stays put: at
+150% the panel's right edge landed on **896px** against a trigger right edge of **896px**. The
+tooltip is the harder one — `TooltipPanel` is `fixed` at the *app root*, outside the zoom, reading a
+zoomed anchor's `getBoundingClientRect()`. That rect is in painted viewport pixels, so it lines up
+by construction, and it does: hovering the `$3,869.83` figure at 150% put the tip **0px** off the
+anchor's horizontal centre with the standard **8px** gap. The tip itself stays at app scale, which
+is right — a tooltip is chrome, not dashboard content.
+
+**A widget shows the same content at a larger size, not more of it**, and that is the whole point:
+`tier`, `listColumns` and `fitCount` are all decided in local units, which the zoom holds roughly
+constant. Activity drew five rows and two at both stops. (`listColumns` is `round(widthPx / 240)`
+and can still flip at its own boundary — the Decks widget went 1 column to 2 across 348 to 360 local
+px — but that is the existing heuristic being knife-edged, which a 12px window drag does too.)
 
 **The page does no layout arithmetic of its own beyond cells.** A drop is `moveWidget(x, y)` and a
 corner release `resizeWidget(w, h)`, both refusing an occupied or out-of-grid rectangle by
@@ -381,6 +498,16 @@ rules have the least to say about. Recorded as a known consequence and a follow-
 The rung's own DDL carries that sentence as a comment, so the next reader of `schema.rs` meets the
 decision at the table rather than in this file.
 
+**Since user schema v46 the asymmetry sits inside one page, which makes it sharper rather than
+softer.** `sticky_notes` — the other user-authored table this page now reads — **is** synced, and
+the argument that put it there is the argument that keeps `activity` out: a sticky note is
+*typing*, and prose a reader wrote on the desktop that never reaches the laptop is lost work,
+where the feed is a machine-written record of presses that each already sync on their own. So one
+dashboard now shows a paired reader every note from every device and only this device's collection
+lines, and the reason is what the two tables hold rather than any difference in effort. What that
+costs is only that the follow-up above can no longer be read as "the sync layer has not learned a
+new table lately" — it has, and this one was not it.
+
 ## 6. The commands, on both targets
 
 Each goes **in the module its data lives in, with the gate on the wrapper** — `search.rs` is the
@@ -399,10 +526,19 @@ connection-only query, which is exactly what `web::route` answers.
 | `recent_cards` / `record_recent_card` | `recent_cards.rs` | the cards this device opened, newest first (added with the grid, §11) |
 | `set_completion` | `set_completion.rs` | `[{ setCode, name, releasedAt, owned, size }]` (§11) |
 | `price_movers` | `price_history.rs` | `{ movers, since, days }` (§11) |
+| `sticky_notes` and its four writes | `sticky_notes.rs` | every note by `sort_order`, then create, update, delete and reorder (§12) |
 
 Registration is three places, and a command missing from one of them answers `unknown command` at
 runtime with nothing red: `lib.rs`'s module map, `desktop.rs`'s `generate_handler!` list, and
 `web::route`'s `COMMANDS` **plus** a `match` arm.
+
+**The notes module is the first entry in this table that writes**, and the three things it does
+*not* write are each a decision rather than an omission. There is no `touch_deck`, no
+`deck_audit::record` and no `deck_undo::record_step`, because a sticky note belongs to no deck
+and none of those tables has a row shape for one. **And no `activity` row either** — not a
+judgement call: `activity.scope` is `CHECK (scope IN ('collection','wishlist'))`, so there is no
+word to write, and widening a `CHECK` is a table rebuild. The feed is about the collection; a
+sticky note is not in it.
 
 Four rules the money commands keep, each of which exists because breaking it produces a number
 that is wrong and looks right:
@@ -503,6 +639,14 @@ From the design's §9, plus two the build itself turned up:
   which passes `tsc` and vitest and dies only at `verify`. It also means each page reads the field
   as it *renders*, so the widget's two store writes are safe whether React batches them into one
   commit or two.
+* **Whether a CSS `zoom` traps a `fixed` descendant in general is still open.** The two elements
+  that actually cross the boundary on this page were measured at 150% and both are correct (§4),
+  but neither is a `fixed inset-0` scrim *inside* the zoom, and that case was not reachable: the
+  browser used for the 2026-09-20 property probe reported a 0×0 viewport, so a `fixed` rect came
+  back all zeros. **Nothing on the dashboard is on that path today** — no widget opens a dialog, the
+  tooltip panel is `fixed` at the app root outside the zoom, and `AnchoredPopup` says in its own doc
+  that it is anchored and not portalled. The first widget that opens a dialog is the one that has to
+  check, in a real window.
 * **Six refusal sentences are unreachable from Storybook**, and this is a gap in the workbench
   rather than in the feature — each is covered by its widget's own unit test. Measured while
   writing the stories: `.storybook/fake/db.ts`'s `gone` fault is checked in exactly one place
@@ -515,6 +659,20 @@ From the design's §9, plus two the build itself turned up:
   a refused `set_home_layout`, which `WhileTheDatabaseIsBusy` presses Remove under, asserting the
   widget still leaves the page and nothing is said: the optimistic, deliberately-unrolled-back
   write `useHomeLayout` documents.
+* ~~**`sticky_note_reorder` is built and reaches no press.**~~ **Wired the same day**, and the
+  entry is kept because the reason it was ever true is the useful part. The command shipped end to
+  end — the function and its tests in `sticky_notes.rs`, the registration in `lib.rs`,
+  `desktop.rs` and `web/route.rs`, the handler in the Storybook fake, `ipc.stickyNoteReorder` and
+  `reorder` on `useStickyNotes`' API — with **nothing in the UI calling it**, because the
+  affordance it was written for belonged to a third layout: an *Index* list with drag handles,
+  drawn against the design canvas and then rejected. Board and Pad both shipped without a drag and
+  the command outlived the layout that would have pressed it. `stickyNoteDrag.ts` is the press it
+  was missing — a pointer drag onto another tile, and **Ctrl/⌘ with an arrow** for a reader
+  without one, since `dndManager` ships no `KeyboardSensor` and a drag-only reorder would have
+  been half an interaction. **The lesson is the ordering, not the outcome**: plumbing built for a
+  design that is then cut is not dead code and is not a mistake, but it is unreachable until
+  something presses it, and a grep for its callers is the only thing that says which of the two it
+  currently is.
 
 ## 9. The live pass
 
@@ -610,7 +768,7 @@ document (the app has `app_meta`).
 
 **The page draws the chrome and a widget draws its body.** `WidgetCard` owns the title and its
 rename field, the chip, the settings popover (`WidgetSettingsPanel`, built from the kind's registry
-row), the remove question and the resize corner, identically for every kind; each of the nine
+row), the remove question and the resize corner, identically for every kind; each of the ten
 `widgets/*Widget.tsx` renders content only, from `WidgetParts.tsx`'s figures, bars and bordered
 rows, and a body can be tested knowing nothing about Customize. `AnchoredPopup` grew one
 backwards-compatible shape for it — children may be a function of `close` — so Keep, Remove and the
@@ -664,3 +822,262 @@ days of snapshots the marketplace holds — **so the widget can say two differen
 history yet* and *nothing moved*. `since` is taken before zero moves and the direction are filtered
 out, because computed over the returned movers a quiet week would also answer `null` and read as a
 database that had never remembered a price.
+
+---
+
+## 12. Sticky notes — user schema v46, `sticky_notes`
+
+The eleventh kind and the first one that is nothing but the reader's own typing
+([issue #479](https://github.com/Msgaihede/mtg-grimoire/issues/479), 2026-09-20). Its design is
+[the spec](../superpowers/specs/2026-09-20-sticky-notes-widget-design.md); what follows is only
+what a reader of *this* page needs.
+
+`sticky_notes (id, title, body, color, pinned, sort_order, created_at, updated_at, sync_uid)`,
+`user.db`, one unique index on the uid and no other. The body is CommonMark in the narrowed
+dialect `noteMarkdown.ts` pins for deck notes — never HTML and never ProseMirror JSON, so Rust can
+hand it to anything as text and no renderer has to live in the crate. **A title may be empty, and
+the widget prints the body's first line in its place — computed at render and never stored**, for
+`deck_notes`' reason: a stored derivation goes stale the moment the body is edited and no writer
+could notice.
+
+**It is the first table this page brought with it that syncs.** The other three the home page
+introduced are all this device's — `app_meta`'s `home_layout` and `recent_cards` keys, `activity`
+and `price_snapshots` — and §5's subsection above is where that difference is argued out. (Every
+*other* table the page reads it reads through somebody else's command, and most of those sync
+already.)
+
+**`color` carries no CHECK, and that is a sync decision rather than laxity.** The page's own
+enumerated columns each have one — `activity.kind`, `activity.scope`, `price_snapshots.finish` —
+and neither of those tables syncs. ⚠️ **The rule is not that a synced column may not carry a
+CHECK**: `collection_entries.condition`, `deck_cards.variant`, `collection_folders.kind` and five
+more enumerated columns on synced tables do. It is that those
+vocabularies are Magic's or this app's model, where a note's colour is **a palette the page owns
+and expects to grow** — so a `CHECK (color IN (…))` here would make a build that adds a sixth
+colour emit rows an older build refuses **at apply**, and a refused row is a failed apply rather
+than a note that arrives looking wrong. Rust therefore stores the string it is handed and
+`stickyNotes.ts`'s `noteColor` decides what it means, mapping a word it has never heard of to
+`slate` — which is §3's existing rule for a stored value no option carries, one table over.
+
+⚠️ **`sort_order` is monotonic and never dense, deliberately.** A delete leaves a hole and nothing
+repairs it; `reorder_notes` renumbers from zero over the ids it is handed and **an id that is not
+a note still consumes a position**, because `enumerate()` counts it — so a stranger in the middle
+leaves the notes either side at 0 and 2. The column answers *before or after* and nothing more,
+which is all the `SELECT` asks of it, and both `sticky_notes.rs` and the Storybook fake pin that
+behaviour on purpose. A reader of the column who counts gaps is reading it wrong.
+
+**Dim text on a note is `--color-note-dim` and never `text-dim`.** Measured against the L 26%
+note fills the ordinary dim token lands at about 4.3:1, under the 4.5:1 floor for body text, so it
+is a contrast bug no test in this repo catches. `text-dim` stays correct everywhere on the page
+background.
+
+---
+
+## 13. The tenth kind — New printings (2026-09-20)
+
+[Issue #462](https://github.com/Msgaihede/mtg-grimoire/issues/462), raised from the Luminia Discord
+on 2026-09-14. Reverse-chronological reprints, grouped by release day, of cards the decks a reader
+watches already hold; a row opens a popover of the decks holding that card, and a deck there opens
+the card in that deck. The design is
+[`2026-09-20-new-printings-widget-design.md`](../superpowers/specs/2026-09-20-new-printings-widget-design.md)
+with five artboards beside it, and **three of its decisions were superseded on the way in** — each
+is recorded below rather than left for a reader to discover by diffing.
+
+### It reaches Rust's vocabulary not at all, and there is a test that says so
+
+`home.rs` gained **nothing**. `kind` is a free `String` there and `config` an opaque `Value`, which
+is §1's whole promise, and a kind this build *draws* has to be as invisible to that module as one
+from the future. `home::tests::a_kind_this_build_can_draw_reaches_no_vocabulary_in_this_module`
+round-trips a `newPrintings` widget whose config carries keys the module has no name for, and
+`the_default_layout_holds_no_new_printings_widget` pins the other half — **`DEFAULT_LAYOUT` is
+untouched on both sides**, because a tenth widget in the seed would rearrange the page of every
+reader who never asked for one. It arrives from the catalogue.
+
+**What the registry fence does and does not buy.** `WIDGET_META` being a `Record<WidgetKind, …>`
+makes a missing meta row a compile error, and that is the whole of the compile-time help. It does
+**not** catch a missing `case`: both of `HomePage.tsx`'s switches are over `widget.kind`, which is
+`string`, and both have a `default` arm — so a forgotten arm renders `UnknownWidgetBody`, the *this
+came from a newer build* placeholder, on a kind this build draws perfectly well, with nothing red
+anywhere. `HomePage.test.tsx` asserts both arms by hand because the type system will not.
+
+### Two statements over one `WHERE`, and what one statement would have cost
+
+`src-tauri/src/new_printings.rs`, `list_printings`' shape: the page, then the decks holding the
+cards on it. A single join to `deck_cards` multiplies a printing by the decks holding it, which is
+how the issue's *each printing appears only once* gets quietly broken — and the count beside it
+would be wrong in the same breath. Statement 2 groups on `(oracle_id, deck_id)` and **not** on the
+variant, so a deck holding a card in both a live and a theory pile is one entry with the total; the
+variant it reports is the lower of the two, `live` before `theory`, because a deck that has sleeved
+the card up is holding it whatever else it plans.
+
+No schema change: every column already existed. `cards` is named **unqualified** — the corpus is
+`ATTACH`ed — where the design's SQL wrote `corpus.cards`.
+
+**The basics filter is `type_line LIKE 'Basic %Land%'`, not the design's `'Basic Land%'`.** Measured
+against the live 936 MB corpus on 2026-09-20: the narrow form matches 4 651 printings and the wide
+one 4 721, and every one of the **70** in the difference is a snow basic (`Basic Snow Land —
+Forest`). The narrow form leaks those through *hide basic lands*.
+
+**`decks.archived` is deliberately not filtered.** `Ask` carries no flag for it, nothing in the
+issue or the design mentions one, and an archived deck's cards therefore still feed the list. It
+belongs on `Ask` the day somebody wants it; it is recorded here so the absence is a decision.
+
+### Languages are a setting, not a constant — §2 superseded
+
+`cards.id` is one printing **in one language**, so an unfiltered feed answers a ten-language set as
+ten rows of one reprint. §2 proposed a hard `lang = 'en'`; what shipped is a `Languages` pick —
+**English** (the default, `options[0]`, so a reader who changes nothing gets one row per reprint),
+**Every language**, and **Chosen…** with a checklist built from `src/lib/languages.ts`'s nineteen
+codes. That module gained `LANGUAGE_CODES` and `isKnownLanguage` and a fourth reader.
+
+Three rules carry it:
+
+* **One field on the wire.** `langs: string[]`, where **empty means every language** — TypeScript
+  resolves the three modes into one list, because a mode *and* a list would be two fields that can
+  disagree. Rust narrows again (two-to-four lowercase letters, capped at 24), and a list the
+  narrowing empties is every language rather than a fallback to English, which would be the crate
+  making a claim the caller did not.
+* **`Chosen…` with nothing ticked reads as English and gets no sentence**, where `DecksWidget` says
+  *no decks pinned yet* rather than falling back. An empty deck set is a real statement (*compare
+  against nothing*); an empty language set would mean *show no printings at all*, which nobody
+  means by unticking the last box.
+* **A row carries its language code whenever the resolved set is not exactly English.** Without it
+  *Every language* draws ten rows reading `Sol Ring · SLD · 3 decks` and the list looks broken
+  rather than complete. The code is titled with `languageName`, so `PH` says *Phyrexian* as it does
+  everywhere else (issue #161) — and the **picker's** rows are labelled with the language name and
+  hinted with the code, not the reverse: `DropdownOption.label` *is* the accessible name, so a code
+  there would announce `PH` and re-create exactly that issue. `PrintingsFilterBar` can do it the
+  other way round only because its `CheckList` carries a separate `name`.
+
+### `scope` has two options, not three — §3 superseded
+
+§3 gave `scope` three options (`all`/`pinned`/`chosen`) and then described `Chosen…` as opening the
+checklist *"the seam `Pinned` uses on the Decks widget"* — which is the defect: on `DecksWidget`,
+`Pinned` **is** the checklist. There is no `decks.pinned` column; pinning in this app is a widget's
+own `config.deckIds`. The only other reading — *the decks the Decks widget has pinned* — would make
+one card's face depend on another card's config, and has no referent at all on a page holding two
+`decks` widgets, which §3 above explicitly allows. So: `All decks` and `Chosen…`, `chosen` carries
+the ids, and Rust reads any unknown word as `all`.
+
+### An off-by-default switch — `WidgetToggle.dflt`
+
+The issue requires virtual decks and basic lands **excluded** by default, and `toggleOn` was
+`stored(widget)[key] !== false` — absent means on, deliberately. Spelling the keys negatively
+(`hideBasics`) makes the panel read *Hide basic lands ☑*, a double negative at the one place the
+design is being plain. So `WidgetToggle` gained `dflt?: boolean` and `toggleOn` a third parameter.
+
+**No existing toggle moved**, and that is checkable rather than asserted: there is exactly one
+reader and one writer, every shipped toggle omits `dflt`, and at `dflt = true` the old `v !== false`
+and the new `typeof v === "boolean" ? v : true` agree on every input — a stored `true`, a stored
+`false`, absent, and junk. The panel's writer is `next === dflt ? undefined : next`, which is
+byte-identical to the old `on ? false : undefined` at that call site. `toggleOnOf(widget, key)` sits
+beside `toggleOn` and looks the default up off the kind's row, `pickOf`'s shape for toggles, so a
+body never restates a default the registry carries.
+
+⚠️ **`widgets.test.ts`'s vocabulary snapshot had to widen with it**, and the obvious widening is
+weaker than what it replaced: the projection recorded `toggles.map((t) => t.key)`, and moving to
+`[t.key, t.dflt]` would put `undefined` values in an object that `toEqual` cannot tell from an
+absent key — so deleting a toggle would have gone **green** where the array form went red. It
+records `t.dflt ?? true`, the *effective* default, which is also what `toggleOnOf` answers.
+
+### The row is 54px and its thumb is 33, not the artboards' 34
+
+Row height is a 46px thumb, 3px of padding each side and the card's 1px border. **The artboards'
+thumb is a hand-drawn `<span>` at 34 × 46, which is not 5:7 at all** — `CardArt` is `w-full` with
+`aspectRatio: 5 / 7` (`CARD_ASPECT`), so 34px wide is 47.6px tall and the row would be 56. 33px is
+46.2, and **54 is the number the design's whole size matrix was computed against**, so the pixel
+went rather than the matrix. The 0.2px of drift per row is the case `fit.ts` already permits: an
+estimate a few pixels out costs a scrollbar, not a sentence.
+
+The row is drawn by the body rather than by `WidgetRow` — it needs a rarity gem *inside* a caption,
+a bordered deck-count chip and a 5px unseen dot, and widening the shared row for one kind would put
+three optional slots on the row every other widget draws. `WidgetParts.tsx`'s module doc permits
+exactly this; the activity feed's day sections and the recent cards' strip are the precedents.
+
+**§4's `· borderless` is not buildable and was replaced.** Borderless is a *frame effect*;
+`NewPrinting` carries `promo_types`, a different column. The caption draws the printing's treatment
+instead (*Serialized*, *Surge Foil*). **§7's `Choose decks…` press does not exist either** — the
+settings popover is `WidgetCard`'s own state and a body cannot open it, so the sentence points at
+the control in words, which is what `DecksWidget.NOTHING_PINNED` already does.
+
+### The size matrix reproduces exactly; its row counts do not generalise
+
+Every pixel and column of §8 was recomputed from `fit.ts` on 2026-09-20 and **all twelve rows
+match** — `spanPx(n, 104) = 116n − 12`, `listColumns = max(1, round(widthPx / 240))`, and
+`bodyHeightPx = heightPx − 52` at every `h ≥ 2` and comfortable density. `bodyHeightPx` at twelve
+cells is **1 328**, which is the figure §8's own closing paragraph quotes.
+
+**Its `Printings` column is fixture-bound and is asserted nowhere.** Those counts were taken over
+the artboards' sample of 45 printings across 18 release days, and how many rows fit depends on how
+the days clump: a day header costs 16px over a 6px gap with 8px between groups. Worked, a 2 × 2 is
+`floor((168 − 22 + 6) / (54 + 6)) = 2` whatever the grouping, which is the one entry that
+generalises and the one the suite pins. A 2 × 3 is 4 for a single group where §8 says 3 — the
+difference is a second header, i.e. the fixture.
+
+⚠️ **§8's footprint-scaled window default was cut, and it had already shipped as dead code.** The
+design wanted `w * h >= 24` to open on *a year*, "a one-line default in the component". It is not
+one: `widgets.ts` gives the `window` pick `dflt: 90`, `pickValue` falls back to that, so `pickOf`
+always answers a number and the `defaultWindow` arm never ran. Making it run is easy — read the raw
+config — but the title chip is `chipLabel(widget)`, which takes no `fit`, so a fresh 6 × 4 card
+would have **read a year while its own chip said 90 days**. Threading `fit` through `chipLabel`
+touches shared chrome all ten kinds draw, for one kind's nicety. Every card opens on 90 days and
+the chip never lies; the reader changes it in one press.
+
+### What height adds, and the cursor that makes the dots mean something
+
+`h ≥ 5` adds a `Seen already` rule after the last group newer than the reader's last visit,
+`h ≥ 6` month rules where the month turns, and `h ≥ 8` a closing line once the window is exhausted.
+All three are budgeted **before** rows are laid in, so a card one pixel short of a rule drops a row
+rather than clipping the rule; the body resolves them in two passes and the second list is a prefix
+of the first, so nothing is ever drawn into unbudgeted space.
+
+*Last visit* is **`app_meta.new_printings_seen`**, `recent_cards`' shape and its reason: `config`
+round-trips through older builds, and a cursor an older build rewrites is a cursor that lies. The
+clock is the **caller's** — `SystemTime::now()` panics on wasm.
+
+⚠️ **The cursor is read once per mount and held**, which the design does not say and which is the
+difference between a mark that works and one that does not: the widget writes the cursor when it
+renders a non-empty list, so a body that re-read it would watch every gold dot vanish a frame after
+it appeared. The write is fire-once per mount, never while `still`, and its failure is silent.
+
+### Three empty sentences, and the count is read first
+
+*No decks are being watched* / *nothing has been reprinted in this window* / *reading* / a refusal —
+`PriceMovers`' device, because a count of zero printings cannot tell the first two apart, which is
+why `decksWatched`, `since` and `oldest` travel beside the list. **The refusal is read before the
+emptiness** (`ActivityWidget`'s rule: a failed read has no rows either, and calling that *nothing
+has been reprinted* is a claim about a comparison nobody made), and **`decksWatched` is read before
+the list**, because a reader watching nothing has an empty list for a reason that has nothing to do
+with reprints.
+
+### Both commands are routed on both targets
+
+`new_printings` and `mark_new_printings_seen` are registered in `desktop.rs`'s `invoke_handler`
+**and** named in `web/route.rs`'s `COMMANDS` with a match arm each — a command missing there is
+dead on the web and Android builds, as `price_movers` and `set_completion` already are not.
+`COMMANDS.len()` is **174**, counted off the merged array with that comment's own `awk` rather than
+by adding two to 172.
+
+`src/lib/ipc.test.ts` carries three mirror rows (`NewPrintingDeck`, `NewPrinting`, `NewPrintings` —
+nested two deep, `PriceMovers`' reason: a field renamed inside the deck entry leaves both structs
+above it agreeing while every popover row reads `undefined`) and two `declares` cases. The fence was
+checked rather than trusted: renaming `seen_at` to `seen_when` in the crate turns the `NewPrintings`
+row red.
+
+### Two limitations worth writing down
+
+**A row's thumb is blank on the web and Android targets.** `NewPrinting` carries no `imageUris`, so
+`cardArtSrc` — which on those targets answers the *supplied* URL and ignores the `mtgimg://` one —
+has nothing to draw. **This is shared with `recentCards`**, whose `RecentCard` carries none either
+and whose tiles are entirely card art, so it is a standing property of the home page's card
+pictures rather than something this kind introduced. Closing it means the field on both commands.
+
+**The Storybook corpus cannot exercise the language rule, and one story is deliberately absent.**
+The fake's only two-language card is Lightning Bolt's Japanese `sta 105`, released 2021-04-23 —
+outside the longest window the command answers (365 days from `CLOCK_BASE`, 2026-08-09) — so
+`langs: []` and `langs: ["en"]` return identical rows and an `EveryLanguage` story could not fail.
+The rule is proven in `.storybook/fake/db.test.ts` and in the widget's own suite instead. The fix is
+a `scripts/gen-storybook-cards.mjs` selection change, deliberately not made mid-branch: that corpus
+is generated wholesale and adding rows moves counts across `db.test.ts` and other files' plays.
+The same corpus yields at most **two** rows — one at 90 days, two at 365 — which is why the story
+set is `Default`, `Band`, `Tall`, `NoDecks`, `NothingReprinted` and `Chosen` rather than the
+design's table.

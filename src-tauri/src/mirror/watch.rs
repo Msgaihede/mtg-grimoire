@@ -120,6 +120,18 @@ pub fn surface_of(table: &str) -> Option<Dirty> {
         "decks" => Some(DECKS_AND_COLLECTION),
         "collection_entries" | "collection_folders" => Some(COLLECTION_ONLY),
         "wishlist_entries" | "wishlist_folders" => Some(WISHLIST_ONLY),
+        // **`None`, said out loud rather than left to the arm below** (user schema v46). A
+        // sticky note is neither a deck nor the collection: it is the reader's prose about
+        // nothing in particular, and none of the seven mirrored formats has a section that
+        // could quote one — `docs/superpowers/specs/2026-09-20-sticky-notes-widget-design.md`
+        // §9 puts a mirror channel for it out of scope deliberately.
+        //
+        // Written as an arm although the default already answers `None`, because the two are
+        // not the same statement: the default means "nobody has decided", and a reader
+        // extending the mirror needs to be able to tell that apart from "decided, and the
+        // answer is no". `every_table_in_the_schema_has_been_decided_about` is the fence, and
+        // it would have gone green either way — which is exactly why the arm is here.
+        "sticky_notes" => None,
         _ => None,
     }
 }
@@ -301,7 +313,7 @@ pub fn install_hook_with_changes(
         // commit hook per connection, so a second installer would take this one off.
         //
         // A commit, not a row: `update_hook` does not fire for `WITHOUT ROWID` tables, and two
-        // of the fifteen synced tables are exactly that (`muted_tags`, and `device_names`
+        // of the sixteen synced tables are exactly that (`muted_tags`, and `device_names`
         // since user schema v31). A row-level wake would silently never sync a mute or a
         // rename.
         //
@@ -1138,6 +1150,12 @@ mod tests {
                 // which is not a decision; this is.
                 "price_snapshots",
                 "sets",
+                // The reader's own prose on the home page (user schema v46). It is neither a
+                // deck nor the collection, and none of the seven mirrored formats has a
+                // section that could quote a note — so `surface_of` answers `None` for it in
+                // an arm of its own rather than by falling through, and this row is the other
+                // half of that decision.
+                "sticky_notes",
                 // The op log's clock (user schema v29). It describes a conversation rather
                 // than a collection, and it moves once per captured write — a surface here
                 // would render every mirrored file twice for one edit.

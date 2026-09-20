@@ -24,6 +24,7 @@
  * `BracketCardRow`/`DeckBracketRead`/`DeckValue`   — `src-tauri/src/deck.rs`
  * `ActivityEntry`                                — `src-tauri/src/activity.rs`
  * `HomeWidget`/`HomeLayout`                      — `src-tauri/src/home.rs`
+ * `StickyNoteRow`                                — `src-tauri/src/sticky_notes.rs`
  * `CardFilters`, flattened into both list queries — `src-tauri/src/filters.rs`
  * `MarketplaceFeedStatus`                        — `src-tauri/src/marketplace_feed.rs`
  * `CardTags`/`PrintingTags`                     — `src-tauri/src/tags/oracle.rs`
@@ -6366,6 +6367,122 @@ export interface PriceMovers {
 }
 
 /**
+ * One of the reader's own sticky notes — `sticky_notes.rs`'s `StickyNoteRow` (user schema v46).
+ *
+ * **It hangs off nothing**, which is what separates it from {@link DeckNote}: no deck, no card,
+ * no scope. The home page's `stickyNotes` widget is its only reader.
+ *
+ * Two fields carry no vocabulary on this side of the wire and both are deliberate. `title` may be
+ * empty, and what a note is *called* is computed at render rather than stored — a stored
+ * derivation would go stale the moment the body was edited and no writer could notice. `color` is
+ * one of five words the page knows, and the column carries **no CHECK**: the table is synced, so a
+ * build that adds a sixth colour must be able to emit rows this build can still draw.
+ * `features/home/stickyNotes.ts`'s `noteColor` reads an unknown word as `slate`.
+ *
+ * `body` is CommonMark in the dialect `features/decks/noteMarkdown.ts` pins — never HTML and never
+ * ProseMirror JSON, which is what keeps a renderer out of the crate.
+ */
+export interface StickyNote {
+  id: number;
+  /** May be empty. See the note above: the drawn heading is derived, never this field alone. */
+  title: string;
+  body: string;
+  color: string;
+  pinned: boolean;
+  /** The reader's own arrangement, renumbered by {@link ipc.stickyNoteReorder}. */
+  sortOrder: number;
+  /** Unix seconds. Neither timestamp is synced — two answers to "when" is one too many. */
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * What {@link ipc.stickyNoteUpdate} changes — **absent means leave it**, and `""` really empties.
+ *
+ * Rust's `coalesce(?n, col)` is the whole of that rule, so an omitted key and a key set to
+ * `undefined` are the same thing on the wire and neither can blank a field by accident.
+ */
+export interface StickyNotePatch {
+  title?: string;
+  body?: string;
+  color?: string;
+  pinned?: boolean;
+}
+
+/**
+ * One deck holding the card a {@link NewPrinting} is a reprint of — `new_printings.rs`'s
+ * `NewPrintingDeck`.
+ *
+ * `quantity` is summed across the deck's categories, so a deck holding the card in both a live
+ * and a theory pile is **one** entry with the total rather than two entries that look like two
+ * decks. `variant` is then the *lower* of the two words it was folded from — `live` wins over
+ * `theory`, because a deck that has sleeved the card up is holding it whatever else it plans.
+ */
+export interface NewPrintingDeck {
+  deckId: number;
+  name: string;
+  quantity: number;
+  variant: "live" | "theory";
+  virtualOnly: boolean;
+}
+
+/**
+ * One reprinted printing and the decks that hold the card — `new_printings.rs`'s `NewPrinting`.
+ *
+ * **`releasedAt` is never null here**, unlike `Printing.releasedAt` one command over: a printing
+ * with no date cannot be placed in a day group, so the query drops it rather than the page
+ * inventing an *Undated* bucket.
+ */
+export interface NewPrinting {
+  printingId: string;
+  oracleId: string;
+  name: string;
+  setCode: string;
+  setName: string | null;
+  collectorNumber: string;
+  /** `YYYY-MM-DD`. Never null — see above. */
+  releasedAt: string;
+  rarity: string | null;
+  /** JSON, verbatim — read with `src/lib/treatment.ts`, as on {@link Printing}. */
+  promoTypes: string | null;
+  finishes: string | null;
+  /**
+   * Which language this printing is — `cards.lang`.
+   *
+   * **On the wire because a row has to be able to say it.** A reader who asks for every language
+   * gets one row per language of a reprint, which is what they asked for — and without this those
+   * rows are identical on screen and the list reads as duplicated rather than complete.
+   */
+  lang: string;
+  decks: readonly NewPrintingDeck[];
+}
+
+/**
+ * The feed, and the four facts that travel beside it — `new_printings.rs`'s `NewPrintings`.
+ *
+ * **An empty list means one of three different things and a count of zero cannot tell them
+ * apart**: no deck is watched, nothing was reprinted inside this window, or the window is
+ * shorter than the card data goes back. `decksWatched`, `since` and `oldest` are what let the
+ * page pick its sentence — `PriceMovers`' `days`/`since` device, one widget over.
+ */
+export interface NewPrintings {
+  printings: readonly NewPrinting[];
+  /** How many decks the scope resolved to. **`0` is a real answer** with a sentence of its own. */
+  decksWatched: number;
+  /** The window's far edge, `YYYY-MM-DD`. */
+  since: string;
+  /** The oldest printing actually in the answer, or `null` when there are none. */
+  oldest: string | null;
+  /**
+   * When this device last saw a non-empty feed, in Unix seconds — `app_meta.new_printings_seen`,
+   * and deliberately **not** a `config` key: a config round-trips through older builds, and a
+   * cursor an older build rewrites is a cursor that lies. `null` is *never*, which marks every
+   * row as unseen.
+   */
+  seenAt: number | null;
+}
+
+/**
  * Which edge detector runs — `Method` in `crates/card-scanner/src/session.rs`, whose
  * `#[serde(rename_all = "lowercase")]` is the whole of the mapping.
  */
@@ -8973,6 +9090,87 @@ export const ipc = {
     marketplace: MarketplaceId,
     limit: number,
   ) => invoke<PriceMovers>("price_movers", { window, direction, marketplace, limit }),
+  /**
+   * Every sticky note, `ORDER BY sort_order, id` — see {@link StickyNote}.
+   *
+   * **Takes no arguments and cannot fail**: the read is `#[tauri::command(async)]` on a *sync*
+   * function whose signature has no `Result`, because it is called while the window draws its
+   * first frame and a home page that refuses to draw over a note is a worse answer than a page
+   * with no notes on it. A database that has never held one answers an empty list.
+   */
+  stickyNotes: (): Promise<StickyNote[]> => invoke("sticky_notes"),
+  /**
+   * Write a new note and answer its id. It lands **last** — `max(sort_order) + 1` — so a reader
+   * who has arranged their board keeps that arrangement and finds the new note at the end of it.
+   *
+   * **The colour is stored as written and validated by nobody**, which is the column's own rule
+   * read from this end: a word a newer build sends survives the round trip, and this build draws
+   * it as `slate`. Answers `collection::BUSY` under a running sync like every other write.
+   */
+  stickyNoteCreate: (title: string, body: string, color: string): Promise<number> =>
+    invoke("sticky_note_create", { title, body, color }),
+  /**
+   * Change a note — see {@link StickyNotePatch}, whose absent-means-leave-it rule is the whole of
+   * what this sends.
+   *
+   * **The patch is spread rather than nested**, because `sticky_note_update` declares its four
+   * optional columns as four parameters beside `id` rather than taking a struct — so a wrapper
+   * that sent `{ id, patch }` would be refused at run time with nothing red in either build.
+   * `ipc.test.ts` pins all five names.
+   *
+   * **And a key the patch omits is simply not sent, where {@link ipc.deckNoteUpdate} spells every
+   * key and folds `undefined` to `null`.** That is the same rule met a different way rather than
+   * drift: an absent field deserialises into an `Option` as `None`, which is exactly the
+   * `coalesce(?n, col)` arm that leaves the column alone — and here there is no `null` to send,
+   * because `None` and *leave it* are one word on both sides of this wire.
+   */
+  stickyNoteUpdate: (id: number, patch: StickyNotePatch): Promise<void> =>
+    invoke("sticky_note_update", { id, ...patch }),
+  /** Delete one note. Refused in a sentence — `sticky_notes::NOTE_GONE` — if it is already gone. */
+  stickyNoteDelete: (id: number): Promise<void> => invoke("sticky_note_delete", { id }),
+  /**
+   * Renumber the notes in the order given, `0..n`.
+   *
+   * **An id that is no longer a note is skipped rather than refused**: the page sends what it
+   * drew, and a note deleted in another window must not fail the drag the reader just made.
+   */
+  stickyNoteReorder: (ids: number[]): Promise<void> => invoke("sticky_note_reorder", { ids }),
+  /**
+   * Reprints of cards the watched decks already hold, newest first — see {@link NewPrintings}.
+   *
+   * Every argument is the widget's stored `config` narrowed on the way out, and every one is
+   * narrowed again in Rust: `days` into `1..=365`, `limit` into `1..=100`, an unknown `scope`
+   * into `all`, and `langs` to codes of the right shape. A hand-edited row cannot ask for the
+   * whole corpus.
+   */
+  newPrintings: (
+    scope: string,
+    deckIds: readonly number[],
+    days: number,
+    /**
+     * The languages to answer in. **An empty list is every language** — the allow-list's one
+     * sentinel, and the same rule at both ends of the wire. The default the widget sends is
+     * `["en"]`, which is one row per reprint.
+     */
+    langs: readonly string[],
+    includeVirtual: boolean,
+    includeTheory: boolean,
+    includeBasics: boolean,
+    limit: number,
+  ) =>
+    invoke<NewPrintings>("new_printings", {
+      scope,
+      deckIds,
+      days,
+      langs,
+      includeVirtual,
+      includeTheory,
+      includeBasics,
+      limit,
+    }),
+  /** Move the *seen* cursor to `at`, in Unix seconds. **The clock is the caller's** — never
+   *  `SystemTime::now()`, which panics on the wasm target. */
+  markNewPrintingsSeen: (at: number) => invoke<void>("mark_new_printings_seen", { at }),
   /**
    * Which view the app opens on, as a stored word — `"home"` for a database nobody has changed.
    *

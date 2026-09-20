@@ -24,10 +24,13 @@ import {
   collectionTotalKey,
   deckListKey,
   deckValuesKey,
+  NEW_PRINTINGS_ROOT,
+  newPrintingsKey,
   priceMoversKey,
   RECENT_CARDS_ROOT,
   recentCardsKey,
   setCompletionKey,
+  stickyNotesKey,
   wishlistBreakdownKey,
   wishlistTotalKey,
 } from "./keys";
@@ -103,6 +106,50 @@ describe("shape", () => {
     expect(RECENT_CARDS_ROOT).toEqual(["recentCards"]);
     expect(recentCardsKey(8)).toEqual(["recentCards", "list", 8]);
     expect(recentCardsKey(8).slice(0, RECENT_CARDS_ROOT.length)).toEqual(RECENT_CARDS_ROOT);
+  });
+
+  // A root of its own, and the shortest key in the file: `sticky_notes` is read by nothing else,
+  // so there is no root its data already lives under. `crossWindow.ts` maps the table to exactly
+  // this key — a segment added here is a note another window's write stops refreshing, with
+  // nothing on screen saying so.
+  it("files the sticky notes under a root of their own", () => {
+    expect(stickyNotesKey).toEqual(["stickyNotes"]);
+  });
+
+  // The third exception, and the second one's shape: a root of its own whose only writer is the
+  // widget's own *seen* cursor. Every segment after it is part of the question, so each one has
+  // to be able to re-issue the read.
+  it("files the new printings feed under its own root, carrying the whole question", () => {
+    expect(NEW_PRINTINGS_ROOT).toEqual(["newPrintings"]);
+    const key = newPrintingsKey(
+      "chosen",
+      [7, 3],
+      90,
+      ["ja", "en"],
+      { virtual: false, theory: true, basics: false },
+      100,
+    );
+    expect(key).toEqual(["newPrintings", "feed", "chosen", "3,7", 90, "en,ja", "t", 100]);
+    expect(key.slice(0, NEW_PRINTINGS_ROOT.length)).toEqual(NEW_PRINTINGS_ROOT);
+  });
+
+  // **Two arrays with the same members are one cache entry.** The ids and the languages are
+  // sorted before they are joined, so a reader ticking two decks in the other order — or a
+  // narrowing that happens to emit `["ja","en"]` — does not cost a second read of one answer.
+  it("hashes an id list and a language list to one key whatever order they arrive in", () => {
+    const flags = { virtual: true, theory: false, basics: true };
+    expect(newPrintingsKey("chosen", [3, 7], 30, ["en", "ja"], flags, 25)).toEqual(
+      newPrintingsKey("chosen", [7, 3], 30, ["ja", "en"], flags, 25),
+    );
+    // And the flag segment is three independent switches, not one word: `vb` is virtual and
+    // basics on with theory off, which is a different question from all three on.
+    expect(newPrintingsKey("all", [], 30, [], flags, 25)[6]).toBe("vb");
+    expect(
+      newPrintingsKey("all", [], 30, [], { virtual: true, theory: true, basics: true }, 25)[6],
+    ).toBe("vtb");
+    // Every language is the empty list, which joins to the empty string rather than to a word —
+    // the same sentinel the wire carries.
+    expect(newPrintingsKey("all", [], 30, [], flags, 25)[5]).toBe("");
   });
 });
 

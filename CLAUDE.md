@@ -23,6 +23,24 @@ and [the art one](docs/superpowers/research/2026-08-20-scryfall-art-tags.md).
 per-card mark is a **label** — `deck_labels`, `deck_cards.label_id`, the `Labels` dialog — and the
 collection's free-text `tags` column is a third thing again. Never let the words trade places.
 
+**_Note_ is the same trap one word over, and it is worse because all four spellings are the
+reader's own prose rather than three of one thing and one of another.** A **deck note** is what
+they wrote about one deck and is the only one that attaches cards — `deck_notes` and
+`deck_note_cards`, the band `NoteEditor` opens in the deck editor, many to a deck since user
+schema v43 replaced the single `decks.notes` column. A **card note** is not a table at all: it is
+those same rows read from the card's side, across every deck at once, which is what the
+`card_notes` command and the `CardNote` shape answer — and why the two questions, _what has this
+deck written_ against _what has anyone written about this card_, must stay two commands and
+never collapse into one. An **entry note** is neither: a free-text column on one row of the
+binder or the wishlist (`collection_entries.notes`, `wishlist_entries.notes`), which travels
+with that row through a fold, a move and an export field of its own. And a **sticky note** is
+the reader's prose about nothing in particular, on the home page — `sticky_notes` at user schema
+v46, filed against no deck, no card and no row, which is the whole of what separates it from the
+first three.
+**The overlap is not cosmetic**: `deck_notes` and `sticky_notes` share a title-and-body shape, a
+CommonMark dialect and a renderer, so a sentence that says "notes" and means one of them reads
+perfectly as the other. Say which.
+
 **Both files regenerate _daily_; _weekly_ is this app's refresh interval, and the two must not be
 blurred.** Scryfall's `docs/api/tags` says the bulk files are updated daily, and both `updated_at`
 stamps were the previous day when checked on 2026-08-20. The week is
@@ -220,7 +238,7 @@ number to compare against.
 | [text-mirror.md](docs/reference/text-mirror.md) | The plain-text mirror — the layout, the dirty map, why the pruner reads a manifest instead of guessing, the measured cost of a pass, and the bugs still open |
 | [wishlist-folders.md](docs/reference/wishlist-folders.md) | The two folder tables, the four-term grain, the merge rule, the root-add duplicate and the `elsewhere` mark |
 | [collection-folders.md](docs/reference/collection-folders.md) | The collection's cabinet — the eleventh grain term, the deck groups and `Recently removed` that made it the ledger of where every card sits, the v25 conversion, and what a zero quantity now costs |
-| [home-page.md](docs/reference/home-page.md) | The landing view — the layout document (version 2, the cell grid) and the three files that keep its round-trip promise, why an empty widget list is a layout, the nine widgets and the registry their settings are built from, the grid measured in JavaScript and why it is still not a container query, the `activity` table with its three rules and the write-site census, the commands, the chord renumbering, and the grid redesign's own record — recently viewed, set completion's slot rule and the thinned `price_snapshots` table |
+| [home-page.md](docs/reference/home-page.md) | The landing view — the layout document (version 2, the cell grid) and the three files that keep its round-trip promise, why an empty widget list is a layout, the ten widget kinds and the registry their settings are built from — and why the default layout still holds eight of them — the grid measured in JavaScript and why it is still not a container query, the `activity` table with its three rules and the write-site census, the commands, the chord renumbering, the grid redesign's own record — recently viewed, set completion's slot rule and the thinned `price_snapshots` table — and the sticky notes of v46, including the reorder that was built before anything pressed it |
 | [decks-live-findings.md](docs/reference/decks-live-findings.md) | What driving the shipped window found — **including the bugs still open** |
 | [tags-live-findings.md](docs/reference/tags-live-findings.md) | The Tags page in the shipped window — the art ingest timed, both performance gates settled, and the bugs still open |
 | [card-scanner.md](docs/reference/card-scanner.md) | The crate, the pipeline and every measurement behind it, the three evidence tiers and their weights, both tracker verdicts and the failures that shaped them, the debug server and how to drive it without a camera, and the app's Scanner view — plus the bundle a release build embeds and the weekly workflow that publishes it, the set and date filters, Fast and Exact with the six tiers and the eval that tightened two of them, one decision per card and the failures behind each of its rules, the `app_meta` review tray, and **a synthetic evaluation that is a regression fence and never an accuracy claim** |
@@ -234,7 +252,7 @@ number to compare against.
 | [ci-and-releases.md](docs/reference/ci-and-releases.md) | Both workflows, in full |
 | [hosted-relay-deploy.md](docs/reference/hosted-relay-deploy.md) | The deploy runbook — what exists and what does not, how to ask the host rather than a document, the order, and the things only a live deploy can settle |
 | [collection-sharing.md](docs/reference/collection-sharing.md) | The read-only shared binder — the snapshot format and its six absences, the size measured, the two `collection.rs` traps the publisher has its own read to avoid, the second Worker and the `live`/`lapsed`/`revoked` pass, both viewers, and **what is not deployed** |
-| [sync.md](docs/reference/sync.md) | Pairing **and** the relay — the protocol step by step, the six digits, the fifteen synced tables, how a row is named across devices, §7.3's five rules against the test that proves each, the envelope measured, the auth gate and the two routes that stand outside it, the group door, the rewrap hop that carries a removal to every device, and what is not built |
+| [sync.md](docs/reference/sync.md) | Pairing **and** the relay — the protocol step by step, the six digits, the sixteen synced tables, how a row is named across devices, §7.3's five rules against the test that proves each, the envelope measured, the auth gate and the two routes that stand outside it, the group door, the rewrap hop that carries a removal to every device, and what is not built |
 | [test-coverage.md](docs/reference/test-coverage.md) | What both suites reach, and why the Rust figure needs a correction |
 
 ## Running and verifying

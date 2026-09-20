@@ -22,10 +22,10 @@ use crate::{
     activity, camera, card, collection, collection_alloc, collection_folders, combos, db, deck,
     deck_audit, deck_meta, deck_missing, deck_notes, deck_pull, deck_quick_add, deck_theory,
     deck_tokens, deck_undo, deckpane, decksort, errors, export, flatten, home, images, import,
-    index, listview, markcolors, marketplace, marketplace_feed, mirror, nav, paths, price_history,
-    recent_cards, reset, scanner, schema, scryfall, search, searchopen, set_completion, share,
-    startup, startview, sync, sync_engine, sync_pair, tags, update, wishlist, wishlist_folders,
-    wishlist_optimize, zoom,
+    index, listview, markcolors, marketplace, marketplace_feed, mirror, nav, new_printings, paths,
+    price_history, recent_cards, reset, scanner, schema, scryfall, search, searchopen,
+    set_completion, share, startup, startview, sticky_notes, sync, sync_engine, sync_pair, tags,
+    update, wishlist, wishlist_folders, wishlist_optimize, zoom,
 };
 // **Not in the list above, because this file compiles for Android too.** Its name says
 // `desktop`, but its gate is `cfg(not(target_family = "wasm"))` — desktop *and* mobile — while
@@ -599,6 +599,15 @@ pub fn run() {
             // on. Both reads are infallible by signature — see each module's doc.
             home::home_layout,
             home::set_home_layout,
+            // The Notes widget's own five, and the read is infallible by signature for
+            // `home_layout`'s reason — a widget drawing its first frame can do nothing with an
+            // error that is not "draw the notes you already have". The four writes go through
+            // `with_write` and answer `db::BUSY` when a sync holds the connection.
+            sticky_notes::sticky_notes,
+            sticky_notes::sticky_note_create,
+            sticky_notes::sticky_note_update,
+            sticky_notes::sticky_note_delete,
+            sticky_notes::sticky_note_reorder,
             // The Recently viewed widget: the read is infallible by signature, and the write is
             // the card modal's, which ignores a BUSY — a missed entry costs one tile.
             recent_cards::recent_cards,
@@ -608,6 +617,12 @@ pub fn run() {
             // never by a command — see `price_history`'s doc.
             set_completion::set_completion,
             price_history::price_movers,
+            // The New printings widget: the feed, and the cursor that puts its gold dots out.
+            // The read is two `SELECT`s on the read-only connection; the write takes its clock
+            // from the caller, never `SystemTime::now()` — `recent_cards`' rule, and the reason
+            // both halves compile for the browser too.
+            new_printings::new_printings,
+            new_printings::mark_new_printings_seen,
             startview::start_view,
             startview::set_start_view,
             marketplace_feed::marketplace_feed_refresh,

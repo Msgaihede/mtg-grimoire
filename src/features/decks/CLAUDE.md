@@ -4229,7 +4229,7 @@ The storage side, the eight commands and the undo `Op` are
   `parseNoteBody`'s blocks — a closed AST modelled on `src/lib/releaseNotes.ts`, for that file's
   own reason: the shipped CSP is `script-src 'self'` with no `dangerouslySetInnerHTML` anywhere in
   `src/`. `NoteEditor` is behind `React.lazy`, and **nothing on the read path may import it
-  statically** — one eager import puts a measured 148 kB gzip back in the main chunk and nothing
+  statically** — one eager import puts a measured 141.5 kB gzip back in the main chunk and nothing
   goes red.
 - **A hard break travels as `"\n"` inside a text run**, because `Inline` has no break member. Any
   renderer of these blocks sets `whitespace-pre-line` or every break a reader typed draws as a

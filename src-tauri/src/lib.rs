@@ -147,6 +147,11 @@ pub mod marketplace;
 /// folder, the two `app_meta` settings and the thread — carry the gate inside that module.
 pub mod mirror;
 pub mod nav;
+/// **The home page's New printings feed** — reprints of cards the reader's watched decks already
+/// hold, newest first. Two `SELECT`s over `deck_cards` and the corpus plus one `app_meta` row for
+/// the *seen* cursor; no table of its own, no filesystem and no network, and its only clock is
+/// SQLite's `date('now')` — so it answers in a browser exactly as it does on the desktop.
+pub mod new_printings;
 /// **The home page's Price movers history** — user schema v45, a snapshot of today's price per
 /// owned printing and a read that compares against one. The day is SQLite's `date('now')`, never
 /// `SystemTime::now()`, and nothing in it reaches a filesystem or a network, so the snapshot runs
@@ -194,6 +199,11 @@ pub mod split;
 /// stores a non-empty word and validates nothing else. A Rust-side allow-list would make every
 /// new view a Rust change and would strand a reader on a page a downgrade no longer draws.
 pub mod startview;
+/// **The home page's sticky notes** — the first user table that hangs off nothing, and five
+/// commands over it. SQLite in and a DTO out with no clock beyond `unixepoch()`, so the module
+/// is on this half and only its `#[tauri::command]` wrappers are gated: [`web::route`] calls
+/// the same functions the desktop wrappers do.
+pub mod sticky_notes;
 pub mod sync;
 /// **Every layer of the engine compiles for wasm, and that is the point rather than a bonus.**
 /// The conflict rules are one implementation on three targets (spec §2), so a layer that

@@ -1466,6 +1466,14 @@ fn every_unique_index_on_a_synced_table_has_been_decided_about() {
             // here under a generated name. It is the table's grain, and `apply`'s spec for it
             // spells those two columns out.
             "muted_tags.sqlite_autoindex_muted_tags_1",
+            // **`sticky_notes` would sort here and is absent on purpose** (user schema v46).
+            // It carries one UNIQUE index, `idx_sticky_notes_uid`, which the loop above skips
+            // by name like every other table's — so this list does not grow a row for it, and
+            // a task list that says to add one is describing a red test. The reason it has no
+            // grain is `deck_notes`': two devices each typing a note about the same thing must
+            // stay two notes, and no column pair here could tell an accidental duplicate from
+            // a deliberate one. If `sticky_notes` ever gains a second UNIQUE index, this test
+            // is what will say so.
             // `WISHLIST_GRAIN`, four terms since v23.
             "wishlist_entries.idx_wishlist_grain",
         ]
