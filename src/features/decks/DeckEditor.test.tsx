@@ -152,8 +152,10 @@ const cardDetail = vi.hoisted(() => vi.fn());
  *  note glyph on a card in all four views. */
 const deckNotes = vi.hoisted(() => vi.fn());
 /** The Notes band's create — hoisted beside the read since 2026-09-10, because the card menu's
- *  `Add note…` is a press *this* file drives: the row parks a request, the band writes, and what
- *  a test here asserts is the argument this command was handed. */
+ *  `Add note…` is a press *this* file drives and what a test here asserts is the argument this
+ *  command was handed. **Since 2026-09-20 that argument arrives one press later**: the row parks a
+ *  request, the band opens its editor seeded with the card, and the reader's **Save** is what
+ *  writes — so a test that wants to see this call has to go through the dialog. */
 const deckNoteCreate = vi.hoisted(() => vi.fn());
 const collectionList = vi.hoisted(() => vi.fn());
 const collectionToDeck = vi.hoisted(() => vi.fn());
@@ -257,6 +259,36 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     // control draws for a refused read.
     wishlistFolderList: vi.fn().mockResolvedValue([]),
   },
+}));
+
+/**
+ * The lazy note editor, stood in for by a plain textarea — `DeckNotesPanel.test.tsx`'s mock, for
+ * that file's own reason and one of this file's.
+ *
+ * **Its reason**: Tiptap is a real ProseMirror instance over a DOM jsdom lays nothing out in, so
+ * typing a body through it asserts about the editor rather than about the surface under test.
+ *
+ * **This file's**: `Add note…` stopped writing on the press on 2026-09-20, so the only place the
+ * card's **oracle id** can still be observed is the create that Save makes — and Save is refused
+ * on a blank body (`noteToPlainText(body).trim() === ""`). Without a typable surface the one fact
+ * this file uniquely owns, that the card the reader right-clicked is the card the note names,
+ * could not be asserted at all.
+ *
+ * It keeps the real component's three props, so a signature change fails at the type level rather
+ * than by silently rendering nothing. **`NoteEditorDialog.tsx` holds the app's only reference and
+ * it is dynamic**; this is a `.test.` file, which `DeckNotesPanel.test.tsx`'s static-import sweep
+ * excludes, so nothing here puts 141.5 kB back in the main chunk.
+ */
+vi.mock("./NoteEditor", () => ({
+  default: ({
+    value,
+    onChange,
+    ariaLabel,
+  }: {
+    value: string;
+    onChange: (markdown: string) => void;
+    ariaLabel: string;
+  }) => <textarea aria-label={ariaLabel} value={value} onChange={(e) => onChange(e.target.value)} />,
 }));
 
 import { DeckEditor, exportFileName, exportSubject, layerMatches } from "./DeckEditor";
@@ -5870,30 +5902,52 @@ describe("DeckEditor — a card's menu", () => {
   });
 
   /**
-   * **The press reaches the band, and the band is what writes.**
+   * **The press reaches the band, and the card the reader right-clicked is the card the note
+   * names.**
    *
    * `addNote` is a callback and never a mutation — `deckCardMenu.tsx`'s contract, and here it is
    * load-bearing rather than ceremonial: a `mutate`-scoped `onSuccess` belongs to the *observer*,
    * and a menu has closed by the time a create answers. So the row parks a request, the band takes
-   * it, and one observer owns the write, its refusal line and the editor that opens on it.
+   * it, and one observer owns the write, its refusal line and the editor.
    *
-   * Three facts in one press, because the interesting failure is any one of them alone: the note
-   * is **titled** with the card (a blank one reads `Untitled note` in the band and in this same
-   * submenu the moment it appears), it **names** the card in the same transaction (so it is in
-   * `Notes ▸` on the next read with no attach step to lose), and the band is **opened** (a note a
-   * reader was sent to write is one they cannot write behind a shut disclosure).
+   * ⚠️ **The create moved to Save on 2026-09-20 and this test follows it there rather than
+   * stopping at the dialog.** It asserted `deckNoteCreate(4, "Lightning Bolt", "",
+   * ["o-Lightning Bolt"])` on the press — the one note in the feature born with a title, because
+   * it was the one born *before* its body — and with the editor behind a dialog that shape left an
+   * empty untitled note in the band every time a reader changed their mind. Only the **title**
+   * went: the oracle id still rides in the same create, one press later.
+   *
+   * **Stopping at the dialog would have proved less than the test it replaces**, which is the
+   * whole failure this task went looking for. The subtitle names the card by its *name*; nothing
+   * on screen ever draws its **oracle id**, and that id is the half only this file can see —
+   * `DeckEditor.addNote` reads it off the `DeckCard` under the pointer, narrows away the orphan
+   * case and parks it in a request. `DeckNotesPanel.test.tsx` owns the band's end of the same
+   * journey and is handed its request by hand, so between them the two files cover a wire neither
+   * covers alone.
+   *
+   * Four facts in one press, because the interesting failure is any one of them alone: the editor
+   * is **seeded with the card** (the subtitle, which is the promise the press made), **nothing is
+   * written until Save**, the create **names that card's oracle id** with `title: ""` and the
+   * reader's own body, and the band is **opened** (so what Save makes has somewhere visible to
+   * land rather than disappearing into a section nobody opened).
    */
   it("sends Add note… to the band, naming the card the reader right-clicked", async () => {
     await open();
     await rightClickCard("Lightning Bolt");
     await userEvent.click(screen.getByRole("menuitem", { name: "Add note…" }));
 
+    expect(await screen.findByRole("dialog", { name: "New note" })).toBeInTheDocument();
+    expect(screen.getByText("This note will name Lightning Bolt")).toBeInTheDocument();
+    expect(deckNoteCreate).not.toHaveBeenCalled();
+
+    // The editor arrives through `React.lazy`, so it is a tick later than the dialog around it.
+    await userEvent.type(await screen.findByLabelText("Body of New note"), "Four is too many");
+    await userEvent.click(screen.getByRole("button", { name: "Save note" }));
+
     await waitFor(() =>
-      expect(deckNoteCreate).toHaveBeenCalledWith(4, "Lightning Bolt", "", ["o-Lightning Bolt"]),
+      expect(deckNoteCreate).toHaveBeenCalledWith(4, "", "Four is too many", ["o-Lightning Bolt"]),
     );
-    // …and exactly once. The band takes a request by object identity and its effect re-runs the
-    // moment `open` changes, which is the very thing it changes first — so a guard written any
-    // other way is two notes for one press.
+    // …and exactly once, which is the old test's claim surviving the move: one Save is one note.
     expect(deckNoteCreate).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { notesOpen: true }));
   });
