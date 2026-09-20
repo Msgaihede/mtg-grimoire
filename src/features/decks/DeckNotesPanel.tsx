@@ -64,7 +64,7 @@
  * arrangement and it is what lets the workbench stand this band up in the six states that matter
  * — including a refused read, which no seed can produce and no fault reaches.
  */
-import { useEffect, useId, useMemo, useRef, useState, type JSX } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type JSX } from "react";
 import { ChevronRight, Plus } from "lucide-react";
 import { Dialog } from "@/components/Dialog";
 import { plural } from "@/lib/counts";
@@ -89,6 +89,15 @@ import { useDeckNotes } from "./useDeckNotes";
  * Settings. Nothing in the deck editor spells this word for anything else.
  */
 export const NOTES_HEADING = "Notes";
+
+/**
+ * What the card picker is handed while it is shut — one identity, so a band with no dialog open
+ * does not rebuild that dialog's memos on every render of the deck editor around it.
+ *
+ * It exists because the picker is **mounted whether or not it is open**; see the dialogs at the
+ * foot of {@link NotesBand} for why.
+ */
+const NO_NAMED: readonly DeckNoteCard[] = [];
 
 export interface DeckNotesPanelProps {
   deckId: number;
@@ -486,6 +495,93 @@ export function NotesBand({
     if (pendingCard !== null) setPanel({ kind: "newFromCard", card: pendingCard });
   }
 
+  /**
+   * The header's `New note` — **the one element in this band worth a ref, and the reason is that
+   * it is the only control here that outlives the note a dialog was about.**
+   *
+   * Every other opener is a button on a {@link NoteCard}: a Cards, an Edit or a Delete, each of
+   * which goes when its card does. A delete takes its own opener away by construction, and a
+   * panel raised during render (the card menu's two rows) never had one on this band at all — so
+   * both need somewhere real to send the caret, and this button is on screen whether the band is
+   * open, shut or empty.
+   */
+  const newNoteRef = useRef<HTMLButtonElement>(null);
+
+  /**
+   * The control the open dialog was opened from, or `null` for one that has none.
+   *
+   * ⚠️ **`Dialog` does not hand the caret back, and the contract says so on the prop.** It focuses
+   * its own panel as it mounts (`Dialog.tsx`'s mount effect) and restores nothing on the way out;
+   * its only other focus path is the `stackedOver` settle, which none of these three dialogs
+   * passes. `DialogProps.onDismiss`' own doc spells the division — *"hand focus back to whatever
+   * opened the dialog, then close"* — so the hand-back is the **host's**, and this band is the
+   * host. Without it a reader who shuts Cards, Edit or Delete lands on `<body>` and their next Tab
+   * restarts from the top of the app.
+   *
+   * **An element read off `document.activeElement` at the press**, which is `DeckEditor`'s
+   * `openPull` rather than its `openCheck`: those hold a ref to a control they draw themselves,
+   * and every opener here is a button inside `NoteCard`. Threading a ref down would be one prop
+   * per card to name an element the browser has already focused by the time this runs — the
+   * argument `openPull`'s own doc makes, in that file, against exactly this. A press focuses what
+   * it presses, so reading it is exact.
+   *
+   * **Not an `HTMLElement | null` the band trusts blindly**: see {@link closePanel} for the
+   * `isConnected` test and for the one panel that deliberately clears this before it closes.
+   */
+  const openerRef = useRef<HTMLElement | null>(null);
+
+  /**
+   * Open one of them, remembering where the caret came from.
+   *
+   * ⚠️ **The read happens before the write and that ordering is the whole of it.** `Dialog`'s
+   * mount effect takes the caret on the commit this `setPanel` schedules, so a capture made any
+   * later reads the dialog's own panel and hands the caret back to a node that is unmounting.
+   *
+   * The two panels raised during **render** — an `edit` focus and a `newFromCard` — deliberately
+   * do not come through here: there is no press to read a caret from, `document.activeElement` is
+   * whatever the card menu left behind (for a `focus`, the card's own landing pad, which
+   * {@link NoteCard}'s effect has already taken), and a ref written during render is a write React
+   * is entitled to run twice. They leave `openerRef` as {@link closePanel} left it — `null` — and
+   * take that function's fallback, which is the honest answer: the band is where the note they
+   * asked for went.
+   */
+  const openPanel = useCallback((next: NonNullable<NotePanel>) => {
+    openerRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setPanel(next);
+  }, []);
+
+  /**
+   * Shut whichever is open, and give the caret back — **focus first, then close**, which is
+   * `DeckEditor`'s `dismiss` character for character and for its reason: at this instant the
+   * opener is still mounted, and one line further on it may not be.
+   *
+   * ⚠️ **`isConnected` is not defensive, it is the delete path's ordinary case.** A note deleted
+   * from another window takes its card with it while a dialog about that note is still up, and
+   * `.focus()` on a detached node is a silent no-op that leaves the caret exactly where this
+   * exists to stop it landing — on `<body>`. The fallback is {@link newNoteRef}.
+   *
+   * **The confirmed delete clears `openerRef` itself rather than relying on that test**, because
+   * at the moment of the press its opener is still connected: the write is a round trip, and the
+   * card does not unmount until the invalidation it fires has refetched. So the naive
+   * implementation focuses a button that is about to be removed, the caret reaches `<body>` a beat
+   * later, and every assertion made synchronously passes. See the dialog's own `onDelete`.
+   *
+   * It runs for the scrim as well as for Escape and the ✕, which is a departure from
+   * `useDismissOnEscape`'s rule that an outside click hands nothing back — and it is deliberate
+   * twice over. `NoteCardsDialog` and `NoteEditorDialog` take one `onClose` and are not this
+   * file's to widen; and the rule's premise is that a reader who clicked elsewhere is already
+   * somewhere else, which is false under a modal scrim, where there is nothing else to be on and
+   * the caret is on a panel about to unmount.
+   */
+  const closePanel = useCallback(() => {
+    const opener = openerRef.current;
+    openerRef.current = null;
+    if (opener !== null && opener.isConnected) opener.focus();
+    else newNoteRef.current?.focus();
+    setPanel(null);
+  }, []);
+
   return (
     // The Deck stats band's grammar, character for character: a rule and the content under it.
     // That is the shape the toolbar above the deck is in too, and a surface, a border and a
@@ -532,8 +628,24 @@ export function NotesBand({
             disclosure — and `ml-auto` puts it at the far end of the row rather than hard against
             the count. */}
         <button
+          ref={newNoteRef}
           type="button"
-          onClick={() => setPanel({ kind: "newNote" })}
+          // **The press opens the band, and the press rather than the create is the moment.**
+          // This control is drawn while the band is shut, so without it a reader shuts the area,
+          // presses New note, Saves, and is answered by the header's count going from `2 notes` to
+          // `3 notes` — their note written into a region they cannot see. That is the argument the
+          // card menu's `add` already makes one component up, in those words, and the two paths
+          // have to agree because they end in the same dialog.
+          //
+          // **The press and not the Save**, for two reasons. A band that opened itself *after* the
+          // dialog closed would be a change the reader cannot connect to anything they did; and a
+          // create that is refused, or a dialog they dismiss, would leave them with no list to
+          // check either way. What it costs is `decks.notes_open` written on a note they then
+          // cancelled — the same trade the card menu's row makes, and one press undoes it.
+          onClick={() => {
+            if (!open) onToggle(true);
+            openPanel({ kind: "newNote" });
+          }}
           className={cn("ml-auto inline-flex items-center gap-1.5", META_SUBMIT)}
         >
           {/* `inline-flex items-center gap-1.5` on the button is what puts the glyph beside the
@@ -599,9 +711,12 @@ export function NotesBand({
                     // first time and do nothing the second — which is exactly the press a reader
                     // makes when it has scrolled away again.
                     focused={focus !== null && focus.noteId === note.id ? focus : null}
-                    onEdit={() => setPanel({ kind: "edit", note })}
-                    onCards={() => setPanel({ kind: "cards", note })}
-                    onDelete={() => setPanel({ kind: "confirm", note })}
+                    // Through {@link openPanel} and never a bare `setPanel`: these three are the
+                    // presses the caret has to be given back to, and the capture has to happen
+                    // before the state write. A fourth action added here owes the same call.
+                    onEdit={() => openPanel({ kind: "edit", note })}
+                    onCards={() => openPanel({ kind: "cards", note })}
+                    onDelete={() => openPanel({ kind: "confirm", note })}
                   />
                 ))}
               </ul>
@@ -623,7 +738,20 @@ export function NotesBand({
 
           **`live` and never `panel.note` wherever a dialog draws the note**, so a note deleted
           from another window takes its dialog with it rather than leaving one addressing a row
-          nothing answers for. */}
+          nothing answers for.
+
+          **All three are mounted whether or not they are open, with `open` as the only gate** —
+          `DeckEditor.tsx`'s own two confirmations, verbatim. A `{cond && <Dialog open …/>}` takes
+          the element out of the tree on the render that closes it, so `AnimatePresence` has
+          nothing left to play the exit on and the panel snaps away; two of these did, while
+          `NoteEditorDialog` tweened, which is one band drawing one gesture two ways. What the
+          house pattern costs is a **fallback heading**, visible for the length of that exit
+          because `live` is `null` the moment `panel` is: the two below read `Cards` and
+          `Delete note` on the way out, which is what `deletedCategory === null ? "Delete category"`
+          already ships two files over. Nothing is rendered *inside* a shut dialog either way —
+          `Dialog` mounts its children only while open — so the fallbacks are chrome and never
+          content, and the null guards in the callbacks below are unreachable rather than
+          defensive. */}
       <NoteEditorDialog
         open={
           panel?.kind === "newNote" ||
@@ -647,38 +775,52 @@ export function NotesBand({
         onSave={(body) => {
           if (panel?.kind === "edit" && live !== null) onSave(live.id, { title: live.title, body });
           else onCreate(body, panel?.kind === "newFromCard" ? [panel.card.oracleId] : []);
-          setPanel(null);
+          // A Save is a way out like any other, so the caret goes back the same way. The opener
+          // survives every arm of this write — an edit leaves its card standing and a create adds
+          // one — so there is nothing here to clear, which is exactly what the delete is not.
+          closePanel();
         }}
-        onClose={() => setPanel(null)}
+        onClose={closePanel}
       />
 
-      {panel?.kind === "cards" && live !== null && (
-        <NoteCardsDialog
-          open
-          // `noteTitle` here rather than in the dialog, so the heading the picker draws and the
-          // name the card it was opened from carries are one computation.
-          title={noteTitle(live)}
-          named={live.cards}
-          attachable={attachable}
-          onAttach={(oracleId) => onAttach(live.id, oracleId)}
-          onDetach={(oracleId) => onDetach(live.id, oracleId)}
-          onClose={() => setPanel(null)}
-        />
-      )}
+      <NoteCardsDialog
+        open={panel?.kind === "cards" && live !== null}
+        // `noteTitle` here rather than in the dialog, so the heading the picker draws and the
+        // name the card it was opened from carries are one computation. The bare `Cards` is the
+        // fallback the mount pattern above buys the exit tween with.
+        title={live === null ? "Cards" : noteTitle(live)}
+        named={live?.cards ?? NO_NAMED}
+        attachable={attachable}
+        onAttach={(oracleId) => live !== null && onAttach(live.id, oracleId)}
+        onDetach={(oracleId) => live !== null && onDetach(live.id, oracleId)}
+        onClose={closePanel}
+      />
 
-      {panel?.kind === "confirm" && live !== null && (
-        <DeleteNoteDialog
-          open
-          title={noteTitle(live)}
-          cardCount={live.cards.length}
-          pending={pending}
-          onDelete={() => {
-            onDelete(live.id);
-            setPanel(null);
-          }}
-          onClose={() => setPanel(null)}
-        />
-      )}
+      <DeleteNoteDialog
+        open={panel?.kind === "confirm" && live !== null}
+        title={live === null ? null : noteTitle(live)}
+        cardCount={live?.cards.length ?? 0}
+        pending={pending}
+        onDelete={() => {
+          if (live === null) return;
+          // ⚠️ **The opener is dropped before the close, and this line is the whole fix.** The
+          // caret is on this note's own `Delete` button, which is still in the document right now
+          // — the write is a round trip and the card does not unmount until the invalidation it
+          // fires has refetched. So handing the caret back to it succeeds, and then the card is
+          // removed and the caret falls to `<body>`: the failure this hand-back exists to prevent,
+          // reached by the implementation that looks like the fix. Cleared, {@link closePanel}
+          // takes its fallback and the caret goes to `New note`, which is the one control that
+          // survives an empty band.
+          //
+          // **Only the confirmed press.** `Keep it`, Escape and the ✕ all leave the note where it
+          // is, so their opener outlives the dialog and is exactly where the reader should be put
+          // back — they go through `onClose` below, untouched.
+          openerRef.current = null;
+          onDelete(live.id);
+          closePanel();
+        }}
+        onClose={closePanel}
+      />
     </section>
   );
 }
@@ -695,8 +837,11 @@ export function NotesBand({
  * **A `Dialog` rather than a box unfolding under the card**, which is what it was: the band is a
  * masonry now, and a question that grew inside one card would reflow every card after it at the
  * moment the reader was reading the question. It is also what retired `useDestructiveFocus` and
- * `useConfirmFocus` — a dialog takes the caret into its own panel as it opens, so there is no
- * hand-back for this component to arrange and no `role="group"` landing pad to focus.
+ * `useConfirmFocus`: a dialog takes the caret into its own panel as it opens, so there is no
+ * landing pad here to focus and no `role="group"` to put one on. **Giving the caret back is not
+ * retired with them and is the host's** — `DialogProps.onDismiss`' own doc says so — which is what
+ * {@link NotesBand}'s `closePanel` does for all three of these, and what this component
+ * deliberately knows nothing about.
  *
  * The button order is the band's old one: the destructive act first and the way out beside it,
  * which is `ClearCategory`'s arrangement and every other confirmation in this folder's.
@@ -710,7 +855,9 @@ function DeleteNoteDialog({
   onClose,
 }: {
   open: boolean;
-  title: string;
+  /** The note's name, or `null` while the dialog is shut — see the mount pattern at the call
+   *  site, and the heading below for what `null` draws. */
+  title: string | null;
   cardCount: number;
   pending: boolean;
   onDelete: () => void;
@@ -721,7 +868,11 @@ function DeleteNoteDialog({
       open={open}
       // The question *is* the heading, so there is no second paragraph asking it. `Dialog` is
       // `aria-labelledby` this, which is what a test and a screen reader address the panel by.
-      title={`Delete “${title}”?`}
+      //
+      // **`null` is the shut state and draws the bare verb**, never `Delete “”?` — the dialog is
+      // mounted whether or not it is open so its exit can play, and the quoted name is gone by
+      // then. `DeckEditor`'s two confirmations spell the same fallback the same way.
+      title={title === null ? "Delete note" : `Delete “${title}”?`}
       closeLabel="Close the delete question"
       // Narrower than the picker's `w-[47.5rem]` and the editor's `w-[40rem]`: the widest thing in
       // it is one sentence, and a question set across 760px reads as a page rather than a prompt.

@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { DeckCard, DeckNote } from "@/lib/ipc";
 import { card } from "./validation/fixtures";
-import { NOTE_STRIP_ATTR } from "./NoteCard";
+import { NOTE_GAP, NOTE_STRIP_ATTR } from "./NoteCard";
 
 const deckNotes = vi.hoisted(() => vi.fn());
 const deckNoteCreate = vi.hoisted(() => vi.fn());
@@ -295,6 +295,66 @@ describe("the Notes band", () => {
   });
 
   /**
+   * ⚠️ **The masonry's geometry, which nothing else in the tree asserts.**
+   *
+   * `NoteCard.test.tsx` pins the *card's* half — that an item claims a `grid-row: span N` off its
+   * own measured height — and that is exactly what makes this half the side a mutation can move
+   * unseen: jsdom lays nothing out, so every one of these four values can be dropped or changed
+   * and every suite in the repository stays green while the shipped band is wrong. Each is a
+   * different wrongness. Without `gridAutoRows: 1px` the spans place into full-height rows and the
+   * grid is one card per row. Without `rowGap: 0` a gutter is drawn at every row boundary a card
+   * *crosses*, which for a 200px card is 199 of them inside it. Without `items-start` an item is
+   * stretched, its height stops being its content's, and `masonry.ts` says in those words that
+   * `align-items: start` is the only thing forbidding a measure → span → measure oscillation. And
+   * `minmax(280px, 1fr)` is the column count itself, which is the one number this band refuses to
+   * work out for itself.
+   *
+   * Read off `style` rather than a computed value, because there is nothing to compute against —
+   * and the class through `toHaveClass`, which reads `classList` rather than matching source text.
+   */
+  it("rules the grid in one-pixel rows with no row gap, so a card can span its own height", async () => {
+    deckNotes.mockResolvedValue([note({ id: 1, title: "Mana base", body: "Fourteen." })]);
+    renderBand();
+
+    const region = await band();
+    const grid = await within(region).findByRole("list");
+    expect(grid.style.gridTemplateColumns).toBe("repeat(auto-fill, minmax(280px, 1fr))");
+    expect(grid.style.gridAutoRows).toBe("1px");
+    expect(grid.style.rowGap).toBe("0px");
+    // The gutter rides *inside* each card's span, so the one gap on the box is the horizontal one
+    // — and it is `NOTE_GAP` rather than a number written twice.
+    expect(grid.style.columnGap).toBe(`${NOTE_GAP}px`);
+    expect(grid).toHaveClass("items-start");
+  });
+
+  /**
+   * **`New note` opens the band, and the press is the moment.**
+   *
+   * The control is drawn while the band is shut — which is the header's whole point — so without
+   * this a reader shuts the area, presses it, Saves, and is answered by the count going from
+   * `2 notes` to `3 notes`: their note written into a region they cannot see. `DeckNotesPanel`'s
+   * request effect already argues exactly this for the card menu's `Add note…`, and the two paths
+   * end in the same dialog, so they have to agree.
+   */
+  it("opens the band on New note, so what is about to be saved has somewhere to land", async () => {
+    const shut = renderBand({ open: false });
+    await userEvent.click(
+      within(await band()).getByRole("button", { name: "New note" }),
+    );
+    expect(shut.onToggle).toHaveBeenCalledWith(true);
+    expect(await screen.findByRole("dialog", { name: "New note" })).toBeInTheDocument();
+    shut.unmount();
+
+    // And an open band is left alone: `decks.notes_open` is a stored preference, so a write that
+    // changes nothing is still a row in the deck's history.
+    const already = renderBand({ open: true });
+    await userEvent.click(
+      within(await band()).getByRole("button", { name: "New note" }),
+    );
+    expect(already.onToggle).not.toHaveBeenCalled();
+  });
+
+  /**
    * **Three flags kept exclusive by an `only()` helper became one value that cannot be two.**
    * The band used to hold `editing`, `confirming` and `picking` as three `number | null`s, so
    * "never two at once" was a rule everybody had to remember to call; it is the union's shape now
@@ -477,6 +537,85 @@ describe("editing a note", () => {
     await writeAndSave("New note", "Mana base", "Save note");
 
     await waitFor(() => expect(client.getQueryState(cardKey)?.isInvalidated).toBe(true));
+  });
+});
+
+/* --------------------------------------------------------------- the caret ------------- */
+
+/**
+ * ⚠️ **Where the caret goes when a dialog shuts, which is the band's job and not `Dialog`'s.**
+ *
+ * The shell focuses its own panel as it mounts and restores nothing on the way out — its only
+ * other focus path is the `stackedOver` settle, which none of these three dialogs passes — and
+ * `DialogProps.onDismiss`' own doc states the division: *"hand focus back to whatever opened the
+ * dialog, then close"*. So without the band's `closePanel` a reader who shuts Cards, Edit or
+ * Delete lands on `<body>`, and their next Tab restarts from the top of the app. That is the
+ * failure `DecksPage.test.tsx` already documents in those words, and it is the same one
+ * `useDestructiveFocus` used to answer for the in-row confirmation this band replaced.
+ */
+describe("giving the caret back", () => {
+  it("hands the caret back to the control a dialog was opened from", async () => {
+    deckNotes.mockResolvedValue([note({ id: 1, title: "Mana base", body: "Fourteen." })]);
+    renderBand();
+
+    const region = await band();
+    const opener = await within(region).findByRole("button", { name: "Cards on Mana base" });
+    await userEvent.click(opener);
+    await screen.findByRole("dialog", { name: "Mana base" });
+
+    // Escape rather than `Done`, because the keyboard way out is what a hand-back is for — and
+    // because both reach the same `onClose`, so the button would assert no less and say less.
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(opener).toHaveFocus());
+  });
+
+  /**
+   * ⚠️ **The delete path's opener goes with the note, and the obvious implementation passes every
+   * synchronous assertion while leaving the caret on `<body>`.**
+   *
+   * The write is a round trip: at the moment of the press the `Delete Mana base` button is still
+   * in the document, so `opener.isConnected` is true and a `closePanel` that trusted it would
+   * focus a button that is removed a beat later, when the invalidation it fired refetches. The
+   * band therefore clears its opener on the confirmed press and takes the fallback — the header's
+   * `New note`, the one control that survives an empty band.
+   *
+   * **The second answer from `deck_notes` is what makes this test able to fail.** A fixture whose
+   * read keeps returning the note never unmounts the card, so the naive implementation's caret
+   * stays on a button that is still there and the assertion passes against the defect. The band
+   * has to actually go empty.
+   */
+  it("hands the caret to New note when the control that asked goes with the note", async () => {
+    deckNotes.mockResolvedValueOnce([note({ id: 1, title: "Mana base" })]).mockResolvedValue([]);
+    renderBand();
+
+    const region = await band();
+    await userEvent.click(
+      await within(region).findByRole("button", { name: "Delete Mana base" }),
+    );
+    const question = await screen.findByRole("dialog", { name: "Delete “Mana base”?" });
+    await userEvent.click(within(question).getByRole("button", { name: "Delete note" }));
+    expect(deckNoteDelete).toHaveBeenCalledWith(4, 1);
+
+    // Wait for the card to actually go — asserting before it does is asserting about the one
+    // moment in which both implementations agree.
+    await waitFor(() => expect(within(region).queryByRole("listitem")).toBeNull());
+    expect(within(region).getByRole("button", { name: "New note" })).toHaveFocus();
+  });
+
+  /** A declined question leaves the note and its card where they are, so the control that asked
+   *  is still there to be given back to — the other half of the press above. */
+  it("hands the caret back to the Delete button of a question the reader declined", async () => {
+    deckNotes.mockResolvedValue([note({ id: 1, title: "Mana base" })]);
+    renderBand();
+
+    const region = await band();
+    const opener = await within(region).findByRole("button", { name: "Delete Mana base" });
+    await userEvent.click(opener);
+    const question = await screen.findByRole("dialog", { name: "Delete “Mana base”?" });
+    await userEvent.click(within(question).getByRole("button", { name: "Keep it" }));
+
+    await waitFor(() => expect(opener).toHaveFocus());
+    expect(deckNoteDelete).not.toHaveBeenCalled();
   });
 });
 
