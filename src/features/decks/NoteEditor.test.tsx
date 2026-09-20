@@ -4,8 +4,16 @@
 import { Editor } from "@tiptap/react";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { compile } from "tailwindcss";
 import { describe, expect, it, vi } from "vitest";
-import NoteEditor, { NOTE_EXTENSIONS } from "./NoteEditor";
+// Tailwind's own entry, read through Vite rather than `node:fs` — this project has no
+// `@types/node` on purpose, which is `tokens.test.ts`'s note and why `?raw` is the house style
+// for a test that asserts against a file's text. The entry is self-contained (one
+// `@tailwind utilities` and no `@import` of its own), so handing it back from `loadStylesheet`
+// is the whole of the resolver the compile below needs.
+import twEntry from "tailwindcss/index.css?raw";
+import appCss from "@/index.css?raw";
+import NoteEditor, { NOTE_EXTENSIONS, NOTE_PLACEHOLDER } from "./NoteEditor";
 import source from "./NoteEditor.tsx?raw";
 
 /**
@@ -375,5 +383,191 @@ describe("the stylesheet", () => {
     expect(source).toContain('import "prosemirror-view/style/prosemirror.css"');
     expect(source).not.toContain("document.head");
     expect(source).not.toMatch(/createElement\(\s*["']style["']\s*\)/);
+  });
+});
+
+/* ------------------------------------------------------------------ the placeholder ---- */
+
+describe("the empty surface's prompt", () => {
+  it("teaches the naming rule on an empty surface, because there is no title field to do it", async () => {
+    render(<NoteEditor value="" onChange={vi.fn()} ariaLabel="Body of a new note" />);
+
+    // ProseMirror writes the sentence onto the empty paragraph as `data-placeholder`, and the CSS
+    // in `SURFACE` is what paints it. The attribute is the half jsdom can referee.
+    const empty = await screen.findByRole("textbox");
+    expect(empty.querySelector("[data-placeholder]")).toHaveAttribute(
+      "data-placeholder",
+      NOTE_PLACEHOLDER,
+    );
+  });
+
+  it("says nothing on a surface that already has a body", async () => {
+    render(<NoteEditor value="Fourteen sources." onChange={vi.fn()} ariaLabel="Body of Mana base" />);
+    const surface = await screen.findByRole("textbox");
+    expect(surface.querySelector("[data-placeholder]")).toBeNull();
+  });
+
+  /** The sentence the dialog's `NOTE_PLACEHOLDER` is the one home for, pinned so the naming rule
+   *  cannot quietly stop being taught by being reworded into saying something else. */
+  it("says what happens to the first line", () => {
+    expect(NOTE_PLACEHOLDER).toBe("Start typing — the first line becomes the note's name.");
+  });
+});
+
+/**
+ * Compile a utility against the app's **own** stylesheet and hand back the `@layer utilities`
+ * block it produced — empty string where Tailwind emitted nothing at all.
+ *
+ * ⚠️ **Because the failure this guards against is silent.** A mistyped arbitrary value, or a
+ * colour token this build does not carry, produces **no rule and no warning**: `tsc` passes,
+ * both suites pass, the class sits right there in the source, and the surface simply has no
+ * prompt. That is `src/index.css`'s own `@custom-variant` trap one layer out, and
+ * `keyboardModality.test.ts`'s `selectorFor` is the shape this copies — including reading both
+ * stylesheets through Vite's `?raw` rather than `node:fs`, since this project has no
+ * `@types/node`.
+ *
+ * **`src/index.css` and not a bare `@import "tailwindcss"`**, which is the one thing about this
+ * helper that had to be got right: `text-dim` is a project token declared in an `@theme` block
+ * there, so compiled against stock Tailwind it emits nothing — and the test would then be
+ * reporting the shipped stylesheet's own colour as a defect. Every other `@import` that file
+ * makes is answered with an empty sheet: two font families, `tw-animate-css` and shadcn's
+ * theme contribute no utility this file is about.
+ *
+ * **The utilities layer, one candidate at a time, and never the whole sheet.** Two different ways
+ * a looser check reads success out of silence, and only the second is about this rule at all:
+ *
+ * * **`::before` is in preflight**, which names `*, ::after, ::before, ::backdrop,
+ *   ::file-selector-button` to zero its box model. So `built.includes("::before")` is `true` for a
+ *   candidate that emitted nothing — measured: a junk candidate builds 11 583 characters from
+ *   `src/index.css` and 4 614 from stock Tailwind, and both contain it.
+ * * **`content:` comes from the *siblings*, and this is the sharper of the two.** Preflight sets
+ *   no `content` at all — a sheet built from one junk candidate holds neither `content:` nor
+ *   `--tw-content` — but the `before:` variant injects `content: var(--tw-content);` into **every**
+ *   rule it makes, so the other four utilities each emit one. Build all five with only the
+ *   `content-[…]` one mistyped and the sheet reads `content:` **true** and
+ *   `attr(data-placeholder)` **false**: the whole sheet says the prompt is painted while the one
+ *   declaration that paints it is missing. Measured, both ways round.
+ *
+ * Which is why this compiles **one** candidate and returns only what `@layer utilities` holds:
+ * nothing a sibling emitted, and nothing preflight wrote, can stand in for the rule being asked
+ * about. An earlier draft of this comment claimed the `content:` half came from preflight; it does
+ * not, and that was the same mistake one level up — an explanation nobody had falsified.
+ */
+async function compiledUtilities(utility: string): Promise<string> {
+  return layerOf(await buildSheet([utility]), "utilities");
+}
+
+/**
+ * One `@layer <name> { … }` block out of a built sheet — `""` where the build emitted none.
+ *
+ * **Regions rather than the whole sheet, because the whole sheet includes `src/index.css`'s own
+ * rules.** A `content:` added anywhere in that stylesheet would redden an assertion about what
+ * *preflight* does; narrowing to the layer being asked about keeps the test's subject and the
+ * test's scope the same thing. The **first** `@layer base` is preflight — this build emits two,
+ * the second being the app's own base rules — which the caller pins by checking for
+ * `box-sizing`.
+ */
+function layerOf(sheet: string, name: "base" | "utilities"): string {
+  return sheet.match(new RegExp(`@layer ${name} \\{([\\s\\S]*?)\\n\\}`))?.[1].trim() ?? "";
+}
+
+/** The whole built sheet for a set of candidates — what {@link compiledUtilities} narrows, and
+ *  what the trap above is demonstrated over. */
+async function buildSheet(utilities: readonly string[]): Promise<string> {
+  const compiler = await compile(appCss, {
+    base: "/",
+    loadStylesheet: (id: string) =>
+      Promise.resolve(
+        id === "tailwindcss"
+          ? { path: "/tailwindcss/index.css", base: "/tailwindcss", content: twEntry }
+          : { path: "/empty.css", base: "/", content: "" },
+      ),
+    loadModule: () => Promise.reject(new Error("no JS modules expected")),
+  });
+  return compiler.build([...utilities]);
+}
+
+/** The utilities `SURFACE` paints the prompt with, lifted out of the shipped source rather than
+ *  copied here — a list written twice is a list that can agree with itself while disagreeing with
+ *  the file that ships. */
+const PROMPT_UTILITIES = [
+  ...source.matchAll(/"(\[&_\.is-editor-empty:first-child\]:before:[^"]+)"/g),
+].map(([, utility]) => utility);
+
+describe("the prompt's CSS is really compiled", () => {
+  it("is painted from SURFACE at all", () => {
+    // A sweep over nothing finds nothing: an empty list would make every assertion below pass
+    // while proving the opposite of what it says.
+    expect(PROMPT_UTILITIES.length).toBe(5);
+  });
+
+  it("emits a rule for every one of them", async () => {
+    const silent: string[] = [];
+    for (const utility of PROMPT_UTILITIES) {
+      if ((await compiledUtilities(utility)) === "") silent.push(utility);
+    }
+    // Collected as a list rather than asserted one at a time, so a failure names *which* of the
+    // five emitted nothing instead of stopping at the first.
+    expect(silent).toEqual([]);
+  });
+
+  it("really compiles the prompt's content rule", async () => {
+    const built = await compiledUtilities(
+      "[&_.is-editor-empty:first-child]:before:content-[attr(data-placeholder)]",
+    );
+    expect(built).toContain("content:");
+    expect(built).toContain("attr(data-placeholder)");
+    // The descendant half of the variant, which is what puts the rule on ProseMirror's own
+    // decorated paragraph rather than on the surface itself.
+    expect(built).toContain(".is-editor-empty:first-child::before");
+  });
+
+  /**
+   * The control, and it is what makes the three above mean anything: Tailwind answers a class it
+   * cannot parse with **silence**, not with an error — so a test that cannot tell that silence
+   * from success is a test that would pass over the defect.
+   */
+  it("emits nothing at all for a prompt rule that is mistyped", async () => {
+    expect(
+      await compiledUtilities("[&_.is-editor-empty:first-child]:before:content[attr(data-placeholder)]"),
+    ).toBe("");
+    expect(await compiledUtilities("[&_.is-editor-empty:first-child]:before:text-dimm")).toBe("");
+  });
+
+  /**
+   * **The trap {@link compiledUtilities} exists to avoid, asserted rather than described.**
+   *
+   * Both halves are measurements this file would otherwise only claim, and the first draft of
+   * that claim was wrong — so it is pinned instead. Preflight zeroes the box model of
+   * `::before`, so the glyph is in every sheet; it sets no `content`, so a sheet built from one
+   * junk candidate has none. What puts `content:` there is the **`before:` variant itself**,
+   * which injects `content: var(--tw-content)` into every rule it makes — so the four siblings
+   * supply the word while the one utility that carries the sentence emits nothing.
+   *
+   * A whole-sheet check therefore reads *painted* off a surface with no prompt on it, which is
+   * the exact shape of vacuous assertion this describe block is about.
+   */
+  it("would read as painted off the whole sheet, which is why it is not read that way", async () => {
+    const mistyped = "[&_.is-editor-empty:first-child]:before:content[attr(data-placeholder)]";
+    const siblings = PROMPT_UTILITIES.filter((u) => !u.includes("content-["));
+    expect(siblings).toHaveLength(4);
+
+    // **One junk candidate alone.** Read off preflight rather than off the whole sheet: the glyph
+    // is preflight's and so is the absence of `content`, and `src/index.css` is free to grow a
+    // `content:` of its own without that becoming a claim about this rule. `box-sizing` pins that
+    // the region really is preflight and not the app's own `@layer base` below it.
+    const alone = await buildSheet([mistyped]);
+    const preflight = layerOf(alone, "base");
+    expect(preflight).toContain("box-sizing");
+    expect(preflight).toContain("::before");
+    expect(preflight).not.toContain("content:");
+    // And the candidate emitted no utility at all, which is the other half of the silence.
+    expect(layerOf(alone, "utilities")).toBe("");
+
+    // **The same junk candidate beside its four working siblings**: `content:` is back — theirs —
+    // in the utilities layer itself, with the declaration that paints the prompt still missing.
+    const together = layerOf(await buildSheet([...siblings, mistyped]), "utilities");
+    expect(together).toContain("content:");
+    expect(together).not.toContain("attr(data-placeholder)");
   });
 });

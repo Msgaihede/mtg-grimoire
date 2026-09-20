@@ -2915,8 +2915,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   /**
    * **Add note…** — the card menu's first note row.
    *
-   * It writes nothing here: the band makes the note, so the create, its refusal line and the
-   * editor that opens on it are all one observer's. `addLabel`'s split exactly.
+   * It writes nothing here and, since 2026-09-20, **the band writes nothing on the press
+   * either**: the request opens the note editor seeded with this card, and **Save** is the create
+   * that names it. What the split buys is unchanged — the create, its refusal line and the editor
+   * are all one observer's — and `addLabel`'s is that same split, one beat later.
    *
    * ⚠️ **A card with no oracle id never reaches this**, and the fence is at the build site rather
    * than in here: `deckCardMenu` passes `addNote: undefined` for an orphan printing, and

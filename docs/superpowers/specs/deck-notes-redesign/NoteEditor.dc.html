@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>New note dialog</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600&amp;family=Geist:wght@300..700&amp;family=Geist+Mono:wght@400..600&amp;display=swap">
+<style>
+body { margin: 0; background: oklch(0.16 0.01 270); color: oklch(0.93 0.005 90); font-family: "Geist", system-ui, sans-serif; }
+a { color: oklch(0.75 0.12 85); }
+a:hover { color: oklch(0.83 0.12 85); }
+button { font: inherit; color: inherit; background: none; border: none; padding: 0; margin: 0; cursor: pointer; text-align: left; }
+input { font: inherit; color: inherit; }
+p, ul, ol, h1, h2, h3, h4, dl, dd, dt, blockquote { margin: 0; }
+</style>
+</helmet>
+
+<div style="position: relative; width: 1192px; height: 640px; box-sizing: border-box; overflow: hidden; background: oklch(0.16 0.01 270);">
+
+  <!-- The band behind it, unchanged — the same file the canvas draws beside this one -->
+  <dc-import name="NotesBand" hint-size="1192px,420px"></dc-import>
+
+  <!-- The scrim: bg at 75%, the app's own -->
+  <div style="position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgb(12 13 18 / 0.75); padding: 24px;">
+
+    <div role="dialog" aria-modal="true" aria-labelledby="new-note-title" style="display: flex; width: 640px; max-height: 100%; box-sizing: border-box; flex-direction: column; border-radius: 14px; border: 1px solid oklch(0.3 0.01 270); background: oklch(0.16 0.01 270); box-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.65);">
+
+      <header style="display: flex; align-items: center; gap: 12px; border-bottom: 1px solid oklch(0.3 0.01 270); padding: 16px 20px;">
+        <div style="min-width: 0; flex-grow: 1;">
+          <h2 id="new-note-title" style="font-family: 'Cinzel', Georgia, serif; font-size: 20px; font-weight: 500; line-height: 1;">New note</h2>
+        </div>
+        <button type="button" aria-label="Close" style="flex-shrink: 0; border-radius: 8px; padding: 4px; color: oklch(0.65 0.01 90);">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"></path></svg>
+        </button>
+      </header>
+
+      <div style="padding: 16px 20px;">
+
+        <div style="border-radius: 8px; border: 1px solid oklch(0.75 0.12 85); background: oklch(0.16 0.01 270);">
+
+          <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px; border-bottom: 1px solid oklch(0.3 0.01 270); padding: 4px 6px;">
+
+            <div style="display: flex; align-items: center; gap: 2px;">
+              <button type="button" aria-label="Bold" aria-pressed="false" style="display: flex; height: 28px; width: 28px; flex-shrink: 0; align-items: center; justify-content: center; border-radius: 8px; border: 1px solid transparent; color: oklch(0.65 0.01 90);"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 4h6a4 4 0 0 1 0 8H6z"></path><path d="M6 12h7a4 4 0 0 1 0 8H6z"></path></svg></button>
+              <button type="button" aria-label="Italic" aria-pressed="false" style="display: flex; height: 28px; width: 28px; flex-shrink: 0; align-items: center; justify-content: center; border-radius: 8px; border: 1px solid transparent; color: oklch(0.65 0.01 90);"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 4h-9M14 20H5M15 4L9 20"></path></svg></button>
+              <button type="button" aria-label="Strikethrough" aria-pressed="false" style="display: flex; height: 28px; width: 28px; flex-shrink: 0; align-items: center; justify-content: center; border-radius: 8px; border: 1px solid transparent; color: oklch(0.65 0.01 90);"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 4H9.5a3.5 3.5 0 0 0-2.4 6"></path><path d="M4 12h16"></path><path d="M6.5 16a3.5 3.5 0 0 0 3.5 4h5a3.5 3.5 0 0 0 3.2-2"></path></svg></button>
+              <button type="button" aria-label="Code" aria-pressed="false" style="display: flex; height: 28px; width: 28px; flex-shrink: 0; align-items: center; justify-content: center; border-radius: 8px; border: 1px solid transparent; color: oklch(0.65 0.01 90);"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 18l6-6-6-6M8 6l-6 6 6 6"></path></svg></button>
+            </div>
+
+            <div style="display: flex; align-items: center; gap: 2px;">
+              <button type="button" aria-label="Heading 1" aria-pressed="false" style="display: flex; height: 28px; width: 28px; flex-shrink: 0; align-items: center; justify-content: center; border-radius: 8px; border: 1px solid transparent; font-size: 11px; font-weight: 600; color: oklch(0.65 0.01 90);">H1</button>
+              <button type="button" aria-label="Heading 2" aria-pressed="false" style="display: flex; height: 28px; width: 28px; flex-shrink: 0; align-items: center; justify-content: center; border-radius: 8px; border: 1px solid transparent; font-size: 11px; font-weight: 600; color: oklch(0.65 0.01 90);">H2</button>
+              <button type="button" aria-label="Heading 3" aria-pressed="false" style="display: flex; height: 28px; width: 28px; flex-shrink: 0; align-items: center; justify-content: center; border-radius: 8px; border: 1px solid transparent; font-size: 11px; font-weight: 600; color: oklch(0.65 0.01 90);">H3</button>
+            </div>
+
+            <div style="display: flex; align-items: center; gap: 2px;">
+              <button type="button" aria-label="Bulleted list" aria-pressed="false" style="display: flex; height: 28px; width: 28px; flex-shrink: 0; align-items: center; justify-content: center; border-radius: 8px; border: 1px solid transparent; color: oklch(0.65 0.01 90);"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"></path></svg></button>
+              <button type="button" aria-label="Numbered list" aria-pressed="false" style="display: flex; height: 28px; width: 28px; flex-shrink: 0; align-items: center; justify-content: center; border-radius: 8px; border: 1px solid transparent; color: oklch(0.65 0.01 90);"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 6h11M10 12h11M10 18h11M4 6h1v4M4 10h2M6 18H4c0-1 2-1.6 2-2.6S5 14 4 14.6"></path></svg></button>
+              <button type="button" aria-label="Quote" aria-pressed="false" style="display: flex; height: 28px; width: 28px; flex-shrink: 0; align-items: center; justify-content: center; border-radius: 8px; border: 1px solid transparent; color: oklch(0.65 0.01 90);"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 6H3M21 12H8M21 18H8M3 12v6"></path></svg></button>
+            </div>
+
+            <div style="display: flex; align-items: center; gap: 2px;">
+              <button type="button" aria-label="Add a link" style="display: flex; height: 28px; width: 28px; flex-shrink: 0; align-items: center; justify-content: center; border-radius: 8px; border: 1px solid transparent; color: oklch(0.65 0.01 90);"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.5 1.5"></path><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.5-1.5"></path></svg></button>
+            </div>
+          </div>
+
+          <div role="textbox" aria-multiline="true" aria-label="Note body" style="min-height: 240px; box-sizing: border-box; padding: 10px 12px; font-size: 14px; line-height: 1.5; color: oklch(0.93 0.005 90);">
+            <p style="display: flex; align-items: center; color: oklch(0.65 0.01 90);"><span style="display: inline-block; width: 1px; height: 18px; margin-right: 2px; background: oklch(0.93 0.005 90);"></span>Start typing — the first line becomes the note’s name.</p>
+          </div>
+        </div>
+      </div>
+
+      <div style="display: flex; align-items: center; gap: 8px; border-top: 1px solid oklch(0.3 0.01 270); padding: 16px 20px;">
+        <button type="button" style="height: 32px; flex-shrink: 0; border-radius: 8px; border: 1px solid oklch(0.75 0.12 85); padding: 0 12px; font-size: 12px; color: oklch(0.75 0.12 85); opacity: 0.5;">Save note</button>
+        <button type="button" style="border-radius: 8px; border: 1px solid oklch(0.3 0.01 270); padding: 4px 8px; font-size: 12px; color: oklch(0.65 0.01 90);">Cancel</button>
+        <span style="margin-left: auto; font-size: 11px; color: oklch(0.65 0.01 90);">Naming cards stays a card action on the note itself.</span>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1192,"height":640}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

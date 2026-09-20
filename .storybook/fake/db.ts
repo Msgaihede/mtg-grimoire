@@ -5568,15 +5568,23 @@ function storedToken(db: FakeDb, deckId: number, oracleId: string): FakeDeckToke
 
 /**
  * `image_uri::front_face_map` over a fixture row — the picture the **web target and the phone**
- * draw, and the field only two DTOs here carry.
+ * draw, and the field only three DTOs here carry.
  *
  * **Every other DTO omits `imageUris` and that is still the rule**: a picture under Storybook
  * comes from the `@/lib/images` alias, so a URL on a row would be one nobody ever fetches. What
  * earns an exception is a view that ***folds*** the field instead of passing it through, and
- * there are two of those. `deckTokenViews` reads a token tile's `imageUrl` as
+ * there are three of those. `deckTokenViews` reads a token tile's `imageUrl` as
  * `imageUris?.[WALL_CARD_VARIANT] ?? null`; `CombosDialog.tsx` reads a combo piece's the same
- * way, character for character. A row that omitted it would make the fake the one place both
- * views are always `null` and each panel's own resolution unexercised.
+ * way, character for character; and since 2026-09-20 a **note card** reads its representative
+ * printing's the same way again ({@link noteCardsOf}, through {@link noteCardPrinting}). A row
+ * that omitted it would make the fake the one place all three views are always `null` and each
+ * panel's own resolution unexercised.
+ *
+ * ⚠️ **This said "two" for as long as it took the notes band to grow a thumbnail**, which is the
+ * drift `.storybook/CLAUDE.md` names by rule: a prose-only edit routes to neither CI job, so a
+ * count here goes red nowhere. **Re-count the callers when you add one** —
+ * `grep -n "frontFaceImageUris(" .storybook/fake/db.ts` is the census, and the enumeration above
+ * is what makes it checkable.
  *
  * Nothing minted: the two URLs are the fixture's own real Scryfall ones, the same pair
  * {@link readHandlers.card_image_uri} answers with, and the same two variants
@@ -7086,11 +7094,49 @@ function cardNameOfOracle(db: FakeDb, oracleId: string): string {
  * {@link readHandlers.deck_tokens}' rule, and the same division of labour: Rust supplies facts,
  * TypeScript draws the order.
  */
-function noteCardsOf(db: FakeDb, noteId: number): DeckNoteCard[] {
+function noteCardsOf(db: FakeDb, deckId: number, noteId: number): DeckNoteCard[] {
   return db.deckNoteCards
     .filter((c) => c.noteId === noteId)
-    .map((c) => ({ oracleId: c.oracleId, name: cardNameOfOracle(db, c.oracleId) }))
+    .map((c) => {
+      const printing = noteCardPrinting(db, deckId, c.oracleId);
+      return {
+        oracleId: c.oracleId,
+        name: cardNameOfOracle(db, c.oracleId),
+        cardId: printing?.id ?? null,
+        imageUris: frontFaceImageUris(db, printing?.id ?? null),
+      };
+    })
     .sort((a, b) => cmp(a.name, b.name) || cmp(a.oracleId, b.oracleId));
+}
+
+/**
+ * `deck_notes::attachments_by_note`'s correlated subquery — the **representative printing** one
+ * attachment draws, and the third DTO in this file to fold {@link frontFaceImageUris}.
+ *
+ * **The deck's own printing first, any printing the corpus holds second**, which is that
+ * statement's `ORDER BY (dc.card_id IS NULL), c.id` spelled as two passes: SQLite sorts `0`
+ * before `1`, so a printing this deck sleeves wins, and `c.id` breaks every remaining tie. A
+ * note about Lightning Bolt in a deck playing the M10 art must not draw the Alpha art — the
+ * picture is how a reader recognises the row, and the wrong one reads as a note naming a card
+ * that is not in the deck.
+ *
+ * **`null` is the orphan and is a real answer**, not a lookup that went wrong: the crate's
+ * `LEFT JOIN` keeps an attachment whose oracle id the corpus has never heard of, named by that
+ * id, and the card draws an empty frame rather than a broken image.
+ *
+ * **Every printing of the deck is considered rather than the deck's own row order**, because a
+ * note attaches by oracle id and a deck may hold two printings of one card; `c.id` is what picks
+ * between them, on both sides, so the two passes cannot come to disagree.
+ */
+function noteCardPrinting(db: FakeDb, deckId: number, oracleId: string): FakeCard | null {
+  const byId = (a: FakeCard, b: FakeCard): number => cmp(a.id, b.id);
+  const held = db.deckCards
+    .filter((dc) => dc.deckId === deckId)
+    .map((dc) => cardById(db, dc.cardId))
+    .filter((c): c is FakeCard => c !== null && c.oracleId === oracleId)
+    .sort(byId);
+  if (held.length > 0) return held[0] ?? null;
+  return [...db.cards].filter((c) => c.oracleId === oracleId).sort(byId)[0] ?? null;
 }
 
 /** `deck_notes::note_row` — one stored note with the cards it names joined on, copied for
@@ -7103,7 +7149,7 @@ function toDeckNote(db: FakeDb, n: FakeDeckNote): DeckNote {
     title: n.title,
     body: n.body,
     sortOrder: n.sortOrder,
-    cards: noteCardsOf(db, n.id),
+    cards: noteCardsOf(db, n.deckId, n.id),
     createdAt: n.createdAt,
     updatedAt: n.updatedAt,
   };
@@ -10109,11 +10155,13 @@ export function readHandlers(db: FakeDb) {
      * {@link DECK_GONE} because an empty plan already means something else here — "nothing in
      * this deck can be filled" — and a dialog cannot tell those two apart from a bare `[]`.
      *
-     * `imageUris` is omitted, as it is from every DTO this fake builds bar one: under Storybook
-     * a card picture comes from the `@/lib/images` alias rather than from a URL on the row, so a
-     * hand-minted one here would be a URL nobody ever fetches. The exception is
-     * {@link frontFaceImageUris}, and its own comment says what earns it one — a view that *folds*
-     * the field rather than passing it through.
+     * `imageUris` is omitted, as it is from every DTO this fake builds but the ones that **fold**
+     * it: under Storybook a card picture comes from the `@/lib/images` alias rather than from a
+     * URL on the row, so a hand-minted one here would be a URL nobody ever fetches. The
+     * exceptions go through {@link frontFaceImageUris}, and its own comment enumerates them and
+     * says what earns one — a view that folds the field rather than passing it through. **No
+     * count here on purpose**: this sentence read "bar one" while two DTOs carried it and then
+     * three, because a number in prose goes red nowhere.
      */
     deck_pull_plan: (args: { deckId: number }): DeckPullRow[] => {
       // **First, ahead of the read, and {@link isVirtual}'s own contract is what makes that
@@ -10275,9 +10323,11 @@ export function readHandlers(db: FakeDb) {
      * reason: an empty plan already means something else here — *everything this deck is short of
      * has left the card database* — and a dialog cannot tell those two apart from a bare list.
      *
-     * `imageUris` is omitted, as it is from every DTO this fake builds bar one: under Storybook a
-     * card picture comes from the `@/lib/images` alias rather than from a URL on the row, so a
-     * hand-minted one here would be a URL nobody ever fetches.
+     * `imageUris` is omitted, as it is from every DTO this fake builds but the ones that **fold**
+     * it: under Storybook a card picture comes from the `@/lib/images` alias rather than from a
+     * URL on the row, so a hand-minted one here would be a URL nobody ever fetches.
+     * {@link frontFaceImageUris} enumerates the exceptions; no count is written here, for the
+     * reason its own comment gives.
      */
     deck_missing_plan: (args: { deckId: number }): DeckMissingRow[] => {
       // {@link deck_pull_plan}'s fence, ahead of the shortfall walk and for its reason: a

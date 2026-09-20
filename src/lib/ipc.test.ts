@@ -1894,7 +1894,7 @@ describe("ipc argument names match the Rust command signatures", () => {
       sortOrder: 0,
       // Empty would be the ordinary case; one entry is what pins the nested shape, which no
       // parity check on the outer struct can see.
-      cards: [{ oracleId: "o-bolt", name: "Lightning Bolt" }],
+      cards: [{ oracleId: "o-bolt", name: "Lightning Bolt", cardId: "m10-146" }],
       createdAt: 1,
       updatedAt: 2,
     };
@@ -4688,11 +4688,17 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     // chip and the deck's per-card marks, so a field renamed one level down leaves `DeckNoteRow`
     // agreeing field for field while every card the note names arrives `undefined`.
     //
-    // **On this table and not on `mirrors` above**, for `ShareRow`'s reason twice over and
-    // deliberately rather than by omission: neither draws a picture — a note is prose about a
-    // card, and a row carrying an art URL per attachment would be paying for a wall nobody
-    // renders — and the largest of the three is eight fields against that table's floor of ten.
-    // Both of those rules are properties of a card *wall's* row rather than of a mirror.
+    // **On this table and not on `mirrors` above, and since 2026-09-20 the _field floor_ is the
+    // whole of why.** `mirrors` asserts two things beyond field parity — `imageUris` present on
+    // both sides, and more than ten fields parsed — and this comment used to rest on the first:
+    // *neither draws a picture, and a row carrying an art URL per attachment would be paying for
+    // a wall nobody renders*. **That stopped being true when `DeckNoteCard` grew `cardId` and
+    // `imageUris`**, which is exactly that art URL per attachment: a note card draws a
+    // representative printing now, so the picture assertion is one these rows would **pass**.
+    // What still keeps all three here is the count — `DeckNoteRow` 8, `CardNoteRow` 5,
+    // `DeckNoteCard` 4 — against a floor of ten that is a property of a card *wall's* row rather
+    // than of a mirror. So: **a later rung that takes one of these past ten fields is a row that
+    // should move up to `mirrors`**, and for `DeckNoteCard` nothing else is in the way.
     //
     // **`DeckNote`/`DeckNoteRow` and `CardNote`/`CardNoteRow` are the two spellings that differ**,
     // `DeckCard`/`DeckCardRow`'s precedent, so both pairs are written out rather than assumed.

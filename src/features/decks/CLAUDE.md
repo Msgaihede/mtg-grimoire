@@ -4208,8 +4208,15 @@ The storage side, the eight commands and the undo `Op` are
   printing cannot be marked by four views each remembering.
 - **The band is the third collapsible section**, after `DeckStats`, wearing `DeckTokensPanel`'s
   grammar character for character and remembering itself in `decks.notes_open`. Unlike
-  `DeckTokensPanel` it **keeps its disclosure at zero notes**: the way to write a first note is
-  inside the band, so plain type where the control should be would be a dead end.
+  `DeckTokensPanel` it **keeps its disclosure at zero notes** — and the redesign (2026-09-20)
+  left that conclusion standing on a different reason, so the old one is worth naming. It read
+  *the way to write a first note is inside the band, so plain type where the control should be
+  would be a dead end*, which was true while the band opened on an **add row**. It is false now:
+  the act is `New note` in the **heading row**, beside the count and outside the collapsible
+  region, so a reader with nothing written can press it whether the area is open or shut and the
+  disclosure is load-bearing for reaching nothing. What it still buys is the sentence *inside*
+  the empty band, which names that control rather than leaving a reader to find it — so plain
+  type where the disclosure should be would leave that sentence nowhere to go.
 - **The band takes `cards`, not `variant`, and that is a measured call.** It first read
   `useDeck(deckId, variant)` for the attach picker's card names — `CategoriesDialog`'s
   arrangement, and free *only while that query is fresh*. The band is gated on the deck row, so it
