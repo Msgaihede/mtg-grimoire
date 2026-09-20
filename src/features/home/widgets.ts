@@ -32,9 +32,9 @@
 import type { HomeLayout } from "@/lib/ipc";
 
 /**
- * The ten kinds this build can draw.
+ * The eleven kinds this build can draw.
  *
- * Adding an eleventh means a member here, a row in {@link WIDGET_META} (which will not compile
+ * Adding a twelfth means a member here, a row in {@link WIDGET_META} (which will not compile
  * without one) and a component — and it means nothing at all to Rust, which stores whatever
  * string it is handed.
  */
@@ -48,7 +48,8 @@ export type WidgetKind =
   | "recentCards"
   | "setCompletion"
   | "priceMovers"
-  | "newPrintings";
+  | "newPrintings"
+  | "stickyNotes";
 
 /**
  * Which column the two value widgets group their bars over.
@@ -151,7 +152,7 @@ const VALUE_PICKS: readonly WidgetPick[] = [
 /**
  * Every kind's meta, keyed by the kind.
  *
- * **A `Record<WidgetKind, …>` rather than an array, and that is the fence**: an eleventh member on
+ * **A `Record<WidgetKind, …>` rather than an array, and that is the fence**: a new member on
  * {@link WidgetKind} with no row here is a compile error at this object. The `Omit` is what stops
  * the key and the `kind` field disagreeing — {@link WIDGETS} writes the field from the key.
  */
@@ -313,6 +314,45 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
       },
     ],
     toggles: [{ key: "names", label: "Show names" }],
+  },
+  /**
+   * The reader's own prose. Insertion order is the catalogue's order, and this and
+   * `newPrintings` directly below are its newest pair — that one landed on `main` while this was
+   * being written, so which of the two is last is an accident of merge order and nothing reads it.
+   *
+   * `min` is `[3, 2]` where every other kind's is `[2, 2]` or smaller, and that is the one figure
+   * here doing real work rather than copying a neighbour: at a two-cell width the Board's tiles are
+   * about 96px across and every note's name truncates, so the size is made unreachable rather than
+   * drawn badly. `boundsOf` is what enforces it, against the steppers, the resize corner and the
+   * arrow keys alike.
+   *
+   * All three toggles read correctly **on**, and that is now a choice rather than the only
+   * shape available: `dflt` landed on {@link WidgetToggle} with `newPrintings`, which starts two
+   * of its three off. These three stay on because each names something a reader would miss if it
+   * were hidden, not something they have to ask for.
+   */
+  stickyNotes: {
+    label: "Notes",
+    description: "Sticky notes you write yourself, in the editor deck notes already use.",
+    def: [4, 3],
+    min: [3, 2],
+    max: [8, 6],
+    picks: [
+      {
+        key: "layout",
+        label: "Layout",
+        options: [
+          { id: "board", label: "Board" },
+          { id: "pad", label: "Pad" },
+        ],
+      },
+    ],
+    toggles: [
+      { key: "dates", label: "Show edited date" },
+      { key: "strip", label: "Show colour strip" },
+      { key: "pinned", label: "Pinned note first" },
+    ],
+    chip: "layout",
   },
   newPrintings: {
     label: "New printings",

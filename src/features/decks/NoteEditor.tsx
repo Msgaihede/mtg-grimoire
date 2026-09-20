@@ -385,8 +385,19 @@ export default function NoteEditor({
    * the document under the caret and put it back at the start.
    *
    * `emitUpdate: false`, so restoring a body is not itself an edit worth writing back.
+   *
+   * ⚠️ **The destroyed guard is load-bearing, and both calls below need it.** `editor.commands`
+   * and `editor.getMarkdown()` both reach through `editor.view`, which is `null` once the
+   * instance is torn down — so either one throws `Cannot read properties of null`, uncaught,
+   * from inside a passive effect, which unwinds the whole React tree rather than failing one
+   * component. It is reachable because this editor is always mounted behind `Suspense`: React
+   * hides and *reconnects* that subtree (`reconnectPassiveEffects`), so this effect can run
+   * again after the instance it closed over has gone. Found on 2026-09-20 from the home page's
+   * sticky-note dialog, where a story play mounts the surface — `DeckNotesPanel`'s stories never
+   * do, which is the only reason the deck band had not hit it.
    */
   useEffect(() => {
+    if (editor.isDestroyed) return;
     if (editor.getMarkdown() === value) return;
     editor.commands.setContent(value, { contentType: "markdown", emitUpdate: false });
   }, [editor, value]);

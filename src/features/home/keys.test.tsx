@@ -30,6 +30,7 @@ import {
   RECENT_CARDS_ROOT,
   recentCardsKey,
   setCompletionKey,
+  stickyNotesKey,
   wishlistBreakdownKey,
   wishlistTotalKey,
 } from "./keys";
@@ -105,6 +106,14 @@ describe("shape", () => {
     expect(RECENT_CARDS_ROOT).toEqual(["recentCards"]);
     expect(recentCardsKey(8)).toEqual(["recentCards", "list", 8]);
     expect(recentCardsKey(8).slice(0, RECENT_CARDS_ROOT.length)).toEqual(RECENT_CARDS_ROOT);
+  });
+
+  // A root of its own, and the shortest key in the file: `sticky_notes` is read by nothing else,
+  // so there is no root its data already lives under. `crossWindow.ts` maps the table to exactly
+  // this key — a segment added here is a note another window's write stops refreshing, with
+  // nothing on screen saying so.
+  it("files the sticky notes under a root of their own", () => {
+    expect(stickyNotesKey).toEqual(["stickyNotes"]);
   });
 
   // The third exception, and the second one's shape: a root of its own whose only writer is the

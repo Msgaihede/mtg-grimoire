@@ -25,13 +25,19 @@ import { cardDetailKey } from "./cardDetailKey";
  * root refreshes both. `"card"` rather than a deck id in that third slot because this read is the
  * one that spans every deck: there is no id to put there.
  *
- * ⚠️ **`useDeckNotes`' five writes fire the *three*-segment key (`["decks", "notes", deckId]`)
- * and therefore do not reach this entry**, which is a hole worth naming rather than leaving for
- * somebody to find. What it costs is bounded by `query.ts`' app-wide 30 s `staleTime`: a reader
- * who writes a note in the band and opens this overlay within half a minute is served the list as
- * it stood before the press, and after that a fresh mount refetches. The fix is one word in that
- * hook — invalidate `["decks", "notes"]` — and it belongs there rather than here, because a key
- * cannot invalidate itself and this file has no way to hear a write it does not make.
+ * ⚠️ **This entry is reached only because `useDeckNotes` invalidates two segments and not three**
+ * — `["decks", "notes"]`, at `useDeckNotes.ts:88`. That is not an accident of the wider key being
+ * convenient: the hook's own doc says the narrower `["decks", "notes", deckId]` is "the obvious
+ * answer and the wrong one" *because of this reader*, which spans every deck and so puts `"card"`
+ * where a deck id would go and prefix-matches nothing three-segment. A tidy-up there that narrows
+ * the key to match the hook's own query key silently strands this overlay: it would go on
+ * answering from cache, bounded only by `query.ts`'s 30 s `staleTime`, so a reader who wrote a
+ * note about Lightning Bolt and then opened Lightning Bolt would be told something else. Nothing
+ * here can notice — a key cannot invalidate itself and this file never hears a write it does not
+ * make — so the dependency is recorded on both sides and belongs to neither alone.
+ *
+ * (This comment described that as an open hole until 2026-09-20. It was closed on 2026-09-10, in
+ * the commit that found it from the other side of the seam.)
  */
 function cardNotesKey(oracleId: string) {
   return ["decks", "notes", "card", oracleId];
@@ -272,7 +278,13 @@ function NoteRow({ note }: { note: CardNote }) {
       <p className="text-xs font-medium text-accent">{note.deckName}</p>
       {title !== "" && <p className="mt-1 text-sm font-medium text-text">{title}</p>}
       {blocks.length > 0 ? (
-        <div className="mt-1 space-y-2 text-sm leading-relaxed text-dim">
+        // `whitespace-pre-line` is load-bearing rather than typography, and this renderer went
+        // without it until 2026-09-20: a hard break travels as a `"\n"` *inside a text run*, so
+        // under the default `normal` every break a reader typed collapses to a space and a note
+        // laid out in short lines comes back as one paragraph with nothing going red. Set once
+        // here because `white-space` inherits, so a run nested in a list item or a quote is
+        // covered by the same declaration. `DeckNotesPanel` has said the same thing since v43.
+        <div className="mt-1 space-y-2 text-sm leading-relaxed whitespace-pre-line text-dim">
           {blocks.map((block, i) => (
             <BlockView key={i} block={block} />
           ))}

@@ -126,6 +126,38 @@ it("lists what was written about the card, and names the deck each note was in",
   expect(screen.getByText("Lightning Bolt")).toBeInTheDocument();
 });
 
+it("draws a hard break as a line boundary rather than a space", async () => {
+  // Regression, 2026-09-20: this renderer was the one of the three that did not set
+  // `whitespace-pre-line`, so every break a reader typed in the band read correctly there and
+  // ran together here.
+  //
+  // ⚠️ **No text assertion can tell the bug from the fix.** A hard break travels as a `"\n"`
+  // *inside a text run* (`noteMarkdown.ts`), so the newline is in the DOM either way and only
+  // `white-space` decides how it draws — and jsdom computes nothing from a Tailwind class. So
+  // this asserts the declaration, and asserts it the way the rule actually works: `white-space`
+  // inherits, `DeckNotesPanel` sets it once on the block container for exactly that reason, and
+  // a run nested in a list item or a quote is covered by an ancestor's declaration rather than
+  // its own. Walking up is therefore the claim; checking one fixed element would pin this file's
+  // current markup instead of the rule.
+  cardNotes.mockResolvedValue([
+    note({ id: 1, deckId: 7, deckName: "Burn", title: "Sideboard", body: "a\\\nb" }),
+  ]);
+  renderWithCard({ oracleId: "o1" });
+
+  // The identity normalizer matters: the default one collapses whitespace, so the query would
+  // match "a b" and pass against the very collapse this test exists to catch.
+  const run = await screen.findByText("a\nb", { normalizer: (text) => text });
+  // Anti-vacuity: if the parser ever stops emitting the break, the walk below would still find
+  // the class and report a pass about a newline that is no longer there.
+  expect(run.textContent).toContain("\n");
+
+  let node: HTMLElement | null = run;
+  while (node !== null && !node.classList.contains("whitespace-pre-line")) {
+    node = node.parentElement;
+  }
+  expect(node, "no ancestor declares whitespace-pre-line, so the break draws as a space").not.toBeNull();
+});
+
 it("says the card has no notes rather than drawing an empty box", async () => {
   // Silence is the failure this whole component is shaped against: an empty panel is a picture
   // the in-flight and failed states also draw, and only one of the three means "there is nothing

@@ -33,6 +33,7 @@ const EVERY_KIND: Record<WidgetKind, true> = {
   setCompletion: true,
   priceMovers: true,
   newPrintings: true,
+  stickyNotes: true,
 };
 
 const EVERY_DIMENSION: Record<BreakdownDimension, true> = {
@@ -197,6 +198,15 @@ describe("WIDGETS", () => {
         picks: { count: { ids: [4, 6, 8], dflt: 8 } },
         toggles: { names: true },
         chip: undefined,
+      },
+      stickyNotes: {
+        picks: { layout: { ids: ["board", "pad"], dflt: undefined } },
+        // All three start on. `dflt` landed on `WidgetToggle` while this kind was being written
+        // (see `newPrintings` below, the first to use it), so "absent means on" is no longer the
+        // only shape a toggle has — these three are on because each names something the reader
+        // would miss rather than something they have to ask for.
+        toggles: { dates: true, strip: true, pinned: true },
+        chip: "layout",
       },
       // The first kind with a switch that starts *off*, and the two that do are the issue's own
       // requirement rather than a taste: a virtual deck is a pile the reader does not own, and a

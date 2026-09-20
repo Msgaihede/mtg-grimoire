@@ -13,11 +13,11 @@
 //!
 //! # The row handle here is the `sync_uid`, not the rowid
 //!
-//! Every statement this module builds addresses a row by `WHERE sync_uid = ?`. Thirteen of the
-//! fifteen synced tables have an `INTEGER PRIMARY KEY` and two have none at all — `muted_tags`
+//! Every statement this module builds addresses a row by `WHERE sync_uid = ?`. Fourteen of the
+//! sixteen synced tables have an `INTEGER PRIMARY KEY` and two have none at all — `muted_tags`
 //! is `WITHOUT ROWID` on `(namespace, tag_id)` and `device_names` on `device_id` — so a rowid
 //! would need a second spelling of every statement for both. The uid is `UNIQUE` on all
-//! fifteen and every row has one, which is what `schema::mint_missing_uids` and the capture
+//! sixteen and every row has one, which is what `schema::mint_missing_uids` and the capture
 //! trigger's mint are between them for.
 //!
 //! # Add-wins needs this device's own history, and `sync_ops` is where it is
@@ -160,15 +160,15 @@ struct Meta {
     /// `created_at` / `updated_at`. `deck_audit` and `muted_tags` carry their own stamp
     /// (`at`, `muted_at`) as an ordinary field and have neither column.
     timestamps: bool,
-    /// Whether the table can hold a sentence for the reader at all. Nine of the fifteen
+    /// Whether the table can hold a sentence for the reader at all. Ten of the sixteen
     /// cannot: `decks`, `deck_categories`, `deck_labels`, `deck_tokens`, `deck_notes`,
-    /// `deck_note_cards`, `deck_audit`, `muted_tags` and `device_names`.
+    /// `deck_note_cards`, `deck_audit`, `muted_tags`, `device_names` and `sticky_notes`.
     needs_review: bool,
     /// The self-referencing column a cycle can form on, for the three folder tables.
     tree: Option<&'static str>,
 }
 
-const META: [Meta; 15] = [
+const META: [Meta; 16] = [
     Meta {
         table: "deck_folders",
         order: 0,
@@ -418,6 +418,29 @@ const META: [Meta; 15] = [
         }],
         counters: &[],
         timestamps: true,
+        needs_review: false,
+        tree: None,
+    },
+    Meta {
+        table: "sticky_notes",
+        // Appended rather than slotted in, `deck_tokens`' and `deck_notes`' reason: the rank is
+        // only ever *sorted* by, and this row hangs off nothing at all, so there is no parent it
+        // has to land behind and any number does. Renumbering the tail to give it a tidier one
+        // would move fifteen ranks to change nothing an emission can observe.
+        order: 15,
+        // **No grain, deliberately** — `deck_notes`' argument verbatim, and this table is the
+        // stronger case for it. Two devices each typing a note about the same thing must stay
+        // two notes, and there is no column pair that could tell an accidental duplicate from a
+        // deliberate one: the title may be empty on both, and `color` and `sort_order` say
+        // nothing about identity. Uid-only, like `deck_notes`, `decks` and the folder tables.
+        grains: &[],
+        counters: &[],
+        timestamps: true,
+        // No `needs_review` column on the table, so there is nowhere to put a sentence — and
+        // nothing to say one about. Every field here is last-writer-wins prose the reader can
+        // read for themselves, and the conflict a sentence exists to report (a row deleted on
+        // one device and edited on another) resolves add-wins with the note still in front of
+        // them.
         needs_review: false,
         tree: None,
     },

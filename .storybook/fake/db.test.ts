@@ -66,6 +66,7 @@ import type {
   ImportResolveLine,
   SearchRequest,
   SearchSortKey,
+  StickyNote,
   TransferImportMode,
   WishlistImportItem,
   WishlistQuery,
@@ -79,6 +80,9 @@ import { activityLine } from "@/features/home/activityText";
 // The app's half of the default layout, which the fake spells out rather than imports — so the
 // only thing holding the two together is a test that compares them.
 import { DEFAULT_LAYOUT } from "@/features/home/widgets";
+// The app's own note reader, borrowed for one fence a grep could not make: the seeded sticky
+// notes claim to carry a hard break, and only this says whether the characters really are one.
+import { parseNoteBody } from "@/features/decks/noteMarkdown";
 import type { MarketplaceId } from "@/lib/marketplace";
 import { parseSnapshotValue, SNAPSHOT_VERSION } from "@/lib/shareSnapshot";
 import type { SortSpec } from "@/lib/sort";
@@ -9785,6 +9789,24 @@ describe("the busy fault", () => {
       // argument, and `"grid"` is non-blank, so the one refusal `set_start_view` has cannot stand
       // in for a refusal about a sync either.
       layout: { version: 2, widgets: [] },
+      // The sticky notes' one key no write before them had. Their other four are already on this
+      // record — `id`, `ids`, `title` and `body` from the note writes above, and `color` from
+      // the three label writes, which is the **fourth** key here that writes in two different
+      // features spell the same way. `"ember"` is a word a label accepts and a sticky note does
+      // not even look at: that column carries no CHECK on either side of the wire, so there is
+      // nothing for `sticky_note_create` to refuse instead of the sync.
+      //
+      // `pinned` is a boolean and has no junk state, `collapsed`'s reason — and it is named
+      // rather than left out because `invoke` matches by name, which is this record's whole
+      // rule, even for a key whose command treats absent and present alike.
+      //
+      // The two that resolve a row are what this loop is really for here: `id: 1` names **no
+      // sticky note** in this world, so a handler that looked its note up before taking the lock
+      // would fail by answering `sticky_notes::NOTE_GONE` instead of BUSY. `ids` is
+      // `[categoryId(1, "main")]` — strings, where a reorder wants numbers — and that is
+      // harmless for every collision's reason on this record: `refuseIfBusy` is that handler's
+      // first statement, and it skips an id that is not a note rather than refusing one anyway.
+      pinned: true,
       // `mark_new_printings_seen`'s argument, and the **sixth** key on this record that carries a
       // clock the caller owns rather than one the backend reads. Never looked at on this path —
       // `refuseIfBusy` is that handler's first statement and it has no refusal of its own to run
@@ -10215,7 +10237,40 @@ describe("the busy fault", () => {
     //
     // **This delta is arithmetic against one tree** — re-run the sweep after the next merge
     // rather than adding to it. 115 was taken by running it and reading `left`.
-    expect(names).toHaveLength(116);
+    //
+    // The sticky notes then added **four**, 115 → 119 on their own branch, and the feature ships **five** commands:
+    // the eighth entry where the handler count and the delta differ, and the ordinary shape of
+    // it — `sticky_notes` is a read on `lock_db_read` and is not in this table at all, while
+    // `sticky_note_create`, `_update`, `_delete` and `_reorder` all take plain
+    // `sync::with_write`. Nothing here moves a copy across the collection boundary and nothing
+    // touches the network, so none needed `with_write_owned` and none joined `unlocked`.
+    //
+    // Two of the four are worth this loop more than the others. `sticky_note_update` and
+    // `sticky_note_delete` each resolve a row and refuse `sticky_notes::NOTE_GONE` when they
+    // cannot, and `id: 1` on the record above names no sticky note in this world — so a handler
+    // that looked its note up first would refuse in the wrong words, and the `/busy/i` match is
+    // what tells the two apart. `sticky_note_reorder` is the third worth naming for the opposite
+    // reason: its whole body is a loop over `sortOrder` that **skips** an id it cannot find, so
+    // a missing refusal there would answer `Ok` on a busy database and show up nowhere else in
+    // this file — `deck_note_reorder`'s shape, one table over.
+    //
+    // **119 was measured rather than reasoned to**, and by a second method worth naming, since
+    // every paragraph above is about a number that keeps going wrong: the `writeHandlers` object
+    // literal was **parsed** with the TypeScript compiler API and its properties counted — 132
+    // keys, no duplicate, no spread, no computed name, and all 13 `unlocked` entries present as
+    // real keys, so 132 − 13 = 119 is exactly what `Object.keys(…).filter(…)` answers here. That
+    // is the same answer as reading `left` off a failing run and is available without one.
+    // (Arithmetic against the previous figure said 119 too; agreement between the two is the
+    // point, because 115 + 4 would have been just as confident if a sibling branch had landed a
+    // write.)
+    //
+    // ⚠️ **It is still a fact about one tree.** A red here after a merge means count again — the
+    // parse above takes seconds — and it does not mean these four are missing a `refuseIfBusy`.
+    // ⚠️ **And a merge did exactly that, the same day.** `newPrintings` landed one write of its
+    // own on `main` while this branch was open — 115 → 116 there, 115 → 119 here — so neither
+    // number survived and the figure below is the parse above re-run on the merged tree. That is
+    // the case the paragraph above was written for, arriving before the ink was dry.
+    expect(names).toHaveLength(120);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -15406,6 +15461,244 @@ describe("the recently viewed cards", () => {
     expect(() => writeHandlers(busy).record_recent_card({ cardId: " " })).toThrow(/busy/i);
     // A read answers through every second of a sync.
     expect(readHandlers(busy).recent_cards({ limit: 8 })).toEqual([]);
+  });
+});
+
+/**
+ * The sticky notes — `sticky_notes.rs`'s five commands, user schema v46.
+ *
+ * **The first table on this page that hangs off nothing**, so there is no owner to resolve and
+ * no parent to be wrong about; what is left to get right is an *order*, a patch that means
+ * "leave it", and two refusals that must lose to the lock.
+ */
+describe("the reader's sticky notes", () => {
+  const DAY = 86_400;
+  /**
+   * `sticky_notes::NOTE_GONE`, verbatim — and **the same sentence `deck_notes.rs` uses**, which
+   * is the house style rather than a copy-paste. Spelled out here rather than imported from
+   * `db.ts` (which does not export it) for the reason the fake keeps two constants for one
+   * string: the two crates may reword independently, and a test reading the fake's own constant
+   * could never tell you that the fake had drifted from the crate.
+   */
+  const GONE = "That note is not there any more.";
+  const SEEDED = [
+    "Trade night — Friday",
+    "Bracket 3 — house rules",
+    "Cards to proxy",
+    "Sealed box math",
+    "Wishlist — birthday",
+    "Sleeve stock",
+    "Draft archetypes",
+    "Deck ideas — Atraxa",
+  ];
+
+  /**
+   * A board holding exactly these notes, ids `1..n` in the order written and `sortOrder` to
+   * match unless a case says otherwise. Every field has a default, because the tests below are
+   * each about one of them and a row spelled out eight times would bury which.
+   */
+  function board(...notes: Partial<StickyNote>[]): FakeDb {
+    return makeDb({
+      stickyNotes: notes.map((n, i) => ({
+        id: i + 1,
+        title: "",
+        body: "",
+        color: "slate",
+        pinned: false,
+        sortOrder: i,
+        createdAt: CLOCK_BASE - DAY,
+        updatedAt: CLOCK_BASE - DAY,
+        ...n,
+      })),
+    });
+  }
+
+  /** `starter` is the only world with any, and `empty` is the state the widget's empty card
+   *  draws — a note is a thing somebody wrote, so no seed can imply one. */
+  it("seeds eight notes on starter in the order they were arranged, and none on empty", () => {
+    const got = readHandlers(seed("starter")).sticky_notes();
+
+    expect(got.map((n) => n.title)).toEqual(SEEDED);
+    // All five colours the page knows, so the tinted layout has something to be tinted about.
+    expect(new Set(got.map((n) => n.color))).toEqual(
+      new Set(["amber", "jade", "azure", "rose", "slate"]),
+    );
+    // Exactly one pin: a mark every row wears is a mark that says nothing, and it is the only
+    // arrangement the Pinned-first option visibly changes.
+    expect(got.filter((n) => n.pinned).map((n) => n.title)).toEqual(["Trade night — Friday"]);
+    // Every seeded row is under the fixture's clock, so a story's first write lands above all
+    // eight — this file's rule for every seeded timestamp.
+    expect(Math.max(...got.map((n) => n.updatedAt))).toBeLessThan(CLOCK_BASE);
+    expect(readHandlers(seed("empty")).sticky_notes()).toEqual([]);
+  });
+
+  /**
+   * ⚠️ **The hard break, read through the app's own reader rather than grepped for.**
+   *
+   * A break is spelled as a trailing backslash in the stored body and travels as a `"\n"`
+   * inside a text run, because `Inline` has no break member — so a renderer that forgets
+   * `whitespace-pre-line` draws it as a space, a lost line boundary nothing else in either
+   * suite would notice. Seeding one is what makes that visible in the workbench; asserting the
+   * parse is what stops a later tidy-up deleting the backslash and leaving the seed claiming a
+   * break it no longer has.
+   */
+  it("seeds bodies that really carry a hard break and a bullet list", () => {
+    const got = readHandlers(seed("starter")).sticky_notes();
+    const blocks = (n: StickyNote) => parseNoteBody(n.body);
+
+    const broken = got.filter((n) =>
+      blocks(n).some((b) => b.kind === "paragraph" && b.inlines.some((i) => i.text.includes("\n"))),
+    );
+    expect(broken.map((n) => n.title)).toEqual(["Sealed box math", "Deck ideas — Atraxa"]);
+
+    expect(
+      got.filter((n) => blocks(n).some((b) => b.kind === "list" && !b.ordered)).length,
+    ).toBeGreaterThan(0);
+  });
+
+  /** Landing last is the promise: a board somebody arranged keeps that arrangement, and the new
+   *  note is where they can find it. The colour is stored as written — no CHECK, because the
+   *  table is synced and a newer build's sixth colour has to survive the round trip. */
+  it("lands a new note at the end of the board and answers its id", () => {
+    const db = board({}, {});
+    const id = writeHandlers(db).sticky_note_create({
+      title: "Pack list",
+      body: "",
+      color: "chartreuse",
+    });
+    const got = readHandlers(db).sticky_notes();
+
+    expect(got.map((n) => n.id)).toEqual([1, 2, id]);
+    expect(got[2]).toMatchObject({ title: "Pack list", color: "chartreuse", sortOrder: 2 });
+    // Not an argument: a note is pinned by pressing the pin, so a create writes the column's
+    // own `DEFAULT 0` and nothing else.
+    expect(got[2].pinned).toBe(false);
+    // One instant for both stamps, and above every row already in the store.
+    expect(got[2].createdAt).toBe(got[2].updatedAt);
+    expect(got[2].createdAt).toBeGreaterThan(CLOCK_BASE);
+  });
+
+  /** `coalesce(?n, col)`, and the two values a truthiness test would swallow. */
+  it("changes only the fields it names, and `\"\"` and `false` are real presses", () => {
+    const db = board({ title: "Trade night", body: "Seven", color: "amber", pinned: true });
+    const w = writeHandlers(db);
+
+    w.sticky_note_update({ id: 1, body: "Eight" });
+    expect(readHandlers(db).sticky_notes()[0]).toMatchObject({
+      title: "Trade night",
+      body: "Eight",
+      color: "amber",
+      pinned: true,
+    });
+
+    // A title the reader deliberately cleared, and a pin they deliberately took out. `??` and
+    // never `||`: either read as "no change" would be a press that reported success and did
+    // nothing, for ever.
+    w.sticky_note_update({ id: 1, title: "", pinned: false });
+    expect(readHandlers(db).sticky_notes()[0]).toMatchObject({
+      title: "",
+      body: "Eight",
+      pinned: false,
+    });
+  });
+
+  /** The crate writes `updated_at = unixepoch()` with nothing compared first, unlike
+   *  `deck_note_update` — there is no history row here to guard and no undo step to spend, so
+   *  there is nothing a comparison would buy. The birth date never moves. */
+  it("moves the clock on every save, even one that names no field, and never the birth date", () => {
+    const db = board({ createdAt: CLOCK_BASE - 2 * DAY, updatedAt: CLOCK_BASE - 2 * DAY });
+    const before = readHandlers(db).sticky_notes()[0];
+
+    writeHandlers(db).sticky_note_update({ id: 1 });
+
+    const after = readHandlers(db).sticky_notes()[0];
+    expect(after.createdAt).toBe(before.createdAt);
+    expect(after.updatedAt).toBeGreaterThan(before.updatedAt);
+  });
+
+  /** **The survivors are not renumbered**, which is the crate's `DELETE` and not an omission:
+   *  `sort_order` is an ordering and never a position, and a renumbering pass would be N extra
+   *  rows for the sync to carry every time a reader threw one note away. */
+  it("deletes one note and leaves the survivors' numbers where they were", () => {
+    const db = board({}, {}, {});
+
+    writeHandlers(db).sticky_note_delete({ id: 2 });
+
+    expect(readHandlers(db).sticky_notes().map((n) => [n.id, n.sortOrder])).toEqual([
+      [1, 0],
+      [3, 2],
+    ]);
+  });
+
+  /** Renumber in the order given. **An id that is not a note is skipped rather than refused** —
+   *  the page sends the order it drew, and a note deleted in another window must not fail the
+   *  drag the reader just made. The sync makes that an ordinary Tuesday. */
+  it("renumbers in the order given, and a stranger is skipped but keeps its place", () => {
+    const db = board({}, {}, {});
+
+    writeHandlers(db).sticky_note_reorder({ ids: [3, 1, 2] });
+    expect(readHandlers(db).sticky_notes().map((n) => n.id)).toEqual([3, 1, 2]);
+
+    // ⚠️ The number written is the position in the **argument**, strangers included — the
+    // crate's `enumerate()` counts them — so the notes after one keep a hole. The reader still
+    // sees the order they dragged, which is the only thing this command promises.
+    writeHandlers(db).sticky_note_reorder({ ids: [2, 999, 1, 3] });
+    expect(readHandlers(db).sticky_notes().map((n) => [n.id, n.sortOrder])).toEqual([
+      [2, 0],
+      [1, 2],
+      [3, 3],
+    ]);
+  });
+
+  /** The tie term, and it is load-bearing rather than tidy: a create mints `max + 1` while a
+   *  reorder renumbers from 0, so two devices really can land on one number — and a read
+   *  sorting on `sort_order` alone would be free to draw those two in either order, a board
+   *  that reshuffles itself between two frames. */
+  it("breaks a tie on the id", () => {
+    const db = board({ sortOrder: 5 }, { sortOrder: 5 }, { sortOrder: 1 });
+
+    expect(readHandlers(db).sticky_notes().map((n) => n.id)).toEqual([3, 1, 2]);
+  });
+
+  /** A page holding a row it can mutate is a state the backend cannot produce, which is this
+   *  fake's own bar — `set_home_layout`'s rule on the way back out. */
+  it("hands back copies rather than the stored rows", () => {
+    const db = board({ title: "Trade night" });
+
+    readHandlers(db).sticky_notes()[0].title = "not this";
+
+    expect(db.stickyNotes[0].title).toBe("Trade night");
+  });
+
+  /** One sentence, `sticky_notes::NOTE_GONE` verbatim, on the two writes that resolve a row —
+   *  a create has none to miss and a reorder skips instead. */
+  it("refuses an update or a delete of a note that is gone, in the crate's sentence", () => {
+    const db = board({});
+    const w = writeHandlers(db);
+
+    expect(() => w.sticky_note_update({ id: 404, title: "x" })).toThrow(GONE);
+    expect(() => w.sticky_note_delete({ id: 404 })).toThrow(GONE);
+    expect(readHandlers(db).sticky_notes()).toHaveLength(1);
+  });
+
+  /**
+   * All four writes take the write connection, and **the lock is asked first** — the ids here
+   * name no note at all, so a handler that resolved its row before `refuseIfBusy` would fail
+   * this by answering {@link GONE} instead of BUSY.
+   *
+   * The read answers through every second of a sync, which is why its own BUSY is unstoryable —
+   * the gap `home-page.md` records for six other widgets, and not one to chase with a fault.
+   */
+  it("refuses all four writes under a sync and answers the read anyway", () => {
+    const db = board({});
+    db.fault = "busy";
+    const w = writeHandlers(db);
+
+    expect(() => w.sticky_note_create({ title: "", body: "", color: "slate" })).toThrow(/busy/i);
+    expect(() => w.sticky_note_update({ id: 404 })).toThrow(/busy/i);
+    expect(() => w.sticky_note_delete({ id: 404 })).toThrow(/busy/i);
+    expect(() => w.sticky_note_reorder({ ids: [404] })).toThrow(/busy/i);
+    expect(readHandlers(db).sticky_notes()).toHaveLength(1);
   });
 });
 
