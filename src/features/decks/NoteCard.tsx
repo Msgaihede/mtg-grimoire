@@ -66,8 +66,26 @@ export const NOTE_STRIP_ATTR = "data-note-strip";
  */
 export interface NoteFocus {
   noteId: number;
-  /** Open this note's editor as it arrives — `add` only. Reading is what `open` is for, and an
-   *  editor a reader did not ask for is a body they can lose by pressing the wrong thing. */
+  /**
+   * Open this note's editor as it arrives — **read in one place, and raised by nothing**.
+   *
+   * ⚠️ It said *`add` only* until 2026-09-20 and that is no longer a description of anything.
+   * `Add note…` used to create the row and then send the band to it with this flag up, so the
+   * editor opened on a note that already existed; it opens a dialog on a note that does **not**
+   * exist yet now — the card travels as `NotesBandProps.pendingCard` and the create is the Save.
+   * The band's one producer — `DeckNotesPanel`'s request adjustment — therefore writes
+   * `edit: false` unconditionally, and its one reader, `NotesBand`'s adjustment beside it, is
+   * reading a field nothing raises. This card is not that reader: it takes the whole focus and
+   * asks only whether there *is* one, because bringing a note into view is what both kinds want.
+   *
+   * **Kept rather than deleted, and the reason is the arm behind it.** `NotesBand`'s adjustment
+   * waits for the named note to appear in `notes` before it acts on an `edit` focus — the
+   * guarantee a caller that *does* raise one is owed, and the thing that would have to be
+   * rediscovered if the field went and came back. It costs one comparison per focus change.
+   * Reading is what a focus with this down is for, which is the whole of `Notes ▸`: an editor a
+   * reader did not ask for is a body they can lose by pressing the wrong thing, and 141.5 kB of
+   * ProseMirror in front of a card they came to look at.
+   */
   edit: boolean;
 }
 

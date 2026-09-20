@@ -3079,6 +3079,98 @@ the Theory list shows on the Live list and the other way round, because both hol
 id; and one note naming Lightning Bolt names it once, however many copies or finishes the deck
 holds.
 
+### …and *draws* one by `card_id`, which is a read-time convenience and nothing else
+
+Added 2026-09-20 with the band's redesign, so that a note card can draw a **44×32 `art` crop** of
+each card it names. `attachments_by_note` resolves a **representative printing** per attachment —
+the printing **this deck holds** where it holds one, and any printing the corpus has otherwise —
+and `DeckNoteCard` carries `cardId` and `imageUris` beside the oracle id and the name.
+
+**Both are answers and never keys.** Never matched on, never written, never synced, and
+**honestly different between two reads of one row**: which printing wins moves with the deck's own
+list, so swapping a printing changes the picture a note draws without changing anything the note
+stores. `cardId: null` is the **orphan** — an oracle id the corpus knows no printing of at all —
+and it draws the empty frame rather than a broken image. A card merely **cut from the deck** is
+not that case and keeps both, because the fallback arm searches the whole corpus.
+
+**No migration, and that is the point.** `deck_note_cards` is unchanged — the same columns, the
+same `idx_deck_note_cards_grain` on `(note_id, oracle_id)` — so the fifteen synced tables, its
+`apply::Meta` rank of 14 and `deck_undo`'s `attachments` snapshot are all untouched. The redesign
+that asked for the pictures added columns to a **read**, which is why it spent no schema rung.
+
+### ⚠️ The printing is picked as a *row*, and the design's `min()` aggregates are not what shipped
+
+The statement chooses one `cards` row with a correlated subquery and takes every column off
+**that** row:
+
+```sql
+LEFT JOIN cards p ON p.id = (
+     SELECT c.id
+       FROM cards c
+       LEFT JOIN deck_cards dc ON dc.card_id = c.id AND dc.deck_id = n.deck_id
+      WHERE c.oracle_id = nc.oracle_id
+      ORDER BY (dc.card_id IS NULL), c.id
+      LIMIT 1
+)
+```
+
+**The aggregate form is what the design document drew, and it has a real defect.** The spec's §5
+keeps the `GROUP BY nc.note_id, nc.oracle_id` the statement already had and picks each column with
+an aggregate of its own — `coalesce(min(c.name), nc.oracle_id)` beside
+`coalesce(min(CASE WHEN dc.card_id IS NOT NULL THEN c.id END), min(c.id))`. **Those two agree by
+luck rather than by construction**: every printing of one oracle card shares its name, so the name
+aggregate cannot disagree with anything, and the spec is right that the `GROUP BY` costs no rows.
+The picture is where the luck runs out, and it runs out on the **third** column rather than on
+either of these. `min(json_extract(c.image_uris, '$.art'))` is a `min()` over a *different* column
+of the same joined group, so it is free to answer **one printing's id beside another printing's
+art**: one card's identity under a different card's picture, out of a query that returns a row for
+every attachment and errors on none, with nothing in either build able to see it. A subquery that
+answers a single `id` makes that unrepresentable rather than unlikely, and the `GROUP BY` goes
+away with it.
+
+Four more things about it:
+
+- **`ORDER BY (dc.card_id IS NULL), c.id` inside the subquery is the whole of the preference.**
+  SQLite sorts `0` before `1`, so a printing the deck holds comes first and `c.id` breaks the tie
+  — which is the deck's own printing where it has one and a plain `min(c.id)` where it has none.
+  That is the spec's `coalesce(min(CASE WHEN dc.card_id IS NOT NULL THEN c.id END), min(c.id))`
+  said as a **sort** instead of as two nested aggregates: same preference, same fallback, one
+  expression, and a *row* at the end of it rather than an id.
+- **The `GROUP BY` is gone and no row count moved.** The grain gives one `deck_note_cards` row per
+  attachment to begin with, and `p.id = (scalar)` matches at most one, so the printing
+  multiplication the aggregate was collapsing cannot occur. `min(c.name)` went with it and lost
+  nothing: every printing of an oracle card shares its name, which is why `card_name` is still
+  spelled as a `min()` one function over.
+- **`LEFT JOIN`, so a card the corpus has never heard of is still an attachment**, named by its
+  own oracle id. The reference is soft like every other card reference in a user table, and a note
+  that refused to load because a printing has not been synced yet would be a note the reader
+  cannot reach.
+- **`cards(oracle_id)` is indexed** (`idx_cards_oracle`), which is what keeps the subquery from
+  being a scan per attachment.
+
+**The rows come back in card-name order** — the statement ends
+`ORDER BY nc.note_id, coalesce(p.name, nc.oracle_id), nc.oracle_id` — and that is load-bearing on
+the near side rather than cosmetic: `NoteCard` draws the **first three** crops and counts the rest
+as `+N more`, so the order decides which three a reader sees. An orphan sorts by its own oracle id,
+which is the same string it is named by.
+
+### ⚠️ This statement has an `IMAGE_COL` of its own, and it is **4** rather than 27
+
+Not to be confused with `DECK_SELECT`'s, which the *`IMAGE_COL` stays at 27* subsection below is
+about: that is a different statement in a different module, and the two numbers have nothing to do
+with each other beyond the name. Here it is *one past `p.id`*, the last named column, and
+`crate::image_uri::front_face_selects("p")` appends the rest.
+
+The failure it fences is the one `card.rs`'s `fixture_with_both_image_columns` exists for, and it
+is worse than an error: the appended columns are **(top-level, face) pairs**, one pair per
+`image_uri::LIST_VARIANTS` entry, and `for_face` prefers the face — so a read one column *early*
+puts the top-level URL into the face slot and answers a **perfectly real URL**, the right crop on
+the right host, versioned. A fixture carrying one column, or one variant, cannot tell that from a
+correct read. Only a distinct URL in every one of `FRONT_FACE_COLUMNS`' slots can, which is what
+`an_attachment_names_the_printing_this_deck_holds` seeds: two printings of one oracle card, each
+with a different picture in each slot, and **the printing the deck holds sorting *second* by id**
+so that the preference is the only thing that could have chosen it.
+
 ### The two tables, and why only one has a grain
 
 `deck_notes` is **uid-only**, joining `decks`, the three folder tables and `deck_audit`. Two
@@ -3119,11 +3211,18 @@ and nine in the before-image mapper down by one, and moves `update_deck`'s `?9`�
 `IMAGE_COL` reads **27** before and after. The one constant a reader would check to decide whether
 the read had moved is the one number that did not.
 
+**This is `deck.rs`'s `DECK_SELECT` and it is not the only `IMAGE_COL` in the crate** — every
+statement that appends `image_uri::front_face_selects` declares one of its own, and
+`grep -rn "const IMAGE_COL" src-tauri/src/` is the census rather than a number written here.
+`attachments_by_note`'s is **4**; see *…and draws one by `card_id`* above. Same name, same kind of
+fence, unrelated statements: no one of them constrains another, and reading one subsection's
+figure into another's statement is a read that answers real URLs for the wrong printing.
+
 ### The eight commands
 
 | Command | Answers |
 | --- | --- |
-| `deck_notes(deckId)` | every note on the deck in `sort_order`, each with the oracle ids it names and a card name for each |
+| `deck_notes(deckId)` | every note on the deck in `sort_order`, each with the oracle ids it names and — per id — a card name, a representative printing and that printing's image urls |
 | `deck_note_create(deckId, title, body, oracleIds)` | the new row |
 | `deck_note_update(deckId, id, title?, body?)` | the updated row |
 | `deck_note_delete(deckId, id)` | — |
@@ -3140,8 +3239,12 @@ no way to change that order. The issue asked for notes that can be added, manage
 independently, and reordering was this plan's own addition rather than a request. It is left in
 because deleting a working capability across seven layers to remove one unpressed button is the
 worse trade, and it is written down here because an unwired command is exactly the kind of thing a
-green build never mentions. Wiring it is two `RowAction`s in `DeckNotesPanel`, on `CategoryRow`'s
-up/down arrangement.
+green build never mentions. **What wiring it would take moved with the band's redesign**: this
+said *two `RowAction`s in `DeckNotesPanel`, on `CategoryRow`'s up/down arrangement*, which was an
+answer about a list of rows. The band is a masonry of cards now, where the next card is to the
+right on one line and at the foot of the shortest column on the next — so a pair of up/down
+arrows would name a direction the layout does not have, and the gesture a grid of cards wants is a
+drag. The command is unchanged either way; only the size of the surface that would press it moved.
 
 `card_notes` is the one read that is not deck-scoped, and it is what the card modal's `Notes` row
 asks. A card opened from the collection, from search or from another deck still answers *what have
@@ -3155,7 +3258,9 @@ page has already made. A second command would be a second source of truth for a 
 **`deck_notes` reads in two statements, never N+1**: one over `deck_notes`, one `LEFT JOIN` from
 `deck_note_cards` to `cards` across the deck's note ids, zipped in Rust. Where a `cards` row is
 missing — an oracle id the corpus has never seen — the name answers as the oracle id rather than
-failing the read.
+failing the read. **It is still two statements now that each attachment also answers a printing**
+— the preference is a correlated subquery *inside* the second one, not a third query and not a
+round trip per card; *…and draws one by `card_id`* above has the whole of it.
 
 ### History rides the `deck` kind, and `AUDIT_KINDS` stays at nine
 
