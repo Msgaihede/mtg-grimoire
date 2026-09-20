@@ -82,7 +82,7 @@
  *
  * Full record: `docs/superpowers/research/2026-08-27-commander-brackets-and-combos.md`.
  */
-import type { DeckCombo } from "@/lib/ipc";
+import type { ComboBracketTag, DeckCombo } from "@/lib/ipc";
 import type { BracketCardFacts } from "./types";
 
 /**
@@ -297,7 +297,7 @@ function isExtraTurn(text: string): boolean {
  * `S` and `O` take the *lower* of the two brackets Spellbook hedges between, which is the only
  * reading a floor can honestly give: "probably 3 or 4" is not evidence a deck is barred from 3.
  */
-const COMBO_FLOOR: Record<DeckCombo["bracketTag"], number | null> = {
+export const COMBO_FLOOR: Record<ComboBracketTag, number | null> = {
   R: 4,
   S: 3,
   P: 3,
@@ -306,6 +306,33 @@ const COMBO_FLOOR: Record<DeckCombo["bracketTag"], number | null> = {
   E: null,
   B: null,
 };
+
+/**
+ * The brackets a combo is legal in, as the five numbers a reader is shown.
+ *
+ * **Derived from {@link COMBO_FLOOR} and never tabulated a second time.** A floor of N means
+ * "this combo belongs in bracket N and up", which is N through 5 — the same statement the deck
+ * advisory makes as a lower bound, said as a set because the card side is not estimating a
+ * deck's bracket and has no bound to raise.
+ *
+ * `B` is the exception and it is not a floor at all: *Banned* is a legality finding, so the
+ * answer is the empty list and the caller says "not legal in Commander" rather than drawing
+ * five empty pips. `E` has no floor for the opposite reason — it is legal everywhere — so it
+ * answers all five. The two nulls in {@link COMBO_FLOOR} mean different things and this is the
+ * only place that has to know it.
+ *
+ * **`?? 1` is `E`'s arm and not a fallback for an unknown letter.** `ComboBracketTag` is a
+ * closed union and the table is total over it, so the only `undefined` this coalesce can ever
+ * see comes from a cast — the same shape `estimateBracket` already tolerates one rung below,
+ * where an eighth letter raises nothing rather than poisoning the arithmetic. Here it answers
+ * all five brackets, which is the honest reading of a classification this build does not know:
+ * we have no evidence it is barred from anywhere.
+ */
+export function comboBrackets(tag: ComboBracketTag): readonly number[] {
+  if (tag === "B") return [];
+  const floor = COMBO_FLOOR[tag] ?? 1;
+  return [1, 2, 3, 4, 5].filter((n) => n >= floor);
+}
 
 /**
  * Where the estimate starts: **2, Core** — the bracket a deck that flags nothing reads as.
