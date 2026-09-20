@@ -5,6 +5,7 @@ import { registerCommands } from "../../../.storybook/fake/core";
 import { printing } from "../../../.storybook/fake/fixtures";
 import type { CardCombo, CardCombosPage, ComboPiece, ComboStatus } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
+import { DESKTOP_FLOOR_HEIGHT_PX, DESKTOP_FLOOR_PX } from "@/lib/viewports";
 import { CombosDialog } from "./CombosDialog";
 
 /**
@@ -49,7 +50,7 @@ const NOT_OWNED = piece({
 
 /** The plain two-card combo: both pieces owned, nothing but `produces` filled in — which is what a
  *  large share of the feed's rows look like, and why every optional section draws *nothing*
- *  rather than an empty heading. */
+ *  rather than an empty heading. It is also the shape {@link OwnedEntirely} is about. */
 const LIFEGAIN: CardCombo = {
   id: "3422-3587",
   bracketTag: "S",
@@ -84,6 +85,10 @@ const AVACYN_COMBO: CardCombo = {
 /**
  * The row with every optional field filled — and a `templateCount` of 1, which is the state the
  * pieces list cannot show: the combo also needs something no card list can name.
+ *
+ * It is the pane's tallest drawing and the one {@link WalkTheRail} walks to, which is the whole
+ * reason it is third in the list rather than first: the rail's selection falls to row one on open,
+ * so the only way to see this one is to press it.
  */
 const TEMPLATED: CardCombo = {
   id: "5120-5121",
@@ -115,7 +120,9 @@ const TEMPLATED: CardCombo = {
 };
 
 /** A card with far more combos than one page — Ashnod's Altar is in 6 044 of them on the real
- *  corpus, so this is the ordinary case for a staple rather than a stress test. */
+ *  corpus, so this is the ordinary case for a staple rather than a stress test. Sixty against a
+ *  `PAGE_SIZE` of 50, so the rail's first page is full and the sentinel has something left to
+ *  ask for. */
 const MANY: CardCombo[] = Array.from({ length: 60 }, (_, i) => ({
   ...LIFEGAIN,
   id: `9000-${i}`,
@@ -151,6 +158,27 @@ const NEVER: ComboStatus = {
   stale: true,
 };
 
+/**
+ * What one rail row is called, spelled out here so a `play` can press a row by the sentence the
+ * component builds for it.
+ *
+ * **Written out rather than imported from `comboRowLabel`.** That function is not exported, and
+ * exporting it so the stories could re-run it would make this page assert that the component
+ * agrees with itself. These are the four parts in the order the row says them — the other pieces
+ * and the classification, the brackets in words, the size, the ownership — and if the shape moves,
+ * these break, which is the whole point of writing them by hand.
+ */
+const ROW_LIFEGAIN =
+  "Boros Charm — Spicy. Legal in brackets 3, 4 and 5. 2 cards. You own every piece.";
+const ROW_TEMPLATED =
+  "Boros Charm + Spitemare — Powerful. Legal in brackets 3, 4 and 5. 3 cards. Missing 1.";
+const ROW_MANY_FIRST =
+  "Boros Charm 1 — Spicy. Legal in brackets 3, 4 and 5. 2 cards. Missing 1.";
+
+/** The sentence the pane's five pips carry, and the range box's `3–5` said in full. Both of this
+ *  page's `S`/`P` fixtures floor at bracket 3, so it is the same string for all of them. */
+const BRACKETS_3_TO_5 = "Legal in brackets 3, 4 and 5";
+
 /** The six arguments the command takes, as the fake receives them. */
 interface Args {
   oracleId: string;
@@ -163,8 +191,8 @@ interface Args {
 
 /**
  * A handler over a fixed list, doing exactly what the backend does with the search, the two chips
- * and the window — so the box, the chips, the toggle and **Show more** are live on this page rather
- * than decorative.
+ * and the window — so the box, the chips and the toggle are live on this page rather than
+ * decorative, and so is the rail's scroll paging.
  *
  * **The order is the contract and it is the whole of what this fixture has to get right.** The
  * search changes the *subject*; the chips are facets of it. So `total` is over everything;
@@ -186,8 +214,7 @@ function pageOf(all: CardCombo[]) {
     for (const c of searched) sizes.set(c.cardCount, (sizes.get(c.cardCount) ?? 0) + 1);
     const matched = searched.filter(
       (c) =>
-        (args.cardCount === null || c.cardCount === args.cardCount) &&
-        (!args.ownedOnly || owns(c)),
+        (args.cardCount === null || c.cardCount === args.cardCount) && (!args.ownedOnly || owns(c)),
     );
     return {
       total: all.length,
@@ -204,7 +231,7 @@ function pageOf(all: CardCombo[]) {
 /* ------------------------------------------------------------------ the host -------------- */
 
 /** Which world a story stands the dialog up in. `"fake"` asks the workbench's own database, which
- *  is what the first story is for; the rest stage a page of their own. */
+ *  is what the last story is for; the rest stage a page of their own. */
 type Stage = "fake" | "list" | "many" | "never" | "none";
 
 /**
@@ -225,11 +252,7 @@ function Host({ stage }: { stage: Stage }) {
     // staging them here keeps each story's world in the story that is about it.
     if (stage !== "fake") {
       const all =
-        stage === "many"
-          ? MANY
-          : stage === "list"
-            ? [LIFEGAIN, AVACYN_COMBO, TEMPLATED]
-            : [];
+        stage === "many" ? MANY : stage === "list" ? [LIFEGAIN, AVACYN_COMBO, TEMPLATED] : [];
       registerCommands({
         combos_for_card: pageOf(all),
         combos_status: () => (stage === "never" ? NEVER : INGESTED),
@@ -259,8 +282,16 @@ const meta = {
        * and `cardOverlay` during render and most of them register handlers; the store is a module
        * singleton `.storybook/` cannot make per-story, so inline, a docs page mounts every story
        * at once and the last to render owns both for all of them.
+       *
+       * **1040px, and the number is arithmetic rather than taste** (raised from 760 on
+       * 2026-09-20, when the panel took a fixed `h-[54rem]`). The panel asks for **864px** and
+       * `Dialog`'s scrim spends `2 × max(1.5rem, 5vh)` of the frame on glass — 104px at this
+       * height — which leaves 936 and draws the dialog whole with 72px to spare. At the old 760
+       * the scrim left 684 and `max-h-full` clamped the panel by 180px, so the as-of caption and
+       * the foot of both columns were a picture of a window nobody has. Anything from about 1000
+       * up would do; this one has headroom rather than sitting on the boundary.
        */
-      story: { inline: false, height: "760px" },
+      story: { inline: false, height: "1040px" },
       description: {
         component:
           "What a card is a **piece of** — Commander Spellbook's combo feed asked from the " +
@@ -269,26 +300,31 @@ const meta = {
           "either card's own text finds one: Boros Reckoner says nothing about Boros Charm. " +
           "That is the same reason the deck bracket needed a fourth signal, asked the other way " +
           "round — not *what does this deck contain* but *what is this card part of*.\n\n" +
+          "**A rail and a pane, since 2026-09-20 (issue #481).** It was a list of accordions, " +
+          "and the report was that the images and the text were too small. Taken literally that " +
+          "asks for a wider accordion; what it describes is a surface scanned by card art " +
+          "through a 96px window, with the thing the reader wants behind a press. So the left " +
+          "rail is the **scan list** — one line per combo, no art, the bracket range, the other " +
+          "pieces' names and what is missing — and the right pane is **one combo at full size** " +
+          "with nothing collapsed: 176px card frames, the steps, the prerequisites and the " +
+          "mana. Selection is derived rather than stored, so the first row is drawn on open and " +
+          "narrowing the list falls the pane through to the first row of the new one.\n\n" +
           "**It is paged, and the corpus is why.** 107 016 combos over 7 330 distinct cards " +
           "(measured 2026-09-08), and the distribution is not flat — Ashnod's Altar is in " +
-          "**6 044** of them and 114 cards are in more than 500. So 25 a page, with the search " +
-          "and both chips sent to the backend rather than applied to the page in hand: a size " +
-          "chip that narrowed only the rows on screen would be describing 0.4 % of the list.\n\n" +
+          "**6 044** of them and 114 cards are in more than 500. So 50 a page, fetched when a " +
+          "sentinel at the foot of the rail scrolls into view rather than by a press, with the " +
+          "search and both chips sent to the backend rather than applied to the page in hand: a " +
+          "size chip that narrowed only the rows on screen would be describing 0.8 % of the " +
+          "list.\n\n" +
           "**Paging is not a way to find anything, which is what the box above the chips is " +
-          "for.** Six thousand combos at 25 a page is 242 presses to reach the end of one card's " +
-          "list, and no way at all to ask *which of these has Krark-Clan Ironworks in it*. The " +
-          "search matches a piece's name — the asked-about card included — and it changes the " +
-          "**subject**, where the chips are facets of it: the chip counts move when the reader " +
-          "types and stand still when they press a chip. `All` is the sum of the sizes beside " +
-          "it and is derived rather than asked for, because a figure that has to equal a sum is " +
-          "a figure with two sources to drift between.\n\n" +
-          "**Every row is an accordion, collapsed.** Expanded, one row is the pieces, the " +
-          "bracket line, produces, both prerequisite blocks, the numbered steps, the mana, the " +
-          "template caveat and the Spellbook link — most of a screen, twenty-five to a page, " +
-          "which is what driving the shipped window found it reading as. Collapsed it is the " +
-          "pieces and the letter: which cards, and how strong, which is what a reader scanning " +
-          "this list is asking. Closed is **nothing mounted**, `Dialog`'s own rule one surface " +
-          "down, so a page of twenty-five costs twenty-five headers.\n\n" +
+          "for.** Six thousand combos fifty at a time is 121 scrolls to reach the end of one " +
+          "card's list, and no way at all to ask *which of these has Krark-Clan Ironworks in " +
+          "it*. The search matches a piece's name — the asked-about card included — and it " +
+          "changes the **subject**, where the chips are facets of it.\n\n" +
+          "**The chips carry no counts and the rail's heading does.** `All · 412` became `All`: " +
+          "five figures of arithmetic in a row of controls between a search box and the cards " +
+          "is what the reporter of #481 was reading past. The number is drawn once, as " +
+          "`412 combos` over the list it is a count of.\n\n" +
           "**Three empties, and telling them apart is the point.** A card in no combo, a " +
           "database that has never downloaded the feed and a printing with no oracle card behind " +
           "it are the same empty page, and the sentences are not close — one is about the " +
@@ -298,9 +334,14 @@ const meta = {
           "**Everything the feed left empty draws nothing.** `produces`, the two prerequisite " +
           "fields, `manaNeeded` and the numbered steps are all `\"\"` on a large share of rows, " +
           "and a heading with nothing under it reads as content that failed to load.\n\n" +
-          "The bracket letter's words are `DeckBracket`'s `COMBO_TAG`, imported rather than " +
-          "respelled: two surfaces describing one letter two ways is a letter a reader can " +
-          "trust neither drawing of.",
+          "**No letter is drawn on this side of the app any more.** The brackets a combo is " +
+          "legal in are derived from `COMBO_FLOOR` through `comboBrackets` in " +
+          "`features/decks/validation/bracket.ts` and are never tabulated a second time — the " +
+          "rail says them as a range (`3–5`), the pane as five pips carrying " +
+          "`Legal in brackets 3, 4 and 5` as the group's own label, and a `B` combo says it is " +
+          "not legal in Commander rather than drawing five empty pips. `COMBO_TAG`'s **names** " +
+          "are still imported from `DeckBracket` and still drawn, because *Powerful — for " +
+          "strong decks in bracket 3+* is a sentence and `P` is a vocabulary lesson.",
       },
     },
   },
@@ -310,102 +351,242 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 /**
- * The ordinary list: three combos, one of them missing a piece and one of them needing something
- * no card list can name — **all three collapsed**, which is what the page is for.
+ * The ordinary list: three combos in the rail, and the first of them drawn whole in the pane.
  *
- * A row's header is its pieces and its bracket line and nothing else: which cards, and how strong.
- * Read the second row against the first — Avacyn is **Not owned**, in words rather than in colour
- * alone, which is the app's rule wherever a status is coloured and the one that matters most here.
- * Ownership stays in the *header* for that reason and not by inheritance: the whole point of *I own
- * every piece* is finding the combo you could build tonight, and a reader scanning a list has to
- * see the missing piece without opening anything.
+ * **Nothing is collapsed and nothing is behind a press.** The rail's job is what a reader chooses
+ * *between* — the bracket range, the other pieces, and how much of the combo they already own —
+ * and everything else about the selected one is on the right at full size. Read the second row
+ * against the first: Avacyn's says **Missing 1**, in words rather than in colour alone, which is
+ * the app's rule wherever a status is coloured and the one that matters most here. The whole point
+ * of *I own every piece* is finding the combo you could build tonight, so a reader scanning the
+ * rail has to see what they are short of without pressing anything.
+ *
+ * This is also the **two-card** shape: two 176px frames side by side with a `+` centred on the
+ * art, `produces` as the headline, and not one of the five prose sections drawn, because the feed
+ * filled none of them.
  */
 export const Combos: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    // **Boros Charm appears twice, and the count is the assertion.** It is a piece of two of
-    // these three combos, which is the ordinary shape of a combo list rather than a quirk of the
-    // fixture — a card is in a combo *with* several others, and the reason this dialog exists is
-    // that the relationship is not readable off either card. A `getByText` here fails on the
-    // working component; a bare `getAllByText` would pass a page that had collapsed the two rows
-    // into one, which is the failure worth catching. **The count is re-derived rather than
-    // adjusted now that the bodies are closed**, and it comes to the same two: the name is the
-    // piece's caption, which the header keeps.
-    await expect(await canvas.findAllByText("Boros Charm")).toHaveLength(2);
-    await expect(canvas.getByText("Avacyn, Angel of Hope")).toBeInTheDocument();
-    // **Ownership said in a word, not in a colour — twice, because two pieces are unowned.**
-    // Avacyn in the second row and the unsynced Spitemare in the third. A card the corpus has
-    // never synced is necessarily not owned, so those two states co-occur rather than competing:
-    // the frame says the database has no printing, the mark says the reader has no copy, and
-    // both sentences are true at once.
-    await expect(canvas.getAllByText("Not owned")).toHaveLength(2);
-    // **The piece this corpus has never synced names its card twice, on purpose.** `CardArt`
-    // prints the name inside the empty frame it draws for a null `cardId`, and the row prints it
-    // again as the caption — the pairing `DeckTokensPanel` already uses with the same component.
-    // Both are the header's, so this is two here as well.
-    // "No card" is the frame's own word for *this database has no printing*, as against
-    // "No image" for a printing whose art did not arrive; asserting it is what separates an
-    // unsynced piece from a slow one.
-    await expect(canvas.getAllByText("Spitemare")).toHaveLength(2);
-    await expect(canvas.getByText("No card")).toBeInTheDocument();
-    // And every one of the eight things a body holds is *absent* — the template caveat and the
-    // Spellbook link named here because they are the two a reader misses first.
-    await expect(canvas.queryByText(/no card list can name/i)).toBeNull();
-    await expect(canvas.queryByText("Produces")).toBeNull();
-    await expect(canvas.queryByRole("button", { name: "View on Commander Spellbook" })).toBeNull();
-  },
-};
+    // The count is in the heading over the rail and nowhere else — one text node, because a `gap`
+    // is not a word separator to the accessible-name computation.
+    await expect(await canvas.findByText("3 combos")).toBeInTheDocument();
+    const rail = canvas.getByRole("list", { name: "Combos" });
+    await expect(within(rail).getAllByRole("button")).toHaveLength(3);
 
-/**
- * One row opened, and the wall the accordion is for.
- *
- * The third combo is the only one with steps, prerequisites and a mana cost, and it is the one that
- * needs something no card list can name — so its body is the longest this dialog draws, and reading
- * it here against {@link Combos} is what says how much of a page twenty-five of these were. The
- * other two rows stay closed: expansion is per row, and a lifted flag would be the same wall one
- * press further in.
- */
-export const OneRowOpen: Story = {
-  play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement);
-    // Found by its own name rather than by position: a header's accessible name is built from the
-    // piece names and the bracket letter, because left to compute itself out of the layout it
-    // would run every caption and ownership mark together into one token.
-    const header = await canvas.findByRole("button", {
-      name: "Boros Reckoner + Boros Charm + Spitemare — P Powerful",
-    });
-    await userEvent.click(header);
+    // **The first row is selected on open**, which is the derivation and not an effect: `picked`
+    // is null until something is pressed and the pane falls through to `rows[0]`.
+    const first = within(rail).getByRole("button", { name: ROW_LIFEGAIN });
+    await expect(first).toHaveAttribute("aria-current", "true");
 
-    await expect(header).toHaveAttribute("aria-expanded", "true");
-    await expect(await canvas.findByText(/no card list can name/i)).toBeInTheDocument();
-    await expect(canvas.getByRole("list", { name: "Steps" })).toBeInTheDocument();
-    await expect(canvas.getByText("Mana needed")).toBeInTheDocument();
+    // …and the pane is drawing that row. **Boros Charm appears exactly twice**, and the count is
+    // the assertion: once as the rail row's headline — the *other* pieces, since the asked-about
+    // card is the dialog's subtitle and repeating it on every row costs the width the names need
+    // — and once as the caption under its picture in the pane.
+    await expect(canvas.getAllByText("Boros Charm")).toHaveLength(2);
+    await expect(canvas.getByText("Infinite lifegain · Infinite lifegain triggers")).toBeVisible();
+    // **The pips speak once and as a sentence.** Five numbers with two of them merely a different
+    // colour is exactly the statement this app never makes on its own, so the group is
+    // `role="img"` and carries the whole thing as its label.
+    await expect(canvas.getByRole("img", { name: BRACKETS_3_TO_5 })).toBeInTheDocument();
+    // Spellbook's own classification in Spellbook's own words, beside the pips — `COMBO_TAG`
+    // imported from the deck bracket rather than spelled a second time. **Asserted whole, which is
+    // the assertion the one-text-node rule exists for**: the name was briefly drawn in a nested
+    // `<span className="font-medium text-text">`, which reads correctly on screen and made this
+    // query fail — Testing Library reads an element's *own* text children, so the outer span
+    // computed as `— probably 3 or 4, but hard to classify` with `Spicy` somewhere else. A reader
+    // reads it as one sentence and so does this.
+    await expect(
+      canvas.getByText("Spicy — probably 3 or 4, but hard to classify"),
+    ).toBeVisible();
+    // Ownership said in a word on both frames, not in a colour.
+    await expect(canvas.getAllByText("Owned")).toHaveLength(2);
+    // The two rows that are not selected still say what they are short of.
+    await expect(canvas.getAllByText("Missing 1")).toHaveLength(2);
+    await expect(canvas.getByText("You own every piece")).toBeInTheDocument();
+
+    // Every pane draws the link, so this is a presence and not the absence the accordion's
+    // collapsed rows used to assert.
     await expect(
       canvas.getByRole("button", { name: "View on Commander Spellbook" }),
     ).toBeInTheDocument();
-    // The other two are untouched — one row's press is one row's.
-    await expect(canvas.getAllByRole("button", { expanded: false })).toHaveLength(2);
+    // And nothing of the *third* combo is on screen: its pieces, its steps and its template
+    // caveat all belong to a row nobody has pressed.
+    await expect(canvas.queryByText("Spitemare")).toBeNull();
+    await expect(canvas.queryByRole("list", { name: "Steps" })).toBeNull();
+    await expect(canvas.queryByText(/no card list can name/i)).toBeNull();
   },
 };
 
 /**
- * A term in the box, and the chips following it.
+ * Walking the rail — press a row, and the pane is about that row instead.
  *
- * **This is the half paging cannot do.** Ashnod's Altar is in 6 044 combos, 25 to a page; a reader
- * who wants the one with a particular card in it has no way to ask for it by pressing **Show more**
- * 241 times. The search matches any piece's name, the asked-about card included, and it is sent to
- * the backend for the chips' reason — a term applied to the page in hand would be searching 0.4 %
- * of the list and calling the answer *no match*.
+ * **This replaces the story that opened one, because there is nothing to open.** A press moves the
+ * *selection*; the pane is keyed on the combo, so a new row is a new element and the pane starts
+ * at the top rather than halfway down somebody else's steps.
  *
- * Watch the chip row rather than the list: `All` and the sizes are counts of the **searched** set,
- * so they move as the term lands. That is the same rule as *a chip's count does not move when it is
- * pressed*, read from the other side — the search changes the subject, and a facet of a different
- * subject is a different number.
+ * The row it walks to is the **three-card-with-a-template** shape, which is the pane's tallest
+ * drawing and the only one on this page with all five prose sections: the pieces (one of them a
+ * card this corpus has never synced), the steps, both prerequisite blocks, `Mana needed`, and the
+ * sentence saying the cards above are *not the whole combo* — a `requires[]` template can be
+ * resolved against no card list at all, so a pane that drew its named pieces and stopped would be
+ * implying a two-card combo where the feed says three things are needed.
+ *
+ * **No arrow key is pressed here, and that is an environment limit rather than a choice.** The
+ * rail's `ArrowDown`/`ArrowUp` call `scrollIntoView({ block: "nearest" })` on the row it moves to,
+ * which jsdom does not implement at all — so a keyboard `play` would throw under
+ * `src/stories.test.tsx` for a reason that has nothing to do with the component. The keyboard is
+ * `CombosDialog.test.tsx`'s and the shipped window's.
+ */
+export const WalkTheRail: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const rail = await canvas.findByRole("list", { name: "Combos" });
+    // Found by its own name rather than by position: a row's accessible name is built rather than
+    // left to fall out of the layout, because the spaces on it are flex gaps and the accname
+    // computation would otherwise run the range box, the names, the size and the ownership mark
+    // together into one token.
+    const row = within(rail).getByRole("button", { name: ROW_TEMPLATED });
+    await userEvent.click(row);
+
+    await expect(row).toHaveAttribute("aria-current", "true");
+    await expect(within(rail).getByRole("button", { name: ROW_LIFEGAIN })).not.toHaveAttribute(
+      "aria-current",
+    );
+
+    // The pane moved: the first row's headline is gone and this row's is drawn.
+    await expect(canvas.queryByText("Infinite lifegain · Infinite lifegain triggers")).toBeNull();
+    await expect(await canvas.findByText("Infinite damage")).toBeVisible();
+
+    // The five sections only this shape fills.
+    await expect(canvas.getByRole("list", { name: "Prerequisites" })).toBeInTheDocument();
+    await expect(canvas.getByRole("list", { name: "Notable prerequisites" })).toBeInTheDocument();
+    await expect(canvas.getByRole("list", { name: "Steps" })).toBeInTheDocument();
+    await expect(canvas.getByText("Mana needed")).toBeInTheDocument();
+    await expect(canvas.getByText(/no card list can name/i)).toBeVisible();
+
+    // **The unsynced piece names its card twice, on purpose.** `CardArt` prints the name inside
+    // the empty frame it draws for a null `cardId`, and the pane prints it again as the caption.
+    // "No card" is that frame's word for *this database has no printing*, as against "No image"
+    // for a printing whose art did not arrive — asserting it is what separates an unsynced piece
+    // from a slow one.
+    await expect(canvas.getAllByText("Spitemare")).toHaveLength(2);
+    await expect(canvas.getByText("No card")).toBeInTheDocument();
+    // A card the corpus has never synced is necessarily not owned, so those two states co-occur
+    // rather than competing: the frame says the database has no printing, the mark says the
+    // reader has no copy, and both sentences are true at once.
+    await expect(canvas.getByText("Not owned")).toBeInTheDocument();
+  },
+};
+
+/**
+ * The combo the reader owns every piece of — the shape the ownership chip exists to find.
+ *
+ * **Ownership is a word and never only a colour**, and this is the surface where that rule matters
+ * most: pressing *I own every piece* is a reader asking which of these they could assemble
+ * tonight. The rail row says **You own every piece** and the pane says **Owned** under each frame,
+ * so the answer survives a reader who cannot tell the green from the grey.
+ *
+ * It is also the singular: one match, so the heading reads `1 combo` rather than `1 combos`.
+ */
+export const OwnedEntirely: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await canvas.findByText("3 combos");
+    const chip = canvas.getByRole("button", { name: "I own every piece" });
+    await userEvent.click(chip);
+
+    await expect(await canvas.findByText("1 combo")).toBeInTheDocument();
+    await expect(chip).toHaveAttribute("aria-pressed", "true");
+    const rail = canvas.getByRole("list", { name: "Combos" });
+    await expect(within(rail).getAllByRole("button")).toHaveLength(1);
+
+    // The one row left, and the pane that followed the selection down to it.
+    await expect(within(rail).getByRole("button", { name: ROW_LIFEGAIN })).toHaveAttribute(
+      "aria-current",
+      "true",
+    );
+    await expect(canvas.getAllByText("Owned")).toHaveLength(2);
+    // Nothing on screen is short of anything — which is the claim the chip makes.
+    await expect(canvas.queryByText("Missing 1")).toBeNull();
+    await expect(canvas.queryByText("Not owned")).toBeNull();
+  },
+};
+
+/**
+ * The dialog in the **smallest window this app can be** — 1024 × 700, `tauri.conf.json`'s
+ * `minWidth` and `minHeight`, read from `@/lib/viewports` rather than spelled again here.
+ *
+ * **This is the story the panel's width was argued against.** `w-[62rem]` is 992px, wider than
+ * anything else this app ships, and the scrim spends 24px a side above the phone fold — so the
+ * panel asks for 1040 of a window that has 1024, and `Dialog`'s `max-w-full` absorbs the
+ * difference. The height is the same argument on the other axis: the panel asks for 864 and the
+ * scrim's `max(1.5rem, 5vh)` leaves 630, so `max-h-full` clamps it and both columns scroll inside
+ * themselves. Neither clamp is a fallback; they are the reason 62rem is safe and 72rem is not.
+ *
+ * **What a `play` can settle here is the structure and not the width.** jsdom lays nothing out —
+ * every rect is 0 and no stylesheet is loaded — so the assertions below are that the split is
+ * still a split at this size: a rail with its three rows, and a pane still drawing one combo
+ * whole. Whether the panel really fits is a claim only Storybook's own browser or the shipped
+ * window can make, and `docs/superpowers/plans/2026-09-20-combos-dialog-split-view.md` names it as
+ * one of the two things the live pass exists for.
+ */
+export const NarrowWindow: Story = {
+  decorators: [
+    (Story) => (
+      <div
+        // **`position: fixed` resolves against the nearest *transformed* ancestor**, not the
+        // viewport — so this one line turns a window-covering modal into a story-sized one, and
+        // is what makes the frame below a *window* rather than a box drawn next to one. The same
+        // trick every dialog story in this repo uses; `AllPrintingsDialog` and `CardDetailModal`
+        // are the two to read.
+        style={{
+          transform: "translateZ(0)",
+          width: DESKTOP_FLOOR_PX,
+          height: DESKTOP_FLOOR_HEIGHT_PX,
+        }}
+        className="relative overflow-hidden rounded-lg border border-border bg-bg"
+      >
+        <Story />
+      </div>
+    ),
+  ],
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const rail = await canvas.findByRole("list", { name: "Combos" });
+    await expect(within(rail).getAllByRole("button")).toHaveLength(3);
+    await expect(canvas.getByText("3 combos")).toBeInTheDocument();
+    // The pane is still a pane: the picture wall, the pips and the headline all drawn.
+    await expect(canvas.getAllByText("Boros Charm")).toHaveLength(2);
+    await expect(canvas.getByRole("img", { name: BRACKETS_3_TO_5 })).toBeInTheDocument();
+    await expect(canvas.getByText("Infinite lifegain · Infinite lifegain triggers")).toBeVisible();
+  },
+};
+
+/**
+ * A term in the box, and the chip row following it.
+ *
+ * **This is the half paging cannot do.** Ashnod's Altar is in 6 044 combos, fifty to a page; a
+ * reader who wants the one with a particular card in it cannot get there by scrolling 121 times.
+ * The search matches any piece's name, the asked-about card included, and it is sent to the
+ * backend for the chips' reason — a term applied to the page in hand would be searching 0.8 % of
+ * the list and calling the answer *no match*.
+ *
+ * Watch two things rather than the list. The heading over the rail is `matching`, so it follows
+ * the term. And the size chips are drawn from a census of the **searched** set, so a size the term
+ * left nothing of loses its chip entirely — a control that could only ever empty the list is a
+ * control that lies. Selection follows too, with no effect anywhere: the id in `picked` is not in
+ * the new `rows`, so the pane falls through to the first row of the list the reader just asked
+ * for.
  */
 export const Searched: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByRole("button", { name: "All · 3" })).toBeInTheDocument();
+    await expect(await canvas.findByText("3 combos")).toBeInTheDocument();
+    // **The chips carry no counts since 2026-09-20** — `All · 3` is `All`, and the figure it was
+    // carrying is the heading asserted above.
+    await expect(canvas.getByRole("button", { name: "All" })).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: "3 cards" })).toBeInTheDocument();
 
     // Named for *this* list and never a bare `Search`: the card modal is on screen behind this
     // dialog and the app is full of boxes, and a `getByLabelText` cannot tell two of one name
@@ -413,71 +594,100 @@ export const Searched: Story = {
     await userEvent.type(canvas.getByLabelText("Search these combos"), "avacyn");
 
     // 300ms of debounce before a keystroke becomes a query, which is why the wait is generous.
-    await expect(await canvas.findByText("Showing 1 of 1")).toBeInTheDocument();
-    await expect(canvas.getByRole("button", { name: "All · 1" })).toBeInTheDocument();
-    // The size the term left nothing of has no chip at all — a control that could only ever empty
-    // the list is a control that lies.
-    await expect(canvas.queryByRole("button", { name: /^3 cards/ })).toBeNull();
-    await expect(canvas.getByText("Avacyn, Angel of Hope")).toBeInTheDocument();
-    await expect(canvas.queryByText("Spitemare")).toBeNull();
+    await expect(await canvas.findByText("1 combo")).toBeInTheDocument();
+    // The size the term left nothing of has no chip at all.
+    await expect(canvas.queryByRole("button", { name: "3 cards" })).toBeNull();
+    await expect(canvas.getByRole("button", { name: "2 cards" })).toBeInTheDocument();
+    // One row, and the pane fell through to it — the rail's headline and the pane's caption.
+    await expect(canvas.getAllByText("Avacyn, Angel of Hope")).toHaveLength(2);
+    await expect(canvas.queryByText("Boros Charm")).toBeNull();
   },
 };
 
 /**
  * A term that matches none of them — and it is the **filter's** empty, not a fifth sentence.
  *
- * The two sentences below it are claims about the reader's card and about their database, and
- * neither is true here: the card is in three combos and the feed is ingested. `total` is over the
- * unfiltered set, which is what keeps the chips and the box on screen above the line saying so.
+ * The two sentences it must never borrow are claims about the reader's card and about their
+ * database, and neither is true here: the card is in three combos and the feed is ingested.
+ * `total` is over the unfiltered set and the search does not move it, which is what keeps this
+ * branch reachable with a term in the box *and* keeps the controls that did the narrowing on
+ * screen above the line saying so. The rail goes with the list, because there is no list.
  */
 export const SearchedToNothing: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await canvas.findByText("Showing 3 of 3");
+    await canvas.findByText("3 combos");
     await userEvent.type(canvas.getByLabelText("Search these combos"), "krark-clan");
 
     await expect(await canvas.findByText(/no combo matches that filter/i)).toBeInTheDocument();
     await expect(canvas.queryByText(/none on record naming this card/i)).toBeNull();
     await expect(canvas.queryByText(/has not been downloaded/i)).toBeNull();
+    // The way back is still on screen; the rail and the pane are not.
+    await expect(canvas.getByRole("button", { name: "All" })).toBeInTheDocument();
+    await expect(canvas.queryByRole("list", { name: "Combos" })).toBeNull();
   },
 };
 
 /**
  * The same three combos, narrowed to the two-card ones.
  *
- * **The chip's count is the census and does not move when it is pressed** — `byCardCount` is a
- * census of the *searched* set and the box is empty here, `matching` describes the chips — so a
- * chip reading `2 cards · 2` still reads that with the filter on. A control that changed its mind
- * about what it was counting the moment it was used would be unreadable. {@link Searched} is the
- * other side of that same rule: a term *does* move it, because a term changes the subject.
+ * **The census a chip exists by does not move when the chip is pressed** — `byCardCount` is a
+ * census of the *searched* set and the box is empty here, where `matching` is that set with the
+ * chips applied — so the `3 cards` chip is still drawn with its own size emptied out of the list.
+ * A row of controls that rewrote itself the moment one was used would be unreadable, and the chip
+ * doing the emptying is the way back out of it. {@link Searched} is the other side of the same
+ * rule: a *term* does move it, because a term changes the subject.
  */
 export const Filtered: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await canvas.findByText("Showing 3 of 3");
-    await userEvent.click(await canvas.findByRole("button", { name: "2 cards · 2" }));
+    await canvas.findByText("3 combos");
+    await userEvent.click(canvas.getByRole("button", { name: "2 cards" }));
 
-    await expect(await canvas.findByText("Showing 2 of 2")).toBeInTheDocument();
-    // The three-card row is gone — read off a *piece* of it rather than off its template caveat,
-    // which is in the body now and absent from every collapsed row whatever the filter says.
-    await expect(canvas.queryByText("Spitemare")).toBeNull();
-    // And the chip still says how many two-card combos there are.
-    await expect(canvas.getByRole("button", { name: "2 cards · 2" })).toBeInTheDocument();
+    await expect(await canvas.findByText("2 combos")).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: "2 cards" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    // The three-card row has gone from the rail — read off its headline, which is the *other*
+    // pieces and therefore the one string only that row draws.
+    await expect(canvas.queryByText("Boros Charm + Spitemare")).toBeNull();
+    // And its chip is still there, because the census is not the list.
+    await expect(canvas.getByRole("button", { name: "3 cards" })).toBeInTheDocument();
   },
 };
 
 /**
  * A card in far more combos than one page holds — the ordinary case for a staple, not a stress
- * test. **Show more** appends the next 25 and the heading says how far down the list the reader
- * has got.
+ * test.
+ *
+ * **Paging is scrolling now.** There is no *Show more*: a sentinel sits at the foot of the rail's
+ * scroller and an `IntersectionObserver` rooted on it asks for the next fifty when it comes into
+ * view. In Storybook's own browser that is live and this rail really does grow to sixty.
+ *
+ * **Under `src/stories.test.tsx` it can never fire**, because `src/test-setup.ts` stubs
+ * `IntersectionObserver` to a no-op — so the assertions below are deliberately about the **first
+ * page only**, and the row count is a floor rather than an equality. A `toHaveLength(50)` would be
+ * a story that passed in jsdom and failed in the browser it is written for, which is the worst of
+ * both.
  */
 export const ManyCombos: Story = {
   args: { stage: "many" },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByText("Showing 25 of 60")).toBeInTheDocument();
-    await userEvent.click(await canvas.findByRole("button", { name: "Show more" }));
-    await expect(await canvas.findByText("Showing 50 of 60")).toBeInTheDocument();
+    // `matching` is the whole list however much of it has been fetched, so this figure is the
+    // same in both environments.
+    await expect(await canvas.findByText("60 combos")).toBeInTheDocument();
+    const rail = canvas.getByRole("list", { name: "Combos" });
+    expect(within(rail).getAllByRole("button").length).toBeGreaterThanOrEqual(50);
+
+    // The head of the first page, selected on open…
+    await expect(within(rail).getByRole("button", { name: ROW_MANY_FIRST })).toHaveAttribute(
+      "aria-current",
+      "true",
+    );
+    // …and its foot, which the first request answered with and no observer had to ask for.
+    await expect(canvas.getByText("Boros Charm 50")).toBeInTheDocument();
   },
 };
 
@@ -498,6 +708,8 @@ export const NeverDownloaded: Story = {
     await expect(await canvas.findByText(/has not been downloaded/i)).toBeInTheDocument();
     // Never the other sentence, on a database that has looked at nothing.
     await expect(canvas.queryByText(/none on record naming this card/i)).toBeNull();
+    // And no filter band over it: `total` is 0, so there is nothing for a chip to be a facet of.
+    await expect(canvas.queryByRole("button", { name: "All" })).toBeNull();
   },
 };
 

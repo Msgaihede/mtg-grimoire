@@ -534,8 +534,32 @@ function Panel({
       // **Below `sm` there is no ceiling at all, by the same `p-0` that takes the frame off.** A
       // phone's dialog fills the glass; 5vh of scrim over a 358px-wide panel is the inset this
       // fold exists to delete, spelled on the other axis.
+      // **`grid-cols-[minmax(0,1fr)]` is the rows' own rule on the other axis, and it was missing
+      // for two years of dialogs because nothing was wide enough to notice** (2026-09-20). The
+      // panel's `max-w-full` is a percentage against its **grid area**, and with no
+      // `grid-template-columns` that area is an *implicit* column — which is `auto`, and an `auto`
+      // column sizes to its own content. So the clamp was circular in exactly the way `max-h-full`
+      // was before 2026-08-18: the column became whatever the panel asked for, `100%` of it was
+      // that same number, and the ceiling clamped **nothing**.
+      //
+      // Measured in a browser at a 1024px viewport, the app's own floor, with a `w-[62rem]` panel:
+      // the column computed **992px**, the panel drew **992** at `x: 24`, and its right edge landed
+      // **8px** from the glass against the 24 the scrim spends on the left. Setting
+      // `grid-template-columns: minmax(0,1fr)` live took it to **976** at `x: 24` with 24px either
+      // side, and backing the property out restored 992 — one pass, both readings.
+      //
+      // **`minmax(0,` is load-bearing**, for `grid-rows`' reason spelled at that site: a bare `1fr`
+      // is `minmax(auto,1fr)`, whose `auto` floor is the content again and the circularity with it.
+      //
+      // **Every dialog that fits is unmoved**, which is what makes this safe to put on the shared
+      // line the comment below guards: the widest fixed panel here is `w-[55rem]` (880) and the
+      // floor's padded box is 976, so nothing but a panel that was already overflowing can change
+      // size. It is one column and not a third one — `FLANK_COLUMNS` is written after it in this
+      // `cn`, so a flanked dialog's three columns still win, which is the precedence that keeps
+      // that case exactly as it was.
       className={cn(
-        "fixed inset-0 grid grid-rows-[minmax(0,1fr)] place-items-center bg-bg/75",
+        "fixed inset-0 grid grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)]",
+        "place-items-center bg-bg/75",
         "p-0 sm:px-6 sm:py-[max(1.5rem,5vh)]",
         // **Only when a host asked for flanks**, and the `undefined` test is doing real work: with
         // no flanks this string has to be what it was before the prop existed, because every other
