@@ -29,12 +29,28 @@ function note(over: Partial<DeckNote> & { id: number }): DeckNote {
   };
 }
 
-/** Five named cards, each with a printing to draw — one more than {@link NOTE_THUMBS} plus the
- *  one the `+N more` chip is written about. */
+/**
+ * Five named cards, each with a printing to draw — one more than {@link NOTE_THUMBS} plus the one
+ * the `+N more` chip is written about.
+ *
+ * **Two of the five carry a comma in their own name**, which is the fixture doing work rather than
+ * flavour: the strip's `sr-only` sentence joins names with `; `, and a `, ` join would read as
+ * seven items under a count that says five. The exact-string assertion below is what catches it.
+ */
 function five(): DeckNoteCard[] {
-  return ["Krenko, Mob Boss", "Goblin Chieftain", "Purphoros", "Skirk Prospector", "Goblin Matron"]
-    .map((name, i) => ({ oracleId: `o-${i}`, name, cardId: `c-${i}` }));
+  return [
+    "Krenko, Mob Boss",
+    "Goblin Chieftain",
+    "Purphoros, God of the Forge",
+    "Skirk Prospector",
+    "Goblin Matron",
+  ].map((name, i) => ({ oracleId: `o-${i}`, name, cardId: `c-${i}` }));
 }
+
+/** The whole of what the strip says to a screen reader for {@link five}'s cards. */
+const FIVE_SPOKEN =
+  "Names 5 cards: Krenko, Mob Boss; Goblin Chieftain; Purphoros, God of the Forge; " +
+  "Skirk Prospector; Goblin Matron.";
 
 /** The art strip, which has no role and no name of its own — see {@link NOTE_STRIP_ATTR}. */
 function strip(container: HTMLElement): HTMLElement {
@@ -112,12 +128,25 @@ describe("a note as a card", () => {
     expect(container.querySelectorAll("img")).toHaveLength(NOTE_THUMBS);
   });
 
+  it("says the count and every name it does not draw, in one sr-only sentence", () => {
+    draw(note({ id: 1, title: "Krenko line", body: "Haste first.", cards: five() }));
+    // **All five, not the three the strip draws** — and the two card names carrying commas of
+    // their own are why the separator is `; `: a `, ` join reads as seven items under a count
+    // that says five. This is the one thing the redesign took away and did not put back, so the
+    // whole string is asserted rather than a fragment of it.
+    expect(screen.getByText(FIVE_SPOKEN)).toBeInTheDocument();
+  });
+
   it("makes each crop a control where a host passes a handler", async () => {
     const onOpenCard = vi.fn();
     const cards = five();
     draw(note({ id: 1, title: "Krenko line", body: "Haste first.", cards }), { onOpenCard });
 
     expect(screen.getAllByRole("button", { name: /^Open / })).toHaveLength(NOTE_THUMBS);
+    // The sentence is drawn on this branch too, and that is the ruling rather than an accident:
+    // named buttons carry the three names that are *drawn* and say nothing about the count or the
+    // two that are not, so one sentence covering both branches is one thing to keep true.
+    expect(screen.getByText(FIVE_SPOKEN)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Open Goblin Chieftain" }));
     // The card itself, not its oracle id: a host that opens a modal needs the printing and the
     // name too, and `DeckNoteCard` is what the note already holds.
@@ -136,6 +165,9 @@ describe("a note as a card", () => {
     expect(container.querySelector(`[${NOTE_STRIP_ATTR}]`)).toBeNull();
     expect(screen.queryByRole("button", { name: /^Open / })).not.toBeInTheDocument();
     expect(screen.queryByText(/more$/)).not.toBeInTheDocument();
+    // And nothing is *said* either. The sentence lives inside the strip, so a note that names
+    // nothing announces nothing rather than `Names 0 cards:` with an empty list after it.
+    expect(screen.queryByText(/^Names /)).not.toBeInTheDocument();
   });
 
   it("draws an empty frame for a card with no printing, never a broken image", () => {

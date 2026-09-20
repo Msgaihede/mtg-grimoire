@@ -85,10 +85,15 @@ export interface NoteCardProps {
    * shipped case rather than a fallback for one.** The band passes no handler: there is nowhere
    * for a press to go that this card could reach, since opening a card's modal from here means a
    * prop threaded down from `DeckEditor` that nothing has asked for. So the crops are decoration
-   * beside prose, and the strip's one control is the `+N more` chip, which opens the picker where
-   * the card names actually live. A `<button>` drawn with no handler behind it would be a named,
-   * focusable tab stop per crop — three to a card, on every card of the grid — that does nothing
-   * when pressed, which is strictly worse than a picture.
+   * beside prose, and the strip's one control is the `+N more` chip. A `<button>` drawn with no
+   * handler behind it would be a named, focusable tab stop per crop — three to a card, on every
+   * card of the grid — that does nothing when pressed, which is strictly worse than a picture.
+   *
+   * **What a screen reader gets does not depend on this prop**, and that is deliberate:
+   * {@link namesSentence} is drawn inside the strip on both branches, so the count and every name
+   * are announced whether the crops are frames or controls. Without it, making the crops
+   * decoration would have taken an announcement away and replaced it with nothing — the chip that
+   * used to carry the count is gone and `+N more` does not exist below four cards.
    */
   onOpenCard?: (card: DeckNoteCard) => void;
 }
@@ -162,6 +167,12 @@ export function NoteCard({
           commonest note is the `0 cards` chip's failure told in pictures. */}
       {note.cards.length > 0 && (
         <div {...{ [NOTE_STRIP_ATTR]: "" }} className="flex items-center gap-1.5">
+          {/* **`sr-only` is `position: absolute`, so this span is out of flow and is not a flex
+              item at all** — it takes none of the strip's `gap-1.5` and moves no frame. It is the
+              same thing `actionLabel` already puts in this card three times, and the app-wide
+              containing-block rule is met by `AppShell`'s `main` being `relative`, one scroller
+              up. */}
+          <span className="sr-only">{namesSentence(note.cards)}</span>
           {note.cards.slice(0, NOTE_THUMBS).map((card) => (
             <NoteThumb key={card.oracleId} card={card} onOpen={onOpenCard} />
           ))}
@@ -197,6 +208,35 @@ export function NoteCard({
       </div>
     </li>
   );
+}
+
+/**
+ * What the strip says to a screen reader — **the one thing the redesign took away and did not put
+ * back**.
+ *
+ * The row this card replaced drew a mono `N cards` chip beside the title, which was visible *and*
+ * announced. The design deleted it on the grounds that *"the strip counts the cards now"*, and
+ * that trade holds only while the strip counts them **for everybody**: the crops are `aria-hidden`
+ * decoration (see {@link NoteCardProps.onOpenCard}) and the `+N more` chip does not exist until a
+ * note names more than {@link NOTE_THUMBS}, so on a note naming one to three cards the count had
+ * come to be nowhere at all. `Cards on <note>` says a picker exists; it does not say this note
+ * names anything.
+ *
+ * **Every card, not the three that are drawn.** The sentence costs no pixels and no layout, and
+ * the names the strip has no room for are otherwise reachable only by opening the picker — which
+ * is the thing a reader would be opening *to find out whether it was worth opening*.
+ *
+ * **Joined with `; ` and never `, `**, which is not a matter of taste: a card's name may contain a
+ * comma — `Krenko, Mob Boss`, `Purphoros, God of the Forge` — so a comma-joined list is read as
+ * more items than the note names, and the count at the head of the sentence then disagrees with
+ * what follows it. The trailing stop is what keeps the last name from running into whatever the
+ * card says next.
+ *
+ * The count is {@link plural}'s, like the chip's, so `1 card` cannot come out as `1 cards` here
+ * while the chip beside it gets it right.
+ */
+function namesSentence(cards: readonly DeckNoteCard[]): string {
+  return `Names ${plural(cards.length, "card")}: ${cards.map((card) => card.name).join("; ")}.`;
 }
 
 /** The frame itself — one box at one size, so the two branches below cannot come to draw two. */
