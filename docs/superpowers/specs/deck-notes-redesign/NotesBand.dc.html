@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Deck notes band</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600&amp;family=Geist:wght@300..700&amp;family=Geist+Mono:wght@400..600&amp;display=swap">
+<style>
+body { margin: 0; background: oklch(0.16 0.01 270); color: oklch(0.93 0.005 90); font-family: "Geist", system-ui, sans-serif; }
+a { color: oklch(0.75 0.12 85); }
+a:hover { color: oklch(0.83 0.12 85); }
+button { font: inherit; color: inherit; background: none; border: none; padding: 0; margin: 0; cursor: pointer; text-align: left; }
+input { font: inherit; color: inherit; }
+p, ul, ol, h1, h2, h3, h4, dl, dd, dt, blockquote { margin: 0; }
+</style>
+</helmet>
+
+<section style="width: 1192px; height: 420px; box-sizing: border-box; border-top: 1px solid oklch(0.3 0.01 270); padding-top: 12px; background: oklch(0.16 0.01 270);">
+
+  <!-- The disclosure, the count, and the one act this band offers -->
+  <div style="display: flex; flex-wrap: wrap; align-items: center; column-gap: 12px; row-gap: 6px;">
+    <button type="button" aria-expanded="true" style="display: flex; align-items: center; gap: 6px; border-radius: 8px; font-size: 14px; color: oklch(0.93 0.005 90);">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0; transform: rotate(90deg);" aria-hidden="true"><path d="M9 18l6-6-6-6"></path></svg>
+      Notes
+    </button>
+    <span style="font-size: 12px; color: oklch(0.65 0.01 90);">5 notes</span>
+
+    <button type="button" style="margin-left: auto; display: inline-flex; height: 32px; flex-shrink: 0; align-items: center; gap: 6px; border-radius: 8px; border: 1px solid oklch(0.75 0.12 85); padding: 0 12px; font-size: 12px; color: oklch(0.75 0.12 85);">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="flex-shrink: 0;" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+      New note
+    </button>
+  </div>
+
+  <!-- The notes, as a grid: columns are auto-fill minmax(280px, 1fr), cards capped at 420px -->
+  <ul style="margin-top: 12px; display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 8px; list-style: none; padding: 0;">
+
+    <li style="display: flex; height: 184px; max-width: 420px; box-sizing: border-box; flex-direction: column; gap: 6px; border-radius: 10px; border: 1px solid oklch(0.3 0.01 270); background: oklch(0.21 0.012 270); padding: 10px 12px;">
+      <span style="min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500; color: oklch(0.93 0.005 90);">Mana base</span>
+      <div style="min-height: 0; flex-grow: 1; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; font-size: 12px; line-height: 1.625; color: oklch(0.65 0.01 90);">Nine sources of double red is one short — every hand that keeps two lands and Krenko needs the second before turn four. Cut the third utility land for a basic Mountain.</div>
+
+      <!-- The cards this note names: the first three, then the rest as a count -->
+      <div style="display: flex; align-items: center; gap: 6px;">
+        <button type="button" aria-label="Cavern of Souls" style="display: block; height: 32px; width: 44px; flex-shrink: 0; overflow: hidden; border-radius: 4px; border: 1px solid oklch(0.3 0.01 270); background: oklch(0.16 0.01 270); box-sizing: border-box;"></button>
+        <button type="button" aria-label="Mountain" style="display: block; height: 32px; width: 44px; flex-shrink: 0; overflow: hidden; border-radius: 4px; border: 1px solid oklch(0.3 0.01 270); background: oklch(0.16 0.01 270); box-sizing: border-box;"></button>
+      </div>
+
+      <div style="display: flex; align-items: center; justify-content: flex-end; gap: 10px;">
+        <button type="button" style="border-radius: 4px; font-size: 11px; color: oklch(0.65 0.01 90);">Cards</button>
+        <button type="button" style="border-radius: 4px; font-size: 11px; color: oklch(0.65 0.01 90);">Edit</button>
+        <button type="button" style="border-radius: 4px; font-size: 11px; color: oklch(0.65 0.01 90);">Delete</button>
+      </div>
+    </li>
+
+    <li style="display: flex; height: 184px; max-width: 420px; box-sizing: border-box; flex-direction: column; gap: 6px; border-radius: 10px; border: 1px solid oklch(0.3 0.01 270); background: oklch(0.21 0.012 270); padding: 10px 12px;">
+      <span style="min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500; color: oklch(0.93 0.005 90);">Sac outlets to find</span>
+      <div style="min-height: 0; flex-grow: 1; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; font-size: 12px; line-height: 1.625; color: oklch(0.65 0.01 90);">The goblin tokens need somewhere to go that is not combat. Skirk Prospector is the only one in the list so far — Ashnod's Altar and Goblin Bombardment are both in the binder.</div>
+
+      <div style="display: flex; align-items: center; gap: 6px;">
+        <button type="button" aria-label="Skirk Prospector" style="display: block; height: 32px; width: 44px; flex-shrink: 0; overflow: hidden; border-radius: 4px; border: 1px solid oklch(0.3 0.01 270); background: oklch(0.16 0.01 270); box-sizing: border-box;"></button>
+      </div>
+
+      <div style="display: flex; align-items: center; justify-content: flex-end; gap: 10px;">
+        <button type="button" style="border-radius: 4px; font-size: 11px; color: oklch(0.65 0.01 90);">Cards</button>
+        <button type="button" style="border-radius: 4px; font-size: 11px; color: oklch(0.65 0.01 90);">Edit</button>
+        <button type="button" style="border-radius: 4px; font-size: 11px; color: oklch(0.65 0.01 90);">Delete</button>
+      </div>
+    </li>
+
+    <li style="display: flex; height: 184px; max-width: 420px; box-sizing: border-box; flex-direction: column; gap: 6px; border-radius: 10px; border: 1px solid oklch(0.3 0.01 270); background: oklch(0.21 0.012 270); padding: 10px 12px;">
+      <span style="min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500; color: oklch(0.93 0.005 90);">Krenko line</span>
+      <div style="min-height: 0; flex-grow: 1; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; font-size: 12px; line-height: 1.625; color: oklch(0.65 0.01 90);">Haste enabler first, then the tap. Without one the whole turn is a draw step. Tested twice against the Simic deck — both times it was the haste that was missing.</div>
+
+      <div style="display: flex; align-items: center; gap: 6px;">
+        <button type="button" aria-label="Krenko, Mob Boss" style="display: block; height: 32px; width: 44px; flex-shrink: 0; overflow: hidden; border-radius: 4px; border: 1px solid oklch(0.3 0.01 270); background: oklch(0.16 0.01 270); box-sizing: border-box;"></button>
+        <button type="button" aria-label="Goblin Chieftain" style="display: block; height: 32px; width: 44px; flex-shrink: 0; overflow: hidden; border-radius: 4px; border: 1px solid oklch(0.3 0.01 270); background: oklch(0.16 0.01 270); box-sizing: border-box;"></button>
+        <button type="button" aria-label="Purphoros, God of the Forge" style="display: block; height: 32px; width: 44px; flex-shrink: 0; overflow: hidden; border-radius: 4px; border: 1px solid oklch(0.3 0.01 270); background: oklch(0.16 0.01 270); box-sizing: border-box;"></button>
+        <button type="button" aria-label="Two more cards in Krenko line" style="display: grid; height: 32px; flex-shrink: 0; place-items: center; border-radius: 4px; border: 1px solid oklch(0.3 0.01 270); padding: 0 8px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 10px; font-variant-numeric: tabular-nums; color: oklch(0.65 0.01 90);">+2 more</button>
+      </div>
+
+      <div style="display: flex; align-items: center; justify-content: flex-end; gap: 10px;">
+        <button type="button" style="border-radius: 4px; font-size: 11px; color: oklch(0.65 0.01 90);">Cards</button>
+        <button type="button" style="border-radius: 4px; font-size: 11px; color: oklch(0.65 0.01 90);">Edit</button>
+        <button type="button" style="border-radius: 4px; font-size: 11px; color: oklch(0.65 0.01 90);">Delete</button>
+      </div>
+    </li>
+
+    <li style="display: flex; height: 184px; max-width: 420px; box-sizing: border-box; flex-direction: column; gap: 6px; border-radius: 10px; border: 1px solid oklch(0.3 0.01 270); background: oklch(0.21 0.012 270); padding: 10px 12px;">
+      <span style="min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500; color: oklch(0.93 0.005 90);">Budget swaps if the Cavern goes</span>
+      <div style="min-height: 0; flex-grow: 1; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 6; font-size: 12px; line-height: 1.625; color: oklch(0.65 0.01 90);">Unclaimed Territory does the same job for a dollar as long as everything stays a Goblin — which it does, apart from Purphoros. Secluded Courtyard is the same card with a worse name on it.</div>
+
+      <div style="display: flex; align-items: center; justify-content: flex-end; gap: 10px;">
+        <button type="button" style="border-radius: 4px; font-size: 11px; color: oklch(0.65 0.01 90);">Cards</button>
+        <button type="button" style="border-radius: 4px; font-size: 11px; color: oklch(0.65 0.01 90);">Edit</button>
+        <button type="button" style="border-radius: 4px; font-size: 11px; color: oklch(0.65 0.01 90);">Delete</button>
+      </div>
+    </li>
+
+    <li style="display: flex; height: 184px; max-width: 420px; box-sizing: border-box; flex-direction: column; gap: 6px; border-radius: 10px; border: 1px solid oklch(0.3 0.01 270); background: oklch(0.21 0.012 270); padding: 10px 12px;">
+      <span style="min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500; color: oklch(0.93 0.005 90);">Table notes — Thursday pod</span>
+      <div style="min-height: 0; flex-grow: 1; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 6; font-size: 12px; line-height: 1.625; color: oklch(0.65 0.01 90);">Two of them are on bracket 3, so the extra-turns package stays out. Nobody minded the tokens; the Bombardment finish is the part that reads as combo, so lead with the board instead.</div>
+
+      <div style="display: flex; align-items: center; justify-content: flex-end; gap: 10px;">
+        <button type="button" style="border-radius: 4px; font-size: 11px; color: oklch(0.65 0.01 90);">Cards</button>
+        <button type="button" style="border-radius: 4px; font-size: 11px; color: oklch(0.65 0.01 90);">Edit</button>
+        <button type="button" style="border-radius: 4px; font-size: 11px; color: oklch(0.65 0.01 90);">Delete</button>
+      </div>
+    </li>
+
+  </ul>
+</section>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1192,"height":420}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,475 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Deck editor</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600&amp;family=Geist:wght@300..700&amp;family=Geist+Mono:wght@400..600&amp;display=swap">
+<style>
+body { margin: 0; background: oklch(0.16 0.01 270); color: oklch(0.93 0.005 90); font-family: "Geist", system-ui, sans-serif; }
+a { color: oklch(0.75 0.12 85); }
+a:hover { color: oklch(0.83 0.12 85); }
+button { font: inherit; color: inherit; background: none; border: none; padding: 0; margin: 0; cursor: pointer; text-align: left; }
+input { font: inherit; color: inherit; }
+p, ul, ol, h1, h2, h3, h4, dl, dd, dt, blockquote { margin: 0; }
+</style>
+</helmet>
+
+<div style="width: 1440px; height: 1460px; box-sizing: border-box; display: flex; flex-direction: column; overflow: hidden; background: oklch(0.16 0.01 270);">
+
+  <!-- Title bar — 34px, drawn by the app rather than by Windows -->
+  <div style="height: 34px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; padding-left: 12px; background: oklch(0.21 0.012 270); border-bottom: 1px solid oklch(0.3 0.01 270);">
+    <div style="display: flex; align-items: center; gap: 10px;">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="oklch(0.75 0.12 85)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4.5A1.5 1.5 0 0 1 6.5 3H19v16H6.5A1.5 1.5 0 0 0 5 20.5z"></path><path d="M5 17.5A1.5 1.5 0 0 1 6.5 16H19"></path><path d="M12 7.5l2.2 3.2L12 13.9l-2.2-3.2z" fill="oklch(0.75 0.12 85)"></path></svg>
+      <span style="font-family: 'Cinzel', Georgia, serif; font-size: 13px; line-height: 1; letter-spacing: 0.2em; color: oklch(0.65 0.01 90);">MTG GRIMOIRE</span>
+    </div>
+    <div style="display: flex; height: 100%;">
+      <button type="button" aria-label="Keyboard map" style="display: inline-flex; height: 100%; width: 46px; align-items: center; justify-content: center; color: oklch(0.65 0.01 90);"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="6" width="20" height="12" rx="2"></rect><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M8 14h8"></path></svg></button>
+      <button type="button" aria-label="Minimize" style="display: inline-flex; height: 100%; width: 46px; align-items: center; justify-content: center; color: oklch(0.65 0.01 90);"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14"></path></svg></button>
+      <button type="button" aria-label="Maximize" style="display: inline-flex; height: 100%; width: 46px; align-items: center; justify-content: center; color: oklch(0.65 0.01 90);"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="1"></rect></svg></button>
+      <button type="button" aria-label="Close" style="display: inline-flex; height: 100%; width: 46px; align-items: center; justify-content: center; color: oklch(0.65 0.01 90);"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"></path></svg></button>
+    </div>
+  </div>
+
+  <div style="display: flex; flex-grow: 1; min-height: 0;">
+
+    <!-- Sidebar — 208px expanded -->
+    <nav aria-label="Views" style="width: 208px; flex-shrink: 0; box-sizing: border-box; display: flex; flex-direction: column; gap: 6px; padding: 12px; background: oklch(0.21 0.012 270); border-right: 1px solid oklch(0.3 0.01 270);">
+
+      <button type="button" style="position: relative; display: flex; width: 100%; box-sizing: border-box; align-items: center; gap: 12px; border-radius: 8px; padding: 10px 12px; font-size: 16px; color: oklch(0.65 0.01 90);">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;" aria-hidden="true"><path d="M3 10.5L12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z"></path></svg>
+        <span>Home</span>
+      </button>
+
+      <button type="button" style="position: relative; display: flex; width: 100%; box-sizing: border-box; align-items: center; gap: 12px; border-radius: 8px; padding: 10px 12px; font-size: 16px; color: oklch(0.65 0.01 90);">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M21 21l-4.3-4.3"></path></svg>
+        <span>Search</span>
+      </button>
+
+      <button type="button" style="position: relative; display: flex; width: 100%; box-sizing: border-box; align-items: center; gap: 12px; border-radius: 8px; padding: 10px 12px; font-size: 16px; color: oklch(0.65 0.01 90);">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;" aria-hidden="true"><path d="M3 4h8l9 9-7 7-9-9z"></path><circle cx="7.5" cy="8.5" r="1.5"></circle></svg>
+        <span>Tagger</span>
+      </button>
+
+      <button type="button" aria-current="page" style="position: relative; display: flex; width: 100%; box-sizing: border-box; align-items: center; gap: 12px; border-radius: 8px; padding: 10px 12px; font-size: 16px; background: oklch(0.16 0.01 270); color: oklch(0.75 0.12 85);">
+        <span aria-hidden="true" style="position: absolute; left: 0; top: 8px; bottom: 8px; width: 2px; border-radius: 9999px; background: oklch(0.75 0.12 85);"></span>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;" aria-hidden="true"><rect x="3" y="6" width="12" height="15" rx="2"></rect><path d="M8 4h9a2 2 0 0 1 2 2v11"></path></svg>
+        <span>Decks</span>
+      </button>
+
+      <button type="button" style="position: relative; display: flex; width: 100%; box-sizing: border-box; align-items: center; gap: 12px; border-radius: 8px; padding: 10px 12px; font-size: 16px; color: oklch(0.65 0.01 90);">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M3 12h18M9 7.5h6M9 16.5h6"></path></svg>
+        <span>Collection</span>
+      </button>
+
+      <button type="button" style="position: relative; display: flex; width: 100%; box-sizing: border-box; align-items: center; gap: 12px; border-radius: 8px; padding: 10px 12px; font-size: 16px; color: oklch(0.65 0.01 90);">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;" aria-hidden="true"><path d="M12 20.5S4.5 15.8 4.5 10.6A4.1 4.1 0 0 1 12 8.2a4.1 4.1 0 0 1 7.5 2.4c0 5.2-7.5 9.9-7.5 9.9z"></path></svg>
+        <span>Wishlist</span>
+      </button>
+
+      <button type="button" style="position: relative; display: flex; width: 100%; box-sizing: border-box; align-items: center; gap: 12px; border-radius: 8px; padding: 10px 12px; font-size: 16px; color: oklch(0.65 0.01 90);">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;" aria-hidden="true"><path d="M3 8a2 2 0 0 1 2-2h2.5L9 4h6l1.5 2H19a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><circle cx="12" cy="12.5" r="3.5"></circle></svg>
+        <span>Scanner</span>
+      </button>
+
+      <button type="button" style="position: relative; display: flex; width: 100%; box-sizing: border-box; align-items: center; gap: 12px; border-radius: 8px; padding: 10px 12px; font-size: 16px; color: oklch(0.65 0.01 90);">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;" aria-hidden="true"><path d="M5 3h14v18l-3-2-3 2-3-2-3 2z"></path><path d="M9 8h6M9 12h6"></path></svg>
+        <span>Trade</span>
+      </button>
+
+      <button type="button" style="position: relative; display: flex; width: 100%; box-sizing: border-box; align-items: center; gap: 12px; border-radius: 8px; padding: 10px 12px; font-size: 16px; color: oklch(0.65 0.01 90);">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;" aria-hidden="true"><path d="M4 4l10 10M20 4L10 14"></path><path d="M14 14l5 5M10 14l-5 5"></path></svg>
+        <span>Playtesting</span>
+      </button>
+
+      <button type="button" style="position: relative; display: flex; width: 100%; box-sizing: border-box; align-items: center; gap: 12px; border-radius: 8px; padding: 10px 12px; font-size: 16px; color: oklch(0.65 0.01 90);">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;" aria-hidden="true"><circle cx="12" cy="12" r="3.5"></circle><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.2 5.2l2.1 2.1M16.7 16.7l2.1 2.1M18.8 5.2l-2.1 2.1M7.3 16.7l-2.1 2.1"></path></svg>
+        <span>Settings</span>
+      </button>
+
+      <div style="margin-top: auto; margin-left: -12px; margin-right: -12px; margin-bottom: -12px; border-top: 1px solid oklch(0.3 0.01 270); padding: 12px;">
+        <button type="button" aria-label="Collapse sidebar" style="display: flex; width: 100%; box-sizing: border-box; align-items: center; gap: 12px; border-radius: 8px; padding: 10px 12px; font-size: 16px; color: oklch(0.65 0.01 90);">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M9 4v16M16 10l-2.5 2 2.5 2"></path></svg>
+          <span>Collapse</span>
+        </button>
+      </div>
+    </nav>
+
+    <div style="display: flex; flex-direction: column; flex-grow: 1; min-width: 0;">
+
+      <!-- Ribbon — 56px, then the 2px mana line -->
+      <div style="flex-shrink: 0;">
+        <div style="height: 56px; display: flex; align-items: center; gap: 16px; background: oklch(0.21 0.012 270); padding: 0 20px;">
+          <h1 style="font-family: 'Cinzel', Georgia, serif; font-size: 20px; font-weight: 500; line-height: 1;">Decks</h1>
+          <div style="margin-left: auto; display: flex; min-width: 0; align-items: center; gap: 16px;">
+            <p style="font-size: 14px; color: oklch(0.65 0.01 90);">116,568 cards · data from 2026-08-03</p>
+            <button type="button" style="display: inline-flex; flex-shrink: 0; align-items: center; gap: 8px; border-radius: 8px; border: 1px solid oklch(0.3 0.01 270); padding: 8px 14px; font-size: 16px;">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.6-6.4"></path><path d="M21 3v6h-6"></path></svg>
+              Refresh data
+            </button>
+          </div>
+        </div>
+        <div aria-hidden="true" style="height: 2px; width: 100%; background: linear-gradient(90deg, #fffbd5 0%, #aae0fa 25%, #cbc2bf 50%, #f9aa8f 75%, #9bd3ae 100%);"></div>
+      </div>
+
+      <!-- main, p-5 — the deck editor column -->
+      <div style="position: relative; flex-grow: 1; min-height: 0; box-sizing: border-box; padding: 20px; display: flex; flex-direction: column; gap: 12px; background: oklch(0.16 0.01 270);">
+
+        <!-- Header line: what the deck is, and what can be done to it -->
+        <div style="display: flex; flex-shrink: 0; flex-wrap: wrap; align-items: center; column-gap: 12px; row-gap: 8px; padding: 6px 0;">
+          <button type="button" aria-label="Back to decks" style="display: inline-flex; height: 36px; flex-shrink: 0; align-items: center; gap: 4px; border-radius: 8px; padding: 0 8px; font-size: 14px; color: oklch(0.65 0.01 90);">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;" aria-hidden="true"><path d="M15 18l-6-6 6-6"></path></svg>
+            Decks
+          </button>
+
+          <input type="text" value="Krenko, Mob Boss" aria-label="Deck name" style="flex-grow: 1; min-width: 160px; box-sizing: border-box; border-radius: 8px; border: 1px solid transparent; background: transparent; padding: 4px 8px; font-size: 20px; font-weight: 500; line-height: 1.25;">
+
+          <div style="margin-left: auto; display: flex; flex-shrink: 0; flex-wrap: nowrap; align-items: center; gap: 8px;">
+
+            <div role="group" aria-label="Deck list" style="display: flex; flex-shrink: 0; overflow: hidden; border-radius: 8px; border: 1px solid oklch(0.3 0.01 270);">
+              <button type="button" style="height: 36px; padding: 0 10px; font-size: 12px; color: oklch(0.65 0.01 90);">Theory</button>
+              <button type="button" aria-pressed="true" style="height: 36px; padding: 0 10px; font-size: 12px; font-weight: 500; background: oklch(0.75 0.12 85); color: oklch(0.2 0.02 85);">Actual</button>
+            </div>
+
+            <button type="button" style="display: inline-flex; height: 36px; flex-shrink: 0; align-items: center; justify-content: center; gap: 6px; white-space: nowrap; border-radius: 8px; border: 1px solid oklch(0.3 0.01 270); background: oklch(0.21 0.012 270); padding: 0 10px; font-size: 12px; color: oklch(0.65 0.01 90);">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;" aria-hidden="true"><path d="M12 3v18M6 7h12M6 7l-3 7h6zM18 7l3 7h-6z"></path></svg>
+              Compare
+            </button>
+
+            <div role="group" aria-label="Import and export" style="display: flex; flex-shrink: 0; overflow: hidden; border-radius: 8px; border: 1px solid oklch(0.3 0.01 270); background: oklch(0.21 0.012 270);">
+              <button type="button" aria-label="Import cards" style="display: inline-flex; height: 36px; align-items: center; justify-content: center; gap: 6px; white-space: nowrap; padding: 0 10px; font-size: 12px; color: oklch(0.65 0.01 90);">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;" aria-hidden="true"><path d="M9 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h3"></path><path d="M13 8l4 4-4 4M17 12H9"></path></svg>
+                Import
+              </button>
+              <button type="button" aria-label="Export deck" style="display: inline-flex; height: 36px; align-items: center; justify-content: center; gap: 6px; white-space: nowrap; border-left: 1px solid oklch(0.3 0.01 270); padding: 0 10px; font-size: 12px; color: oklch(0.65 0.01 90);">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;" aria-hidden="true"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3"></path><path d="M11 8l4 4-4 4M15 12H4"></path></svg>
+                Export
+              </button>
+            </div>
+
+            <button type="button" style="display: inline-flex; height: 36px; flex-shrink: 0; align-items: center; justify-content: center; gap: 6px; white-space: nowrap; border-radius: 8px; border: 1px solid oklch(0.3 0.01 270); background: oklch(0.21 0.012 270); padding: 0 10px; font-size: 12px; color: oklch(0.65 0.01 90);">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;" aria-hidden="true"><path d="M4 4v16M10 4v16M16 4v10"></path><circle cx="19" cy="19" r="2.5"></circle></svg>
+              Categories
+            </button>
+
+            <button type="button" style="display: inline-flex; height: 36px; flex-shrink: 0; align-items: center; justify-content: center; gap: 6px; white-space: nowrap; border-radius: 8px; border: 1px solid oklch(0.3 0.01 270); background: oklch(0.21 0.012 270); padding: 0 10px; font-size: 12px; color: oklch(0.65 0.01 90);">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;" aria-hidden="true"><path d="M20.6 13.4L12 22l-9-9V3h10z"></path><circle cx="7.5" cy="7.5" r="1.3"></circle></svg>
+              Labels
+            </button>
+
+            <button type="button" style="display: inline-flex; height: 36px; flex-shrink: 0; align-items: center; justify-content: center; gap: 6px; white-space: nowrap; border-radius: 8px; border: 1px solid oklch(0.3 0.01 270); background: oklch(0.21 0.012 270); padding: 0 10px; font-size: 12px; color: oklch(0.65 0.01 90);">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"></path><path d="M3 4v4h4"></path><path d="M12 8v4.5l3 1.8"></path></svg>
+              History
+            </button>
+
+            <button type="button" style="display: inline-flex; height: 36px; flex-shrink: 0; align-items: center; justify-content: center; gap: 6px; white-space: nowrap; border-radius: 8px; border: 1px solid oklch(0.3 0.01 270); background: oklch(0.21 0.012 270); padding: 0 10px; font-size: 12px; color: oklch(0.65 0.01 90);">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;" aria-hidden="true"><path d="M14.7 6.3a4 4 0 0 0 5 5L21 10l-7 7-3 3a2.1 2.1 0 0 1-3-3l3-3 7-7z"></path></svg>
+              Deck settings
+            </button>
+          </div>
+        </div>
+
+        <!-- The ledger line -->
+        <dl style="display: flex; min-height: 36px; flex-shrink: 0; flex-wrap: wrap; align-items: center; column-gap: 10px; row-gap: 4px; border-top: 1px solid oklch(0.3 0.01 270); border-bottom: 1px solid oklch(0.3 0.01 270); padding: 4px 0; min-width: 0;">
+          <div style="display: flex; flex-shrink: 0; align-items: baseline; gap: 6px;"><dt style="font-size: 11px; color: oklch(0.65 0.01 90);">Format</dt><dd style="font-size: 12px;">Commander</dd></div>
+          <div aria-hidden="true" style="height: 14px; width: 1px; flex-shrink: 0; background: oklch(0.3 0.01 270);"></div>
+          <div style="display: flex; flex-shrink: 0; align-items: baseline; gap: 6px;"><dt style="font-size: 11px; color: oklch(0.65 0.01 90);">Cards</dt><dd style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 13px; font-variant-numeric: tabular-nums;">100</dd></div>
+          <div aria-hidden="true" style="height: 14px; width: 1px; flex-shrink: 0; background: oklch(0.3 0.01 270);"></div>
+          <div style="display: flex; flex-shrink: 0; align-items: baseline; gap: 6px;"><dt style="font-size: 11px; color: oklch(0.65 0.01 90);">Lands</dt><dd style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 13px; font-variant-numeric: tabular-nums;">37 <span style="color: oklch(0.65 0.01 90);">+2 MDFC</span></dd></div>
+          <div aria-hidden="true" style="height: 14px; width: 1px; flex-shrink: 0; background: oklch(0.3 0.01 270);"></div>
+          <div style="display: flex; flex-shrink: 0; align-items: baseline; gap: 6px;"><dt style="font-size: 11px; color: oklch(0.65 0.01 90);">Avg. mana</dt><dd style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 13px; font-variant-numeric: tabular-nums;">3.42</dd></div>
+          <div aria-hidden="true" style="height: 14px; width: 1px; flex-shrink: 0; background: oklch(0.3 0.01 270);"></div>
+          <div style="display: flex; flex-shrink: 0; align-items: baseline; gap: 6px;"><dt style="font-size: 11px; color: oklch(0.65 0.01 90);">Price</dt><dd style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 13px; font-variant-numeric: tabular-nums;">$212.40</dd></div>
+          <div aria-hidden="true" style="height: 14px; width: 1px; flex-shrink: 0; background: oklch(0.3 0.01 270);"></div>
+          <div style="display: flex; flex-shrink: 0; align-items: baseline; gap: 6px;"><dt style="font-size: 11px; color: oklch(0.65 0.01 90);">Owned</dt><dd style="font-family: 'Geist Mono', ui-monospace, monospace; font-size: 13px; font-variant-numeric: tabular-nums;">88 <span style="margin-left: 6px; font-size: 11px; color: oklch(0.704 0.191 22.216);">12 missing</span></dd></div>
+
+          <div style="margin-left: auto; display: flex; flex-shrink: 0; align-items: center; gap: 6px;">
+            <button type="button" style="display: inline-flex; height: 28px; flex-shrink: 0; align-items: center; gap: 6px; white-space: nowrap; border-radius: 8px; border: 1px solid oklch(0.3 0.01 270); padding: 0 8px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; font-variant-numeric: tabular-nums; color: oklch(0.65 0.01 90);">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="oklch(0.72 0.14 152)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M8.5 12.5l2.5 2.5 4.5-5"></path></svg>
+              No issues
+            </button>
+            <button type="button" style="display: inline-flex; height: 28px; flex-shrink: 0; align-items: center; gap: 6px; white-space: nowrap; border-radius: 8px; border: 1px solid oklch(0.75 0.12 85); padding: 0 8px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; font-variant-numeric: tabular-nums; color: oklch(0.75 0.12 85);">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;" aria-hidden="true"><path d="M3 7l4 5 5-8 5 8 4-5v11H3z"></path></svg>
+              2
+            </button>
+            <button type="button" style="display: inline-flex; height: 28px; flex-shrink: 0; align-items: center; white-space: nowrap; border-radius: 8px; border: 1px solid oklch(0.75 0.12 85); padding: 0 8px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; font-variant-numeric: tabular-nums; color: oklch(0.75 0.12 85);">Bracket ~3</button>
+          </div>
+        </dl>
+
+        <!-- Toolbar line: how the deck is drawn -->
+        <div style="display: flex; flex-shrink: 0; flex-wrap: wrap; align-items: center; column-gap: 12px; row-gap: 10px; border-bottom: 1px solid oklch(0.3 0.01 270); padding-bottom: 12px;">
+          <div style="display: flex; flex-shrink: 0; align-items: center; gap: 6px;">
+            <span style="font-size: 11px; color: oklch(0.65 0.01 90);">Quick add</span>
+            <input type="text" placeholder="Sol Ring…" aria-label="Quick add a card" style="height: 36px; width: 208px; box-sizing: border-box; border-radius: 8px; border: 1px solid oklch(0.3 0.01 270); background: oklch(0.16 0.01 270); padding: 0 10px; font-size: 13px;">
+          </div>
+
+          <div role="group" aria-label="Undo and redo" style="display: flex; flex-shrink: 0; align-items: center; gap: 4px;">
+            <button type="button" aria-label="Undo" style="display: grid; place-items: center; height: 36px; width: 36px; border-radius: 8px; border: 1px solid oklch(0.3 0.01 270); background: oklch(0.21 0.012 270); color: oklch(0.65 0.01 90);"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 14L4 9l5-5"></path><path d="M4 9h11a5 5 0 0 1 0 10h-4"></path></svg></button>
+            <button type="button" aria-label="Redo" style="display: grid; place-items: center; height: 36px; width: 36px; border-radius: 8px; border: 1px solid oklch(0.3 0.01 270); background: oklch(0.21 0.012 270); color: oklch(0.65 0.01 90); opacity: 0.4;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 14l5-5-5-5"></path><path d="M20 9H9a5 5 0 0 0 0 10h4"></path></svg></button>
+          </div>
+
+          <div style="display: flex; flex-shrink: 0; align-items: center; gap: 6px;">
+            <span id="deck-view-label" style="font-size: 11px; color: oklch(0.65 0.01 90);">View</span>
+            <button type="button" aria-labelledby="deck-view-label" style="display: inline-flex; height: 36px; align-items: center; gap: 6px; border-radius: 8px; border: 1px solid oklch(0.3 0.01 270); padding: 0 10px; font-size: 14px; color: oklch(0.65 0.01 90);">Stacks<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></button>
+          </div>
+
+          <div style="display: flex; flex-shrink: 0; align-items: center; gap: 6px;">
+            <span id="deck-group-label" style="font-size: 11px; color: oklch(0.65 0.01 90);">Group by</span>
+            <button type="button" aria-labelledby="deck-group-label" style="display: inline-flex; height: 36px; align-items: center; gap: 6px; border-radius: 8px; border: 1px solid oklch(0.3 0.01 270); padding: 0 10px; font-size: 14px; color: oklch(0.65 0.01 90);">Category<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></button>
+          </div>
+
+          <div style="display: flex; flex-shrink: 0; align-items: center; gap: 6px;">
+            <span id="deck-sort-label" style="font-size: 11px; color: oklch(0.65 0.01 90);">Sort</span>
+            <button type="button" aria-labelledby="deck-sort-label" style="display: inline-flex; height: 36px; align-items: center; gap: 6px; border-radius: 8px; border: 1px solid oklch(0.3 0.01 270); padding: 0 10px; font-size: 14px; color: oklch(0.65 0.01 90);">Mana value<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></button>
+          </div>
+
+          <div role="group" aria-label="Filter by label" style="display: flex; flex-wrap: wrap; align-items: center; gap: 6px;">
+            <button type="button" aria-pressed="false" style="height: 36px; border-radius: 8px; border: 1px solid oklch(0.3 0.01 270); padding: 0 10px; font-size: 12px; color: oklch(0.65 0.01 90);">Cut next</button>
+            <button type="button" aria-pressed="true" style="height: 36px; border-radius: 8px; border: 1px solid oklch(0.75 0.12 85); padding: 0 10px; font-size: 12px; color: oklch(0.75 0.12 85);">Testing</button>
+          </div>
+
+          <div style="margin-left: auto; display: flex; min-width: 160px; max-width: 400px; flex-grow: 1; align-items: center;">
+            <input type="search" aria-label="Filter this deck" placeholder="Filter this deck…" style="height: 36px; min-width: 0; flex-grow: 1; box-sizing: border-box; border-radius: 8px; border: 1px solid oklch(0.3 0.01 270); background: oklch(0.16 0.01 270); padding: 0 10px; font-size: 12px;">
+          </div>
+        </div>
+
+        <!-- The desk: the deck's piles, and the search dock pinned beside them -->
+        <div style="display: flex; flex-shrink: 0; gap: 16px;">
+
+          <div style="min-width: 0; flex-grow: 1; display: grid; grid-template-columns: repeat(3, 224px); column-gap: 8px; align-items: start; padding: 6px;">
+
+            <section style="width: 224px; box-sizing: border-box; border-radius: 10px; border: 1px solid transparent; padding: 6px;">
+              <div style="display: flex; min-width: 0; flex-direction: column; row-gap: 2px; padding: 0 4px 6px;">
+                <div style="display: flex; min-width: 0; align-items: center; gap: 6px;">
+                  <span style="min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500;">Command zone</span>
+                  <span style="flex-shrink: 0; border-radius: 3px; border: 1px solid oklch(0.3 0.01 270); padding: 0 4px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 9px; color: oklch(0.65 0.01 90);">RULE</span>
+                </div>
+                <div style="display: flex; flex-shrink: 0; align-items: baseline; justify-content: space-between; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 10px; font-variant-numeric: tabular-nums; color: oklch(0.65 0.01 90);"><span>1 card</span><span>$5.40</span></div>
+              </div>
+              <ul style="position: relative; display: block; height: 327px; list-style: none; padding: 0; overflow: visible;">
+                <sc-for list="{{commandCards}}" as="card" hint-placeholder-count="1">
+                  <li style="position: relative; display: block; box-sizing: border-box; height: 319px; border-radius: 10px; border: 1px solid oklch(0.3 0.01 270); background: oklch(0.21 0.012 270); box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.45), 0 4px 6px -4px rgb(0 0 0 / 0.45); margin-bottom: {{card.mb}};">
+                    <span style="position: relative; display: block; height: 293px; overflow: hidden; border-radius: 9px; background: oklch(0.21 0.012 270);">
+                      <span style="display: flex; align-items: center; height: 27px; gap: 6px; padding-left: 34px; padding-right: 6px; border-bottom: 1px solid oklch(0.3 0.01 270); background: color-mix(in oklab, oklch(0.3 0.01 270) 35%, oklch(0.21 0.012 270));">
+                        <span style="min-width: 0; flex-grow: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px;">{{card.name}}</span>
+                        <span style="flex-shrink: 0; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 10px; color: oklch(0.65 0.01 90);">{{card.cost}}</span>
+                      </span>
+                      <span style="display: flex; height: 246px; align-items: center; justify-content: center; font-size: 11px; color: oklch(0.65 0.01 90);">No image</span>
+                      <span style="position: absolute; left: 0; right: 0; bottom: 0; display: flex; align-items: center; height: 20px; padding: 0 6px; border-top: 1px solid oklch(0.3 0.01 270); background: color-mix(in oklab, oklch(0.3 0.01 270) 35%, oklch(0.21 0.012 270)); font-size: 9px; color: oklch(0.65 0.01 90);">{{card.type}}</span>
+                      <span style="position: absolute; top: 0; left: 0; display: flex; align-items: center; height: 22px; padding-left: 6px; padding-right: 12px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; line-height: 1; font-variant-numeric: tabular-nums; background: #c8c4bf; color: oklch(0.2 0.02 85); clip-path: polygon(0 0, 100% 0, calc(100% - 10px) 100%, 0 100%);">{{card.qty}}</span>
+                    </span>
+                    <span style="position: relative; display: flex; box-sizing: border-box; align-items: center; height: 28px; margin-top: -4px; margin-left: -1px; margin-right: -1px; gap: 6px; padding-right: 6px; border-left: 1px solid oklch(0.3 0.01 270); border-right: 1px solid oklch(0.3 0.01 270); border-bottom: 1px solid oklch(0.3 0.01 270); border-radius: 0 0 7px 7px; background: oklch(0.21 0.012 270); font-family: 'Geist Mono', ui-monospace, monospace; font-size: 10px; color: oklch(0.65 0.01 90);">
+                      <span style="margin-left: 6px; width: 6px; height: 6px; flex-shrink: 0; border-radius: 9999px; background: {{card.gem}};"></span>
+                      <span style="min-width: 0; flex-grow: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{card.printing}}</span>
+                      <span style="flex-shrink: 0; font-variant-numeric: tabular-nums; color: oklch(0.93 0.005 90);">{{card.price}}</span>
+                    </span>
+                  </li>
+                </sc-for>
+              </ul>
+            </section>
+
+            <section style="width: 224px; box-sizing: border-box; border-radius: 10px; border: 1px solid transparent; padding: 6px;">
+              <div style="display: flex; min-width: 0; flex-direction: column; row-gap: 2px; padding: 0 4px 6px;">
+                <div style="display: flex; min-width: 0; align-items: center; gap: 6px;">
+                  <button type="button" aria-label="Drag to reorder" style="flex-shrink: 0; border-radius: 4px; color: oklch(0.65 0.01 90); cursor: grab;"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="9" cy="5" r="1.6"></circle><circle cx="9" cy="12" r="1.6"></circle><circle cx="9" cy="19" r="1.6"></circle><circle cx="15" cy="5" r="1.6"></circle><circle cx="15" cy="12" r="1.6"></circle><circle cx="15" cy="19" r="1.6"></circle></svg></button>
+                  <span style="min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500;">Creatures</span>
+                </div>
+                <div style="display: flex; flex-shrink: 0; align-items: baseline; justify-content: space-between; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 10px; font-variant-numeric: tabular-nums; color: oklch(0.65 0.01 90);"><span>28 cards</span><span>$83.12</span></div>
+              </div>
+              <ul style="position: relative; display: block; height: 531px; list-style: none; padding: 0; overflow: visible;">
+                <sc-for list="{{creatureCards}}" as="card" hint-placeholder-count="7">
+                  <li style="position: relative; display: block; box-sizing: border-box; height: 319px; border-radius: 10px; border: 1px solid oklch(0.3 0.01 270); background: oklch(0.21 0.012 270); box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.45), 0 4px 6px -4px rgb(0 0 0 / 0.45); margin-bottom: {{card.mb}};">
+                    <span style="position: relative; display: block; height: 293px; overflow: hidden; border-radius: 9px; background: oklch(0.21 0.012 270);">
+                      <span style="display: flex; align-items: center; height: 27px; gap: 6px; padding-left: 34px; padding-right: 6px; border-bottom: 1px solid oklch(0.3 0.01 270); background: color-mix(in oklab, oklch(0.3 0.01 270) 35%, oklch(0.21 0.012 270));">
+                        <span style="min-width: 0; flex-grow: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px;">{{card.name}}</span>
+                        <span style="flex-shrink: 0; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 10px; color: oklch(0.65 0.01 90);">{{card.cost}}</span>
+                      </span>
+                      <span style="display: flex; height: 246px; align-items: center; justify-content: center; font-size: 11px; color: oklch(0.65 0.01 90);">No image</span>
+                      <span style="position: absolute; left: 0; right: 0; bottom: 0; display: flex; align-items: center; height: 20px; padding: 0 6px; border-top: 1px solid oklch(0.3 0.01 270); background: color-mix(in oklab, oklch(0.3 0.01 270) 35%, oklch(0.21 0.012 270)); font-size: 9px; color: oklch(0.65 0.01 90);">{{card.type}}</span>
+                      <span style="position: absolute; top: 0; left: 0; display: flex; align-items: center; height: 22px; padding-left: 6px; padding-right: 12px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; line-height: 1; font-variant-numeric: tabular-nums; background: {{card.tag}}; color: oklch(0.2 0.02 85); clip-path: polygon(0 0, 100% 0, calc(100% - 10px) 100%, 0 100%);">{{card.qty}}</span>
+                    </span>
+                    <span style="position: relative; display: flex; box-sizing: border-box; align-items: center; height: 28px; margin-top: -4px; margin-left: -1px; margin-right: -1px; gap: 6px; padding-right: 6px; border-left: 1px solid oklch(0.3 0.01 270); border-right: 1px solid oklch(0.3 0.01 270); border-bottom: 1px solid oklch(0.3 0.01 270); border-radius: 0 0 7px 7px; background: oklch(0.21 0.012 270); font-family: 'Geist Mono', ui-monospace, monospace; font-size: 10px; color: oklch(0.65 0.01 90);">
+                      <span style="margin-left: 6px; width: 6px; height: 6px; flex-shrink: 0; border-radius: 9999px; background: {{card.gem}};"></span>
+                      <span style="min-width: 0; flex-grow: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{card.printing}}</span>
+                      <span style="flex-shrink: 0; font-variant-numeric: tabular-nums; color: oklch(0.93 0.005 90);">{{card.price}}</span>
+                    </span>
+                  </li>
+                </sc-for>
+              </ul>
+            </section>
+
+            <section style="width: 224px; box-sizing: border-box; border-radius: 10px; border: 1px solid transparent; padding: 6px;">
+              <div style="display: flex; min-width: 0; flex-direction: column; row-gap: 2px; padding: 0 4px 6px;">
+                <div style="display: flex; min-width: 0; align-items: center; gap: 6px;">
+                  <button type="button" aria-label="Drag to reorder" style="flex-shrink: 0; border-radius: 4px; color: oklch(0.65 0.01 90); cursor: grab;"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="9" cy="5" r="1.6"></circle><circle cx="9" cy="12" r="1.6"></circle><circle cx="9" cy="19" r="1.6"></circle><circle cx="15" cy="5" r="1.6"></circle><circle cx="15" cy="12" r="1.6"></circle><circle cx="15" cy="19" r="1.6"></circle></svg></button>
+                  <span style="min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500;">Lands</span>
+                </div>
+                <div style="display: flex; flex-shrink: 0; align-items: baseline; justify-content: space-between; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 10px; font-variant-numeric: tabular-nums; color: oklch(0.65 0.01 90);"><span>37 cards</span><span>$41.05</span></div>
+              </div>
+              <ul style="position: relative; display: block; height: 497px; list-style: none; padding: 0; overflow: visible;">
+                <sc-for list="{{landCards}}" as="card" hint-placeholder-count="6">
+                  <li style="position: relative; display: block; box-sizing: border-box; height: 319px; border-radius: 10px; border: 1px solid oklch(0.3 0.01 270); background: oklch(0.21 0.012 270); box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.45), 0 4px 6px -4px rgb(0 0 0 / 0.45); margin-bottom: {{card.mb}};">
+                    <span style="position: relative; display: block; height: 293px; overflow: hidden; border-radius: 9px; background: oklch(0.21 0.012 270);">
+                      <span style="display: flex; align-items: center; height: 27px; gap: 6px; padding-left: 34px; padding-right: 6px; border-bottom: 1px solid oklch(0.3 0.01 270); background: color-mix(in oklab, oklch(0.3 0.01 270) 35%, oklch(0.21 0.012 270));">
+                        <span style="min-width: 0; flex-grow: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px;">{{card.name}}</span>
+                        <span style="flex-shrink: 0; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 10px; color: oklch(0.65 0.01 90);">{{card.cost}}</span>
+                      </span>
+                      <span style="display: flex; height: 246px; align-items: center; justify-content: center; font-size: 11px; color: oklch(0.65 0.01 90);">No image</span>
+                      <span style="position: absolute; left: 0; right: 0; bottom: 0; display: flex; align-items: center; height: 20px; padding: 0 6px; border-top: 1px solid oklch(0.3 0.01 270); background: color-mix(in oklab, oklch(0.3 0.01 270) 35%, oklch(0.21 0.012 270)); font-size: 9px; color: oklch(0.65 0.01 90);">{{card.type}}</span>
+                      <span style="position: absolute; top: 0; left: 0; display: flex; align-items: center; height: 22px; padding-left: 6px; padding-right: 12px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; line-height: 1; font-variant-numeric: tabular-nums; background: #c8c4bf; color: oklch(0.2 0.02 85); clip-path: polygon(0 0, 100% 0, calc(100% - 10px) 100%, 0 100%);">{{card.qty}}</span>
+                    </span>
+                    <span style="position: relative; display: flex; box-sizing: border-box; align-items: center; height: 28px; margin-top: -4px; margin-left: -1px; margin-right: -1px; gap: 6px; padding-right: 6px; border-left: 1px solid oklch(0.3 0.01 270); border-right: 1px solid oklch(0.3 0.01 270); border-bottom: 1px solid oklch(0.3 0.01 270); border-radius: 0 0 7px 7px; background: oklch(0.21 0.012 270); font-family: 'Geist Mono', ui-monospace, monospace; font-size: 10px; color: oklch(0.65 0.01 90);">
+                      <span style="margin-left: 6px; width: 6px; height: 6px; flex-shrink: 0; border-radius: 9999px; background: {{card.gem}};"></span>
+                      <span style="min-width: 0; flex-grow: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{card.printing}}</span>
+                      <span style="flex-shrink: 0; font-variant-numeric: tabular-nums; color: oklch(0.93 0.005 90);">{{card.price}}</span>
+                    </span>
+                  </li>
+                </sc-for>
+              </ul>
+            </section>
+          </div>
+
+          <!-- The search dock — 384px, pinned to the top of the scroller -->
+          <section aria-label="Add cards" style="width: 396px; height: 591px; box-sizing: border-box; flex-shrink: 0; align-self: flex-start; display: flex; flex-direction: column; gap: 8px; border-left: 1px solid oklch(0.3 0.01 270); padding-left: 12px;">
+            <div style="display: flex; flex-shrink: 0; align-items: center; gap: 8px;">
+              <button type="button" aria-label="Collapse card search" style="display: flex; height: 28px; width: 28px; flex-shrink: 0; align-items: center; justify-content: center; border-radius: 8px; color: oklch(0.65 0.01 90);"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="transform: rotate(180deg);" aria-hidden="true"><path d="M15 18l-6-6 6-6"></path></svg></button>
+              <span style="min-width: 0; flex-grow: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; font-size: 14px; font-weight: 500;">Search cards</span>
+              <span aria-hidden="true" style="height: 28px; width: 28px; flex-shrink: 0;"></span>
+            </div>
+
+            <div role="group" aria-label="Search in" style="display: flex; flex-shrink: 0; border-bottom: 1px solid oklch(0.3 0.01 270);">
+              <button type="button" style="height: 28px; min-width: 0; flex-grow: 1; margin-bottom: -1px; border-bottom: 2px solid oklch(0.75 0.12 85); text-align: center; font-size: 12px; font-weight: 500; color: oklch(0.75 0.12 85);">Collection</button>
+              <button type="button" style="height: 28px; min-width: 0; flex-grow: 1; margin-bottom: -1px; border-bottom: 2px solid transparent; text-align: center; font-size: 12px; color: oklch(0.65 0.01 90);">All cards</button>
+            </div>
+
+            <input type="search" aria-label="Search your collection" placeholder="Search your collection…" style="height: 36px; flex-shrink: 0; box-sizing: border-box; border-radius: 8px; border: 1px solid oklch(0.3 0.01 270); background: oklch(0.21 0.012 270); padding: 0 12px; font-size: 14px;">
+
+            <div role="group" aria-label="Color identity" style="display: flex; flex-shrink: 0; flex-wrap: wrap; gap: 6px;">
+              <button type="button" aria-pressed="false" style="display: grid; place-items: center; height: 32px; width: 32px; border-radius: 8px; border: 1px solid oklch(0.3 0.01 270);"><span style="display: block; height: 16px; width: 16px; border-radius: 9999px; background: #fffbd5;"></span></button>
+              <button type="button" aria-pressed="false" style="display: grid; place-items: center; height: 32px; width: 32px; border-radius: 8px; border: 1px solid oklch(0.3 0.01 270);"><span style="display: block; height: 16px; width: 16px; border-radius: 9999px; background: #aae0fa;"></span></button>
+              <button type="button" aria-pressed="false" style="display: grid; place-items: center; height: 32px; width: 32px; border-radius: 8px; border: 1px solid oklch(0.3 0.01 270);"><span style="display: block; height: 16px; width: 16px; border-radius: 9999px; background: #cbc2bf;"></span></button>
+              <button type="button" aria-pressed="true" style="display: grid; place-items: center; height: 32px; width: 32px; border-radius: 8px; border: 1px solid oklch(0.75 0.12 85);"><span style="display: block; height: 16px; width: 16px; border-radius: 9999px; background: #f9aa8f;"></span></button>
+              <button type="button" aria-pressed="false" style="display: grid; place-items: center; height: 32px; width: 32px; border-radius: 8px; border: 1px solid oklch(0.3 0.01 270);"><span style="display: block; height: 16px; width: 16px; border-radius: 9999px; background: #9bd3ae;"></span></button>
+              <button type="button" aria-pressed="false" style="display: grid; place-items: center; height: 32px; width: 32px; border-radius: 8px; border: 1px solid oklch(0.3 0.01 270);"><span style="display: block; height: 16px; width: 16px; border-radius: 9999px; background: #c8c4bf;"></span></button>
+              <button type="button" style="display: inline-flex; height: 32px; align-items: center; gap: 6px; border-radius: 8px; border: 1px solid oklch(0.3 0.01 270); padding: 0 10px; font-size: 12px; color: oklch(0.65 0.01 90);">Filters<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></button>
+            </div>
+
+            <p role="status" style="flex-shrink: 0; font-size: 12px; color: oklch(0.65 0.01 90);">34 cards — scroll for more</p>
+
+            <div role="group" aria-label="Your collection" style="min-height: 0; flex-grow: 1; overflow: hidden; border-radius: 8px; border: 1px solid oklch(0.3 0.01 270); padding: 12px; display: grid; grid-template-columns: repeat(2, 150px); gap: 12px; align-content: start;">
+              <sc-for list="{{results}}" as="hit" hint-placeholder-count="4">
+                <div style="display: flex; width: 150px; flex-direction: column;">
+                  <span style="position: relative; display: block; height: 210px; overflow: hidden; border-radius: 10px; background: oklch(0.21 0.012 270); border: 1px solid oklch(0.3 0.01 270); box-sizing: border-box;">
+                    <span style="display: flex; align-items: center; height: 24px; gap: 4px; padding: 0 6px; border-bottom: 1px solid oklch(0.3 0.01 270); background: color-mix(in oklab, oklch(0.3 0.01 270) 35%, oklch(0.21 0.012 270)); font-size: 10px;"><span style="min-width: 0; flex-grow: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{hit.name}}</span></span>
+                    <span style="display: flex; height: 184px; align-items: center; justify-content: center; font-size: 11px; color: oklch(0.65 0.01 90);">No image</span>
+                    <span style="position: absolute; bottom: 4px; left: 4px; border-radius: 4px; background: rgb(12 13 18 / 0.85); padding: 2px 6px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; line-height: 16px; font-variant-numeric: tabular-nums;">{{hit.owned}}</span>
+                    <span style="position: absolute; bottom: 4px; right: 4px; display: grid; height: 24px; width: 24px; place-items: center; border-radius: 8px; border: 1px solid oklch(0.3 0.01 270); background: rgb(12 13 18 / 0.85); color: oklch(0.65 0.01 90);"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg></span>
+                  </span>
+                  <span style="position: relative; display: flex; box-sizing: border-box; align-items: center; height: 28px; margin-top: -4px; gap: 6px; padding-right: 6px; border: 1px solid oklch(0.3 0.01 270); border-top: none; border-radius: 0 0 8px 8px; background: oklch(0.21 0.012 270); font-family: 'Geist Mono', ui-monospace, monospace; font-size: 10px; color: oklch(0.65 0.01 90);">
+                    <span style="margin-left: 6px; width: 6px; height: 6px; flex-shrink: 0; border-radius: 9999px; background: {{hit.gem}};"></span>
+                    <span style="min-width: 0; flex-grow: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{hit.printing}}</span>
+                    <span style="flex-shrink: 0; font-variant-numeric: tabular-nums; color: oklch(0.93 0.005 90);">{{hit.price}}</span>
+                  </span>
+                </div>
+              </sc-for>
+            </div>
+
+            <p style="flex-shrink: 0; font-size: 11px; color: oklch(0.65 0.01 90);">Scryfall (USD) prices as of the last price-feed refresh.</p>
+          </section>
+        </div>
+
+        <!-- The price strip -->
+        <div style="position: relative; flex-shrink: 0;">
+          <p style="font-size: 11px; color: oklch(0.65 0.01 90);">Scryfall (USD) prices as of the last price-feed refresh. <span>Copies you cut from this deck go to Recently removed.</span></p>
+        </div>
+
+        <!-- Tokens &amp; emblems, shut -->
+        <section aria-label="Tokens &amp; emblems" style="flex-shrink: 0; border-top: 1px solid oklch(0.3 0.01 270); padding-top: 12px;">
+          <div style="display: flex; flex-wrap: wrap; align-items: center; column-gap: 12px; row-gap: 6px;">
+            <button type="button" style="display: flex; align-items: center; gap: 6px; border-radius: 8px; font-size: 14px;">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;" aria-hidden="true"><path d="M9 18l6-6-6-6"></path></svg>
+              Tokens &amp; emblems
+            </button>
+            <span style="font-size: 12px; color: oklch(0.65 0.01 90);">7 to bring</span>
+          </div>
+        </section>
+
+        <!-- Deck stats, shut -->
+        <section aria-label="Deck stats" style="flex-shrink: 0; border-top: 1px solid oklch(0.3 0.01 270); padding-top: 12px;">
+          <div style="display: flex; flex-wrap: wrap; align-items: center; column-gap: 12px; row-gap: 6px;">
+            <button type="button" style="display: flex; align-items: center; gap: 6px; border-radius: 8px; font-size: 14px;">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;" aria-hidden="true"><path d="M9 18l6-6-6-6"></path></svg>
+              Deck stats
+            </button>
+          </div>
+        </section>
+
+        <!-- The notes band — the thing being redesigned. Its own artboard, mounted here. -->
+        <div style="flex-shrink: 0;">
+          <dc-import name="NotesBand" hint-size="1192px,420px"></dc-import>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1460}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const RARE = '#bfa35a';
+    const UNCOMMON = '#b3c7ce';
+    const COMMON = '#9aa0a6';
+    const MYTHIC = '#e86a33';
+    const stack = (rows) =>
+      rows.map((row, i) => ({
+        ...row,
+        mb: i === rows.length - 1 ? '8px' : '-285px',
+        tag: row.tag || '#c8c4bf',
+      }));
+
+    return {
+      commandCards: stack([
+        {
+          name: 'Krenko, Mob Boss',
+          cost: '2RR',
+          type: 'Legendary Creature — Goblin Warrior',
+          qty: '1',
+          gem: RARE,
+          printing: 'C21 · 142',
+          price: '$5.40',
+        },
+      ]),
+      creatureCards: stack([
+        { name: 'Goblin Chieftain', cost: '1RR', type: 'Creature — Goblin', qty: '1', gem: RARE, printing: 'M10 · 135', price: '$8.90' },
+        { name: 'Goblin Matron', cost: '2R', type: 'Creature — Goblin', qty: '1', gem: UNCOMMON, printing: 'DMR · 128', price: '$1.10' },
+        { name: 'Goblin Recruiter', cost: '1R', type: 'Creature — Goblin', qty: '1', gem: UNCOMMON, printing: 'DMR · 129', price: '$12.40' },
+        { name: 'Krenko, Tin Street Kingpin', cost: '2R', type: 'Legendary Creature — Goblin', qty: '1', gem: RARE, printing: 'WAR · 129', price: '$4.05' },
+        { name: 'Pashalik Mons', cost: '2R', type: 'Legendary Creature — Goblin', qty: '1', gem: RARE, printing: 'MH1 · 138', price: '$1.85' },
+        { name: 'Purphoros, God of the Forge', cost: '3R', type: 'Legendary Enchantment Creature — God', qty: '1', gem: MYTHIC, printing: 'THS · 135', price: '$21.60' },
+        { name: 'Skirk Prospector', cost: 'R', type: 'Creature — Goblin', qty: '1', gem: COMMON, printing: 'DOM · 143', price: '$0.75' },
+      ]),
+      landCards: stack([
+        { name: 'Cavern of Souls', cost: '', type: 'Land', qty: '1', gem: MYTHIC, printing: 'LCI · 269', price: '$38.20' },
+        { name: 'Den of the Bugbear', cost: '', type: 'Land', qty: '1', gem: RARE, printing: 'AFR · 254', price: '$6.40' },
+        { name: 'Mountain', cost: '', type: 'Basic Land — Mountain', qty: '24', gem: COMMON, printing: 'C21 · 292', price: '$0.05' },
+        { name: 'Rogue’s Passage', cost: '', type: 'Land', qty: '1', gem: UNCOMMON, printing: 'C21 · 300', price: '$0.35' },
+        { name: 'Shinka, the Bloodsoaked Keep', cost: '', type: 'Legendary Land', qty: '1', gem: RARE, printing: 'CHK · 279', price: '$1.20' },
+        { name: 'Valakut Awakening', cost: '', type: 'Land', qty: '1', gem: RARE, printing: 'ZNR · 164', price: '$3.10' },
+      ]),
+      results: [
+        { name: 'Goblin Bushwhacker', owned: '×2', gem: '#b3c7ce', printing: 'ZEN · 123', price: '$0.90' },
+        { name: 'Goblin Rabblemaster', owned: '×1', gem: '#bfa35a', printing: 'M15 · 143', price: '$2.40' },
+        { name: 'Goblin Warchief', owned: '×3', gem: '#bfa35a', printing: 'DMR · 130', price: '$1.75' },
+        { name: 'Impact Tremors', owned: '×1', gem: '#9aa0a6', printing: 'DTK · 134', price: '$1.05' },
+      ],
+    };
+  }
+}
+</script>
+</body>
+</html>
