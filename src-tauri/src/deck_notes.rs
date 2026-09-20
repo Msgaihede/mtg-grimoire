@@ -67,7 +67,7 @@ use crate::sync::{with_write, AppState};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use serde_json::json;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 #[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
@@ -143,11 +143,24 @@ pub struct DeckNoteRow {
 /// oracle id the corpus has never heard of is named by the id itself rather than by nothing. Two
 /// devices that synced on different days can honestly disagree about it, which is why nothing is
 /// ever matched on it.
+///
+/// `card_id` and `image_uris` are the same kind of thing one step further: a **representative
+/// printing**, chosen at read time so a note card can draw a picture of what it names. A note
+/// attaches by oracle id and by nothing else — this printing is never written, never matched on
+/// and never synced, and the next reader of the same row may honestly get a different one.
+///
+/// **The deck's own printing is preferred**, falling back to any printing the corpus holds. A note
+/// about Lightning Bolt in a deck sleeving the M10 art must not draw the Alpha art: the picture is
+/// how a reader recognises the row, and the wrong one reads as a note naming a card that is not in
+/// the deck. `None` is the orphan — the `name` fallback already covers it, and the card draws an
+/// empty frame rather than a broken image.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeckNoteCard {
     pub oracle_id: String,
     pub name: String,
+    pub card_id: Option<String>,
+    pub image_uris: Option<BTreeMap<String, String>>,
 }
 
 /// One note naming one card, seen from the **card** rather than from a deck — [`notes_for_card`]'s
@@ -224,31 +237,52 @@ fn require_note(conn: &Connection, deck_id: i64, id: i64) -> Result<String, Stri
 /// query answers every attachment of every note in the deck; the caller zips them onto the notes
 /// it already read.
 ///
-/// Three things about the SQL:
+/// Four things about the SQL:
 ///
-/// * **`LEFT JOIN cards`, so a card the corpus has never heard of is still an attachment.** The
-///   reference is soft like every other card reference in a user table, and a note that refused
-///   to load because a printing has not been synced yet would be a note the reader cannot reach.
-/// * **`coalesce(min(c.name), nc.oracle_id)` — the id is the fallback name.** An unknown oracle id
-///   answers itself, which is unlovely and legible, where a `NULL` name would have to be a
-///   nullable field every reader then has to branch on.
-/// * **`GROUP BY` is load-bearing and is not a tidiness.** `cards` holds one row per *printing*,
-///   so the join multiplies an attachment by however many printings that oracle card has —
-///   Lightning Bolt alone would put the same card on a note dozens of times. `min()` collapses
-///   them to the one name every printing of an oracle card shares.
+/// * **One printing is chosen as a *row*, by a correlated subquery, and every column is taken off
+///   that row.** This replaces the `GROUP BY` + `min()` the statement used to carry, and the
+///   reason is [`DeckNoteCard::image_uris`]: two independent aggregates over a joined `cards` can
+///   answer one printing's id and a different printing's picture, which is a wrong card's art with
+///   no way for any caller to notice. A subquery that answers one `id` makes that unrepresentable.
+/// * **`ORDER BY (dc.card_id IS NULL), c.id` inside it is the preference.** SQLite sorts `0`
+///   before `1`, so a printing this deck holds comes first and `c.id` breaks the tie — which is
+///   the same printing the old `min(c.id)` chose whenever the deck held none.
+/// * **The `GROUP BY` is gone and no row count moved.** `deck_note_cards` carries
+///   [`DECK_NOTE_CARD_GRAIN`](crate::schema::DECK_NOTE_CARD_GRAIN) on `(note_id, oracle_id)`, so
+///   there is one row per attachment to begin with, and a `LEFT JOIN` on `p.id = (scalar)` matches
+///   at most one. The printing multiplication the old comment warned about is collapsed by the
+///   subquery instead.
+/// * **`LEFT JOIN`, so a card the corpus has never heard of is still an attachment**, named by its
+///   own oracle id. The reference is soft like every other card reference in a user table, and a
+///   note that refused to load because a printing has not been synced yet would be a note the
+///   reader cannot reach.
+///
+/// `cards(oracle_id)` is indexed (`idx_cards_oracle`), which is what keeps the subquery from being
+/// a scan.
 fn attachments_by_note(
     conn: &Connection,
     filter: &str,
     id: i64,
 ) -> Result<HashMap<i64, Vec<DeckNoteCard>>, String> {
+    let images = crate::image_uri::front_face_selects("p").join(", ");
     let sql = format!(
-        "SELECT nc.note_id, nc.oracle_id, coalesce(min(c.name), nc.oracle_id)
+        "SELECT nc.note_id,
+                nc.oracle_id,
+                coalesce(p.name, nc.oracle_id),
+                p.id,
+                {images}
            FROM deck_note_cards nc
            JOIN deck_notes n ON n.id = nc.note_id
-           LEFT JOIN cards c ON c.oracle_id = nc.oracle_id
+           LEFT JOIN cards p ON p.id = (
+                SELECT c.id
+                  FROM cards c
+                  LEFT JOIN deck_cards dc ON dc.card_id = c.id AND dc.deck_id = n.deck_id
+                 WHERE c.oracle_id = nc.oracle_id
+                 ORDER BY (dc.card_id IS NULL), c.id
+                 LIMIT 1
+           )
           WHERE {filter}
-          GROUP BY nc.note_id, nc.oracle_id
-          ORDER BY nc.note_id, coalesce(min(c.name), nc.oracle_id), nc.oracle_id"
+          ORDER BY nc.note_id, coalesce(p.name, nc.oracle_id), nc.oracle_id"
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = stmt
@@ -258,6 +292,12 @@ fn attachments_by_note(
                 DeckNoteCard {
                     oracle_id: r.get(1)?,
                     name: r.get(2)?,
+                    card_id: r.get(3)?,
+                    // **From 4** — the `crate::image_uri::FRONT_FACE_COLUMNS` expressions
+                    // `front_face_selects` appended, in the (top-level, face) pairs
+                    // `front_face_map` folds back up, one pair per variant. The offset moves with
+                    // every column added to the named list above it.
+                    image_uris: crate::image_uri::front_face_map(|i| r.get(4 + i))?,
                 },
             ))
         })
@@ -314,9 +354,11 @@ pub fn list_notes(conn: &Connection, deck_id: i64) -> Result<Vec<DeckNoteRow>, S
 
 /// The card's name for a history row, or the oracle id when the corpus has no row for it.
 ///
-/// [`attachments_by_note`]'s `min(c.name)` spelled again for one id, and deliberately the same
-/// rule: the drawer and the band must not name one card two ways. `min()` always answers a row,
-/// so the `Option` here is the aggregate's `NULL` rather than a missing row.
+/// [`attachments_by_note`]'s name fallback spelled again for one id, and deliberately the same
+/// rule: the drawer and the band must not name one card two ways. It stays an aggregate where
+/// that statement now picks a representative printing as a row, because a history line wants a
+/// name and nothing else — every printing of an oracle card shares it — and `min()` always
+/// answers a row, so the `Option` here is the aggregate's `NULL` rather than a missing row.
 fn card_name_for(conn: &Connection, oracle_id: &str) -> Result<String, String> {
     let name: Option<String> = conn
         .query_row(
@@ -1468,5 +1510,98 @@ mod tests {
             create_note(&conn, 404, "t", "b", &[]).unwrap_err(),
             crate::deck::GONE
         );
+    }
+
+    /// A note names one card the deck holds and one it does not, and each answers a printing that
+    /// can be drawn.
+    ///
+    /// **The deck's own printing wins, and the tie-break below it is `c.id`.** Two printings of
+    /// one oracle card are the same card to a note — it attaches by oracle id on purpose — but
+    /// only one of them is the picture the reader is looking at in the deck, and a thumbnail of
+    /// the other is a note that appears to name a card the deck does not hold.
+    #[test]
+    fn an_attachment_names_the_printing_this_deck_holds() {
+        let (conn, burn, _) = deck_db();
+        // Two printings of one oracle card: `aaa` sorts first by id, `zzz` is the one in the deck.
+        conn.execute(
+            "INSERT INTO cards (id, name, set_code, collector_number, lang, layout, oracle_id,
+                                 image_uris, raw)
+             VALUES ('aaa','Bolt','lea','161','en','normal','o-bolt',
+                     json_object('art','https://cards.scryfall.io/art/front/a/a/a.webp?1'), '{}'),
+                    ('zzz','Bolt','m10','146','en','normal','o-bolt',
+                     json_object('art','https://cards.scryfall.io/art/front/z/z/z.webp?1'), '{}')",
+            [],
+        )
+        .unwrap();
+        // The deck's own printing, through the command a drag uses — `deck_db` seeds a deck with
+        // no piles, so the add names one and `category_for_name` makes it.
+        crate::deck::add_card(&conn, burn, "zzz", None, Some("Main deck"), "live", None, 1)
+            .unwrap();
+
+        let note = create_note(&conn, burn, "", "Body", &["o-bolt".into()]).unwrap();
+        let card = &note.cards[0];
+
+        assert_eq!(card.card_id.as_deref(), Some("zzz"));
+        assert_eq!(
+            card.image_uris
+                .as_ref()
+                .and_then(|m| m.get("art"))
+                .map(String::as_str),
+            Some("https://cards.scryfall.io/art/front/z/z/z.webp?1"),
+        );
+    }
+
+    /// A card the deck no longer holds still answers a printing — the note keeps the card it names
+    /// after the card is cut, which is the whole standing this module is built on.
+    #[test]
+    fn an_attachment_the_deck_no_longer_holds_still_answers_a_printing() {
+        let (conn, burn, _) = deck_db();
+        conn.execute(
+            "INSERT INTO cards (id, name, set_code, collector_number, lang, layout, oracle_id, raw)
+             VALUES ('aaa','Bolt','lea','161','en','normal','o-bolt','{}')",
+            [],
+        )
+        .unwrap();
+
+        let note = create_note(&conn, burn, "", "Body", &["o-bolt".into()]).unwrap();
+        let card = &note.cards[0];
+
+        assert_eq!(card.card_id.as_deref(), Some("aaa"));
+        // No fetchable picture anywhere on the row is `None`, never an empty map.
+        assert!(card.image_uris.is_none());
+    }
+
+    /// An oracle id the corpus has never heard of keeps naming itself, and draws no frame.
+    #[test]
+    fn an_orphan_attachment_carries_no_printing() {
+        let (conn, burn, _) = deck_db();
+
+        let note = create_note(&conn, burn, "", "Body", &["o-unknown".into()]).unwrap();
+        let card = &note.cards[0];
+
+        assert_eq!(card.name, "o-unknown");
+        assert_eq!(card.card_id, None);
+        assert!(card.image_uris.is_none());
+    }
+
+    /// The printing multiplication the old `GROUP BY` collapsed is still collapsed — one row per
+    /// attachment, whatever the corpus holds.
+    #[test]
+    fn many_printings_of_one_card_are_still_one_attachment() {
+        let (conn, burn, _) = deck_db();
+        for id in ["a1", "a2", "a3", "a4"] {
+            conn.execute(
+                "INSERT INTO cards (id, name, set_code, collector_number, lang, layout, oracle_id,
+                                     raw)
+                 VALUES (?1,'Bolt','lea','161','en','normal','o-bolt','{}')",
+                params![id],
+            )
+            .unwrap();
+        }
+
+        let note = create_note(&conn, burn, "", "Body", &["o-bolt".into()]).unwrap();
+
+        assert_eq!(note.cards.len(), 1);
+        assert_eq!(note.cards[0].card_id.as_deref(), Some("a1"));
     }
 }
