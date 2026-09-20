@@ -22,15 +22,22 @@
 //!   there for the two collisions the cascade on its own answered with
 //!   `UNIQUE constraint failed`.
 //!
-//! **Nothing here writes history.** `deck_meta::delete_folder` is the one folder write in that
-//! module that records an audit row, because `decks` has a `deck_audit` to file it under and a
-//! deck being re-filed is a fact about that deck. The wishlist has no audit log at all, so the
-//! asymmetry is the schema's rather than a gap left open here.
+//! **Two writes here do throw wishes away, and neither is a filing decision.** [`clear_folder`]
+//! empties one drawer and [`delete_folder_and_wishes`] takes a drawer, its sub-tree and every
+//! wish in it (issue #471). Each is a press whose whole subject is the wishes it deletes, which
+//! is what separates it from [`delete_folder`]: that press is about the drawer, so the wishes in
+//! it survive it.
 //!
-//! **Two of the seven commands are this list's own** and have no counterpart in the gallery:
+//! **Nothing here writes an audit history.** `deck_meta::delete_folder` is the one folder write
+//! in that module that records an audit row, because `decks` has a `deck_audit` to file it under
+//! and a deck being re-filed is a fact about that deck. The wishlist has no audit log at all, so
+//! the asymmetry is the schema's rather than a gap left open here. What the writes here do record
+//! is the home page's feed, [`crate::activity`] — see [`record_folder`] and [`record_clear`].
+//!
+//! **Some of the commands are this list's own** and have no counterpart in the gallery:
 //! [`set_wish_folder`], which is the "move to" — and merges rather than failing, because the
-//! folder is the fourth term of [`crate::schema::WISHLIST_GRAIN`] — and [`folder_summary`],
-//! which is what a folder tile is drawn from.
+//! folder is the fourth term of [`crate::schema::WISHLIST_GRAIN`] — [`folder_summary`], which is
+//! what a folder tile is drawn from, and the two deleting writes above.
 
 use crate::collection::EntryChange;
 // The two sentences this module refuses with, taken from the module it is a port of rather
@@ -446,10 +453,29 @@ pub fn reorder_folders(
     list_folders(conn)
 }
 
+/// The sub-tree rooted at `?1` — that folder and every folder beneath it, at any depth — as a
+/// `WITH RECURSIVE doomed(id)` prefix for the statement written after it.
+///
+/// **One spelling for its two callers**, [`delete_folder`] and [`delete_folder_and_wishes`],
+/// because both stand in front of the same `parent_id` cascade and must agree with it and with
+/// each other about which folders are doomed. It walks in the database rather than in Rust
+/// because the cascade it stands in front of is itself recursive.
+///
+/// **`UNION` and never `UNION ALL`.** A `parent_id` cycle that arrived some other way — a
+/// hand-edited database, a restored backup — is what [`move_folder`]'s hop budget exists for,
+/// and here the duplicate-row check is what makes the same corruption converge instead of
+/// looping.
+const DOOMED_SUBTREE: &str = "WITH RECURSIVE doomed(id) AS (
+     SELECT ?1
+     UNION
+     SELECT f.id FROM wishlist_folders f JOIN doomed d ON f.parent_id = d.id
+ )";
+
 /// Delete a folder. **Does not delete the wishes in it** — they surface at the root, filed
 /// nowhere, still exactly as they were. Sub-folders go with it. Like
 /// [`crate::deck_meta::delete_folder`] and [`crate::deck::delete_deck`], an id that resolves to
 /// nothing is a success: the caller wanted that folder gone, and it is gone.
+/// [`delete_folder_and_wishes`] is the press that takes the wishes as well.
 ///
 /// # Why the un-filing is written out and not left to the cascade
 ///
@@ -501,25 +527,16 @@ pub fn delete_folder(conn: &Connection, id: i64) -> Result<(), String> {
     // to record nothing: a delete that found no folder deleted no folder. This function has
     // never refused a stale id and does not start now.
     let deleted = read_folder(&tx, id)?;
-    // The sub-tree, in the database rather than in a Rust walk, because the cascade this
-    // stands in front of is itself recursive and the two must agree about which folders are
-    // doomed. **`UNION` and never `UNION ALL`**: a `parent_id` cycle that arrived some other
-    // way — a hand-edited database, a restored backup — is what [`move_folder`]'s hop budget
-    // exists for, and here the duplicate-row check is what makes the same corruption converge
-    // instead of looping. `ORDER BY w.id` so the row a merge folds into is decided by the
-    // table and not by the planner.
+    // Every wish in the sub-tree — see [`DOOMED_SUBTREE`] for the walk. `ORDER BY w.id` so the
+    // row a merge folds into is decided by the table and not by the planner.
     let filed: Vec<i64> = {
         let mut stmt = tx
-            .prepare(
-                "WITH RECURSIVE doomed(id) AS (
-                     SELECT ?1
-                     UNION
-                     SELECT f.id FROM wishlist_folders f JOIN doomed d ON f.parent_id = d.id
-                 )
+            .prepare(&format!(
+                "{DOOMED_SUBTREE}
                  SELECT w.id FROM wishlist_entries w
                   WHERE w.folder_id IN (SELECT id FROM doomed)
-                  ORDER BY w.id",
-            )
+                  ORDER BY w.id"
+            ))
             .map_err(|e| e.to_string())?;
         let rows = stmt
             .query_map(params![id], |r| r.get(0))
@@ -542,6 +559,142 @@ pub fn delete_folder(conn: &Connection, id: i64) -> Result<(), String> {
         record_folder(&tx, "delete", &folder.name, None)?;
     }
     tx.commit().map_err(|e| e.to_string())
+}
+
+/// Empty one folder of the wishes filed **directly** in it, and answer how many wishes went.
+/// The folder stays, and so does everything else: its sub-folders and the wishes in them, the
+/// root, every other drawer (issue #471).
+///
+/// **Direct members only, because the press is "clear what I am looking at".** Standing in a
+/// folder, the reader sees the wishes filed in it and one tile per sub-folder; a clear that
+/// reached into those tiles would delete wishes the view never showed them. It is the grain
+/// [`WishlistFolderSummary::wishes`] counts at, not the tree's.
+///
+/// **A folder that is not there is [`FOLDER_GONE`], and this is where the write parts company
+/// with [`delete_folder`].** A delete that finds nothing has still got what it asked for — the
+/// folder is gone. A clear that finds nothing has not: the likeliest way the folder went is
+/// another surface deleting it, and [`delete_folder`] re-files its wishes at the root, so they
+/// are still on the list. Answering "0 cleared" would tell the reader the wishes they wanted
+/// gone are gone while they sit at the root.
+///
+/// **Nothing is re-filed, so no merge is owed.** Every row the `DELETE` names leaves the table
+/// rather than moving, so no grain changes and [`refile_wish`] has nothing to do.
+///
+/// One [`crate::activity`] `clear` row when anything went ([`record_clear`]) and none when
+/// nothing did — a press that removed nothing changed nothing, which is [`delete_folder`]'s "a
+/// delete that found no folder deleted no folder" one step over. One transaction: the copies
+/// the row reports are read inside the transaction that deletes them.
+pub fn clear_folder(conn: &Connection, id: i64) -> Result<i64, String> {
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    // The name, for the feed row — and the refusal, before anything is read or written.
+    let folder = read_folder(&tx, id)?.ok_or_else(|| FOLDER_GONE.to_owned())?;
+    // The copies, before the `DELETE` takes them: it answers **rows**, and the feed's signed
+    // `delta` is copies — [`crate::reset::clear_wishlist`]'s reason, one drawer rather than
+    // the whole list.
+    let copies: i64 = tx
+        .query_row(
+            "SELECT coalesce(sum(quantity), 0) FROM wishlist_entries WHERE folder_id = ?1",
+            params![id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    let wishes = tx
+        .execute(
+            "DELETE FROM wishlist_entries WHERE folder_id = ?1",
+            params![id],
+        )
+        .map_err(|e| e.to_string())? as i64;
+    if wishes > 0 {
+        record_clear(&tx, &folder.name, wishes, copies)?;
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(wishes)
+}
+
+/// Delete a folder, every folder beneath it, **and every wish filed anywhere in that sub-tree**,
+/// and answer how many wishes went. The root and every other drawer are untouched (issue #471).
+///
+/// [`delete_folder`] with the one thing that function refuses to do. There the press is about
+/// the drawer, so the wishes survive it; here the reader asked for the wishes by name, so they
+/// go. The sub-tree is [`DOOMED_SUBTREE`], the walk [`delete_folder`] makes, so the two presses
+/// cannot disagree about which drawers a delete reaches.
+///
+/// **No merge, and this is the one path out of a folder that does not need [`refile_wish`].**
+/// The wishes are deleted before the folder row goes, so by the time the `DELETE` on
+/// `wishlist_folders` runs, `wishlist_entries.folder_id`'s `ON DELETE SET NULL` has no row left
+/// to rewrite — nothing lands on the root grain, so nothing can collide there. The sub-folders
+/// are still the `parent_id` cascade's work, and depend on `PRAGMA foreign_keys` exactly as
+/// [`delete_folder`]'s do.
+///
+/// **An id that resolves to nothing is refused with [`FOLDER_GONE`]** — [`clear_folder`]'s
+/// answer, and deliberately not [`delete_folder`]'s "you wanted it gone and it is gone". That
+/// rule is true of a press about the *drawer*; this press is about the wishes as well, and the
+/// likeliest way a drawer is gone is another surface's plain delete, which re-filed every wish in
+/// it at the root. A quiet `Ok(0)` would close the confirmation and leave the reader believing
+/// the wishes they asked to be rid of had gone with it, while every one of them sits at the top
+/// of the list; the page words the refusal instead, and the reader can see where they went.
+///
+/// **Two feed rows where [`delete_folder`] writes one, and that is not its "one line for the
+/// press" rule broken.** That rule is against a line per *wish*. Here two different things
+/// happened — wishes left the list, which moves the day's copy count, and a drawer stopped
+/// existing, which moves none — and a single `folder` line would carry the `0` delta every
+/// folder line carries, leaving the day header's roll-up nothing to read the lost copies off.
+/// So a `clear` row ([`record_clear`]) when any wish went, then the ordinary `delete` line.
+///
+/// One transaction: mid-press the wishes are gone and the drawers are gone, or neither is.
+pub fn delete_folder_and_wishes(conn: &Connection, id: i64) -> Result<i64, String> {
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    // The name, for both feed rows — and the refusal, before anything is read or written.
+    let folder = read_folder(&tx, id)?.ok_or_else(|| FOLDER_GONE.to_owned())?;
+    let copies: i64 = tx
+        .query_row(
+            &format!(
+                "{DOOMED_SUBTREE}
+                 SELECT coalesce(sum(quantity), 0) FROM wishlist_entries
+                  WHERE folder_id IN (SELECT id FROM doomed)"
+            ),
+            params![id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    let wishes = tx
+        .execute(
+            &format!(
+                "{DOOMED_SUBTREE}
+                 DELETE FROM wishlist_entries WHERE folder_id IN (SELECT id FROM doomed)"
+            ),
+            params![id],
+        )
+        .map_err(|e| e.to_string())? as i64;
+    tx.execute("DELETE FROM wishlist_folders WHERE id = ?1", params![id])
+        .map_err(|e| e.to_string())?;
+    if wishes > 0 {
+        record_clear(&tx, &folder.name, wishes, copies)?;
+    }
+    record_folder(&tx, "delete", &folder.name, None)?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(wishes)
+}
+
+/// One `clear` line in the feed, for wishes a drawer press deleted rather than re-filed —
+/// [`clear_folder`]'s and [`delete_folder_and_wishes`]'.
+///
+/// [`crate::reset::clear_wishlist`]'s kind and its payload key — `"cards"` is the count of
+/// wishes (rows) there too, never copies — plus `"folder"`, the drawer's name as it was at the
+/// press, which is what tells one drawer emptied apart from the whole list wiped. `delta` is the
+/// copies, negative, for the day header's roll-up; the two numbers differ by every playset
+/// wished for. Callers write it only when a wish went.
+fn record_clear(conn: &Connection, folder: &str, wishes: i64, copies: i64) -> Result<(), String> {
+    crate::activity::record(
+        conn,
+        crate::activity::WISHLIST,
+        crate::activity::CLEAR,
+        None,
+        None,
+        &serde_json::json!({ "cards": wishes, "folder": folder }),
+        -copies,
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// Move one wish into a folder, or — with `None` — back to the **root of the list**.
@@ -866,6 +1019,7 @@ pub async fn wishlist_folder_reorder(
 
 /// The wishes inside surface at the root and the sub-folders go too — see [`delete_folder`],
 /// where the sub-folders are the DDL's work and the wishes are emphatically not.
+/// [`wishlist_folder_delete_with_wishes`] is the sibling press that takes the wishes as well.
 #[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn wishlist_folder_delete(
@@ -876,6 +1030,37 @@ pub async fn wishlist_folder_delete(
     tauri::async_runtime::spawn_blocking(move || with_write(&state, |c| delete_folder(c, id)))
         .await
         .map_err(unfinished)?
+}
+
+/// Empty one drawer of the wishes filed directly in it, and answer how many went — see
+/// [`clear_folder`] for why its sub-folders are untouched and why a drawer that has gone is a
+/// refusal rather than a zero.
+#[cfg(not(target_family = "wasm"))]
+#[tauri::command]
+pub async fn wishlist_folder_clear(
+    state: tauri::State<'_, Arc<AppState>>,
+    id: i64,
+) -> Result<i64, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || with_write(&state, |c| clear_folder(c, id)))
+        .await
+        .map_err(unfinished)?
+}
+
+/// Delete a drawer, its sub-tree and every wish in it, and answer how many wishes went — see
+/// [`delete_folder_and_wishes`]. [`wishlist_folder_delete`] is the press that keeps them.
+#[cfg(not(target_family = "wasm"))]
+#[tauri::command]
+pub async fn wishlist_folder_delete_with_wishes(
+    state: tauri::State<'_, Arc<AppState>>,
+    id: i64,
+) -> Result<i64, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        with_write(&state, |c| delete_folder_and_wishes(c, id))
+    })
+    .await
+    .map_err(unfinished)?
 }
 
 /// "Move to …", and "Move to the wishlist" — see [`set_wish_folder`] for the merge, which is
@@ -1317,6 +1502,159 @@ mod tests {
         assert_eq!(delete_folder(&conn, 404), Ok(()));
     }
 
+    // -- clear_folder and delete_folder_and_wishes (issue #471) ------------------------------
+
+    /// Every wish still on the list, as `(id, folder_id, quantity)` in id order — straight from
+    /// the table, so a merge that summed into a survivor shows up as a changed quantity.
+    fn remaining(conn: &Connection) -> Vec<(i64, Option<i64>, i64)> {
+        conn.prepare("SELECT id, folder_id, quantity FROM wishlist_entries ORDER BY id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap()
+    }
+
+    /// "Clear what I am looking at": the two wishes filed directly in `Ordered` go, and the
+    /// three wishes the view does not list — one a tile down, one at the root, one in a sibling
+    /// — stay exactly as they were. The folder itself stays, and so does its sub-folder.
+    #[test]
+    fn clear_folder_empties_only_the_wishes_filed_directly_in_it() {
+        let conn = conn();
+        let ordered = create_folder(&conn, None, "Ordered").unwrap();
+        let someday = create_folder(&conn, Some(ordered.id), "Someday").unwrap();
+        let elsewhere = create_folder(&conn, None, "Expensive").unwrap();
+        wish(&conn, "o1", 2, Some(ordered.id));
+        wish(&conn, "o2", 3, Some(ordered.id));
+        let deep = wish(&conn, "o1", 1, Some(someday.id));
+        let root = wish(&conn, "o1", 5, None);
+        let sibling = wish(&conn, "o4", 4, Some(elsewhere.id));
+
+        assert_eq!(
+            clear_folder(&conn, ordered.id),
+            Ok(2),
+            "two wishes went, and the answer counts wishes rather than their five copies"
+        );
+
+        assert_eq!(
+            remaining(&conn),
+            vec![
+                (deep, Some(someday.id), 1),
+                (root, None, 5),
+                (sibling, Some(elsewhere.id), 4),
+            ],
+            "the sub-folder's wish, the root's and the sibling's, none of them moved or merged"
+        );
+        assert_eq!(
+            list_folders(&conn).unwrap().len(),
+            3,
+            "a clear deletes no drawer, not even the one it emptied"
+        );
+    }
+
+    #[test]
+    fn clear_folder_on_a_folder_holding_nothing_answers_zero_and_records_nothing() {
+        let conn = conn();
+        let ordered = create_folder(&conn, None, "Ordered").unwrap();
+        let someday = create_folder(&conn, Some(ordered.id), "Someday").unwrap();
+        // Filed a level down, so "holding nothing" is about the folder's own wishes and the
+        // answer is not zero merely because the whole sub-tree was empty.
+        let deep = wish(&conn, "o1", 2, Some(someday.id));
+        let before = feed(&conn).len();
+
+        assert_eq!(clear_folder(&conn, ordered.id), Ok(0));
+
+        assert_eq!(remaining(&conn), vec![(deep, Some(someday.id), 2)]);
+        assert_eq!(
+            feed(&conn).len(),
+            before,
+            "a press that removed nothing writes no line"
+        );
+    }
+
+    /// The race the refusal exists for, driven rather than described: another surface deletes
+    /// the drawer, [`delete_folder`] re-files its wish at the root, and a clear that arrives
+    /// afterwards must not answer "0 cleared" over a wish that is still on the list.
+    #[test]
+    fn clear_folder_refuses_a_folder_that_is_not_there() {
+        let conn = conn();
+        let ordered = create_folder(&conn, None, "Ordered").unwrap();
+        let filed = wish(&conn, "o1", 2, Some(ordered.id));
+        delete_folder(&conn, ordered.id).unwrap();
+        let before = feed(&conn).len();
+
+        assert_eq!(clear_folder(&conn, ordered.id), Err(FOLDER_GONE.to_owned()));
+
+        assert_eq!(
+            remaining(&conn),
+            vec![(filed, None, 2)],
+            "the wish the delete surfaced at the root is still there"
+        );
+        assert_eq!(feed(&conn).len(), before, "and the refusal wrote no line");
+    }
+
+    /// The drawer, both levels beneath it, and all three wishes filed anywhere in them — with a
+    /// root wish for the **same card** as two of the doomed ones. Left to `ON DELETE SET NULL`
+    /// those two would land on the root grain and collide with it (see [`delete_folder`]); they
+    /// are deleted before the folder row goes, so the root wish must come out untouched, not
+    /// merged into.
+    #[test]
+    fn delete_folder_and_wishes_takes_the_subtree_and_every_wish_in_it() {
+        let conn = conn();
+        let top = create_folder(&conn, None, "Top").unwrap();
+        let a = create_folder(&conn, Some(top.id), "A").unwrap();
+        let b = create_folder(&conn, Some(a.id), "B").unwrap();
+        let sibling = create_folder(&conn, None, "Expensive").unwrap();
+        wish(&conn, "o1", 2, Some(top.id));
+        wish(&conn, "o2", 1, Some(a.id));
+        wish(&conn, "o1", 3, Some(b.id));
+        let root = wish(&conn, "o1", 4, None);
+        let kept = wish(&conn, "o2", 5, Some(sibling.id));
+
+        assert_eq!(delete_folder_and_wishes(&conn, top.id), Ok(3));
+
+        let left: Vec<i64> = list_folders(&conn).unwrap().iter().map(|f| f.id).collect();
+        assert_eq!(
+            left,
+            vec![sibling.id],
+            "both levels of sub-folder cascaded with it"
+        );
+        assert_eq!(
+            remaining(&conn),
+            vec![(root, None, 4), (kept, Some(sibling.id), 5)],
+            "the root wish holds its own four copies and nothing merged into it"
+        );
+    }
+
+    /// The race the refusal is for, and the reason it is not [`delete_folder`]'s quiet success:
+    /// another surface deleted the drawer the plain way, which re-filed its wish at the root, so
+    /// a "delete it and its wishes" arriving afterwards must say the drawer is gone rather than
+    /// answer "0 deleted" over a wish that is still on the list — and must not touch that wish.
+    #[test]
+    fn delete_folder_and_wishes_refuses_a_folder_that_is_not_there() {
+        let conn = conn();
+        let ordered = create_folder(&conn, None, "Ordered").unwrap();
+        let filed = wish(&conn, "o1", 2, Some(ordered.id));
+        delete_folder(&conn, ordered.id).unwrap();
+        let before = feed(&conn).len();
+
+        assert_eq!(
+            delete_folder_and_wishes(&conn, ordered.id),
+            Err(FOLDER_GONE.to_owned())
+        );
+
+        assert_eq!(
+            remaining(&conn),
+            vec![(filed, None, 2)],
+            "the wish the plain delete surfaced at the root is still there"
+        );
+        assert_eq!(
+            feed(&conn).len(),
+            before,
+            "no clear line and no delete line"
+        );
+    }
+
     #[test]
     fn list_folders_reads_the_tree_shape_and_order() {
         let conn = conn();
@@ -1735,6 +2073,76 @@ mod tests {
         let conn = conn();
         delete_folder(&conn, 999_999).unwrap();
         assert!(feed(&conn).is_empty());
+    }
+
+    /// One `clear` line naming the drawer — [`crate::reset::clear_wishlist`]'s kind and its
+    /// `cards` key, which counts wishes there too — and a delta of the copies, which is a
+    /// different number here on purpose. The sub-folder's wish is neither counted nor summed.
+    #[test]
+    fn clearing_a_wishlist_folder_records_one_clear_row_naming_it() {
+        let conn = conn();
+        let ordered = create_folder(&conn, None, "Ordered").unwrap();
+        let someday = create_folder(&conn, Some(ordered.id), "Someday").unwrap();
+        wish(&conn, "o1", 2, Some(ordered.id));
+        wish(&conn, "o2", 3, Some(ordered.id));
+        wish(&conn, "o3", 7, Some(someday.id));
+
+        clear_folder(&conn, ordered.id).unwrap();
+
+        let rows = feed(&conn);
+        assert_eq!(rows.len(), 3, "the two creates and the clear");
+        assert_eq!(rows[0].scope, crate::activity::WISHLIST);
+        assert_eq!(rows[0].kind, crate::activity::CLEAR);
+        assert_eq!(rows[0].card_id, None, "a clear is about no one card");
+        assert_eq!(rows[0].card_name, None);
+        assert_eq!(payload(&rows[0])["cards"], 2, "two wishes went");
+        assert_eq!(payload(&rows[0])["folder"], "Ordered");
+        assert_eq!(rows[0].delta, -5, "and five copies with them");
+    }
+
+    /// Two lines, because two things happened: the wishes went (the `clear`, carrying the
+    /// copies) and the drawer went (the ordinary `delete`, carrying none). Newest first, and the
+    /// delete is written second.
+    #[test]
+    fn deleting_a_wishlist_folder_with_its_wishes_records_the_clear_and_the_delete() {
+        let conn = conn();
+        let shopping = create_folder(&conn, None, "Shopping").unwrap();
+        let soon = create_folder(&conn, Some(shopping.id), "Soon").unwrap();
+        wish(&conn, "o1", 2, Some(shopping.id));
+        wish(&conn, "o2", 1, Some(shopping.id));
+        wish(&conn, "o3", 3, Some(soon.id));
+
+        delete_folder_and_wishes(&conn, shopping.id).unwrap();
+
+        let rows = feed(&conn);
+        assert_eq!(rows.len(), 4, "the two creates, the clear and the delete");
+        assert_eq!(rows[0].kind, crate::activity::FOLDER);
+        assert_eq!(payload(&rows[0])["action"], "delete");
+        assert_eq!(payload(&rows[0])["name"], "Shopping");
+        assert_eq!(rows[0].delta, 0);
+        assert_eq!(rows[1].scope, crate::activity::WISHLIST);
+        assert_eq!(rows[1].kind, crate::activity::CLEAR);
+        assert_eq!(
+            payload(&rows[1])["cards"],
+            3,
+            "every wish in the sub-tree, the sub-folder's included"
+        );
+        assert_eq!(payload(&rows[1])["folder"], "Shopping");
+        assert_eq!(rows[1].delta, -6);
+    }
+
+    /// A drawer holding nothing loses no wishes, so it gets the `delete` line and no `clear`.
+    #[test]
+    fn deleting_an_empty_wishlist_folder_with_its_wishes_records_only_the_delete() {
+        let conn = conn();
+        let shopping = create_folder(&conn, None, "Shopping").unwrap();
+
+        assert_eq!(delete_folder_and_wishes(&conn, shopping.id), Ok(0));
+
+        let rows = feed(&conn);
+        assert_eq!(rows.len(), 2, "the create and the delete");
+        assert_eq!(rows[0].kind, crate::activity::FOLDER);
+        assert_eq!(payload(&rows[0])["action"], "delete");
     }
 
     #[test]

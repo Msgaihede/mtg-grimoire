@@ -130,7 +130,7 @@ const SHARE_WRITES: readonly string[] = ["shareCreate", "shareRefresh", "shareRe
  *   using it is what keeps the app's folder list one query instead of two cache entries.
  *
  * **The name that must never appear is `useWishlistFolders`**, its neighbour in the same module,
- * which carries five folder writes. It would give this view a folder-creating control, which spec
+ * which carries every folder write. It would give this view a folder-creating control, which spec
  * §8 defers and this directory's own doc comments forbid, and the `ipc.*` sweep above cannot see
  * a single call of it.
  *
@@ -182,7 +182,8 @@ describe("the shared view", () => {
    * feature that does the calling somewhere this glob does not reach.
    *
    * It is one identifier away from real — `useWishlistFolderList` and `useWishlistFolders` are
-   * neighbours in one module and the second carries five folder writes — and the swap leaves
+   * neighbours in one module and the second carries every folder write — two of which delete
+   * wishes since issue #471 — and the swap leaves
    * every other assertion in this file green.
    */
   it("imports only the named few it is allowed to, from other features", () => {
@@ -201,7 +202,7 @@ describe("the shared view", () => {
             `${path} imports ${name} from @/features/${from}. Everything in ` +
               "src/features/share/ renders a document somebody else published, and a hook from " +
               "another feature can reach commands this file's ipc sweep never sees — " +
-              "`useWishlistFolders` next door carries five folder writes. Add the name to " +
+              "`useWishlistFolders` next door carries every folder write. Add the name to " +
               "OUTSIDE_IMPORTS in readOnly.test.ts in the same commit and say why.",
           ).toContain(name);
         }

@@ -464,6 +464,40 @@ describe("ipc argument names match the Rust command signatures", () => {
   });
 
   /**
+   * **The two folder writes that delete wishes, pinned on the day they were written** (issue
+   * #471) — `wishlist_folder_clear` empties one level, `wishlist_folder_delete_with_wishes` takes
+   * the whole sub-tree. They are one case because they are one pair of buttons' worth of wire and
+   * share the one trap: both take a bare `id` beside `wishlist_folder_delete`'s bare `id`, so a
+   * wrapper copied from the wrong line type-checks perfectly and invokes a command that deletes a
+   * different amount of the reader's list.
+   *
+   * Both ends of each name, `card_tcgplayer_ids`' rule: the wire name *is* the Rust function
+   * name, so a rename on that side alone compiles clean and leaves this wrapper invoking nothing.
+   * A regex over the signature rather than `commandParams`, for the home reads' reason above — a
+   * command in this crate may be spelled `pub async fn` or `#[tauri::command(async)] pub fn`.
+   */
+  it("sends the folder clear and the delete-with-wishes under the names their commands declare", async () => {
+    // A pass must never be able to mean "the crate was never read".
+    expect(wishlistFoldersRs.length, "wishlist_folders.rs was not read").toBeGreaterThan(1_000);
+
+    invoke.mockResolvedValue(4);
+    // The count travels verbatim: it is what the reader is told went, and a wrapper that
+    // swallowed it would hand the page `undefined` to say.
+    await expect(ipc.wishlistFolderClear(3)).resolves.toBe(4);
+    expect(invoke).toHaveBeenLastCalledWith("wishlist_folder_clear", { id: 3 });
+
+    invoke.mockResolvedValue(9);
+    await expect(ipc.wishlistFolderDeleteWithWishes(3)).resolves.toBe(9);
+    expect(invoke).toHaveBeenLastCalledWith("wishlist_folder_delete_with_wishes", { id: 3 });
+
+    for (const command of ["wishlist_folder_clear", "wishlist_folder_delete_with_wishes"]) {
+      expect(wishlistFoldersRs, `\`${command}\` declares no \`id\``).toMatch(
+        new RegExp(`fn ${command}\\([^)]*\\bid\\s*:\\s*i64\\b`, "s"),
+      );
+    }
+  });
+
+  /**
    * **The home page's five reads, pinned on the day they were written** — `wishlist_summary`,
    * `collection_breakdown`, `wishlist_breakdown`, `deck_values` and `activity_recent`. They are
    * one case rather than five because they are one page's worth of wire, and because three of the

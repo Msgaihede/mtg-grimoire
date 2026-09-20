@@ -520,10 +520,11 @@ create tile's **solid** edge is the whole of what tells the two shapes apart. Dr
 would have made a reader stop to check they had the right drawer, and collapsing "still counting"
 into "empty" is exactly the distinction `face` draws that em dash for.
 
-**The strip survives for `Move to folder…` and `Delete…`, and that residue is the rule rather
-than a leftover.** The answer to "into which folder" is a list of the *other* folders, and the
-answer to "delete this?" is a sentence about what happens to the wishes inside. Neither is a name
-typed on a line, and neither has a tile of its own to be drawn on.
+**The strip survives for `Move to folder…` and `Delete…` — and, since issue #471, `Clear…` —
+and that residue is the rule rather than a leftover.** The answer to "into which folder" is a list
+of the *other* folders, and the answer to "delete this?" or "clear this?" is a sentence about what
+happens to the wishes inside. None of them is a name typed on a line, and none has a tile of its
+own to be drawn on — which is why `Clear…` went into the strip without an argument.
 
 One consequence in the page itself: `openPanel` gained a level clause —
 `flatten || (panel?.kind === "newFolder" && panel.parentId !== folderId) ? null : panel` — because
@@ -1055,6 +1056,62 @@ wipe that stopped at the entries would hand the reader an empty filing cabinet t
 drawer at a time. The returned count stays the count of **wishes** deleted, which is what the
 reader is being told about.
 
+## Emptying one drawer: `Clear…`, and a delete that takes the wishes
+
+**2026-09-19, [issue #471](https://github.com/Msgaihede/mtg-grimoire/issues/471).** The reader's
+case was a folder that is emptied as part of the workflow rather than once — an `Ordered` drawer
+that fills, gets bought, and fills again. Until then there were two ways to get rid of a
+drawer's wishes and both were wrong for it: cross them off one at a time, or `Reset all`, which
+takes the whole list. Deleting the folder did neither, and on purpose — it re-files the wishes at
+the root, which is [the two `ON DELETE` actions](#the-two-tables-and-the-two-on-delete-actions)'
+whole argument. So there are two new writes, and the
+reader decided the one question that made them different:
+
+| Press | Command | Takes | Leaves |
+| --- | --- | --- | --- |
+| `⋯ → Clear…` → `Clear folder` | `wishlist_folder_clear` → `clear_folder` | the wishes filed **directly** in the folder | the folder, every sub-folder and everything in them |
+| `⋯ → Delete…` → `Delete folder and wishes` | `wishlist_folder_delete_with_wishes` → `delete_folder_and_wishes` | the folder, its whole sub-tree, and every wish anywhere in it | the root and every other drawer |
+| `⋯ → Delete…` → `Delete folder` | `wishlist_folder_delete` → `delete_folder` | the folder and its sub-tree | every wish, re-filed at the root (unchanged) |
+
+**Clear is "what I see when I stand in it", and that is the reader's rule, not a
+simplification.** A clear that walked the sub-tree would empty drawers the reader was not
+looking at and may have filed for a different reason. It is the one number on this page that is
+*not* the folder card's: the card prints a recursive total (`buildFolderTree` sums children), and
+`Clear` takes only the direct wishes — so the confirmation **states its count**, which is the
+reverse of `DeleteFolderConfirm`'s rule of repeating no figure the card already shows. Here the
+figure is new information. It comes off `wishlist_folder_summary`, whose counts are already
+direct, and the menu row greys (`Nothing filed directly here`) once that summary has answered 0.
+
+**The delete that takes the wishes needs no merge**, and it is the one path out of a drawer
+where `refile_wish` is not the mechanism. The re-filing exists because the SET NULL rewrites the
+grain's fourth term; a delete that removes the wishes first leaves that cascade nothing to
+rewrite and nothing to collide on. The sub-tree is the same recursive `UNION` walk `delete_folder`
+uses — one query in the crate, not two — so "which drawers are doomed" cannot be answered two
+ways.
+
+**Both refuse a folder that is gone (`FOLDER_GONE`), and that is the plain delete's rule
+reversed on purpose.** `delete_folder` calls a gone id a success — the press is about the drawer,
+the reader wanted it gone, and it is. These two presses are about the *wishes*, and the likeliest
+way a drawer has gone is another surface's plain delete, which re-filed every wish in it at the
+root. A quiet "0" would close the confirmation and leave the reader believing the wishes they
+meant to throw away had gone, while they sit at the top of the list; the refusal reaches the
+page's write-failure banner instead. The delete-with-wishes half of this was a decision taken at
+review: it was written as `delete_folder`'s `Ok(0)` first, and the race above is what moved it.
+
+**The feed writes one `clear` row per press**, the kind and the `cards` key `clear_wishlist`
+already writes, plus a `folder` key naming the drawer — so it reads `Cleared 4 cards from your
+wishlist` / `in Ordered`, and the whole-list wipe (no `folder` key) is unchanged. A press that
+removed nothing writes nothing. A delete that took wishes writes that row **and** the ordinary
+`Deleted wishlist folder …` line, because two things happened.
+
+**Both invalidate the card search as well as `["wishlist"]`**, which the other folder writes do
+not: they are the only two that delete *wishes*, and every search result draws a `wishlisted`
+heart per printing — `WishlistPage`'s `settleWhole` argument, one hook over.
+
+**No undo.** The wishlist keeps no journal — `deck_undo` is per deck — so both confirmations say
+what will go before the press, and the plain `Delete folder` beside the destructive one is still
+the answer that keeps every wish.
+
 ## Deliberately out of scope
 
 - **Folders in import and export.** The seven formats carry cards, and a folder is not one — see
@@ -1113,7 +1170,7 @@ dx 0.0 / dy 0.0 from its trigger on keyboard activation, which is what `menuClic
 | Path | What is in it |
 | --- | --- |
 | `src-tauri/src/schema.rs` | The v23 step, `WISHLIST_GRAIN`, and the whole-schema `ON DELETE` inventory |
-| `src-tauri/src/wishlist_folders.rs` | The five folder commands, `set_wish_folder`, `folder_summary` |
+| `src-tauri/src/wishlist_folders.rs` | The folder commands, `set_wish_folder`, `folder_summary`, and since issue #471 `clear_folder` and `delete_folder_and_wishes` |
 | `src-tauri/src/wishlist.rs` | `set_wish_printing`, `elsewhere`, `WISH_PREFERRED_FINISH`, the cheapest-printing join |
 | `src-tauri/src/wishlist_optimize.rs` | `plan` and `apply`, the candidate query, and the six DTOs `ipc.test.ts`'s `plainMirrors` pins |
 | `src/features/wishlist/optimizePlan.ts` | The conclusions drawn from those facts — the ticked set, the headline, the outcome reading |

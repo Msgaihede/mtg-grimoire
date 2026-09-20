@@ -1967,6 +1967,44 @@ describe("DeckEditor", () => {
   });
 
   /**
+   * **The desk is not text, and a press-drag on it must not make a selection** — issue #473.
+   *
+   * A pile heading, a price line or the gap between two piles is not a card, so a press-drag there
+   * started a text selection instead of a drag, and across a Stacks desk that is thousands of
+   * characters of headings and card frames painted blue. A second press inside it began a native
+   * drag of the selection, and the reader lost the window. `lib/nativeDrag.ts` refuses that drag
+   * app-wide; this is the half that takes the selection away where the report found it.
+   *
+   * **And the text comes back wherever it is read rather than handled**, which is the half a
+   * blanket rule gets wrong: the dialogs are mounted *inside* this section, so they would inherit
+   * the refusal, and so would the two panels anchored to the ledger line and the notes a reader
+   * came to read. Each opts back in at its own shell. `classList` rather than a class-string
+   * match, because jsdom applies no stylesheet and the class is the whole of what can be checked
+   * here — the live pass measured the computed `user-select` on each.
+   */
+  it("keeps the desk from being selected as text, and gives the text back where it is read", async () => {
+    await open();
+
+    expect(screen.getByRole("region", { name: "Deck editor: Burn" }).classList).toContain(
+      "select-none",
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Deck settings" }));
+    expect(screen.getByRole("dialog", { name: "Deck settings" }).classList).toContain(
+      "select-text",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Deck settings" }));
+
+    await userEvent.click(await screen.findByRole("button", { name: "1 issue · Modern" }));
+    expect(screen.getByRole("dialog", { name: "Modern check" }).classList).toContain("select-text");
+
+    const notes = screen.getByRole("region", { name: "Notes" });
+    const disclosure = within(notes).getByRole("button", { name: "Notes" });
+    const body = document.getElementById(disclosure.getAttribute("aria-controls") ?? "");
+    expect(body?.classList).toContain("select-text");
+  });
+
+  /**
    * **The note mark, in all four views at once — the half of issue #447 that is "built but
    * unwired" until something here draws it.**
    *

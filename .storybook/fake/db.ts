@@ -12345,6 +12345,36 @@ function nextWishFolderOrder(db: FakeDb, parentId: number | null): number {
     .reduce((n, f) => Math.max(n, f.sortOrder + 1), 0);
 }
 
+/**
+ * `wishlist_folders::DOOMED_SUBTREE` — the folder `id` and every folder beneath it, at any
+ * depth: exactly the rows `parent_id`'s `ON DELETE CASCADE` onto its own table takes with it.
+ *
+ * **One walk for its two callers**, {@link writeHandlers.wishlist_folder_delete} and
+ * {@link writeHandlers.wishlist_folder_delete_with_wishes}, the crate's reason for one spelling:
+ * both stand in front of the same cascade, and two copies of the walk would be two chances to
+ * disagree about which drawers are going. It is walked to a **fixed point** rather than one
+ * level deep because the cascade is recursive, and the `!doomed.has(f.id)` guard is what makes a
+ * `parent_id` loop that arrived some other way converge — the crate's `UNION` rather than
+ * `UNION ALL`, for the same reason.
+ *
+ * `id` is in the answer whether or not a folder has it, as `SELECT ?1` is: a gone id is a set of
+ * one that no row matches, which is how the plain delete comes to change nothing for it. (The
+ * other caller refuses a gone id in words before it walks.)
+ */
+function wishFolderSubtree(db: FakeDb, id: number): Set<number> {
+  const doomed = new Set<number>([id]);
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const f of db.wishlistFolders) {
+      if (f.parentId !== null && doomed.has(f.parentId) && !doomed.has(f.id)) {
+        doomed.add(f.id);
+        grew = true;
+      }
+    }
+  }
+  return doomed;
+}
+
 function collectionFolderById(db: FakeDb, id: number): FakeCollectionFolder | undefined {
   return db.collectionFolders.find((f) => f.id === id);
 }
@@ -15194,6 +15224,7 @@ export function writeHandlers(db: FakeDb) {
      * being `ON DELETE CASCADE` on itself. A confirmation that said "and everything in it" would
      * be wrong about the half that matters: a folder is where a wish was kept, and the wish is
      * the thing the reader wanted. An id that resolves to nothing is a success.
+     * {@link wishlist_folder_delete_with_wishes} is the press that takes the wishes as well.
      *
      * **The un-filing goes through {@link mergeWishOnto} and that is not a nicety** — it is the
      * whole reason the crate stopped leaving this press to the `SET NULL`. The folder is the
@@ -15217,17 +15248,7 @@ export function writeHandlers(db: FakeDb) {
      */
     wishlist_folder_delete: (args: { id: number }): void => {
       refuseIfBusy(db);
-      const doomed = new Set<number>([args.id]);
-      // The cascade is recursive, so it is walked to a fixed point rather than one level deep.
-      for (let grew = true; grew;) {
-        grew = false;
-        for (const f of db.wishlistFolders) {
-          if (f.parentId !== null && doomed.has(f.parentId) && !doomed.has(f.id)) {
-            doomed.add(f.id);
-            grew = true;
-          }
-        }
-      }
+      const doomed = wishFolderSubtree(db, args.id);
       // Ids rather than rows, taken before anything moves: a merge replaces `db.wishlistEntries`
       // with a filtered copy, so a held reference is a row that is no longer in the store.
       const filed = db.wishlistEntries
@@ -15244,6 +15265,67 @@ export function writeHandlers(db: FakeDb) {
         wish.updatedAt = stamp(db);
       }
       db.wishlistFolders = db.wishlistFolders.filter((f) => !doomed.has(f.id));
+    },
+
+    /**
+     * `wishlist_folders::clear_folder` — **every wish filed directly in this folder, deleted; the
+     * folder stays** (issue #471). Answers how many wishes went, and `0` for a drawer that was
+     * already empty is an answer rather than a refusal: the reader wanted it empty, and it is.
+     *
+     * **Direct only.** A sub-folder is a drawer of its own with its own Clear, so its wishes are
+     * untouched, and so is every wish at the root. That is
+     * {@link readHandlers.wishlist_folder_summary}'s grain — direct per folder — so the `wishes`
+     * a folder card drew before the press is the number this answers after it.
+     *
+     * **A folder that is not there is refused in words** ({@link FOLDER_GONE}), where
+     * {@link wishlist_folder_delete} one function up calls a gone id a success. The two presses
+     * are about different things: a delete's whole request is "this drawer is gone", which a gone
+     * drawer already satisfies, while a clear names a drawer that is meant to *stand* afterwards
+     * — and answering `0` for one that no longer does would tell a reader looking at a stale tile
+     * that it had been emptied when it had been deleted.
+     *
+     * **No merge**, because nothing moves: a deleted wish lands on no grain. And **it files no
+     * {@link FakeDb.activity} row**, though the crate's twin records one — no write in this fake
+     * does, {@link wishlist_remove} and {@link wishlist_clear} included, and that table is the
+     * past the seeds carry.
+     */
+    wishlist_folder_clear: (args: { id: number }): number => {
+      refuseIfBusy(db);
+      if (!wishFolderById(db, args.id)) throw refuse(FOLDER_GONE);
+      const before = db.wishlistEntries.length;
+      db.wishlistEntries = db.wishlistEntries.filter((w) => w.folderId !== args.id);
+      return before - db.wishlistEntries.length;
+    },
+
+    /**
+     * `wishlist_folders::delete_folder_and_wishes` — the folder, **its whole sub-tree**, and every
+     * wish filed anywhere in it (issue #471). Answers how many wishes went.
+     *
+     * {@link wishlist_folder_delete} with the one rule that separates them reversed: that press
+     * is about the drawer, so the wishes in it survive and surface at the root; this one's whole
+     * subject is the wishes. The folders it takes are the same folders, found by the same
+     * {@link wishFolderSubtree} walk — so the two can never disagree about which drawers a delete
+     * reaches. **No merge**, and that is the difference in shape: nothing is re-filed, so no wish
+     * lands on a grain another already holds. Root wishes and sibling folders are untouched.
+     *
+     * **An id that is not there is refused in words** ({@link FOLDER_GONE}) —
+     * {@link wishlist_folder_clear}'s answer, not {@link wishlist_folder_delete}'s success. This
+     * press is about the wishes as well as the drawer, and the likeliest way a drawer is gone is
+     * the plain delete, which re-filed every wish in it at the root: a quiet `0` would close the
+     * confirmation over wishes the reader asked to be rid of and that are still on the list.
+     *
+     * **It files no {@link FakeDb.activity} row**, for {@link wishlist_folder_clear}'s reason.
+     */
+    wishlist_folder_delete_with_wishes: (args: { id: number }): number => {
+      refuseIfBusy(db);
+      if (!wishFolderById(db, args.id)) throw refuse(FOLDER_GONE);
+      const doomed = wishFolderSubtree(db, args.id);
+      const before = db.wishlistEntries.length;
+      db.wishlistEntries = db.wishlistEntries.filter(
+        (w) => w.folderId === null || !doomed.has(w.folderId),
+      );
+      db.wishlistFolders = db.wishlistFolders.filter((f) => !doomed.has(f.id));
+      return before - db.wishlistEntries.length;
     },
 
     /**

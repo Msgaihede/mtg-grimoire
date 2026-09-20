@@ -284,6 +284,19 @@ describe("DeckBracket", () => {
 
   /** The disclosure names every card the number was read from — a reader who disagrees with a
    *  heuristic can see which card caused it, which is what makes a guess worth showing. */
+  /**
+   * **Its sentences are selectable although the editor around it is not** (issue #473). The deck
+   * editor refuses text selection at its root so a press-drag on the desk cannot paint it blue, and
+   * this panel is anchored inside that root — so without its own opt-in a reader could not copy a
+   * combo's name out of it.
+   */
+  it("keeps its text selectable inside an editor that is not", async () => {
+    wrap(<Harness cards={DECK} />);
+    await userEvent.click(trigger());
+
+    expect((await panel()).classList).toContain("select-text");
+  });
+
   it("names what it read, behind a disclosure", async () => {
     vi.mocked(estimateBracket).mockReturnValue(
       estimate({

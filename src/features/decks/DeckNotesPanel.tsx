@@ -513,8 +513,11 @@ export function NotesBand({
       )}
 
       {/* Always in the tree so `aria-controls` above always names something, and empty while the
-          area is shut so a closed band costs no editor, no picker and no state. */}
-      <div id={bodyId}>
+          area is shut so a closed band costs no editor, no picker and no state.
+          **`select-text` because a note is the one thing on this page written to be read** — the
+          editor refuses text selection at its root (issue #473), and a note a reader cannot copy
+          a line out of is a note they have to retype. */}
+      <div id={bodyId} className="select-text">
         {open && (
           <div className="mt-3 flex flex-col gap-3">
             {/* Making one comes first, and the band opens on it. A reader with no notes is who

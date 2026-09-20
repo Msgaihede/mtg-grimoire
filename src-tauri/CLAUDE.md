@@ -1060,6 +1060,14 @@ shared_cell` walks both into two databases and compares them column by column.
   the root. One at a time
   is what answers the second. Every other write that can land on a taken wishlist grain already
   merged; this was the one that let the index decide.
+  **`delete_folder_and_wishes` is the one path out of a drawer that needs no re-filing** (issue
+  #471): it deletes the sub-tree's wishes before the folder row goes, so the SET NULL has nothing
+  left to rewrite. It shares `delete_folder`'s recursive `UNION` walk rather than spelling a
+  second one. Its sibling `clear_folder` takes only the wishes filed **directly** in a folder.
+  **Both answer `FOLDER_GONE` for a gone folder, where `delete_folder` treats one as a success** —
+  the likeliest way the drawer went is that plain delete, which left its wishes at the root, so a
+  quiet `0` would be a press that claims the wishes went when they did not;
+  [wishlist-folders.md](../docs/reference/wishlist-folders.md) has the whole argument.
 - **Every write that names a wishlist folder answers the same sentence, through the one query.**
   `wishlist_folders::require_folder` is `pub(crate)` and is that query; `create_folder`,
   `move_folder`, `reorder_folders`, `set_wish_folder` and `wishlist::add_wish` all call it, and

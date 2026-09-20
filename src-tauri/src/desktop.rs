@@ -479,6 +479,8 @@ pub fn run() {
             wishlist_folders::wishlist_folder_move,
             wishlist_folders::wishlist_folder_reorder,
             wishlist_folders::wishlist_folder_delete,
+            wishlist_folders::wishlist_folder_clear,
+            wishlist_folders::wishlist_folder_delete_with_wishes,
             wishlist_folders::wishlist_set_folder,
             wishlist_folders::wishlist_folder_summary,
             deck::deck_create,
