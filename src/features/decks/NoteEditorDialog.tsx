@@ -11,9 +11,20 @@
  * **This file's own reference is dynamic and is the only one it has** — a claim about *this* file,
  * which is the only kind a file's own header can keep true. How many such references the app holds
  * is a fact about the tree and moves with it (the band carried a second for as long as it drew the
- * editor itself), so `grep -rn 'import("./NoteEditor")' src/` is the census rather than a sentence
- * here. What the sweep guarantees either way is the thing that costs bytes: not *how many* files
- * reach it, but that **none** of them reaches it eagerly.
+ * editor itself), so the census is a grep rather than a sentence here:
+ *
+ * ```
+ * grep -rn 'lazy(() => import("[.]/NoteEditor"))' src/ --include=*.tsx | grep -v '\.test\.'
+ * ```
+ *
+ * **`[.]` rather than `.`, so the command does not find the line you are reading.** A census whose
+ * pattern is spelled in prose matches that prose: the plain spelling answers four lines here, of
+ * which one is a reference, one is a test's warm-up and two are comments — including this one.
+ * The character class matches a literal dot in code and not the `[` in the sentence, and the
+ * `.test.` filter drops the remaining doc comment.
+ *
+ * What the sweep guarantees either way is the thing that costs bytes: not *how many* files reach
+ * the module, but that **none** of them reaches it eagerly.
  *
  * **Three modes, one dialog, and the only differences are three strings.** A create, a create the
  * card menu asked for, and an edit differ in the heading, the button's verb and whether a card

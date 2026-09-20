@@ -454,8 +454,21 @@ describe("the empty surface's prompt", () => {
  * not, and that was the same mistake one level up — an explanation nobody had falsified.
  */
 async function compiledUtilities(utility: string): Promise<string> {
-  const built = await buildSheet([utility]);
-  return built.match(/@layer utilities \{([\s\S]*?)\n\}/)?.[1].trim() ?? "";
+  return layerOf(await buildSheet([utility]), "utilities");
+}
+
+/**
+ * One `@layer <name> { … }` block out of a built sheet — `""` where the build emitted none.
+ *
+ * **Regions rather than the whole sheet, because the whole sheet includes `src/index.css`'s own
+ * rules.** A `content:` added anywhere in that stylesheet would redden an assertion about what
+ * *preflight* does; narrowing to the layer being asked about keeps the test's subject and the
+ * test's scope the same thing. The **first** `@layer base` is preflight — this build emits two,
+ * the second being the app's own base rules — which the caller pins by checking for
+ * `box-sizing`.
+ */
+function layerOf(sheet: string, name: "base" | "utilities"): string {
+  return sheet.match(new RegExp(`@layer ${name} \\{([\\s\\S]*?)\\n\\}`))?.[1].trim() ?? "";
 }
 
 /** The whole built sheet for a set of candidates — what {@link compiledUtilities} narrows, and
@@ -539,14 +552,21 @@ describe("the prompt's CSS is really compiled", () => {
     const siblings = PROMPT_UTILITIES.filter((u) => !u.includes("content-["));
     expect(siblings).toHaveLength(4);
 
-    // One junk candidate alone: the glyph is preflight's, and there is no `content` anywhere.
+    // **One junk candidate alone.** Read off preflight rather than off the whole sheet: the glyph
+    // is preflight's and so is the absence of `content`, and `src/index.css` is free to grow a
+    // `content:` of its own without that becoming a claim about this rule. `box-sizing` pins that
+    // the region really is preflight and not the app's own `@layer base` below it.
     const alone = await buildSheet([mistyped]);
-    expect(alone).toContain("::before");
-    expect(alone).not.toContain("content:");
-    expect(alone).not.toContain("--tw-content");
+    const preflight = layerOf(alone, "base");
+    expect(preflight).toContain("box-sizing");
+    expect(preflight).toContain("::before");
+    expect(preflight).not.toContain("content:");
+    // And the candidate emitted no utility at all, which is the other half of the silence.
+    expect(layerOf(alone, "utilities")).toBe("");
 
-    // The same junk candidate beside its four working siblings: `content:` is back — from them.
-    const together = await buildSheet([...siblings, mistyped]);
+    // **The same junk candidate beside its four working siblings**: `content:` is back — theirs —
+    // in the utilities layer itself, with the declaration that paints the prompt still missing.
+    const together = layerOf(await buildSheet([...siblings, mistyped]), "utilities");
     expect(together).toContain("content:");
     expect(together).not.toContain("attr(data-placeholder)");
   });

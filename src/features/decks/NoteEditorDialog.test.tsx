@@ -28,7 +28,7 @@ Range.prototype.getBoundingClientRect ??= () => new DOMRect();
  *
  * Awaiting it here puts the cost in `beforeAll`, where vitest's own timeout applies rather than
  * testing-library's one second, and leaves every case measuring the dialog instead of the
- * bundler. It is a `import()` expression and not an import statement, so the 141.5 kB sweep in
+ * bundler. It is an `import()` expression and not an import statement, so the 141.5 kB sweep in
  * `DeckNotesPanel.test.tsx` is untouched by it — and a `.test.` file is exempt from that sweep
  * regardless.
  */
@@ -89,12 +89,21 @@ describe("writing a note in a dialog", () => {
     await screen.findByRole("textbox");
 
     /*
-     * **Counted, not name-matched.** `queryByRole("textbox", { name: /title/i })` is what this
-     * assertion used to be, and it is satisfied by a bare `<input type="text" />` with no label
-     * at all, or by one called `Name`, `Heading` or `Subject` — every one of which is the field
-     * this redesign deleted, wearing a different word. It passed today only by accident: the old
-     * field's placeholder began `Untitled`, and `Untitled` matches `/title/i` through
-     * dom-accessibility-api's placeholder fallback.
+     * **Counted, not name-matched**, and the weakness is in the *query* rather than in what it
+     * happened to find.
+     *
+     * `queryByRole("textbox", { name: /title/i })` is what this assertion used to be. Against the
+     * fields it was written for it worked honestly: both title inputs at `9a429679^` carried a
+     * real `<label class="sr-only">` — `New note title` on the add row and `Title of {title}` on
+     * the edit row — so their accessible names were `"New note title"` and `"Title of Mana base"`,
+     * and `/title/i` matched a name a reader is actually given. (Measured with
+     * `computeAccessibleName`, not inferred: a `<label for>` outranks a placeholder, and in this
+     * stack a placeholder-only input computes to `""` rather than to its placeholder at all.)
+     *
+     * What it cannot do is say there is **no** title field, because it pins a *name pattern*: an
+     * unlabelled `<input type="text" />` computes to `""`, and one labelled `Name`, `Heading` or
+     * `Subject` computes to a name `/title/i` misses — every one of them the field this redesign
+     * deleted, wearing a different word, and every one of them passing.
      *
      * So the box is *counted* and then identified: exactly one, and it is the body.
      */
