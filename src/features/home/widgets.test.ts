@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { normalise, overlaps, sameGeometry, spanFor, toStored } from "./layout";
+import { pickDefault } from "./widgetSettings";
 import {
   boundsOf,
   BREAKDOWN_DIMENSIONS,
@@ -31,6 +32,7 @@ const EVERY_KIND: Record<WidgetKind, true> = {
   recentCards: true,
   setCompletion: true,
   priceMovers: true,
+  newPrintings: true,
 };
 
 const EVERY_DIMENSION: Record<BreakdownDimension, true> = {
@@ -126,6 +128,16 @@ describe("WIDGETS", () => {
    * into readers' `config` rows (`dimension` and `limit` predate the grid), so renaming one is a
    * migration, not a tidy-up: a stored word no option carries reads as the default, silently. The
    * defaults are pinned for the same reason — a reader who never touched a pick is reading one.
+   *
+   * **A toggle carries its default here too, and it is the *effective* one rather than the field.**
+   * The projection was `toggles.map((toggle) => toggle.key)` until `dflt` existed, which pinned
+   * which switches a kind has and said nothing about which way round they start — so an
+   * off-by-default switch could have been flipped to on by an edit no test could see, and the
+   * sentence above is exactly as true of a switch as it is of a pick. `?? true` rather than the
+   * raw field for two reasons: absent and `dflt: true` are one state to every reader of a toggle,
+   * and `toEqual` treats an `undefined` value as an absent key — so a projection carrying raw
+   * `undefined`s would go green on a toggle *deleted* from a kind, which is the drift this case
+   * has caught before.
    */
   it("stores every setting under the key and words the widgets read", () => {
     const vocabulary = Object.fromEntries(
@@ -138,7 +150,7 @@ describe("WIDGETS", () => {
               { ids: pick.options.map((option) => option.id), dflt: pick.dflt },
             ]),
           ),
-          toggles: toggles.map((toggle) => toggle.key),
+          toggles: Object.fromEntries(toggles.map((toggle) => [toggle.key, toggle.dflt ?? true])),
           chip,
         },
       ]),
@@ -146,22 +158,26 @@ describe("WIDGETS", () => {
     const dimension = { ids: ["rarity", "color", "set", "finish"], dflt: undefined };
     const chart = { ids: ["bars", "list"], dflt: undefined };
     expect(vocabulary).toEqual({
-      summary: { picks: {}, toggles: [], chip: undefined },
-      collectionValue: { picks: { dimension, chart }, toggles: ["figures"], chip: "dimension" },
-      wishlistValue: { picks: { dimension, chart }, toggles: ["figures"], chip: "dimension" },
+      summary: { picks: {}, toggles: {}, chip: undefined },
+      collectionValue: {
+        picks: { dimension, chart },
+        toggles: { figures: true },
+        chip: "dimension",
+      },
+      wishlistValue: { picks: { dimension, chart }, toggles: { figures: true }, chip: "dimension" },
       decks: {
         picks: { scope: { ids: ["recent", "pinned", "archived"], dflt: undefined } },
-        toggles: ["art"],
+        toggles: { art: true },
         chip: "scope",
       },
       folders: {
         picks: { cabinets: { ids: ["both", "collection", "wishlist"], dflt: undefined } },
-        toggles: ["captions"],
+        toggles: { captions: true },
         chip: "cabinets",
       },
       activity: {
         picks: { limit: { ids: [25, 50, 100], dflt: 50 } },
-        toggles: ["times"],
+        toggles: { times: true },
         chip: undefined,
       },
       priceMovers: {
@@ -169,20 +185,70 @@ describe("WIDGETS", () => {
           window: { ids: ["7d", "30d", "all"], dflt: undefined },
           direction: { ids: ["both", "up", "down"], dflt: undefined },
         },
-        toggles: [],
+        toggles: {},
         chip: "window",
       },
       setCompletion: {
         picks: { sort: { ids: ["complete", "cards", "name"], dflt: undefined } },
-        toggles: ["bars"],
+        toggles: { bars: true },
         chip: "sort",
       },
       recentCards: {
         picks: { count: { ids: [4, 6, 8], dflt: 8 } },
-        toggles: ["names"],
+        toggles: { names: true },
         chip: undefined,
       },
+      // The first kind with a switch that starts *off*, and the two that do are the issue's own
+      // requirement rather than a taste: a virtual deck is a pile the reader does not own, and a
+      // basic land is reprinted in every set, so a feed that volunteered either would be mostly
+      // noise. `theory` starts on, because a theory card is one the reader intends to own.
+      newPrintings: {
+        picks: {
+          scope: { ids: ["all", "chosen"], dflt: undefined },
+          window: { ids: [30, 90, 365], dflt: 90 },
+          langs: { ids: ["en", "all", "chosen"], dflt: undefined },
+        },
+        toggles: { virtual: false, theory: true, basics: false },
+        chip: "window",
+      },
     });
+  });
+
+  /**
+   * The tenth kind, off the catalogue and not the seed.
+   *
+   * The `Record<WidgetKind, …>` fence is a *compile-time* one — a member with no row here does not
+   * build — so what is left for a runtime case is the row's **contents**: the footprint a reader
+   * can pull it to, the two switches that start off, and the two vocabulary decisions that were
+   * settled against the spec rather than copied from it.
+   */
+  it("carries the tenth kind, off the catalogue and not the default layout", () => {
+    expect(isWidgetKind("newPrintings")).toBe(true);
+    expect(WIDGETS.map((widget) => widget.kind)).toContain("newPrintings");
+    // **The default layout is untouched** — a tenth kind that displaced a shipped one would
+    // rearrange the page of every reader who never asked for it.
+    expect(DEFAULT_LAYOUT.widgets.some((widget) => widget.kind === "newPrintings")).toBe(false);
+    expect(DEFAULT_LAYOUT.widgets).toHaveLength(8);
+
+    const meta = widgetMeta("newPrintings");
+    // Twelve cells tall is the one bound no shipped kind reaches: this is a list a reader reads
+    // down a column, so the ceiling is the grid's rather than a tile's.
+    expect(meta.min).toEqual([2, 2]);
+    expect(meta.max).toEqual([8, 12]);
+    // The two off-by-default switches — the issue's requirement, as the registry states it.
+    expect(meta.toggles.find((toggle) => toggle.key === "virtual")?.dflt).toBe(false);
+    expect(meta.toggles.find((toggle) => toggle.key === "basics")?.dflt).toBe(false);
+    // And the one that is on, stated as absence: a theory card is one the reader intends to own,
+    // which is precisely the reader who wants to know it was reprinted.
+    expect(meta.toggles.find((toggle) => toggle.key === "theory")?.dflt).toBeUndefined();
+    // Two scopes, because a third could only be the second under another name — there is no
+    // `decks.pinned`, and on the Decks widget `Pinned` *is* the checklist.
+    expect(
+      meta.picks.find((pick) => pick.key === "scope")?.options.map((option) => option.id),
+    ).toEqual(["all", "chosen"]);
+    // English is `options[0]`, so a reader who changes nothing gets one row per reprint —
+    // `cards.id` is one printing in one language.
+    expect(pickDefault(meta.picks.find((pick) => pick.key === "langs")!)).toBe("en");
   });
 });
 

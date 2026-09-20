@@ -122,7 +122,7 @@ ever chosen. **Only an absent row and an unparseable one are the default**;
 `layout.test.ts`'s *"keeps an empty widget list rather than restoring the default"* pins the
 webview's, because both sides have a fallback and either alone would undo the reader's choice.
 
-## 3. The nine widgets
+## 3. The ten widgets
 
 The default layout fills an eight-by-seven rectangle exactly, so a first launch shows no hole:
 `summary` 0,0 4×2 · `recentCards` 4,0 4×2 · `decks` 0,2 3×3 · `activity` 3,2 3×3 ·
@@ -132,7 +132,8 @@ two sets of decks is a layout to build rather than a case to refuse, and `newWid
 that does not collide.
 
 **Every kind declares what a reader can change about it in `widgets.ts`**: a default, minimum and
-maximum footprint, `picks` (one of several) and `toggles` (on/off, stored only as `false`), and the
+maximum footprint, `picks` (one of several) and `toggles` (on/off, **storing nothing at their own default**, which
+is on unless the row names `dflt: false`), and the
 `chip` — which pick's label is drawn beside a wide card's title. The settings popover is built from
 that row, so a kind grows a setting by adding a row rather than by the panel learning a special
 case. Three settings belong to every kind and are not rows: the footprint (two size steppers), the
@@ -150,6 +151,7 @@ stores nothing). All of it lives in `config` — the extension rule below.
 | `recentCards` | the cards this device opened last, as a strip of card faces that open the card | `{ count: 4·6·8, names }` |
 | `setCompletion` | every set the reader holds a card from, and how much of it | `{ sort: complete·cards·name, bars }` |
 | `priceMovers` | owned printings whose price moved most over a window | `{ window: 7d·30d·all, direction: both·up·down }` |
+| `newPrintings` | reprints of cards the watched decks hold, in release-day groups | `{ scope: all·chosen, deckIds, window: 30·90·365, langs: en·all·chosen, langIds, virtual, theory, basics }` |
 
 **A config written before the grid keeps its meaning.** `dimension` and `limit` kept their keys
 rather than taking the design's `scope`, and a `decks` config holding pins but no `scope` reads as
@@ -664,3 +666,213 @@ days of snapshots the marketplace holds — **so the widget can say two differen
 history yet* and *nothing moved*. `since` is taken before zero moves and the direction are filtered
 out, because computed over the returned movers a quiet week would also answer `null` and read as a
 database that had never remembered a price.
+
+## 12. The tenth kind — New printings (2026-09-20)
+
+[Issue #462](https://github.com/Msgaihede/mtg-grimoire/issues/462), raised from the Luminia Discord
+on 2026-09-14. Reverse-chronological reprints, grouped by release day, of cards the decks a reader
+watches already hold; a row opens a popover of the decks holding that card, and a deck there opens
+the card in that deck. The design is
+[`2026-09-20-new-printings-widget-design.md`](../superpowers/specs/2026-09-20-new-printings-widget-design.md)
+with five artboards beside it, and **three of its decisions were superseded on the way in** — each
+is recorded below rather than left for a reader to discover by diffing.
+
+### It reaches Rust's vocabulary not at all, and there is a test that says so
+
+`home.rs` gained **nothing**. `kind` is a free `String` there and `config` an opaque `Value`, which
+is §1's whole promise, and a kind this build *draws* has to be as invisible to that module as one
+from the future. `home::tests::a_kind_this_build_can_draw_reaches_no_vocabulary_in_this_module`
+round-trips a `newPrintings` widget whose config carries keys the module has no name for, and
+`the_default_layout_holds_no_new_printings_widget` pins the other half — **`DEFAULT_LAYOUT` is
+untouched on both sides**, because a tenth widget in the seed would rearrange the page of every
+reader who never asked for one. It arrives from the catalogue.
+
+**What the registry fence does and does not buy.** `WIDGET_META` being a `Record<WidgetKind, …>`
+makes a missing meta row a compile error, and that is the whole of the compile-time help. It does
+**not** catch a missing `case`: both of `HomePage.tsx`'s switches are over `widget.kind`, which is
+`string`, and both have a `default` arm — so a forgotten arm renders `UnknownWidgetBody`, the *this
+came from a newer build* placeholder, on a kind this build draws perfectly well, with nothing red
+anywhere. `HomePage.test.tsx` asserts both arms by hand because the type system will not.
+
+### Two statements over one `WHERE`, and what one statement would have cost
+
+`src-tauri/src/new_printings.rs`, `list_printings`' shape: the page, then the decks holding the
+cards on it. A single join to `deck_cards` multiplies a printing by the decks holding it, which is
+how the issue's *each printing appears only once* gets quietly broken — and the count beside it
+would be wrong in the same breath. Statement 2 groups on `(oracle_id, deck_id)` and **not** on the
+variant, so a deck holding a card in both a live and a theory pile is one entry with the total; the
+variant it reports is the lower of the two, `live` before `theory`, because a deck that has sleeved
+the card up is holding it whatever else it plans.
+
+No schema change: every column already existed. `cards` is named **unqualified** — the corpus is
+`ATTACH`ed — where the design's SQL wrote `corpus.cards`.
+
+**The basics filter is `type_line LIKE 'Basic %Land%'`, not the design's `'Basic Land%'`.** Measured
+against the live 936 MB corpus on 2026-09-20: the narrow form matches 4 651 printings and the wide
+one 4 721, and every one of the **70** in the difference is a snow basic (`Basic Snow Land —
+Forest`). The narrow form leaks those through *hide basic lands*.
+
+**`decks.archived` is deliberately not filtered.** `Ask` carries no flag for it, nothing in the
+issue or the design mentions one, and an archived deck's cards therefore still feed the list. It
+belongs on `Ask` the day somebody wants it; it is recorded here so the absence is a decision.
+
+### Languages are a setting, not a constant — §2 superseded
+
+`cards.id` is one printing **in one language**, so an unfiltered feed answers a ten-language set as
+ten rows of one reprint. §2 proposed a hard `lang = 'en'`; what shipped is a `Languages` pick —
+**English** (the default, `options[0]`, so a reader who changes nothing gets one row per reprint),
+**Every language**, and **Chosen…** with a checklist built from `src/lib/languages.ts`'s nineteen
+codes. That module gained `LANGUAGE_CODES` and `isKnownLanguage` and a fourth reader.
+
+Three rules carry it:
+
+* **One field on the wire.** `langs: string[]`, where **empty means every language** — TypeScript
+  resolves the three modes into one list, because a mode *and* a list would be two fields that can
+  disagree. Rust narrows again (two-to-four lowercase letters, capped at 24), and a list the
+  narrowing empties is every language rather than a fallback to English, which would be the crate
+  making a claim the caller did not.
+* **`Chosen…` with nothing ticked reads as English and gets no sentence**, where `DecksWidget` says
+  *no decks pinned yet* rather than falling back. An empty deck set is a real statement (*compare
+  against nothing*); an empty language set would mean *show no printings at all*, which nobody
+  means by unticking the last box.
+* **A row carries its language code whenever the resolved set is not exactly English.** Without it
+  *Every language* draws ten rows reading `Sol Ring · SLD · 3 decks` and the list looks broken
+  rather than complete. The code is titled with `languageName`, so `PH` says *Phyrexian* as it does
+  everywhere else (issue #161) — and the **picker's** rows are labelled with the language name and
+  hinted with the code, not the reverse: `DropdownOption.label` *is* the accessible name, so a code
+  there would announce `PH` and re-create exactly that issue. `PrintingsFilterBar` can do it the
+  other way round only because its `CheckList` carries a separate `name`.
+
+### `scope` has two options, not three — §3 superseded
+
+§3 gave `scope` three options (`all`/`pinned`/`chosen`) and then described `Chosen…` as opening the
+checklist *"the seam `Pinned` uses on the Decks widget"* — which is the defect: on `DecksWidget`,
+`Pinned` **is** the checklist. There is no `decks.pinned` column; pinning in this app is a widget's
+own `config.deckIds`. The only other reading — *the decks the Decks widget has pinned* — would make
+one card's face depend on another card's config, and has no referent at all on a page holding two
+`decks` widgets, which §3 above explicitly allows. So: `All decks` and `Chosen…`, `chosen` carries
+the ids, and Rust reads any unknown word as `all`.
+
+### An off-by-default switch — `WidgetToggle.dflt`
+
+The issue requires virtual decks and basic lands **excluded** by default, and `toggleOn` was
+`stored(widget)[key] !== false` — absent means on, deliberately. Spelling the keys negatively
+(`hideBasics`) makes the panel read *Hide basic lands ☑*, a double negative at the one place the
+design is being plain. So `WidgetToggle` gained `dflt?: boolean` and `toggleOn` a third parameter.
+
+**No existing toggle moved**, and that is checkable rather than asserted: there is exactly one
+reader and one writer, every shipped toggle omits `dflt`, and at `dflt = true` the old `v !== false`
+and the new `typeof v === "boolean" ? v : true` agree on every input — a stored `true`, a stored
+`false`, absent, and junk. The panel's writer is `next === dflt ? undefined : next`, which is
+byte-identical to the old `on ? false : undefined` at that call site. `toggleOnOf(widget, key)` sits
+beside `toggleOn` and looks the default up off the kind's row, `pickOf`'s shape for toggles, so a
+body never restates a default the registry carries.
+
+⚠️ **`widgets.test.ts`'s vocabulary snapshot had to widen with it**, and the obvious widening is
+weaker than what it replaced: the projection recorded `toggles.map((t) => t.key)`, and moving to
+`[t.key, t.dflt]` would put `undefined` values in an object that `toEqual` cannot tell from an
+absent key — so deleting a toggle would have gone **green** where the array form went red. It
+records `t.dflt ?? true`, the *effective* default, which is also what `toggleOnOf` answers.
+
+### The row is 54px and its thumb is 33, not the artboards' 34
+
+Row height is a 46px thumb, 3px of padding each side and the card's 1px border. **The artboards'
+thumb is a hand-drawn `<span>` at 34 × 46, which is not 5:7 at all** — `CardArt` is `w-full` with
+`aspectRatio: 5 / 7` (`CARD_ASPECT`), so 34px wide is 47.6px tall and the row would be 56. 33px is
+46.2, and **54 is the number the design's whole size matrix was computed against**, so the pixel
+went rather than the matrix. The 0.2px of drift per row is the case `fit.ts` already permits: an
+estimate a few pixels out costs a scrollbar, not a sentence.
+
+The row is drawn by the body rather than by `WidgetRow` — it needs a rarity gem *inside* a caption,
+a bordered deck-count chip and a 5px unseen dot, and widening the shared row for one kind would put
+three optional slots on the row every other widget draws. `WidgetParts.tsx`'s module doc permits
+exactly this; the activity feed's day sections and the recent cards' strip are the precedents.
+
+**§4's `· borderless` is not buildable and was replaced.** Borderless is a *frame effect*;
+`NewPrinting` carries `promo_types`, a different column. The caption draws the printing's treatment
+instead (*Serialized*, *Surge Foil*). **§7's `Choose decks…` press does not exist either** — the
+settings popover is `WidgetCard`'s own state and a body cannot open it, so the sentence points at
+the control in words, which is what `DecksWidget.NOTHING_PINNED` already does.
+
+### The size matrix reproduces exactly; its row counts do not generalise
+
+Every pixel and column of §8 was recomputed from `fit.ts` on 2026-09-20 and **all twelve rows
+match** — `spanPx(n, 104) = 116n − 12`, `listColumns = max(1, round(widthPx / 240))`, and
+`bodyHeightPx = heightPx − 52` at every `h ≥ 2` and comfortable density. `bodyHeightPx` at twelve
+cells is **1 328**, which is the figure §8's own closing paragraph quotes.
+
+**Its `Printings` column is fixture-bound and is asserted nowhere.** Those counts were taken over
+the artboards' sample of 45 printings across 18 release days, and how many rows fit depends on how
+the days clump: a day header costs 16px over a 6px gap with 8px between groups. Worked, a 2 × 2 is
+`floor((168 − 22 + 6) / (54 + 6)) = 2` whatever the grouping, which is the one entry that
+generalises and the one the suite pins. A 2 × 3 is 4 for a single group where §8 says 3 — the
+difference is a second header, i.e. the fixture.
+
+⚠️ **§8's footprint-scaled window default was cut, and it had already shipped as dead code.** The
+design wanted `w * h >= 24` to open on *a year*, "a one-line default in the component". It is not
+one: `widgets.ts` gives the `window` pick `dflt: 90`, `pickValue` falls back to that, so `pickOf`
+always answers a number and the `defaultWindow` arm never ran. Making it run is easy — read the raw
+config — but the title chip is `chipLabel(widget)`, which takes no `fit`, so a fresh 6 × 4 card
+would have **read a year while its own chip said 90 days**. Threading `fit` through `chipLabel`
+touches shared chrome all ten kinds draw, for one kind's nicety. Every card opens on 90 days and
+the chip never lies; the reader changes it in one press.
+
+### What height adds, and the cursor that makes the dots mean something
+
+`h ≥ 5` adds a `Seen already` rule after the last group newer than the reader's last visit,
+`h ≥ 6` month rules where the month turns, and `h ≥ 8` a closing line once the window is exhausted.
+All three are budgeted **before** rows are laid in, so a card one pixel short of a rule drops a row
+rather than clipping the rule; the body resolves them in two passes and the second list is a prefix
+of the first, so nothing is ever drawn into unbudgeted space.
+
+*Last visit* is **`app_meta.new_printings_seen`**, `recent_cards`' shape and its reason: `config`
+round-trips through older builds, and a cursor an older build rewrites is a cursor that lies. The
+clock is the **caller's** — `SystemTime::now()` panics on wasm.
+
+⚠️ **The cursor is read once per mount and held**, which the design does not say and which is the
+difference between a mark that works and one that does not: the widget writes the cursor when it
+renders a non-empty list, so a body that re-read it would watch every gold dot vanish a frame after
+it appeared. The write is fire-once per mount, never while `still`, and its failure is silent.
+
+### Three empty sentences, and the count is read first
+
+*No decks are being watched* / *nothing has been reprinted in this window* / *reading* / a refusal —
+`PriceMovers`' device, because a count of zero printings cannot tell the first two apart, which is
+why `decksWatched`, `since` and `oldest` travel beside the list. **The refusal is read before the
+emptiness** (`ActivityWidget`'s rule: a failed read has no rows either, and calling that *nothing
+has been reprinted* is a claim about a comparison nobody made), and **`decksWatched` is read before
+the list**, because a reader watching nothing has an empty list for a reason that has nothing to do
+with reprints.
+
+### Both commands are routed on both targets
+
+`new_printings` and `mark_new_printings_seen` are registered in `desktop.rs`'s `invoke_handler`
+**and** named in `web/route.rs`'s `COMMANDS` with a match arm each — a command missing there is
+dead on the web and Android builds, as `price_movers` and `set_completion` already are not.
+`COMMANDS.len()` is **174**, counted off the merged array with that comment's own `awk` rather than
+by adding two to 172.
+
+`src/lib/ipc.test.ts` carries three mirror rows (`NewPrintingDeck`, `NewPrinting`, `NewPrintings` —
+nested two deep, `PriceMovers`' reason: a field renamed inside the deck entry leaves both structs
+above it agreeing while every popover row reads `undefined`) and two `declares` cases. The fence was
+checked rather than trusted: renaming `seen_at` to `seen_when` in the crate turns the `NewPrintings`
+row red.
+
+### Two limitations worth writing down
+
+**A row's thumb is blank on the web and Android targets.** `NewPrinting` carries no `imageUris`, so
+`cardArtSrc` — which on those targets answers the *supplied* URL and ignores the `mtgimg://` one —
+has nothing to draw. **This is shared with `recentCards`**, whose `RecentCard` carries none either
+and whose tiles are entirely card art, so it is a standing property of the home page's card
+pictures rather than something this kind introduced. Closing it means the field on both commands.
+
+**The Storybook corpus cannot exercise the language rule, and one story is deliberately absent.**
+The fake's only two-language card is Lightning Bolt's Japanese `sta 105`, released 2021-04-23 —
+outside the longest window the command answers (365 days from `CLOCK_BASE`, 2026-08-09) — so
+`langs: []` and `langs: ["en"]` return identical rows and an `EveryLanguage` story could not fail.
+The rule is proven in `.storybook/fake/db.test.ts` and in the widget's own suite instead. The fix is
+a `scripts/gen-storybook-cards.mjs` selection change, deliberately not made mid-branch: that corpus
+is generated wholesale and adding rows moves counts across `db.test.ts` and other files' plays.
+The same corpus yields at most **two** rows — one at 90 days, two at 365 — which is why the story
+set is `Default`, `Band`, `Tall`, `NoDecks`, `NothingReprinted` and `Chosen` rather than the
+design's table.

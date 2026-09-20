@@ -10,6 +10,7 @@ import {
   pickOf,
   pickValue,
   toggleOn,
+  toggleOnOf,
   widgetDensity,
   widgetTitle,
 } from "./widgetSettings";
@@ -111,6 +112,40 @@ describe("toggleOn", () => {
 
   it("reads only its own key", () => {
     expect(toggleOn(widget("folders", { art: false }), "captions")).toBe(true);
+  });
+});
+
+describe("toggleOn with a default", () => {
+  /** The rule the current code is an instance of: *the default stores nothing*. With no `dflt`
+   *  the answer is on, which is every shipped toggle and must not move. */
+  it("is unchanged when no default is named", () => {
+    expect(toggleOn(widget("decks"), "art")).toBe(true);
+    expect(toggleOn(widget("decks", { art: false }), "art")).toBe(false);
+    expect(toggleOn(widget("decks", { art: true }), "art")).toBe(true);
+    // Anything that is not a boolean is the default — a hand-edited row, a newer build's word.
+    expect(toggleOn(widget("decks", { art: "yes" }), "art")).toBe(true);
+  });
+
+  /** The kind is immaterial here and the argument is the whole of it: this function cannot see the
+   *  registry, so `decks`' own row is never consulted and the third argument is what decides. */
+  it("reads absent as off when the default is off", () => {
+    expect(toggleOn(widget("decks"), "art", false)).toBe(false);
+    expect(toggleOn(widget("decks", { art: true }), "art", false)).toBe(true);
+    expect(toggleOn(widget("decks", { art: false }), "art", false)).toBe(false);
+    expect(toggleOn(widget("decks", { art: 1 }), "art", false)).toBe(false);
+  });
+
+  /** `toggleOnOf` is to a toggle what `pickOf` is to a pick: it finds the row, so a body never
+   *  restates a default the registry already carries. A key the kind declares no toggle for — and
+   *  a kind this build cannot draw at all — is `true`, the shape a body with a stale key had
+   *  before `dflt` existed. **Every row this build ships omits `dflt`**, so the off half of the
+   *  lookup is pinned by the first kind that names one rather than here. */
+  it("reads the default off the kind's registry row", () => {
+    expect(toggleOnOf(widget("decks"), "art")).toBe(true);
+    expect(toggleOnOf(widget("decks", { art: false }), "art")).toBe(false);
+    expect(toggleOnOf(widget("decks"), "aKeyThisKindHasNoToggleFor")).toBe(true);
+    expect(toggleOnOf(widget("fromTheFuture"), "art")).toBe(true);
+    expect(toggleOnOf(widget("fromTheFuture", { art: false }), "art")).toBe(false);
   });
 });
 

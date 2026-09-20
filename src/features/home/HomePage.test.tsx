@@ -14,7 +14,7 @@ import { DEFAULT_LAYOUT, widgetMeta, type WidgetKind } from "./widgets";
  * widget body stubbed**, so this file is about the page.
  *
  * What a body draws, what it reads and what it does with the box it is given is each body's own
- * suite's; nine of them fetching through `ipc` here would make every assertion below wait on nine
+ * suite's; ten of them fetching through `ipc` here would make every assertion below wait on ten
  * queries it is not about. The stub records what the page *handed* each body — the fit, `editing`,
  * `still` — which is the page's half of that contract and the half only this file can see.
  *
@@ -57,6 +57,20 @@ vi.mock("./widgets/WishlistValueWidget", () => ({ WishlistValueWidget: stubs.bod
 vi.mock("./widgets/RecentCardsWidget", () => ({ RecentCardsWidget: stubs.body }));
 vi.mock("./widgets/SetCompletionWidget", () => ({ SetCompletionWidget: stubs.body }));
 vi.mock("./widgets/PriceMoversWidget", () => ({ PriceMoversWidget: stubs.body }));
+/**
+ * The tenth kind, and **the one mock whose settings stub says something**.
+ *
+ * Both of the page's switches are over `widget.kind`, which is a free `string` with a `default`
+ * arm — so a missing `case` compiles, type-checks and draws `UnknownWidgetBody` in silence. The
+ * shared settings stub renders `null`, which cannot tell "drawn" from "not drawn"; this one is a
+ * sentence the test near the top of this file looks for. **Not `"New printings settings"`**: the
+ * popover's own heading is `` `${title} settings` ``, so that wording matches two elements and the
+ * query throws for a reason that has nothing to do with the wiring.
+ */
+vi.mock("./widgets/NewPrintingsWidget", () => ({
+  NewPrintingsWidget: stubs.body,
+  NewPrintingsWidgetSettings: () => "the new printings pickers",
+}));
 
 /* ------------------------------------------------------------ the measured canvas ------- */
 
@@ -189,6 +203,33 @@ describe("HomePage", () => {
     expect(screen.getAllByRole("region")).toHaveLength(DEFAULT_LAYOUT.widgets.length);
   });
 
+  /**
+   * **The one wiring on this page that nothing but a test can catch.**
+   *
+   * Both switches — {@link renderBody} and {@link renderExtraSettings} — are over `widget.kind`,
+   * which is a free `string` and has a `default` arm on purpose (a kind a newer build wrote must
+   * draw *something*). So a `case` this build owns and forgets is not a type error, not a lint
+   * error and not a failing test: the card simply draws the *this came from a newer build*
+   * placeholder for a kind this build can draw, and the settings popover simply has no section in
+   * it. Both halves are asserted here, and both are asserted **negatively as well** — the
+   * placeholder's own sentence must be absent — because "the body rendered" and "the right body
+   * rendered" are two different claims when a fallback exists.
+   *
+   * Verified by deleting each `case` in turn: the first expectation fails without the `renderBody`
+   * arm and the last without the `renderExtraSettings` one.
+   */
+  it("draws the new printings body and its settings through the page's two switches", async () => {
+    const user = userEvent.setup();
+    mount(layoutOf(widget({ id: "np", kind: "newPrintings", w: 3, h: 3 })));
+
+    expect(screen.getByText("Body of np")).toBeInTheDocument();
+    expect(screen.queryByText(/came from a newer version/)).toBeNull();
+
+    await customize(user);
+    await user.click(screen.getByRole("button", { name: "Settings for New printings" }));
+    expect(await screen.findByText("the new printings pickers")).toBeInTheDocument();
+  });
+
   it("places each box on its own cells and hands its body the footprint in pixels", () => {
     const { container } = mount(layoutOf(widget({ id: "decks", kind: "decks", x: 3, y: 2, w: 3, h: 3 })));
 
@@ -289,8 +330,8 @@ describe("HomePage", () => {
 
   /**
    * **A preview is the real body, told it is still.** Still is the body's promise to write nothing
-   * and open nothing, and the preview box is out of the accessibility tree — so nine pictures of
-   * widgets are not nine more regions with nine sets of controls.
+   * and open nothing, and the preview box is out of the accessibility tree — so ten pictures of
+   * widgets are not ten more regions with ten sets of controls.
    */
   it("draws each catalogue preview as a still body outside the accessibility tree", async () => {
     const user = userEvent.setup();

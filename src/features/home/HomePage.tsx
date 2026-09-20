@@ -88,6 +88,7 @@ import { ActivityWidget } from "./widgets/ActivityWidget";
 import { CollectionValueWidget } from "./widgets/CollectionValueWidget";
 import { DecksWidget, DecksWidgetSettings } from "./widgets/DecksWidget";
 import { FoldersWidget, FoldersWidgetSettings } from "./widgets/FoldersWidget";
+import { NewPrintingsWidget, NewPrintingsWidgetSettings } from "./widgets/NewPrintingsWidget";
 import { PriceMoversWidget } from "./widgets/PriceMoversWidget";
 import { RecentCardsWidget } from "./widgets/RecentCardsWidget";
 import { SetCompletionWidget } from "./widgets/SetCompletionWidget";
@@ -194,6 +195,8 @@ function renderBody(props: WidgetBodyProps): ReactElement {
       return <SetCompletionWidget {...props} />;
     case "priceMovers":
       return <PriceMoversWidget {...props} />;
+    case "newPrintings":
+      return <NewPrintingsWidget {...props} />;
     default:
       return <UnknownWidgetBody />;
   }
@@ -209,6 +212,8 @@ function renderExtraSettings(widget: HomeWidget, onConfig: ConfigPatch): ReactNo
       return <DecksWidgetSettings widget={widget} onConfig={onConfig} />;
     case "folders":
       return <FoldersWidgetSettings widget={widget} onConfig={onConfig} />;
+    case "newPrintings":
+      return <NewPrintingsWidgetSettings widget={widget} onConfig={onConfig} />;
     default:
       return undefined;
   }

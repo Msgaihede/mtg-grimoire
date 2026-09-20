@@ -35,6 +35,7 @@ import deckTokensRs from "../../src-tauri/src/deck_tokens.rs?raw";
 import desktopRs from "../../src-tauri/src/desktop.rs?raw";
 import homeRs from "../../src-tauri/src/home.rs?raw";
 import markcolorsRs from "../../src-tauri/src/markcolors.rs?raw";
+import newPrintingsRs from "../../src-tauri/src/new_printings.rs?raw";
 import priceHistoryRs from "../../src-tauri/src/price_history.rs?raw";
 import recentCardsRs from "../../src-tauri/src/recent_cards.rs?raw";
 import resetRs from "../../src-tauri/src/reset.rs?raw";
@@ -2851,6 +2852,7 @@ describe("ipc argument names match the Rust command signatures", () => {
       ["recent_cards.rs", recentCardsRs],
       ["set_completion.rs", setCompletionRs],
       ["price_history.rs", priceHistoryRs],
+      ["new_printings.rs", newPrintingsRs],
     ] as const) {
       expect(src.length, `${name} was not read`).toBeGreaterThan(1_000);
     }
@@ -2885,6 +2887,48 @@ describe("ipc argument names match the Rust command signatures", () => {
     for (const param of ["window", "direction", "marketplace", "limit"]) {
       declares(priceHistoryRs, "price_movers", param);
     }
+
+    /**
+     * **Eight arguments, three of them bare booleans side by side** — `price_movers`' own trap
+     * one worse. A wrapper that swapped `includeTheory` and `includeBasics` type-checks, is
+     * refused by nothing, and answers a feed that hides theory cards and shows basic lands: a
+     * list that is wrong in both directions at once and looks perfectly ordinary.
+     */
+    invoke.mockResolvedValue({
+      printings: [],
+      decksWatched: 0,
+      since: "2026-06-22",
+      oldest: null,
+      seenAt: null,
+    });
+    await ipc.newPrintings("chosen", [3, 7], 90, ["en", "ja"], false, true, false, 100);
+    expect(invoke).toHaveBeenCalledWith("new_printings", {
+      scope: "chosen",
+      deckIds: [3, 7],
+      days: 90,
+      langs: ["en", "ja"],
+      includeVirtual: false,
+      includeTheory: true,
+      includeBasics: false,
+      limit: 100,
+    });
+    for (const param of [
+      "scope",
+      "deck_ids",
+      "days",
+      "langs",
+      "include_virtual",
+      "include_theory",
+      "include_basics",
+      "limit",
+    ]) {
+      declares(newPrintingsRs, "new_printings", param);
+    }
+
+    invoke.mockResolvedValue(undefined);
+    await ipc.markNewPrintingsSeen(1_700_000_000);
+    expect(invoke).toHaveBeenCalledWith("mark_new_printings_seen", { at: 1_700_000_000 });
+    declares(newPrintingsRs, "mark_new_printings_seen", "at");
   });
 
   it("reads the error log with a limit and clears it with nothing", async () => {
@@ -4513,6 +4557,18 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     ["SetCompletion", setCompletionRs, "SetCompletion"],
     ["PriceMover", priceHistoryRs, "PriceMover"],
     ["PriceMovers", priceHistoryRs, "PriceMovers"],
+    // **The tenth widget's three**, and they are nested two deep for `PriceMovers`' reason: a
+    // field renamed inside `NewPrintingDeck` leaves both structs above it agreeing while every
+    // row of the drill-down popover reads `undefined`.
+    //
+    // Each is the quiet kind. A renamed `releasedAt` puts every printing in no day group at all;
+    // a renamed `decksWatched` is `undefined`, which is not `0`, so the *no decks are watched*
+    // sentence never fires and a reader watching nothing is told nothing was reprinted; a renamed
+    // `seenAt` marks every row unseen for ever; and a renamed `quantity` draws `×undefined`
+    // beside a deck name.
+    ["NewPrintingDeck", newPrintingsRs, "NewPrintingDeck"],
+    ["NewPrinting", newPrintingsRs, "NewPrinting"],
+    ["NewPrintings", newPrintingsRs, "NewPrintings"],
     ["WishlistSummary", wishlistRs, "WishlistSummary"],
     // Defined in `collection.rs` and imported by `wishlist.rs` — one struct for two commands, so
     // one row here rather than two, and a second definition in the wishlist would be the drift

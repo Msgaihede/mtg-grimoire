@@ -155,9 +155,9 @@ describe("WidgetSettingsPanel", () => {
   });
 
   /**
-   * **A switch is stored only as `false`.** Turning one off writes `false`; turning it back on
-   * removes the key, so a reader who has changed nothing and one who changed it back carry the same
-   * config.
+   * **A switch that names no `dflt` is stored only as `false`.** Turning one off writes `false`;
+   * turning it back on removes the key, so a reader who has changed nothing and one who changed it
+   * back carry the same config.
    */
   it("stores a switch turned off as false, and one turned on as nothing", async () => {
     const user = userEvent.setup();
@@ -178,6 +178,33 @@ describe("WidgetSettingsPanel", () => {
     expect(off).not.toBeChecked();
     await user.click(off);
     expect(onConfig).toHaveBeenLastCalledWith({ figures: undefined });
+  });
+
+  /**
+   * **The writer is `!on === dflt ? undefined : !on`, and this pins the half of it every shipped
+   * kind is in** — a second kind, a second key, and the same two answers as the case above. The
+   * other half, a row naming `dflt: false`, is pinned by the first kind that names one; no row in
+   * this build does, so a case for it here could only assert against a kind that is not there.
+   */
+  it("stores nothing when a switch is put back to its default, either way round", async () => {
+    const user = userEvent.setup();
+    const onConfig = vi.fn();
+    const deck = (config: unknown) => widget({ id: "decks", kind: "decks", config });
+    const view = render(<WidgetSettingsPanel {...props({ widget: deck(null), onConfig })} />);
+
+    // Default-on and untouched: the press away from the default is what stores a word.
+    const art = screen.getByRole("checkbox", { name: "Cover art" });
+    expect(art).toBeChecked();
+    await user.click(art);
+    expect(onConfig).toHaveBeenLastCalledWith({ art: false });
+
+    view.rerender(
+      <WidgetSettingsPanel {...props({ widget: deck({ art: false }), onConfig })} />,
+    );
+    const off = screen.getByRole("checkbox", { name: "Cover art" });
+    expect(off).not.toBeChecked();
+    await user.click(off);
+    expect(onConfig).toHaveBeenLastCalledWith({ art: undefined });
   });
 
   /** A kind with no switches draws no empty Show heading. */
