@@ -71,7 +71,7 @@ import { FOCUS, FOCUS_INSET } from "@/lib/focus";
 import type { DeckCard, DeckNote, DeckNoteCard } from "@/lib/ipc";
 import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
-import { noteTitle } from "./deckNotes";
+import { attachableCards, noteTitle, type NoteCardChoice } from "./deckNotes";
 import {
   CONFIRM_CANCEL,
   CONFIRM_DESTRUCTIVE,
@@ -176,9 +176,14 @@ export interface DeckNotesPanelProps {
  * **`oracleId` is `string` and not `string | null`**, which is what makes an orphan printing
  * unrepresentable rather than merely refused: see `DeckEditor`'s `addNote` for the row that is
  * absent because of it.
+ *
+ * **A `Pick` since the printing landed**, and the two fields are still the whole of what a note
+ * needs to be born: the identity it attaches by, and the word to print. A representative printing
+ * is a fact the *read* resolves, so a request that carried one would be the menu guessing at an
+ * answer the database is about to give.
  */
 export type DeckNoteRequest =
-  | { kind: "add"; card: DeckNoteCard }
+  | { kind: "add"; card: Pick<DeckNoteCard, "oracleId" | "name"> }
   | { kind: "open"; noteId: number };
 
 /**
@@ -193,38 +198,6 @@ interface NoteFocus {
   /** Open this note's editor as it arrives — `add` only. Reading is what `open` is for, and an
    *  editor a reader did not ask for is a body they can lose by pressing the wrong thing. */
   edit: boolean;
-}
-
-/**
- * One card a note can name: the identity Scryfall gives it across every printing, and the word to
- * print.
- *
- * The same pair `DeckNoteCard` already is, reused rather than respelled — the picker offers the
- * deck's cards in exactly the shape an attached one comes back in, so a row can be drawn from
- * either side with one component.
- */
-export type NoteCardChoice = DeckNoteCard;
-
-/**
- * The deck's own cards, as the picker offers them: one entry per **oracle id**, by name.
- *
- * **Deduped, because a note names a card and not a printing.** One note naming Lightning Bolt
- * names it once, however many copies, printings or finishes the deck holds — and a picker
- * offering the same card four times would be four presses that all did the same thing.
- *
- * **A row with no oracle id is dropped rather than offered.** That is an orphan printing — a card
- * the corpus has since stopped carrying — and there is no id to attach; offering it would be a
- * press that could only be refused.
- */
-export function attachableCards(cards: readonly DeckCard[]): NoteCardChoice[] {
-  const byOracle = new Map<string, string>();
-  for (const card of cards) {
-    if (card.oracleId === null) continue;
-    if (!byOracle.has(card.oracleId)) byOracle.set(card.oracleId, card.name);
-  }
-  return [...byOracle.entries()]
-    .map(([oracleId, name]) => ({ oracleId, name }))
-    .sort((a, b) => a.name.localeCompare(b.name, "en"));
 }
 
 /**
@@ -849,7 +822,11 @@ function NoteCards({
   onDone,
 }: {
   title: string;
-  named: readonly NoteCardChoice[];
+  /** What the note already names — a {@link DeckNoteCard} and no longer a
+   *  {@link NoteCardChoice}, which were one type until the picker's row grew a printing, a type
+   *  and a copy count. An attached card carries none of those, and the chips beside this list
+   *  never filter it. */
+  named: readonly DeckNoteCard[];
   attachable: readonly NoteCardChoice[];
   onAttach: (oracleId: string) => void;
   onDetach: (oracleId: string) => void;

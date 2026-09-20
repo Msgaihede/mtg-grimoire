@@ -18,7 +18,9 @@
  * `deck_notes.title` is allowed to be `''` and this file answers the question instead.
  */
 
-import type { DeckNote } from "@/lib/ipc";
+import type { DeckCard, DeckNote } from "@/lib/ipc";
+import type { ImageVariant } from "@/lib/images";
+import { OTHER, TYPE_BUCKETS, typeBucket } from "./deckBuckets";
 import { noteToPlainText } from "./noteMarkdown";
 
 /**
@@ -89,4 +91,106 @@ export function notedOracleIds(notes: readonly DeckNote[]): ReadonlySet<string> 
 export function notesForCard(notes: readonly DeckNote[], oracleId: string | null): DeckNote[] {
   if (!oracleId) return [];
   return notes.filter((note) => note.cards.some((card) => card.oracleId === oracleId));
+}
+
+/**
+ * One card a note can be told to name, as the picker draws it.
+ *
+ * **One entry per oracle id, because a note names a card and not a printing.** One note naming
+ * Lightning Bolt names it once, however many copies, printings or finishes the deck holds — and a
+ * picker offering the same card four times would be four presses that all did the same thing.
+ *
+ * It is no longer an alias of {@link DeckNoteCard}, which it was until the redesign: the picker's
+ * row draws a picture, a printing and a type beside the name, and an attached card carries none of
+ * those. The two are still built from one list and read side by side, which is why `oracleId` and
+ * `name` are spelled the same way in both.
+ */
+export interface NoteCardChoice {
+  oracleId: string;
+  name: string;
+  /** The printing this row draws — the **first** row the deck lists for this oracle id, which is
+   *  the deck's own order and therefore the copy the reader is looking at. */
+  cardId: string;
+  imageUris?: Partial<Record<ImageVariant, string>> | null;
+  setCode: string;
+  collectorNumber: string;
+  /** `deckBuckets.ts`' bucket for the **front** face — what the chips filter on. */
+  typeBucket: string;
+  /** Every copy of this card in the list handed in, folded. Drawn as `4×`; it names nothing and
+   *  is never written — a note names a card, not a quantity of one. */
+  copies: number;
+}
+
+/**
+ * The deck's own cards, as the picker offers them.
+ *
+ * **A row with no oracle id is dropped rather than offered.** That is an orphan printing — a card
+ * the corpus has since stopped carrying — and there is no id to attach; offering it would be a
+ * press that could only be refused.
+ *
+ * **Both variants of a deck arrive here as one list**, which is the panel's own arrangement: the
+ * band holds no `variant`, because `deck_notes` has no variant column and a note written against
+ * the plan shows on the actual list too.
+ */
+export function attachableCards(cards: readonly DeckCard[]): NoteCardChoice[] {
+  const byOracle = new Map<string, NoteCardChoice>();
+  for (const card of cards) {
+    if (card.oracleId === null) continue;
+    const seen = byOracle.get(card.oracleId);
+    if (seen) {
+      seen.copies += card.quantity;
+      continue;
+    }
+    byOracle.set(card.oracleId, {
+      oracleId: card.oracleId,
+      name: card.name,
+      cardId: card.cardId,
+      imageUris: card.imageUris,
+      setCode: card.setCode,
+      collectorNumber: card.collectorNumber,
+      typeBucket: typeBucket(card.typeLine),
+      copies: card.quantity,
+    });
+  }
+  return [...byOracle.values()].sort((a, b) => a.name.localeCompare(b.name, "en"));
+}
+
+/** The two rungs of the picker's radiogroup that are not a card type. Keys rather than labels at
+ *  every call site, because the label is English and the key is the state. */
+export const ALL_CHIP = "all";
+export const NAMED_CHIP = "named";
+
+/**
+ * The picker's rungs, with a count on each: `All`, `Named`, then one per type the deck holds.
+ *
+ * **Cards and never copies.** Twenty Mountains are one row in this list and one thing a note can
+ * name, so a chip reading `Land 20` beside a list showing one Land row would be two numbers for
+ * one fact.
+ *
+ * **Types rather than piles**, which is where this parts company with the spec it was drawn from:
+ * a type is a fact about the card and a pile is the reader's own filing, and `deck_categories` has
+ * no unique index on the word, so two piles may legally share a name and fold into one chip that
+ * stood for both. `typeBucket` reads the **front** face of a `//` line, which is the rule a modal
+ * DFC needs.
+ *
+ * **`Named` is drawn at zero and the type chips are not.** Named is how a reader checks their own
+ * work — *have I named anything yet* is a question a `0` answers — where a `Planeswalker 0` on a
+ * burn deck is a rung that filters to an empty list nobody asked about.
+ */
+export function typeChipCounts(
+  choices: readonly NoteCardChoice[],
+  namedCount: number,
+): { key: string; label: string; count: number }[] {
+  const counts = new Map<string, number>();
+  for (const choice of choices) {
+    counts.set(choice.typeBucket, (counts.get(choice.typeBucket) ?? 0) + 1);
+  }
+  const order = [...TYPE_BUCKETS, OTHER];
+  return [
+    { key: ALL_CHIP, label: "All", count: choices.length },
+    { key: NAMED_CHIP, label: "Named", count: namedCount },
+    ...order
+      .filter((label) => counts.has(label))
+      .map((label) => ({ key: label.toLowerCase(), label, count: counts.get(label) ?? 0 })),
+  ];
 }

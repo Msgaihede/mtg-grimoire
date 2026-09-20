@@ -2,6 +2,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, within } from "storybook/test";
 import type { DeckNote } from "@/lib/ipc";
 import { NOTES_HEADING, NotesBand } from "./DeckNotesPanel";
+import type { NoteCardChoice } from "./deckNotes";
 
 /**
  * One note, with everything a row can carry.
@@ -23,14 +24,59 @@ function note(over: Partial<DeckNote> & { id: number }): DeckNote {
   };
 }
 
-/** The deck this band is drawn over — the picker's whole offer, deduped by oracle id and by
- *  name, which is what `attachableCards` hands it in the app. */
-const ATTACHABLE = [
-  { oracleId: "o-bolt", name: "Lightning Bolt" },
-  { oracleId: "o-goblin", name: "Goblin Guide" },
-  { oracleId: "o-monastery", name: "Monastery Swiftspear" },
-  { oracleId: "o-eidolon", name: "Eidolon of the Great Revel" },
-  { oracleId: "o-mountain", name: "Mountain" },
+/** The deck this band is drawn over — the picker's whole offer, one row per oracle id with the
+ *  printing, the bucket and the folded copy count `attachableCards` hands it in the app.
+ *
+ *  Written out rather than run through `attachableCards` over `DeckCard` fixtures: a story is a
+ *  statement about what the *band* draws, and building its offer with the same function the band
+ *  uses would make the picker's states depend on a derivation this file is not about.
+ *  `deckNotes.test.ts` owns that derivation. */
+const ATTACHABLE: NoteCardChoice[] = [
+  {
+    oracleId: "o-bolt",
+    name: "Lightning Bolt",
+    cardId: "c-bolt",
+    setCode: "m10",
+    collectorNumber: "146",
+    typeBucket: "Instant",
+    copies: 4,
+  },
+  {
+    oracleId: "o-goblin",
+    name: "Goblin Guide",
+    cardId: "c-goblin",
+    setCode: "zen",
+    collectorNumber: "124",
+    typeBucket: "Creature",
+    copies: 4,
+  },
+  {
+    oracleId: "o-monastery",
+    name: "Monastery Swiftspear",
+    cardId: "c-monastery",
+    setCode: "ktk",
+    collectorNumber: "118",
+    typeBucket: "Creature",
+    copies: 4,
+  },
+  {
+    oracleId: "o-eidolon",
+    name: "Eidolon of the Great Revel",
+    cardId: "c-eidolon",
+    setCode: "jou",
+    collectorNumber: "93",
+    typeBucket: "Enchantment",
+    copies: 3,
+  },
+  {
+    oracleId: "o-mountain",
+    name: "Mountain",
+    cardId: "c-mountain",
+    setCode: "m10",
+    collectorNumber: "244",
+    typeBucket: "Land",
+    copies: 20,
+  },
 ];
 
 /**
@@ -215,7 +261,7 @@ export const ManyNotes: Story = {
         id: 2,
         title: "Sideboard plan",
         body: "## Against control\n\nBring the Eidolons in.",
-        cards: [{ oracleId: "o-eidolon", name: "Eidolon of the Great Revel" }],
+        cards: [{ oracleId: "o-eidolon", name: "Eidolon of the Great Revel", cardId: "c-eidolon" }],
       }),
       note({ id: 3, title: "Budget", body: "The fetchlands can wait." }),
       note({ id: 4, title: "", body: "Ask Supreme about the Bolt count" }),
@@ -324,10 +370,10 @@ export const NamingFourCards: Story = {
         title: "The one-drop suite",
         body: "All four of these want to be on the play.",
         cards: [
-          { oracleId: "o-bolt", name: "Lightning Bolt" },
-          { oracleId: "o-goblin", name: "Goblin Guide" },
-          { oracleId: "o-monastery", name: "Monastery Swiftspear" },
-          { oracleId: "o-eidolon", name: "Eidolon of the Great Revel" },
+          { oracleId: "o-bolt", name: "Lightning Bolt", cardId: "c-bolt" },
+          { oracleId: "o-goblin", name: "Goblin Guide", cardId: "c-goblin" },
+          { oracleId: "o-monastery", name: "Monastery Swiftspear", cardId: "c-monastery" },
+          { oracleId: "o-eidolon", name: "Eidolon of the Great Revel", cardId: "c-eidolon" },
         ],
       }),
       note({ id: 2, title: "Nothing to do with a card", body: "Sleeve these before Friday." }),

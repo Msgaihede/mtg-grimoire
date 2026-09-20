@@ -2025,7 +2025,9 @@ describe("DeckEditor", () => {
    */
   it("marks a noted card in all four views, and leaves its neighbour alone", async () => {
     deckNotes.mockResolvedValue([
-      noteRow({ cards: [{ oracleId: "o-Lightning Bolt", name: "Lightning Bolt" }] }),
+      noteRow({
+        cards: [{ oracleId: "o-Lightning Bolt", name: "Lightning Bolt", cardId: "c-Lightning Bolt" }],
+      }),
     ]);
     const user = userEvent.setup();
     await open();
@@ -5850,7 +5852,7 @@ describe("DeckEditor — a card's menu", () => {
       noteRow({
         id: 3,
         title: "Why four",
-        cards: [{ oracleId: "o-Lightning Bolt", name: "Lightning Bolt" }],
+        cards: [{ oracleId: "o-Lightning Bolt", name: "Lightning Bolt", cardId: "c-Lightning Bolt" }],
       }),
     ]);
     await open();
@@ -5908,7 +5910,7 @@ describe("DeckEditor — a card's menu", () => {
       noteRow({
         id: 3,
         title: "Why four",
-        cards: [{ oracleId: "o-Lightning Bolt", name: "Lightning Bolt" }],
+        cards: [{ oracleId: "o-Lightning Bolt", name: "Lightning Bolt", cardId: "c-Lightning Bolt" }],
       }),
     ]);
     await open();

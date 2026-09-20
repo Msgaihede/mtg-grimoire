@@ -8133,7 +8133,11 @@ describe("deck notes", () => {
       body: "Fourteen sources.",
       oracleIds: [BOLT_ORACLE],
     });
-    expect(note.cards).toEqual([{ oracleId: BOLT_ORACLE, name: "Lightning Bolt" }]);
+    expect(note.cards).toMatchObject([{ oracleId: BOLT_ORACLE, name: "Lightning Bolt" }]);
+    // The representative printing is the attachment's other half and is asserted on its own
+    // below: a note about a card names a *card*, and which printing draws it is a fact the read
+    // resolves rather than one the write stored.
+    expect(note.cards[0].cardId).not.toBeNull();
     const all = readHandlers(db).deck_notes({ deckId: 1 });
     expect(all).toHaveLength(1);
     expect(all[0].id).toBe(note.id);
@@ -8202,9 +8206,48 @@ describe("deck notes", () => {
       body: "b",
       oracleIds: ["o-not-in-the-corpus"],
     });
+    // **`cardId: null` is the orphan and is the other half of the same sentence**: there is no
+    // printing to name, so the card draws an empty frame rather than a broken image, and the
+    // picture is `null` with it rather than an empty map.
     expect(note.cards).toEqual([
-      { oracleId: "o-not-in-the-corpus", name: "o-not-in-the-corpus" },
+      {
+        oracleId: "o-not-in-the-corpus",
+        name: "o-not-in-the-corpus",
+        cardId: null,
+        imageUris: null,
+      },
     ]);
+  });
+
+  it("names the deck's own printing where the deck holds one, and any printing otherwise", () => {
+    // `attachments_by_note`'s `ORDER BY (dc.card_id IS NULL), c.id` — a note about Lightning Bolt
+    // in a deck sleeving one printing must not draw another's art, because the picture is how a
+    // reader recognises the row. A deck holding none of the card still gets a picture.
+    const db = notesDb();
+    const byId = db.cards
+      .filter((c) => c.oracleId === BOLT_ORACLE)
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    const chosen = byId[byId.length - 1];
+    expect(chosen.id).not.toBe(byId[0].id);
+    db.deckCards.push(deckCard({ id: 900, deckId: 1, cardId: chosen.id }));
+
+    const note = writeHandlers(db).deck_note_create({
+      deckId: 1,
+      title: "t",
+      body: "b",
+      oracleIds: [BOLT_ORACLE],
+    });
+    expect(note.cards[0].cardId).toBe(chosen.id);
+
+    // The other deck holds none of it, so the corpus answers instead — the lowest id, which is
+    // the tie-break the deck's own pass uses too.
+    const elsewhere = writeHandlers(db).deck_note_create({
+      deckId: 2,
+      title: "t",
+      body: "b",
+      oracleIds: [BOLT_ORACLE],
+    });
+    expect(elsewhere.cards[0].cardId).toBe(byId[0].id);
   });
 
   it("refuses a blank oracle id on the two paths that would store one, and on neither other", () => {

@@ -1,6 +1,18 @@
 import { describe, expect, it } from "vitest";
 import type { DeckNote } from "@/lib/ipc";
-import { UNTITLED_NOTE, notedOracleIds, noteTitle, notesForCard } from "./deckNotes";
+import {
+  attachableCards,
+  typeChipCounts,
+  UNTITLED_NOTE,
+  notedOracleIds,
+  noteTitle,
+  notesForCard,
+} from "./deckNotes";
+// `validation/fixtures`' `card` is this folder's one `DeckCard` builder — `CardFacts` is
+// `DeckCard` under the engine's name for it, so the factory really does answer the whole row.
+// `DeckNotesPanel.test.tsx` already imports it for exactly these cards, and a second local copy
+// of a forty-field fixture is a second place for a default to drift.
+import { card } from "./validation/fixtures";
 
 /**
  * The three derivations, which are the only part of this feature that can be wrong without
@@ -66,12 +78,12 @@ describe("noteTitle", () => {
 describe("notedOracleIds", () => {
   it("gathers every id across every note, once each", () => {
     const ids = notedOracleIds([
-      note({ id: 1, cards: [{ oracleId: "o-bolt", name: "Lightning Bolt" }] }),
+      note({ id: 1, cards: [{ oracleId: "o-bolt", name: "Lightning Bolt", cardId: "c-bolt" }] }),
       note({
         id: 2,
         cards: [
-          { oracleId: "o-bolt", name: "Lightning Bolt" },
-          { oracleId: "o-ritual", name: "Dark Ritual" },
+          { oracleId: "o-bolt", name: "Lightning Bolt", cardId: "c-bolt" },
+          { oracleId: "o-ritual", name: "Dark Ritual", cardId: "c-ritual" },
         ],
       }),
     ]);
@@ -83,7 +95,7 @@ describe("notedOracleIds", () => {
 });
 
 describe("notesForCard", () => {
-  const bolt = { oracleId: "o-bolt", name: "Lightning Bolt" };
+  const bolt = { oracleId: "o-bolt", name: "Lightning Bolt", cardId: "c-bolt" };
 
   it("answers the notes that name the card, in the deck's own order", () => {
     const notes = [
@@ -111,5 +123,118 @@ describe("notesForCard", () => {
     const notes = [note({ id: 1, cards: [bolt] })];
     expect(notesForCard(notes, "o-bolt")).not.toBe(notes);
     expect(notes).toHaveLength(1);
+  });
+});
+
+describe("what the card picker offers", () => {
+  it("folds every copy of one oracle card into one row", () => {
+    const [row, ...rest] = attachableCards([
+      card({ cardId: "m10", oracleId: "o-bolt", name: "Lightning Bolt", quantity: 3 }),
+      card({ cardId: "lea", oracleId: "o-bolt", name: "Lightning Bolt", quantity: 1 }),
+    ]);
+
+    expect(rest).toEqual([]);
+    expect(row?.copies).toBe(4);
+  });
+
+  it("takes the printing off the first row the deck lists, which is the deck's own order", () => {
+    const [row] = attachableCards([
+      card({
+        cardId: "m10",
+        oracleId: "o-bolt",
+        name: "Lightning Bolt",
+        setCode: "m10",
+        collectorNumber: "146",
+      }),
+      card({
+        cardId: "lea",
+        oracleId: "o-bolt",
+        name: "Lightning Bolt",
+        setCode: "lea",
+        collectorNumber: "161",
+      }),
+    ]);
+
+    expect(row?.cardId).toBe("m10");
+    expect(row?.setCode).toBe("m10");
+    expect(row?.collectorNumber).toBe("146");
+  });
+
+  it("buckets a card by the front face of its type line", () => {
+    const [mdfc] = attachableCards([
+      card({
+        cardId: "agadeem",
+        oracleId: "o-agadeem",
+        name: "Agadeem's Awakening",
+        typeLine: "Sorcery // Land",
+      }),
+    ]);
+
+    // The back of a modal DFC is routinely a land while the front is a spell; a deck is cast
+    // from the front, and `typeBucket` is the rule that already says so.
+    expect(mdfc?.typeBucket).toBe("Sorcery");
+  });
+
+  it("drops a row with no oracle id rather than offering a press that can only be refused", () => {
+    expect(attachableCards([card({ cardId: "orphan", oracleId: null, name: "Gone" })])).toEqual([]);
+  });
+
+  it("sorts by name, so the list reads the way a reader scans it", () => {
+    const names = attachableCards([
+      card({ cardId: "b", oracleId: "o-b", name: "Mountain" }),
+      card({ cardId: "a", oracleId: "o-a", name: "Goblin Guide" }),
+    ]).map((c) => c.name);
+
+    expect(names).toEqual(["Goblin Guide", "Mountain"]);
+  });
+});
+
+describe("the picker's chips", () => {
+  const CHOICES = attachableCards([
+    card({
+      cardId: "1",
+      oracleId: "o-1",
+      name: "Goblin Guide",
+      typeLine: "Creature — Goblin Scout",
+      quantity: 4,
+    }),
+    card({
+      cardId: "2",
+      oracleId: "o-2",
+      name: "Mountain",
+      typeLine: "Basic Land — Mountain",
+      quantity: 20,
+    }),
+    card({ cardId: "3", oracleId: "o-3", name: "Lightning Bolt", typeLine: "Instant", quantity: 4 }),
+  ]);
+
+  it("counts cards and never copies, because a note names a card once", () => {
+    const chips = typeChipCounts(CHOICES, 1);
+
+    // 20 Mountains are one row in this list and one thing a note can name.
+    expect(chips.find((c) => c.key === "all")?.count).toBe(3);
+    expect(chips.find((c) => c.key === "land")?.count).toBe(1);
+  });
+
+  it("puts All and Named first, then the types in TYPE_BUCKETS' order", () => {
+    expect(typeChipCounts(CHOICES, 1).map((c) => c.label)).toEqual([
+      "All",
+      "Named",
+      "Creature",
+      "Instant",
+      "Land",
+    ]);
+  });
+
+  it("draws no chip for a type the deck does not hold", () => {
+    expect(typeChipCounts(CHOICES, 0).map((c) => c.label)).not.toContain("Planeswalker");
+  });
+
+  it("keeps Named even at zero, because it is how a reader checks their own work", () => {
+    expect(typeChipCounts(CHOICES, 0).find((c) => c.key === "named")).toEqual({
+      key: "named",
+      label: "Named",
+      count: 0,
+    });
   });
 });

@@ -4381,10 +4381,18 @@ export interface DeckNote {
  * see {@link DeckNote}. `name` is a convenience the backend joins from `cards`, and **it falls
  * back to the oracle id itself** where the corpus has no row for one: a note must not disappear
  * from a deck because a card left the reader's copy of Scryfall's data.
+ *
+ * `cardId` and `imageUris` are a **representative printing**, resolved at read time so a note card
+ * can draw a picture of what it names — the deck's own printing where the deck holds one, and any
+ * printing the corpus has otherwise. Neither is ever matched on, written, or synced, and the same
+ * row read twice may honestly name two different printings. `cardId: null` is the orphan, and it
+ * draws the empty frame rather than a broken image.
  */
 export interface DeckNoteCard {
   oracleId: string;
   name: string;
+  cardId: string | null;
+  imageUris?: Partial<Record<ImageVariant, string>> | null;
 }
 
 /**

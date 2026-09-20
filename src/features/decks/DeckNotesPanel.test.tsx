@@ -49,12 +49,7 @@ vi.mock("./NoteEditor", () => ({
   }) => <textarea aria-label={ariaLabel} value={value} onChange={(e) => onChange(e.target.value)} />,
 }));
 
-import {
-  DeckNotesPanel,
-  NOTES_HEADING,
-  attachableCards,
-  type DeckNoteRequest,
-} from "./DeckNotesPanel";
+import { DeckNotesPanel, NOTES_HEADING, type DeckNoteRequest } from "./DeckNotesPanel";
 
 /* --------------------------------------------------------------------- fixtures ------- */
 
@@ -227,10 +222,10 @@ describe("the Notes band", () => {
         id: 1,
         title: "The one-drops",
         cards: [
-          { oracleId: "o-bolt", name: "Lightning Bolt" },
-          { oracleId: "o-goblin", name: "Goblin Guide" },
-          { oracleId: "o-monastery", name: "Monastery Swiftspear" },
-          { oracleId: "o-eidolon", name: "Eidolon of the Great Revel" },
+          { oracleId: "o-bolt", name: "Lightning Bolt", cardId: "c-bolt" },
+          { oracleId: "o-goblin", name: "Goblin Guide", cardId: "c-goblin" },
+          { oracleId: "o-monastery", name: "Monastery Swiftspear", cardId: "c-monastery" },
+          { oracleId: "o-eidolon", name: "Eidolon of the Great Revel", cardId: "c-eidolon" },
         ],
       }),
       note({ id: 2, title: "Sleeve these" }),
@@ -365,7 +360,11 @@ describe("editing a note", () => {
    */
   it("asks before deleting, and says what the delete does not reach", async () => {
     deckNotes.mockResolvedValue([
-      note({ id: 1, title: "Mana base", cards: [{ oracleId: "o-bolt", name: "Lightning Bolt" }] }),
+      note({
+        id: 1,
+        title: "Mana base",
+        cards: [{ oracleId: "o-bolt", name: "Lightning Bolt", cardId: "c-bolt" }],
+      }),
     ]);
     renderBand();
 
@@ -427,28 +426,17 @@ describe("editing a note", () => {
 /* -------------------------------------------------------------------- the picker ------- */
 
 describe("naming cards in a note", () => {
-  /**
-   * **One entry per oracle id, and a printing with none is dropped.** A note names a card and not
-   * a printing — one note naming Lightning Bolt names it once, however many copies, printings or
-   * finishes the deck holds — and an orphan row has no id to attach, so offering it would be a
-   * press that could only be refused.
-   */
-  it("dedupes the deck's cards by oracle id and drops the ones with none", () => {
-    const cards: DeckCard[] = [
-      card({ name: "Lightning Bolt", oracleId: "o-bolt" }),
-      card({ name: "Lightning Bolt", oracleId: "o-bolt" }),
-      card({ name: "Ancestral Recall", oracleId: "o-recall" }),
-      card({ name: "Ghost", oracleId: null }),
-    ];
-    expect(attachableCards(cards)).toEqual([
-      { oracleId: "o-recall", name: "Ancestral Recall" },
-      { oracleId: "o-bolt", name: "Lightning Bolt" },
-    ]);
-  });
+  // The dedupe, the fold and the bucketing moved to `deckNotes.test.ts` with `attachableCards`
+  // itself: they are arithmetic over a card list and never a fact about this band, which is what
+  // the move to `deckNotes.ts` is for. What stays here is what the *picker* does with the answer.
 
   it("offers the deck's own cards, minus the ones the note already names", async () => {
     deckNotes.mockResolvedValue([
-      note({ id: 1, title: "Burn plan", cards: [{ oracleId: "o-bolt", name: "Lightning Bolt" }] }),
+      note({
+        id: 1,
+        title: "Burn plan",
+        cards: [{ oracleId: "o-bolt", name: "Lightning Bolt", cardId: "c-bolt" }],
+      }),
     ]);
     renderBand({
       cards: [
@@ -477,7 +465,11 @@ describe("naming cards in a note", () => {
 
   it("takes a card off a note without taking the note anywhere", async () => {
     deckNotes.mockResolvedValue([
-      note({ id: 1, title: "Burn plan", cards: [{ oracleId: "o-bolt", name: "Lightning Bolt" }] }),
+      note({
+        id: 1,
+        title: "Burn plan",
+        cards: [{ oracleId: "o-bolt", name: "Lightning Bolt", cardId: "c-bolt" }],
+      }),
     ]);
     renderBand({ cards: [card({ name: "Lightning Bolt", oracleId: "o-bolt" })] });
 
@@ -637,7 +629,9 @@ describe("a note act asked for from the card menu", () => {
 
     // Cleared by the host, then asked again — the round trip a real press makes.
     view.update({ request: null });
-    view.update({ request: { kind: "add", card: { oracleId: "o-bolt", name: "Lightning Bolt" } } });
+    view.update({
+      request: { kind: "add", card: { oracleId: "o-bolt", name: "Lightning Bolt" } },
+    });
 
     await waitFor(() => expect(deckNoteCreate).toHaveBeenCalledTimes(2));
     expect(view.onRequestHandled).toHaveBeenCalledTimes(2);

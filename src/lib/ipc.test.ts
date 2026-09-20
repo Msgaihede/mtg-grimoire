@@ -1892,7 +1892,7 @@ describe("ipc argument names match the Rust command signatures", () => {
       sortOrder: 0,
       // Empty would be the ordinary case; one entry is what pins the nested shape, which no
       // parity check on the outer struct can see.
-      cards: [{ oracleId: "o-bolt", name: "Lightning Bolt" }],
+      cards: [{ oracleId: "o-bolt", name: "Lightning Bolt", cardId: "m10-146" }],
       createdAt: 1,
       updatedAt: 2,
     };

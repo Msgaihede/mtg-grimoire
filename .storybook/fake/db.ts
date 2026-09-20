@@ -6944,11 +6944,49 @@ function cardNameOfOracle(db: FakeDb, oracleId: string): string {
  * {@link readHandlers.deck_tokens}' rule, and the same division of labour: Rust supplies facts,
  * TypeScript draws the order.
  */
-function noteCardsOf(db: FakeDb, noteId: number): DeckNoteCard[] {
+function noteCardsOf(db: FakeDb, deckId: number, noteId: number): DeckNoteCard[] {
   return db.deckNoteCards
     .filter((c) => c.noteId === noteId)
-    .map((c) => ({ oracleId: c.oracleId, name: cardNameOfOracle(db, c.oracleId) }))
+    .map((c) => {
+      const printing = noteCardPrinting(db, deckId, c.oracleId);
+      return {
+        oracleId: c.oracleId,
+        name: cardNameOfOracle(db, c.oracleId),
+        cardId: printing?.id ?? null,
+        imageUris: frontFaceImageUris(db, printing?.id ?? null),
+      };
+    })
     .sort((a, b) => cmp(a.name, b.name) || cmp(a.oracleId, b.oracleId));
+}
+
+/**
+ * `deck_notes::attachments_by_note`'s correlated subquery — the **representative printing** one
+ * attachment draws, and the third DTO in this file to fold {@link frontFaceImageUris}.
+ *
+ * **The deck's own printing first, any printing the corpus holds second**, which is that
+ * statement's `ORDER BY (dc.card_id IS NULL), c.id` spelled as two passes: SQLite sorts `0`
+ * before `1`, so a printing this deck sleeves wins, and `c.id` breaks every remaining tie. A
+ * note about Lightning Bolt in a deck playing the M10 art must not draw the Alpha art — the
+ * picture is how a reader recognises the row, and the wrong one reads as a note naming a card
+ * that is not in the deck.
+ *
+ * **`null` is the orphan and is a real answer**, not a lookup that went wrong: the crate's
+ * `LEFT JOIN` keeps an attachment whose oracle id the corpus has never heard of, named by that
+ * id, and the card draws an empty frame rather than a broken image.
+ *
+ * **Every printing of the deck is considered rather than the deck's own row order**, because a
+ * note attaches by oracle id and a deck may hold two printings of one card; `c.id` is what picks
+ * between them, on both sides, so the two passes cannot come to disagree.
+ */
+function noteCardPrinting(db: FakeDb, deckId: number, oracleId: string): FakeCard | null {
+  const byId = (a: FakeCard, b: FakeCard): number => cmp(a.id, b.id);
+  const held = db.deckCards
+    .filter((dc) => dc.deckId === deckId)
+    .map((dc) => cardById(db, dc.cardId))
+    .filter((c): c is FakeCard => c !== null && c.oracleId === oracleId)
+    .sort(byId);
+  if (held.length > 0) return held[0] ?? null;
+  return [...db.cards].filter((c) => c.oracleId === oracleId).sort(byId)[0] ?? null;
 }
 
 /** `deck_notes::note_row` — one stored note with the cards it names joined on, copied for
@@ -6961,7 +6999,7 @@ function toDeckNote(db: FakeDb, n: FakeDeckNote): DeckNote {
     title: n.title,
     body: n.body,
     sortOrder: n.sortOrder,
-    cards: noteCardsOf(db, n.id),
+    cards: noteCardsOf(db, n.deckId, n.id),
     createdAt: n.createdAt,
     updatedAt: n.updatedAt,
   };
