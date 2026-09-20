@@ -862,6 +862,15 @@ describe("a note act asked for from the card menu", () => {
    * wanted to *look* at behind 141.5 kB of ProseMirror and shut whatever dialog they already had
    * open. The caret is the "into view" half: focusing an element scrolls it into view in a
    * browser, and it is the half jsdom can actually see.
+   *
+   * ⚠️ **"No editor" is two queries, because the two ways of getting one wrong are headed
+   * differently.** `Body of Mana base` names the **edit** dialog, whose heading is the note's own
+   * title — the failure of an `open` that reached `setPanel({ kind: "edit" })`. A `newFromCard`
+   * panel raised in error on this path is headed `New note`, so that query would not see it at
+   * all, and the only assertion that might is `document.activeElement` — incidentally, and only
+   * depending on whether the row's focus or the dialog's own focus grab lands last. Since
+   * 2026-09-20 there is a second producer of a panel on this component, so the bare "no dialog"
+   * is asserted rather than left to be true by accident.
    */
   it("brings a note into view without opening its editor", async () => {
     deckNotes.mockResolvedValue([note({ id: 5, title: "Mana base" })]);
@@ -875,6 +884,7 @@ describe("a note act asked for from the card menu", () => {
     await waitFor(() => expect(document.activeElement).toBe(row));
 
     expect(screen.queryByLabelText("Body of Mana base")).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
     expect(deckNoteCreate).not.toHaveBeenCalled();
     expect(view.onRequestHandled).toHaveBeenCalledTimes(1);
   });

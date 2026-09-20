@@ -5947,7 +5947,14 @@ describe("DeckEditor — a card's menu", () => {
     await waitFor(() =>
       expect(deckNoteCreate).toHaveBeenCalledWith(4, "", "Four is too many", ["o-Lightning Bolt"]),
     );
-    // …and exactly once, which is the old test's claim surviving the move: one Save is one note.
+    // …and exactly once — **which is a weaker claim than the one this line used to make, and
+    // saying so is the point.** The old `Times(1)` fenced *one press, one note* at the host: the
+    // create ran straight off the request, so a `DeckEditor` that parked two of them for one press
+    // made two notes and this went red. A second request only re-seeds the same dialog now, so one
+    // Save is still one create and the park-once half is no longer visible from here — and
+    // `DeckNotesPanel.test.tsx`'s idempotency test cannot see it either, because it is fed its
+    // requests by hand. What this fences is the half that is left: the Save itself does not
+    // double-fire.
     expect(deckNoteCreate).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { notesOpen: true }));
   });
