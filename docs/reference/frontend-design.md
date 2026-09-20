@@ -645,8 +645,9 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   of which is a second `CardGrid` on a page that already has one; `deck`, the editor's desk — **one
   key for both deck views**, because Stacks and Grid are two drawings of the same pile and
   switching between them must not resize the cards the reader just settled on; `deckGallery`, the
-  decks page's wall of deck tiles and folder cards; and `printings`, the modal's wall, which opens
-  *over* a wall the reader has already sized. `useCardZoomGesture(ref, section)` names the section
+  decks page's wall of deck tiles and folder cards; `home`, the dashboard, which is **not a wall of
+  anything** and is spent differently from all of them (below); and `printings`, the modal's wall,
+  which opens *over* a wall the reader has already sized. `useCardZoomGesture(ref, section)` names the section
   it is stepping. **`collectionSearch` and `wishlistSearch` are 2026-09-07's**, and they are their
   own keys for `deckSearch`'s reason exactly: a sidebar's tiles and the page wall's tiles are on
   screen at once and are two different questions — *how big are the cards I am shopping through*
@@ -668,6 +669,22 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   - **Rust needed nothing.** `zoom.rs` validates the multiplier and deliberately does not know the
     section vocabulary (`a_section_this_build_does_not_know_is_stored_anyway`), so an eighth wall
     is remembered across restarts by the machinery that was already there.
+- **The dashboard joined on 2026-09-20 (issue #480), and it is the one section that is not a
+  multiplier on a tile.** Every other section spends its number as `scaled(base, zoom)` on a tile's
+  width, because a card is a picture and a picture's size *is* the question. A widget is a box of
+  **type**: a bigger box at the same type size is not a zoomed dashboard, it is the same dashboard
+  showing *more* small rows, which is the reverse of the gesture. So `home` is spent as a **CSS
+  `zoom` on the grid box** — Chromium's layout scale, not a paint one, so cells, cards, titles,
+  figures and rows all move together and `fit.ts` never learned the word. Measured in a browser
+  that day: a 900px canvas holding a `zoom: 1.5` child lays it out at 600 local px, paints it at
+  900, and a 12px rule inside paints at 18px. What the page owes it is a **division** — the canvas
+  is measured outside the zoom and the columns computed against `width / zoom`, which is how a zoom
+  takes tiles away — and a **multiplication**, because a pointer's `clientX` is viewport pixels
+  where a cell is the grid's own, so a drag divides its travel by `step * zoom`. It is also the one
+  section whose listener is on the **whole page** rather than on a scroller, which is the opposite
+  of `deckGallery`'s rule above and for a reason that does not apply there: this page has no
+  navigation chrome to protect, and a ctrl+wheel that misses the canvas does not do nothing — it
+  falls through to WebView2's own page zoom. [home-page.md](home-page.md) §4 has the whole record.
 - **What is drawn _on_ a card scales with it, through two inherited custom properties**
   (2026-08-17). Until then the zoom sized the tile and nothing else: the finish chip, the crown, the
   owned badge, the printings count, the rarity gem, the caption, the deck's copy count and label dot,

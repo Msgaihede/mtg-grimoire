@@ -1244,7 +1244,7 @@ Expected: FAIL — `tsc` errors on `EVERY_KIND`, because `WidgetKind` has no `st
 `| "stickyNotes"` on `WidgetKind`, and the row in `WIDGET_META` **exactly as the spec's §7 gives it**. Insertion order in that object is the catalogue's order; put it last.
 
 ⚠️ `RESERVED_KEYS = ["title", "density"]` — no pick or toggle here may use either.
-⚠️ Every toggle defaults **on** (`WidgetToggle` is stored only as `false`); all three are written to be correct that way round.
+⚠️ All three toggles default **on**. `WidgetToggle` gained a `dflt` field on `main` while this was being written (`newPrintings` starts two of its three off), so this is a choice rather than the only shape — but absent still means on, and all three are written to be correct that way round.
 ⚠️ `DEFAULT_LAYOUT` does **not** change — the kind is catalogue-only, so none of its three copies (`widgets.ts`, `home.rs`, `.storybook/fake/db.ts:2623`) moves.
 
 - [ ] **Step 4: Wire the page's switch**

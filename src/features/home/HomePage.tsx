@@ -38,6 +38,40 @@
  * **No z-index on a box at rest.** A card's settings popover is anchored inside it and has to paint
  * over the cards after it in the document; a lifted box would be a stacking context capping it. The
  * one box that is raised is the one being dragged, for the length of the drag, from `LAYER`.
+ *
+ * ## The zoom is a CSS `zoom`, and it is the only one in this app that is
+ *
+ * Every other wall spends its `cardZoom` number as a multiplier on a tile's width — `scaled(170,
+ * zoom)` — because a card is a picture and a picture's size *is* the question. A widget is not: it
+ * is a box of type, and a bigger box at the same type size is not a zoomed dashboard, it is the
+ * same dashboard showing **more** small rows. Which is the opposite of the gesture — a reader who
+ * rolls the wheel forward is asking for less on screen, more legibly.
+ *
+ * So the number is spent as `zoom` on the grid box, which Chromium implements as a *layout* scale
+ * rather than a paint one: measured on 2026-09-20, a 900px canvas holding a `zoom: 1.5` child lays
+ * that child out at 600 local px, paints it at 900, and a 12px rule inside it paints at 18px. Cells,
+ * cards, titles, figures and rows all move together, and nothing in `fit.ts` had to learn the word.
+ *
+ * **What the page owes it is one division.** The canvas is measured **outside** the zoom — the box
+ * carrying {@link HOME_CANVAS_ATTR} is never scaled — and `columnsFor`/`cellFor` are asked about
+ * `width / zoom`, the width the grid actually lays out in. Fewer columns fall straight out of that:
+ * a 1200px canvas is 1200 local px at 100% and 800 at 150%, which is ten columns against six.
+ * Measuring inside the zoom would have worked too (`clientWidth` on a zoomed box answers in local
+ * units), and is refused because it makes the arithmetic depend on a browser behaviour no test in
+ * this repo can see — **jsdom does not implement `zoom` at all**, so the division is the half that
+ * stays testable.
+ *
+ * **And one correction.** A pointer event's `clientX` is in *viewport* pixels while `cell` and
+ * `GAP` are in the grid's local ones, so a drag divides its travel by `step * zoom`. Without it a
+ * widget dragged at 150% would travel half again as many cells as the pointer did — the one place
+ * the two coordinate spaces meet, and the only line in this file that names the zoom twice.
+ *
+ * **The gesture is caught on the whole page section, not on the canvas.** `DecksPage` puts its
+ * listener on the scrolling tiles and deliberately not on the view, because a ctrl+wheel over its
+ * folder tree is a gesture about navigation chrome. This page has no such chrome — a header row of
+ * three buttons, and empty desk under the last widget — and a wheel that misses the canvas does not
+ * do nothing: it falls through to WebView2's own page zoom, scaling the sidebar and the ribbon.
+ * Covering the section is what makes "ctrl+wheel on the dashboard" one answer instead of two.
  */
 import {
   useCallback,
@@ -55,6 +89,8 @@ import { FOCUS } from "@/lib/focus";
 import type { HomeLayout, HomeWidget } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { PRESS } from "@/lib/motion";
+import { useAppStore } from "@/lib/store";
+import { useCardZoomGesture } from "@/lib/useCardZoomGesture";
 import { cn } from "@/lib/utils";
 import {
   CELL_MIN,
@@ -88,6 +124,7 @@ import { ActivityWidget } from "./widgets/ActivityWidget";
 import { CollectionValueWidget } from "./widgets/CollectionValueWidget";
 import { DecksWidget, DecksWidgetSettings } from "./widgets/DecksWidget";
 import { FoldersWidget, FoldersWidgetSettings } from "./widgets/FoldersWidget";
+import { NewPrintingsWidget, NewPrintingsWidgetSettings } from "./widgets/NewPrintingsWidget";
 import { PriceMoversWidget } from "./widgets/PriceMoversWidget";
 import { RecentCardsWidget } from "./widgets/RecentCardsWidget";
 import { SetCompletionWidget } from "./widgets/SetCompletionWidget";
@@ -195,6 +232,8 @@ function renderBody(props: WidgetBodyProps): ReactElement {
       return <SetCompletionWidget {...props} />;
     case "priceMovers":
       return <PriceMoversWidget {...props} />;
+    case "newPrintings":
+      return <NewPrintingsWidget {...props} />;
     case "stickyNotes":
       return <StickyNotesWidget {...props} />;
     default:
@@ -212,6 +251,8 @@ function renderExtraSettings(widget: HomeWidget, onConfig: ConfigPatch): ReactNo
       return <DecksWidgetSettings widget={widget} onConfig={onConfig} />;
     case "folders":
       return <FoldersWidgetSettings widget={widget} onConfig={onConfig} />;
+    case "newPrintings":
+      return <NewPrintingsWidgetSettings widget={widget} onConfig={onConfig} />;
     default:
       return undefined;
   }
@@ -273,12 +314,57 @@ export function HomePage(): ReactElement {
   const [catalogueOpen, setCatalogueOpen] = useState(false);
   const [gesture, setGesture] = useState<Gesture | null>(null);
 
+  /**
+   * How large the reader draws the dashboard — one of the ladder's sixteen stops, out of the one
+   * store the app keeps sizes in.
+   *
+   * `home` is its own section, so a size settled on here is restored here and reaches no wall of
+   * cards. See `ZOOM_SECTIONS`.
+   */
+  const zoom = useAppStore((s) => s.cardZoom.home);
+  /**
+   * Ctrl+wheel over the page, through the hook rather than an `onWheel` prop: React registers
+   * `wheel` as a passive listener, and a passive listener's `preventDefault` does nothing — so
+   * without this WebView2 would apply its own page zoom *as well*, scaling the sidebar, the ribbon
+   * and the title bar out from under a reader who asked the dashboard to get bigger.
+   *
+   * On the section rather than on the canvas — see the module doc.
+   */
+  const sectionRef = useRef<HTMLElement>(null);
+  useCardZoomGesture(sectionRef, "home");
+
   const [canvasRef, width] = useCanvasWidth();
   const measured = width > 0;
-  const cols = columnsFor(width);
-  const cell = cellFor(width, cols);
-  /** One widget per row: a canvas too narrow for a readable cell — or not measured yet. */
-  const stacked = !measured || isStacked(width);
+  /**
+   * The canvas in the grid's own coordinate space: what the measured width is worth once the CSS
+   * `zoom` below has scaled it.
+   *
+   * **This is the whole of how a zoom becomes fewer columns.** `columnsFor` is unchanged and knows
+   * nothing about any of this — it is asked about a narrower canvas and answers with fewer columns,
+   * exactly as it does for a narrower window. The cells it hands back are local pixels, which the
+   * zoom paints larger.
+   */
+  const canvas = width / zoom;
+  const cols = columnsFor(canvas);
+  const cell = cellFor(canvas, cols);
+  /**
+   * One widget per row: a canvas too narrow for a readable cell — or not measured yet.
+   *
+   * **Judged on the local canvas, which makes the stack something a zoom can reach**, and that is
+   * the right reading of `CELL_MIN` rather than a side effect of the division. The floor is not
+   * about painted pixels — a reader who zooms out has *asked* for small cells, and refusing them
+   * would be the zoom's one direction that does nothing. It is about whether the grid has room to
+   * be a grid **in its own units**: the column count bottoms out at `GRID_MIN_COLUMNS`, so past
+   * that point zooming in cannot take a column away and instead takes local pixels off every cell
+   * — eight columns of a 900px window are 64px each at 150%, which is a widget body about ten
+   * characters wide however large the characters are. One widget per row at the full width, with
+   * the type at the size the reader asked for, is the honest answer to that gesture.
+   *
+   * It runs the other way too, and the same reading covers it: zooming *out* of a window narrow
+   * enough to stack at 100% widens the local canvas past the floor and lays the grid back out.
+   * That is the gesture working — more on screen, smaller — and not a window that grew.
+   */
+  const stacked = !measured || isStacked(canvas);
 
   /**
    * The arrangement as drawn: the stored one brought inside this many columns.
@@ -310,9 +396,9 @@ export function HomePage(): ReactElement {
    * `arranged` from it would judge a drop against the arrangement from before the drag — and if the
    * window was resized mid-drag, against the wrong column count.
    */
-  const live = useRef({ arranged, cols, cell, update });
+  const live = useRef({ arranged, cols, cell, zoom, update });
   useLayoutEffect(() => {
-    live.current = { arranged, cols, cell, update };
+    live.current = { arranged, cols, cell, zoom, update };
   });
 
   /**
@@ -364,11 +450,17 @@ export function HomePage(): ReactElement {
       let ghost: Gesture["ghost"] = { ...start, ok: true };
 
       const follow = (e: PointerEvent) => {
-        const { arranged: now, cols: across } = live.current;
+        const { arranged: now, cols: across, zoom: scale } = live.current;
         const dx = e.clientX - originX;
         const dy = e.clientY - originY;
-        const cx = Math.round(dx / step);
-        const cy = Math.round(dy / step);
+        // **The one place the two coordinate spaces meet.** `dx` is viewport pixels, `step` is the
+        // grid's own — and the CSS `zoom` on the grid box is exactly the ratio between them, so a
+        // cell is `step * scale` pixels wide *on screen*, which is what the pointer travelled
+        // across. Divided by the bare `step`, a drag at 150% would move a widget half again as
+        // many cells as the reader's hand did. Read fresh rather than folded into `step` at press
+        // time: a ctrl+wheel mid-drag is a gesture this page has no reason to refuse.
+        const cx = Math.round(dx / (step * scale));
+        const cy = Math.round(dy / (step * scale));
         let rect: CellRect;
         if (mode === "move") {
           rect = {
@@ -528,7 +620,7 @@ export function HomePage(): ReactElement {
   };
 
   return (
-    <section className="flex min-h-full flex-col gap-3">
+    <section ref={sectionRef} className="flex min-h-full flex-col gap-3">
       {/* Not drawn: the ribbon's own heading already names the view. */}
       <h2 className="sr-only">Home</h2>
 
@@ -581,107 +673,125 @@ export function HomePage(): ReactElement {
       {/* The canvas is always mounted — it is what is measured, and a measurement that waited for
           widgets would leave an empty page's first Add placed against no grid at all. */}
       <div ref={canvasRef} {...{ [HOME_CANVAS_ATTR]: "" }} className="min-w-0">
-        {stacked ? (
-          // One widget per row, in reading order, at the full canvas width and at the height its
-          // footprint has on the narrowest readable grid. There is no grid to drop on, so the cards
-          // are not arrangeable; the size steppers still write the footprint the wide page uses.
-          <div className="flex flex-col" style={{ gap: GAP }}>
-            {[...shown]
-              .sort((a, b) => a.y - b.y || a.x - b.x)
-              .map((widget) => {
-                const heightPx = spanPx(widget.h, CELL_MIN);
-                return (
-                  <div
-                    key={widget.id}
-                    {...{ [HOME_WIDGET_ATTR]: widget.id }}
-                    className="relative flex min-w-0 flex-col"
-                    style={{ height: heightPx }}
-                  >
-                    {card(widget, { widthPx: width, heightPx })}
-                  </div>
-                );
-              })}
-          </div>
-        ) : (
-          (editing || shown.length > 0) && (
-            // `relative` so the guides are positioned against the grid's own box, which is exactly
-            // `rows` cells tall — a guide against anything taller would run past the last row.
-            <div className="relative">
-              {editing && (
-                <div aria-hidden="true" className="pointer-events-none absolute inset-0">
-                  {Array.from({ length: Math.max(0, cols - 1) }, (_, i) => (
-                    <span
-                      key={`v${i}`}
-                      className="absolute inset-y-0 opacity-50"
-                      style={{ left: (i + 1) * step - GAP / 2, borderLeft: GUIDE_STROKE }}
-                    />
-                  ))}
-                  {Array.from({ length: Math.max(0, rows - 1) }, (_, i) => (
-                    <span
-                      key={`h${i}`}
-                      className="absolute inset-x-0 opacity-50"
-                      style={{ top: (i + 1) * step - GAP / 2, borderTop: GUIDE_STROKE }}
-                    />
-                  ))}
-                </div>
-              )}
+        {/*
+          The zoom, and the only element in this app that carries one. It goes **inside** the
+          measured canvas so that `width` above is true pixels and `canvas` is the division — see
+          the module doc. `zoom: 1` is an identity and is written unconditionally rather than
+          branched, so there is one box on the page at every stop rather than a tree that reshapes
+          itself at 100%.
 
-              <div
-                className="grid"
-                style={{
-                  gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
-                  gridTemplateRows: `repeat(${rows}, ${cell}px)`,
-                  gap: GAP,
-                }}
-              >
-                {shown.map((widget) => {
-                  const dragging = gesture?.mode === "move" && gesture.id === widget.id;
+          `min-w-0` again: this box is what the grid's `1fr` columns are divided out of, and a grid
+          child with a long unbroken name would otherwise push the track past the canvas.
+        */}
+        <div style={{ zoom }} className="min-w-0">
+          {stacked ? (
+            // One widget per row, in reading order, at the full canvas width and at the height its
+            // footprint has on the narrowest readable grid. There is no grid to drop on, so the cards
+            // are not arrangeable; the size steppers still write the footprint the wide page uses.
+            <div className="flex flex-col" style={{ gap: GAP }}>
+              {[...shown]
+                .sort((a, b) => a.y - b.y || a.x - b.x)
+                .map((widget) => {
+                  const heightPx = spanPx(widget.h, CELL_MIN);
                   return (
                     <div
                       key={widget.id}
                       {...{ [HOME_WIDGET_ATTR]: widget.id }}
-                      // `relative` and nothing else at rest — see the module doc on z-index. The box
-                      // being dragged is lifted over the ghost and every other card.
-                      className={cn("relative flex min-w-0 flex-col", dragging && LAYER.raised)}
-                      style={{
-                        gridColumn: `${widget.x + 1} / span ${widget.w}`,
-                        gridRow: `${widget.y + 1} / span ${widget.h}`,
-                        transform: dragging
-                          ? `translate(${gesture.dx}px, ${gesture.dy}px)`
-                          : undefined,
-                      }}
+                      className="relative flex min-w-0 flex-col"
+                      style={{ height: heightPx }}
                     >
-                      {card(widget, {
-                        widthPx: spanPx(widget.w, cell),
-                        heightPx: spanPx(widget.h, cell),
-                      })}
+                      {/* The **local** canvas, not the measured one: this card is inside the zoom,
+                        so its box is in the grid's own pixels like every other length here. */}
+                      {card(widget, { widthPx: canvas, heightPx })}
                     </div>
                   );
                 })}
+            </div>
+          ) : (
+            (editing || shown.length > 0) && (
+              // `relative` so the guides are positioned against the grid's own box, which is exactly
+              // `rows` cells tall — a guide against anything taller would run past the last row.
+              <div className="relative">
+                {editing && (
+                  <div aria-hidden="true" className="pointer-events-none absolute inset-0">
+                    {Array.from({ length: Math.max(0, cols - 1) }, (_, i) => (
+                      <span
+                        key={`v${i}`}
+                        className="absolute inset-y-0 opacity-50"
+                        style={{ left: (i + 1) * step - GAP / 2, borderLeft: GUIDE_STROKE }}
+                      />
+                    ))}
+                    {Array.from({ length: Math.max(0, rows - 1) }, (_, i) => (
+                      <span
+                        key={`h${i}`}
+                        className="absolute inset-x-0 opacity-50"
+                        style={{ top: (i + 1) * step - GAP / 2, borderTop: GUIDE_STROKE }}
+                      />
+                    ))}
+                  </div>
+                )}
 
-                {/*
+                <div
+                  className="grid"
+                  style={{
+                    gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
+                    gridTemplateRows: `repeat(${rows}, ${cell}px)`,
+                    gap: GAP,
+                  }}
+                >
+                  {shown.map((widget) => {
+                    const dragging = gesture?.mode === "move" && gesture.id === widget.id;
+                    return (
+                      <div
+                        key={widget.id}
+                        {...{ [HOME_WIDGET_ATTR]: widget.id }}
+                        // `relative` and nothing else at rest — see the module doc on z-index. The box
+                        // being dragged is lifted over the ghost and every other card.
+                        className={cn("relative flex min-w-0 flex-col", dragging && LAYER.raised)}
+                        style={{
+                          gridColumn: `${widget.x + 1} / span ${widget.w}`,
+                          gridRow: `${widget.y + 1} / span ${widget.h}`,
+                          // `follow`'s correction again, and for its reason: the travel was
+                          // measured in viewport pixels and this transform is applied inside the
+                          // zoom, so at 150% an undivided offset would carry the card half again
+                          // as far as the pointer — out from under the hand holding it.
+                          transform: dragging
+                            ? `translate(${gesture.dx / zoom}px, ${gesture.dy / zoom}px)`
+                            : undefined,
+                        }}
+                      >
+                        {card(widget, {
+                          widthPx: spanPx(widget.w, cell),
+                          heightPx: spanPx(widget.h, cell),
+                        })}
+                      </div>
+                    );
+                  })}
+
+                  {/*
                   Where the gesture would land. **Last in the grid and `relative` with no z-index**,
                   so it paints over every resting card by document order — a refusal is drawn *over*
                   the card in the way, which is the one place it has to be visible — and under the
                   card being dragged, which is the one box that is raised.
                 */}
-                {gesture !== null && (
-                  <div
-                    aria-hidden="true"
-                    className={cn(
-                      "pointer-events-none relative rounded-lg border-2",
-                      gesture.ghost.ok ? GHOST_FREE : GHOST_REFUSED,
-                    )}
-                    style={{
-                      gridColumn: `${gesture.ghost.x + 1} / span ${gesture.ghost.w}`,
-                      gridRow: `${gesture.ghost.y + 1} / span ${gesture.ghost.h}`,
-                    }}
-                  />
-                )}
+                  {gesture !== null && (
+                    <div
+                      aria-hidden="true"
+                      className={cn(
+                        "pointer-events-none relative rounded-lg border-2",
+                        gesture.ghost.ok ? GHOST_FREE : GHOST_REFUSED,
+                      )}
+                      style={{
+                        gridColumn: `${gesture.ghost.x + 1} / span ${gesture.ghost.w}`,
+                        gridRow: `${gesture.ghost.y + 1} / span ${gesture.ghost.h}`,
+                      }}
+                    />
+                  )}
+                </div>
               </div>
-            </div>
-          )
-        )}
+            )
+          )}
+        </div>
       </div>
 
       <WidgetCatalogue

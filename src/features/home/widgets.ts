@@ -32,9 +32,9 @@
 import type { HomeLayout } from "@/lib/ipc";
 
 /**
- * The ten kinds this build can draw.
+ * The eleven kinds this build can draw.
  *
- * Adding an eleventh means a member here, a row in {@link WIDGET_META} (which will not compile
+ * Adding a twelfth means a member here, a row in {@link WIDGET_META} (which will not compile
  * without one) and a component — and it means nothing at all to Rust, which stores whatever
  * string it is handed.
  */
@@ -48,6 +48,7 @@ export type WidgetKind =
   | "recentCards"
   | "setCompletion"
   | "priceMovers"
+  | "newPrintings"
   | "stickyNotes";
 
 /**
@@ -83,13 +84,20 @@ export interface WidgetPick {
 }
 
 /**
- * An on/off setting, stored as `config[key]`. **Stored only as `false`; absent means on.** A
- * reader who has changed nothing sees the widget's whole face, which is the one the catalogue
- * showed them.
+ * An on/off setting, stored as `config[key]`. **The default is stored as absence, whichever way
+ * round the default runs** — a reader who has changed nothing stores nothing, so an upgrade that
+ * moves a default moves it for them too.
+ *
+ * `dflt` is `true` when absent, which is every toggle shipped before this field existed: a reader
+ * who has changed nothing sees the widget's whole face, which is the one the catalogue showed
+ * them. A kind names `dflt: false` where the *off* state is the honest starting point — a switch
+ * whose subject the reader has to ask for, and which would read as a double negative if spelled
+ * as a `hide…` key on the panel.
  */
 export interface WidgetToggle {
   key: string;
   label: string;
+  dflt?: boolean;
 }
 
 /** A footprint in grid cells: `[wide, tall]`. */
@@ -308,8 +316,9 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
     toggles: [{ key: "names", label: "Show names" }],
   },
   /**
-   * The reader's own prose. **Last, because insertion order is the catalogue's order** and this is
-   * the newest kind.
+   * The reader's own prose. Insertion order is the catalogue's order, and this and
+   * `newPrintings` directly below are its newest pair — that one landed on `main` while this was
+   * being written, so which of the two is last is an accident of merge order and nothing reads it.
    *
    * `min` is `[3, 2]` where every other kind's is `[2, 2]` or smaller, and that is the one figure
    * here doing real work rather than copying a neighbour: at a two-cell width the Board's tiles are
@@ -317,8 +326,10 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
    * drawn badly. `boundsOf` is what enforces it, against the steppers, the resize corner and the
    * arrow keys alike.
    *
-   * All three toggles read correctly **on** — `WidgetToggle` is stored only as `false`, so absent
-   * means on and there is no such thing as one that starts off.
+   * All three toggles read correctly **on**, and that is now a choice rather than the only
+   * shape available: `dflt` landed on {@link WidgetToggle} with `newPrintings`, which starts two
+   * of its three off. These three stay on because each names something a reader would miss if it
+   * were hidden, not something they have to ask for.
    */
   stickyNotes: {
     label: "Notes",
@@ -342,6 +353,59 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
       { key: "pinned", label: "Pinned note first" },
     ],
     chip: "layout",
+  },
+  newPrintings: {
+    label: "New printings",
+    description: "Reprints of cards your decks already hold, newest first.",
+    def: [3, 3],
+    min: [2, 2],
+    max: [8, 12],
+    picks: [
+      {
+        key: "scope",
+        label: "Which decks",
+        // Two options, not three: there is no `decks.pinned`, and on the Decks widget `Pinned`
+        // *is* the checklist — so a third option would be this one under a second name.
+        options: [
+          { id: "all", label: "All decks" },
+          { id: "chosen", label: "Chosen…" },
+        ],
+      },
+      {
+        key: "window",
+        label: "Window",
+        dflt: 90,
+        options: [
+          { id: 30, label: "30 days" },
+          { id: 90, label: "90 days" },
+          { id: 365, label: "A year" },
+        ],
+      },
+      {
+        // **English is `options[0]` and therefore the default**, which is what keeps one reprint
+        // to one row for a reader who changes nothing — `cards.id` is one printing *in one
+        // language*, so an unfiltered feed answers a ten-language set as ten rows of one reprint.
+        // The other two options are that reader changing their mind on purpose.
+        key: "langs",
+        label: "Languages",
+        options: [
+          { id: "en", label: "English" },
+          { id: "all", label: "Every language" },
+          { id: "chosen", label: "Chosen…" },
+        ],
+      },
+    ],
+    // Two of the three start off, which is what {@link WidgetToggle.dflt} was added for: a
+    // virtual deck is a pile the reader does not own and a basic land is reprinted in every set,
+    // so both are subjects to be asked for rather than face to be hidden. `theory` keeps the
+    // shipped default — a theory card is one the reader intends to own, which is precisely the
+    // reader who wants to know it was reprinted.
+    toggles: [
+      { key: "virtual", label: "Virtual decks", dflt: false },
+      { key: "theory", label: "Theory cards" },
+      { key: "basics", label: "Basic lands", dflt: false },
+    ],
+    chip: "window",
   },
 };
 

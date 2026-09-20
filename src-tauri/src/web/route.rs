@@ -286,6 +286,14 @@ pub const COMMANDS: &[&str] = &[
     // `schema::prepare_database` and `marketplace_feed::store`, both of which a browser reaches.
     "set_completion",
     "price_movers",
+    // **The New printings widget's read and its cursor.** Both are connection-only: the read is
+    // two `SELECT`s over `deck_cards` and the corpus whose only clock is SQLite's `date('now')`,
+    // and the write takes `at` from the caller for `record_recent_card`'s reason. A browser that
+    // could read the feed and not move the cursor would draw a widget whose gold dots never go
+    // out; one that could read neither would draw the tenth widget as an error on two of the
+    // three targets.
+    "new_printings",
+    "mark_new_printings_seen",
     "start_view",
     "set_start_view",
     // **The three docked search columns' shared row**, and both halves for `deck_sort`'s reason.
@@ -2395,6 +2403,40 @@ pub fn call(
             )
         }
 
+        // The New printings pair. **`langs` is `field` and not `optional`**, because an absent
+        // language list and an empty one mean different things on the way in and only the empty
+        // one is a legal answer — empty is *every language*, so a caller that forgot the argument
+        // would silently be given the widest feed there is rather than told it forgot. `limit` is
+        // the one `optional`: `None` there is the module's own full read.
+        "new_printings" => {
+            let ask = crate::new_printings::Ask {
+                scope: field(command, args, "scope")?,
+                deck_ids: field(command, args, "deckIds")?,
+                days: field(command, args, "days")?,
+                langs: field(command, args, "langs")?,
+                include_virtual: field(command, args, "includeVirtual")?,
+                include_theory: field(command, args, "includeTheory")?,
+                include_basics: field(command, args, "includeBasics")?,
+                limit: optional(command, args, "limit")?,
+            };
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::new_printings::feed(&conn, &ask).map_err(RouteError::Failed)?,
+            )
+        }
+
+        // The cursor. The clock is the caller's on this target for the reason it is on every
+        // other: `SystemTime::now()` panics on wasm rather than erroring.
+        "mark_new_printings_seen" => {
+            let at: i64 = field(command, args, "at")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| crate::new_printings::mark_seen(c, at))
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
         "start_view" => {
             let conn = crate::sync::lock_db_read(state);
             encode(command, crate::startview::stored(&conn))
@@ -3488,6 +3530,52 @@ mod tests {
         assert!(call(&s, "price_movers", &absent).is_ok());
     }
 
+    /// **The new printings feed and its cursor, both routed.** A browser that could read the feed
+    /// and not move the cursor would draw a widget whose gold dots never go out; one that could
+    /// read neither would draw the tenth widget as an error on two of the three targets. Neither
+    /// is a download wearing a command's name — the read is two `SELECT`s over the collection and
+    /// the corpus with no clock beyond SQLite's `date('now')`, and the write takes its clock from
+    /// the caller for `record_recent_card`'s reason (`SystemTime::now()` panics on this target).
+    #[test]
+    fn the_new_printings_pair_is_routed() {
+        assert!(COMMANDS.contains(&"new_printings"));
+        assert!(COMMANDS.contains(&"mark_new_printings_seen"));
+
+        let s = state("web-route-new-printings");
+        // The argument names are `ipc.ts`'s, camel-cased — `deckIds` and the three `include*`
+        // switches are the ones a `field` lookup would miss if either side spelled them in snake.
+        let args = json!({
+            "scope": "all", "deckIds": [], "days": 90, "langs": ["en"],
+            "includeVirtual": false, "includeTheory": true, "includeBasics": false, "limit": 100,
+        });
+        let out = call(&s, "new_printings", &args).unwrap();
+        assert_eq!(out["printings"], json!([]));
+        assert_eq!(out["decksWatched"], json!(0));
+        assert_eq!(out["oldest"], json!(null));
+        assert_eq!(out["seenAt"], json!(null), "nothing has been seen yet");
+        assert!(
+            out["since"].as_str().is_some(),
+            "and the window has an edge"
+        );
+
+        // **`langs` is not optional**, because an absent list would silently be every language.
+        let mut forgotten = args.clone();
+        forgotten.as_object_mut().unwrap().remove("langs");
+        assert!(matches!(
+            call(&s, "new_printings", &forgotten),
+            Err(RouteError::Args { .. })
+        ));
+
+        call(
+            &s,
+            "mark_new_printings_seen",
+            &json!({ "at": 1_700_000_000 }),
+        )
+        .unwrap();
+        let out = call(&s, "new_printings", &args).unwrap();
+        assert_eq!(out["seenAt"], json!(1_700_000_000));
+    }
+
     /// **The folder tree's width and collapse, round-tripped through the route** — the pair beside
     /// the one above, and written separately because the thing to pin here is the *shape* rather
     /// than only the survival: the read answers an object with both fields, `width` is `null`
@@ -3884,12 +3972,17 @@ mod tests {
         // their own branch and wrong in the merge**, which is exactly what a number derived by
         // adding cannot survive. 166 is `awk`'s answer over the merged array literal.
         //
-        // **177 since the Notes widget routed five** (`sticky_notes` and its four writes) —
-        // `awk`'d off the array literal above rather than reached by adding five to 172, which
-        // is the discipline every paragraph here has now asked for six times.
+        // **179 since the New printings widget routed two and the Notes widget five** — that
+        // one's feed and cursor, and `sticky_notes` with its four writes. Counted with the `awk`
+        // the paragraphs above ask for
+        // (`awk '/^pub const COMMANDS/,/^\];/' src/web/route.rs | grep -c '^\s*"'`) over the
+        // array as it stands here, and **not** by adding anything to anything — the two branches
+        // above landed within a day of each other, which is exactly the case that makes the
+        // arithmetic wrong and is why this comment has now warned about it seven times. If a
+        // later merge turns this red, take the number from `left`.
         assert_eq!(
             COMMANDS.len(),
-            177,
+            179,
             "update this number when a command is added"
         );
     }

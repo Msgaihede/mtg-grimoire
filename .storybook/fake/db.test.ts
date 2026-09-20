@@ -9807,6 +9807,13 @@ describe("the busy fault", () => {
       // harmless for every collision's reason on this record: `refuseIfBusy` is that handler's
       // first statement, and it skips an id that is not a note rather than refusing one anyway.
       pinned: true,
+      // `mark_new_printings_seen`'s argument, and the **sixth** key on this record that carries a
+      // clock the caller owns rather than one the backend reads. Never looked at on this path —
+      // `refuseIfBusy` is that handler's first statement and it has no refusal of its own to run
+      // second — and named for `collapsed`'s reason: `invoke` matches by name, which is this
+      // record's whole rule. A number off the IPC boundary has no junk state to fail this loop
+      // with instead, so any value would do and the fixture's own today is the honest one.
+      at: WHEN,
     };
     // The five above excluded, this is every command that really takes the write lock —
     // re-counted 2026-08-12 **after a merge in which three branches had each added one**,
@@ -10213,10 +10220,25 @@ describe("the busy fault", () => {
     // up before taking the lock would refuse in the wrong words, and the `/busy/i` match is what
     // tells the two apart.
     //
+    // The New printings widget then added **one**, 115 → 116, and the feature ships **two**
+    // commands: `mark_new_printings_seen` is the write — the thirteenth `app_meta` write by
+    // `set_deck_folder_pane`'s count above, on the reader's own database through
+    // `sync::with_write`, so it answers BUSY under a sync for every reason its twelve
+    // predecessors do. Its read half (`new_printings`, on `lock_db_read`) is in `readHandlers`
+    // and not in this table at all: the split every preference and every list read before it is
+    // on.
+    //
+    // It is worth this loop **because it has no refusal of its own**, which is the strongest
+    // form of the argument `set_nav_collapsed` makes three paragraphs up: the body is one
+    // assignment of a number that has no junk state, so a handler that forgot `refuseIfBusy`
+    // would answer `Ok` on a busy database and nothing else in this file would notice. The
+    // caller ignores the refusal either way — a cursor that did not move costs a row of gold
+    // dots somebody has already looked at.
+    //
     // **This delta is arithmetic against one tree** — re-run the sweep after the next merge
     // rather than adding to it. 115 was taken by running it and reading `left`.
     //
-    // The sticky notes then added **four**, 115 → 119, and the feature ships **five** commands:
+    // The sticky notes then added **four**, 115 → 119 on their own branch, and the feature ships **five** commands:
     // the eighth entry where the handler count and the delta differ, and the ordinary shape of
     // it — `sticky_notes` is a read on `lock_db_read` and is not in this table at all, while
     // `sticky_note_create`, `_update`, `_delete` and `_reorder` all take plain
@@ -10244,7 +10266,11 @@ describe("the busy fault", () => {
     //
     // ⚠️ **It is still a fact about one tree.** A red here after a merge means count again — the
     // parse above takes seconds — and it does not mean these four are missing a `refuseIfBusy`.
-    expect(names).toHaveLength(119);
+    // ⚠️ **And a merge did exactly that, the same day.** `newPrintings` landed one write of its
+    // own on `main` while this branch was open — 115 → 116 there, 115 → 119 here — so neither
+    // number survived and the figure below is the parse above re-run on the merged tree. That is
+    // the case the paragraph above was written for, arriving before the ink was dry.
+    expect(names).toHaveLength(120);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -15865,6 +15891,342 @@ describe("the price movers", () => {
     expect(got.movers.some((m) => m.delta > 0)).toBe(true);
     expect(got.movers.some((m) => m.delta < 0)).toBe(true);
     expect(ask(seed("empty"), "7d")).toEqual({ movers: [], since: null, days: 0 });
+  });
+});
+
+/**
+ * `new_printings` — the reprints of what the watched decks hold, and the cursor beside them.
+ *
+ * **The corpus is the test's own here where every other block in this file reads the fixture's**,
+ * and that is forced rather than preferred: `cards.ts` is 59 real printings spread over 33 years,
+ * and the widest window this feed will answer is a year — so the shared corpus holds exactly two
+ * rows this command can ever reach (`msc 143` and `sld 913`, measured below against `starter`).
+ * A window, an ordering, a limit and a language set cannot be shown against two rows on two days,
+ * so the cases that are about *arithmetic* mint their printings off {@link BOLT} and the cases
+ * that are about the **seeds** ask the seeds.
+ */
+describe("the new printings feed", () => {
+  const DAY = 86_400;
+  type Ask = Parameters<ReturnType<typeof readHandlers>["new_printings"]>[0];
+
+  /** `YYYY-MM-DD`, `daysAgo` days before the fixture's today — the corpus column's own form. */
+  const day = (daysAgo: number) =>
+    new Date((CLOCK_BASE - daysAgo * DAY) * 1_000).toISOString().slice(0, 10);
+
+  /**
+   * A printing of the Bolt's oracle card, released `daysAgo` days before today.
+   *
+   * Minted off a real row, so every column but the four this feed narrows on is the corpus's —
+   * and the oracle id with them, which is what makes it a *reprint* of the card the deck below
+   * holds rather than a second card wearing the same name.
+   */
+  function reprint(id: string, daysAgo: number, over: Partial<FakeCard> = {}): FakeCard {
+    return { ...BOLT, id, setCode: "rpt", collectorNumber: "1", releasedAt: day(daysAgo), ...over };
+  }
+
+  /** A world whose one deck holds the `lea` Bolt, over that corpus plus the Bolt itself. */
+  function world(reprints: FakeCard[], over: Partial<FakeDb> = {}): FakeDb {
+    return makeDeckDb({
+      cards: [BOLT, ...reprints],
+      decks: [deck({ id: 1, name: "Atraxa" })],
+      deckCards: [deckCard({ id: 1, deckId: 1, cardId: BOLT.id })],
+      ...over,
+    });
+  }
+
+  /** The ask every case varies from — 90 days, every deck, and the widget's three defaults. */
+  function ask(db: FakeDb, over: Partial<Ask> = {}) {
+    return readHandlers(db).new_printings({
+      scope: "all",
+      deckIds: [],
+      days: 90,
+      langs: ["en"],
+      includeVirtual: false,
+      includeTheory: true,
+      includeBasics: false,
+      limit: 100,
+      ...over,
+    });
+  }
+
+  /**
+   * **The requirement the two-pass shape exists for.** One walk that visited a printing once per
+   * deck holding it would answer this row twice and then need de-duplicating back down, and the
+   * count beside it would be wrong in the same breath.
+   */
+  it("answers a printing two decks hold once, with both decks and both counted", () => {
+    const db = world([reprint("new", 10)], {
+      decks: [deck({ id: 1, name: "Atraxa" }), deck({ id: 2, name: "Edgar" })],
+      deckCards: [
+        deckCard({ id: 1, deckId: 1, cardId: BOLT.id }),
+        deckCard({ id: 2, deckId: 2, cardId: BOLT.id }),
+      ],
+    });
+    const got = ask(db);
+
+    expect(got.printings).toHaveLength(1);
+    expect(got.printings[0].printingId).toBe("new");
+    // By deck name, which is the popover's order and not the store's.
+    expect(got.printings[0].decks.map((d) => d.name)).toEqual(["Atraxa", "Edgar"]);
+    expect(got.decksWatched).toBe(2);
+    expect(got.oldest).toBe(got.printings[0].releasedAt);
+  });
+
+  /** One entry with the total, never two rows that draw identically and sum apart — and the word
+   *  it reports is the lower of the two, so a deck that has sleeved the card up says `live`. */
+  it("sums a deck's copies across its piles and folds the variant to live", () => {
+    const db = world([reprint("new", 10)], {
+      deckCards: [
+        deckCard({ id: 1, deckId: 1, cardId: BOLT.id, quantity: 2 }),
+        deckCard({ id: 2, deckId: 1, cardId: BOLT.id, quantity: 3, variant: "theory" }),
+      ],
+    });
+
+    expect(ask(db).printings[0].decks).toEqual([
+      { deckId: 1, name: "Atraxa", quantity: 5, variant: "live", virtualOnly: false },
+    ]);
+  });
+
+  /** Newest first, and the three tie-breaks under it are the crate's `ORDER BY` verbatim. */
+  it("orders by release day, then set, collector number and id", () => {
+    const db = world([
+      reprint("c", 10, { setCode: "zzz" }),
+      reprint("a", 10, { setCode: "aaa", collectorNumber: "2" }),
+      reprint("b", 10, { setCode: "aaa", collectorNumber: "10" }),
+      reprint("newest", 1),
+    ]);
+
+    // `"10"` before `"2"`, because a collector number is TEXT and this is byte order.
+    expect(ask(db).printings.map((p) => p.printingId)).toEqual(["newest", "b", "a", "c"]);
+  });
+
+  /** `since` is the far edge **after** the clamp, so a page that asked for 99 999 days can draw
+   *  the date it really got — and a zero or a negative is one day rather than an empty window. */
+  it("clamps the window and answers the edge it really used", () => {
+    const db = world([reprint("new", 10), reprint("old", 200)]);
+
+    expect(ask(db).since).toBe(day(90));
+    expect(ask(db, { days: 99_999 }).since).toBe(day(365));
+    expect(ask(db, { days: -5 }).since).toBe(day(1));
+    expect(ask(db, { days: 0 }).since).toBe(day(1));
+    expect(ask(db, { days: 30 }).printings.map((p) => p.printingId)).toEqual(["new"]);
+    expect(ask(db, { days: 365 }).printings.map((p) => p.printingId)).toEqual(["new", "old"]);
+    expect(ask(db, { days: 365 }).oldest).toBe(day(200));
+  });
+
+  /** A negative is **no rows** and never the default, which is what SQLite reads a bare negative
+   *  `LIMIT` as; anything past the ceiling is the ceiling. Seeded, because a limit assertion over
+   *  an empty feed proves nothing. */
+  it("clamps the page size, and a negative asks for nothing", () => {
+    const db = world([reprint("a", 10), reprint("b", 11), reprint("c", 12)]);
+
+    expect(ask(db).printings).toHaveLength(3);
+    expect(ask(db, { limit: -1 }).printings).toHaveLength(0);
+    expect(ask(db, { limit: 0 }).printings).toHaveLength(0);
+    expect(ask(db, { limit: 2 }).printings.map((p) => p.printingId)).toEqual(["a", "b"]);
+    // A page cut by the limit says what it is a truncation *of*.
+    expect(ask(db, { limit: 2 }).oldest).toBe(day(11));
+    expect(ask(db, { limit: 9_999 }).printings).toHaveLength(3);
+  });
+
+  /**
+   * **Decision 2, and the whole of it.** `cards.id` is one printing *in one language*, so the
+   * language set is what decides whether a second language is a second row — and each of the
+   * three modes the widget offers is a real answer here.
+   */
+  it("answers one row per language the allow-list admits, and an empty list is every language", () => {
+    const db = world([
+      reprint("new-en", 10),
+      reprint("new-ja", 10, { lang: "ja", collectorNumber: "2" }),
+      reprint("new-de", 10, { lang: "de", collectorNumber: "3" }),
+    ]);
+
+    // English — the widget's default, and the issue's de-duplication requirement.
+    expect(ask(db).printings.map((p) => p.printingId)).toEqual(["new-en"]);
+    expect(ask(db).printings[0].lang).toBe("en");
+    // Every language — an **empty** list, and three rows is what the reader asked for.
+    expect(ask(db, { langs: [] }).printings.map((p) => p.lang)).toEqual(["en", "ja", "de"]);
+    // Chosen — English and Japanese, and not German.
+    expect(ask(db, { langs: ["en", "ja"] }).printings.map((p) => p.lang)).toEqual(["en", "ja"]);
+  });
+
+  /**
+   * The list arrives from a layout document a reader can hand-edit, so it is bounded here as well
+   * as narrowed in TypeScript. **A list the narrowing empties is every language**, which is the
+   * same rule as an empty list rather than a different one — never a silent fallback to English,
+   * which would be this side making a claim the caller did not.
+   */
+  it("drops an entry that is not a language code, and a list emptied that way is every language", () => {
+    const db = world([reprint("new-en", 10), reprint("new-ja", 10, { lang: "ja" })]);
+    // A SQL fragment, a blank, a forty-character word, a capitalised code and two things that
+    // are not strings at all — the last pair being what a hand-edited document can really hold.
+    const junk = ["en' OR 1=1 --", "", "x".repeat(40), "EN", 7, null];
+
+    expect(ask(db, { langs: junk }).printings).toHaveLength(2);
+    // And a list past the cap is bounded rather than refused: the narrowing runs first, so the
+    // cap counts **codes** rather than characters.
+    const long = Array.from({ length: 32 }, () => "zz");
+    expect(ask(db, { langs: long }).printings).toHaveLength(0);
+  });
+
+  /** A basic land is what a deck holds twenty of and never what it wants told about — and a snow
+   *  land is a basic land, because a reader who unticked the switch did not mean *except the snow
+   *  ones*. An ordinary land is not one. */
+  it("drops a basic land unless it is asked for, the snow ones included", () => {
+    const forest = CARDS.find((c) => c.typeLine === "Basic Land — Forest")!;
+    const snow = { ...forest, id: "snow", oracleId: "snow-o", typeLine: "Basic Snow Land — Forest" };
+    const tower = { ...forest, id: "tower", oracleId: "tower-o", typeLine: "Land" };
+    const db = world(
+      [
+        reprint("forest-new", 10, { oracleId: forest.oracleId }),
+        reprint("snow-new", 10, { oracleId: "snow-o", collectorNumber: "2" }),
+        reprint("tower-new", 10, { oracleId: "tower-o", collectorNumber: "3" }),
+        // The three rows the deck actually lists — the type line is read off *these*, because a
+        // type line is a fact about the oracle card and the switch is applied to the held set.
+        forest,
+        snow,
+        tower,
+      ],
+      {
+        deckCards: [
+          deckCard({ id: 1, deckId: 1, cardId: forest.id }),
+          deckCard({ id: 2, deckId: 1, cardId: "snow" }),
+          deckCard({ id: 3, deckId: 1, cardId: "tower" }),
+        ],
+      },
+    );
+
+    expect(ask(db).printings.map((p) => p.printingId)).toEqual(["tower-new"]);
+    expect(ask(db, { includeBasics: true }).printings.map((p) => p.printingId)).toEqual([
+      "forest-new",
+      "snow-new",
+      "tower-new",
+    ]);
+  });
+
+  /**
+   * **And `decksWatched` moves with it**, which is the whole point of taking the count over the
+   * same predicate as the page: a reader whose only deck is virtual has to be told *no decks are
+   * being watched*, which is a different sentence from *nothing was reprinted*.
+   */
+  it("watches no virtual deck by default, and says so in the count as well as the rows", () => {
+    const db = world([reprint("new", 10)], {
+      decks: [deck({ id: 1, name: "Ideas", virtualOnly: true })],
+    });
+
+    expect(ask(db)).toMatchObject({ printings: [], decksWatched: 0 });
+    const asked = ask(db, { includeVirtual: true });
+    expect(asked.decksWatched).toBe(1);
+    expect(asked.printings[0].decks[0]).toMatchObject({ name: "Ideas", virtualOnly: true });
+  });
+
+  /** A plan is a list of cards the reader is building toward, and whether it counts as *held* is
+   *  the reader's answer rather than this command's. */
+  it("counts a theory row only when it is asked for", () => {
+    const db = world([reprint("new", 10)], {
+      deckCards: [deckCard({ id: 1, deckId: 1, cardId: BOLT.id, variant: "theory" })],
+    });
+
+    expect(ask(db, { includeTheory: false }).printings).toHaveLength(0);
+    // And the deck it *is* watched under says which list holds it.
+    expect(ask(db).printings[0].decks[0].variant).toBe("theory");
+  });
+
+  /** Two arms and not three: `chosen` carries the ids and every other word is every deck. */
+  it("reads the ids under chosen, ignores them under anything else, and treats an empty set as one", () => {
+    const db = world([reprint("new", 10)], {
+      decks: [deck({ id: 1, name: "Atraxa" }), deck({ id: 2, name: "Edgar" })],
+      deckCards: [
+        deckCard({ id: 1, deckId: 1, cardId: BOLT.id }),
+        deckCard({ id: 2, deckId: 2, cardId: BOLT.id }),
+      ],
+    });
+
+    const chosen = ask(db, { scope: "chosen", deckIds: [2] });
+    expect(chosen.decksWatched).toBe(1);
+    expect(chosen.printings[0].decks.map((d) => d.name)).toEqual(["Edgar"]);
+    // `all` ignores the ids, and a word this build has never heard of is `all` rather than a
+    // refusal — the store outlives the build that wrote it.
+    expect(ask(db, { deckIds: [2] }).decksWatched).toBe(2);
+    expect(ask(db, { scope: "aScopeFromALaterBuild", deckIds: [2] }).decksWatched).toBe(2);
+    // An empty `chosen` is a real answer and never *every deck*: the reader chose a set and it
+    // is empty.
+    expect(ask(db, { scope: "chosen", deckIds: [] })).toMatchObject({
+      printings: [],
+      decksWatched: 0,
+    });
+  });
+
+  /** An orphaned deck row names a printing the corpus no longer holds, so there is no oracle card
+   *  to be reprinted — the crate's join says the same thing in SQL. */
+  it("ignores a deck row whose printing the corpus has lost", () => {
+    const db = world([reprint("new", 10)], {
+      deckCards: [deckCard({ id: 1, deckId: 1, cardId: "gone" })],
+    });
+
+    expect(ask(db)).toMatchObject({ printings: [], decksWatched: 1 });
+  });
+
+  /**
+   * The cursor, and the world it opens in: **one day before the newest printing the decks can
+   * reach**, so the newest release day is unseen and every older one is read. A stamp at today
+   * would mark the whole feed as seen and a `null` would dot every row of it — either is a mark
+   * no story could fail on.
+   */
+  it("opens with the newest release day unseen, and the write moves the cursor", () => {
+    const db = world([reprint("new", 10), reprint("old", 40)]);
+
+    expect(db.newPrintingsSeen).toBe(Date.parse(`${day(10)}T00:00:00Z`) / 1_000 - DAY);
+    expect(ask(db).seenAt).toBe(db.newPrintingsSeen);
+    writeHandlers(db).mark_new_printings_seen({ at: CLOCK_BASE });
+    expect(ask(db).seenAt).toBe(CLOCK_BASE);
+    // A world that passes the field keeps it, `null` included — *never*, which draws every dot.
+    expect(ask(world([reprint("new", 10)], { newPrintingsSeen: null })).seenAt).toBeNull();
+  });
+
+  /** Nothing there to have been looked at, so *never* — which draws every dot, and is the
+   *  honest floor rather than a gap. */
+  it("has no cursor at all in a world with no decks", () => {
+    expect(makeDb().newPrintingsSeen).toBeNull();
+    expect(seed("empty").newPrintingsSeen).toBeNull();
+  });
+
+  /**
+   * The seeds, and the three sentences the widget picks between.
+   *
+   * **The figures are the shared corpus's and are the whole of what it can answer**: `starter`'s
+   * four decks hold two oracle cards that were reprinted inside a year of the fixture's today —
+   * Swords to Plowshares (`msc 143`, 2026-06-26) and Sol Ring (`sld 913`, 2025-12-01) — and
+   * nothing at all inside thirty days. So *no decks watched*, *nothing reprinted* and a real feed
+   * are all reachable, and a feed of more than two rows is not.
+   */
+  it("gives starter a feed, thirty days nothing, and a deckless world the other sentence", () => {
+    const starter = seed("starter");
+
+    expect(ask(starter, { days: 30 })).toMatchObject({ printings: [], decksWatched: 4 });
+    expect(ask(starter).printings.map((p) => `${p.setCode} ${p.collectorNumber}`)).toEqual([
+      "msc 143",
+    ]);
+    expect(ask(starter, { days: 365 }).printings.map((p) => p.name)).toEqual([
+      "Swords to Plowshares",
+      "Sol Ring",
+    ]);
+    // The newest of those two is unseen and the older one is read, which is the mix the gold dot
+    // needs and the reason the cursor is derived rather than stamped.
+    const feed = ask(starter, { days: 365 });
+    expect(feed.seenAt).toBeLessThan(Date.parse(`${feed.printings[0].releasedAt}T00:00:00Z`) / 1000);
+    expect(feed.seenAt).toBeGreaterThan(
+      Date.parse(`${feed.printings[1].releasedAt}T00:00:00Z`) / 1000,
+    );
+
+    // A world with no decks at all — the *no decks are being watched* sentence, which is a
+    // different sentence from *nothing was reprinted* and points at a different fix.
+    for (const name of ["empty", "large"] as const) {
+      expect(ask(seed(name), { days: 365 })).toMatchObject({ printings: [], decksWatched: 0 });
+    }
+    // And the virtual deck is the fifth one this seed adds, watched only when it is asked for.
+    expect(ask(seed("virtualDeck")).decksWatched).toBe(4);
+    expect(ask(seed("virtualDeck"), { includeVirtual: true }).decksWatched).toBe(5);
   });
 });
 

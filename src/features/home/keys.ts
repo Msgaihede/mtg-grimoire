@@ -60,7 +60,15 @@
  * and leave it stale after the four presses that actually change one — and those four are all
  * `useStickyNotes`' own, which is what lets one key and one invalidation be the whole of it.
  * `crossWindow.ts` maps `sticky_notes` to exactly this key, so a note written in another window
- * lands here too. A heading counting these exceptions stood here until the third one arrived.
+ * lands here too. A heading counting these exceptions stood here until a third and a fourth
+ * arrived within a day of each other.
+ *
+ * {@link NEW_PRINTINGS_ROOT} is the third, and it is the second one's case rather than the
+ * first's. The feed's answer is half `deck_cards` and half the corpus, so `["decks"]` is the root
+ * it *looks* like it belongs under — but a deck write says nothing about the corpus, and the
+ * widget's own cursor write is not a deck write at all. Filed under `["decks"]` it would refetch
+ * after every card added to any deck and stay stale after the sync that actually brings the new
+ * printings in. The whole argument is at the constant itself.
  *
  * ## What is deliberately not here
  *
@@ -202,3 +210,42 @@ export const recentCardsKey = (limit: number): QueryKey => ["recentCards", "list
  * nothing a note carries is priced.
  */
 export const stickyNotesKey: QueryKey = ["stickyNotes"];
+
+/**
+ * The root the new printings feed is filed under — the module doc's **third** exception, and it is
+ * {@link RECENT_CARDS_ROOT}'s case rather than {@link activityKey}'s.
+ *
+ * The answer is about `deck_cards` and the corpus, so `["decks"]` is the root it *looks* like it
+ * belongs under — and a deck write genuinely does change it. But the other half of the answer is
+ * the corpus, which a deck write says nothing about, and the cursor write below is not a deck
+ * write at all: filing it under `["decks"]` would refetch the feed after every card added to any
+ * deck while leaving it stale after the sync that actually brings new printings in. A root of its
+ * own, invalidated by this widget's own cursor write and refetched on mount and on focus like
+ * every other query in this app, is the honest arrangement.
+ */
+export const NEW_PRINTINGS_ROOT: QueryKey = ["newPrintings"];
+
+/** One feed. **Every segment is part of the question** — the scope and its ids pick the decks, the
+ *  window picks the far edge, each switch changes which rows are counted, and the limit cuts the
+ *  list — so each one has to be able to re-issue the read. The ids are joined rather than nested
+ *  so two arrays with the same members are one cache entry. */
+export const newPrintingsKey = (
+  scope: string,
+  deckIds: readonly number[],
+  days: number,
+  langs: readonly string[],
+  flags: { virtual: boolean; theory: boolean; basics: boolean },
+  limit: number,
+): QueryKey => [
+  "newPrintings",
+  "feed",
+  scope,
+  [...deckIds].sort((a, b) => a - b).join(","),
+  days,
+  // **The resolved list, not the mode** — the key has to be the question the backend was asked.
+  // Sorted and joined so two arrays with the same members are one cache entry, and so `["en","ja"]`
+  // and `["ja","en"]` do not cost two reads of one answer.
+  [...langs].sort().join(","),
+  `${flags.virtual ? "v" : ""}${flags.theory ? "t" : ""}${flags.basics ? "b" : ""}`,
+  limit,
+];

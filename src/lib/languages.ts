@@ -6,7 +6,13 @@
  * label for the eight codes a reader can guess and a riddle for the rest: issue #161 is a
  * reader asking what the `PH` on Elesh Norn means, and the honest answer, *the card is printed
  * in Phyrexian*, is nowhere on the screen. This module is that answer, in one place, so the
- * three surfaces that abbreviate a language say the same words about it.
+ * four surfaces that abbreviate a language say the same words about it.
+ *
+ * **The fourth also picks from it rather than only naming one of its codes** — the home page's
+ * New printings widget offers a language allow-list in its settings, which is what
+ * {@link LANGUAGE_CODES} and {@link isKnownLanguage} are for. A picker is a stricter reader than
+ * a label: see {@link isKnownLanguage} for why the two answer differently about a code this table
+ * has not been taught.
  *
  * **The table is the corpus's, not a guess at Scryfall's.** 19 codes appear across the
  * 116 712 rows of the 2026-08-18 bulk — 2 644 of them non-English — and every one is named
@@ -44,6 +50,41 @@ const LANGUAGE_NAME = new Map<string, string>([
   ["qya", "Quenya"],
   ["dw", "Dwarvish"],
 ]);
+
+/**
+ * Every code this table names, in its declared order — **English first**, which is the order a
+ * language picker wants and the one `PrintingsFilterBar` already draws.
+ *
+ * The fourth reader of the table, and the first that needs the *codes* rather than one code's
+ * name: the home page's New printings widget offers a language allow-list in its settings, and
+ * building that list from anywhere else would be a second language vocabulary to keep in step
+ * with this one. The array is built from the `Map` rather than written out again for that reason.
+ *
+ * **A snapshot, not a live view** — `Array.from` copies, so a caller cannot reach the `Map`
+ * through it and reorder what every other reader sees.
+ */
+export const LANGUAGE_CODES: readonly string[] = Array.from(LANGUAGE_NAME.keys());
+
+/** The same set, for {@link isKnownLanguage}. A `Set` rather than `Array.includes` because the
+ *  widget narrows a stored list against it on every render. */
+const KNOWN_LANGUAGES = new Set(LANGUAGE_CODES);
+
+/**
+ * Is this one of the codes this table names?
+ *
+ * **The vocabulary check a hand-editable config needs**, and deliberately *narrower* than
+ * {@link languageName}, which answers for any string at all. The two are asking different
+ * questions: drawing a language the corpus grew yesterday as `XX` is honest, where offering it as
+ * a tick-box in a picker would be this app inventing a filter that matches nothing. A reader's
+ * stored `["en", "zz"]` keeps the English and drops the rest.
+ *
+ * So a language Scryfall adds next set is drawn by every surface and offered by none until this
+ * table learns it — which is the right way round, because the picker is the one place a code has
+ * to mean something before a reader presses it.
+ */
+export function isKnownLanguage(code: string): boolean {
+  return KNOWN_LANGUAGES.has(code.toLowerCase());
+}
 
 /**
  * What this code is called, or the code itself in capitals.

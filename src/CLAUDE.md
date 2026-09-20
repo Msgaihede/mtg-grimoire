@@ -679,10 +679,15 @@ Every one of these has its measurement and its story in
 - **`loading="lazy"` belongs on a plain scroller, not on a virtualised one** — the virtualiser
   has already made the request count small, so the browser's gate only delays the pictures about
   to be looked at.
-- **Ctrl+wheel zooms the card sections and nothing else, and every section zooms on its own.**
-  `useAppStore`'s `cardZoom` is a `Record<ZoomSection, number>` over the card sections named in
+- **Ctrl+wheel zooms one section of the page and nothing else, and every section zooms on its own.**
+  `useAppStore`'s `cardZoom` is a `Record<ZoomSection, number>` over the sections named in
   `src/lib/cardZoom.ts` — `ZOOM_SECTIONS` is the census, and it has grown twice since this
-  paragraph first said “four”. `deck` is one key for **both** deck views, because Stacks and Grid
+  paragraph first said “four”. **It said “the card sections” until 2026-09-20**, and the
+  dashboard is what made that false: `home` is a grid of widgets with no card on it, and it spends
+  its number as a **CSS `zoom` on the grid box** rather than as a multiplier on a tile's width —
+  the only section that does, because a widget is a box of type and a bigger box at the same type
+  size shows *more* small rows rather than reading as a zoom. See `features/home/HomePage.tsx` and
+  [home-page.md](../docs/reference/home-page.md) §4. `deck` is one key for **both** deck views, because Stacks and Grid
   are two drawings of the same pile and switching view must not resize the cards. Each starts at
   `DEFAULT_ZOOM`, each is stepped along the same ladder, and each is handed back when the reader
   returns to that section.

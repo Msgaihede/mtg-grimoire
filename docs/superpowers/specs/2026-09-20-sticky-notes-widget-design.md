@@ -365,8 +365,9 @@ stickyNotes: {
 ⚠️ **`RESERVED_KEYS = ["title", "density"]`** (`widgets.test.ts:45`) — neither may be a pick or
 toggle key here. `title` is already the reader's own card name.
 
-⚠️ **Every toggle defaults on.** `WidgetToggle` is stored only as `false` and absent means on
-(`widgets.ts:129`), so there is no such thing as a toggle that starts off. All three above are
+⚠️ **All three toggles default on, and since 2026-09-20 that is a choice rather than the only
+option.** `WidgetToggle` gained a `dflt` field when `newPrintings` landed on `main` — it starts two
+of its three off — so "absent means on" is the default rather than the rule. All three above are
 written to be correct that way round.
 
 **It does not join `DEFAULT_LAYOUT`.** That layout fills an eight-by-seven rectangle exactly so a

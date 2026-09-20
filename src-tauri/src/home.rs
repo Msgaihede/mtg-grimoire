@@ -547,6 +547,71 @@ mod tests {
         assert_eq!(back.widgets[0].config["keep"][2], 3);
     }
 
+    /// **A kind this build *can* draw reaches this module not at all**, which is the half of the
+    /// promise above that is easy to lose and impossible to notice.
+    ///
+    /// The sibling test makes the claim for a kind from the future, where the vocabulary is
+    /// obviously somebody else's. This one makes it for a kind from the *present*: `newPrintings`
+    /// is drawn by the very build these tests run in, and the point is that nothing here can tell
+    /// it from a word it has never heard. A layout holding it — with a `config` carrying keys this
+    /// module has no name for — round-trips whole.
+    ///
+    /// So an allow-list, a `match` on `kind` or an enum added to this module goes red here
+    /// whichever side it is added on, which is what `docs/reference/home-page.md` §1 promises and
+    /// what `src/features/home/widgets.ts` is the other half of.
+    #[test]
+    fn a_kind_this_build_can_draw_reaches_no_vocabulary_in_this_module() {
+        let c = conn();
+        let sent = layout(vec![HomeWidget {
+            id: "np1".into(),
+            kind: "newPrintings".into(),
+            x: 2,
+            y: 4,
+            w: 4,
+            h: 12,
+            span: Some(2),
+            config: serde_json::json!({
+                "scope": "chosen",
+                "deckIds": [3, 7],
+                "window": 365,
+                "langs": "chosen",
+                "langIds": ["en", "ja"],
+                "virtual": true,
+                "basics": true,
+                "theory": false,
+                "somethingThisBuildHasNoNameFor": { "a": 1 }
+            }),
+        }]);
+        store(&c, &sent).unwrap();
+        let back = stored(&c);
+        assert_eq!(back, sent, "the whole document, config and all");
+        assert_eq!(back.widgets[0].config["deckIds"][1], 7);
+        assert_eq!(back.widgets[0].config["langIds"][1], "ja");
+        assert_eq!(
+            back.widgets[0].config["somethingThisBuildHasNoNameFor"]["a"],
+            1
+        );
+    }
+
+    /// **A new kind does not reach [`DEFAULT_LAYOUT`] either**, which is the other way a widget
+    /// can arrive somewhere it was never meant to.
+    ///
+    /// The seed is what a *fresh install* gets, and a tenth widget added to it would rearrange the
+    /// page of every reader who never asked for one — the eight entries fill the eight-by-seven
+    /// rectangle exactly, so a ninth has nowhere to go that does not move something. A kind this
+    /// build draws arrives from the catalogue, by the reader's own press. This test is here so
+    /// that adding one to the table is a deliberate act rather than a tidy-looking edit.
+    #[test]
+    fn the_default_layout_holds_no_new_printings_widget() {
+        assert_eq!(DEFAULT_WIDGET_COUNT, 8);
+        assert!(
+            !DEFAULT_LAYOUT
+                .iter()
+                .any(|(_, kind, ..)| *kind == "newPrintings"),
+            "the tenth kind arrives from the catalogue, never from the seed"
+        );
+    }
+
     /// **The upgrade's Rust half.** A version-1 row — `span`, no geometry — is exactly what every
     /// reader who customised their page before the grid has on disk, and reading it as the default
     /// would throw their arrangement away on the first launch of this build. It reads with its

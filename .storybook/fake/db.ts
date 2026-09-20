@@ -207,6 +207,9 @@ import type {
   MirrorStatus,
   MoveOutcome,
   MutedTag,
+  NewPrinting,
+  NewPrintingDeck,
+  NewPrintings,
   OracleTagStatus,
   PairingHandshake,
   PairingOffer,
@@ -1886,6 +1889,23 @@ export interface FakeDb {
    */
   startView: string | null;
   /**
+   * `app_meta.new_printings_seen` — when this device last looked at the New printings feed, in
+   * unix seconds, or `null` for **never**.
+   *
+   * **An `app_meta` row and deliberately not a widget `config` key**, which is `new_printings.rs`'
+   * own argument: a layout document round-trips through older builds, and a cursor an older build
+   * rewrites is a cursor that lies. So it sits on this table beside {@link FakeDb.recentCards},
+   * where nothing but its own write touches it.
+   *
+   * **Derived by {@link makeDb} when a world says nothing** — see
+   * {@link newPrintingsSeenFromDecks} — so the newest release day a world's decks can reach is
+   * unseen and every older one is marked as read. A world that passes the field keeps it
+   * verbatim, `null` included, which is how a story stands in *never looked* on a full page of
+   * decks. `null` is also what a world with no decks derives, because there is nothing there to
+   * have been seen.
+   */
+  newPrintingsSeen: number | null;
+  /**
    * `marketplace_prices` — the table that made a third and fourth marketplace possible.
    *
    * Keyed `(marketplace, cardId, finish)` and **not** a column on `cards`, for the schema's own
@@ -2738,6 +2758,53 @@ const PRICE_MOVER_WINDOWS: Readonly<Record<string, number | null>> = {
   all: null,
 };
 
+/** `new_printings::MAX_DAYS` — the longest window the feed will answer, in days. A hand-edited
+ *  `config` cannot ask for the whole corpus. */
+const MAX_NEW_PRINTING_DAYS = 365;
+
+/** `new_printings::NEW_PRINTINGS_READ` — how many printings one read asks for, and the ceiling a
+ *  caller's own limit is cut to. */
+const NEW_PRINTINGS_READ = 100;
+
+/** `new_printings::MAX_LANGS` — how many codes an allow-list may carry. `src/lib/languages.ts`
+ *  names 19, so 24 clears the corpus with room and refuses a list that could only be a bug. */
+const MAX_NEW_PRINTING_LANGS = 24;
+
+/**
+ * `new_printings::BASIC_LAND_LIKE` — `Basic %Land%`, as the regular expression SQLite's `LIKE`
+ * means by it.
+ *
+ * Three things have to line up for the two to agree and each is easy to lose. `LIKE` anchors at
+ * **both** ends, so the `^` is the leading `Basic ` and the trailing `%` is why there is no `$`.
+ * The `%` between them is `.*` and may match **nothing**, which is the whole of what keeps plain
+ * `Basic Land — Forest` in while letting `Basic Snow Land — Forest` in too — a reader who
+ * unticked the switch did not mean *except the snow ones*. And SQLite's `LIKE` is
+ * case-insensitive over ASCII, which is the `i`.
+ */
+const BASIC_LAND_TYPE = /^Basic .*Land/i;
+
+/**
+ * Is this a language code at all? `new_printings::is_lang_code` — two to four lowercase ASCII
+ * letters (`en`, `zhs`, `grc`).
+ *
+ * **A shape check rather than a membership test against `languages.ts`' nineteen**, which is the
+ * crate's own reasoning and worth keeping on this side: a language Scryfall adds next set is the
+ * reader's own data arriving early, and refusing it here would need this file edited before a
+ * feed could show it. The `typeof` is the one thing the crate gets from serde and this does not —
+ * the list arrives from a hand-editable layout document, so an entry can be a number or a null.
+ */
+function isNewPrintingLang(code: unknown): code is string {
+  return typeof code === "string" && /^[a-z]{2,4}$/.test(code);
+}
+
+/**
+ * A unix second as SQLite's `date(…)` writes one — `YYYY-MM-DD`, in **UTC**, which is what
+ * `date('now', '-N days')` answers and what `cards.released_at` already holds.
+ */
+function dayOf(at: number): string {
+  return new Date(at * 1_000).toISOString().slice(0, 10);
+}
+
 /**
  * `startview::DEFAULT_VIEW` — where the app opens for a reader who has never said.
  *
@@ -3032,6 +3099,11 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // landing view. `start_view` answers `home` for it, which is what the app opens on out of
     // the box and what every story that says nothing about the setting is standing in.
     startView: null,
+    // The third field in this function whose default depends on the world rather than on this
+    // line — **derived below** by {@link newPrintingsSeenFromDecks}, beside the two above. A
+    // `null` here would be *never*, which draws a dot on every row of the New printings feed and
+    // would make the unseen mark a thing no story could see the absence of.
+    newPrintingsSeen: null,
     // Empty here and filled by a seed, exactly as the card corpus is: a downloaded feed is a
     // table with rows in it, and "no rows" is the honest state of an install that has never
     // chosen Card Kingdom. `starterSeed` fills both from the corpus.
@@ -3110,6 +3182,10 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
   // anything" on a full collection.
   if (init.recentCards === undefined) db.recentCards = recentFromCollection(db);
   if (init.priceHistory === undefined) db.priceHistory = historyFromCollection(db);
+  // The third, and the one whose subject is the **decks** rather than the collection: how much of
+  // the reprint feed this device has already looked at. Same rule as the two above — a world that
+  // passes the field keeps it, `null` included.
+  if (init.newPrintingsSeen === undefined) db.newPrintingsSeen = newPrintingsSeenFromDecks(db);
   return db;
 }
 
@@ -3189,6 +3265,40 @@ export function historyFromCollection(db: FakeDb): FakePriceSnapshot[] {
     }
   }
   return out;
+}
+
+/**
+ * The *seen* cursor a world with decks opens with: **one day before the newest paper printing of
+ * anything the decks hold**, in unix seconds.
+ *
+ * So the newest release day the feed can reach is unseen and every older one is already read,
+ * which is the one shape of world the gold dot is visible *and* absent in. A cursor stamped at
+ * the fake's own today would mark the whole feed as seen and a `null` would dot every row of it;
+ * either is a mark no story could fail on.
+ *
+ * **Derived from the decks rather than from the corpus**, which is what keeps it pointing at a
+ * day the feed really answers: the newest printing in `cards.ts` is a Treasure token no deck
+ * lists, so a cursor set from the corpus alone would sit above every row a deck can produce and
+ * mark the lot as read. The switches are not consulted — a cursor is a fact about a *device*,
+ * where every switch on this widget is a fact about one widget's `config`, and a world whose
+ * cursor moved when a story ticked *Basic lands* would be a world the app cannot produce.
+ *
+ * `null` — **never**, which draws every dot — for a world whose decks hold nothing the corpus
+ * knows, because there is nothing there to have been looked at.
+ */
+export function newPrintingsSeenFromDecks(db: FakeDb): number | null {
+  const held = new Set<string>();
+  for (const row of db.deckCards) {
+    const card = cardById(db, row.cardId);
+    if (card !== null && card.oracleId !== "") held.add(card.oracleId);
+  }
+  let newest: string | null = null;
+  for (const card of db.cards) {
+    if (!card.isPaper || !held.has(card.oracleId)) continue;
+    if (newest === null || card.releasedAt > newest) newest = card.releasedAt;
+  }
+  if (newest === null) return null;
+  return Math.floor(Date.parse(`${newest}T00:00:00Z`) / 1_000) - 86_400;
 }
 
 /* ------------------------------------------------------------------ small helpers ----- */
@@ -10833,6 +10943,171 @@ export function readHandlers(db: FakeDb) {
           cmp(a.finish, b.finish),
       );
       return { movers: movers.slice(0, limit), since, days };
+    },
+
+    /**
+     * `new_printings::feed` — reprints of cards the watched decks already hold, newest first.
+     *
+     * **Two passes over the store and never one join, which is the crate's own shape and is here
+     * for its reason.** The page is one question and *which decks hold each of its cards* is a
+     * second: a single walk that visited a printing once per deck holding it would answer the
+     * same printing twice and then need de-duplicating back down, which is exactly how the
+     * issue's *each printing appears only once* gets quietly broken — and the count beside it
+     * would be wrong in the same breath. {@link NewPrintings.decksWatched} is taken over the
+     * **same** predicate the page is, so a reader whose only deck is virtual is told *no decks
+     * are being watched* rather than *nothing was reprinted*: two different sentences pointing at
+     * two different fixes, and a count over a wider set would pick the wrong one.
+     *
+     * **Today is {@link CLOCK_BASE}**, the fake's own, exactly as {@link readHandlers.price_movers}
+     * measures its windows from it — and `since` is the far edge **after** the clamp, so a page
+     * that asked for 99 999 days can draw the date it really got. Everything the caller sent is
+     * narrowed here as well as in TypeScript, because the numbers arrive from a layout document a
+     * reader can hand-edit: `days` into `1..=365`, `limit` into `0..=100` (**a negative is no rows
+     * and never the default**, which is the trap a bare SQL `LIMIT` reads as *no limit at all*),
+     * an unknown `scope` into `all`, and `langs` to codes of the right shape capped at
+     * {@link MAX_NEW_PRINTING_LANGS}.
+     *
+     * **`langs` is an allow-list whose one sentinel is emptiness: an empty list is every
+     * language**, and a list the narrowing empties is the same answer rather than a different one
+     * — never a silent fallback to English, which would be this side making a claim the caller did
+     * not. That matters because `cards.id` is one printing *in one language*, so a set that
+     * shipped in ten is ten rows of one reprint, and which of those a reader wanted is a setting
+     * rather than a rule. The page's own default sends `["en"]`.
+     *
+     * **There is no undated arm and the fixture is why**: `cards.released_at` is nullable in the
+     * corpus and the crate's `WHERE` drops a row with no date rather than inventing an *Undated*
+     * bucket, while {@link FakeCard.releasedAt} is a plain `string` — so this fake has no such row
+     * to drop and a branch here would be one no story could reach.
+     *
+     * A read, so it answers through every second of a sync.
+     */
+    new_printings: (args: {
+      scope: string;
+      deckIds: readonly number[];
+      days: number;
+      langs: readonly unknown[];
+      includeVirtual: boolean;
+      includeTheory: boolean;
+      includeBasics: boolean;
+      limit: number;
+    }): NewPrintings => {
+      const days = Math.min(MAX_NEW_PRINTING_DAYS, Math.max(1, Math.trunc(args.days) || 1));
+      const since = dayOf(CLOCK_BASE - days * 86_400);
+      // `page_size`: a caller that asked for nothing is given nothing, where
+      // `card_printings` falls back to a real page — an empty feed here is an ordinary answer
+      // with a sentence of its own, and an empty printings list there would read as *this card
+      // has no printings*. Absent is the full read, which is the crate's `None`.
+      const asked = Math.trunc(args.limit);
+      const limit = Number.isFinite(asked)
+        ? asked > 0
+          ? Math.min(NEW_PRINTINGS_READ, asked)
+          : 0
+        : NEW_PRINTINGS_READ;
+      // **Two arms and not three.** `decks` has no `pinned` column — a pinned set is a *widget's*
+      // `deckIds` — so `chosen` is the only id-carrying scope there can be, and a word this build
+      // has never heard of is `all` rather than a refusal. An empty `chosen` is a real answer and
+      // never *every deck*: the reader chose a set and it is empty.
+      const chosen = args.scope === "chosen";
+      const picked = new Set(chosen ? (args.deckIds ?? []) : []);
+      const watched = db.decks.filter(
+        (d) => (!chosen || picked.has(d.id)) && (args.includeVirtual || !d.virtualOnly),
+      );
+      const watchedIds = new Set(watched.map((d) => d.id));
+      const allow = new Set(
+        (args.langs ?? []).filter(isNewPrintingLang).slice(0, MAX_NEW_PRINTING_LANGS),
+      );
+      const everyLanguage = allow.size === 0;
+
+      // Pass one's subject: the distinct oracle cards the watched decks hold. **The basics switch
+      // is applied here rather than on the page**, because a type line is a fact about the oracle
+      // card — so both ends give the same answer and narrowing the held set is the cheaper one.
+      const held = new Set<string>();
+      for (const row of db.deckCards) {
+        if (!watchedIds.has(row.deckId)) continue;
+        if (!args.includeTheory && row.variant !== "live") continue;
+        const card = cardById(db, row.cardId);
+        if (card === null || card.oracleId === "") continue;
+        if (!args.includeBasics && BASIC_LAND_TYPE.test(card.typeLine ?? "")) continue;
+        held.add(card.oracleId);
+      }
+
+      const page = db.cards
+        .filter(
+          (c) =>
+            c.isPaper &&
+            held.has(c.oracleId) &&
+            c.releasedAt >= since &&
+            (everyLanguage || allow.has(c.lang)),
+        )
+        .sort(
+          (a, b) =>
+            cmp(b.releasedAt, a.releasedAt) ||
+            cmp(a.setCode, b.setCode) ||
+            cmp(a.collectorNumber, b.collectorNumber) ||
+            cmp(a.id, b.id),
+        )
+        .slice(0, limit);
+
+      // Pass two, over the oracle ids pass one answered — so the popover's rows are exactly the
+      // rows on screen rather than a second, wider question asked at the same time. **The basics
+      // switch is not repeated**: a basic land the page excluded contributed no oracle id to ask
+      // about. The theory switch **is**, because it changes which rows are summed rather than
+      // which cards are asked about.
+      const onPage = new Set(page.map((p) => p.oracleId));
+      const holders = new Map<string, Map<number, NewPrintingDeck>>();
+      for (const row of db.deckCards) {
+        if (!watchedIds.has(row.deckId)) continue;
+        if (!args.includeTheory && row.variant !== "live") continue;
+        const card = cardById(db, row.cardId);
+        if (card === null || !onPage.has(card.oracleId)) continue;
+        const deck = watched.find((d) => d.id === row.deckId);
+        if (deck === undefined) continue;
+        const perDeck = holders.get(card.oracleId) ?? new Map<number, NewPrintingDeck>();
+        // **Keyed by the deck and never by the variant**, which is the whole of the quantity
+        // rule: a deck holding a card in a live pile and a theory one is **one** entry with the
+        // total, where keying the variant too would draw two rows that look identical and sum
+        // apart — the worst shape a bug in this list can have. The word it reports is the
+        // *lower* of the two, so `live` wins wherever any live row holds it.
+        const entry = perDeck.get(deck.id) ?? {
+          deckId: deck.id,
+          name: deck.name,
+          quantity: 0,
+          variant: "theory",
+          virtualOnly: deck.virtualOnly,
+        };
+        perDeck.set(deck.id, {
+          ...entry,
+          quantity: entry.quantity + row.quantity,
+          variant: entry.variant === "live" || row.variant === "live" ? "live" : "theory",
+        });
+        holders.set(card.oracleId, perDeck);
+      }
+
+      const printings: NewPrinting[] = page.map((p) => ({
+        printingId: p.id,
+        oracleId: p.oracleId,
+        name: p.name,
+        setCode: p.setCode,
+        setName: p.setName,
+        collectorNumber: p.collectorNumber,
+        releasedAt: p.releasedAt,
+        rarity: p.rarity,
+        promoTypes: p.promoTypes,
+        finishes: p.finishes,
+        lang: p.lang,
+        decks: [...(holders.get(p.oracleId)?.values() ?? [])].sort(
+          (a, b) => cmp(a.name, b.name) || a.deckId - b.deckId,
+        ),
+      }));
+      return {
+        printings,
+        decksWatched: watched.length,
+        since,
+        // The release day of the **last row on the page**, so a page cut by the limit can say
+        // what it is a truncation of without a second count.
+        oldest: printings.length === 0 ? null : printings[printings.length - 1].releasedAt,
+        seenAt: db.newPrintingsSeen,
+      };
     },
 
     /**
@@ -18533,6 +18808,29 @@ export function writeHandlers(db: FakeDb) {
       const view = args.view.trim();
       if (view === "") throw refuse(NO_START_VIEW);
       db.startView = view;
+    },
+
+    /**
+     * `new_printings::mark_seen` — move the *seen* cursor to `at`, in unix seconds.
+     *
+     * **The clock is the caller's**, which is `record_recent_card`'s rule one `app_meta` row over
+     * and made for the same reason: `SystemTime::now()` panics on the wasm target rather than
+     * erroring, so the page stamps the moment and the backend stores it.
+     *
+     * **No refusal of its own, which is unusual here and is the point.** The value is a number
+     * off the IPC boundary and has no junk state, and there is nothing about a cursor for this
+     * side to have an opinion on — a build that read a stored row it could not parse treats it as
+     * *never*, which draws every dot, and drawing a dot too many costs a reader one glance where
+     * hiding one costs them the whole mark. So the only thing it can answer is `busy`, and it
+     * honours that like every other write here because the crate takes `sync::with_write` for it.
+     *
+     * **The caller ignores that refusal**, deliberately: a cursor that did not move costs a row of
+     * gold dots the reader has already looked at, and a widget that raised an error over one would
+     * be worse than the dots.
+     */
+    mark_new_printings_seen: (args: { at: number }): void => {
+      refuseIfBusy(db);
+      db.newPrintingsSeen = args.at;
     },
 
     /**

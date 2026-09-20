@@ -6402,6 +6402,79 @@ export interface StickyNotePatch {
 }
 
 /**
+ * One deck holding the card a {@link NewPrinting} is a reprint of — `new_printings.rs`'s
+ * `NewPrintingDeck`.
+ *
+ * `quantity` is summed across the deck's categories, so a deck holding the card in both a live
+ * and a theory pile is **one** entry with the total rather than two entries that look like two
+ * decks. `variant` is then the *lower* of the two words it was folded from — `live` wins over
+ * `theory`, because a deck that has sleeved the card up is holding it whatever else it plans.
+ */
+export interface NewPrintingDeck {
+  deckId: number;
+  name: string;
+  quantity: number;
+  variant: "live" | "theory";
+  virtualOnly: boolean;
+}
+
+/**
+ * One reprinted printing and the decks that hold the card — `new_printings.rs`'s `NewPrinting`.
+ *
+ * **`releasedAt` is never null here**, unlike `Printing.releasedAt` one command over: a printing
+ * with no date cannot be placed in a day group, so the query drops it rather than the page
+ * inventing an *Undated* bucket.
+ */
+export interface NewPrinting {
+  printingId: string;
+  oracleId: string;
+  name: string;
+  setCode: string;
+  setName: string | null;
+  collectorNumber: string;
+  /** `YYYY-MM-DD`. Never null — see above. */
+  releasedAt: string;
+  rarity: string | null;
+  /** JSON, verbatim — read with `src/lib/treatment.ts`, as on {@link Printing}. */
+  promoTypes: string | null;
+  finishes: string | null;
+  /**
+   * Which language this printing is — `cards.lang`.
+   *
+   * **On the wire because a row has to be able to say it.** A reader who asks for every language
+   * gets one row per language of a reprint, which is what they asked for — and without this those
+   * rows are identical on screen and the list reads as duplicated rather than complete.
+   */
+  lang: string;
+  decks: readonly NewPrintingDeck[];
+}
+
+/**
+ * The feed, and the four facts that travel beside it — `new_printings.rs`'s `NewPrintings`.
+ *
+ * **An empty list means one of three different things and a count of zero cannot tell them
+ * apart**: no deck is watched, nothing was reprinted inside this window, or the window is
+ * shorter than the card data goes back. `decksWatched`, `since` and `oldest` are what let the
+ * page pick its sentence — `PriceMovers`' `days`/`since` device, one widget over.
+ */
+export interface NewPrintings {
+  printings: readonly NewPrinting[];
+  /** How many decks the scope resolved to. **`0` is a real answer** with a sentence of its own. */
+  decksWatched: number;
+  /** The window's far edge, `YYYY-MM-DD`. */
+  since: string;
+  /** The oldest printing actually in the answer, or `null` when there are none. */
+  oldest: string | null;
+  /**
+   * When this device last saw a non-empty feed, in Unix seconds — `app_meta.new_printings_seen`,
+   * and deliberately **not** a `config` key: a config round-trips through older builds, and a
+   * cursor an older build rewrites is a cursor that lies. `null` is *never*, which marks every
+   * row as unseen.
+   */
+  seenAt: number | null;
+}
+
+/**
  * Which edge detector runs — `Method` in `crates/card-scanner/src/session.rs`, whose
  * `#[serde(rename_all = "lowercase")]` is the whole of the mapping.
  */
@@ -9054,6 +9127,42 @@ export const ipc = {
    * drew, and a note deleted in another window must not fail the drag the reader just made.
    */
   stickyNoteReorder: (ids: number[]): Promise<void> => invoke("sticky_note_reorder", { ids }),
+  /**
+   * Reprints of cards the watched decks already hold, newest first — see {@link NewPrintings}.
+   *
+   * Every argument is the widget's stored `config` narrowed on the way out, and every one is
+   * narrowed again in Rust: `days` into `1..=365`, `limit` into `1..=100`, an unknown `scope`
+   * into `all`, and `langs` to codes of the right shape. A hand-edited row cannot ask for the
+   * whole corpus.
+   */
+  newPrintings: (
+    scope: string,
+    deckIds: readonly number[],
+    days: number,
+    /**
+     * The languages to answer in. **An empty list is every language** — the allow-list's one
+     * sentinel, and the same rule at both ends of the wire. The default the widget sends is
+     * `["en"]`, which is one row per reprint.
+     */
+    langs: readonly string[],
+    includeVirtual: boolean,
+    includeTheory: boolean,
+    includeBasics: boolean,
+    limit: number,
+  ) =>
+    invoke<NewPrintings>("new_printings", {
+      scope,
+      deckIds,
+      days,
+      langs,
+      includeVirtual,
+      includeTheory,
+      includeBasics,
+      limit,
+    }),
+  /** Move the *seen* cursor to `at`, in Unix seconds. **The clock is the caller's** — never
+   *  `SystemTime::now()`, which panics on the wasm target. */
+  markNewPrintingsSeen: (at: number) => invoke<void>("mark_new_printings_seen", { at }),
   /**
    * Which view the app opens on, as a stored word — `"home"` for a database nobody has changed.
    *
