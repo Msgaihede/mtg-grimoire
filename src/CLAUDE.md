@@ -1033,7 +1033,15 @@ Every one of these has its measurement and its story in
   without either of them having to say so; the token is `Android` and not `Linux` or `Mobile`,
   because an Android agent is a Linux one with one extra word. **Name a reader, never count
   them** — a count is a fact about a tree and every branch has a different one;
-  `grep -n "isAndroid(" src/` is the census. `AppShell` reads it for the caption (three of
+  `grep -n "isAndroid(" src/` is the census — **and since 2026-09-20 that grep is no longer the
+  whole of it**, because the module exports a second answer built on the first. `isDesktop()` is
+  `!isWebTarget() && !isAndroid()`, the question *a second window exists here*, and its readers
+  reach `isAndroid` only through it, so they do not appear in that sweep at all:
+  `grep -n "isDesktop()" src/` is theirs. Both readers are one chord —
+  `AppShell` binds `Ctrl+Shift+N` behind it and `KeyMap` filters `desktopOnly` rows with the same
+  call, so the panel cannot list a chord this build does not bind (see
+  [keyboard-shortcuts.md](../docs/reference/keyboard-shortcuts.md)). `AppShell` reads `isAndroid`
+  itself for the caption (three of
   `TitleBar`'s four verbs are `#[cfg(desktop)]` in tauri and `capabilities/mobile.json` grants
   none of them); `BackupPanel` reads it to fold the panel away (the mirror is desktop-only by
   decision); and `ipc.ts`'s `scannerFrame` / `scannerCapture` read it to choose a body shape.

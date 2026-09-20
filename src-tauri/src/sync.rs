@@ -150,6 +150,11 @@ pub struct AppState {
     /// hook — SQLite allows one per connection. See [`crate::db::CrossFileFence`], which also
     /// names what it cannot see.
     pub fence: Arc<crate::db::CrossFileFence>,
+    /// Which user tables have been written since the other windows were last told — see
+    /// [`crate::changes`]. An `Arc` for [`AppState::mirror`]'s reason: the update hook on `db`
+    /// holds a clone of it for the life of the process.
+    #[cfg(not(target_family = "wasm"))]
+    pub changes: Arc<crate::changes::Changes>,
     /// A pairing in flight, if there is one.
     ///
     /// **In memory rather than in the database, deliberately**, and it is the same argument
@@ -1418,6 +1423,7 @@ mod tests {
                 mirror_status: std::sync::Mutex::new(crate::mirror::watch::LastPass::default()),
                 pairing: std::sync::Mutex::new(None),
                 fence,
+                changes: Default::default(),
             },
             dir,
         )

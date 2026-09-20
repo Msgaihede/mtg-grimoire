@@ -5,6 +5,7 @@ import { ipc } from "@/lib/ipc";
 import { DEFAULT_SCANNER_PREFS, TRAY_ROWS } from "./fixtures";
 import { ScannerPage } from "./ScannerPage";
 import type { ScannerPrefs, ScannerTrayRow } from "./types";
+import { SCANNER_OPEN_ELSEWHERE } from "./verdictText";
 
 /**
  * Denies the camera before `ScannerPage` ever asks for it, and undoes that on unmount.
@@ -159,6 +160,23 @@ export const Developer: Story = {
       "aria-checked",
       "true",
     );
+  },
+};
+
+/**
+ * Another window holds the scanner: one sentence, no camera, no tray.
+ *
+ * The fault is the lease being held and nothing else — `scanner_elsewhere` answers yes, so the page
+ * never mounts the live view that would ask for the camera, the prefs or the tray. The tray's
+ * absence is asserted *after* the sentence has landed, since before the ask answers there is no
+ * tray either and the check would pass over a gate that never closed.
+ */
+export const OpenInAnotherWindow: Story = {
+  parameters: { fake: { fault: "scannerElsewhere" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(await canvas.findByText(SCANNER_OPEN_ELSEWHERE)).toBeVisible();
+    await expect(canvas.queryByRole("region", { name: "Scanned cards" })).not.toBeInTheDocument();
   },
 };
 

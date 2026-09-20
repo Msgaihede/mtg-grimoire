@@ -3123,6 +3123,7 @@ mod tests {
             mirror_status: std::sync::Mutex::new(crate::mirror::watch::LastPass::default()),
             pairing: std::sync::Mutex::new(None),
             fence,
+            changes: Default::default(),
         });
 
         // Stands in for the ingest, which holds this exact lock for the length of a sync.

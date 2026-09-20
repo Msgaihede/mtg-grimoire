@@ -21,11 +21,11 @@ nothing red. The whole of what the catalogue buys is one sentence:
 > against the same object the panel draws.**
 
 That is a *fence*, not a convention, and it is worth being precise about which rows stand behind
-it. Of the nine entries in `SHORTCUTS`:
+it. Of the ten entries in `SHORTCUTS`:
 
 | Rows | Fenced how |
 | --- | --- |
-| `switchView`, `keyMap` (`AppShell`); `undo`, `redo`, `remove` (`DeckEditor`) | **Fenced.** The handler calls `matchesShortcut` against the entry. Rename the id and `shortcut()` throws at import; change a chord and the binding changes with it. |
+| `switchView`, `keyMap`, `newWindow` (`AppShell`); `undo`, `redo`, `remove` (`DeckEditor`) | **Fenced.** The handler calls `matchesShortcut` against the entry. Rename the id and `shortcut()` throws at import; change a chord and the binding changes with it. |
 | `dismiss` (`Escape`), `contextMenu` (`Shift+F10`, `Menu`) | **Prose.** The bindings live in `useDismissOnEscape` and `menu/useContextMenu`, and neither reads the catalogue. |
 | `zoom` (`Ctrl+wheel`), `select` (`Ctrl`/`Shift`-click) | **Unmatchable by construction.** A pointer chord carries no `key`, so `matchesChord` answers `false` from its shape rather than from a guard a caller could forget. `useCardZoomGesture` and `multiSelect.ts` keep their own logic; the fence there is only that the label sits next to the code it describes. |
 
@@ -223,6 +223,31 @@ how a later edit puts the wrong one back:
 the first nine, so a merge cannot quietly restore the old numbering; the exclusions are still
 matched on **id** rather than counted. [home-page.md](home-page.md) is the rest of the record.
 
+## `newWindow`, and the first flag that says where a row is real
+
+**`Ctrl+Shift+N` opens another window onto the same app** (2026-09-20). VS Code's chord, and
+**`Ctrl+N` is deliberately left unbound** — it is the obvious spelling of "a new *thing*", which a
+view may yet want for a deck or a folder, and spending it on a window would take that away for a
+gesture the reader already has: **relaunching the app does the same**, which is what Windows'
+middle-click on the taskbar icon is. [multi-window.md](multi-window.md) is the record.
+
+**The row carries `desktopOnly: true`, and that is the fence reaching one step further.** A chord
+for something the platform cannot do is a row promising a key nothing binds — exactly the drift the
+catalogue exists to end — and a second window is desktop-only twice over: the web build does not
+route `window_new`, and Android runs one task per application. So `shortcuts.ts` grew the flag and
+`shownOn(row, desktop)`; `KeyMap` filters with `shownOn(row, isDesktop())` and `AppShell` binds
+behind the **same** `isDesktop()` call, so listed and bound stay one answer rather than two.
+
+**Nothing reaches that filter off the desktop today**, and the flag is still where it belongs. The
+panel's one mount is `TitleBar`, which is itself desktop-only — so the filter is doing nothing this
+week. It sits in `KeyMap` rather than at that mount because `KeyMap` is the component that reads the
+catalogue, and the day this panel is drawn on a phone the rows are already honest.
+
+**It is matched ahead of the `[aria-modal="true"]` guard, with `F1` rather than with `Ctrl+1…9`,
+and the reason is its own.** That guard exists because switching view under an open dialog strands
+the dialog over a page it was not opened from. Opening another window disturbs nothing in this one:
+the dialog stays exactly where it is, in the window that owns it.
+
 ## `range` is declared, never counted
 
 `switchView` carries nine chords and the panel draws `Ctrl` `1` **to** `Ctrl` `9`; `redo` carries
@@ -261,10 +286,13 @@ looking for it.
 **`F1` swallows auto-repeat, and `Ctrl+1…9` deliberately does not.** Holding a key fires `keydown`
 at the OS repeat rate, so a *toggle* on that press strobes the panel through its own fade for as
 long as the finger is down and lands on whichever side the reader let go on. The guard is on the
-`F1` branch alone: re-selecting the view you are already on is idempotent, so a guard there would
+`F1` branch: re-selecting the view you are already on is idempotent, so a guard there would
 be a rule with no failure behind it, and one hoisted to the top of the handler would answer the
 question for every chord the shell ever binds — including a stepping chord, where repeating *is*
-the binding. The press is still `preventDefault`ed on every repeat, so a held `F1` never reaches
+the binding. **`Ctrl+Shift+N` carries the same guard on its own branch since 2026-09-20, with a
+different failure behind it**: a held chord would open a window per repeat. Which is the argument
+for keeping the guard per branch rather than at the top — the shell now has two chords that swallow
+repeats for two unrelated reasons, and one that must not. The press is still `preventDefault`ed on every repeat, so a held `F1` never reaches
 the browser either. `userEvent` cannot express auto-repeat at all (every keydown it dispatches
 carries `repeat: false`), so that case is the one press in `AppShell.test.tsx` fired by hand.
 
@@ -362,6 +390,12 @@ new bindings therefore need a raw `Input.dispatchKeyEvent` over the CDP session 
 harness — `key F10 --shift` works, `key F1` throws `unknown key`. Adding them to `KEYS` is a
 one-line change each and was deliberately not made mid-pass;
 [live-ui-verification.md](live-ui-verification.md) is the harness contract.
+
+**`Ctrl+Shift+N` is a third, and it is a letter rather than a named key.** The multi-window pass
+(2026-09-20) sent the pair by hand — `key: "N"`, `code: "KeyN"`, VK 78, `modifiers: 10`
+(ctrl | shift) — into the focused page, and the chord matched because `matchesChord` compares
+single-character keys **case-insensitively**: `e.key` is the shifted `"N"` and the catalogue's is
+`"n"`. That rule is three sections up; this is what it looks like from the harness side.
 
 **The trigger's tooltip is invisible while the panel is open, and it is not a stuck ghost.** The
 hint is drawn by the app's one tooltip host at `LAYER.tooltip` (`z-46`), which is *outside* the

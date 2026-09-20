@@ -11,6 +11,10 @@
 //! holds. Nothing here is remembered between launches: the app registers no window-state
 //! plugin, so this runs on every start, and a window the reader resized is theirs only until
 //! they close it.
+//!
+//! **And every window after the first is opened here too** — [`open_new`], behind both a
+//! relaunch and Ctrl+Shift+N. It takes the same rungs on the monitor of the window it came from
+//! and opens [`OFFSET`] down and right of it, by [`cascade`].
 
 use tauri::Manager;
 
@@ -63,7 +67,133 @@ pub fn opening_size(work_area: (f64, f64)) -> (f64, f64) {
     (room.0.max(MIN.0), room.1.max(MIN.1))
 }
 
-/// Size the main window to the monitor it opened on, centre it, and show it.
+/// Every window after the first is `window-2`, `window-3`, … — the prefix
+/// `capabilities/desktop.json` grants as `window-*`, which a test pins against this constant.
+pub const LABEL_PREFIX: &str = "window-";
+
+/// How far down and right of the window it came from a new one opens, in logical pixels — enough
+/// to see that there are two, the way Windows cascades.
+pub const OFFSET: f64 = 32.0;
+
+/// The next label's number. `main` is the first window, so counting starts at two; a closed
+/// window's number is never reused.
+static NEXT_LABEL: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(2);
+
+/// Where a new window's top-left goes, in logical pixels: [`OFFSET`] down and right of `from`,
+/// except on an axis where the frame would leave the work area — there it starts again at that
+/// axis's edge.
+pub fn cascade(
+    from: (f64, f64),
+    size: (f64, f64),
+    area_origin: (f64, f64),
+    area_size: (f64, f64),
+) -> (f64, f64) {
+    let fit = |start: f64, len: f64, origin: f64, room: f64| {
+        let wanted = start + OFFSET;
+        if wanted + len > origin + room {
+            origin
+        } else {
+            wanted.max(origin)
+        }
+    };
+    (
+        fit(from.0, size.0 + CHROME.0, area_origin.0, area_size.0),
+        fit(from.1, size.1 + CHROME.1, area_origin.1, area_size.1),
+    )
+}
+
+/// The window with focus, else any — what a relaunch opens its new window beside.
+pub fn focused(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
+    let all = app.webview_windows();
+    all.values()
+        .find(|w| w.is_focused().unwrap_or(false))
+        .cloned()
+        .or_else(|| all.into_values().next())
+}
+
+/// Open another window onto the same app: the config's window under a new label, sized by
+/// [`opening_size`], placed by [`cascade`] beside `from`, with the camera grant, shown and focused.
+///
+/// ⚠️ **Never call this synchronously from a command or an event handler.** Tauri documents that
+/// building a window on Windows "deadlocks when used in a synchronous command or event handlers"
+/// (`tauri-2.11.5/src/webview/webview_window.rs:115`). The single-instance callback spawns onto
+/// the async runtime and `window_new` is an `async` command for exactly this.
+pub fn open_new(
+    app: &tauri::AppHandle,
+    from: Option<&tauri::WebviewWindow>,
+) -> Result<tauri::WebviewWindow, String> {
+    let Some(mut config) = app.config().app.windows.first().cloned() else {
+        return Err("the app has no window configuration to open another from".to_owned());
+    };
+    config.label = format!(
+        "{LABEL_PREFIX}{}",
+        NEXT_LABEL.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
+    let window = tauri::WebviewWindowBuilder::from_config(app, &config)
+        .map_err(|e| e.to_string())?
+        .build()
+        .map_err(|e| e.to_string())?;
+    place(&window, from);
+    crate::camera::install(&window);
+    let _ = window.show();
+    let _ = window.set_focus();
+    Ok(window)
+}
+
+/// Size `window` for the monitor `from` is on and put it beside `from`, or centre it when there is
+/// no `from`. Best-effort, for [`open_sized_to_monitor`]'s reason.
+///
+/// **The position is set in physical pixels, converted back with the same `scale` it was derived
+/// with.** A `LogicalPosition` would be converted by the *new* window's scale factor, and a window
+/// Tauri has just built sits wherever Windows put it — on a desk whose monitors scale differently,
+/// a point read off a 150% monitor and handed back at 100% lands on the wrong monitor altogether.
+/// Monitor coordinates are physical, so the physical point is the one that means the same thing
+/// to both windows. On a desk where every monitor shares one scale the two spellings agree.
+fn place(window: &tauri::WebviewWindow, from: Option<&tauri::WebviewWindow>) {
+    let anchor = from.unwrap_or(window);
+    let monitor = anchor
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| anchor.primary_monitor().ok().flatten());
+    let Some(monitor) = monitor else {
+        return;
+    };
+    let scale = monitor.scale_factor();
+    let area = monitor.work_area();
+    let origin = (
+        f64::from(area.position.x) / scale,
+        f64::from(area.position.y) / scale,
+    );
+    let room = (
+        f64::from(area.size.width) / scale,
+        f64::from(area.size.height) / scale,
+    );
+    let size = opening_size(room);
+    let _ = window.set_size(tauri::LogicalSize::new(size.0, size.1));
+    match from.and_then(|f| f.outer_position().ok()) {
+        Some(at) => {
+            let (x, y) = cascade(
+                (f64::from(at.x) / scale, f64::from(at.y) / scale),
+                size,
+                origin,
+                room,
+            );
+            let _ = window.set_position(tauri::PhysicalPosition::new(
+                (x * scale).round() as i32,
+                (y * scale).round() as i32,
+            ));
+        }
+        None => {
+            let _ = window.center();
+        }
+    }
+}
+
+/// Size a window to the monitor it opened on, centre it, and show it. Every window the app opens
+/// is sized by the same rungs — `main` here, from `setup`, and every later one through
+/// [`open_new`]'s `place`, which shares [`opening_size`] and differs only in where it puts the
+/// window.
 ///
 /// Best-effort throughout, and deliberately: every call here is a window operation whose
 /// failure is not worth a launch. What is *not* optional is `show()` — the config opens the
@@ -73,10 +203,7 @@ pub fn opening_size(work_area: (f64, f64)) -> (f64, f64) {
 ///
 /// When no monitor answers, the window keeps the config's own 1920×1080 and is still shown: a
 /// size that may be too big beats no window at all.
-pub fn open_sized_to_monitor(app: &tauri::AppHandle) {
-    let Some(window) = app.get_webview_window("main") else {
-        return;
-    };
+pub fn open_sized_to_monitor(window: &tauri::WebviewWindow) {
     let monitor = window
         .current_monitor()
         .ok()
@@ -151,10 +278,51 @@ mod tests {
         assert_eq!(opening_size((800.0, 600.0)), (1024.0, 700.0));
     }
 
+    /// The case the offset exists for: a new window lands where the reader can see both.
+    #[test]
+    fn a_new_window_opens_down_and_right_of_the_one_it_came_from() {
+        assert_eq!(
+            cascade((100.0, 80.0), (1280.0, 720.0), (0.0, 0.0), (2560.0, 1392.0)),
+            (132.0, 112.0)
+        );
+    }
+
+    /// An axis that would push the frame off the work area starts again at that edge, rather than
+    /// opening a window the reader has to drag back.
+    #[test]
+    fn an_axis_that_would_overflow_the_work_area_starts_again_at_its_edge() {
+        // 1282 + 1280 + 16 of frame = 2578 > 2560.
+        assert_eq!(
+            cascade(
+                (1250.0, 80.0),
+                (1280.0, 720.0),
+                (0.0, 0.0),
+                (2560.0, 1392.0)
+            ),
+            (0.0, 112.0)
+        );
+    }
+
+    /// A second monitor's work area does not start at zero.
+    #[test]
+    fn a_work_area_that_does_not_start_at_zero_is_respected() {
+        // y: 732 + 720 + 9 = 1461 > 1032, so it starts again at that monitor's top.
+        assert_eq!(
+            cascade(
+                (2600.0, 700.0),
+                (1280.0, 720.0),
+                (2560.0, 0.0),
+                (1920.0, 1032.0)
+            ),
+            (2632.0, 0.0)
+        );
+    }
+
     /// The ladder's top rung and this floor are *also* written in `tauri.conf.json`, and the
     /// duplication is the point: the config is what the window is created at before `setup`
     /// runs, and what it keeps if no monitor answers. `visible: false` is pinned here too — it
-    /// is what makes `open_sized_to_monitor` the only thing that shows the window, so dropping
+    /// is what makes `open_sized_to_monitor` the only thing that shows `main`, and `open_new`
+    /// the only thing that shows every window built from this same entry after it, so dropping
     /// it fails no build and no other test, it just puts the resize back on screen.
     #[test]
     fn the_config_declares_the_top_rung_and_this_floor() {

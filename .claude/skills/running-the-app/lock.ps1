@@ -5,7 +5,10 @@ worktree of this repo:
 
   app        the built exe or `tauri dev`, Vite 1420, CDP 9222. Exclusive because
              `tauri-plugin-single-instance` gives a second instance exit code 0,
-             no window and no stderr.
+             no window and no stderr - and since 2026-09-20 the app already running
+             answers that launch by opening a window of its own, so a dev build
+             started from another worktree hands you a window rendering the RUNNING
+             worktree's frontend. See docs/reference/multi-window.md.
   storybook  port 6006 and the `mtg-grimoire-sb-mcp` server pointed at it. A second
              Storybook lands elsewhere and the MCP answers from the first one.
 

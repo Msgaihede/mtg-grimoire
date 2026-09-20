@@ -205,6 +205,10 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `tauri-plugin-single-instance` gives it exit code 0, no window and no stderr, and a dev
   build from `target/debug` counts. Measured 2026-08-09 while verifying the v0.2.0 zip: the
   first attempt looked like a broken build and was a live dev instance.
+  ⚠️ **Since 2026-09-20 the running app answers that launch by opening a window of its own**
+  ([multi-window.md](multi-window.md)), so the zip you are verifying can appear to start while
+  what came up is the *other* build — a dev window, at whatever revision that checkout is on.
+  Check that `Get-Process mtg-grimoire` is empty before you launch the copy, not afterwards.
 - `--bundles` is pinned per platform. Not because RPM needs `rpmbuild` — it does not, Tauri
   builds RPMs in-process with the pure-Rust `rpm` crate — but because shipping one is a
   choice. AppImage is the bundle with external needs: it downloads `linuxdeploy` and wants

@@ -23,7 +23,7 @@ import {
   type SidebarDrop,
 } from "@/components/useSidebarDrops";
 import { ipc } from "@/lib/ipc";
-import { isAndroid } from "@/lib/platform";
+import { isAndroid, isDesktop } from "@/lib/platform";
 import { isWebTarget } from "@/pwa/target";
 import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
 import { useCardToDeckRefusal } from "@/features/card/cardMenu";
@@ -44,6 +44,7 @@ import { usePrefetchSearchOpen } from "@/features/search/useSearchOpen";
 import { usePrefetchFolderPane } from "@/features/decks/useFolderPane";
 import { useCardZoomPersistence } from "@/lib/useCardZoomPersistence";
 import { useComboProgress } from "@/lib/useComboProgress";
+import { useCrossWindowRefresh } from "@/lib/useCrossWindowRefresh";
 import { useListViewPersistence } from "@/lib/useListViewPersistence";
 import { useFlattenPersistence } from "@/lib/useFlattenPersistence";
 import { useDelayedFlag } from "@/lib/useDelayedFlag";
@@ -74,7 +75,7 @@ import { cn } from "@/lib/utils";
 const NAV_ID = "app-nav";
 
 /**
- * The two chords this shell binds, looked up **once at module scope** rather than per press.
+ * The three chords this shell binds, looked up **once at module scope** rather than per press.
  *
  * `shortcut()` throws on an id the catalogue does not carry, which is the whole reason it is a
  * function; resolving here rather than inside the handler is what makes that throw arrive at
@@ -83,6 +84,7 @@ const NAV_ID = "app-nav";
  */
 const SWITCH_VIEW = shortcut("global", "switchView");
 const KEY_MAP = shortcut("global", "keyMap");
+const NEW_WINDOW = shortcut("global", "newWindow");
 
 /**
  * The list `Ctrl+1…9` is bound against, by index — `NAV` minus the one row that is not always
@@ -246,14 +248,18 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   // in this block: `sync_now`'s own mutation invalidates only the sync status, so applying pulled
   // ops from an automatic trip refreshed nothing on screen until this listener existed.
   useDeviceSyncInvalidation();
+  // Another window's commit, as `db:changed` — which Rust sends only while two or more windows
+  // are open, so a one-window session subscribes here and never hears it.
+  useCrossWindowRefresh();
   // The relay socket's state, seeded and then kept live by one `sync:live` listener — the
   // ribbon's whole reason for existing (see `Ribbon`'s own comment on `deviceSync`). Read here
   // rather than in the ribbon itself so there is exactly one subscription for the life of the
   // app, and passed down `isWebTarget()`-gated at the call site below.
   const deviceSync = useDeviceSyncLive();
   /**
-   * The app's two window-wide chords: `Ctrl+1`…`Ctrl+9` to jump between the first **nine** of the
-   * ten destinations {@link CHORD_NAV} names, and `F1` to open the map that says so.
+   * The app's three window-wide chords: `Ctrl+1`…`Ctrl+9` to jump between the first **nine** of
+   * the ten destinations {@link CHORD_NAV} names, `F1` to open the map that says so, and — on the
+   * desktop alone — `Ctrl+Shift+N` to open another window onto the same app.
    *
    * **Nine of ten and not "the nine {@link CHORD_NAV} names"**, which is what this line said until
    * Home joined the rail. That list is `NAV` minus `shared` — ten entries — and the run of digits
@@ -292,8 +298,8 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
         // The press is ours whether or not it does anything, so the browser never sees a held
         // `F1` either.
         e.preventDefault();
-        // **Auto-repeat is swallowed here and nowhere else, because this is the only chord whose
-        // meaning depends on the state it changes.** Holding a key fires `keydown` at the OS
+        // **Auto-repeat is swallowed per chord, here and at `Ctrl+Shift+N` below, because each
+        // has its own failure behind the guard.** Holding a key fires `keydown` at the OS
         // repeat rate, and a toggle on that is the panel strobing through its own fade for as
         // long as the finger is down — it lands on whichever side the reader let go on.
         // `Ctrl+1…9` below is left alone deliberately: re-selecting the view you are on is
@@ -301,6 +307,16 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
         // one to the top of the handler would decide the question for every chord this shell
         // ever grows — including a stepping chord, where repeating *is* the binding.
         if (!e.repeat) setKeyMapOpen(!useAppStore.getState().keyMapOpen);
+        return;
+      }
+      // Ahead of the modal guard with `F1`, and for a reason of its own: opening another window
+      // disturbs nothing in this one, so a dialog has nothing to be stranded over. `isDesktop()`
+      // is the key map's own filter, so the chord is bound exactly where it is listed — the web
+      // build does not route `window_new`, and a phone runs one window per app.
+      if (isDesktop() && matchesShortcut(NEW_WINDOW, e)) {
+        e.preventDefault();
+        // Held keys repeat at the OS rate, and every repeat would be another window.
+        if (!e.repeat) void ipc.windowNew().catch(() => undefined);
         return;
       }
       if (document.querySelector('[aria-modal="true"]') !== null) return;

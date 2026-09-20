@@ -1,10 +1,12 @@
 /**
  * The fake `listen`, aliased over `@tauri-apps/api/event`.
  *
- * Nine events reach the frontend, and they are all of `app.emit` in `src-tauri/src` —
+ * Eleven events reach the frontend, and they are all of `app.emit` in `src-tauri/src` —
  * `grep -n 'app\.emit(' -r src-tauri/src` is what answers that count, not this list, because it
- * has already drifted once (this read "five" while `combos:progress` and `art-tags:progress`
- * were already live, and live sync then added two more without anybody re-counting):
+ * has already drifted twice (this read "five" while `combos:progress` and `art-tags:progress`
+ * were already live, and live sync then added two more without anybody re-counting; then it read
+ * "nine" while `startup:changed` was already live, which the grep found on 2026-09-19 when
+ * `db:changed` was added):
  * `sync:progress` (`SyncProgressEvent`, subscribed once by `useSyncProgress`),
  * `collection:reconciled` (`ReconciledEvent`, subscribed by `useSyncInvalidation`),
  * `update:progress` (`UpdateProgressEvent`, subscribed by `useUpdate`),
@@ -15,9 +17,18 @@
  * here that names its wrapper instead of a component, because the combo feed downloads at
  * launch since 2026-09-08 and the Settings panel this line used to name is gone with the press
  * that started it),
- * `sync:applied` (`RelayOutcome`, subscribed by `useDeviceSyncInvalidation`) and
- * `sync:live` (`SyncLiveEvent`, subscribed by `useDeviceSyncLive`). A story drives any of them
- * with `emitFake`.
+ * `sync:applied` (`RelayOutcome`, subscribed by `useDeviceSyncInvalidation`),
+ * `sync:live` (`SyncLiveEvent`, subscribed by `useDeviceSyncLive`),
+ * `startup:changed` (`StartupStatus`, reached through `ipc.onStartupChanged` by `DesktopBoot`,
+ * which gates the whole app on it) and
+ * `db:changed` (`DbChanged`, subscribed once by `useCrossWindowRefresh`). **That last one is
+ * emitted only while two or more windows are open**, so a single-window session never sees it —
+ * and a story is one window (`window_count` answers one here), so it never hears it either unless
+ * it calls `emitFake` itself. **And driving that one reaches the listener without changing
+ * anything a story can see**: `useCrossWindowRefresh` invalidates the module-level `queryClient`
+ * from `@/lib/query`, never the client the story's own `QueryClientProvider` holds — so the
+ * subscription is what an `emitFake` here proves, and the refresh is `useCrossWindowRefresh`'s
+ * own suite's. A story drives any of them with `emitFake`.
  *
  * `UnlistenFn` is not re-exported and does not need to be: `ipc.ts` imports it as
  * `type UnlistenFn`, which the transform erases, so the alias never has to answer for it at

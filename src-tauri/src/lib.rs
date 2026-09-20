@@ -253,6 +253,11 @@ pub mod zoom;
 /// for wasm.
 #[cfg(not(target_family = "wasm"))]
 pub mod camera;
+/// **Which user tables a commit wrote, told to every open window.** Non-wasm because it rides the
+/// write connection's update hook and lives on `AppState` beside `mirror`; its emitter is
+/// `#[cfg(desktop)]` inside, because only the desktop opens a second window. See the module doc.
+#[cfg(not(target_family = "wasm"))]
+pub mod changes;
 #[cfg(not(target_family = "wasm"))]
 pub mod export;
 #[cfg(not(target_family = "wasm"))]

@@ -1,5 +1,12 @@
+import { isWebTarget } from "@/pwa/target";
+
 /**
- * Which platform this page is running on, for the two places the answer changes what is drawn.
+ * Which platform this page is running on, wherever the answer changes what is drawn.
+ *
+ * **Name a reader, never count them** — a count is a fact about a tree and every branch has a
+ * different one. `grep -n "isAndroid(" src/` is the census, and since `isDesktop()` landed below
+ * it is no longer the whole of it: that one's readers reach this answer only through it and so
+ * appear in `grep -n "isDesktop()" src/` instead.
  *
  * **A user-agent test rather than a Tauri call, and `src/lib/images.ts` is the precedent.**
  * `imageOrigin()` there already decides the custom-protocol origin from
@@ -22,4 +29,12 @@
  */
 export function isAndroid(userAgent: string = navigator.userAgent): boolean {
   return userAgent.includes("Android");
+}
+
+/**
+ * The desktop shell — neither the browser build nor a phone. What a desktop-only chord asks: a
+ * second window exists only here (a phone runs one task per app; a browser tab is its own app).
+ */
+export function isDesktop(): boolean {
+  return !isWebTarget() && !isAndroid();
 }

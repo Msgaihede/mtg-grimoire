@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef } from "react";
 import { type QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
+import { registerUnsavedCheck } from "@/lib/crossWindow";
 import type { CollectionImportItem, ImportCommitOutcome } from "@/lib/ipc";
-import { ipc } from "@/lib/ipc";
+import { ipc, ipcError } from "@/lib/ipc";
 import type { ScannerTrayRow } from "./types";
+import { refusalPasses } from "./verdictText";
 
 /** The cache entry the tray lives in. */
 const TRAY_KEY = ["scanner", "tray"] as const;
@@ -12,28 +14,51 @@ const EMPTY: readonly ScannerTrayRow[] = [];
 
 /**
  * The tray's write queue: the tail every new write waits on (it never rejects, so a refused write
- * does not stall the next), how many writes are queued or on the wire, and whether a tray write is
- * queued and has not gone out yet.
+ * does not stall the next), how many writes are queued or on the wire, whether a tray write is
+ * queued and has not gone out yet, a refused write's next try if it is waiting, and whether the
+ * last tray write was refused with nothing landed since.
  *
  * **One per query client rather than one per mount**, because the cache it writes is per client:
  * a view switch unmounts the tray with its flush still on the wire, and a remount that started a
  * queue of its own would put its first write — or a commit — beside that one instead of behind it.
+ * The retry lives here rather than in the hook for the same reason, and because the view it was
+ * scheduled from is usually gone by the time it runs.
  */
 interface WriteQueue {
   tail: Promise<void>;
   pending: number;
   writeWaiting: boolean;
+  retry: ReturnType<typeof setTimeout> | null;
+  refused: boolean;
 }
 const queues = new WeakMap<QueryClient, WriteQueue>();
 
 function queueFor(qc: QueryClient): WriteQueue {
   let queue = queues.get(qc);
   if (queue === undefined) {
-    queue = { tail: Promise.resolve(), pending: 0, writeWaiting: false };
+    queue = { tail: Promise.resolve(), pending: 0, writeWaiting: false, retry: null, refused: false };
     queues.set(qc, queue);
   }
   return queue;
 }
+
+/**
+ * **Whether this client's tray holds rows the store has not confirmed** — what `crossWindow.ts`
+ * asks before it drops an idle tray on another window's `app_meta` change.
+ *
+ * The first two terms are a write that has not finished — queued or on the wire, commits included,
+ * or waiting out its delay before the next try; the third is one that finished badly. A sync or
+ * another window's lease keeps the first two true for as long as it lasts, because those refusals
+ * are tried until the write lands. **The third is for a refusal no wait changes** — a row of
+ * nothing, a tray past its limit — which gets one more try and then stops, with the cards still in
+ * this cache and nowhere else: dropped then, they would simply be gone. It clears when a tray write
+ * or a commit lands.
+ */
+function hasUnsavedTray(qc: QueryClient): boolean {
+  const queue = queues.get(qc);
+  return queue !== undefined && (queue.pending > 0 || queue.retry !== null || queue.refused);
+}
+registerUnsavedCheck(TRAY_KEY, hasUnsavedTray);
 
 /**
  * How long the tray has to stay unchanged before it is written.
@@ -44,9 +69,22 @@ function queueFor(qc: QueryClient): WriteQueue {
  */
 export const TRAY_QUIET_MS = 400;
 
-/** How long a refused write waits before its one more try — `useScannerPrefs`' `PREFS_RETRY_MS`,
- *  for its reason: BUSY is a sync's tail, which is seconds. */
+/**
+ * How long a refused write waits before it is tried again — `useScannerPrefs`' `PREFS_RETRY_MS`, for
+ * its reason: BUSY is usually a sync's tail, which is seconds. **The interval is also what keeps the
+ * lease unbroken**: every try goes through `set_scanner_tray`, which admits this window and holds
+ * the scanner until the try settles — through the up-to-five-seconds wait for the write connection
+ * that ends in `BUSY` — and the lease then runs two seconds from that settlement. The next try goes
+ * out this long after the answer, so it has to stay under `scanner::LEASE` for a window whose tray
+ * is still owed to hold the scanner from one try to the next.
+ */
 export const TRAY_RETRY_MS = 1500;
+
+/**
+ * What a queued tray write came to: it landed (or there was nothing left to write), it was refused
+ * by something that passes on its own ({@link refusalPasses}), or it was refused for good.
+ */
+type WriteOutcome = "landed" | "waiting" | "refused";
 
 export interface TrayState {
   /** Newest first, exactly as `tray.ts`' reducer left them. Empty until the row loads. */
@@ -83,8 +121,10 @@ export interface TrayState {
  * **The cache entry is the tray.** `setRows` is a `setQueryData` on `["scanner", "tray"]`, so the
  * page draws one value and a view switch finds the rows where they were — `gcTime: Infinity`, or
  * five minutes on another page would hand a remount the stored copy and lose every card whose write
- * was still pending or refused. Nothing but this hook writes the row, so a refetch could only ever
- * be older than what is here, which is why `staleTime` is `Infinity` too.
+ * was still pending or refused. Only the window holding the scanner writes the row — every write
+ * takes its lease — so a refetch here could only ever be older than what is here, which is why
+ * `staleTime` is `Infinity` too. Another window's `app_meta` change drops this entry once the view
+ * has gone, and only once {@link hasUnsavedTray} says nothing in it is waiting to be stored.
  *
  * **Every write is single-flight, the commit included.** At most one `set_scanner_tray` or
  * `scanner_tray_commit` is on the wire; the next waits for it to settle, so they reach the backend
@@ -95,9 +135,20 @@ export interface TrayState {
  * queue never holds more than one.
  *
  * **A write that fails keeps the rows and says nothing.** `set_scanner_tray` answers BUSY while a
- * sync holds the write connection, and rows scanned during a sync are the reader's cards: the tray
- * stays on screen, the next change writes the whole tray again, and one more try after
- * {@link TRAY_RETRY_MS} is what lets a tray nobody touches again survive a restart.
+ * sync holds the write connection, and `OPEN_ELSEWHERE` while another window holds the scanner;
+ * neither says anything about the rows, and rows scanned meanwhile are the reader's cards. So the
+ * tray stays on screen and **the write is tried again every {@link TRAY_RETRY_MS} until it lands** —
+ * through a first sync that runs for minutes, not just once — stopping early only when a newer
+ * change takes the tries over or there are no rows left to write. Each try holds the scanner from
+ * the moment it is admitted until it settles — through the whole of a BUSY wait — and the next one
+ * goes out inside the two seconds the lease runs after that, so the window with unsaved cards keeps
+ * the scanner until they are stored, and no second window can open a tray read from a row about to
+ * change under it. A refusal that no wait changes
+ * gets one more try and no further; its rows stay unsaved until the next change.
+ *
+ * **No write stores what is not there.** Every write reads the cache as it goes out, and a cache
+ * with no entry — the view gone and the entry dropped — is a tray this hook no longer knows, so the
+ * write is skipped rather than storing `latest()`'s `[]` over the row.
  *
  * **Unmount flushes**, so leaving the Scanner inside the quiet window does not cost the card that
  * just landed. The flush reads the cache rather than a closure, so it writes the tray as it is.
@@ -116,7 +167,6 @@ export function useTray(): TrayState {
   });
 
   const quietRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const latest = useCallback(() => qc.getQueryData<ScannerTrayRow[]>(TRAY_KEY) ?? [], [qc]);
 
@@ -139,35 +189,54 @@ export function useTray(): TrayState {
     [qc],
   );
 
-  /** Queue one tray write, unless one is already waiting to go. Resolves `false` when refused. */
-  const queueWrite = useCallback((): Promise<boolean> | null => {
+  /** Queue one tray write, unless one is already waiting to go. Resolves what it came to. */
+  const queueWrite = useCallback((): Promise<WriteOutcome> | null => {
     const queue = queueFor(qc);
     if (queue.writeWaiting) return null;
     queue.writeWaiting = true;
     return enqueue(async () => {
       queue.writeWaiting = false;
-      await ipc.setScannerTray(latest());
+      // The raw entry, never `latest()`: its `[]` for a tray this hook no longer holds is an
+      // answer for a reader, and stored it would empty the row.
+      const rows = qc.getQueryData<ScannerTrayRow[]>(TRAY_KEY);
+      if (rows === undefined) return;
+      await ipc.setScannerTray(rows);
     }).then(
-      () => true,
-      () => false,
+      (): WriteOutcome => {
+        queue.refused = false;
+        return "landed";
+      },
+      (e: unknown): WriteOutcome => {
+        queue.refused = true;
+        return refusalPasses(ipcError(e)) ? "waiting" : "refused";
+      },
     );
-  }, [enqueue, latest, qc]);
+  }, [enqueue, qc]);
 
   const write = useCallback(() => {
-    if (retryRef.current !== null) {
-      clearTimeout(retryRef.current);
-      retryRef.current = null;
+    const queue = queueFor(qc);
+    if (queue.retry !== null) {
+      clearTimeout(queue.retry);
+      queue.retry = null;
     }
-    void queueWrite()?.then((ok) => {
+    /**
+     * After a write settles: nothing more once it has landed or a newer write carries the tray;
+     * another try after {@link TRAY_RETRY_MS} for as long as the refusal is one that passes, each on
+     * its own interval, so the loop can never run faster than that; and one more try, no further,
+     * for any other refusal. At most one try is ever waiting — `queue.retry` is a single slot, and a
+     * newer write clears it before it starts its own.
+     */
+    const settle = (outcome: WriteOutcome, retried: boolean) => {
+      if (outcome === "landed") return;
       // A newer write is already waiting to go, and it carries the whole tray.
-      const newer = quietRef.current !== null || retryRef.current !== null || queueFor(qc).writeWaiting;
-      if (ok || newer) return;
-      retryRef.current = setTimeout(() => {
-        retryRef.current = null;
-        // Once more and no further — a tray still refused waits for the next change.
-        void queueWrite();
+      if (quietRef.current !== null || queue.retry !== null || queue.writeWaiting) return;
+      if (outcome === "refused" && retried) return;
+      queue.retry = setTimeout(() => {
+        queue.retry = null;
+        void queueWrite()?.then((next) => settle(next, true));
       }, TRAY_RETRY_MS);
-    });
+    };
+    void queueWrite()?.then((outcome) => settle(outcome, false));
   }, [qc, queueWrite]);
 
   const setRows = useCallback(
@@ -192,7 +261,13 @@ export function useTray(): TrayState {
         const sent = latest();
         const rest = remaining(sent);
         const outcome = await ipc.scannerTrayCommit(items, folderId, rest);
-        const now = latest();
+        // The store holds `rest` now, whole: whatever an earlier refused write left unsaved is
+        // settled by it or carried by the write below.
+        queueFor(qc).refused = false;
+        const now = qc.getQueryData<ScannerTrayRow[]>(TRAY_KEY);
+        // The view has gone and its entry with it: the stored `rest` is the tray, and there is
+        // nothing here to write behind it — `remaining([])` stored would empty it.
+        if (now === undefined) return outcome;
         if (now === sent) {
           // The store already holds exactly this: nothing to write behind it, and a quiet timer
           // still counting down would only write the same tray again.

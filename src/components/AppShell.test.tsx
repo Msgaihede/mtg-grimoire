@@ -46,6 +46,14 @@ const onCombosProgress = vi.hoisted(() => vi.fn());
  * user agent below.
  */
 const onSyncApplied = vi.hoisted(() => vi.fn());
+/**
+ * Another window's write, heard by `useCrossWindowRefresh` — a listener registered in a mount
+ * effect, so a missing mock is a synchronous `TypeError` in every case here rather than a
+ * rejection. Nothing in this file emits it: one window is all a test renders.
+ */
+const onDbChanged = vi.hoisted(() => vi.fn());
+/** `Ctrl+Shift+N`'s whole effect on this window — the backend opens the other one. */
+const windowNew = vi.hoisted(() => vi.fn());
 const onSyncLive = vi.hoisted(() => vi.fn());
 const syncLiveState = vi.hoisted(() => vi.fn());
 const syncLiveForeground = vi.hoisted(() => vi.fn());
@@ -88,6 +96,8 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     onOracleTagProgress,
     onCombosProgress,
     onSyncApplied,
+    onDbChanged,
+    windowNew,
     onSyncLive,
     syncLiveState,
     syncLiveForeground,
@@ -334,6 +344,8 @@ beforeEach(() => {
   onOracleTagProgress.mockReset().mockReturnValue(() => {});
   onCombosProgress.mockReset().mockReturnValue(() => {});
   onSyncApplied.mockReset().mockReturnValue(() => {});
+  onDbChanged.mockReset().mockReturnValue(() => {});
+  windowNew.mockReset().mockResolvedValue(undefined);
   onSyncLive.mockReset().mockReturnValue(() => {});
   // "off" — the resting state every installation that has paired nothing is in, and the state
   // that draws no marker at all.
@@ -1993,6 +2005,88 @@ describe("the shell's keyboard bindings", () => {
     fireEvent.keyDown(document.body, { key: "4", ctrlKey: true, repeat: true });
 
     expect(useAppStore.getState().activeView).toBe("decks");
+  });
+
+  /**
+   * `Ctrl+Shift+N` asks the backend for another window, and this window changes nothing about
+   * itself — the view stays where it was, because the new window is where the reader is going.
+   */
+  it("opens a new window on Ctrl+Shift+N", async () => {
+    const user = userEvent.setup();
+    render(
+      <AppShell update={noUpdate}>
+        <div>content</div>
+      </AppShell>,
+    );
+
+    await user.keyboard("{Control>}{Shift>}n{/Shift}{/Control}");
+
+    expect(windowNew).toHaveBeenCalledOnce();
+    expect(useAppStore.getState().activeView).toBe("search");
+  });
+
+  /**
+   * **A held chord is one window, not one per repeat** — `F1`'s guard, for a different reason:
+   * a toggle on auto-repeat strobes, while this would stack a window on the desk at the OS's
+   * repeat rate for as long as the finger stayed down. Fired by hand for `F1`'s reason too:
+   * `userEvent` cannot express a repeat.
+   */
+  it("opens one window for a held Ctrl+Shift+N, not one per repeat", async () => {
+    const user = userEvent.setup();
+    render(
+      <AppShell update={noUpdate}>
+        <div>content</div>
+      </AppShell>,
+    );
+
+    await user.keyboard("{Control>}{Shift>}n{/Shift}{/Control}");
+    fireEvent.keyDown(document.body, { key: "N", ctrlKey: true, shiftKey: true, repeat: true });
+    fireEvent.keyDown(document.body, { key: "N", ctrlKey: true, shiftKey: true, repeat: true });
+
+    expect(windowNew).toHaveBeenCalledOnce();
+  });
+
+  /**
+   * **The modal guard is `Ctrl+1…9`'s and not this chord's.** A view switched under a dialog
+   * strands the dialog; a second window disturbs nothing in this one, so a reader mid-dialog who
+   * wants to look something up elsewhere is exactly who this is for.
+   */
+  it("opens a new window with a modal up", async () => {
+    const user = userEvent.setup();
+    render(
+      <AppShell update={noUpdate}>
+        <div role="dialog" aria-modal="true">
+          content
+        </div>
+      </AppShell>,
+    );
+
+    await user.keyboard("{Control>}{Shift>}n{/Shift}{/Control}");
+
+    expect(windowNew).toHaveBeenCalledOnce();
+  });
+
+  /**
+   * The web build does not route `window_new` and a browser tab is its own app, so the chord is
+   * left to the browser there — the key map leaves the row off for the same reason.
+   */
+  it("binds no new-window chord on the web build", async () => {
+    const { isWebTarget } = await import("@/pwa/target");
+    vi.mocked(isWebTarget).mockReturnValue(true);
+    try {
+      const user = userEvent.setup();
+      render(
+        <AppShell update={noUpdate}>
+          <div>content</div>
+        </AppShell>,
+      );
+
+      await user.keyboard("{Control>}{Shift>}n{/Shift}{/Control}");
+
+      expect(windowNew).not.toHaveBeenCalled();
+    } finally {
+      vi.mocked(isWebTarget).mockReturnValue(false);
+    }
   });
 
   /**

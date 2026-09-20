@@ -1308,6 +1308,23 @@ export interface FakeUpdate {
  * the files. With no bundle there are no labels, so `scanner_set_filters` refuses any filter but
  * the empty one, in the crate's words.
  *
+ * **`scannerElsewhere`** is another window holding the scanner's lease, so `scanner_elsewhere`
+ * answers `true` and the Scanner view draws one sentence and opens no camera. It is a fault rather
+ * than a seed for the reason `wishGone`'s *"what the fault stands in for is the second window"*
+ * gives, and **not** for the sentence above that one, which is that entry's alone: nothing here
+ * has to be there on the read and gone on the re-read. What this one stands in for is a **second
+ * window**, and a story
+ * is one window and cannot open another ({@link windowHandlers} answers `window_count` with one),
+ * so no press here can put the lease in anybody else's hands. It is not a failure either: the lease
+ * is renewed by the other window's open view and lapses two seconds after it goes, which is why the
+ * view asks again each second rather than drawing a refusal. **Two handlers read it**:
+ * `scanner_elsewhere`, and `scanner_hold` — the heartbeat, which refuses in the crate's words
+ * because it is the other half of the same question, asked by taking. The crate's session commands
+ * and its prefs and tray writes refuse with `OPEN_ELSEWHERE` too, and the fake does not teach them
+ * to: a view told `true` asks for no camera and no prefs, so none of them is ever sent from this
+ * state, and a refusal no story can reach would be one more sentence to keep in step with
+ * `scanner.rs` for nothing.
+ *
  * **`shareLapsed`** is a shared collection link that has gone dark, and it is `pairingReadError`'s
  * split one feature over: **the one refusal in the viewer's flow a reader cannot produce by
  * typing.** Every other way `share_open` fails is reachable from the paste box — a pasted
@@ -1349,6 +1366,7 @@ export type Fault =
   | "patreonGroupEntitled"
   | "wishGone"
   | "scannerMissing"
+  | "scannerElsewhere"
   | "shareLapsed";
 
 /**
@@ -20177,6 +20195,8 @@ const FILTERS_NEED_NAMES =
   "Filters need card names, and the scanner has none loaded — it needs corpus.db beside the bundle.";
 /** The crate's `Session::set_filters` refusal for filters no printing survives. */
 const NO_PRINTING_MATCHES = "No printing matches these filters.";
+/** `scanner.rs`' `OPEN_ELSEWHERE`, verbatim — `verdictText.ts`' `SCANNER_OPEN_ELSEWHERE`. */
+const OPEN_ELSEWHERE = "The scanner is open in another window.";
 
 /** A copy through JSON, which is what `app_meta` stores — so a story holding the object it was
  *  handed cannot reach back into the row, and a row cannot hold anything JSON would not. */
@@ -20197,6 +20217,17 @@ export function scannerHandlers(db: FakeDb) {
   return {
     /** `scanner::scanner_status`. */
     scanner_status: (): ScannerStatus => (db.fault === "scannerMissing" ? STATUS.missing : STATUS.present),
+    /** `scanner::scanner_elsewhere` — whether another window holds the scanner's lease. */
+    scanner_elsewhere: (): boolean => db.fault === "scannerElsewhere",
+    /**
+     * `scanner::scanner_hold` — the mounted view's heartbeat. It refuses exactly where
+     * `scanner_elsewhere` answers yes, because the two read one lease: under `scannerElsewhere`
+     * the gate never mounts the live view, and a story that reached this anyway is told what the
+     * crate would tell it.
+     */
+    scanner_hold: (): void => {
+      if (db.fault === "scannerElsewhere") throw refuse(OPEN_ELSEWHERE);
+    },
     /** `scanner::scanner_frame`. */
     scanner_frame: (): ScannerVerdict => VERDICTS.decided,
     /** `scanner::scanner_reset`. */
@@ -20260,6 +20291,21 @@ export function scannerHandlers(db: FakeDb) {
       db.scannerTray = throughJson(args.remaining);
       return outcome;
     },
+  } satisfies Record<string, CommandHandler>;
+}
+
+/* --------------------------------------------------------------------- the windows ---- */
+
+/**
+ * The window commands. A story is one window and cannot open another, so `window_new` only
+ * answers and `window_count` is always one.
+ */
+export function windowHandlers() {
+  return {
+    /** `desktop::window_new`. */
+    window_new: (): void => undefined,
+    /** `desktop::window_count`. */
+    window_count: (): number => 1,
   } satisfies Record<string, CommandHandler>;
 }
 
@@ -20330,14 +20376,15 @@ export function pluginHandlers() {
 }
 
 /**
- * Reads ∪ writes ∪ the scanner ∪ the plugins: the whole command table, which is what a story
- * registers.
+ * Reads ∪ writes ∪ the scanner ∪ the windows ∪ the plugins: the whole command table, which is
+ * what a story registers.
  *
  * The first two halves close over the one `db`, so a write is visible to the next read — the
  * property that makes a story clickable rather than a snapshot. The scanner table mirrors no
  * table: it reads `db.fault` and keeps its own two `app_meta` rows (prefs and the tray), and
- * touches none of the reader's cards. The plugin table takes **no store** at all — it mirrors no
- * table and no module in the crate.
+ * touches none of the reader's cards. The window table and the plugin table take **no store** at
+ * all — the windows are the process's rather than the database's, and the plugins mirror no table
+ * and no module in the crate.
  */
 export function allHandlers(db: FakeDb) {
   return {
@@ -20345,6 +20392,7 @@ export function allHandlers(db: FakeDb) {
     ...journalled(db, writeHandlers(db)),
     ...undoHandlers(db),
     ...scannerHandlers(db),
+    ...windowHandlers(),
     ...pluginHandlers(),
   };
 }

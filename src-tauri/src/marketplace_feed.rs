@@ -2105,6 +2105,7 @@ mod tests {
                 mirror_status: std::sync::Mutex::new(crate::mirror::watch::LastPass::default()),
                 pairing: std::sync::Mutex::new(None),
                 fence,
+                changes: Default::default(),
             }),
             dir,
         )

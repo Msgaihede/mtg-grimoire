@@ -905,13 +905,22 @@ pub async fn sync_device_rename(
     name: String,
 ) -> Result<(), String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let marks = state.clone();
+    let out = tauri::async_runtime::spawn_blocking(move || {
         sync::with_write(&state, |conn| {
             identity::rename_device(conn, &device_id, &name).map_err(err)
         })
     })
     .await
-    .map_err(|e| format!("could not rename that device: {e}"))?
+    .map_err(|e| format!("could not rename that device: {e}"))?;
+    // `identity::rename_device` writes `sync_devices` and `device_names`, and both are
+    // `WITHOUT ROWID`, which the update hook never sees — so the other windows hear about a
+    // rename from here. See `crate::changes::MARKED_BY_COMMAND`.
+    if out.is_ok() {
+        marks.changes.mark_table("sync_devices");
+        marks.changes.mark_table("device_names");
+    }
+    out
 }
 
 /// Remove a device, in the four steps whose **order is the whole of the fix**.
@@ -1040,15 +1049,28 @@ async fn leave_group_now(conn: &Connection) -> Result<(), String> {
 #[tauri::command]
 pub async fn sync_group_leave(state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let marks = state.clone();
+    let out = tauri::async_runtime::spawn_blocking(move || {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .map_err(|e| e.to_string())?;
         sync::with_write(&state, |conn| runtime.block_on(leave_group_now(conn)))
     })
-    .await
-    .map_err(|e| format!("could not leave that group: {e}"))?
+    .await;
+    // **Three marks, because the update hook hears none of what a departure writes.**
+    // `identity::leave_group` empties `sync_devices`, which is `WITHOUT ROWID`, and `sync_group`
+    // with a bare `DELETE` on a table no trigger and no foreign key touches — so SQLite truncates it
+    // and visits no row. `entitlement::clear` then empties the grant's `sync_state` rows,
+    // `WITHOUT ROWID` again. See `crate::changes`' module doc for both blind spots.
+    //
+    // **Marked whatever the answer, because `Err` does not mean nothing was written**: the
+    // departure commits before the clear runs, so a failed clear answers an error over a group
+    // this device has already left. Over-marking costs another window one refetch (spec §4).
+    for table in ["sync_devices", "sync_group", "sync_state"] {
+        marks.changes.mark_table(table);
+    }
+    out.map_err(|e| format!("could not leave that group: {e}"))?
 }
 
 #[cfg(test)]

@@ -1,5 +1,8 @@
 //! Everything that only exists when there is a Tauri window: the command registry, the
-//! app's startup, and the seventeen commands that have no module of their own.
+//! app's startup, and the commands that have no module of their own. (This said *seventeen*
+//! while there were ten; `grep -c '^#\[tauri::command\]'` is the count, and it is not kept here.
+//! **Anchor it** — `generate_handler!`'s own comment below names the attribute, so the
+//! unanchored grep answers one more than there are commands.)
 //!
 //! Split out of `lib.rs` so that the crate's *module map* is the only thing at the root.
 //! `lib.rs` is then readable as the one place that says what compiles where, and this file
@@ -51,6 +54,29 @@ async fn sync_run(
     force: bool,
 ) -> Result<sync::SyncOutcome, String> {
     sync::run_sync(state.inner().clone(), app, force).await
+}
+
+/// Open another window onto the same app — Ctrl+Shift+N. `caller` is the window that asked, so the
+/// new one opens beside it (Tauri injects it by type; the name is ours, and is not `window` because
+/// that is the module). `async` because building a window from a synchronous command deadlocks on
+/// Windows; see `window::open_new`.
+#[tauri::command]
+async fn window_new(app: tauri::AppHandle, caller: tauri::WebviewWindow) -> Result<(), String> {
+    #[cfg(desktop)]
+    {
+        window::open_new(&app, Some(&caller)).map(|_| ())
+    }
+    #[cfg(mobile)]
+    {
+        let _ = (app, caller);
+        Err("A phone runs the app in one window.".to_owned())
+    }
+}
+
+/// How many windows are open — what the Update panel's hint says a restart will close.
+#[tauri::command]
+fn window_count(app: tauri::AppHandle) -> usize {
+    app.webview_windows().len()
 }
 
 /// Current sync state.
@@ -142,13 +168,22 @@ async fn error_log_list(
 #[tauri::command]
 async fn error_log_clear(state: tauri::State<'_, Arc<AppState>>) -> Result<usize, String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let marks = state.clone();
+    let out = tauri::async_runtime::spawn_blocking(move || {
         sync::with_write(&state, |conn| {
             errors::clear(conn).map_err(|e| format!("could not clear the error log: {e}"))
         })
     })
     .await
-    .map_err(|e| format!("could not clear the error log: {e}"))?
+    .map_err(|e| format!("could not clear the error log: {e}"))?;
+    // `errors::clear` is a bare `DELETE FROM error_log`, and the table has no triggers and no
+    // foreign key names it — so SQLite truncates it without visiting a row and the update hook
+    // hears nothing. The other windows' logs hear about a clear from here. See `crate::changes`'
+    // module doc, and the `mirror::watch` test that pins the blind spot.
+    if out.is_ok() {
+        marks.changes.mark_table("error_log");
+    }
+    out
 }
 
 /// Open the release on github.com, for the install kinds that cannot update in place.
@@ -188,21 +223,6 @@ fn update_api_base() -> String {
     update::GITHUB_API.to_owned()
 }
 
-/// Bring the running instance forward when a second launch is refused.
-///
-/// Without this, double-clicking the exe a second time looks like nothing happened —
-/// the guard is silent by design, so the app has to answer with the window itself.
-/// Desktop only: it is called from the single-instance callback, which does not exist on
-/// Android — and `WebviewWindow::unminimize` is itself `#[cfg(desktop)]` in tauri 2.11.5, so
-/// this function does not merely go unused on a phone, it does not compile there.
-#[cfg(desktop)]
-fn focus_existing_window(app: &tauri::AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.unminimize();
-        let _ = window.set_focus();
-    }
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // **Before the builder, and it has to be before it.** A build that has just replaced
@@ -233,6 +253,13 @@ pub fn run() {
     // owns. Two processes sharing a WAL database is survivable; two sharing the temp
     // `.gz` an ingest streams from is not.
     //
+    // **The second launch is still refused; what it asks for is a window in this one.** The
+    // callback below runs in the first process when the second is turned away, and it used to
+    // bring `main` forward. It opens another window instead — the same app, one more view onto
+    // it — because more windows in one process share one `AppState`, one write connection and
+    // one set of background services, where a second process on the same data folder would
+    // need every one of those rebuilt to tolerate a peer. See `window::open_new`.
+    //
     // **On Android the crate does not exist.** `tauri-plugin-single-instance`'s `lib.rs`
     // opens with `#![cfg(not(any(target_os = "android", target_os = "ios")))]`, so `init` is
     // not a no-op there — it is an unresolved name and a hard compile error. Android needs
@@ -243,7 +270,17 @@ pub fn run() {
     #[cfg(desktop)]
     let builder =
         tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            focus_existing_window(app);
+            // **A relaunch opens a window, the way Edge and VS Code do** — and Windows' own
+            // middle-click on the taskbar icon is a relaunch, so that gesture works with no UI of
+            // ours. Spawned, never inline: this runs inside the plugin's window procedure, and
+            // building a window from a handler deadlocks on Windows (see `window::open_new`).
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                let from = window::focused(&app);
+                if let Err(e) = window::open_new(&app, from.as_ref()) {
+                    eprintln!("a second launch could not open a window: {e}");
+                }
+            });
         }));
     #[cfg(mobile)]
     let builder = tauri::Builder::default();
@@ -644,6 +681,14 @@ pub fn run() {
             // The scanner, its prefs and its tray. The session's state is managed separately
             // below — see scanner.rs; the prefs and the tray are `app_meta` rows on `AppState`.
             scanner::scanner_status,
+            // Whether another window holds the scanner — one window scans at a time, on a lease
+            // renewed by the open view's heartbeat, its frames and every tray or prefs write —
+            // asked without taking it, so a second window's Scanner view can say so before it
+            // opens a camera. See `scanner::LEASE`.
+            scanner::scanner_elsewhere,
+            // The mounted view's heartbeat: it takes the lease, so the view holds the scanner from
+            // its first render whatever its camera is doing.
+            scanner::scanner_hold,
             scanner::scanner_frame,
             scanner::scanner_reset,
             scanner::scanner_capture,
@@ -670,7 +715,12 @@ pub fn run() {
             sync_engine::commands::sync_live_state,
             // Whether the background startup has landed — the one command the page asks before
             // it mounts anything that needs `AppState`. See `startup`.
-            startup::startup_status
+            startup::startup_status,
+            // Another window onto the same app, and how many there are. Neither takes
+            // `AppState`, so both answer before `startup_status` does — a relaunch during a
+            // slow startup still gets its window.
+            window_new,
+            window_count
         ])
         .setup(|app| {
             // First, and before anything that can fail: the window is created **hidden**
@@ -680,19 +730,19 @@ pub fn run() {
             // Windows has taken its taskbar out of it. See `window.rs`.
             // Android has no hidden-window step and no rungs to choose between — the
             // activity is already on screen and the OS sizes it.
-            #[cfg(desktop)]
-            window::open_sized_to_monitor(app.handle());
-
+            //
             // The in-app QR scanner's camera grant — see `camera`'s own doc for why WebView2
-            // needs one at all. Desktop only, in this same block, for the reason the block
-            // above is: Android's grant is the manifest permission instead, and there is no
+            // needs one at all. Desktop only, in this same block, for the sizing's reason
+            // above: Android's grant is the manifest permission instead, and there is no
             // equivalent "the window now exists" moment on that platform in this file to hang
             // the call off. `camera::install` is a no-op off Windows, so calling it on Linux and
             // macOS costs nothing; it is still gated here rather than called unconditionally
             // because `app.get_webview_window("main")` and everything past it belongs beside the
-            // rest of this window's own setup.
+            // rest of this window's own setup. **Every later window gets both calls too**, from
+            // `window::open_new` — this is only the first window's copy of them.
             #[cfg(desktop)]
             if let Some(main) = app.get_webview_window("main") {
+                window::open_sized_to_monitor(&main);
                 camera::install(&main);
             }
 
@@ -840,13 +890,16 @@ fn start(app: &tauri::AppHandle) {
         //
         // The third argument is the cross-file fence, which arrived with the
         // user/corpus split: the hook has to be able to tell the mirror which of the
-        // two databases a write landed in.
+        // two databases a write landed in. The fifth is the other windows' mask
+        // (`crate::changes`), riding the same hook for the fence's reason — SQLite
+        // allows one update hook per connection.
         let conn = db::lock_blocking(&state.db);
-        mirror::watch::install_hook(
+        mirror::watch::install_hook_with_changes(
             &conn,
             state.mirror.clone(),
             state.fence.clone(),
             writes.clone(),
+            state.changes.clone(),
         );
         drop(conn);
 
@@ -856,6 +909,13 @@ fn start(app: &tauri::AppHandle) {
         // editing. It reads through `db_read` and never takes the write connection, so
         // no press it overlaps can be answered `db::BUSY` by it.
         mirror::watch::spawn(state.clone());
+
+        // The other windows' refresh — see `crate::changes`. After the hook, and the order
+        // costs nothing either way: a commit that rings before this task is waiting leaves
+        // `notify_one`'s one stored permit, so its first wait returns at once rather than
+        // missing that commit. Above `startup::settle` like the mirror's thread, because it
+        // is a spawn that does no work until something is written.
+        crate::changes::spawn_emitter(app.clone(), state.clone());
     }
 
     // Here rather than before the builder, and the difference is one rare bug: this
@@ -1222,6 +1282,8 @@ fn init_state(app: &tauri::AppHandle) -> Result<AppState, String> {
         // The mask's twin, and hooked up in the same call for the same reason: SQLite allows
         // one update hook per connection, so the fence has to ride in the mirror's.
         fence: Arc::new(db::CrossFileFence::new()),
+        // Clean, and hooked up in `start` beside the mirror's mask, for the mask's reason.
+        changes: Default::default(),
         pairing: Mutex::new(None),
     })
 }
@@ -1624,6 +1686,30 @@ mod tests {
             .collect();
         names.sort();
         assert_eq!(names, vec!["desktop.json", "mobile.json"]);
+    }
+
+    /// A window the app opens with no capability gets no `core:` — so its `listen` rejects and
+    /// `core/tauri.ts` swallows it — no window verbs, no dialog: a window that half works and says
+    /// nothing. Every label `window::open_new` mints must be granted what `main` is.
+    ///
+    /// `#[cfg(desktop)]` because `window` is: this file compiles for Android, and the module does
+    /// not.
+    #[cfg(desktop)]
+    #[test]
+    fn every_window_the_app_opens_is_granted_the_desktop_capability() {
+        let caps: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/desktop.json")).unwrap();
+        assert_eq!(
+            caps["windows"],
+            serde_json::json!(["main", format!("{}*", window::LABEL_PREFIX)])
+        );
+        let mobile: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/mobile.json")).unwrap();
+        assert_eq!(
+            mobile["windows"],
+            serde_json::json!(["main"]),
+            "a phone has one window"
+        );
     }
 
     /// Without `decorations: false` the app draws two title bars: Windows' and

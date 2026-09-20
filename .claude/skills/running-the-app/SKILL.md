@@ -8,9 +8,15 @@ description: Use when launching MTG Grimoire, a live CDP pass, the Vite dev serv
 **Two things here are exclusive across every worktree, and both fail quietly.**
 
 - **The app.** `tauri-plugin-single-instance` is registered before every other plugin
-  (`src-tauri/src/lib.rs:203`) and keys on the `com.mtggrimoire.app` identifier, which
-  every worktree builds. A second instance gets **exit code 0, no window, no stderr** —
-  it reads as a broken build. A debug build from `target/debug` counts.
+  (`src-tauri/src/desktop.rs`, the `#[cfg(desktop)] let builder` block) and keys on the
+  `com.mtggrimoire.app` identifier, which every worktree builds. A second instance gets
+  **exit code 0, no window, no stderr** — it reads as a broken build. A debug build from
+  `target/debug` counts.
+  ⚠️ **Since 2026-09-20 the first app answers that second launch by opening a window**, so
+  the failure is no longer silent — it is a **lie**. Launch worktree B's dev build while
+  worktree A's app is up and B still exits 0, but A opens a new window showing **A's**
+  frontend: a window that looks like the one you asked for and renders somebody else's
+  branch. The lock is what prevents it. `docs/reference/multi-window.md` is the record.
 - **Storybook.** `.mcp.json` points `mtg-grimoire-sb-mcp` at `http://localhost:6006/mcp`.
   A second Storybook lands on a different port and the MCP then answers **from the first
   agent's stories**. Nothing on either side says so.
@@ -105,10 +111,17 @@ avoid `$`, which PowerShell interpolates before node sees it.
 `docs/reference/live-ui-verification.md` is the command vocabulary and the trap list;
 this skill does not repeat it.
 
-`CDP_PORT` overrides 9222 (`scripts/cdp.mjs:31`) — it points `cdp.mjs` at a different
-debugger on an app that is already running. **It does not make a second app possible**:
-the guard keys on the `com.mtggrimoire.app` identifier, not on a port. One app, one lock,
-whatever port you drive it on.
+`CDP_PORT` overrides 9222 (`scripts/cdp.mjs`'s `PORT` constant, at the top of the file) —
+it points `cdp.mjs` at a different debugger on an app that is already running. **It does
+not make a second app possible**: the guard keys on the `com.mtggrimoire.app` identifier,
+not on a port. One app, one lock, whatever port you drive it on.
+
+**One app is not one window.** Ctrl+Shift+N and a relaunch each open another window in the
+same process, so `/json/list` can hold several page targets that share a URL and a title.
+`node scripts/cdp.mjs pages` lists them and `CDP_PAGE` picks one — **by target id for
+anything multi-step**, because the list may reorder by activity and an index can name a
+different window between two commands. With two open and no `CDP_PAGE`, `cdp.mjs` warns on
+stderr and drives page 0.
 
 ## You are not done until you have released
 

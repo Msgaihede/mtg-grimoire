@@ -374,7 +374,8 @@ pub async fn sync_patreon_claim(
     code: String,
 ) -> Result<SupporterStatus, String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let marks = state.clone();
+    let out = tauri::async_runtime::spawn_blocking(move || {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -385,8 +386,18 @@ pub async fn sync_patreon_claim(
             Ok(supporter_status(conn))
         })
     })
-    .await
-    .map_err(|e| e.to_string())?
+    .await;
+    // The grant is `sync_state` rows, and `sync_state` is `WITHOUT ROWID`, which the update hook
+    // never sees — so the other windows' Sync panels hear about a claim from here. See
+    // `crate::changes::MARKED_BY_COMMAND`.
+    //
+    // **Marked whatever the answer, because `Err` does not mean nothing was written.**
+    // `entitlement::store_grant` commits the grant in a transaction of its own and `store_status`
+    // runs after it, so a claim can answer an error over a grant that is stored. Over-marking costs
+    // another window one refetch (spec §4); under-marking costs it a panel reading *Not connected*
+    // over a live membership.
+    marks.changes.mark_table("sync_state");
+    out.map_err(|e| e.to_string())?
 }
 
 /// One round trip now.

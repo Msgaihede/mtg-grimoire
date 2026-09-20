@@ -14,6 +14,32 @@ export const SURE_DISTANCE = 0.3;
  */
 export const WEB_SENTENCE = RAW_CALL_UNAVAILABLE;
 
+/**
+ * What a second window's Scanner view says while another window holds the scanner. The same string
+ * as `scanner::OPEN_ELSEWHERE`, which is also how every command the lease refuses reads — a frame,
+ * the view's heartbeat, a prefs or tray write — so the page matches on it byte for byte;
+ * `ipc.test.ts` pins the Rust half.
+ */
+export const SCANNER_OPEN_ELSEWHERE = "The scanner is open in another window.";
+
+/**
+ * `db::BUSY`, verbatim — what every write answers while a sync holds the write connection.
+ * `useTray.test.ts` pins it against `db.rs`, so a reworded crate sentence goes red there rather
+ * than turning every sync into a refusal the tray gives up on.
+ */
+export const DB_BUSY = "The card database is busy finishing a sync. Try that again in a moment.";
+
+/**
+ * **Whether a refused tray or prefs write is one that passes** — a sync holding the write
+ * connection, or another window holding the scanner's lease. Neither says anything about the rows
+ * or the prefs, and both end on their own, so the write is tried again until it lands. Anything
+ * else — a tray row of nothing, a tray past its limit — is refused however long the page waits,
+ * and gets one more try and no further: a loop there would hold the lease for good.
+ */
+export function refusalPasses(sentence: string): boolean {
+  return sentence === DB_BUSY || sentence === SCANNER_OPEN_ELSEWHERE;
+}
+
 function aspectOk(v: ScannerVerdict): boolean {
   return v.ok && v.score !== null && Math.abs(v.score.aspect - CARD_ASPECT) / CARD_ASPECT < 0.08;
 }

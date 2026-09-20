@@ -484,4 +484,38 @@ describe("UpdatePanel", () => {
       expect(await screen.findByText("This release published no notes.")).toBeInTheDocument();
     });
   });
+
+  /**
+   * A restart is the process, and every window is in it — so with more than one open, the press
+   * costs more than the sentence under the row says. No dialog: this button is already the
+   * second, deliberate press, and a third would be the panel doubting its own flow.
+   */
+  describe("with more than one window open", () => {
+    it("says a restart closes all of them, on the button's own description", () => {
+      render(
+        <UpdatePanel update={update({ action: "install" })} history={history()} windows={3} />,
+      );
+      const button = screen.getByRole("button", { name: /Restart to finish/ });
+      expect(button).toHaveAccessibleDescription("Restarting closes all 3 windows.");
+    });
+
+    /**
+     * **Two is where the rule starts, so two is the case that has to be pinned.** Three and one
+     * bracket the rule without meeting it: a `windows > 1` narrowed to `windows > 2` keeps both
+     * of them green and takes the hint away from every reader with exactly a second window open,
+     * which is the commonest way to have more than one.
+     */
+    it("says it at exactly two, the first count the rule covers", () => {
+      render(
+        <UpdatePanel update={update({ action: "install" })} history={history()} windows={2} />,
+      );
+      const button = screen.getByRole("button", { name: /Restart to finish/ });
+      expect(button).toHaveAccessibleDescription("Restarting closes all 2 windows.");
+    });
+
+    it("says nothing at one window", () => {
+      render(<UpdatePanel update={update({ action: "install" })} history={history()} />);
+      expect(screen.queryByText(/closes all/)).not.toBeInTheDocument();
+    });
+  });
 });

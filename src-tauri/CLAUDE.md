@@ -1122,7 +1122,8 @@ with the measurements: [text-mirror.md](../docs/reference/text-mirror.md).
   its date and nothing else. The same trap is why `zip` keeps `default-features = false`: with the
   `time` feature on, `DateTime::default_for_write()` reaches for that clock on its own.
 - **There is one `update_hook`, on the one write connection, and it is the whole of how the
-  mirror learns anything.** `watch::install_hook` is installed on `AppState.db` from `setup`, and
+  mirror — and, since 2026-09-20, every other window — learns anything.**
+  `watch::install_hook` is installed on `AppState.db` from `setup`, and
   every user-facing write in this crate goes through `sync::with_write` on that connection — so
   no command has to remember to tell the mirror anything, and no command added next year can
   forget to. `db_read` is `SQLITE_OPEN_READ_ONLY` and can never fire it; SQLite allows exactly
@@ -1130,6 +1131,26 @@ with the measurements: [text-mirror.md](../docs/reference/text-mirror.md).
   callback runs on the writer's thread with the write connection's mutex held: one `fetch_or` on
   an atomic and return. Nothing there may allocate, take a lock, or call back into the database —
   SQLite forbids the last one outright.
+  **The one hook now carries two masks**, which is exactly why it is one hook: `changes::Changes`
+  rides beside the mirror's `Mask` (`install_hook_with_changes`; `install_hook` delegates with a
+  throwaway `Changes`, since almost all of its callers are test fixtures), one bit per **user**
+  table, and the commit hook rings its `Notify` only when a bit is set. `changes.rs` and
+  [multi-window.md](../docs/reference/multi-window.md) carry the emitter.
+  ⚠️ **And the hook has two blind spots, each of which a command has to cover by hand.**
+  **`WITHOUT ROWID` tables never fire it at all** — `muted_tags`, `sync_devices`, `sync_state` and
+  `device_names` are marked by the commands a reader's press reaches
+  (`changes::MARKED_BY_COMMAND`), `price_snapshots` and `sync_peers` deliberately are not
+  (`WRITTEN_BY_THE_APP`: the app writes them and no press does), and a test enumerates
+  `main.sqlite_master` against the two lists so a new one goes red until somebody decides. It is
+  also `db::CrossFileFence`'s blind spot, one bullet up, and the mirror's.
+  **A bare `DELETE FROM t` with no `WHERE` is the second** — SQLite's truncate optimisation visits
+  no row — and **nothing can enumerate this one**, because it is a property of a statement rather
+  than of a table. Triggers and foreign keys both switch the optimisation off, which is why
+  `reset.rs`'s Danger Zone clears are seen; `error_log_clear` and `sync_group_leave` are the two
+  presses that reach it and each marks by hand. A new unconditional `DELETE` a press reaches owes
+  the same check, and `watch`'s
+  `a_bare_delete_on_a_table_with_no_triggers_or_foreign_keys_marks_nothing` is where the next one
+  learns it.
 - **A new user table must be added to `watch::surface_of`'s map, or its writes never reach the
   mirror.** The map's default arm is `_ => None`, which is the correct direction to fail (a
   surface that never catches up, which `Rebuild now` or deleting the root fixes — not a
@@ -2140,6 +2161,13 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
   every platform because there was only one; `desktop.json` carries
   `"platforms": ["windows", "linux", "macOS"]` and the shipped permission set unchanged, and
   `mobile.json` carries `["android"]` and four absences, each a decision:
+  **`desktop.json`'s `windows` is `["main", "window-*"]` since 2026-09-20**, not `["main"]` —
+  capability labels accept globs, and the second window is `window-2`, the third `window-3`, from
+  `window::LABEL_PREFIX` (a test pins the glob against that constant). Without the second entry a
+  new window is granted **nothing**: no `core:`, so `listen` rejects and `core/tauri.ts` swallows
+  the rejection, and no window verbs, dialog, clipboard or snap-layout either — a window that
+  draws and hears nothing, with no error anywhere. `mobile.json` is untouched, because a phone
+  opens no second window.
   **no `core:window:` verbs** — `minimize`, `toggle_maximize` and `start_dragging` are all
   `#[cfg(desktop)]` in tauri 2.11.5 and are not commands on Android at all, and the fourth,
   `close`, would kill the app from a button no phone user is looking for;
@@ -2175,11 +2203,16 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
   real filesystem, `tokio`, threads and WAL. It is the fact most easily lost, and a plan that
   treats Android as a wasm port is wrong from its first line.
 - **`cfg(desktop)` and `cfg(mobile)` are real cfgs**, emitted by `tauri_build::build()`, so cargo
-  checks every gate. Three things are gated because they **cannot compile** on Android —
-  `tauri_plugin_single_instance::init` (an empty crate there), `window.rs` (`center()` is
-  `#[cfg(desktop)]`) and `focus_existing_window` (`unminimize()` likewise). Four more are gated
-  because they **must not run**: the `--await-predecessor` handshake, the mirror's hook and
-  thread, `update::clean_up` and the daily update check. **`mirror/`, `transfer/` and `update.rs`
+  checks every gate. Two things are gated because they **cannot compile** on Android —
+  `tauri_plugin_single_instance::init` (an empty crate there) and `window.rs`, whose
+  `open_sized_to_monitor` and `open_new` both reach `#[cfg(desktop)]` window verbs (`center()`,
+  and `WebviewWindowBuilder::from_config` over a desktop window config). **It was three until
+  2026-09-20**, the third being `focus_existing_window` (`unminimize()` likewise) — the function
+  the single-instance callback used to call, deleted when a relaunch started opening a window
+  instead of bringing one forward. Five more are gated because they **must not run**: the
+  `--await-predecessor` handshake, the mirror's hook and thread, `update::clean_up`, the daily
+  update check, and `changes::spawn_emitter` — the cross-window refresh has nothing to emit where
+  the OS runs one window per app. **`mirror/`, `transfer/` and `update.rs`
   still compile there and that is deliberate** — `AppState` names two mirror types, and in a
   library crate a `pub fn` in a `pub mod` raises no `dead_code`, so not *running* them costs
   nothing where not *compiling* them costs a six-file ripple. (**The `get_app_meta` half of that
@@ -2205,7 +2238,20 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
   window is created hidden (`"visible": false`) and `open_sized_to_monitor` is the only thing
   that shows it**, so it runs before anything in `setup` that can fail — an early `?` above it
   would leave a running app with no window, which is exactly what the single-instance guard
-  looks like. Nothing is remembered between launches: no window-state plugin is registered, so
+  looks like.
+  **Every window climbs the same ladder, not only `main`** (2026-09-20). `open_sized_to_monitor`
+  takes a `&WebviewWindow` rather than looking up `"main"`, and `window::open_new` — behind both a
+  relaunch and Ctrl+Shift+N — shares `opening_size` through its own `place`, which differs only in
+  *where* it puts the window: `OFFSET` (32 logical px) down and right of the window it came from,
+  restarting at the work area's edge on whichever axis would overflow, and centring when there is
+  no anchor. Each later window is built from the **same config entry** cloned under a new label, so
+  `visible: false` is what keeps every one of them off screen until `open_new` shows it, and
+  ⚠️ **`place` sets the position in physical pixels** — a `LogicalPosition` would be converted by
+  the *new* window's scale factor, which on a mixed-DPI desk lands the window on the wrong monitor
+  altogether. ⚠️ **Never build a window from a synchronous command or event handler**: Tauri
+  documents that it deadlocks on Windows, so the single-instance callback spawns onto the async
+  runtime and `window_new` is `async`. [multi-window.md](../docs/reference/multi-window.md) is the
+  record. Nothing is remembered between launches: no window-state plugin is registered, so
   a size the reader chose is theirs until they close it. **`decorations: false` does not change
   that arithmetic**: `open_sized_to_monitor` sizes the *window*, and an undecorated window's
   outer rect is 16px wider and 9px taller than its client area for the invisible grab margin —
@@ -2312,6 +2358,17 @@ The whole record, including the pipeline the crate implements:
   callable, so there is **no capability entry**; and the page shows the sentence, so there is
   **no `error_log` source**. The scanner's commands are registered in `desktop.rs`'s
   `generate_handler!`, not `lib.rs`.
+- **One window scans at a time, so every command that _uses_ the scanner takes the calling
+  `WebviewWindow` and admits on a lease** (2026-09-20) — the four session commands, `scanner_hold`
+  (the mounted view's heartbeat) and all three prefs/tray **writes**; the three reads and
+  `scanner_elsewhere` take nothing. A refusal is `scanner::OPEN_ELSEWHERE`, matched by the page
+  against that exact sentence. ⚠️ **An admission holds the lease until its command _settles_**,
+  through a `LeaseGuard` kept alive across the whole body including the awaited `spawn_blocking`,
+  because a tray write waits up to five seconds for the write connection before answering `BUSY`
+  and a lease stamped at admission lapsed under it at two. **A new command that touches the
+  session or those two `app_meta` rows takes the webview and admits**; one that only reads must
+  not. [card-scanner.md](../docs/reference/card-scanner.md) §9 and
+  [multi-window.md](../docs/reference/multi-window.md) §5.
 
 ## The web target
 
@@ -2408,4 +2465,5 @@ The whole record, including the pipeline the crate implements:
 | [sync.md](../docs/reference/sync.md) | `sync_pair/`, `sync_engine/` and the user-schema rungs sync owns, v29 to v31 — the pairing protocol step by step and the six digits; then the fifteen synced tables, how a row is named across devices, the three SQLite facts the capture triggers' shape follows from, §7.3's five rules against the test that proves each, the envelope measured, the relay's endpoints, and what is not built |
 | [web-target.md](../docs/reference/web-target.md) | The browser build — the module map, the OPFS pair, the measured browse and facet, and the first run's open memory failure |
 | [text-mirror.md](../docs/reference/text-mirror.md) | `mirror/` — the layout, the dirty map, why the pruner reads a manifest instead of guessing, what a pass costs measured, and the bugs still open |
+| [multi-window.md](../docs/reference/multi-window.md) | `changes.rs`, `window.rs`'s `open_new` and the scanner's lease — why a second *process* stays refused, the commit-driven mask and both of the update hook's blind spots, the emitter's locked take, and the live pass behind every figure |
 | [card-scanner.md](../docs/reference/card-scanner.md) | `scanner.rs` and the crate behind it — the pipeline and every measurement, the three evidence tiers and their weights, both tracker verdicts, the debug server, §9's first commands, two body shapes and lazy asset load, and §10's embedded assets and their load order, the filters mask, Fast and Exact, `decision_seq`, the `app_meta` tray and the synthetic evaluation |

@@ -22,12 +22,25 @@ vi.mock("@/lib/ipc", async (original) => ({
   },
 }));
 
+import dbRs from "../../../src-tauri/src/db.rs?raw";
+import { refreshForTables } from "@/lib/crossWindow";
 import { TRAY_QUIET_MS, TRAY_RETRY_MS, useTray } from "./useTray";
+import { DB_BUSY, SCANNER_OPEN_ELSEWHERE } from "./verdictText";
 
-const BUSY = "The card database is busy finishing a sync. Try that again in a moment.";
+/** `db::BUSY` — pinned against `db.rs` below, so the page and the crate cannot drift apart. */
+const BUSY = DB_BUSY;
+/** `scanner::TRAY_ROW_NEEDS_A_COPY` — a refusal no amount of waiting changes. */
+const NEEDS_A_COPY = "A tray row needs at least one copy.";
 
-function mount() {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+/** The tray's cache entry, spelled as `crossWindow.ts`' `SINGLE_WRITER_KEYS` spells it. */
+const TRAY = ["scanner", "tray"];
+
+function client() {
+  return new QueryClient({ defaultOptions: { queries: { retry: false } } });
+}
+
+/** One client per test unless a test passes its own, which is how a view comes back to a cache. */
+function mount(qc = client()) {
   const wrapper = ({ children }: { children: ReactNode }) =>
     createElement(QueryClientProvider, { client: qc }, children);
   return renderHook(() => useTray(), { wrapper });
@@ -157,11 +170,20 @@ describe("useTray", () => {
   });
 
   /**
+   * **The sentence the retries wait out is the crate's, byte for byte.** A page that spelled it
+   * differently would treat every sync as a refusal that never passes, and give up after one try.
+   */
+  it("spells db::BUSY exactly as the crate does", () => {
+    expect(dbRs.length, "db.rs was not read").toBeGreaterThan(1_000);
+    expect(dbRs).toContain(`pub const BUSY: &str = "${DB_BUSY}";`);
+  });
+
+  /**
    * **A BUSY write keeps the rows and says nothing.** Rows scanned during a sync are the reader's
    * cards, and the store is only where they survive a restart — so the tray stays on screen, and
-   * one more try after a short delay is what makes them survive one.
+   * the write is tried again after a short delay; a try that lands is the last.
    */
-  it("keeps the rows through a BUSY write and tries once more after a short delay", async () => {
+  it("keeps the rows through a BUSY write, tries again after a short delay, and stops once it lands", async () => {
     setScannerTray.mockRejectedValueOnce(BUSY);
     const { result } = mount();
     await advance(0);
@@ -176,6 +198,48 @@ describe("useTray", () => {
     expect(setScannerTray).toHaveBeenLastCalledWith(TRAY_ROWS);
     await advance(TRAY_RETRY_MS * 5);
     expect(setScannerTray).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * **The lease's refusal is `BUSY`'s twin.** Another window holding the scanner answers a tray
+   * write with `OPEN_ELSEWHERE`, and that says nothing about the rows — so they stay, and the write
+   * is tried again on the same schedule.
+   */
+  it("keeps the rows through a write refused as open elsewhere, and tries again like BUSY", async () => {
+    setScannerTray.mockRejectedValueOnce(SCANNER_OPEN_ELSEWHERE);
+    const { result } = mount();
+    await advance(0);
+
+    act(() => result.current.setRows(TRAY_ROWS));
+    await advance(TRAY_QUIET_MS);
+    expect(setScannerTray).toHaveBeenCalledTimes(1);
+    expect(result.current.rows).toEqual(TRAY_ROWS);
+
+    await advance(TRAY_RETRY_MS);
+    expect(setScannerTray).toHaveBeenCalledTimes(2);
+    expect(setScannerTray).toHaveBeenLastCalledWith(TRAY_ROWS);
+    expect(result.current.rows).toEqual(TRAY_ROWS);
+  });
+
+  /**
+   * **A retry never writes what is not there.** The view is gone and so is its cache entry — the
+   * rows went with it — and writing `latest()`'s `[]` would store an empty tray over the one the
+   * row still holds.
+   */
+  it("skips a retry that finds its cache entry gone, rather than storing an empty tray", async () => {
+    setScannerTray.mockRejectedValueOnce(BUSY);
+    const qc = client();
+    const { result, unmount } = mount(qc);
+    await advance(0);
+
+    act(() => result.current.setRows(TRAY_ROWS));
+    unmount();
+    expect(setScannerTray, "the premise: the unmount's flush was refused").toHaveBeenCalledTimes(1);
+    await advance(0);
+    qc.removeQueries({ queryKey: TRAY });
+
+    await advance(TRAY_RETRY_MS);
+    expect(setScannerTray).toHaveBeenCalledTimes(1);
   });
 
   /** The retry writes the tray as it is by then, not as it was when the write was refused. */
@@ -300,6 +364,36 @@ describe("useTray", () => {
       expect(wire.stored()).toEqual(after);
     });
 
+    /**
+     * The commit's answer writes the tray behind it only while there is a tray to write: with the
+     * view gone and its entry dropped, `latest()` is `[]` rather than the rows, and storing what is
+     * left of *that* would empty the tray the commit had just stored.
+     */
+    it("writes nothing behind a commit that answers after its entry has gone", async () => {
+      const wire = backend();
+      scannerTray.mockResolvedValue(TRAY_ROWS);
+      const qc = client();
+      const { result, unmount } = mount(qc);
+      await advance(0);
+
+      const taken = TRAY_ROWS[1];
+      let committed!: Promise<ImportCommitOutcome>;
+      act(() => {
+        committed = result.current.commit([], null, (latest) => latest.filter((row) => row.key !== taken.key));
+      });
+      await advance(0);
+      expect(scannerTrayCommit).toHaveBeenCalledTimes(1);
+      unmount();
+      qc.removeQueries({ queryKey: TRAY });
+
+      await wire.settleNewestFirst();
+      await expect(committed).resolves.toEqual(OUTCOME);
+      await advance(TRAY_QUIET_MS * 2);
+      await wire.settleNewestFirst();
+      expect(setScannerTray).not.toHaveBeenCalled();
+      expect(wire.stored()).toEqual(TRAY_ROWS.filter((row) => row !== taken));
+    });
+
     it("keeps every row when the commit is refused, and the next write still goes out", async () => {
       scannerTray.mockResolvedValue(TRAY_ROWS);
       scannerTrayCommit.mockRejectedValueOnce(BUSY);
@@ -320,5 +414,144 @@ describe("useTray", () => {
       await advance(TRAY_QUIET_MS);
       expect(setScannerTray).toHaveBeenCalledWith(TRAY_ROWS.slice(1));
     });
+  });
+});
+
+/**
+ * **What another window's refresh may do with a tray this window has left.** `crossWindow.ts`
+ * drops an idle tray on every `app_meta` change so the next visit reads the stored row fresh —
+ * and asks this hook first whether anything in it is unsaved. These drive that real refresh
+ * against the real hook, because the failure is the pair of them: the entry dropped under a write
+ * still waiting, and the write then storing nothing or nobody's rows.
+ */
+describe("useTray under another window's refresh", () => {
+  /**
+   * Leave the Scanner during a sync: the unmount's flush answers `BUSY`, the next try is waiting,
+   * and some other window's `app_meta` write lands meanwhile.
+   */
+  it("keeps an idle tray whose refused write is waiting to retry, and the retry stores the rows", async () => {
+    setScannerTray.mockRejectedValueOnce(BUSY);
+    const qc = client();
+    const { result, unmount } = mount(qc);
+    await advance(0);
+    act(() => result.current.setRows(TRAY_ROWS));
+    unmount();
+    expect(setScannerTray, "the premise: the unmount's flush was refused").toHaveBeenCalledTimes(1);
+    await advance(0);
+
+    refreshForTables(qc, ["app_meta"]);
+    expect(qc.getQueryData(TRAY), "the refresh dropped rows the store does not hold").toEqual(TRAY_ROWS);
+
+    await advance(TRAY_RETRY_MS);
+    expect(setScannerTray).toHaveBeenCalledTimes(2);
+    expect(setScannerTray).toHaveBeenLastCalledWith(TRAY_ROWS);
+  });
+
+});
+
+/**
+ * **A write the tray still owes is tried until it lands** — for a sync and for another window's
+ * lease alike, once an interval and never faster, stopping only when a write lands, its rows are
+ * superseded by a newer write, or there are no rows left to write. Every try is `set_scanner_tray`,
+ * the lease-gated command, so the window with unsaved cards holds the scanner the whole time.
+ */
+describe("useTray retrying until the write lands", () => {
+  /**
+   * **A first sync outlasts any fixed number of tries.** Seven refused tries here, each exactly one
+   * interval after the last, each carrying the same rows, and the entry kept through another
+   * window's refresh after every one — then the sync clears, the next try lands, and nothing goes
+   * out after it.
+   */
+  it.each([
+    ["a sync", BUSY],
+    ["another window's lease", SCANNER_OPEN_ELSEWHERE],
+  ])("keeps trying a write refused by %s, once an interval, until it lands", async (_, refusal) => {
+    setScannerTray.mockRejectedValue(refusal);
+    const qc = client();
+    const { result, unmount } = mount(qc);
+    await advance(0);
+    act(() => result.current.setRows(TRAY_ROWS));
+    unmount();
+    await advance(0);
+    expect(setScannerTray, "the premise: the unmount's flush was refused").toHaveBeenCalledTimes(1);
+
+    for (let tries = 2; tries <= 8; tries += 1) {
+      await advance(TRAY_RETRY_MS - 1);
+      expect(setScannerTray, "a try went out before its interval").toHaveBeenCalledTimes(tries - 1);
+      await advance(1);
+      expect(setScannerTray, `try ${tries} did not go out`).toHaveBeenCalledTimes(tries);
+      expect(setScannerTray).toHaveBeenLastCalledWith(TRAY_ROWS);
+      refreshForTables(qc, ["app_meta"]);
+      expect(qc.getQueryData(TRAY), "the tray was dropped while its write was still refused").toEqual(TRAY_ROWS);
+    }
+
+    setScannerTray.mockResolvedValue(undefined);
+    await advance(TRAY_RETRY_MS);
+    expect(setScannerTray).toHaveBeenCalledTimes(9);
+    await advance(TRAY_RETRY_MS * 10);
+    expect(setScannerTray, "a try went out after one had landed").toHaveBeenCalledTimes(9);
+    refreshForTables(qc, ["app_meta"]);
+    expect(qc.getQueryCache().find({ queryKey: TRAY, exact: true })).toBeUndefined();
+  });
+
+  /**
+   * **Only a refusal that passes is waited out.** A row of nothing is refused however long the
+   * page waits, so it gets the one more try it always had and no further — a loop there would hold
+   * the scanner's lease for as long as the process lived. The rows are still unsaved, so the entry
+   * is still kept.
+   */
+  it("gives any other refusal one more try and no further", async () => {
+    setScannerTray.mockRejectedValue(NEEDS_A_COPY);
+    const qc = client();
+    const { result, unmount } = mount(qc);
+    await advance(0);
+    act(() => result.current.setRows(TRAY_ROWS));
+    unmount();
+    await advance(0);
+    await advance(TRAY_RETRY_MS * 10);
+    expect(setScannerTray).toHaveBeenCalledTimes(2);
+    refreshForTables(qc, ["app_meta"]);
+    expect(qc.getQueryData(TRAY)).toEqual(TRAY_ROWS);
+  });
+
+  /** The tries stop with the rows: an entry that has gone leaves the loop nothing to write. */
+  it("stops trying once the cache entry has gone, rather than storing an empty tray", async () => {
+    setScannerTray.mockRejectedValue(BUSY);
+    const qc = client();
+    const { result, unmount } = mount(qc);
+    await advance(0);
+    act(() => result.current.setRows(TRAY_ROWS));
+    unmount();
+    await advance(0);
+    await advance(TRAY_RETRY_MS * 2);
+    expect(setScannerTray).toHaveBeenCalledTimes(3);
+
+    qc.removeQueries({ queryKey: TRAY });
+    await advance(TRAY_RETRY_MS * 10);
+    expect(setScannerTray).toHaveBeenCalledTimes(3);
+  });
+
+  /**
+   * **A change while the tries wait takes them over rather than starting a second loop.** It
+   * carries the whole tray, so the loop goes on with the newer rows — still once an interval.
+   */
+  it("lets a newer change take the tries over, without a second loop", async () => {
+    setScannerTray.mockRejectedValue(BUSY);
+    const { result } = mount();
+    await advance(0);
+    act(() => result.current.setRows(TRAY_ROWS.slice(0, 1)));
+    await advance(TRAY_QUIET_MS);
+    await advance(TRAY_RETRY_MS);
+    expect(setScannerTray).toHaveBeenCalledTimes(2);
+
+    act(() => result.current.setRows(TRAY_ROWS.slice(0, 2)));
+    await advance(TRAY_QUIET_MS);
+    expect(setScannerTray).toHaveBeenCalledTimes(3);
+    expect(setScannerTray).toHaveBeenLastCalledWith(TRAY_ROWS.slice(0, 2));
+    for (let tries = 4; tries <= 8; tries += 1) {
+      await advance(TRAY_RETRY_MS);
+      expect(setScannerTray, "two loops were running").toHaveBeenCalledTimes(tries);
+      expect(setScannerTray).toHaveBeenLastCalledWith(TRAY_ROWS.slice(0, 2));
+    }
   });
 });

@@ -73,7 +73,11 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
 - **The successor waits on the predecessor's process handle** (`--await-predecessor <pid>`,
   `OpenProcess(SYNCHRONIZE)` + `WaitForSingleObject`), _before_ `Builder::default()`. Without
   the wait `tauri-plugin-single-instance` gives it **exit code 0, no window, no stderr** and
-  the update looks corrupt. **The first version waited by deleting the renamed image and that
+  the update looks corrupt. ⚠️ **Since 2026-09-20 that failure wears a different face**: the
+  predecessor answers a second launch by opening a window
+  ([multi-window.md](multi-window.md)), so a successor that raced it would leave the reader with
+  a window of the **old** build looking like the update had worked. The wait is what makes both
+  readings moot, and it has not changed. **The first version waited by deleting the renamed image and that
   was wrong**: Rust's `fs::remove_file` uses POSIX-semantics deletion on current Windows, so
   it _succeeds_ against a running exe — measured as "let go after 0 ms" with 200 ms of
   predecessor still to live. With the process wait: **231 ms**, window back, PID changed.
@@ -84,6 +88,11 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   the operation is still running and the panel disables the button it just earned. Measured:
   "Restart to finish" arrived already disabled. Every `Ok` path drops the guard first. Invisible
   to unit tests, which pass `busy` in by hand.
+- **Installing ends every window, and past one the button says so** (2026-09-20). `update_apply`
+  calls `app.exit(0)`, which is the *process* — so when `useWindowCount() >= 2` the panel draws
+  *Restarting closes all N windows.* under **Restart to finish**, as an `aria-describedby` hint
+  rather than a dialog: that button is already the second, deliberate press. One window comes back
+  after the restart, and restoring the rest is out of scope.
 - NSIS handoff is `setup.exe /P /R /UPDATE`, **spawned before we exit**: the installer's
   `CheckIfAppIsRunning` kills the running process without prompting in passive mode, and
   leaving on our own terms is what lets `RunEvent::Exit` checkpoint the WAL.

@@ -21,9 +21,19 @@ deliberately**: no screenshots are stored.
   nothing about the one file that can drift from that capability.
 - **The window fake keeps module state where the other three keep per-world state**, and that is
   the honest model rather than an oversight: a story's *backend* is its own, and two docs-page
-  stories may hold different databases — but there is one window, on the desk and here. What it
+  stories may hold different databases — but **a story is one window**. What it
   costs is exactly what `scope.ts` exists to prevent, so `installWorld` calls `resetWindow()`
   beside the store reset. A story that maximized the window must not leave the next one maximized.
+  ⚠️ **"one window, on the desk and here" is what this said until 2026-09-20, and the first half
+  stopped being true**: the app opens as many as the reader asks for — Ctrl+Shift+N, or relaunching
+  the exe — each with its own webview and its own query cache
+  ([multi-window.md](../docs/reference/multi-window.md)). Nothing about the fake's shape changes,
+  because the workbench still draws one: `window_new` answers and opens nothing, `window_count` is
+  always one, and `getCurrentWindow().listen` is the same per-window subscription drawn in the one
+  window there is. **What a second window would show is a `fault`, never a second window** — the
+  `scannerElsewhere` fault below is the whole of that vocabulary, and a story that wants to say
+  *another window is doing this* reaches for the same shape rather than teaching the fake to open
+  one.
 - **The fake stores table rows and derives DTOs** (`fake/db.ts`), because `ownedQuantity` means
   three different things. A fake that stored DTOs would make all three agree, and
   teach a reader a model the app does not have. (It was **four** until 2026-09-08: `WishRow`
@@ -65,28 +75,35 @@ deliberately**: no screenshots are stored.
   **Nine** seeds
   (`empty`/`starter`/`needsReview`/`large`/`bracketMismatch`/`combosMissing`/`paired`/
   `virtualDeck`/`shared`),
-  **twenty-seven** faults
+  **twenty-eight** faults
   (`busy`/`syncing`/`syncError`/`imageFailures`/`gone`/`indexCold`/`deckMeta`/`deckNotes`/
   `updateAvailable`/
   `updateError`/`errorLog`/`feedFetchError`/`oracleTagsMissing`/`oracleTagsFetchError`/
   `artTagsMissing`/`artTagsFetchError`/`imageUrisMissing`/`exportWriteError`/
   `mirrorRootUnwritable`/`combosFetchError`/`pairingReadError`/`patreonDeclined`/
-  `patreonLapsed`/`patreonGroupEntitled`/`wishGone`/`scannerMissing`/`shareLapsed`); saying
+  `patreonLapsed`/`patreonGroupEntitled`/`wishGone`/`scannerMissing`/`scannerElsewhere`/
+  `shareLapsed`); saying
   nothing gets `starter` with no fault. A
   fault is set on the _world_, so a story shows what the **app** does with a refusal rather than
   what one mocked call returns. **`syncing` is `busy`'s neighbour and reaches exactly one
   command**: `cache_clear` refuses outright while a card update is in flight, because
   `data/tmp/` is where the corpus download puts 77 MB the ingest then reads back — and it is
   checked *before* the write connection is asked for, which is why it is not `busy`.
-  **Eight of the twenty-seven are not failures at all** — `indexCold` is
+  **Nine of the twenty-eight are not failures at all** — `indexCold` is
   the search index mid-build; `oracleTagsMissing` is the Oracle tag taxonomy having never
   been ingested, which is every install's first launch and the state the type-line fallback
   exists for; `artTagsMissing` is the same thing one dataset over, where the honest floor is a
   Tags page that says it has nothing yet; `imageUrisMissing` is a corpus whose
   `cards.image_uris` is NULL throughout, so
-  `card_image_uri` answers `null` for every printing and "Copy card image" copies nothing; and
+  `card_image_uri` answers `null` for every printing and "Copy card image" copies nothing;
   `scannerMissing` is the three scanner assets never having been placed, which is every
-  installation's state until a reader does.
+  installation's state until a reader does; and `scannerElsewhere` is another window holding the
+  scanner's two-second lease, so `scanner_elsewhere` answers `true` — and `scanner_hold`, the
+  mounted view's heartbeat, refuses with the lease's sentence — and the Scanner view draws one
+  sentence and opens no camera. **It is a fault rather than a seed because what it stands in for
+  is a second window**, and a story is one window (`window_new` only answers, `window_count` is
+  always one) — and it is not a failure because the lease lapses on its own once the other
+  window's view has gone and its tray and prefs writes have landed.
   **`patreonDeclined`, `patreonLapsed` and `patreonGroupEntitled` are the other three, and they
   are the three supporter states no press can reach.** Connecting *is* reachable — paste a claim
   code, press Connect — so there is neither fault nor seed for it; what a reader can never

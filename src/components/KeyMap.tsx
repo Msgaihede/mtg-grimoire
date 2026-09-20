@@ -3,10 +3,12 @@ import { AnimatePresence } from "motion/react";
 import { usePopupPlacement } from "@/components/Dropdown/usePopupPlacement";
 import { NAV } from "@/components/nav";
 import { PopupPanel } from "@/components/PopupListbox";
+import { isDesktop } from "@/lib/platform";
 import {
   SHORTCUTS,
   activeScopes,
   chordParts,
+  shownOn,
   type Shortcut,
   type ShortcutScope,
 } from "@/lib/shortcuts";
@@ -253,7 +255,14 @@ export function KeyMap({ children }: { children: ReactNode }) {
               )}
             >
               {activeScopes({ activeView, openDeckId }).map((scope) => {
-                const rows = SHORTCUTS[scope];
+                // Filtered with the same answer `AppShell` binds against, so a row for something
+                // this build cannot do — a second window, on a phone or in a tab — is neither
+                // listed nor bound, rather than listed and dead. **Nothing reaches this branch
+                // off the desktop today**: this panel's one mount is `TitleBar`, which is itself
+                // desktop-only. The filter is what keeps the rows honest the day the panel is
+                // drawn anywhere else, and it belongs here rather than at that mount because
+                // this is the component that reads the catalogue.
+                const rows = SHORTCUTS[scope].filter((row) => shownOn(row, isDesktop()));
                 // **A scope with nothing in it draws nothing — not a heading over a gap.** All
                 // nine views are in that state today — `deckEditor` is a scope of its own and
                 // *replaces* `decks` rather than filling it — and that is the honest answer
