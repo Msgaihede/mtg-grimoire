@@ -4,8 +4,16 @@
 import { Editor } from "@tiptap/react";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { compile } from "tailwindcss";
 import { describe, expect, it, vi } from "vitest";
-import NoteEditor, { NOTE_EXTENSIONS } from "./NoteEditor";
+// Tailwind's own entry, read through Vite rather than `node:fs` — this project has no
+// `@types/node` on purpose, which is `tokens.test.ts`'s note and why `?raw` is the house style
+// for a test that asserts against a file's text. The entry is self-contained (one
+// `@tailwind utilities` and no `@import` of its own), so handing it back from `loadStylesheet`
+// is the whole of the resolver the compile below needs.
+import twEntry from "tailwindcss/index.css?raw";
+import appCss from "@/index.css?raw";
+import NoteEditor, { NOTE_EXTENSIONS, NOTE_PLACEHOLDER } from "./NoteEditor";
 import source from "./NoteEditor.tsx?raw";
 
 /**
@@ -375,5 +383,120 @@ describe("the stylesheet", () => {
     expect(source).toContain('import "prosemirror-view/style/prosemirror.css"');
     expect(source).not.toContain("document.head");
     expect(source).not.toMatch(/createElement\(\s*["']style["']\s*\)/);
+  });
+});
+
+/* ------------------------------------------------------------------ the placeholder ---- */
+
+describe("the empty surface's prompt", () => {
+  it("teaches the naming rule on an empty surface, because there is no title field to do it", async () => {
+    render(<NoteEditor value="" onChange={vi.fn()} ariaLabel="Body of a new note" />);
+
+    // ProseMirror writes the sentence onto the empty paragraph as `data-placeholder`, and the CSS
+    // in `SURFACE` is what paints it. The attribute is the half jsdom can referee.
+    const empty = await screen.findByRole("textbox");
+    expect(empty.querySelector("[data-placeholder]")).toHaveAttribute(
+      "data-placeholder",
+      NOTE_PLACEHOLDER,
+    );
+  });
+
+  it("says nothing on a surface that already has a body", async () => {
+    render(<NoteEditor value="Fourteen sources." onChange={vi.fn()} ariaLabel="Body of Mana base" />);
+    const surface = await screen.findByRole("textbox");
+    expect(surface.querySelector("[data-placeholder]")).toBeNull();
+  });
+
+  /** The sentence the dialog's `NOTE_PLACEHOLDER` is the one home for, pinned so the naming rule
+   *  cannot quietly stop being taught by being reworded into saying something else. */
+  it("says what happens to the first line", () => {
+    expect(NOTE_PLACEHOLDER).toBe("Start typing — the first line becomes the note's name.");
+  });
+});
+
+/**
+ * Compile a utility against the app's **own** stylesheet and hand back the `@layer utilities`
+ * block it produced — empty string where Tailwind emitted nothing at all.
+ *
+ * ⚠️ **Because the failure this guards against is silent.** A mistyped arbitrary value, or a
+ * colour token this build does not carry, produces **no rule and no warning**: `tsc` passes,
+ * both suites pass, the class sits right there in the source, and the surface simply has no
+ * prompt. That is `src/index.css`'s own `@custom-variant` trap one layer out, and
+ * `keyboardModality.test.ts`'s `selectorFor` is the shape this copies — including reading both
+ * stylesheets through Vite's `?raw` rather than `node:fs`, since this project has no
+ * `@types/node`.
+ *
+ * **`src/index.css` and not a bare `@import "tailwindcss"`**, which is the one thing about this
+ * helper that had to be got right: `text-dim` is a project token declared in an `@theme` block
+ * there, so compiled against stock Tailwind it emits nothing — and the test would then be
+ * reporting the shipped stylesheet's own colour as a defect. Every other `@import` that file
+ * makes is answered with an empty sheet: two font families, `tw-animate-css` and shadcn's
+ * theme contribute no utility this file is about.
+ *
+ * **The utilities layer and never the whole sheet.** Preflight names `::before` and sets
+ * `content` on it, so `built.includes("::before")` and `built.includes("content:")` are both
+ * true for a utility that emitted *nothing* — measured, and it is exactly the vacuous assertion
+ * this whole describe block exists to avoid making.
+ */
+async function compiledUtilities(utility: string): Promise<string> {
+  const compiler = await compile(appCss, {
+    base: "/",
+    loadStylesheet: (id: string) =>
+      Promise.resolve(
+        id === "tailwindcss"
+          ? { path: "/tailwindcss/index.css", base: "/tailwindcss", content: twEntry }
+          : { path: "/empty.css", base: "/", content: "" },
+      ),
+    loadModule: () => Promise.reject(new Error("no JS modules expected")),
+  });
+  const built = compiler.build([utility]);
+  return built.match(/@layer utilities \{([\s\S]*?)\n\}/)?.[1].trim() ?? "";
+}
+
+/** The utilities `SURFACE` paints the prompt with, lifted out of the shipped source rather than
+ *  copied here — a list written twice is a list that can agree with itself while disagreeing with
+ *  the file that ships. */
+const PROMPT_UTILITIES = [
+  ...source.matchAll(/"(\[&_\.is-editor-empty:first-child\]:before:[^"]+)"/g),
+].map(([, utility]) => utility);
+
+describe("the prompt's CSS is really compiled", () => {
+  it("is painted from SURFACE at all", () => {
+    // A sweep over nothing finds nothing: an empty list would make every assertion below pass
+    // while proving the opposite of what it says.
+    expect(PROMPT_UTILITIES.length).toBe(5);
+  });
+
+  it("emits a rule for every one of them", async () => {
+    const silent: string[] = [];
+    for (const utility of PROMPT_UTILITIES) {
+      if ((await compiledUtilities(utility)) === "") silent.push(utility);
+    }
+    // Collected as a list rather than asserted one at a time, so a failure names *which* of the
+    // five emitted nothing instead of stopping at the first.
+    expect(silent).toEqual([]);
+  });
+
+  it("really compiles the prompt's content rule", async () => {
+    const built = await compiledUtilities(
+      "[&_.is-editor-empty:first-child]:before:content-[attr(data-placeholder)]",
+    );
+    expect(built).toContain("content:");
+    expect(built).toContain("attr(data-placeholder)");
+    // The descendant half of the variant, which is what puts the rule on ProseMirror's own
+    // decorated paragraph rather than on the surface itself.
+    expect(built).toContain(".is-editor-empty:first-child::before");
+  });
+
+  /**
+   * The control, and it is what makes the three above mean anything: Tailwind answers a class it
+   * cannot parse with **silence**, not with an error — so a test that cannot tell that silence
+   * from success is a test that would pass over the defect.
+   */
+  it("emits nothing at all for a prompt rule that is mistyped", async () => {
+    expect(
+      await compiledUtilities("[&_.is-editor-empty:first-child]:before:content[attr(data-placeholder)]"),
+    ).toBe("");
+    expect(await compiledUtilities("[&_.is-editor-empty:first-child]:before:text-dimm")).toBe("");
   });
 });

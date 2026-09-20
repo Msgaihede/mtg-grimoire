@@ -41,6 +41,7 @@
 import "prosemirror-view/style/prosemirror.css";
 
 import Heading, { type Level } from "@tiptap/extension-heading";
+import { Placeholder } from "@tiptap/extensions";
 import { Markdown } from "@tiptap/markdown";
 import {
   EditorContent,
@@ -107,6 +108,15 @@ const NoteHeading = Heading.extend({
 });
 
 /**
+ * What an empty surface says, and **the only teaching left in the create flow**.
+ *
+ * The redesign deleted the title field: a note is written with `title: ""` and `noteTitle()`
+ * answers the body's first line. That rule is invisible unless something says it, and the one
+ * place a reader is looking when it matters is the empty box they are about to type in.
+ */
+export const NOTE_PLACEHOLDER = "Start typing — the first line becomes the note's name.";
+
+/**
  * The whole dialect, spelled out — **including every option that is off**.
  *
  * The list is the same one `noteMarkdown.ts` reads and `docs/superpowers/specs/…-deck-notes-design.md`
@@ -127,6 +137,11 @@ const NoteHeading = Heading.extend({
  * which matters here precisely because `trailingNode` is off and there is no spare paragraph to
  * land in. None of them can put a node or a mark into a body. `dropcursor` is off because
  * dragging inside a note is not a gesture this app offers.
+ *
+ * **A fourth behaviour extension is added below rather than configured in there**, because it is
+ * not a StarterKit option: {@link Placeholder}, which paints the empty surface's prompt. The
+ * sentence above holds unchanged — it can put no node and no mark into a body either, so the
+ * dialect and `noteMarkdown.test.ts`' round trip are untouched by it.
  *
  * ⚠️ **Four of the dialect's members cannot be named here at all, and that is a type fact rather
  * than an omission.** `StarterKitOptions` types `document`, `text` and `gapcursor` as literally
@@ -169,6 +184,20 @@ export const NOTE_EXTENSIONS = [
     dropcursor: false,
   }),
   NoteHeading.configure({ levels: HEADING_LEVELS }),
+
+  /**
+   * **Behaviour, not schema** — the same kind `undoRedo`, `listKeymap` and `gapcursor` already
+   * are, and the first one named at this list's own level rather than inside StarterKit's
+   * options. It can put no node and no mark into a body, so the pinned dialect and
+   * `noteMarkdown.test.ts`' round trip are untouched. What it does is write `data-placeholder`
+   * onto an empty node and add `is-empty` / `is-editor-empty`; {@link SURFACE} is what paints it.
+   *
+   * `showOnlyWhenEditable` is the default and is right: a read-only surface with a prompt on it is
+   * a box inviting a press it will refuse. `showOnlyCurrent` keeps the sentence on the one empty
+   * paragraph the caret is in rather than on every empty paragraph in a long note.
+   */
+  Placeholder.configure({ placeholder: NOTE_PLACEHOLDER }),
+
   Markdown,
 ];
 
@@ -212,10 +241,22 @@ const PROSE = cn(
  * `focus:outline-none` with a border that goes gold instead: an outline on a box the reader is
  * typing in draws a second edge around an edge that is already there, and the border is what every
  * other field in these dialogs lights up (`META_FIELD`, `FIELD`).
+ *
+ * ⚠️ **The prompt's five utilities are compiled in `NoteEditor.test.tsx` rather than read.** An
+ * arbitrary value Tailwind cannot parse emits **no rule and no warning**, so a surface with no
+ * prompt is what a typo here buys — and nothing else in either build can see it.
  */
 const SURFACE = cn(
   "min-h-32 w-full px-2.5 py-2 text-sm text-text",
   "focus:outline-none",
+  // The prompt, painted on the empty paragraph {@link Placeholder} marked. `float-left h-0` is
+  // ProseMirror's own recipe: a `::before` in flow would push the caret down a line, and a
+  // floated zero-height box leaves the caret exactly where an empty paragraph puts it.
+  "[&_.is-editor-empty:first-child]:before:pointer-events-none",
+  "[&_.is-editor-empty:first-child]:before:float-left",
+  "[&_.is-editor-empty:first-child]:before:h-0",
+  "[&_.is-editor-empty:first-child]:before:text-dim",
+  "[&_.is-editor-empty:first-child]:before:content-[attr(data-placeholder)]",
   PRESS_STILL,
   PROSE,
 );
