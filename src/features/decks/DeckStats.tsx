@@ -18,7 +18,7 @@ import {
 } from "@/lib/mana";
 import { PRESS, statusLine } from "@/lib/motion";
 import { cn } from "@/lib/utils";
-import { cardManaValue, CURVE_BUCKETS, curveBucket, isLand } from "./deckBuckets";
+import { cardManaValue, CURVE_BUCKETS, curveBucket, isLand, isMdfcLand } from "./deckBuckets";
 import { CardDistribution } from "./stats/CardDistribution";
 import { CurveByColor } from "./stats/CurveByColor";
 import { DeckFigures } from "./stats/DeckFigures";
@@ -130,6 +130,23 @@ export interface DeckStatsSummary {
   inactive: number;
   lands: number;
   nonlands: number;
+  /**
+   * Copies that are a land on the **back** of a modal DFC — counted by {@link isMdfcLand}. Never
+   * part of {@link lands}, and a **subset** of {@link nonlands} rather than a third bucket beside
+   * the two.
+   *
+   * A second number rather than a wider first one, which is the whole of issue #475. These cards
+   * are cast from the front, so they are nonlands to the curve, the average and the type bars —
+   * and they are filed under Ramp, Removal or whatever they *do*, because `autoCategoryFor` reads
+   * the front face too. What a deckbuilder counts them as is *cards that can be a land this
+   * game*, which no figure here could say while `lands` was the only one. So the ledger draws
+   * `38 +2 MDFC` and the two terms answer two questions.
+   *
+   * **It is a disjoint tally and never a subtotal**: a Pathway is `Land // Land`, so its front
+   * answers {@link isLand} and it is in `lands` and not here. `lands + nonlands` is still every
+   * counted copy, with these among the nonlands — nothing about that arithmetic moved.
+   */
+  mdfcLands: number;
   /** Nonland copies with no mana value anywhere — an orphaned row has neither a `cmc` nor a
    *  printed cost, and filing it under 0 would put a number this app invented at the head of
    *  the curve, where a reader counts their cheapest spells. */
@@ -322,6 +339,9 @@ export function deckStats(cards: readonly DeckCard[], separateXGroup = false): D
   // line and the deck list's own filing disagree, and its doc says which job each answer serves.
   const lands = counted.filter((c) => isLand(c.typeLine));
   const nonlands = counted.filter((c) => !isLand(c.typeLine));
+  // A subset of `nonlands` by construction — `isMdfcLand` requires the front face not be a land —
+  // so this is read beside the Lands figure and never added into it.
+  const mdfcLands = nonlands.filter(isMdfcLand);
 
   const copiesOf = (rows: readonly DeckCard[]) => rows.reduce((n, c) => n + c.quantity, 0);
 
@@ -470,6 +490,7 @@ export function deckStats(cards: readonly DeckCard[], separateXGroup = false): D
       .reduce((n, card) => n + card.quantity, 0),
     lands: copiesOf(lands),
     nonlands: copiesOf(nonlands),
+    mdfcLands: copiesOf(mdfcLands),
     unknownManaValue,
     curve,
     variableCost: separateXGroup ? variableCost : null,

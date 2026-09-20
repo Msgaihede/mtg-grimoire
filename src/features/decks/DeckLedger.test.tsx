@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { TOOLTIP_OPEN_MS, TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import type { DeckCard } from "@/lib/ipc";
@@ -79,6 +79,71 @@ describe("DeckLedger", () => {
     ledger([card({ name: "Bolt", quantity: 4 })]);
 
     expect(term("Cards").querySelector("dd")?.textContent).toBe("4");
+  });
+
+  /**
+   * **The lands a deck plays off the back of a spell, said beside the figure and never folded
+   * into it** (issue #475). A modal DFC is filed under what it *does* — Turntimber Symbiosis
+   * lands in Ramp — and is a spell to the curve and the average, so the manabase figure had no
+   * way to say a reader could draw it and play a land.
+   *
+   * **The whole string is asserted rather than the two halves separately**, because `38` and
+   * `+2 MDFC` both being present is what a render with no separator at all also satisfies —
+   * `38+2 MDFC`, which reads as a single number and is the one way this can be visibly wrong.
+   * What it deliberately does **not** claim to see is which side of the `<span>` the space sits
+   * on: `textContent` concatenates across element boundaries, so both spellings answer alike.
+   * That placement is a convention with no fence, and the reason is at its own site.
+   */
+  it("says the lands the deck plays off the back of a spell, beside the figure", async () => {
+    ledger([
+      card({ name: "Island", typeLine: "Basic Land — Island", cmc: 0, quantity: 38 }),
+      card({ name: "Turntimber Symbiosis", typeLine: "Sorcery // Land", cmc: 7, layout: "modal_dfc" }),
+      card({
+        name: "Skyclave Cleric",
+        typeLine: "Creature — Kor Cleric // Land",
+        cmc: 2,
+        layout: "modal_dfc",
+      }),
+    ]);
+
+    expect(term("Lands").querySelector("dd")?.textContent).toBe("38 +2 MDFC");
+    expect(await openTooltip(term("Lands"))).toHaveTextContent(
+      "Lands by type line, and 2 modal double-faced cards that play as a land off the back.",
+    );
+  });
+
+  /** `plural` and `verb` together — the count a reader is likeliest to meet is one. */
+  it("agrees with a count of one", async () => {
+    ledger([
+      card({ name: "Island", typeLine: "Basic Land — Island", cmc: 0, quantity: 38 }),
+      card({ name: "Turntimber Symbiosis", typeLine: "Sorcery // Land", cmc: 7, layout: "modal_dfc" }),
+    ]);
+
+    expect(term("Lands").querySelector("dd")?.textContent).toBe("38 +1 MDFC");
+    expect(await openTooltip(term("Lands"))).toHaveTextContent(
+      "1 modal double-faced card that plays as a land off the back.",
+    );
+  });
+
+  /**
+   * A deck with none draws the bare figure and **binds no hint at all** — `Lands` needs no gloss,
+   * and the tooltip exists to expand the abbreviation. `useTooltip` answers no binding for falsy
+   * content, so the anchor has no `onPointerEnter` to fire and nothing opens.
+   */
+  it("draws the bare figure, and no hint, for a deck that plays no MDFC land", async () => {
+    ledger([
+      card({ name: "Island", typeLine: "Basic Land — Island", cmc: 0, quantity: 38 }),
+      // The Pathway is already a land to the figure beside it — counted once, never twice.
+      card({ name: "Blightstep Pathway", typeLine: "Land // Land", cmc: 0, layout: "modal_dfc" }),
+    ]);
+
+    expect(term("Lands").querySelector("dd")?.textContent).toBe("39");
+    // Past the open delay, or the absence is a claim about a hint that had not opened yet.
+    fireEvent.pointerEnter(term("Lands"));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, TOOLTIP_OPEN_MS + 100));
+    });
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });
 
   /**
