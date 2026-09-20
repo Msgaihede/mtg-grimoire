@@ -571,6 +571,13 @@ describe("a refused read", () => {
  * `DeckEditor.test.tsx`'s; what is left — and what nothing else can see — is the band's own end of
  * the contract: that a request is taken **once**, that `add` and `open` do two different things,
  * and that the host is handed the request back so it can clear it.
+ *
+ * ⚠️ **The witness that a request was taken is the dialog, not a write** (2026-09-20). An `add`
+ * used to create its note on the press, so `deckNoteCreate` was both the behaviour under test and
+ * the proof that the effect had run; the create is the dialog's **Save** now, so three of the
+ * tests below moved onto `onRequestHandled` and the editor itself. A `deckNoteCreate` assertion
+ * left in one of them would not have failed loudly — it would have hung a `waitFor` out to its
+ * timeout on a call that is never going to come.
  */
 describe("a note act asked for from the card menu", () => {
   const BOLT: DeckNoteRequest = {
@@ -579,20 +586,55 @@ describe("a note act asked for from the card menu", () => {
   };
 
   /**
-   * **Titled with the card, naming the card, in one write.**
+   * **The editor opens and the note does not exist yet, which is the whole of what moved**
+   * (2026-09-20).
    *
-   * This is the one note in the feature born with a title, and the reason is that it is also the
-   * one born *before* its body: a blank one reads `Untitled note` in this band and in that card's
-   * own `Notes ▸` submenu the moment it appears, which is a row with no identity in a list of
-   * rows. `oracleIds` in the same call is what makes it turn up under the card again with no
-   * attach step to lose.
+   * The request used to write its note on the press — titled with the card, naming it in the same
+   * transaction — because it was the one note in the feature born *before* its body, and a blank
+   * one reads `Untitled note`. The redesign put the body behind a dialog, and a dialog a reader
+   * dismisses would have left exactly that empty untitled note in the band every time, with no
+   * recourse but to find it and delete it. So the press asks the question and Save answers it.
    */
-  it("writes a note that already names the card", async () => {
+  it("opens the editor on an add request and writes nothing yet", async () => {
     renderBand({ request: BOLT });
 
-    await waitFor(() =>
-      expect(deckNoteCreate).toHaveBeenCalledWith(4, "Lightning Bolt", "", ["o-bolt"]),
-    );
+    expect(await screen.findByRole("dialog", { name: "New note" })).toBeInTheDocument();
+    // The subtitle is a fact about what the dialog was opened to *do* rather than about anything
+    // typed into it — the attach has not happened and will ride in the create.
+    expect(screen.getByText("This note will name Lightning Bolt")).toBeInTheDocument();
+    expect(deckNoteCreate).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **The card still rides in the create, in the same transaction it always did**, so the note
+   * turns up under that card's own `Notes ▸` submenu with no attach step to lose. Only *when*
+   * moved: one round trip later, on the invalidate after Save.
+   *
+   * `title: ""` like every other note this band writes. The title the old path invented was the
+   * price of a note born before its body, and nothing here is born before its body any more.
+   */
+  it("names the card in the create the Save makes", async () => {
+    renderBand({ request: BOLT });
+
+    await writeAndSave("New note", "Four is too many", "Save note");
+
+    expect(deckNoteCreate).toHaveBeenCalledWith(4, "", "Four is too many", ["o-bolt"]);
+  });
+
+  /**
+   * **A cancelled dialog leaves nothing behind, which is the whole of why the create moved.** An
+   * empty untitled note in the band is a row the reader has to notice, recognise as theirs and
+   * delete — and the press that made it was a press they changed their mind about.
+   */
+  it("leaves nothing behind when the reader backs out of one", async () => {
+    renderBand({ request: BOLT });
+
+    await userEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+
+    // `waitFor`, because the panel outlives `open` by the length of its fade — every other
+    // "the dialog is gone" assertion in this file waits for the same reason.
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(deckNoteCreate).not.toHaveBeenCalled();
   });
 
   /**
@@ -602,6 +644,10 @@ describe("a note act asked for from the card menu", () => {
    * second half is what stops the request being a press the reader did not make: an already-open
    * band writes `decks.notes_open` for nothing, and every one of those is a row in the deck's
    * history.
+   *
+   * ⚠️ The open band's half waits on **`onRequestHandled`** rather than on the create it used to
+   * wait on — see the block's own note. Something has to be waited for, or the assertion below it
+   * passes on the render before the effect has run at all.
    */
   it("opens the band when it is shut, and leaves an open one alone", async () => {
     const shut = renderBand({ open: false, request: BOLT });
@@ -609,38 +655,23 @@ describe("a note act asked for from the card menu", () => {
     shut.unmount();
 
     const already = renderBand({ open: true, request: BOLT });
-    await waitFor(() => expect(deckNoteCreate).toHaveBeenCalled());
+    await waitFor(() => expect(already.onRequestHandled).toHaveBeenCalled());
     expect(already.onToggle).not.toHaveBeenCalled();
   });
 
   /**
-   * **The editor is open on the new note, which is what "quick add a note to a card" means.**
-   *
-   * The id does not exist until the create answers, which is why the band holds a *focus* rather
-   * than re-reading the request: `onSuccess` is the only place that id ever arrives. The second
-   * answer from `deck_notes` is the invalidation landing — the row cannot be drawn before it, so
-   * a fixture with one answer would assert about an editor that could never appear.
-   *
-   * ⚠️ That second answer is also why an `edit` focus is **taken late**: the focus reaches the
-   * band a render before the note it names is in the list, so a band that consumed it there would
-   * find nothing to open on and open nothing, for ever.
-   */
-  it("opens the new note's editor once the write lands", async () => {
-    deckNotes.mockResolvedValueOnce([]).mockResolvedValue([note({ id: 9, title: "Lightning Bolt" })]);
-    deckNoteCreate.mockResolvedValue(note({ id: 9, title: "Lightning Bolt" }));
-    renderBand({ request: BOLT });
-
-    expect(await screen.findByLabelText("Body of Lightning Bolt")).toBeInTheDocument();
-  });
-
-  /**
-   * ⚠️ **The failure this whole shape exists to prevent: one press, two notes.**
+   * ⚠️ **The failure this whole shape exists to prevent, and it is smaller than it was.**
    *
    * The band's effect names `open` among its dependencies and its own first act is to change
    * `open`, so it re-runs at least once for every request it honours — and `React.StrictMode`
-   * runs a mount effect twice again on top of that. Re-rendering with the **same object** is the
-   * cheapest way to say so: a guard on anything but identity, or one held anywhere but a ref,
-   * passes every other test in this file and doubles every note in the shipped window.
+   * runs a mount effect twice again on top of that. It was *one press, two notes* while the create
+   * ran from here; what a missing ref costs now is a second `decks.notes_open` write against a
+   * band that is already opening — a row in the deck's history for nothing — and a second
+   * `onRequestHandled` for one press.
+   *
+   * **`onRequestHandled`'s count is what tells the two apart**, and it is the only thing that
+   * does: a re-run reopens the same panel with the same card, so the dialog looks identical
+   * either way. Re-rendering with the **same object** is the cheapest way to state the hazard.
    */
   it("takes one request once, even as the band opens under it", async () => {
     // Shut, so honouring the request is what opens it — which is the whole hazard: `open` is a
@@ -652,23 +683,36 @@ describe("a note act asked for from the card menu", () => {
     view.update({ open: true, request: BOLT });
     view.update({ open: true, request: BOLT });
 
-    await waitFor(() => expect(deckNoteCreate).toHaveBeenCalledTimes(1));
+    expect(await screen.findByRole("dialog", { name: "New note" })).toBeInTheDocument();
     expect(view.onRequestHandled).toHaveBeenCalledTimes(1);
   });
 
-  /** A second press is a second note, and the host's fresh object is what says so — the reason
-   *  the guard compares identity rather than a card id. */
-  it("takes a second request as a second note", async () => {
+  /**
+   * A second press is a second note, and the host's fresh object is what says so — the reason
+   * **both** guards compare identity rather than an oracle id: the effect's ref, and the band's
+   * own `seeded` adjustment.
+   *
+   * ⚠️ **Renamed on 2026-09-20 from "takes a second request as a second note".** Nothing here
+   * writes a note — the reader backs out of the first editor and the second press has to reopen
+   * one — so the old name asserted in words what the test no longer does. The cancel is also what
+   * makes this the *reachable* shape: the dialog is `aria-modal` over a `fixed inset-0` scrim, so
+   * a second right-click cannot be made while the first editor is up.
+   */
+  it("takes a second request as a second editor, even for the same card", async () => {
     const view = renderBand({ request: BOLT });
-    await waitFor(() => expect(deckNoteCreate).toHaveBeenCalledTimes(1));
+    await userEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 
-    // Cleared by the host, then asked again — the round trip a real press makes.
+    // Cleared by the host, then asked again with a **fresh object for the same card** — the round
+    // trip a real press makes. Two right-clicks on one card mean two notes, so a guard comparing
+    // `oracleId` would answer the second press with nothing at all and the reader would meet a
+    // menu row that had stopped working.
     view.update({ request: null });
     view.update({
       request: { kind: "add", card: { oracleId: "o-bolt", name: "Lightning Bolt" } },
     });
 
-    await waitFor(() => expect(deckNoteCreate).toHaveBeenCalledTimes(2));
+    expect(await screen.findByRole("dialog", { name: "New note" })).toBeInTheDocument();
     expect(view.onRequestHandled).toHaveBeenCalledTimes(2);
   });
 

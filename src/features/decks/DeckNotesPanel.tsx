@@ -38,6 +38,12 @@
  * without a form standing in for one. It is also drawn while the band is shut, so the offer does
  * not depend on the disclosure.
  *
+ * **The card menu's `Add note…` ends in that same dialog since 2026-09-20**, which is what keeps
+ * this heading the band's *one* act rather than one of two. That request used to write its note on
+ * the press — titled with the card, naming it in the same transaction — so a note could be born by
+ * a route this band drew no control for and a reader who changed their mind had an empty one to
+ * find and delete. It seeds the editor with the card instead, and **Save** is the create.
+ *
  * ## Reading loads no editor, and that is a bundle rule rather than a preference
  *
  * A note is drawn by {@link NoteCard}, over `parseNoteBody`'s blocks — a small closed reader
@@ -129,11 +135,13 @@ export interface DeckNotesPanelProps {
    * Called once the band has acted on {@link DeckNotesPanelProps.request}, so the host can clear
    * it.
    *
-   * **"Acted on" is *taken*, not *finished*, and for `add` those are two different moments.** The
-   * create is a round trip; waiting for it would leave a refused write's request standing for the
-   * rest of the session, and the second press a reader made after nothing happened would be
-   * refused as a duplicate of a request the band had already consumed. The band's own refusal
-   * line is what says a create did not land.
+   * **"Acted on" is *taken*, not *finished*, and for `add` that is the editor opening rather than
+   * a note existing.** Since 2026-09-20 the request reaches no write at all — the create is the
+   * dialog's Save, which may come minutes later or not at all — so there is nothing on this path
+   * left to wait for. The old shape made the same call for a harder reason, and it is worth
+   * keeping: the create *was* here, it is a round trip, and waiting for it would have left a
+   * refused write's request standing for the rest of the session, with the second press a reader
+   * made after nothing happened refused as a duplicate of a request the band had already consumed.
    */
   onRequestHandled?: () => void;
 }
@@ -206,79 +214,75 @@ export function DeckNotesPanel({
    * reader who right-clicks one card twice means two notes; `DeckEditor` builds a fresh object per
    * press, so comparing the object is what tells *asked again* from *rendered again*.
    *
-   * `open` resolves to a focus here because the note already exists. `add`'s cannot, and that
-   * asymmetry is the whole reason {@link NoteFocus} is a second type: there is no id until the
-   * create answers with one.
+   * **`open` resolves to a focus here and `add` resolves to nothing at all**, which is the
+   * asymmetry {@link NoteFocus} is a second type for, now reaching only the one arm: an `open`
+   * names a note that exists, and an `add` names a card and no id — there is no row to point at
+   * until a Save nobody has made yet answers with one. What an `add` becomes instead is
+   * {@link pendingCard}, which is a card and not a focus.
    */
   if (request !== null && request !== taken) {
     setTaken(request);
     if (request.kind === "open") setFocus({ noteId: request.noteId, edit: false });
   }
 
-  // `mutate` off the mutation rather than the mutation object, because the object is rebuilt on
-  // every render of this component and `mutate` is not — so the effect below names one dependency
-  // that actually holds still.
-  const createNote = notes.create.mutate;
+  /**
+   * The card an `Add note…` named, for {@link NotesBand} to open its editor on — or `null`.
+   *
+   * **A derivation and not a third piece of state**, which is what writing {@link taken} during
+   * render buys: the newest request is in hand on the render it arrives, so a `useState` beside it
+   * could only restate it a render later, and only through the one shape
+   * `react-hooks/set-state-in-effect` refuses.
+   *
+   * The **identity** is what travels: `taken` holds the host's own request object, so two presses
+   * on one card are two `card` objects — which is what lets the band tell *asked again* from
+   * *rendered again* with no counter and no id, exactly as the adjustment above does.
+   */
+  const pendingCard = taken?.kind === "add" ? taken.card : null;
 
   /**
-   * Everything taking a request *does* — the disclosure, the write, and the hand-back.
+   * Everything taking a request *does* — the disclosure and the hand-back, and **no write**.
    *
    * ⚠️ **The ref is the whole of the idempotency and it is not decoration.** This effect names
    * `open` among its dependencies and its own first act is to change `open`, so it re-runs at
-   * least once for every request it honours — and without the guard that second run is a second
-   * note, made silently, on a press the reader made once. `main.tsx` wraps the app in
-   * `React.StrictMode`, which runs a mount effect **twice** in development, and a `useRef`
-   * survives that double invocation where a local flag would not: same fiber, same ref object. So
-   * a guard written any other way passes in a release build and doubles every note under
-   * `tauri dev`.
+   * least once for every request it honours; and `main.tsx` wraps the app in `React.StrictMode`,
+   * which runs a mount effect **twice** in development. A `useRef` survives that double invocation
+   * where a local flag would not: same fiber, same ref object.
    *
-   * **No `setState` of this component's own in the body** — see the adjustment above. The two
-   * writes made from here are a prop callback and a mutation's `onSuccess`, which is the callback
-   * shape that rule exists to leave alone.
+   * **What a guard written any other way costs is smaller than it was and is still a defect.** It
+   * used to be a second note, made silently, on a press the reader made once — the create ran from
+   * here. What is left is a second `onToggle(true)` against a band that is already opening, which
+   * is a `decks.notes_open` write and a row in the deck's history for nothing, and a second
+   * `onRequestHandled` for one press.
    *
-   * **`onRequestHandled` is called here rather than in that `onSuccess`** — see
-   * {@link DeckNotesPanelProps.onRequestHandled} for why a refused write must not leave a request
-   * standing.
+   * **No `setState` of this component's own in the body** — see the adjustment above. Both calls
+   * made from here are prop callbacks, which is the callback shape that rule exists to leave
+   * alone; the panel the `add` arm opens is {@link NotesBand}'s own state, raised by
+   * {@link pendingCard} during that component's render rather than reached into from this effect.
+   *
+   * **`onRequestHandled` is called here** — see {@link DeckNotesPanelProps.onRequestHandled}.
    */
   const acted = useRef<DeckNoteRequest | null>(null);
   useEffect(() => {
     if (taken === null || acted.current === taken) return;
     acted.current = taken;
 
-    // Both kinds open the band and neither closes it: a note a reader asked to read or to write
-    // is one they cannot do either to behind a shut disclosure. `onToggle` rather than a local
-    // flag, because the answer is `decks.notes_open` — so the band is open again next time, which
-    // is what they just said they wanted.
+    // Both kinds open the band and neither closes it. An `open` is a note the reader came to
+    // read, which they cannot do behind a shut disclosure; an `add` writes its note in a dialog
+    // over the page and opens the band anyway, so that what they are about to Save has somewhere
+    // visible to land rather than disappearing into a section they never opened. `onToggle` rather
+    // than a local flag, because the answer is `decks.notes_open` — so the band is open again next
+    // time, which is what they just said they wanted.
     if (!open) onToggle(true);
 
-    if (taken.kind === "add") {
-      // **Titled with the card's name, and the card attached in the same write.** This is the one
-      // note in the feature that is born with a title, and the reason is that it is also the one
-      // born *before* its body: a blank one would read `Untitled note` in the band and in that
-      // card's own `Notes ▸` submenu the moment it appears, which is a row with no identity in a
-      // list of rows — where every note written through {@link NoteEditorDialog} has a body by
-      // the time it exists and `noteTitle` answers its first line. `oracleIds` is what *names*
-      // the card, in the same transaction, so the note turns up under this card's submenu on the
-      // next read with no attach step to lose.
-      //
-      // **The scoped `onSuccess` is safe here where it is a defect in the label chain**
-      // (`deckCardMenu.tsx`'s `addLabel`): that callback belongs to the *observer*, and the
-      // observer there is a dialog the reader can dismiss mid-flight. This observer is the band,
-      // which outlives the menu — and were it to unmount there would be no editor left to open.
-      createNote(
-        { title: taken.card.name, body: "", oracleIds: [taken.card.oracleId] },
-        { onSuccess: (note) => setFocus({ noteId: note.id, edit: true }) },
-      );
-    }
-
     onRequestHandled?.();
-  }, [taken, open, onToggle, createNote, onRequestHandled]);
+  }, [taken, open, onToggle, onRequestHandled]);
 
   return (
     <NotesBand
       open={open}
       onToggle={onToggle}
       focus={focus}
+      pendingCard={pendingCard}
       notes={notes.notes}
       attachable={attachable}
       answered={notes.query.isSuccess}
@@ -300,8 +304,9 @@ export interface NotesBandProps {
   open: boolean;
   onToggle: (next: boolean) => void;
   /**
-   * The note the band has been sent to, or `null` — {@link DeckNotesPanel}'s answer to a request
-   * from the card menu.
+   * The note the band has been sent to, or `null` — {@link DeckNotesPanel}'s answer to an `open`
+   * request from the card menu, where {@link NotesBandProps.pendingCard} is its answer to an
+   * `add`.
    *
    * **Optional and defaulting to `null`, so the workbench and every existing caller are
    * unchanged.** A band nobody has sent anywhere behaves exactly as it did.
@@ -311,6 +316,21 @@ export interface NotesBandProps {
    * not have it reopened under them on the next render.
    */
   focus?: NoteFocus | null;
+  /**
+   * A card the card menu asked for a note about, or `null` — the other half of that answer, and
+   * the only thing that raises {@link NotePanel}'s `newFromCard`.
+   *
+   * **Two props rather than one shape with both fields optional**, which is
+   * {@link DeckNoteRequest}'s own argument one layer up: a `focus` names a note that exists and
+   * the band *points* at it, this names a card and no note at all and the band *opens an editor*
+   * on one it is about to write, and a single shape carrying both would let a caller ask for a
+   * note about nothing.
+   *
+   * Acted on by **identity**, exactly as {@link NotesBandProps.focus} is: two presses on one card
+   * are two objects, so an editor the reader dismissed is not reopened under them on the next
+   * render, and a second press does reopen it.
+   */
+  pendingCard?: Pick<DeckNoteCard, "oracleId" | "name"> | null;
   /** Every note on the deck, in `sort_order`. */
   notes: readonly DeckNote[];
   /** What the attach picker offers — see {@link attachableCards}. */
@@ -348,13 +368,13 @@ export interface NotesBandProps {
  *
  * `newNote` and `newFromCard` carry no id because there is no row yet: the create happens on Save.
  *
- * ⚠️ **`newFromCard` is spelled here and nothing in this file raises it yet.** The card menu's
- * `add` still writes its note straight away, titled with the card and naming it in the same
- * transaction — see {@link DeckNotesPanel}'s request effect for why that one note is born with a
- * title, and why moving that path behind this dialog is a change to the request contract rather
- * than to this union. The arm is drawn because {@link NoteEditorDialog} already answers it and
- * {@link NotesBand} is the only surface that could ever express it; the dialog's own workbench
- * covers the draft, and this band has no story for it.
+ * **`newFromCard` has a producer since 2026-09-20, and it is the only one it will ever have** —
+ * {@link NotesBandProps.pendingCard}, raised during render on the identity of the card the card
+ * menu named. It was spelled here in advance of exactly that change: the request used to write its
+ * note on the press, titled with the card and naming it in the same transaction, so a dialog the
+ * reader dismissed would have left an empty untitled note in the band every time. What the move
+ * costs is that the note reaches that card's own `Notes ▸` submenu one round trip later, on the
+ * invalidate after Save.
  */
 type NotePanel =
   | { kind: "newNote" }
@@ -376,6 +396,7 @@ export function NotesBand({
   open,
   onToggle,
   focus = null,
+  pendingCard = null,
   notes,
   attachable,
   answered,
@@ -415,7 +436,9 @@ export function NotesBand({
    * rows make: `Add note…` ends in a body the reader is about to type and `Notes ▸` ends in one
    * they came to read — so an `open` reaching in here would put a card they wanted to *look* at
    * behind 141.5 kB of ProseMirror, and shut whatever dialog they already had open on the way.
-   * Bringing the card into view is {@link NoteCard}'s half and happens for both.
+   * Bringing the card into view is {@link NoteCard}'s half and happens for both. **`Add note…`
+   * makes its half of that split through {@link NotesBandProps.pendingCard} since 2026-09-20**,
+   * and the adjustment below it is this one's twin.
    *
    * **During render and not in an effect**, for {@link DeckNotesPanel}'s reason —
    * `react-hooks/set-state-in-effect`, and React's own *adjusting state when a prop changes*.
@@ -423,12 +446,14 @@ export function NotesBand({
    * being reopened under them on the next render: closing writes `panel`, and `sentTo` is
    * untouched until a genuinely new focus arrives.
    *
-   * ⚠️ **An `edit` focus is taken only once the note it names is in `notes`, and the wait is
-   * load-bearing.** The id arrives from the create's `onSuccess`, which runs before the
-   * invalidation it fired has refetched — so on the render the focus first appears the row does
-   * not exist yet. Recording `sentTo` there and finding nothing would consume the focus and open
-   * nothing at all, for ever. Nothing is recorded until there is a note to open on, so the
-   * adjustment simply runs again on the render the read lands in.
+   * ⚠️ **An `edit` focus is taken only once the note it names is in `notes`, and since 2026-09-20
+   * nothing in the app raises one.** Its single producer was the request effect's create, whose
+   * `onSuccess` answered with an id before the invalidation it had fired refetched — so on the
+   * render the focus first appeared the row did not exist yet, and recording `sentTo` there would
+   * have consumed the focus and opened nothing at all, for ever. That create is the dialog's Save
+   * now and hands back no focus, so this arm is reachable only through a caller that writes
+   * `focus.edit` itself. The wait stays because {@link NoteFocus} still spells the field: it costs
+   * one comparison, and a caller that does raise one is owed the guarantee.
    */
   if (focus !== sentTo) {
     const wanted =
@@ -437,6 +462,28 @@ export function NotesBand({
       setSentTo(focus);
       if (wanted !== null) setPanel({ kind: "edit", note: wanted });
     }
+  }
+
+  /** The card this band has already opened an editor for — see the adjustment below. */
+  const [seeded, setSeeded] = useState<typeof pendingCard>(null);
+
+  /**
+   * A card the card menu named, opened as a note that does not exist yet.
+   *
+   * **During render and on the object's identity**, for {@link NotesBandProps.focus}'s reason and
+   * by its mechanism — `react-hooks/set-state-in-effect` refuses a `setState` in an effect body
+   * outright, and what is left is React's own *adjusting state when a prop changes*. Comparing the
+   * object is what lets a reader dismiss an editor this opened without it being reopened under
+   * them on the next render: closing writes `panel`, and `seeded` is untouched until a genuinely
+   * new card arrives.
+   *
+   * **There is no wait here where the adjustment above has one**, and that is the same asymmetry
+   * stated a third time: an `edit` focus cannot be honoured until the note it names is in `notes`,
+   * while this panel carries the *card* and needs no row at all — the row is what Save makes.
+   */
+  if (pendingCard !== seeded) {
+    setSeeded(pendingCard);
+    if (pendingCard !== null) setPanel({ kind: "newFromCard", card: pendingCard });
   }
 
   return (
