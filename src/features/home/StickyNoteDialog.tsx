@@ -373,6 +373,18 @@ function StickyNoteBody({
           id={nameId}
           value={draftTitle}
           onChange={(e) => setDraftTitle(e.target.value)}
+          // **A blank note takes the caret; a note with anything in it does not.**
+          //
+          // `Dialog` focuses its own panel rather than a field, because "these are panels of
+          // settled values… dropping the caret into the first text box would make the reader's
+          // first keystroke an edit" — and it already carves this case out: *unless the body has
+          // already put it somewhere*, which `QuickZones`' New category is the other instance of.
+          // A note with neither a name nor a body **is** that case: one empty box asking one
+          // question, reached by pressing **New note**, where an edit is the only thing the
+          // reader came to do. React applies `autoFocus` during commit and child effects run
+          // before a parent's, so `panel.contains(document.activeElement)` is already true when
+          // Dialog's effect runs and it stands down — no focus fight, and nothing to undo.
+          autoFocus={note.title === "" && note.body === ""}
           // Blank is a legal name: a note with a body reads its first line instead, computed at
           // render and never stored. The sentence is `DeckNotesPanel`'s, because it is the same
           // rule — `stickyTitle` delegates to the same function.

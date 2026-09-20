@@ -53,11 +53,42 @@
  * interpolated class emits no rule at all rather than failing, and Tailwind would never see
  * `bg-note-${colour}` in the first place. {@link FACE} and {@link EDGE} spell the ten values out
  * whole so a colour cannot be built out of pieces at a call site either.
+ *
+ * ## The board is arrangeable, by pointer and by key, and only the board
+ *
+ * A tile can be dragged onto another tile and takes its place — `stickyNoteDrag.ts` is the
+ * gesture, its own mark, and the pure reducer both hands write through, and its header carries
+ * why the mark a drop draws is the **target** rather than an insertion line. The keyboard's half
+ * is {@link NUDGE}: **Ctrl (or ⌘) and an arrow key on a focused tile** steps the note one place
+ * along, or one row up or down. Plain arrows are deliberately left alone, so a caret walk over
+ * the board — the shape `CardGrid`'s `arrowNav` already has — can take them later without this
+ * having to move; a modifier is what keeps *walk* and *move* apart. It is an element-scoped key
+ * on a focused control, like the widget grip's own arrows one file over, rather than a row in
+ * `lib/shortcuts.ts`: that catalogue is the app's chords, and a chord it lists is a chord the
+ * keyboard map advertises everywhere.
+ *
+ * **The Pad offers neither, and that is not an omission.** It draws one note at a time with the
+ * rest as a pager, a rail or an index, so there is no arrangement on screen to rearrange — and a
+ * press on a rail chip already means *show me this one*, which a drag from it would contradict.
+ *
+ * ⚠️ **Both gestures act on the whole drawn order, and `Pinned note first` outranks them.**
+ * `orderedNotes` lifts a pinned note to the front *after* `sortOrder`, so a note dropped above a
+ * pinned one is written first and then drawn second. That is the toggle doing what it says rather
+ * than the drop being refused, and it is why the board writes the order it is *drawing* — the
+ * list that comes back re-reads the same way.
  */
-import { useCallback, useMemo, useState, type CSSProperties, type ReactElement } from "react";
+import {
+  useCallback,
+  useMemo,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactElement,
+} from "react";
 import { ChevronLeft, ChevronRight, Files, Plus } from "lucide-react";
 import { parseNoteBody, type Block, type Inline } from "@/features/decks/noteMarkdown";
 import { plural } from "@/lib/counts";
+import { DROP_EDGE } from "@/lib/dropMarks";
 import { openExternal } from "@/lib/externalLinks";
 import { FOCUS, FOCUS_INSET } from "@/lib/focus";
 import { ipcError, type StickyNote, type StickyNotePatch } from "@/lib/ipc";
@@ -66,6 +97,7 @@ import { ago } from "@/lib/relativeTime";
 import { cn } from "@/lib/utils";
 import type { Tier, WidgetFit } from "../fit";
 import { StickyNoteDialog } from "../StickyNoteDialog";
+import { movedTo, steppedBy, useStickyNoteTile } from "../stickyNoteDrag";
 import {
   NOTE_COLORS,
   noteColor,
@@ -111,6 +143,48 @@ const NOTE_DIM = "var(--color-note-dim)";
 
 /** What colour a note made from this widget starts as. The dialog's swatches change it. */
 const NEW_NOTE_COLOR: NoteColor = NOTE_COLORS[0];
+
+/* ----------------------------------------------------------------- the gesture --------- */
+
+/**
+ * Which way each arrow key steps a note, as `[along, rows]` — one place along the order, or one
+ * whole row of the board.
+ *
+ * One table for both axes, which is `WidgetCard`'s own grip's arrangement and its reason: two
+ * lists cannot come to disagree about which way is up. How many places a row is worth is the
+ * board's answer and arrives at the call site, because it is a fact about the footprint.
+ */
+const NUDGE: Readonly<Record<string, readonly [number, number]>> = {
+  ArrowLeft: [-1, 0],
+  ArrowRight: [1, 0],
+  ArrowUp: [0, -1],
+  ArrowDown: [0, 1],
+};
+
+/**
+ * Is this press the reorder chord?
+ *
+ * ⚠️ **Exact in both directions** — `lib/shortcuts.ts`' own rule, kept by a handler that is not
+ * in that catalogue: Ctrl or ⌘ must be down and Shift and Alt must both be up, so a chord this
+ * does not mean is left for whatever does. Ctrl and Meta are one answer because a reader's hands
+ * know one of the two and this app has never told them apart.
+ */
+function isNudge(event: ReactKeyboardEvent): boolean {
+  return (event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey;
+}
+
+/**
+ * The wash a tile wears while another note is being held over it.
+ *
+ * ⚠️ **`dropMarks.ts`' `DROP_OVER` cannot carry this, and both of its halves say why.** Its ring
+ * colour is inert on a target that has a border of its own rather than a ring — which is already
+ * this app's answer for the four folder cards — and its wash is a utility class laid over a tile
+ * that paints its own paper as an **inline** `background`, which wins outright. So what the
+ * reader would see escalate is nothing at all. The wash is drawn as an overlay inside the tile
+ * instead, in that token's own value, under the note's own words; the border going from
+ * {@link DROP_EDGE}'s faint gold to the full accent is the other half of the step.
+ */
+const OVER_WASH = "bg-accent/15";
 
 /* ----------------------------------------------------------------- the sentences ------- */
 
@@ -364,7 +438,7 @@ export function StickyNotesWidget({
   const pinnedFirst = toggleOn(widget, "pinned");
 
   const api = useStickyNotes();
-  const { create, remove, update } = api;
+  const { create, remove, reorder, update } = api;
 
   /** Which note the editor is open on, by id. `null` is closed, and a note deleted in another
    *  window closes it by simply not being in the list any more. */
@@ -387,10 +461,21 @@ export function StickyNotesWidget({
     setOpenId(null);
   }, [openId, remove]);
   const onClose = useCallback(() => setOpenId(null), []);
-  // A blank note, last in the order. It is **not** opened for writing here: `create` is a
-  // mutation whose answer is the new id and this hook hands back `void`, so there is nothing to
-  // open until the list comes round again. The reader presses the new tile, which is one press.
-  const onNew = useCallback(() => create("", "", NEW_NOTE_COLOR), [create]);
+  /**
+   * A blank note, last in the order — **and the editor opens on it**.
+   *
+   * ⚠️ **It is not seeded with a title, and that is the model rather than a gap.** A blank name is
+   * legal and the body's first line stands in for it, computed at render by `stickyTitle`; a note
+   * born called *Untitled note* would be a stored derivation that goes stale the moment the reader
+   * types a first line, which is the thing `schema.rs` refuses to store in the first place.
+   *
+   * The id arrives through `useStickyNotes`' fourth argument, which is the whole of why that
+   * argument exists: until it did, *New note* left a blank tile on the board and the reader had to
+   * press it — two presses on a widget whose entire purpose is jotting something down. The dialog
+   * is drawn once the invalidated list comes back holding the new row, which is one round trip
+   * against local SQLite; a refused create opens nothing and the footer says so.
+   */
+  const onNew = useCallback(() => create("", "", NEW_NOTE_COLOR, setOpenId), [create]);
 
   /**
    * Is a note a press?
@@ -427,7 +512,7 @@ export function StickyNotesWidget({
 
   return (
     <>
-      {layout === "pad" ? <Pad {...shared} /> : <Board {...shared} />}
+      {layout === "pad" ? <Pad {...shared} /> : <Board {...shared} onReorder={reorder} />}
       {open !== undefined && (
         <StickyNoteDialog
           note={open}
@@ -473,9 +558,57 @@ function Board({
   writeError,
   onOpen,
   onNew,
-}: LayoutProps): ReactElement {
+  onReorder,
+}: LayoutProps & { onReorder: (ids: number[]) => void }): ReactElement {
   const scale = tileScale(fit.tier);
   const geometry = boardGeometry(fit, dates);
+
+  /**
+   * Every note's id in the order the board is drawing them — **not the tiles it is drawing**.
+   *
+   * `sticky_note_reorder` writes `sort_order` from position over the whole table, so the ids a
+   * board cut past its last row still have to travel or they would be renumbered to the front of
+   * the list by omission. What the *gestures* may touch is capped at the tiles on screen, which
+   * is {@link steppedBy}'s `within` and, for a drop, the fact that a pointer can only aim at a
+   * tile that is drawn.
+   */
+  const ids = useMemo(() => notes.map((note) => note.id), [notes]);
+
+  /** The write, refused when it would change nothing — a drop on the place a note already
+   *  occupies, or an arrow at the end of the row, is a gesture and not an edit. */
+  const write = useCallback(
+    (next: number[]) => {
+      if (next.length === ids.length && next.every((id, at) => id === ids[at])) return;
+      onReorder(next);
+    },
+    [ids, onReorder],
+  );
+
+  /** A note dropped on another takes its place — `useCategoryReorderDrop`'s *land where this one
+   *  is*, which is also what one press of an arrow key means. */
+  const onMove = useCallback(
+    (dragged: number, targetId: number) => write(movedTo(ids, dragged, ids.indexOf(targetId))),
+    [ids, write],
+  );
+
+  /**
+   * Ctrl/⌘ and an arrow on a focused tile.
+   *
+   * The caret follows the note for free: the tiles are keyed by id, so React **moves** the
+   * pressed button's own DOM node rather than rebuilding it, and a moved node keeps focus. A key
+   * this does not answer is left alone and not consumed, so the tile is never a keyboard trap.
+   */
+  const onNudge = useCallback(
+    (event: ReactKeyboardEvent, id: number) => {
+      if (!isNudge(event)) return;
+      const step = NUDGE[event.key];
+      if (step === undefined) return;
+      event.preventDefault();
+      write(steppedBy(ids, id, step[0] + step[1] * geometry.columns, geometry.tiles));
+    },
+    [ids, write, geometry.columns, geometry.tiles],
+  );
+
   return (
     <div
       className="flex shrink-0 flex-col"
@@ -503,6 +636,8 @@ function Board({
             strip={strip}
             pressable={pressable}
             onOpen={onOpen}
+            onMove={onMove}
+            onNudge={onNudge}
           />
         ))}
       </ul>
@@ -525,6 +660,13 @@ function Board({
  * between two elements is not a word separator to name computation, so a computed one would read
  * as the title and the preview run together. A pinned note says *pinned* in that name, because the
  * gold dot that says it on screen is `aria-hidden` decoration.
+ *
+ * **The tile is both ends of the reorder and only while it is a press.** A still draws a picture
+ * and Customize makes the whole card a drag handle for the *grid*, so in both states this is a
+ * `<div>` with no ref on it at all — the registration follows the element rather than a flag, and
+ * a note can no more be picked up in a catalogue preview than it can be opened there. The marks
+ * and the two gestures sit on the `<button>` for `dropMarks.ts`' reason: that element carries the
+ * tile's own edge.
  */
 function Tile({
   note,
@@ -534,6 +676,8 @@ function Tile({
   strip,
   pressable,
   onOpen,
+  onMove,
+  onNudge,
 }: {
   note: StickyNote;
   scale: TileScale;
@@ -542,7 +686,10 @@ function Tile({
   strip: boolean;
   pressable: boolean;
   onOpen: (id: number) => void;
+  onMove: (dragged: number, targetId: number) => void;
+  onNudge: (event: ReactKeyboardEvent, id: number) => void;
 }): ReactElement {
+  const { attach, armed, over } = useStickyNoteTile(note.id, onMove);
   const color = noteColor(note.color);
   const title = stickyTitle(note);
   const preview = lines > 0 ? notePreview(note.body, lines) : "";
@@ -560,6 +707,11 @@ function Tile({
   };
   const inner = (
     <>
+      {/* Under the note's own words rather than over them: a wash that dimmed the prose would
+          make the tile hardest to read at the moment the reader is aiming at it. */}
+      {over && (
+        <span aria-hidden="true" className={cn("pointer-events-none absolute inset-0", OVER_WASH)} />
+      )}
       {strip && (
         <span
           aria-hidden="true"
@@ -615,12 +767,23 @@ function Tile({
     <li className="min-w-0">
       {pressable ? (
         <button
+          ref={attach}
           type="button"
           aria-label={note.pinned ? `${title}, pinned` : title}
           onClick={() => onOpen(note.id)}
+          onKeyDown={(event) => onNudge(event, note.id)}
           // The inset focus mark: a tile fills a box that clips, so an outline standing off its
           // edge would be painted where nobody can see it.
-          className={cn(box, "hover:border-dim", PRESS_SOFT, FOCUS_INSET)}
+          className={cn(
+            box,
+            "hover:border-dim",
+            PRESS_SOFT,
+            FOCUS_INSET,
+            // The tile already owns an edge, so the eligible mark recolours it rather than
+            // growing a second outline inside it — `dropMarks.ts`' rule for a bordered target.
+            armed && DROP_EDGE,
+            over && "border-accent",
+          )}
           style={face}
         >
           {inner}

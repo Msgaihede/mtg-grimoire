@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, fn, userEvent, within } from "storybook/test";
+import { expect, fn, userEvent, waitFor, within } from "storybook/test";
 import type { HomeWidget } from "@/lib/ipc";
 import { makeFit, spanPx } from "../fit";
 import { WidgetCard } from "../WidgetCard";
@@ -80,7 +80,17 @@ const meta = {
           "rows: a card with room for no tile draws none rather than one it clips. Everything a " +
           "note body draws goes through the same closed markdown reader the deck band uses, so " +
           "reading a note loads no editing surface at all — the editor arrives only when a note " +
-          "is opened, behind the dialog's own lazy boundary.",
+          "is opened, behind the dialog's own lazy boundary.\n\n" +
+          "**The Board can be rearranged and the Pad cannot.** A tile dragged onto another tile " +
+          "takes its place — the mark a drop draws is the *target* going gold rather than an " +
+          "insertion line, because dnd-kit answers which tile the pointer is over and never " +
+          "which side of it. The keyboard's half is **Ctrl (or ⌘) and an arrow key** on a " +
+          "focused tile: one place along, or one whole row up or down. Plain arrows are left " +
+          "alone.\n\n" +
+          "**New note writes a blank note and opens the editor on it.** The name is deliberately " +
+          "empty — the body's first line stands in for it, computed at render — so the press " +
+          "puts the reader in front of a caret rather than in front of a tile they then have to " +
+          "press.",
       },
     },
   },
@@ -112,6 +122,74 @@ export const Default: Story = {
 
     await userEvent.click(card.getByRole("button", { name: "Cards to proxy" }));
     await expect(await canvas.findByRole("dialog")).toBeInTheDocument();
+  },
+};
+
+/**
+ * Rearranging the board from the keyboard.
+ *
+ * **The gesture this story is really about is a drag**, and the chord is the half a test can
+ * drive: `dndManager` ships no `KeyboardSensor`, so a board that could only be arranged with a
+ * pointer would be half a board — the same gap `WidgetCard`'s own grip and resize corner answer
+ * with their arrow keys.
+ *
+ * ⚠️ **The second tile rather than the first, because `Pinned note first` outranks the
+ * arrangement.** The board writes the order it is drawing and `orderedNotes` then lifts the
+ * pinned note back to the front, so stepping *that* note along writes a real change the reader
+ * cannot see. Moving anything else is visible immediately — which is the toggle working, and is
+ * worth having a story stand on rather than a sentence.
+ *
+ * The caret is placed rather than walked in, which a unit test must not do and a story may: what
+ * is being shown here is what the chord does, and `StickyNotesWidget.test.tsx` is where the tab
+ * that reaches the tile is proved.
+ */
+export const Reorder: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const card = within(await canvas.findByRole("region", { name: "Notes" }));
+    const list = await card.findByRole("list", { name: "Your notes" });
+    const names = () =>
+      within(list)
+        .getAllByRole("button")
+        .map((tile) => tile.getAttribute("aria-label"));
+
+    await expect(names().slice(0, 3)).toEqual([
+      "Trade night — Friday, pinned",
+      "Bracket 3 — house rules",
+      "Cards to proxy",
+    ]);
+
+    within(list).getByRole("button", { name: "Bracket 3 — house rules" }).focus();
+    await userEvent.keyboard("{Control>}{ArrowRight}{/Control}");
+
+    await waitFor(async () => {
+      await expect(names().slice(0, 3)).toEqual([
+        "Trade night — Friday, pinned",
+        "Cards to proxy",
+        "Bracket 3 — house rules",
+      ]);
+    });
+  },
+};
+
+/**
+ * A first launch, and the press that ends it.
+ *
+ * **One press, where it used to be two.** *New note* writes a blank note and opens the editor on
+ * the id the command answered with — so this is also the only story in which the note the dialog
+ * is drawn over did not exist when the story started.
+ */
+export const NewNote: Story = {
+  parameters: { fake: { seed: "empty" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const card = within(await canvas.findByRole("region", { name: "Notes" }));
+
+    await userEvent.click(await card.findByRole("button", { name: "New note" }));
+
+    await expect(await canvas.findByRole("dialog")).toBeInTheDocument();
+    // A blank name, so the field is the placeholder rather than a word nobody typed.
+    await expect(await canvas.findByLabelText("Name")).toHaveValue("");
   },
 };
 

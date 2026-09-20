@@ -21,14 +21,23 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const stickyNotes = vi.hoisted(() => vi.fn());
 const stickyNoteCreate = vi.hoisted(() => vi.fn());
+const stickyNoteReorder = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/ipc")>();
-  return { ...actual, ipc: { ...actual.ipc, stickyNotes, stickyNoteCreate } };
+  return {
+    ...actual,
+    ipc: { ...actual.ipc, stickyNotes, stickyNoteCreate, stickyNoteReorder },
+  };
 });
 
+/**
+ * The id is on the stub as well as the title, because the note *New note* makes has neither a
+ * title nor a body — a blank name is legal and the body's first line stands in for it — so the
+ * only thing that says which note the dialog opened on is the id.
+ */
 vi.mock("../StickyNoteDialog", () => ({
   StickyNoteDialog: ({ note }: { note: { id: number; title: string } }) => (
-    <div data-testid="dialog">{`Editing ${note.title}`}</div>
+    <div data-testid="dialog" data-note-id={note.id}>{`Editing ${note.title}`}</div>
   ),
 }));
 
@@ -50,7 +59,9 @@ vi.mock("../widgetSettings", async (importOriginal) => {
   };
 });
 
+import { DND_SOURCE_ATTR } from "@/lib/dndTarget";
 import type { HomeWidget, StickyNote } from "@/lib/ipc";
+import { boxed, pointerDrag } from "@/test-drag";
 import { makeFit, spanPx, type WidgetFit } from "../fit";
 import { stickyNotesKey } from "../keys";
 import {
@@ -165,6 +176,7 @@ function draw({
 beforeEach(() => {
   stickyNotes.mockReset().mockResolvedValue([]);
   stickyNoteCreate.mockReset().mockResolvedValue(9);
+  stickyNoteReorder.mockReset().mockResolvedValue(undefined);
   qc = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity }, mutations: { retry: false } },
   });
@@ -403,6 +415,184 @@ describe("StickyNotesWidget", () => {
     draw({ editing: true });
     expect(screen.getAllByRole("listitem").length).toBeGreaterThan(0);
     expect(screen.queryByRole("button", { name: /Trade night/ })).not.toBeInTheDocument();
+  });
+
+  /**
+   * ⚠️ **New note is one press, and the whole of Change 1 is that it used to be two.** The press
+   * makes a blank note and opens the editor on the id the command answered with — which is why
+   * `useStickyNotes.create` takes a fourth argument at all.
+   */
+  it("opens the editor on the note New note just made", async () => {
+    const fresh = note({ id: 9, title: "", body: "", color: "amber", sortOrder: 99 });
+    stickyNotes.mockResolvedValue([...NOTES, fresh]);
+    draw();
+
+    await userEvent.click(screen.getByRole("button", { name: "New note" }));
+
+    // ⚠️ Blank, and asserted rather than assumed: a seeded title would be a stored derivation
+    // that goes stale the moment the reader types a first line.
+    await waitFor(() => expect(stickyNoteCreate).toHaveBeenCalledWith("", "", "amber"));
+    expect(await screen.findByTestId("dialog")).toHaveAttribute("data-note-id", "9");
+  });
+
+  it("opens nothing when the create is refused, and says so", async () => {
+    stickyNoteCreate.mockRejectedValue("the database is locked");
+    draw();
+
+    await userEvent.click(screen.getByRole("button", { name: "New note" }));
+
+    expect(await screen.findByText("Not saved — the database is locked")).toBeInTheDocument();
+    expect(screen.queryByTestId("dialog")).not.toBeInTheDocument();
+  });
+
+  /* ---------------------------------------------------------------- the reorder ------- */
+
+  /**
+   * The board's own gesture. `stickyNoteDrag.test.ts` is where the arithmetic and the pointer
+   * mechanics are proved; what these cases are about is the **wiring** — that the widget hands
+   * the reducer every note in the order it is drawing, and that the two hands write the same
+   * command.
+   */
+  describe("reordering the board", () => {
+    /** Six by three: four columns of two rows, so every one of the eight notes is drawn and a
+     *  row is worth four places. */
+    function board() {
+      stickyNotes.mockResolvedValue(NOTES);
+      draw({ w: 6, h: 3 });
+      return within(screen.getByRole("list", { name: "Your notes" })).getAllByRole("button");
+    }
+
+    it("registers every drawn tile as a drag source", () => {
+      const tiles = board();
+      expect(tiles.filter((tile) => tile.hasAttribute(DND_SOURCE_ATTR))).toHaveLength(8);
+    });
+
+    /**
+     * A catalogue preview writes nothing, so its tiles are plain boxes rather than presses —
+     * which is also what makes them impossible to pick up: the registration follows the element,
+     * and there is no `<button>` for it to follow. Asserted as what the tiles *are*, because an
+     * absence assertion about dnd-kit can pass for the wrong reason.
+     */
+    it("draws a still's tiles as boxes, so there is nothing to pick up", () => {
+      draw({ w: 6, h: 3, still: true });
+      const tiles = within(screen.getByRole("list", { name: "Your notes" })).getAllByRole(
+        "listitem",
+      );
+      expect(tiles.map((tile) => tile.firstElementChild?.tagName)).toEqual(Array(8).fill("DIV"));
+    });
+
+    /** Customize makes the whole card the grid's drag handle, so the same thing holds one layer
+     *  up: no press, no source, and a pick-up moves the widget rather than a note. */
+    it("draws the tiles as boxes while Customize is on too", () => {
+      draw({ w: 6, h: 3, editing: true });
+      const tiles = within(screen.getByRole("list", { name: "Your notes" })).getAllByRole(
+        "listitem",
+      );
+      expect(tiles.map((tile) => tile.firstElementChild?.tagName)).toEqual(Array(8).fill("DIV"));
+    });
+
+    /**
+     * The drop, driven as a real pointer gesture — jsdom lays nothing out and dnd-kit hit-tests
+     * by coordinate, so every tile is given a box first. The write carries **every** id, because
+     * `sticky_note_reorder` renumbers the whole table from position.
+     */
+    it("writes the whole order when a note is dropped on another tile", async () => {
+      const tiles = board();
+      tiles.forEach((tile, at) => boxed(tile, at * 100));
+
+      await pointerDrag(tiles[0], tiles[2]);
+
+      await waitFor(() =>
+        expect(stickyNoteReorder).toHaveBeenCalledWith([2, 3, 1, 4, 5, 6, 7, 8]),
+      );
+    });
+
+    /**
+     * The keyboard's half. `dndManager` ships no `KeyboardSensor`, so without this the board
+     * would be arrangeable by pointer alone — which is what `WidgetCard`'s own grip and resize
+     * corner already refuse to be.
+     *
+     * ⚠️ The caret is walked in rather than placed: `element.focus()` tests a caret no reader can
+     * produce, and the chord is held inside one `userEvent.keyboard` call, because the direct
+     * helpers each open a session of their own and release the modifier between them.
+     */
+    it("steps a note one place along on Ctrl and an arrow", async () => {
+      board();
+      await userEvent.tab();
+      expect(document.activeElement).toHaveAccessibleName("Trade night — Friday, pinned");
+
+      await userEvent.keyboard("{Control>}{ArrowRight}{/Control}");
+      expect(stickyNoteReorder).toHaveBeenCalledWith([2, 1, 3, 4, 5, 6, 7, 8]);
+    });
+
+    /** Up and down are a whole row, which is four places at this footprint — the one thing about
+     *  the chord that is a fact about the *board* rather than about the list. */
+    it("steps a note a whole row on Ctrl and a vertical arrow", async () => {
+      board();
+      await userEvent.tab();
+
+      await userEvent.keyboard("{Control>}{ArrowDown}{/Control}");
+      expect(stickyNoteReorder).toHaveBeenCalledWith([2, 3, 4, 5, 1, 6, 7, 8]);
+    });
+
+    /** Plain arrows are left alone and not consumed, so a caret walk over the board can take
+     *  them later without this having to move. */
+    it("leaves a plain arrow alone", async () => {
+      board();
+      await userEvent.tab();
+
+      await userEvent.keyboard("{ArrowRight}");
+      expect(stickyNoteReorder).not.toHaveBeenCalled();
+    });
+
+    /** Exact in both directions: a chord this does not mean is not swallowed here. */
+    it("refuses the chord with a modifier it does not name", async () => {
+      board();
+      await userEvent.tab();
+
+      await userEvent.keyboard("{Control>}{Shift>}{ArrowRight}{/Shift}{/Control}");
+      await userEvent.keyboard("{Alt>}{ArrowRight}{/Alt}");
+      expect(stickyNoteReorder).not.toHaveBeenCalled();
+    });
+
+    /** A step at the end of the order is a gesture and not an edit — the first tile is already
+     *  first, so there is nothing to write. */
+    it("writes nothing for a step that would change nothing", async () => {
+      board();
+      await userEvent.tab();
+
+      await userEvent.keyboard("{Control>}{ArrowLeft}{/Control}");
+      expect(stickyNoteReorder).not.toHaveBeenCalled();
+    });
+
+    /**
+     * ⚠️ **The order written is the order drawn, and `Pinned note first` is applied over it
+     * again.** Here the pin is off, so the drawn order is `sortOrder` and a step writes exactly
+     * what the reader saw. `sortOrder` is sparse in this fixture on purpose: a widget that read a
+     * position out of the column would answer something else.
+     */
+    it("writes positions rather than stored sort orders", async () => {
+      const sparse = [
+        note({ id: 3, title: "First", sortOrder: 2 }),
+        note({ id: 1, title: "Second", sortOrder: 40 }),
+        note({ id: 2, title: "Third", sortOrder: 900 }),
+      ];
+      stickyNotes.mockResolvedValue(sparse);
+      draw({ config: { pinned: false }, w: 6, h: 3, notes: sparse });
+
+      await userEvent.tab();
+      expect(document.activeElement).toHaveAccessibleName("First");
+
+      await userEvent.keyboard("{Control>}{ArrowRight}{/Control}");
+      expect(stickyNoteReorder).toHaveBeenCalledWith([1, 3, 2]);
+    });
+
+    /** The Pad draws one note at a time, so there is no arrangement on screen to rearrange. */
+    it("makes no drag source on the Pad", () => {
+      stickyNotes.mockResolvedValue(NOTES);
+      draw({ config: { layout: "pad" }, w: 6, h: 3 });
+      expect(document.querySelectorAll(`[${DND_SOURCE_ATTR}]`)).toHaveLength(0);
+    });
   });
 
   /* ---------------------------------------------------------------- the Pad ----------- */

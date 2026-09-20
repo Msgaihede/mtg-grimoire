@@ -83,9 +83,28 @@ export interface StickyNotesApi {
    * word it with `ipcError` at the surface that draws it.
    */
   writeError: unknown;
-  /** Write a new note. It lands last, so a reader who has arranged their board keeps that
-   *  arrangement. The colour is one this build knows; Rust stores whatever word it is sent. */
-  create: (title: string, body: string, color: NoteColor) => void;
+  /**
+   * Write a new note. It lands last, so a reader who has arranged their board keeps that
+   * arrangement. The colour is one this build knows; Rust stores whatever word it is sent.
+   *
+   * **`onCreated` is the new note's id, and the fourth argument is additive on purpose.**
+   * `sticky_note_create` has always answered the id and this hook always threw it away, which
+   * made *New note* two presses: one to make a blank tile and one to open it. It is a per-call
+   * `mutate` callback rather than a fifth member of this interface or a `mutateAsync` a caller
+   * awaits — TanStack runs the mutation's own `onSuccess` first, so the invalidation is already
+   * away by the time a caller hears the id, and a caller that passes nothing gets exactly the
+   * behaviour it had.
+   *
+   * ⚠️ **A `mutate`-scoped callback belongs to the *observer* and TanStack drops it when that
+   * observer unmounts.** That is the right trade here and is the opposite of `createLabelFor`'s,
+   * one feature over: the observer is the widget, the thing the callback does is open a dialog
+   * *in* the widget, and a widget that has gone has nowhere to open one. Losing the callback with
+   * it costs nothing; the note is still written.
+   *
+   * It fires only on success, so a refused create opens nothing and
+   * {@link StickyNotesApi.writeError} is what says so.
+   */
+  create: (title: string, body: string, color: NoteColor, onCreated?: (id: number) => void) => void;
   /** Change a note. A field the patch leaves out is left alone; `""` really empties one. */
   update: (id: number, patch: StickyNotePatch) => void;
   /** Delete one note. */
@@ -140,8 +159,14 @@ export function useStickyNotes(): StickyNotesApi {
   // widget that re-renders while the reader types is a draft that is never written. This does not
   // absolve a host of its own `useCallback` around whatever it closes a note's id into; it is one
   // fewer way for that timer to be starved.
+  // The per-call callback is passed only when a caller supplied one, so a create made with three
+  // arguments sends TanStack the same two it always did.
   const create = useCallback(
-    (title: string, body: string, color: NoteColor) => startCreate({ title, body, color }),
+    (title: string, body: string, color: NoteColor, onCreated?: (id: number) => void) =>
+      startCreate(
+        { title, body, color },
+        onCreated === undefined ? undefined : { onSuccess: (id) => onCreated(id) },
+      ),
     [startCreate],
   );
   const update = useCallback(
