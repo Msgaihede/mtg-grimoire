@@ -137,7 +137,16 @@ describe("what the card picker offers", () => {
     expect(row?.copies).toBe(4);
   });
 
-  it("takes the printing off the first row the deck lists, which is the deck's own order", () => {
+  /**
+   * **The printing is Rust's, not the deck's listing order.** `attachments_by_note` orders its
+   * candidates `(dc.card_id IS NULL), c.id` and every row offered here is a printing the deck
+   * holds, so `c.id` decides — and if the picker chose differently, a reader would tick the M10
+   * art and the note would come back drawing the Alpha art.
+   *
+   * Both orders are asserted on purpose: the second is what the old "first row wins" rule would
+   * also have passed, so it cannot tell the two implementations apart on its own.
+   */
+  it("takes the lowest cardId even when the deck lists the higher one first", () => {
     const [row] = attachableCards([
       card({
         cardId: "m10",
@@ -155,9 +164,43 @@ describe("what the card picker offers", () => {
       }),
     ]);
 
-    expect(row?.cardId).toBe("m10");
-    expect(row?.setCode).toBe("m10");
-    expect(row?.collectorNumber).toBe("146");
+    expect(row?.cardId).toBe("lea");
+    expect(row?.setCode).toBe("lea");
+    expect(row?.collectorNumber).toBe("161");
+  });
+
+  it("takes the same printing when the deck lists the lower one first", () => {
+    const [row] = attachableCards([
+      card({
+        cardId: "lea",
+        oracleId: "o-bolt",
+        name: "Lightning Bolt",
+        setCode: "lea",
+        collectorNumber: "161",
+      }),
+      card({
+        cardId: "m10",
+        oracleId: "o-bolt",
+        name: "Lightning Bolt",
+        setCode: "m10",
+        collectorNumber: "146",
+      }),
+    ]);
+
+    expect(row?.cardId).toBe("lea");
+    expect(row?.collectorNumber).toBe("161");
+  });
+
+  it("folds the copies over every printing whichever one wins the art", () => {
+    // The two halves are independent: the printing is a race and the count is a sum, so a fix
+    // that moved the whole row to the winner would silently drop the loser's copies.
+    const [row] = attachableCards([
+      card({ cardId: "m10", oracleId: "o-bolt", name: "Lightning Bolt", quantity: 3 }),
+      card({ cardId: "lea", oracleId: "o-bolt", name: "Lightning Bolt", quantity: 1 }),
+    ]);
+
+    expect(row?.cardId).toBe("lea");
+    expect(row?.copies).toBe(4);
   });
 
   it("buckets a card by the front face of its type line", () => {

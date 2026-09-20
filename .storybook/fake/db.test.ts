@@ -8219,6 +8219,34 @@ describe("deck notes", () => {
     ]);
   });
 
+  /**
+   * **The picture, pinned on a card that has one** — the half the null arm below cannot see.
+   *
+   * `imageUris` is folded rather than passed through by every reader of it (a note card's
+   * thumbnail, `deckTokenViews`, `CombosDialog`), so a fake answering `null` throughout would
+   * make the workbench the one place each of those resolutions is never exercised — which is
+   * exactly what {@link frontFaceImageUris}' own comment warns about. Asserted **against the
+   * fixture's own row** rather than against a pasted URL: a hard-coded string would go stale with
+   * the generated corpus and would pass a `frontFaceImageUris` that had stopped reading the card.
+   */
+  it("draws the picture of the printing it named, and not an empty map", () => {
+    const db = notesDb();
+    const note = writeHandlers(db).deck_note_create({
+      deckId: 1,
+      title: "t",
+      body: "b",
+      oracleIds: [BOLT_ORACLE],
+    });
+    const [attached] = note.cards;
+    const printing = db.cards.find((c) => c.id === attached.cardId);
+
+    expect(printing).toBeDefined();
+    expect(printing?.normalUrl).toBeTruthy();
+    expect(attached.imageUris).not.toBeNull();
+    expect(attached.imageUris?.display).toBe(printing?.normalUrl);
+    expect(attached.imageUris?.art).toBe(printing?.artCropUrl);
+  });
+
   it("names the deck's own printing where the deck holds one, and any printing otherwise", () => {
     // `attachments_by_note`'s `ORDER BY (dc.card_id IS NULL), c.id` — a note about Lightning Bolt
     // in a deck sleeving one printing must not draw another's art, because the picture is how a

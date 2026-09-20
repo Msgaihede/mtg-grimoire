@@ -108,8 +108,8 @@ export function notesForCard(notes: readonly DeckNote[], oracleId: string | null
 export interface NoteCardChoice {
   oracleId: string;
   name: string;
-  /** The printing this row draws — the **first** row the deck lists for this oracle id, which is
-   *  the deck's own order and therefore the copy the reader is looking at. */
+  /** The printing this row draws — the **lowest `cardId`** among the deck's rows for this oracle
+   *  id, which is the printing `attachments_by_note` will name for the note the press creates. */
   cardId: string;
   imageUris?: Partial<Record<ImageVariant, string>> | null;
   setCode: string;
@@ -131,6 +131,25 @@ export interface NoteCardChoice {
  * **Both variants of a deck arrive here as one list**, which is the panel's own arrangement: the
  * band holds no `variant`, because `deck_notes` has no variant column and a note written against
  * the plan shows on the actual list too.
+ *
+ * ⚠️ **The printing is the _lowest_ `cardId` among the deck's rows for that oracle id, and the
+ * rule exists to agree with `deck_notes::attachments_by_note`.** That statement orders its
+ * candidate printings `(dc.card_id IS NULL), c.id` and takes the first — and every row this
+ * function offers is by construction a card the deck holds, so its first term is `0` for all of
+ * them and `c.id` is the whole of the answer. Taking the deck's own listing order instead is the
+ * obvious implementation and is **wrong in a deck holding two printings of one card**: the picker
+ * would show the reader the M10 art, and the note their press created would come back drawing the
+ * Alpha art, because the read resolves the printing itself and never sees what was ticked. A
+ * ticked row and the crop it produces have to be the same picture.
+ *
+ * **`<` and deliberately not `localeCompare`.** `cards.id` is a Scryfall uuid and SQLite's default
+ * collation is BINARY, so a plain code-unit comparison is what `ORDER BY c.id` actually does; a
+ * collator is locale-aware about punctuation and is free to order two ids the other way round,
+ * which would put this back to disagreeing with Rust on exactly the decks it is here to fix.
+ *
+ * **Only the four printing fields move with the winner.** `name` and `typeBucket` are facts about
+ * the *card* — two printings of one card denormalise the same name and share a type line — so
+ * taking them from the first row seen keeps the sort and the chips stable whichever printing wins.
  */
 export function attachableCards(cards: readonly DeckCard[]): NoteCardChoice[] {
   const byOracle = new Map<string, NoteCardChoice>();
@@ -139,6 +158,13 @@ export function attachableCards(cards: readonly DeckCard[]): NoteCardChoice[] {
     const seen = byOracle.get(card.oracleId);
     if (seen) {
       seen.copies += card.quantity;
+      // The fold is over every row; the *printing* is a race the lowest id wins.
+      if (card.cardId < seen.cardId) {
+        seen.cardId = card.cardId;
+        seen.imageUris = card.imageUris;
+        seen.setCode = card.setCode;
+        seen.collectorNumber = card.collectorNumber;
+      }
       continue;
     }
     byOracle.set(card.oracleId, {

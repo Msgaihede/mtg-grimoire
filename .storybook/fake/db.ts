@@ -5426,15 +5426,23 @@ function storedToken(db: FakeDb, deckId: number, oracleId: string): FakeDeckToke
 
 /**
  * `image_uri::front_face_map` over a fixture row — the picture the **web target and the phone**
- * draw, and the field only two DTOs here carry.
+ * draw, and the field only three DTOs here carry.
  *
  * **Every other DTO omits `imageUris` and that is still the rule**: a picture under Storybook
  * comes from the `@/lib/images` alias, so a URL on a row would be one nobody ever fetches. What
  * earns an exception is a view that ***folds*** the field instead of passing it through, and
- * there are two of those. `deckTokenViews` reads a token tile's `imageUrl` as
+ * there are three of those. `deckTokenViews` reads a token tile's `imageUrl` as
  * `imageUris?.[WALL_CARD_VARIANT] ?? null`; `CombosDialog.tsx` reads a combo piece's the same
- * way, character for character. A row that omitted it would make the fake the one place both
- * views are always `null` and each panel's own resolution unexercised.
+ * way, character for character; and since 2026-09-20 a **note card** reads its representative
+ * printing's the same way again ({@link noteCardsOf}, through {@link noteCardPrinting}). A row
+ * that omitted it would make the fake the one place all three views are always `null` and each
+ * panel's own resolution unexercised.
+ *
+ * ⚠️ **This said "two" for as long as it took the notes band to grow a thumbnail**, which is the
+ * drift `.storybook/CLAUDE.md` names by rule: a prose-only edit routes to neither CI job, so a
+ * count here goes red nowhere. **Re-count the callers when you add one** —
+ * `grep -n "frontFaceImageUris(" .storybook/fake/db.ts` is the census, and the enumeration above
+ * is what makes it checkable.
  *
  * Nothing minted: the two URLs are the fixture's own real Scryfall ones, the same pair
  * {@link readHandlers.card_image_uri} answers with, and the same two variants
@@ -10005,11 +10013,13 @@ export function readHandlers(db: FakeDb) {
      * {@link DECK_GONE} because an empty plan already means something else here — "nothing in
      * this deck can be filled" — and a dialog cannot tell those two apart from a bare `[]`.
      *
-     * `imageUris` is omitted, as it is from every DTO this fake builds bar one: under Storybook
-     * a card picture comes from the `@/lib/images` alias rather than from a URL on the row, so a
-     * hand-minted one here would be a URL nobody ever fetches. The exception is
-     * {@link frontFaceImageUris}, and its own comment says what earns it one — a view that *folds*
-     * the field rather than passing it through.
+     * `imageUris` is omitted, as it is from every DTO this fake builds but the ones that **fold**
+     * it: under Storybook a card picture comes from the `@/lib/images` alias rather than from a
+     * URL on the row, so a hand-minted one here would be a URL nobody ever fetches. The
+     * exceptions go through {@link frontFaceImageUris}, and its own comment enumerates them and
+     * says what earns one — a view that folds the field rather than passing it through. **No
+     * count here on purpose**: this sentence read "bar one" while two DTOs carried it and then
+     * three, because a number in prose goes red nowhere.
      */
     deck_pull_plan: (args: { deckId: number }): DeckPullRow[] => {
       // **First, ahead of the read, and {@link isVirtual}'s own contract is what makes that
@@ -10171,9 +10181,11 @@ export function readHandlers(db: FakeDb) {
      * reason: an empty plan already means something else here — *everything this deck is short of
      * has left the card database* — and a dialog cannot tell those two apart from a bare list.
      *
-     * `imageUris` is omitted, as it is from every DTO this fake builds bar one: under Storybook a
-     * card picture comes from the `@/lib/images` alias rather than from a URL on the row, so a
-     * hand-minted one here would be a URL nobody ever fetches.
+     * `imageUris` is omitted, as it is from every DTO this fake builds but the ones that **fold**
+     * it: under Storybook a card picture comes from the `@/lib/images` alias rather than from a
+     * URL on the row, so a hand-minted one here would be a URL nobody ever fetches.
+     * {@link frontFaceImageUris} enumerates the exceptions; no count is written here, for the
+     * reason its own comment gives.
      */
     deck_missing_plan: (args: { deckId: number }): DeckMissingRow[] => {
       // {@link deck_pull_plan}'s fence, ahead of the shortfall walk and for its reason: a
