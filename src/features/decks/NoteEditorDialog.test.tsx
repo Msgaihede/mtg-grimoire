@@ -1,8 +1,9 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { DeckNote } from "@/lib/ipc";
 import { NoteEditorDialog } from "./NoteEditorDialog";
+import { noteToPlainText } from "./noteMarkdown";
 
 /**
  * The two `Range` methods jsdom does not implement, shimmed for the ProseMirror view this dialog
@@ -14,6 +15,26 @@ import { NoteEditorDialog } from "./NoteEditorDialog";
  */
 Range.prototype.getClientRects ??= () => [] as unknown as DOMRectList;
 Range.prototype.getBoundingClientRect ??= () => new DOMRect();
+
+/**
+ * ⚠️ **Warm the lazy chunk once, because `findBy*` gives it one second and a cold transform can
+ * take longer than that.**
+ *
+ * Every case below waits on the surface through `Suspense`, and the surface is Tiptap behind a
+ * dynamic import — so on the *first* test of a cold run, `findByRole("textbox")` is racing Vite
+ * transforming ProseMirror. Observed in this suite: the same file passed in 3.5 s and, on a run
+ * whose setup alone took 2.7 s, failed with the first test timing out on exactly that await.
+ * That is the shape of flake `verify` produces under load and a single run never reproduces.
+ *
+ * Awaiting it here puts the cost in `beforeAll`, where vitest's own timeout applies rather than
+ * testing-library's one second, and leaves every case measuring the dialog instead of the
+ * bundler. It is a `import()` expression and not an import statement, so the 141.5 kB sweep in
+ * `DeckNotesPanel.test.tsx` is untouched by it — and a `.test.` file is exempt from that sweep
+ * regardless.
+ */
+beforeAll(async () => {
+  await import("./NoteEditor");
+});
 
 /**
  * A reader typing into the surface, with **no delay between keystrokes**.
@@ -63,8 +84,23 @@ describe("writing a note in a dialog", () => {
       />,
     );
     await screen.findByRole("heading", { name: "New note" });
-    // One box, and it is the body. A title field here is the thing this redesign deleted.
-    expect(screen.queryByRole("textbox", { name: /title/i })).not.toBeInTheDocument();
+    // Awaited before it is counted: the surface arrives through `Suspense`, so a bare
+    // `getAllByRole` would be counting the frame before the lazy chunk landed.
+    await screen.findByRole("textbox");
+
+    /*
+     * **Counted, not name-matched.** `queryByRole("textbox", { name: /title/i })` is what this
+     * assertion used to be, and it is satisfied by a bare `<input type="text" />` with no label
+     * at all, or by one called `Name`, `Heading` or `Subject` — every one of which is the field
+     * this redesign deleted, wearing a different word. It passed today only by accident: the old
+     * field's placeholder began `Untitled`, and `Untitled` matches `/title/i` through
+     * dom-accessibility-api's placeholder fallback.
+     *
+     * So the box is *counted* and then identified: exactly one, and it is the body.
+     */
+    const boxes = screen.getAllByRole("textbox");
+    expect(boxes).toHaveLength(1);
+    expect(boxes[0]).toHaveAccessibleName("Body of New note");
   });
 
   /**
@@ -98,6 +134,53 @@ describe("writing a note in a dialog", () => {
 
     expect(onSave).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **The blank check goes through `noteToPlainText` and never the markdown string, and this is
+   * the only test that can tell those two apart.**
+   *
+   * Every other case here uses a `new` draft (seeded `""`, where both spellings agree) or a body
+   * with real words in it — so `blank = body.trim() === ""` passes all of them, and the constraint
+   * the brief, the component's header, its inline comment and its Storybook page all argue for
+   * would be checked by nothing. Mutating the guard is what showed that; see the fix report.
+   *
+   * ⚠️ **`">"` is what Tiptap actually stores for an empty blockquote**, measured against
+   * `NOTE_EXTENSIONS` rather than assumed: `toggleBlockquote()` on an empty document serialises
+   * to exactly that one character. It is the real path, not a contrivance — the blockquote input
+   * rule is `>` and a space, so a reader who presses those two keys and stops has a document with
+   * a quote bar and nothing in it. Written raw, the body is not blank and Save would be offered,
+   * producing the note named `Untitled note` with nothing in it that this rule exists to refuse.
+   *
+   * (An empty *heading* is not a second case and was checked: Tiptap serialises it to `""`, where
+   * the two spellings agree.)
+   */
+  it("refuses a body that is markup and no words", async () => {
+    // The premise, pinned locally — without it this test could quietly stop distinguishing the
+    // two implementations while still passing, which is the failure it is here to prevent.
+    const EMPTY_QUOTE = ">";
+    expect(noteToPlainText(EMPTY_QUOTE).trim()).toBe("");
+    expect(EMPTY_QUOTE.trim()).not.toBe("");
+
+    const onSave = vi.fn();
+    render(
+      <NoteEditorDialog
+        open
+        draft={{ kind: "edit", note: note({ id: 3, title: "", body: EMPTY_QUOTE }) }}
+        pending={false}
+        onSave={onSave}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const save = await screen.findByRole("button", { name: "Save" });
+    expect(save).toHaveAttribute("aria-disabled", "true");
+
+    await userEvent.click(save);
+    expect(onSave).not.toHaveBeenCalled();
+
+    // And the name such a note would have got, which is the whole of why it is refused.
+    expect(screen.getByRole("heading", { name: "Untitled note" })).toBeInTheDocument();
   });
 
   /** The other kind of no, and the one that really is the attribute: the half-second a write is

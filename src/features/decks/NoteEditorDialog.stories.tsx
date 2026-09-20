@@ -3,6 +3,30 @@ import { expect, fn } from "storybook/test";
 import type { DeckNote } from "@/lib/ipc";
 import { NoteEditorDialog, type NoteDraft } from "./NoteEditorDialog";
 
+/**
+ * ⚠️ **The two `Range` methods jsdom does not implement — and these are the first stories in this
+ * repo that need them.**
+ *
+ * Every other story in the app deliberately avoids mounting an editor (`DeckNotesPanel.stories.tsx`
+ * says so in as many words: *"What no press here does is load an editor."*), so neither
+ * `src/test-setup.ts` nor `src/stories.test.tsx` installs these — the two suites that mount a
+ * ProseMirror view each carry their own copy. This file is the third, and it is the first that is
+ * collected by `stories.test.tsx`.
+ *
+ * What it buys is not cosmetic: ProseMirror asks a `Range` for its rectangles on any dispatch that
+ * scrolls the selection into view, jsdom has **no such method**, and the `TypeError` is thrown
+ * inside the view's own dispatch — so it escapes as an **unhandled error**, and
+ * `stories.test.tsx` records what that costs in this repo's own words: *"Vitest fails a run on an
+ * unhandled error even when every test passed."* A red `npm run verify` reporting
+ * `Tests 0 failed`.
+ *
+ * Nothing below types or focuses, so it may well never fire — which is exactly why it is written
+ * down rather than left to be found on a CI run. `??=`, so a jsdom that grows a real
+ * implementation is used instead.
+ */
+Range.prototype.getClientRects ??= () => [] as unknown as DOMRectList;
+Range.prototype.getBoundingClientRect ??= () => new DOMRect();
+
 function note(over: Partial<DeckNote> & { id: number }): DeckNote {
   return {
     deckId: 1,
@@ -109,8 +133,13 @@ export const NewNote: Story = {
       "aria-disabled",
       "true",
     );
-    // No title field anywhere — the thing this redesign deleted.
-    await expect(canvas.queryByRole("textbox", { name: /title/i })).toBeNull();
+    // No title field anywhere — the thing this redesign deleted. **Counted rather than
+    // name-matched**: a `queryByRole("textbox", { name: /title/i })` is satisfied by an
+    // unlabelled input, or by one called `Name` or `Heading`, which is the same field wearing a
+    // different word. One box, and it is the body.
+    const boxes = await canvas.findAllByRole("textbox");
+    await expect(boxes).toHaveLength(1);
+    await expect(boxes[0]).toHaveAccessibleName("Body of New note");
   },
 };
 

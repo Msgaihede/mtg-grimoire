@@ -433,12 +433,34 @@ describe("the empty surface's prompt", () => {
  * makes is answered with an empty sheet: two font families, `tw-animate-css` and shadcn's
  * theme contribute no utility this file is about.
  *
- * **The utilities layer and never the whole sheet.** Preflight names `::before` and sets
- * `content` on it, so `built.includes("::before")` and `built.includes("content:")` are both
- * true for a utility that emitted *nothing* — measured, and it is exactly the vacuous assertion
- * this whole describe block exists to avoid making.
+ * **The utilities layer, one candidate at a time, and never the whole sheet.** Two different ways
+ * a looser check reads success out of silence, and only the second is about this rule at all:
+ *
+ * * **`::before` is in preflight**, which names `*, ::after, ::before, ::backdrop,
+ *   ::file-selector-button` to zero its box model. So `built.includes("::before")` is `true` for a
+ *   candidate that emitted nothing — measured: a junk candidate builds 11 583 characters from
+ *   `src/index.css` and 4 614 from stock Tailwind, and both contain it.
+ * * **`content:` comes from the *siblings*, and this is the sharper of the two.** Preflight sets
+ *   no `content` at all — a sheet built from one junk candidate holds neither `content:` nor
+ *   `--tw-content` — but the `before:` variant injects `content: var(--tw-content);` into **every**
+ *   rule it makes, so the other four utilities each emit one. Build all five with only the
+ *   `content-[…]` one mistyped and the sheet reads `content:` **true** and
+ *   `attr(data-placeholder)` **false**: the whole sheet says the prompt is painted while the one
+ *   declaration that paints it is missing. Measured, both ways round.
+ *
+ * Which is why this compiles **one** candidate and returns only what `@layer utilities` holds:
+ * nothing a sibling emitted, and nothing preflight wrote, can stand in for the rule being asked
+ * about. An earlier draft of this comment claimed the `content:` half came from preflight; it does
+ * not, and that was the same mistake one level up — an explanation nobody had falsified.
  */
 async function compiledUtilities(utility: string): Promise<string> {
+  const built = await buildSheet([utility]);
+  return built.match(/@layer utilities \{([\s\S]*?)\n\}/)?.[1].trim() ?? "";
+}
+
+/** The whole built sheet for a set of candidates — what {@link compiledUtilities} narrows, and
+ *  what the trap above is demonstrated over. */
+async function buildSheet(utilities: readonly string[]): Promise<string> {
   const compiler = await compile(appCss, {
     base: "/",
     loadStylesheet: (id: string) =>
@@ -449,8 +471,7 @@ async function compiledUtilities(utility: string): Promise<string> {
       ),
     loadModule: () => Promise.reject(new Error("no JS modules expected")),
   });
-  const built = compiler.build([utility]);
-  return built.match(/@layer utilities \{([\s\S]*?)\n\}/)?.[1].trim() ?? "";
+  return compiler.build([...utilities]);
 }
 
 /** The utilities `SURFACE` paints the prompt with, lifted out of the shipped source rather than
@@ -498,5 +519,35 @@ describe("the prompt's CSS is really compiled", () => {
       await compiledUtilities("[&_.is-editor-empty:first-child]:before:content[attr(data-placeholder)]"),
     ).toBe("");
     expect(await compiledUtilities("[&_.is-editor-empty:first-child]:before:text-dimm")).toBe("");
+  });
+
+  /**
+   * **The trap {@link compiledUtilities} exists to avoid, asserted rather than described.**
+   *
+   * Both halves are measurements this file would otherwise only claim, and the first draft of
+   * that claim was wrong — so it is pinned instead. Preflight zeroes the box model of
+   * `::before`, so the glyph is in every sheet; it sets no `content`, so a sheet built from one
+   * junk candidate has none. What puts `content:` there is the **`before:` variant itself**,
+   * which injects `content: var(--tw-content)` into every rule it makes — so the four siblings
+   * supply the word while the one utility that carries the sentence emits nothing.
+   *
+   * A whole-sheet check therefore reads *painted* off a surface with no prompt on it, which is
+   * the exact shape of vacuous assertion this describe block is about.
+   */
+  it("would read as painted off the whole sheet, which is why it is not read that way", async () => {
+    const mistyped = "[&_.is-editor-empty:first-child]:before:content[attr(data-placeholder)]";
+    const siblings = PROMPT_UTILITIES.filter((u) => !u.includes("content-["));
+    expect(siblings).toHaveLength(4);
+
+    // One junk candidate alone: the glyph is preflight's, and there is no `content` anywhere.
+    const alone = await buildSheet([mistyped]);
+    expect(alone).toContain("::before");
+    expect(alone).not.toContain("content:");
+    expect(alone).not.toContain("--tw-content");
+
+    // The same junk candidate beside its four working siblings: `content:` is back — from them.
+    const together = await buildSheet([...siblings, mistyped]);
+    expect(together).toContain("content:");
+    expect(together).not.toContain("attr(data-placeholder)");
   });
 });

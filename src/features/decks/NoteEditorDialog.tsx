@@ -5,9 +5,15 @@
  * band showing twenty notes costs the main chunk nothing: 141.5 kB gzip against the app's own
  * 481.45 kB. That rule got *stronger* with the redesign rather than weaker — the editor used to
  * unfold inside a row and is now behind a press that opens a dialog, so a band that is merely read
- * loads none of it. **Nothing in this app may reach that module with a static import**;
- * `DeckNotesPanel.test.tsx` sweeps every source file for one, and this file holds the app's only
- * reference of any kind.
+ * loads none of it. **Nothing in this app may reach that module with a static import**, and that
+ * is the half a test enforces: `DeckNotesPanel.test.tsx` sweeps every source file for one.
+ *
+ * **This file's own reference is dynamic and is the only one it has** — a claim about *this* file,
+ * which is the only kind a file's own header can keep true. How many such references the app holds
+ * is a fact about the tree and moves with it (the band carried a second for as long as it drew the
+ * editor itself), so `grep -rn 'import("./NoteEditor")' src/` is the census rather than a sentence
+ * here. What the sweep guarantees either way is the thing that costs bytes: not *how many* files
+ * reach it, but that **none** of them reaches it eagerly.
  *
  * **Three modes, one dialog, and the only differences are three strings.** A create, a create the
  * card menu asked for, and an edit differ in the heading, the button's verb and whether a card
@@ -34,10 +40,11 @@ import { CONFIRM_CANCEL, META_SUBMIT } from "./metaRows";
 import { noteToPlainText } from "./noteMarkdown";
 
 /**
- * **The app's one reference to the editor, and it is deliberately the only one.**
+ * **This file's one reference to the editor, and it is deliberately dynamic.**
  *
- * A static import anywhere on a path the main chunk reaches puts Tiptap back in it — and the app
- * still builds, still passes and still runs, so the only tell is a bundle a third bigger.
+ * A *static* import anywhere on a path the main chunk reaches puts Tiptap back in it — and the app
+ * still builds, still passes and still runs, so the only tell is a bundle a third bigger. See the
+ * header for why this says nothing about how many other files hold a `lazy` one.
  */
 const NoteEditor = lazy(() => import("./NoteEditor"));
 
@@ -140,9 +147,12 @@ function Body({
   // opened from a card menu says nothing about what is being saved.
   const verb = draft.kind === "edit" ? "Save" : "Save note";
 
-  // **Through `noteToPlainText` and never the markdown string.** An empty ProseMirror document
-  // serialises to `""` today and a body of nothing but `#` or `-` would not — what is being asked
-  // is whether the reader wrote any words, which is a question about the text and not the markup.
+  // **Through `noteToPlainText` and never the markdown string**, and the distinguishing case is
+  // measured rather than imagined: an *empty blockquote* — the `>`-and-a-space input rule, pressed
+  // and left — serialises to the single character `">"`, which `body.trim()` calls content and
+  // the reader would see as `Untitled note` with nothing in it. What is being asked is whether
+  // they wrote any **words**, which is a question about the text and not about the markup.
+  // (An empty heading is not a second case: Tiptap serialises it to `""`, where both agree.)
   const blank = noteToPlainText(body).trim() === "";
 
   return (
