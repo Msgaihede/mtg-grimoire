@@ -556,10 +556,19 @@ export function NotesBand({
    * `DeckEditor`'s `dismiss` character for character and for its reason: at this instant the
    * opener is still mounted, and one line further on it may not be.
    *
-   * ⚠️ **`isConnected` is not defensive, it is the delete path's ordinary case.** A note deleted
-   * from another window takes its card with it while a dialog about that note is still up, and
-   * `.focus()` on a detached node is a silent no-op that leaves the caret exactly where this
-   * exists to stop it landing — on `<body>`. The fallback is {@link newNoteRef}.
+   * ⚠️ **`isConnected` is reachable, and the example to hold is the band being _collapsed_ under
+   * an open dialog.** Every opener but `New note` is a button on a {@link NoteCard}, and the cards
+   * live inside the collapsible region while the dialogs are drawn outside it — so `open` going
+   * false with a dialog up unmounts the opener and leaves the dialog standing. `.focus()` on a
+   * detached node is a silent no-op that leaves the caret exactly where this exists to stop it
+   * landing, on `<body>`, so the fallback is {@link newNoteRef}, which is in the header and
+   * survives both the collapse and an empty band.
+   *
+   * **The obvious example is the wrong one and is worth naming as wrong**: a note deleted from
+   * another window does *not* reach this test, because it closes its dialog by making `live` null
+   * — `open` flips false and nothing calls this function at all. That route hands the caret back
+   * nowhere and is the one gap left in this band's contract; see the dialogs at the foot of this
+   * component for why it is not closed here.
    *
    * **The confirmed delete clears `openerRef` itself rather than relying on that test**, because
    * at the moment of the press its opener is still connected: the write is a round trip, and the
@@ -740,18 +749,38 @@ export function NotesBand({
           from another window takes its dialog with it rather than leaving one addressing a row
           nothing answers for.
 
+          ⚠️ **That is also the one close this band cannot hand the caret back from**, and it is
+          the open gap rather than a decision. `live` going null flips `open` false and `Dialog`
+          unmounts its panel; no press was made, so `closePanel` never runs and the caret reaches
+          `<body>`. Closing it needs an effect — the read losing a row is an external event, and
+          there is nowhere else a `.focus()` may legally be made — and that effect would have to
+          call `setPanel(null)` beside it, which `react-hooks/set-state-in-effect` refuses
+          outright and which goes red at `npm run verify` alone. Writing the panel away in a
+          render-phase adjustment instead is legal and does not help: it clears the very state the
+          effect would have to read, and moving the caret during render is not a thing a render
+          may do. So the fix is a shape this file cannot reach on its own, and it belongs with the
+          test that would fence it.
+
           **All three are mounted whether or not they are open, with `open` as the only gate** —
           `DeckEditor.tsx`'s own two confirmations, verbatim. A `{cond && <Dialog open …/>}` takes
           the element out of the tree on the render that closes it, so `AnimatePresence` has
           nothing left to play the exit on and the panel snaps away; two of these did, while
-          `NoteEditorDialog` tweened, which is one band drawing one gesture two ways. What the
-          house pattern costs is a **fallback heading**, visible for the length of that exit
-          because `live` is `null` the moment `panel` is: the two below read `Cards` and
-          `Delete note` on the way out, which is what `deletedCategory === null ? "Delete category"`
-          already ships two files over. Nothing is rendered *inside* a shut dialog either way —
-          `Dialog` mounts its children only while open — so the fallbacks are chrome and never
-          content, and the null guards in the callbacks below are unreachable rather than
-          defensive. */}
+          `NoteEditorDialog` tweened, which is one band drawing one gesture two ways.
+
+          **The `live === null` fallbacks below are a totality requirement and never a rendered
+          state**, which is the opposite of what this comment said for a day. A prop is evaluated
+          on every render of this band whether or not the dialog it belongs to is open, so
+          `noteTitle(live)` and `live.cards` have to be total over a `null` — that is the whole of
+          what those branches buy. **None of them is ever drawn.** `Dialog` is
+          `<AnimatePresence>{open && <Panel …/>}</AnimatePresence>`, and framer-motion renders the
+          **stored** element for an exiting key rather than a fresh one (`AnimatePresence`'s
+          `nextChildren.splice(i, 0, child)`, taken from its `renderedChildren` state), so the
+          panel leaves with the props it had while it was present; and `open` is false exactly
+          when `live` is null, so there is no render in which a fallback and an open panel
+          coexist. Pick words that would read sensibly if one ever were — that is the standard a
+          value nobody can see is held to — and do not weigh it as a cost. Nothing is rendered
+          *inside* a shut dialog either way, since `Dialog` mounts its children only while open,
+          so the null guards in the callbacks below are unreachable rather than defensive. */}
       <NoteEditorDialog
         open={
           panel?.kind === "newNote" ||
@@ -786,13 +815,21 @@ export function NotesBand({
       <NoteCardsDialog
         open={panel?.kind === "cards" && live !== null}
         // `noteTitle` here rather than in the dialog, so the heading the picker draws and the
-        // name the card it was opened from carries are one computation. The bare `Cards` is the
-        // fallback the mount pattern above buys the exit tween with.
+        // name the card it was opened from carries are one computation. The bare `Cards` is what
+        // a prop evaluated on every render has to answer when there is no note — never a heading
+        // anybody sees; the mount pattern above says why.
         title={live === null ? "Cards" : noteTitle(live)}
         named={live?.cards ?? NO_NAMED}
         attachable={attachable}
-        onAttach={(oracleId) => live !== null && onAttach(live.id, oracleId)}
-        onDetach={(oracleId) => live !== null && onDetach(live.id, oracleId)}
+        // Statement bodies rather than `live !== null && …`, which would hand a `void` callback a
+        // boolean: the delete below spells the same guard the same way, and one file answering
+        // one question two ways is what a reader has to stop and check.
+        onAttach={(oracleId) => {
+          if (live !== null) onAttach(live.id, oracleId);
+        }}
+        onDetach={(oracleId) => {
+          if (live !== null) onDetach(live.id, oracleId);
+        }}
         onClose={closePanel}
       />
 
@@ -869,9 +906,12 @@ function DeleteNoteDialog({
       // The question *is* the heading, so there is no second paragraph asking it. `Dialog` is
       // `aria-labelledby` this, which is what a test and a screen reader address the panel by.
       //
-      // **`null` is the shut state and draws the bare verb**, never `Delete “”?` — the dialog is
-      // mounted whether or not it is open so its exit can play, and the quoted name is gone by
-      // then. `DeckEditor`'s two confirmations spell the same fallback the same way.
+      // **`null` is the shut state**, and the branch is what makes the prop total: the host
+      // evaluates it on every render, open or not. It is never drawn — see the mount pattern at
+      // the call site — so the bare verb is what a value nobody sees should read as rather than a
+      // heading anybody meets. `string | null` rather than a `""` fallback for the same reason
+      // one rung down: an empty string is a *name*, and the one thing this template must never be
+      // able to spell is `Delete “”?`.
       title={title === null ? "Delete note" : `Delete “${title}”?`}
       closeLabel="Close the delete question"
       // Narrower than the picker's `w-[47.5rem]` and the editor's `w-[40rem]`: the widest thing in
