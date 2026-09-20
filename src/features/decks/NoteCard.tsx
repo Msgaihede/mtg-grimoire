@@ -48,6 +48,16 @@ export const NOTE_GAP = 8;
 export const NOTE_THUMBS = 3;
 
 /**
+ * The art strip, for a test or a live pass to address.
+ *
+ * `DECK_COLOR_SEGMENT_ATTR`'s reason exactly: the strip has no role, no accessible name and no
+ * text of its own, and in the shipped band its frames are `aria-hidden` decoration — so there is
+ * nothing to query it by. Without a handle *"draws no strip at all"* and *"draws an empty strip"*
+ * are the same assertion, and only one of them is what this card promises.
+ */
+export const NOTE_STRIP_ATTR = "data-note-strip";
+
+/**
  * The note the band has been sent to, and whether it was sent there to write or to read.
  *
  * It is **not** the `DeckNoteRequest` a card's menu raises, and the difference is the whole reason
@@ -68,8 +78,18 @@ export interface NoteCardProps {
   onEdit: () => void;
   onCards: () => void;
   onDelete: () => void;
-  /** A press on one thumbnail — the card it names. `undefined` draws the strip as plain frames
-   *  rather than as controls, which is what the workbench does. */
+  /**
+   * A press on one thumbnail — the card it names.
+   *
+   * **`undefined` draws the crops as plain frames rather than as controls, and that is the
+   * shipped case rather than a fallback for one.** The band passes no handler: there is nowhere
+   * for a press to go that this card could reach, since opening a card's modal from here means a
+   * prop threaded down from `DeckEditor` that nothing has asked for. So the crops are decoration
+   * beside prose, and the strip's one control is the `+N more` chip, which opens the picker where
+   * the card names actually live. A `<button>` drawn with no handler behind it would be a named,
+   * focusable tab stop per crop — three to a card, on every card of the grid — that does nothing
+   * when pressed, which is strictly worse than a picture.
+   */
   onOpenCard?: (card: DeckNoteCard) => void;
 }
 
@@ -141,7 +161,7 @@ export function NoteCard({
       {/* The strip, drawn only where the note names a card — an empty row of frames on the band's
           commonest note is the `0 cards` chip's failure told in pictures. */}
       {note.cards.length > 0 && (
-        <div className="flex items-center gap-1.5">
+        <div {...{ [NOTE_STRIP_ATTR]: "" }} className="flex items-center gap-1.5">
           {note.cards.slice(0, NOTE_THUMBS).map((card) => (
             <NoteThumb key={card.oracleId} card={card} onOpen={onOpenCard} />
           ))}
@@ -179,12 +199,23 @@ export function NoteCard({
   );
 }
 
+/** The frame itself — one box at one size, so the two branches below cannot come to draw two. */
+const THUMB_FRAME = "block h-8 w-11 shrink-0 overflow-hidden rounded border border-border bg-bg";
+
 /**
- * One card a note names, as an art crop.
+ * One card a note names, as an art crop — **a control only where a host has somewhere to send
+ * the press**.
  *
- * **The card's name is the button's accessible name and the picture is `alt=""`** — a frame with
- * no bytes is still a control that goes somewhere, and an `alt` repeating the name would have a
- * screen reader read every crop twice.
+ * With a handler it is a `<button>` whose accessible name is the card's own, because a frame with
+ * no bytes in it is still a control that goes somewhere. With none it is an `aria-hidden`
+ * `<span>`: no role, no name, no tab stop, and the identical picture. See
+ * {@link NoteCardProps.onOpenCard} for why the second of those is the shipped case and not the
+ * exceptional one.
+ *
+ * **The picture is `alt=""` in both branches.** Under the button the name is already said once
+ * and an `alt` repeating it would have a screen reader read every crop twice; under the span the
+ * whole frame is hidden, so the empty `alt` is the element agreeing with its parent rather than a
+ * second decision.
  *
  * Through `CardImage`, never a bare `<img>`: this is a *slot*, and a browser paints an `<img>`'s
  * last decoded frame until the new src decodes, so the picture would lag the name by the length
@@ -205,27 +236,37 @@ function NoteThumb({
       ? null
       : cardArtSrc(cardImageUrl(card.cardId, 0, "art"), card.imageUris?.art);
 
+  const picture = art === null ? null : (
+    <CardImage
+      src={art}
+      alt=""
+      draggable={false}
+      // Lazy, for a plain scroller's reason rather than a wall's: the band draws every note the
+      // deck holds, so a notebook really is that many mounted frames.
+      loading="lazy"
+      className="size-full object-cover"
+    />
+  );
+
+  if (onOpen === undefined) {
+    // No `FOCUS` here, and its absence is the point rather than an omission: a span takes no
+    // caret, so a ring on it would mark a stop that does not exist — the landing-pad rule one
+    // element in.
+    return (
+      <span aria-hidden="true" className={THUMB_FRAME}>
+        {picture}
+      </span>
+    );
+  }
+
   return (
     <button
       type="button"
-      onClick={() => onOpen?.(card)}
+      onClick={() => onOpen(card)}
       aria-label={`Open ${card.name}`}
-      className={cn(
-        "block h-8 w-11 shrink-0 overflow-hidden rounded border border-border bg-bg",
-        FOCUS,
-      )}
+      className={cn(THUMB_FRAME, FOCUS)}
     >
-      {art !== null && (
-        <CardImage
-          src={art}
-          alt=""
-          draggable={false}
-          // Lazy, for a plain scroller's reason rather than a wall's: the band draws every note
-          // the deck holds, so a notebook really is that many mounted frames.
-          loading="lazy"
-          className="size-full object-cover"
-        />
-      )}
+      {picture}
     </button>
   );
 }
@@ -267,8 +308,11 @@ function NoteBody({ body }: { body: string }): JSX.Element {
   const blocks = useMemo(() => parseNoteBody(body), [body]);
 
   if (blocks.length === 0) {
-    // A note really can be a title and nothing else — that is what the add row makes — and an
-    // empty box under a heading reads as something that failed to load.
+    // A blank body is an ordinary row rather than a failure — a note that is a title and nothing
+    // else, and a note whose body the reader has emptied — so the card says which of the two an
+    // empty box is. It is stated as a **sentence** and not as blank space because the line above
+    // is a name and deliberately not a heading (see the title span), so nothing else on the card
+    // would tell a reader that this note has no prose in it from a note whose prose did not load.
     return <p className="text-[0.6875rem] text-dim">Nothing written yet — press Edit.</p>;
   }
 

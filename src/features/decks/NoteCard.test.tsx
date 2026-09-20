@@ -10,10 +10,11 @@
  * by `vite.config.ts`, so a frame with a printing really does draw an `<img>` here and the orphan
  * case is a measurable absence rather than a vacuous one.
  */
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { DeckNote, DeckNoteCard } from "@/lib/ipc";
-import { NOTE_THUMBS, NoteCard } from "./NoteCard";
+import { NOTE_STRIP_ATTR, NOTE_THUMBS, NoteCard } from "./NoteCard";
 
 function note(over: Partial<DeckNote> & { id: number }): DeckNote {
   return {
@@ -35,6 +36,13 @@ function five(): DeckNoteCard[] {
     .map((name, i) => ({ oracleId: `o-${i}`, name, cardId: `c-${i}` }));
 }
 
+/** The art strip, which has no role and no name of its own — see {@link NOTE_STRIP_ATTR}. */
+function strip(container: HTMLElement): HTMLElement {
+  const el = container.querySelector<HTMLElement>(`[${NOTE_STRIP_ATTR}]`);
+  if (el === null) throw new Error("no art strip on this card");
+  return el;
+}
+
 function draw(note: DeckNote, over: Partial<React.ComponentProps<typeof NoteCard>> = {}) {
   return render(
     <ul>
@@ -54,10 +62,14 @@ describe("a note as a card", () => {
   it("names a blank-titled note by its body's first line, in its controls too", () => {
     draw(note({ id: 1, title: "", body: "Ask Supreme about the Bolt count" }));
     // **`getByText` cannot ask this, and the brief's draft of the test used it.** A blank title
-    // is *drawn* as the body's first line, so that one string is on the card five times over —
-    // the name line, the body's own run, and the three `sr-only` halves of `actionLabel` — and
-    // the query throws *found multiple*. So the name line is read structurally and the controls
-    // by their computed names, which is exactly the two halves this claim is about.
+    // is *drawn* as the body's first line, so that exact string is on the card **four** times —
+    // the name line, the body's own inline run, and the `sr-only` halves of `Edit` and `Delete`
+    // — and the query throws *found multiple*. (`Cards`' span is not a fifth: `actionLabel`
+    // gives it `on Ask Supreme…`, and `getByText` is exact by default. Nor are the `<li>`, the
+    // `<p>` or the body `<div>`: `getNodeText` concatenates a node's *direct* text children
+    // only, so an element whose text is all in a descendant never matches.) So the name line is
+    // read structurally and the controls by their computed names, which is exactly the two
+    // halves this claim is about.
     expect(screen.getByRole("listitem").firstElementChild).toHaveTextContent(
       "Ask Supreme about the Bolt count",
     );
@@ -79,24 +91,49 @@ describe("a note as a card", () => {
     expect(screen.getByText("third").tagName).toBe("STRONG");
   });
 
-  it("draws three crops and counts the rest", () => {
+  it("draws three crops and counts the rest, as decoration with one control", () => {
     const { container } = draw(
       note({ id: 1, title: "Krenko line", body: "Haste first.", cards: five() }),
     );
-    expect(screen.getAllByRole("button", { name: /^Open / })).toHaveLength(NOTE_THUMBS);
+    // **No `onOpenCard`, which is what the band passes** — so the crops are `aria-hidden` frames
+    // with no role, no name and no tab stop, and the chip is the strip's only control. Three
+    // named buttons per card that did nothing when pressed is what this branch exists to avoid.
+    expect(screen.queryAllByRole("button", { name: /^Open / })).toHaveLength(0);
+    expect(within(strip(container)).getAllByRole("button")).toHaveLength(1);
     // **`plural` answers `2 more cards` and not `Two more cards`** — the brief's own assertion
     // spelled the number out, and the helper is where "never print 1 cards" is decided, so the
     // assertion is what moves rather than the component.
     expect(
       screen.getByRole("button", { name: "2 more cards in Krenko line" }),
     ).toBeInTheDocument();
-    // The anti-vacuity half of the orphan case below: a card with a printing really does draw a
-    // picture here, so that test's absence means something.
+    // Three crops are still *drawn*, which is both the point of the strip and the anti-vacuity
+    // half of the orphan case below: a card with a printing really does draw a picture here, so
+    // that test's absence means something.
     expect(container.querySelectorAll("img")).toHaveLength(NOTE_THUMBS);
   });
 
+  it("makes each crop a control where a host passes a handler", async () => {
+    const onOpenCard = vi.fn();
+    const cards = five();
+    draw(note({ id: 1, title: "Krenko line", body: "Haste first.", cards }), { onOpenCard });
+
+    expect(screen.getAllByRole("button", { name: /^Open / })).toHaveLength(NOTE_THUMBS);
+    await userEvent.click(screen.getByRole("button", { name: "Open Goblin Chieftain" }));
+    // The card itself, not its oracle id: a host that opens a modal needs the printing and the
+    // name too, and `DeckNoteCard` is what the note already holds.
+    expect(onOpenCard).toHaveBeenCalledWith(cards[1]);
+  });
+
   it("draws no strip at all for a note that names nothing", () => {
-    draw(note({ id: 1, title: "Table notes", body: "Two of them are on bracket 3." }));
+    const { container } = draw(
+      note({ id: 1, title: "Table notes", body: "Two of them are on bracket 3." }),
+    );
+    // **The container's absence, not its contents'.** Asserting only that there is no `Open …`
+    // button and no `+N more` is equally true of an *empty* strip — deleting the
+    // `note.cards.length > 0` guard leaves a childless `<div>` behind, and both of the lines
+    // below go on passing under a test whose title says "no strip at all". Mutation run and
+    // recorded in the task report: without this line the suite stays green over the defect.
+    expect(container.querySelector(`[${NOTE_STRIP_ATTR}]`)).toBeNull();
     expect(screen.queryByRole("button", { name: /^Open / })).not.toBeInTheDocument();
     expect(screen.queryByText(/more$/)).not.toBeInTheDocument();
   });
@@ -109,6 +146,9 @@ describe("a note as a card", () => {
         body: "Gone.",
         cards: [{ oracleId: "o-x", name: "Ghost", cardId: null }],
       }),
+      // A handler, so this also pins the half of the frame's doc that only the control branch can
+      // show: a frame with no bytes in it is still a control that goes somewhere.
+      { onOpenCard: vi.fn() },
     );
     expect(screen.getByRole("button", { name: "Open Ghost" })).toBeInTheDocument();
     // `querySelector` and not `queryByRole("img")`: an `<img alt="">` is presentational and would
