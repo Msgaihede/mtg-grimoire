@@ -27,6 +27,48 @@ import { NoteEditorDialog, type NoteDraft } from "./NoteEditorDialog";
 Range.prototype.getClientRects ??= () => [] as unknown as DOMRectList;
 Range.prototype.getBoundingClientRect ??= () => new DOMRect();
 
+/**
+ * ⚠️ **The lazy chunk, started here and awaited before every story — because `findBy*` gives a
+ * dynamic import one second, and under load it does not always win.**
+ *
+ * Three of the four plays below wait on the editing surface, and that surface is Tiptap behind a
+ * `React.lazy`. So on any run where the module is not already in the registry, the first of them
+ * is racing the import rather than measuring this dialog — and `findBy*`'s default is **1 000 ms**
+ * however long the module actually takes.
+ *
+ * **It is load and not a disk cache**, which is worth stating because the natural guess is the
+ * other one and it is checkable: vitest's own on-disk cache (`node_modules/.vite/vitest`) measures
+ * about **1 KB**, and deleting it before a filtered run of this file changed nothing at all —
+ * 20.27 s, four plays green (2026-09-20). Every `vitest run` is a fresh process; what varies
+ * between them is the machine. The two failures on record have that shape.
+ * `NoteEditorDialog.test.tsx`'s own `beforeAll` records one — *"the same file passed in 3.5 s and,
+ * on a run whose setup alone took 2.7 s, failed with the first test timing out on exactly that
+ * await"*. The second was this file's neighbour on 2026-09-20: `DeckNotesPanel.stories.tsx`'s
+ * `Empty` went red on the same kind of await on a run whose transform and import phases both took
+ * roughly twice their usual length (**20.0 s / 33.3 s**, against **8.1 s / 16.6 s** on the very
+ * next run of the same filter). A single run never reproduces either, which is the whole reason
+ * this is written rather than waited on.
+ *
+ * **These plays have been winning that race by luck rather than by design.**
+ * `DeckNotesPanel.stories.tsx` sorts before this file and presses `New note`, so by the time these
+ * run the module is usually already in the registry — but story order is not a contract, and a
+ * rename, a split, or a filtered run of this file alone puts it first and the luck is gone.
+ *
+ * **This is not a sleep.** It awaits the exact resource being raced and nothing else: it costs
+ * what the import costs and no more, and once settled it is a registry hit in the same tick.
+ * `NoteEditorDialog.test.tsx` solves the identical race with `beforeAll(async () => { await
+ * import("./NoteEditor"); })`; `beforeEach` on the meta is CSF's slot for it — `runStory` awaits
+ * `applyBeforeEach` before it mounts anything, so the wait lands where vitest's own 15 s
+ * `testTimeout` applies instead of testing-library's one second, and the promise is started here
+ * at module scope so the import is already in flight by the first story.
+ *
+ * ⚠️ **It must stay an `import()` _expression_.** A static `from "./NoteEditor"` in a story file
+ * is not exempt from `DeckNotesPanel.test.tsx`'s 141.5 kB sweep — that sweep excuses only
+ * `NoteEditor`'s own file and `.test.` files — so writing this as an import statement would turn
+ * the one fence for the lazy boundary red.
+ */
+const EDITOR_CHUNK = import("./NoteEditor");
+
 function note(over: Partial<DeckNote> & { id: number }): DeckNote {
   return {
     deckId: 1,
@@ -67,6 +109,11 @@ const meta = {
   title: "Decks/NoteEditorDialog",
   component: NoteEditorDialog,
   tags: ["autodocs"],
+  // The wait itself — see {@link EDITOR_CHUNK}. On the meta rather than on each story, so a fifth
+  // story added here inherits it rather than having to remember the race.
+  beforeEach: async () => {
+    await EDITOR_CHUNK;
+  },
   args: {
     open: true,
     // The cast is what lets the three drafts below exist: `StoryObj<typeof meta>` takes each
