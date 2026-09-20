@@ -194,6 +194,11 @@ pub mod split;
 /// stores a non-empty word and validates nothing else. A Rust-side allow-list would make every
 /// new view a Rust change and would strand a reader on a page a downgrade no longer draws.
 pub mod startview;
+/// **The home page's sticky notes** — the first user table that hangs off nothing, and five
+/// commands over it. SQLite in and a DTO out with no clock beyond `unixepoch()`, so the module
+/// is on this half and only its `#[tauri::command]` wrappers are gated: [`web::route`] calls
+/// the same functions the desktop wrappers do.
+pub mod sticky_notes;
 pub mod sync;
 /// **Every layer of the engine compiles for wasm, and that is the point rather than a bonus.**
 /// The conflict rules are one implementation on three targets (spec §2), so a layer that

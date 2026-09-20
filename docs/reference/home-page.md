@@ -122,7 +122,16 @@ ever chosen. **Only an absent row and an unparseable one are the default**;
 `layout.test.ts`'s *"keeps an empty widget list rather than restoring the default"* pins the
 webview's, because both sides have a fallback and either alone would undo the reader's choice.
 
-## 3. The nine widgets
+## 3. The ten widgets
+
+⚠️ **The catalogue and the default layout are two different lists, and the heading above counts
+the first.** `WIDGET_META` is what the Add-widget catalogue offers; `DEFAULT_LAYOUT` is what a
+first launch is handed. A kind may be in the catalogue and not in the layout, and two are:
+`wishlistValue`, which has never been on a first launch, and `stickyNotes` (user schema v46),
+which joined the catalogue alone because a tenth widget would break the rectangle. So the sentence
+below still names **eight** widgets in an eight-by-seven rectangle and is correct as written, and
+`DEFAULT_LAYOUT`'s three copies — `widgets.ts`, `home.rs` and the Storybook fake — did not move.
+Counting the table below and editing that literal to match is the mistake this note exists to stop.
 
 The default layout fills an eight-by-seven rectangle exactly, so a first launch shows no hole:
 `summary` 0,0 4×2 · `recentCards` 4,0 4×2 · `decks` 0,2 3×3 · `activity` 3,2 3×3 ·
@@ -150,6 +159,7 @@ stores nothing). All of it lives in `config` — the extension rule below.
 | `recentCards` | the cards this device opened last, as a strip of card faces that open the card | `{ count: 4·6·8, names }` |
 | `setCompletion` | every set the reader holds a card from, and how much of it | `{ sort: complete·cards·name, bars }` |
 | `priceMovers` | owned printings whose price moved most over a window | `{ window: 7d·30d·all, direction: both·up·down }` |
+| `stickyNotes` | the reader's own notes, as a board of tinted tiles or a pad of stacked sheets | `{ layout: board·pad, dates, strip, pinned }` |
 
 **A config written before the grid keeps its meaning.** `dimension` and `limit` kept their keys
 rather than taking the design's `scope`, and a `decks` config holding pins but no `scope` reads as
@@ -184,12 +194,24 @@ invalidates. The dashboard therefore refreshes after an add, a move, a rename or
 **no mutation anywhere learning a new key**, where a `["home", …]` root would have needed every one
 of those writes to grow a line and a `staleTime` would have hidden whichever was forgotten.
 
-**The one exception is `activityKey`**, under `["activity"]` — a root nothing invalidates, because
-there is no activity mutation: the feed is a record of every *other* table's writes.
-`ActivityWidget` bridges it itself, and **both halves are load-bearing**: it subscribes to the
-query cache and turns an `invalidate` action under any of the three write roots into an
-invalidation of its own key, *and* it holds a marker query under each root so the signal exists at
-all — `invalidateQueries` dispatches nothing when it matches no cached query.
+**The exceptions are the keys whose table no other query in this app reads**, and there is no
+number to write down here: `keys.ts`'s own doc comments are the list, and each one says at its
+declaration why the rule had nothing to point at. `activityKey` is the interesting one and the
+rest are not.
+
+**`activityKey`**, under `["activity"]`, is a root nothing invalidates, because there is no
+activity mutation: the feed is a record of every *other* table's writes. `ActivityWidget` bridges
+it itself, and **both halves are load-bearing**: it subscribes to the query cache and turns an
+`invalidate` action under any of the three write roots into an invalidation of its own key, *and*
+it holds a marker query under each root so the signal exists at all — `invalidateQueries`
+dispatches nothing when it matches no cached query.
+
+**`recentCardsKey` and `stickyNotesKey` need none of that machinery**, and the difference is worth
+having: every writer of either table is in one file, so the mutation that changes the data
+invalidates the key beside it. `stickyNotesKey` is `["stickyNotes"]`, the exact value
+`crossWindow.ts` maps `sticky_notes` to, so a note written in the other window lands here as
+well — and filing it under `["collection"]` to obey the rule would have re-read every note after
+each add to the binder while leaving it stale after the four presses that actually change one.
 
 ## 4. The grid is measured in JavaScript, and still not a container query
 
@@ -381,6 +403,16 @@ rules have the least to say about. Recorded as a known consequence and a follow-
 The rung's own DDL carries that sentence as a comment, so the next reader of `schema.rs` meets the
 decision at the table rather than in this file.
 
+**Since user schema v46 the asymmetry sits inside one page, which makes it sharper rather than
+softer.** `sticky_notes` — the other user-authored table this page now reads — **is** synced, and
+the argument that put it there is the argument that keeps `activity` out: a sticky note is
+*typing*, and prose a reader wrote on the desktop that never reaches the laptop is lost work,
+where the feed is a machine-written record of presses that each already sync on their own. So one
+dashboard now shows a paired reader every note from every device and only this device's collection
+lines, and the reason is what the two tables hold rather than any difference in effort. What that
+costs is only that the follow-up above can no longer be read as "the sync layer has not learned a
+new table lately" — it has, and this one was not it.
+
 ## 6. The commands, on both targets
 
 Each goes **in the module its data lives in, with the gate on the wrapper** — `search.rs` is the
@@ -399,10 +431,19 @@ connection-only query, which is exactly what `web::route` answers.
 | `recent_cards` / `record_recent_card` | `recent_cards.rs` | the cards this device opened, newest first (added with the grid, §11) |
 | `set_completion` | `set_completion.rs` | `[{ setCode, name, releasedAt, owned, size }]` (§11) |
 | `price_movers` | `price_history.rs` | `{ movers, since, days }` (§11) |
+| `sticky_notes` and its four writes | `sticky_notes.rs` | every note by `sort_order`, then create, update, delete and reorder (§12) |
 
 Registration is three places, and a command missing from one of them answers `unknown command` at
 runtime with nothing red: `lib.rs`'s module map, `desktop.rs`'s `generate_handler!` list, and
 `web::route`'s `COMMANDS` **plus** a `match` arm.
+
+**The notes module is the first entry in this table that writes**, and the three things it does
+*not* write are each a decision rather than an omission. There is no `touch_deck`, no
+`deck_audit::record` and no `deck_undo::record_step`, because a sticky note belongs to no deck
+and none of those tables has a row shape for one. **And no `activity` row either** — not a
+judgement call: `activity.scope` is `CHECK (scope IN ('collection','wishlist'))`, so there is no
+word to write, and widening a `CHECK` is a table rebuild. The feed is about the collection; a
+sticky note is not in it.
 
 Four rules the money commands keep, each of which exists because breaking it produces a number
 that is wrong and looks right:
@@ -515,6 +556,17 @@ From the design's §9, plus two the build itself turned up:
   a refused `set_home_layout`, which `WhileTheDatabaseIsBusy` presses Remove under, asserting the
   widget still leaves the page and nothing is said: the optimistic, deliberately-unrolled-back
   write `useHomeLayout` documents.
+* ⚠️ **`sticky_note_reorder` is built and reaches no press.** It exists end to end — the function
+  and its tests in `sticky_notes.rs`, the registration in `lib.rs`, `desktop.rs` and
+  `web/route.rs`, the handler in the Storybook fake, `ipc.stickyNoteReorder`, and `reorder` on
+  `useStickyNotes`' returned API — and **nothing in the UI calls it**, so a reader cannot change
+  the order of their notes and they stay in the order they were written. The affordance it was
+  written for belonged to a third layout, an *Index* list with drag handles, which was drawn
+  against the design canvas and then rejected; Board and Pad both shipped without a drag, and the
+  command outlived the layout that would have pressed it. It is recorded here rather than deleted
+  because the plumbing is the expensive half and the next reader should find a decision instead of
+  a mystery — but until a press exists, the only thing keeping it honest is a Rust test, and a
+  grep for its callers answers *none* on purpose.
 
 ## 9. The live pass
 
@@ -610,7 +662,7 @@ document (the app has `app_meta`).
 
 **The page draws the chrome and a widget draws its body.** `WidgetCard` owns the title and its
 rename field, the chip, the settings popover (`WidgetSettingsPanel`, built from the kind's registry
-row), the remove question and the resize corner, identically for every kind; each of the nine
+row), the remove question and the resize corner, identically for every kind; each of the ten
 `widgets/*Widget.tsx` renders content only, from `WidgetParts.tsx`'s figures, bars and bordered
 rows, and a body can be tested knowing nothing about Customize. `AnchoredPopup` grew one
 backwards-compatible shape for it — children may be a function of `close` — so Keep, Remove and the
@@ -664,3 +716,50 @@ days of snapshots the marketplace holds — **so the widget can say two differen
 history yet* and *nothing moved*. `since` is taken before zero moves and the direction are filtered
 out, because computed over the returned movers a quiet week would also answer `null` and read as a
 database that had never remembered a price.
+
+---
+
+## 12. Sticky notes — user schema v46, `sticky_notes`
+
+The tenth kind and the first one that is nothing but the reader's own typing
+([issue #479](https://github.com/Msgaihede/mtg-grimoire/issues/479), 2026-09-20). Its design is
+[the spec](../superpowers/specs/2026-09-20-sticky-notes-widget-design.md); what follows is only
+what a reader of *this* page needs.
+
+`sticky_notes (id, title, body, color, pinned, sort_order, created_at, updated_at, sync_uid)`,
+`user.db`, one unique index on the uid and no other. The body is CommonMark in the narrowed
+dialect `noteMarkdown.ts` pins for deck notes — never HTML and never ProseMirror JSON, so Rust can
+hand it to anything as text and no renderer has to live in the crate. **A title may be empty, and
+the widget prints the body's first line in its place — computed at render and never stored**, for
+`deck_notes`' reason: a stored derivation goes stale the moment the body is edited and no writer
+could notice.
+
+**It is the first table this page brought with it that syncs.** The other three the home page
+introduced are all this device's — `app_meta`'s `home_layout` and `recent_cards` keys, `activity`
+and `price_snapshots` — and §5's subsection above is where that difference is argued out. (Every
+*other* table the page reads it reads through somebody else's command, and most of those sync
+already.)
+
+**`color` carries no CHECK, and that is a sync decision rather than laxity.** The page's own
+enumerated columns each have one — `activity.kind`, `activity.scope`, `price_snapshots.finish` —
+and neither of those tables syncs. ⚠️ **The rule is not that a synced column may not carry a
+CHECK**: `collection_entries.condition`, `deck_cards.variant`, `collection_folders.kind` and five
+more enumerated columns on synced tables do. It is that those
+vocabularies are Magic's or this app's model, where a note's colour is **a palette the page owns
+and expects to grow** — so a `CHECK (color IN (…))` here would make a build that adds a sixth
+colour emit rows an older build refuses **at apply**, and a refused row is a failed apply rather
+than a note that arrives looking wrong. Rust therefore stores the string it is handed and
+`stickyNotes.ts`'s `noteColor` decides what it means, mapping a word it has never heard of to
+`slate` — which is §3's existing rule for a stored value no option carries, one table over.
+
+⚠️ **`sort_order` is monotonic and never dense, deliberately.** A delete leaves a hole and nothing
+repairs it; `reorder_notes` renumbers from zero over the ids it is handed and **an id that is not
+a note still consumes a position**, because `enumerate()` counts it — so a stranger in the middle
+leaves the notes either side at 0 and 2. The column answers *before or after* and nothing more,
+which is all the `SELECT` asks of it, and both `sticky_notes.rs` and the Storybook fake pin that
+behaviour on purpose. A reader of the column who counts gaps is reading it wrong.
+
+**Dim text on a note is `--color-note-dim` and never `text-dim`.** Measured against the L 26%
+note fills the ordinary dim token lands at about 4.3:1, under the 4.5:1 floor for body text, so it
+is a contrast bug no test in this repo catches. `text-dim` stays correct everywhere on the page
+background.

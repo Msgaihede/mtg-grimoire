@@ -31,6 +31,7 @@ const EVERY_KIND: Record<WidgetKind, true> = {
   recentCards: true,
   setCompletion: true,
   priceMovers: true,
+  stickyNotes: true,
 };
 
 const EVERY_DIMENSION: Record<BreakdownDimension, true> = {
@@ -181,6 +182,11 @@ describe("WIDGETS", () => {
         picks: { count: { ids: [4, 6, 8], dflt: 8 } },
         toggles: ["names"],
         chip: undefined,
+      },
+      stickyNotes: {
+        picks: { layout: { ids: ["board", "pad"], dflt: undefined } },
+        toggles: ["dates", "strip", "pinned"],
+        chip: "layout",
       },
     });
   });

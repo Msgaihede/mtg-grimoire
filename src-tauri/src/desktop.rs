@@ -24,8 +24,8 @@ use crate::{
     deck_tokens, deck_undo, deckpane, decksort, errors, export, flatten, home, images, import,
     index, listview, markcolors, marketplace, marketplace_feed, mirror, nav, paths, price_history,
     recent_cards, reset, scanner, schema, scryfall, search, searchopen, set_completion, share,
-    startup, startview, sync, sync_engine, sync_pair, tags, update, wishlist, wishlist_folders,
-    wishlist_optimize, zoom,
+    startup, startview, sticky_notes, sync, sync_engine, sync_pair, tags, update, wishlist,
+    wishlist_folders, wishlist_optimize, zoom,
 };
 // **Not in the list above, because this file compiles for Android too.** Its name says
 // `desktop`, but its gate is `cfg(not(target_family = "wasm"))` — desktop *and* mobile — while
@@ -599,6 +599,15 @@ pub fn run() {
             // on. Both reads are infallible by signature — see each module's doc.
             home::home_layout,
             home::set_home_layout,
+            // The Notes widget's own five, and the read is infallible by signature for
+            // `home_layout`'s reason — a widget drawing its first frame can do nothing with an
+            // error that is not "draw the notes you already have". The four writes go through
+            // `with_write` and answer `db::BUSY` when a sync holds the connection.
+            sticky_notes::sticky_notes,
+            sticky_notes::sticky_note_create,
+            sticky_notes::sticky_note_update,
+            sticky_notes::sticky_note_delete,
+            sticky_notes::sticky_note_reorder,
             // The Recently viewed widget: the read is infallible by signature, and the write is
             // the card modal's, which ignores a BUSY — a missed entry costs one tile.
             recent_cards::recent_cards,

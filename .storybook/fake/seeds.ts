@@ -93,7 +93,13 @@ import type {
   FakeWishlistFolder,
 } from "./db";
 import { DECK_CATEGORIES, printing } from "./fixtures";
-import type { CategoryKind, CategoryOrigin, DeckAuditKind, DeckVariant } from "@/lib/ipc";
+import type {
+  CategoryKind,
+  CategoryOrigin,
+  DeckAuditKind,
+  DeckVariant,
+  StickyNote,
+} from "@/lib/ipc";
 
 export type SeedName =
   | "empty"
@@ -1751,6 +1757,172 @@ function starterCombos(cards: readonly FakeCard[]) {
   };
 }
 
+/**
+ * **Eight sticky notes** — the reader's own prose, user schema v46, and the only seed that
+ * carries any.
+ *
+ * Seeded rather than derived, which is the whole difference between this table and the two
+ * `makeDb` fills in from the collection: a card the reader opened and a price it has had are
+ * *implied* by a binder, and a note is implied by nothing at all. So every other world has none,
+ * `empty` included, and that is the state the widget's empty card draws rather than a hole in
+ * this file.
+ *
+ * **All five colours are used**, because a board of one colour would draw the tinted-tile
+ * layout without ever showing what the tint is *for* — and a sixth, unknown word is one press
+ * away (nothing validates the column on either side of the wire), so it is not seeded here.
+ * Exactly one note is **pinned**: a pin is a mark on a note and would say nothing if every note
+ * wore it, and "some are pinned, most are not" is the only arrangement the Pinned-first option
+ * visibly changes.
+ *
+ * **Between them the bodies reach every block kind `features/decks/noteMarkdown.ts` draws** —
+ * paragraph, heading, bullet list, ordered list, blockquote, hard break — and strong, em,
+ * strike, inline code and a link on top. That is `starterDeckNotes`' rule one table over, and it
+ * matters more here: the widget renders a note **read-only**, through `parseNoteBody`, so what
+ * a story can see is bounded entirely by what a fixture body contains.
+ *
+ * ⚠️ **Two bodies carry a hard break and it is spelled as a trailing backslash** — `HARD_BREAK`
+ * in that file accepts CommonMark's two trailing spaces *or* prosemirror's `\`, and the
+ * backslash is what Tiptap's serializer actually writes, so it is what a stored note really
+ * looks like. Two trailing spaces would also be the one character sequence a formatter, an
+ * editor or a careless rewrite can delete without changing anything visible. **The break travels
+ * as a `"\n"` inside a text run**, so a renderer that forgets `whitespace-pre-line` draws it as
+ * a space — seeding one is what makes that a thing a reader *sees* in the workbench rather than
+ * only in the shipped window.
+ *
+ * Every timestamp is under {@link CLOCK_BASE}, this file's rule for every seeded row, so a
+ * story's first write still lands above all eight. They are spread over about six weeks and four
+ * of the notes have been edited since they were written, which is what gives the `dates` option
+ * two different answers to draw.
+ *
+ * **Every title is filled.** A blank one is legal and reads as the body's first line at render,
+ * exactly as a deck note's does — but it is reachable with one press here (create, leave the
+ * title box alone), where a deck note's blank had to be seeded, so there is no state a ninth row
+ * would buy.
+ */
+function starterStickyNotes(): StickyNote[] {
+  return [
+    {
+      id: 1,
+      title: "Trade night — Friday",
+      body:
+        "Meeting at the shop at **7**, and the binder has to be packed before then.\n\n" +
+        "- Ada wants the *foil* Lightning Bolt — she is offering the Sol Ring\n" +
+        "- Ben is still owed a Rhystic Study from last month",
+      color: "amber",
+      // The one pinned note. See the header: a mark every row wears is a mark that says nothing.
+      pinned: true,
+      sortOrder: 0,
+      createdAt: CLOCK_BASE - 3 * DAY,
+      updatedAt: CLOCK_BASE - 2 * HOUR,
+    },
+    {
+      id: 2,
+      title: "Bracket 3 — house rules",
+      body:
+        "## What the table agreed\n\n" +
+        "> Two game changers each, no tutoring straight into the win, and a turn-seven clock " +
+        "is the ceiling.\n\n" +
+        "The estimate is a floor, so a deck that reads 3 can still play like a 4 — which is a " +
+        "conversation and not a number.",
+      color: "jade",
+      pinned: false,
+      sortOrder: 1,
+      createdAt: CLOCK_BASE - 21 * DAY,
+      updatedAt: CLOCK_BASE - 6 * DAY,
+    },
+    {
+      id: 3,
+      title: "Cards to proxy",
+      body:
+        "Testing only, and they come out of the sleeves before anything sanctioned.\n\n" +
+        "1. Mana Crypt — the real one is never happening\n" +
+        "2. Jeweled Lotus — waiting to see whether it survives the next list\n" +
+        "3. Gaea's Cradle",
+      color: "azure",
+      pinned: false,
+      sortOrder: 2,
+      createdAt: CLOCK_BASE - 14 * DAY,
+      updatedAt: CLOCK_BASE - 14 * DAY,
+    },
+    {
+      id: 4,
+      // **The hard-break note.** Three lines in one paragraph, joined by the trailing backslash
+      // `HARD_BREAK` accepts — a renderer with no `whitespace-pre-line` draws all three as one
+      // run-on line, which is the whole reason this body is shaped like a receipt.
+      title: "Sealed box math",
+      body:
+        "Set booster box: 30 packs\\\n" +
+        "Rare or better so far: 11\\\n" +
+        "Works out at about 4.10 a pack, which is under what the singles were going for.",
+      color: "slate",
+      pinned: false,
+      sortOrder: 3,
+      createdAt: CLOCK_BASE - 9 * DAY,
+      updatedAt: CLOCK_BASE - DAY,
+    },
+    {
+      id: 5,
+      title: "Wishlist — birthday",
+      body:
+        "If anybody asks, this is the short version — the wishlist itself is the long one.\n\n" +
+        "- Something for the Atraxa pile, ~~anything at all~~ preferably a land\n" +
+        "- A second Arcane Signet\n" +
+        "- [The set I keep reading about](https://scryfall.com/sets/mh3)",
+      color: "rose",
+      pinned: false,
+      sortOrder: 4,
+      createdAt: CLOCK_BASE - 30 * DAY,
+      updatedAt: CLOCK_BASE - 30 * DAY,
+    },
+    {
+      id: 6,
+      // The shortest body in the seed, and deliberately: a board of eight paragraphs of even
+      // length would draw a tidy grid no real one ever is, and the tile that has to survive
+      // being nearly empty is the tile a layout gets wrong.
+      title: "Sleeve stock",
+      body:
+        "Down to **two** unopened packs of matte black.\n\n" +
+        "Rhystic Testbed is on the last of the old ones and they are going cloudy at the corners.",
+      color: "slate",
+      pinned: false,
+      sortOrder: 5,
+      createdAt: CLOCK_BASE - 5 * DAY,
+      updatedAt: CLOCK_BASE - 5 * DAY,
+    },
+    {
+      id: 7,
+      title: "Draft archetypes",
+      body:
+        "### What actually wins at this table\n\n" +
+        "- *Blue-black control* — slow, but nobody else is drafting the removal\n" +
+        "- Red aggro is a trap here; the format is too grindy for it\n\n" +
+        "`otag:removal` on the search page is the shortlist I keep coming back to.",
+      color: "jade",
+      pinned: false,
+      sortOrder: 6,
+      createdAt: CLOCK_BASE - 45 * DAY,
+      updatedAt: CLOCK_BASE - 11 * DAY,
+    },
+    {
+      id: 8,
+      // The second hard break, and it is last on purpose: Pad stacks the notes and Board lays
+      // them out in columns, so one break at each end of the list means neither layout can draw
+      // the whole seed without meeting one.
+      title: "Deck ideas — Atraxa",
+      body:
+        "Superfriends is the obvious build and I do not want it.\n\n" +
+        "Counters, but on *creatures* — Hardened Scales, Corpsejack Menace, and a sacrifice " +
+        "outlet so the pile has an exit.\\\n" +
+        "About four more ramp pieces before it is worth testing.",
+      color: "azure",
+      pinned: false,
+      sortOrder: 7,
+      createdAt: CLOCK_BASE - 2 * DAY,
+      updatedAt: CLOCK_BASE - HOUR,
+    },
+  ];
+}
+
 function starterSeed(): FakeDb {
   const decks = starterDecks();
   const deckCategories = starterCategories();
@@ -1783,6 +1955,9 @@ function starterSeed(): FakeDb {
     // pairs of rows sharing an id and nothing is wrong: the page keys a line on `scope` plus
     // `id`. A seed that offset one side would hide a caller keying on the id alone.
     activity: starterActivity(),
+    // The one table in this seed that is about the reader rather than about their cards — and
+    // the only world that has any. See {@link starterStickyNotes}.
+    stickyNotes: starterStickyNotes(),
   });
 }
 

@@ -91,6 +91,7 @@ import { FoldersWidget, FoldersWidgetSettings } from "./widgets/FoldersWidget";
 import { PriceMoversWidget } from "./widgets/PriceMoversWidget";
 import { RecentCardsWidget } from "./widgets/RecentCardsWidget";
 import { SetCompletionWidget } from "./widgets/SetCompletionWidget";
+import { StickyNotesWidget } from "./widgets/StickyNotesWidget";
 import { SummaryWidget, SummaryWidgetSettings } from "./widgets/SummaryWidget";
 import { WishlistValueWidget } from "./widgets/WishlistValueWidget";
 
@@ -194,6 +195,8 @@ function renderBody(props: WidgetBodyProps): ReactElement {
       return <SetCompletionWidget {...props} />;
     case "priceMovers":
       return <PriceMoversWidget {...props} />;
+    case "stickyNotes":
+      return <StickyNotesWidget {...props} />;
     default:
       return <UnknownWidgetBody />;
   }
