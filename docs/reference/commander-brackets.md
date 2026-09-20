@@ -836,7 +836,7 @@ into one query would mean a `have = card_count` clause that is sometimes applied
 not — two queries wearing one name.
 
 A `Combos` row on the card modal's rail opens `CombosDialog`, which has been a **rail and a
-detail pane** since 2026-09-20: one ~56px line per combo down the left, and on the right the one
+detail pane** since 2026-09-20: one 59px line per combo down the left, and on the right the one
 combo the reader picked, drawn whole — its pieces as card art with the reader's own copy count
 under each, the brackets it is legal in, what it produces, both halves of the prerequisites, the
 numbered steps, the mana it needs and a link to Spellbook's own page for the variant. Above both
@@ -1033,7 +1033,7 @@ that was true of the accordion: a row really did carry that much. A rail row is 
 and no picture, so the paragraph describes a surface that no longer exists, and **a number left
 standing on a false reason is worse than a wrong number**. What sizes the page now is that the
 reader presses nothing to get the next one: the rail fetches when its sentinel comes into view, so
-a page has to be comfortably more than one screenful of ~56px rows, or the observer fires again
+a page has to be comfortably more than one screenful of 59px rows, or the observer fires again
 before the first page has finished landing. Fifty rows is about 2 800px against a rail some 700px
 tall — four screens of headroom — and it halves the round trips over the whole of Ashnod's Altar's
 list. **That pair of figures is arithmetic off the classes and not a measurement**; the paging is
@@ -1227,7 +1227,8 @@ the prose is still one press down — so both halves moved instead.
 ### A rail and a pane (2026-09-20, issue #481)
 
 **The left column is the scan list and the right column is one combo drawn whole.** The rail is
-one ~56px line per combo with no art in it at all; the pane is the combo the reader picked, at
+one 59px line per combo with no art in it at all (measured; the plan derived ~56); the pane is
+the combo the reader picked, at
 full size, with nothing collapsed and nothing abbreviated. **Nothing about the backend moved** —
 `combos_for_card`, its page shape, the three filters and the census are the same answer, rendered
 differently.
@@ -1381,14 +1382,71 @@ draw and a rail with no rows has none to hand it. The two conditions coincide on
 backend can produce; the second is there so that the split view has no state in which it draws two
 empty columns.
 
-**What is derived here, and what a live pass still owes.** The panel arithmetic, the ~56px row,
-the 2 800px against a rail some 700px tall and the pane's ~600px content box are all read off the
-classes rather than off a window, and **this change has not been driven in the shipped window at
-the time of writing**. Two things are owed that pass and only that pass can settle them: the
-`w-[62rem]` panel at a **1024px** window — the smallest this app can be, and the case the 976px
-arithmetic is about — and the rail's scroll paging on a card with thousands of combos. Basalt
-Monolith is the ordinary case and Ashnod's Altar the hard one. Everything under *Driven in the
-shipped window* below is 2026-09-08 and describes the accordion.
+### Driven in the shipped window — 2026-09-20, debug build (the rail and the pane)
+
+`npm run tauri dev`, a debug build over a copy of the real dev pair, at 1920×1080 and again at
+the app's own **1024×700** floor. Two things were owed this pass because the plan derived them
+off the classes rather than off a window — the `w-[62rem]` panel at 1024, and scroll paging on a
+card with thousands of combos — and it found a third that neither suite could see.
+
+**The panel.** 992×864 at 1920×1080, the rail column **344**, the pane **646** with
+`scrollWidth === clientWidth`, a rail row **59px**, and `document.scrollWidth` 1920. At 1024×700
+the panel is **976 at `left: 24`** with **24px either side** and `document.scrollWidth` 1024 — no
+horizontal page scroll, which is the one thing the 1024 floor forbids.
+
+**⚠️ That second reading is the fix rather than the finding, and the finding is `Dialog`'s.**
+Before it, 1024×700 drew the panel at **992** with **8px** of glass on the right against 24 on the
+left: the scrim had `grid-rows-[minmax(0,1fr)]` and no `grid-template-columns`, so the panel's grid
+area was an *implicit* `auto` column that sized to the panel's own content — the column computed
+**992px**, `max-w-full` was `100%` of that, and the clamp clamped **nothing**. It is the
+`max-h-full` circularity of 2026-08-18 on the other axis, unexposed for two years because no panel
+was wider than the padded box; this split view is the first. Setting
+`grid-template-columns: minmax(0,1fr)` live took it to 976 and backing the property out restored
+992, in one pass. `Dialog.tsx` carries the class and `Dialog.test.tsx` pins it.
+
+**Paging.** On **Basalt Monolith** (285 combos here) one scroll to the foot of the rail took it
+from 50 rows to 100. On **Ashnod's Altar** five passes paged **50 → 100 → 150 → 200 → 250 → 300**,
+the scroller growing 2 987 → 17 799 — one page per pass and never more, which is the
+`hasNextPage && !isFetchingNextPage` gate holding. The heading held at its own count throughout,
+because it counts `matching` and not the rows in hand.
+
+**The census on the live feed, and it has moved since 2026-09-08.** Ashnod's Altar reads
+**6,101 combos** where the measurement above reads 6 044, and its `5 cards` chip reads **967**
+against 968 — Spellbook rebuilds the file through the day and the app refreshes weekly, so a
+number that has drifted by tens is the design working. The chips read `All`, `2 cards`, `3 cards`,
+`4 cards`, `5 cards`, `I own every piece` with **no counts on any of them**, and the figure is in
+the one line over the rail.
+
+**The rail row and the pips, read off the window.** A row's built name came back as
+`Forsaken Monument — Ruthless. Legal in brackets 4 and 5. 2 cards. Missing 2.` — the other pieces,
+the tag's name, the brackets in words, and no letter anywhere. The pips group carries
+`aria-label` `Legal in brackets 1, 2, 3, 4 and 5` over a `textContent` of `12345`, so all five are
+drawn and the group speaks once.
+
+**The keyboard.** A real click on row 2 put the caret and `aria-current` on it together;
+`ArrowDown` moved both to row 3 and changed the pane; `End` went to row 299 of 300 **and scrolled
+the rail to its foot**, which is `scrollIntoView({ block: "nearest" })`; `Home` returned to row 0
+at `scrollTop: 0`; and `ArrowUp` there clamped rather than wrapping.
+
+**⚠️ The third thing, which is why this pass was worth running: an empty prerequisites column was
+spending 300px of the pane.** `Section` draws nothing for an empty field, which is right and was
+not enough — the *box around two* of them still took its `w-[300px]` and the row's 32px gap. On
+Basalt Monolith's first combo, which has no prerequisites at all, `Steps` began at **`left: 1161`**
+against `produces` at **829** and was squeezed into **274px** of a 606px content box, with 300px of
+blank beside it. Most of the feed's rows fill neither prerequisite field, so that was the ordinary
+case rather than a corner. The column is now drawn only when it has content: the same combo reads
+`Steps` at **`left: 829`, 606px wide**, and a combo that *does* carry one still draws both columns
+(300 at 829, steps 259 at 1161). Neither suite could have seen it — jsdom lays nothing out.
+
+**The wrap, at the width that decides it.** A piece and its gap occupy 211px, so the pane's
+**606px** content box at 1920 holds three 176px frames and its **575px** box at 1024 holds two. A
+five-piece combo at 1024 drew its pieces over **three** rows with `scrollWidth === clientWidth`
+throughout — the `flex-wrap` doing the job the alternative sideways scrollbar would have done
+badly.
+
+**What this pass did not cover.** The never-downloaded state, for the reason the 2026-09-08 pass
+gives: this corpus has the feed and the launch refresh fetches it uninvited. It is covered in the
+suite and in Storybook.
 
 ### Driven in the shipped window — 2026-09-08, debug build (the accordion)
 

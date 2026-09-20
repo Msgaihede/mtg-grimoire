@@ -52,10 +52,14 @@ import { cardDetailKey } from "./cardDetailKey";
  *
  * **What decides it now is that the reader no longer presses anything to get the next page.** The
  * rail fetches when its sentinel comes into view, so a page's job is to be comfortably more than
- * one screenful of ~56px rows — a page that ran out inside the scroller would have the observer
- * firing again before the first one had finished landing. Fifty rows is about 2 800px against a
- * rail some 700px tall, which is four screens of headroom, and it halves the round trips over the
- * whole of Ashnod's Altar's list.
+ * one screenful of rows — a page that ran out inside the scroller would have the observer firing
+ * again before the first one had finished landing.
+ *
+ * **Measured in the shipped window 2026-09-20** (`npm run tauri dev`, a debug build, 1920×1080,
+ * against a copy of the real pair): a row is **59px**, so fifty of them are **2 987px** of scroller
+ * against a **605px** rail — **4.9 screens** of headroom. Driven on Ashnod's Altar, five
+ * scroll-to-the-foot passes paged **50 → 100 → 150 → 200 → 250 → 300** with the scroller growing
+ * 2 987 → 17 799, one page per pass and never more, which is the gate holding.
  *
  * **Paging is still not a way to *find* anything, which is the other half of that 6 044 and why
  * the box above the chips exists.** Fifty at a time with no search is 121 scrolls to reach the end
@@ -329,6 +333,16 @@ export function CombosDialog(): JSX.Element {
       // has to give. 62rem is 992 — over that by 16, which `max-w-full` absorbs — where 72rem
       // would be 176px of panel the reader could never see. Everything else here is `w-[45rem]`
       // or `w-[55rem]`; a split pane wants more than either.
+      //
+      // **`max-w-full` absorbing it is true since 2026-09-20 and was not true when this panel was
+      // written.** Being the first host wider than the padded box is what exposed a clamp that had
+      // been circular since the shell was built: the scrim had no `grid-template-columns`, so the
+      // panel's grid area was an implicit `auto` column that sized to the panel, and `100%` of it
+      // was whatever the panel had asked for. Driven at 1024×700 it drew **992 at `left: 24`** with
+      // **8px** of glass on the right against 24 on the left. `Dialog.tsx` carries the fix and the
+      // before/after; with it the same window draws **976 at `left: 24`, 24px either side**, and
+      // `document.scrollWidth` stays 1024 — no horizontal page scroll, which is the one thing the
+      // 1024 floor forbids.
       //
       // **The height is fixed, which no other dialog in this app does, and that is the pane's
       // doing.** A panel sized by its content would resize as the reader moved down the rail —
@@ -617,7 +631,8 @@ function Filler({ children }: { children: ReactNode }) {
  * The scan list — one line per combo, and no card art anywhere in it.
  *
  * **Art is what the pane is for, and a picture per row is what made this surface unreadable.**
- * Each row is about 56px and says three things: which brackets the combo is legal in, which other
+ * Each row is 59px, measured in the shipped window, and says three things: which brackets the
+ * combo is legal in, which other
  * cards it needs, and how much of it the reader already owns. Those are what a reader is choosing
  * *between*; everything else about a combo is one press away and drawn at full size.
  *
@@ -849,14 +864,24 @@ function Pane({ combo }: { combo: CardCombo }) {
   const tag = COMBO_TAG[combo.bracketTag];
   const brackets = comboBrackets(combo.bracketTag);
   const produces = splitLines(combo.produces);
+  // Split once and read twice: the prerequisite pair decides whether its column is drawn at all
+  // as well as what goes in it, and two `splitLines` of one field would be two answers to that.
+  const prerequisites = splitLines(combo.easyPrerequisites);
+  const notable = splitLines(combo.notablePrerequisites);
+  const steps = splitLines(combo.description);
 
   return (
     <div className="min-w-0 flex-1 overflow-y-auto p-5">
       {/* **`flex-wrap`, because five pieces do not fit and the alternative is a sideways
-          scrollbar.** The pane's content box is about 600px at the panel's own width, which holds
-          three 176px frames; a four- or five-card combo — 3 016 and 968 of Ashnod's Altar's — puts
-          the rest on a second line. An `overflow-y-auto` box computes `overflow-x` to `auto` as
-          well, so without the wrap those rows would grow a horizontal scrollbar inside the pane. */}
+          scrollbar.** An `overflow-y-auto` box computes `overflow-x` to `auto` as well, so without
+          the wrap a wide row grows a horizontal scrollbar *inside* the pane.
+
+          **Measured 2026-09-20**: a piece and its gap occupy 211px, and the pane's content box is
+          **606px** at the app's own 1920×1080 — three frames (598) fit, four do not — against
+          **575px** at the 1024 floor, where two fit and three wrap. So the wrap is the ordinary
+          case rather than the edge one: Ashnod's Altar is in **967** five-card combos on the live
+          feed, and one of them drew its five pieces over **three** rows at 1024 with
+          `scrollWidth === clientWidth` throughout. */}
       <div className="flex flex-wrap items-center gap-3">
         {combo.pieces.map((piece, i) => (
           <div key={`${piece.oracleId}:${i}`} className="flex items-center gap-3">
@@ -930,14 +955,26 @@ function Pane({ combo }: { combo: CardCombo }) {
       {/* Prerequisites in a fixed column beside the steps, rather than stacked: a prerequisite is
           usually one short line and a step is usually three, so stacking them leaves a 600px band
           holding four words. 300px is wide enough for the longest prerequisite the feed writes
-          without wrapping it to three lines. */}
+          without wrapping it to three lines.
+
+          **The column is drawn only when it has something in it, and that is {@link Section}'s own
+          rule one box out.** `Section` draws nothing for an empty field, which is right and was not
+          enough: a *box around two* of them still spends its 300px and the row's 32px gap on
+          nothing, and most of the feed's rows fill neither prerequisite field. Driven in the
+          shipped window 2026-09-20 on Basalt Monolith, whose first combo has no prerequisites at
+          all: the empty column sat at `left: 829` holding no text, `Steps` began at **1161** —
+          332px right of `produces` at 829 — and was squeezed into **274px** of a 606px content box,
+          with 300px of blank beside it. Which is the 600px-band failure this comment opens by
+          claiming to avoid, reached from the other end. */}
       <div className="mt-4 flex flex-wrap gap-8">
-        <div className="w-[300px] shrink-0">
-          <Section title="Prerequisites" lines={splitLines(combo.easyPrerequisites)} />
-          <Section title="Notable prerequisites" lines={splitLines(combo.notablePrerequisites)} />
-        </div>
+        {(prerequisites.length > 0 || notable.length > 0) && (
+          <div className="w-[300px] shrink-0">
+            <Section title="Prerequisites" lines={prerequisites} />
+            <Section title="Notable prerequisites" lines={notable} />
+          </div>
+        )}
         <div className="min-w-0 flex-1">
-          <Section title="Steps" lines={splitLines(combo.description)} ordered />
+          <Section title="Steps" lines={steps} ordered />
         </div>
       </div>
 

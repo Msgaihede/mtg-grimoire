@@ -711,6 +711,58 @@ it("draws no heading for a field the feed left empty", async () => {
   expect(screen.queryByText("Mana needed")).not.toBeInTheDocument();
 });
 
+/**
+ * The flex row the prerequisites column and the steps column are laid out in.
+ *
+ * **Walked by `closest` and not by counting `parentElement`s**, which is a correction rather than
+ * a preference: `ol` → `Section`'s own div → the column → the row is three hops, and a two-hop
+ * version of this read the *column* instead. It made the no-prerequisites case pass for the wrong
+ * reason — a column has one child either way — and only its pair went red. A test that passes over
+ * the defect it was written for is the thing this repo keeps paying for.
+ */
+function prerequisiteRow(steps: HTMLElement): HTMLElement {
+  const row = steps.closest('div[class*="gap-8"]');
+  if (row === null) throw new Error("the pane's two-column row was not found");
+  return row as HTMLElement;
+}
+
+/**
+ * **The prerequisites *column* goes with its headings, which is `Section`'s rule one box out.**
+ *
+ * `Section` draws nothing for an empty field and that was not enough: the box around the two
+ * prerequisite blocks still spent its `w-[300px]` and the row's 32px gap on nothing, and most of
+ * the feed's rows fill neither field. Driven in the shipped window 2026-09-20 on Basalt Monolith's
+ * first combo, `Steps` began at `left: 1161` against `produces` at 829 and was squeezed into
+ * **274px** of a 606px content box, with 300px of blank beside it; with the column dropped the
+ * same combo reads `Steps` at `left: 829`, **606px** wide.
+ *
+ * **jsdom lays nothing out, so the 300px is invisible here and the *structure* is what this pins**
+ * — the app's standing answer for a layout rule a suite cannot measure. The row holds one child
+ * where the feed filled no prerequisite and two where it filled one, which is the same statement
+ * the pixels make.
+ *
+ * Catches: putting the column back unconditionally. Every heading assertion in the test above
+ * stays green through that, because `Section` is still doing its own job correctly.
+ */
+it("drops the prerequisites column when the feed filled neither field", async () => {
+  combosForCard.mockResolvedValue(page([combo({ description: "Do the thing." })]));
+  renderWithCard();
+  await combosList();
+
+  expect(prerequisiteRow(screen.getByRole("list", { name: "Steps" })).children).toHaveLength(1);
+});
+
+it("keeps the prerequisites column when the feed filled one", async () => {
+  // The other half, so the test above cannot be satisfied by a pane that draws no columns at all.
+  combosForCard.mockResolvedValue(page([FULL]));
+  renderWithCard();
+  await combosList();
+
+  const row = prerequisiteRow(screen.getByRole("list", { name: "Steps" }));
+  expect(row.children).toHaveLength(2);
+  expect(within(row.children[0] as HTMLElement).getByText("Prerequisites")).toBeInTheDocument();
+});
+
 it("says a combo also needs something no card list can name", async () => {
   // Catches: dropping the `templateCount > 0` block, which would leave a three-piece combo
   // reading as though the two cards drawn in the pane were the whole of it.
