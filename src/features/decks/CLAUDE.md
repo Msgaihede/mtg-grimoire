@@ -1534,6 +1534,32 @@ layer.
     scope. Read-only — changing it is a Deck settings trip — and it is the first thing to go at
     `TIGHT_HEADER_PX`, where the check button's own name still carries it. With no spec in hand it
     falls back to the deck row's `formatName`.
+  - **The `Lands` term says `38 +2 MDFC`, and the second number is a tally beside the figure
+    rather than a widening of it** (2026-09-20,
+    [issue #475](https://github.com/Msgaihede/mtg-grimoire/issues/475)). A modal DFC with a spell
+    on the front and a land on the back is filed by what it *does* — `autoCategoryFor` pins `Land`
+    off the **front** face, so Turntimber Symbiosis lands in Ramp — and is a spell to the curve,
+    the average and the type bars, all of which are right, because a deck is cast from the front.
+    What none of them could say is the thing a reader reads the Lands figure *for*: how many cards
+    can be a land this game. `deckBuckets.isMdfcLand` is the predicate,
+    `DeckStatsSummary.mdfcLands` the copies, and `DeckLedger` the one surface that draws it.
+    Four rules carry it:
+    - **It moves no other number.** `mdfcLands` is a subset of `nonlands` by construction and
+      `lands + nonlands` is still every counted copy. Nothing here touches a curve bucket, the
+      average, `typeBucket` or `autoCategoryFor` — a card that is a spell to seven readouts and a
+      land to one is the honest answer, not a contradiction to tidy away.
+    - **The gate is `layout === "modal_dfc"` and never the type line alone.** Measured against the
+      debug corpus (117 738 printings, 2026-09-20): **50** oracle cards are `modal_dfc` with a
+      spell front and a Land back — what this counts; **32** are `transform` with a land back
+      (Search for Azcanta, Legion's Landing, Treasure Map), and those cannot be *played* as a
+      land, so counting one makes a manabase read one land longer than it plays.
+    - **The front face is tested too, and that is the double-count guard.** The **10** Pathways
+      are `Land // Land`, so `isLand` already counts them — without the test a mono-Pathway
+      manabase would read `38 +10 MDFC` over 38 lands.
+    - **The tooltip is bound exactly when the abbreviation is on screen.** `Lands` needs no gloss,
+      so a deck with none binds nothing at all — the header's own rule about a hint that repeats
+      what is already readable, reached from the other side. `useTooltip` answers no binding for
+      falsy content, which is what makes `tip(mdfc > 0 && …)` the whole of it.
 - **The game-changer count on that line is a press, and what it does is _narrow_ the deck** —
   `DeckLedger`'s chip, between the format check and the bracket. It says how many; pressing it
   answers **where**, which the deck laid out under it says nothing about and which on a
