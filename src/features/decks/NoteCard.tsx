@@ -103,9 +103,11 @@ export interface NoteCardProps {
    * shipped case rather than a fallback for one.** The band passes no handler: there is nowhere
    * for a press to go that this card could reach, since opening a card's modal from here means a
    * prop threaded down from `DeckEditor` that nothing has asked for. So the crops are decoration
-   * beside prose, and the strip's one control is the `+N more` chip. A `<button>` drawn with no
-   * handler behind it would be a named, focusable tab stop per crop — three to a card, on every
-   * card of the grid — that does nothing when pressed, which is strictly worse than a picture.
+   * beside prose, and the only control the strip can have left is the `+N more` chip — which
+   * exists only above {@link NOTE_THUMBS}, so **on a note naming one, two or three cards the
+   * shipped strip carries no control at all**. A `<button>` drawn with no handler behind it would
+   * be a named, focusable tab stop per crop — three to a card, on every card of the grid — that
+   * does nothing when pressed, which is strictly worse than a picture.
    *
    * **What a screen reader gets does not depend on this prop**, and that is deliberate:
    * {@link namesSentence} is drawn inside the strip on both branches, so the count and every name

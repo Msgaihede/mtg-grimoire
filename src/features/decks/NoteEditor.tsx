@@ -8,6 +8,19 @@
  * anywhere on a path the deck editor mounts puts all of it back in the main chunk, and **nothing
  * goes red** when it happens — the bundle simply gets a third bigger.
  *
+ * ⚠️ **That measurement names three packages and this file imports four, and the *premise* is
+ * what needed correcting rather than the figure.** `@tiptap/extensions` arrived with
+ * {@link Placeholder} on 2026-09-20 and is **not** a fourth download: `@tiptap/starter-kit`
+ * already depends on it and already pulls it into the graph, so what the named import adds is
+ * that one extension's own code — **12–15 bytes gzip**, measured 2026-09-21, which is inside the
+ * rounding on 141.5. So 141.5 kB remains the number to quote, and the sentence above remains the
+ * reason this module is lazy.
+ *
+ * **This is the canonical site for that figure.** It is repeated at roughly fifteen other call
+ * sites and across the specs and plans — `grep -rn "141.5" src/ docs/` is the census — and none
+ * of them is wrong, so none of them was rewritten: a prose-only sweep routes to neither CI job
+ * and would be fifteen chances to introduce a disagreement over a number nobody disputes.
+ *
  * ## The dialect is the contract, not a starting point
  *
  * There are two renderers for a note body and only one of them is this file. The band's list, the

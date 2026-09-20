@@ -158,11 +158,15 @@ function Picker({
    * The named cards the deck no longer holds, drawn at the head so an unticking press is always
    * reachable. `attachable` cannot contain them by construction — it is built from the deck.
    *
-   * Three of the seven fields are **synthesised** rather than read, because a `DeckNoteCard`
-   * carries no printing: `setCode` and `collectorNumber` are empty and `copies` is `0`. None of
-   * those is a fact about the card, so nothing may draw them — see {@link Row}, which is handed
-   * `stray` and decides on that rather than on the sentinels, so the guard tests the reason and
-   * not the symptom.
+   * **Four of {@link NoteCardChoice}'s eight fields are synthesised** rather than read, because a
+   * `DeckNoteCard` carries no printing: `setCode` and `collectorNumber` are empty, `copies` is
+   * `0`, and `typeBucket` is {@link OTHER}. None of the four is a fact about the card, so nothing
+   * may draw them — see {@link Row}, which is handed `stray` and decides on that rather than on
+   * the sentinels, so the guard tests the reason and not the symptom.
+   *
+   * **`typeBucket` is the one to count**, and it is why this sentence is worth getting right: the
+   * other three read as absences, where a bucket reads as something the card said about itself.
+   * {@link Row}'s own doc makes it the headline of the whole decision.
    */
   const strays: NoteCardChoice[] = useMemo(
     () =>

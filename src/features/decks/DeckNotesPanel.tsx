@@ -749,17 +749,27 @@ export function NotesBand({
           from another window takes its dialog with it rather than leaving one addressing a row
           nothing answers for.
 
-          ⚠️ **That is also the one close this band cannot hand the caret back from**, and it is
-          the open gap rather than a decision. `live` going null flips `open` false and `Dialog`
-          unmounts its panel; no press was made, so `closePanel` never runs and the caret reaches
-          `<body>`. Closing it needs an effect — the read losing a row is an external event, and
-          there is nowhere else a `.focus()` may legally be made — and that effect would have to
-          call `setPanel(null)` beside it, which `react-hooks/set-state-in-effect` refuses
-          outright and which goes red at `npm run verify` alone. Writing the panel away in a
-          render-phase adjustment instead is legal and does not help: it clears the very state the
-          effect would have to read, and moving the caret during render is not a thing a render
-          may do. So the fix is a shape this file cannot reach on its own, and it belongs with the
-          test that would fence it.
+          ⚠️ **That is also the one close this band does not hand the caret back from, and it
+          is parked rather than impossible — this comment claimed the second until 2026-09-21.**
+          `live` going null flips `open` false and `Dialog` unmounts its panel; no press was made,
+          so `closePanel` never runs and the caret reaches `<body>`.
+
+          **The shape that works is a render-phase adjustment beside a sentinel ref, and this file
+          already uses the first half twice** — the `focus` arm and the `newFromCard` arm above.
+          Clearing `panel` during render is React's own *adjusting state when a prop changes* and
+          is legal; `react-hooks/set-state-in-effect` never enters the picture, because the effect
+          left over does no `setState` at all. The objection this comment used to raise against
+          that — that writing the panel away clears the very state the restore would have to read
+          — is answerable with one boolean: {@link closePanel} already writes `openerRef` back to
+          `null`, so a ref it *also* clears tells the two routes apart, and the effect then fires
+          only on the route `closePanel` did not take and is a ref read plus a `.focus()`.
+
+          **What keeps it parked is the reach, not the shape.** It needs two windows open on one
+          deck, a note deleted in one of them while the other has a dialog up on it, and a reader
+          driving that second window by keyboard — deep enough in the tail that the price, a
+          third render-phase adjustment and a ref whose only reader is a case this suite cannot
+          currently reproduce, buys more risk than it removes. It belongs with the test that would
+          fence it.
 
           **All three are mounted whether or not they are open, with `open` as the only gate** —
           `DeckEditor.tsx`'s own two confirmations, verbatim. A `{cond && <Dialog open …/>}` takes

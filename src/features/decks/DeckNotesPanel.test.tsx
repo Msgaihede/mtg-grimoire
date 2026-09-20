@@ -917,14 +917,158 @@ const SOURCES = import.meta.glob<string>("/src/**/*.{ts,tsx}", {
 });
 
 /**
- * An `import … from "…/NoteEditor"` — the static kind, in any of its spellings. A
- * `lazy(() => import("./NoteEditor"))` is an expression and matches none of them.
+ * A **static** reach into `NoteEditor` — an `import` or `export` *statement* naming it, in the
+ * spellings this tree can actually produce. A `lazy(() => import("./NoteEditor"))` is an
+ * expression and must keep matching none of them, because that dynamic import is the whole
+ * mechanism the 141.5 kB lives behind.
+ *
+ * **Four pieces, each closing a spelling that slipped the pattern this replaced** — which was
+ * `from\s*["']…` on a single line, and which is documented against {@link IMPORT_SPELLINGS}
+ * below rather than described in prose a second time:
+ *
+ * * **`(?!\s*\()` after the keyword** is what tells the statement from the expression. `import(`
+ *   at the head of its own line is exactly what prettier produces from
+ *   `lazy(() =>` / `import("./NoteEditor"),` / `)`, and `\b` alone matches it.
+ * * **`from` is optional**, so the bare side-effect `import "./NoteEditor";` is caught. That one
+ *   names no binding and pulls the whole module anyway, which makes it the worst spelling to
+ *   miss.
+ * * **The clause class spans lines** — `[\w{},*$/\s]` matches a newline as every character class
+ *   does — and excludes `"`, `'`, `;` and `=`, so it crosses a wrapped `{` / `X,` / `}` (which
+ *   prettier's `printWidth: 100` produces routinely) and cannot cross into the next statement or
+ *   out of a string literal. `/` is in it so a comment between the braces does not break the
+ *   chain.
+ * * **`(?:\.[jt]sx?)?`** covers the extensions `tsconfig.json`'s `allowImportingTsExtensions`
+ *   permits and the compiled spellings beside them: `.ts`, `.tsx`, `.js`, `.jsx`.
+ *
+ * **Three spellings still slip, and they are named rather than claimed away.** A `tsconfig`
+ * `paths` alias whose own text does not contain `NoteEditor` (there is none, and adding one would
+ * put this fence back to nothing); a CommonJS `require("./NoteEditor")` (this tree is ESM, so
+ * there is none); and a query-suffixed specifier such as `"./NoteEditor?raw"`, which hands the
+ * caller the file's *text* and pulls no module graph at all, so it costs the main chunk nothing.
  *
  * **`m` and deliberately not `g`.** A global regular expression carries `lastIndex` between
  * calls, so a `.test()` inside a filter answers about wherever the previous file left off — and
  * the sweep would silently pass over half the tree.
  */
-const STATIC_NOTE_EDITOR_IMPORT = /^\s*(?:import|export)\b[^\n]*?from\s*["'][^"']*\/NoteEditor["']/m;
+const STATIC_NOTE_EDITOR_IMPORT =
+  /^[ \t]*(?:import|export)\b(?!\s*\()[\w{},*$/\s]*?(?:from\s*)?["'][^"']*\/NoteEditor(?:\.[jt]sx?)?["']/m;
+
+/** One spelling of a reach into `NoteEditor`, and the verdict the sweep owes it. */
+interface ImportSpelling {
+  /** What the spelling is, in words — this is what a failure prints. */
+  readonly what: string;
+  /** The source text, exactly as a file would carry it, newlines included. */
+  readonly source: string;
+  /** Whether {@link STATIC_NOTE_EDITOR_IMPORT} must match it. */
+  readonly caught: boolean;
+}
+
+/**
+ * The sweep's own fixture table, so the claim the doc above makes is checked by the build rather
+ * than by prose.
+ *
+ * **It exists because the sentence it replaced was false.** That doc said the pattern caught the
+ * static import *"in any of its spellings"*, and measured against the pattern it sat on, five
+ * spellings slipped: the bare side-effect import, both explicit extensions, the multi-line
+ * clause, and `import(` wrapped onto a line of its own. The hole was inherited — the pattern was
+ * byte-identical to this branch's base — and harmless until this branch gave `NoteEditor.tsx` a
+ * third export, `NOTE_PLACEHOLDER`, which a sibling wants **by name**, in the multi-line form. A
+ * miss costs a measured 141.5 kB gzip in the main chunk with nothing going red, which is this
+ * feature's headline constraint.
+ *
+ * Two rows carry the edges of the rule. **`import type` is caught and is a false positive** — a
+ * type-only import is erased and costs the bundle nothing — and it is kept caught deliberately,
+ * because a pattern narrowed to exempt it is one more shape a real import can be written past;
+ * the false positive costs a keyword nobody may write here, and the exemption would cost the
+ * fence. **`lazy(() => import(…))` must stay uncaught**, in both of prettier's line breakings,
+ * or this sweep becomes a suite that can never be green.
+ */
+const IMPORT_SPELLINGS: readonly ImportSpelling[] = [
+  { what: "a default import", source: `import NoteEditor from "./NoteEditor";`, caught: true },
+  {
+    what: "a named import",
+    source: `import { NOTE_PLACEHOLDER } from "./NoteEditor";`,
+    caught: true,
+  },
+  {
+    what: "a default and a named together",
+    source: `import NoteEditor, { NOTE_PLACEHOLDER } from "./NoteEditor";`,
+    caught: true,
+  },
+  { what: "a namespace import", source: `import * as editor from "./NoteEditor";`, caught: true },
+  { what: "a star re-export", source: `export * from "./NoteEditor";`, caught: true },
+  {
+    what: "a named re-export through the alias path",
+    source: `export { NOTE_PLACEHOLDER } from "@/features/decks/NoteEditor";`,
+    caught: true,
+  },
+  { what: "single quotes", source: `import NoteEditor from './NoteEditor';`, caught: true },
+  {
+    what: "a type-only import, which is erased — a false positive, kept on purpose",
+    source: `import type { NoteEditorProps } from "./NoteEditor";`,
+    caught: true,
+  },
+  {
+    what: "a bare side-effect import, which names nothing and pulls everything",
+    source: `import "./NoteEditor";`,
+    caught: true,
+  },
+  {
+    what: "an explicit .tsx extension",
+    source: `import NoteEditor from "./NoteEditor.tsx";`,
+    caught: true,
+  },
+  {
+    what: "an explicit .js extension",
+    source: `import NoteEditor from "./NoteEditor.js";`,
+    caught: true,
+  },
+  {
+    what: "prettier's wrapped named clause — the form NOTE_PLACEHOLDER arrives in",
+    source: `import {\n  NOTE_PLACEHOLDER,\n} from "./NoteEditor";`,
+    caught: true,
+  },
+  {
+    what: "a wrapped clause with a comment inside the braces",
+    source: `import {\n  // the prompt\n  NOTE_PLACEHOLDER,\n} from "./NoteEditor";`,
+    caught: true,
+  },
+  {
+    what: "an indented import",
+    source: `  import NoteEditor from "./NoteEditor";`,
+    caught: true,
+  },
+  {
+    what: "the lazy boundary itself — this MUST keep slipping",
+    source: `const NoteEditor = lazy(() => import("./NoteEditor"));`,
+    caught: false,
+  },
+  {
+    what: "the same boundary with import( on its own line, which prettier produces",
+    source: `const NoteEditor = lazy(() =>\n  import("./NoteEditor"),\n);`,
+    caught: false,
+  },
+  {
+    what: "the editor dialog's test suite warming the chunk",
+    source: `  await import("./NoteEditor");`,
+    caught: false,
+  },
+  {
+    what: "the dialog beside it, which every read path imports eagerly",
+    source: `import NoteEditorDialog from "./NoteEditorDialog";`,
+    caught: false,
+  },
+  {
+    what: "a neighbouring module of this feature",
+    source: `import { noteBlocks } from "./noteMarkdown";`,
+    caught: false,
+  },
+  {
+    what: "the module's path as a value rather than as a specifier",
+    source: `export const NOTE_EDITOR_PATH = "./NoteEditor";`,
+    caught: false,
+  },
+];
 
 describe("the editor's 141.5 kB", () => {
   /**
@@ -940,6 +1084,20 @@ describe("the editor's 141.5 kB", () => {
    * behind a dialog; this sweep does not care which file holds it, only that nobody reaches it
    * statically.
    */
+  /**
+   * The doc on {@link STATIC_NOTE_EDITOR_IMPORT}, asserted rather than merely asserted *about*.
+   * The sweep below can only say "no file in the tree matches today", which is exactly as true of
+   * a pattern that matches nothing at all; this is what says the pattern still bites — and, in
+   * the other direction, that it has not been widened onto the one import the feature depends on.
+   */
+  it("catches every static spelling of the import and no dynamic one", () => {
+    const wrong = IMPORT_SPELLINGS.filter(
+      ({ source, caught }) => STATIC_NOTE_EDITOR_IMPORT.test(source) !== caught,
+    ).map(({ what, caught }) => `${caught ? "missed" : "wrongly caught"}: ${what}`);
+
+    expect(wrong).toEqual([]);
+  });
+
   it("is reached by nothing but a dynamic import", () => {
     // A glob that stops matching returns `{}`, and a sweep over nothing finds nothing.
     expect(Object.keys(SOURCES).length).toBeGreaterThan(20);

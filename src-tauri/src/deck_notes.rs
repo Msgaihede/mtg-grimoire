@@ -245,8 +245,13 @@ fn require_note(conn: &Connection, deck_id: i64, id: i64) -> Result<String, Stri
 ///   answer one printing's id and a different printing's picture, which is a wrong card's art with
 ///   no way for any caller to notice. A subquery that answers one `id` makes that unrepresentable.
 /// * **`ORDER BY (dc.card_id IS NULL), c.id` inside it is the preference.** SQLite sorts `0`
-///   before `1`, so a printing this deck holds comes first and `c.id` breaks the tie — which is
-///   the same printing the old `min(c.id)` chose whenever the deck held none.
+///   before `1`, so a printing this deck holds comes first and `c.id` breaks the tie. **It
+///   preserves nothing, because there was nothing to preserve**: the statement this replaced
+///   selected `coalesce(min(c.name), nc.oracle_id)` under a `GROUP BY` and named no printing
+///   column at all — [`DeckNoteCard`] had no `card_id` and no `image_uris` to fill — so a
+///   `min(c.id)` never ran here. That expression existed only in a design draft this plan
+///   rejected, and a sentence citing it as this statement's own history is the kind of claim a
+///   later reader checks against `git log` and cannot find.
 /// * **The `GROUP BY` is gone and no row count moved.** `deck_note_cards` carries
 ///   [`DECK_NOTE_CARD_GRAIN`](crate::schema::DECK_NOTE_CARD_GRAIN) on `(note_id, oracle_id)`, so
 ///   there is one row per attachment to begin with, and a `LEFT JOIN` on `p.id = (scalar)` matches
@@ -267,8 +272,18 @@ fn attachments_by_note(
     /// Where this statement's image columns start — one past `p.id`, the last named column.
     /// Named rather than inlined for `deck_row`'s reason, and `collection.rs`'s: a number left
     /// behind when a fifth named column lands reads one variant's URL as another's, and nothing
-    /// errors. **No test in this module can be relied on to catch that on its own** — the read
-    /// below says why — so the name is the fence, and a migration comment has something to move.
+    /// errors — so the name is the fence a *new* column has to move, and a migration comment has
+    /// something to move with it.
+    ///
+    /// ⚠️ **What catches the offset going wrong is a fixture rather than a test, and that is
+    /// the thing to know before simplifying one.**
+    /// `tests::an_attachment_names_the_printing_this_deck_holds` is red against
+    /// `IMAGE_COL + i` → `3 + i` — mutated and confirmed — **only because it carries a different
+    /// URL in every one of the four image slots**. `front_face_selects` emits `(top-level, face)`
+    /// per variant and `for_face` prefers the face, so a read one column early slides each
+    /// top-level URL into the face slot and answers a real, versioned, on-host URL for every
+    /// variant, with nothing anywhere raising. A fixture with one column, or one variant, or the
+    /// same URL in two slots passes that shear in silence and takes the fence with it.
     const IMAGE_COL: usize = 4;
     let images = crate::image_uri::front_face_selects("p").join(", ");
     let sql = format!(

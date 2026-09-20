@@ -2364,3 +2364,45 @@ on the longest note computed an `aria-label` of **185 characters** —
 Tested twice against the Simic deck and…"*. The visible title truncates by CSS; the name does not.
 It was the same before the redesign (`NoteRow` built its names the same way), but a blank title was
 the exception then and is the rule now. Not fixed here.
+
+### Open — `NoteEditor` drops keystrokes when the host re-renders between two of them
+
+**Pre-existing, and the redesign changed its reachability not at all** — which is the half worth
+stating, because the band was rewritten around this editor in the same week. It is written up here
+rather than left in a test comment because this file's index line promises *including the bugs
+still open*, and until 2026-09-21 the only record of it was
+`NoteEditorDialog.test.tsx`'s doc on `typist()`.
+
+**The mechanism.** `NoteEditor` is controlled. Each keystroke serialises the document to markdown,
+the host stores it, and the editor's own value-sync effect then compares `editor.getMarkdown()`
+against the `value` that render was handed — a guard whose whole job is to leave the document
+alone when the two already agree. A keystroke that lands **after** that render was scheduled and
+**before** its effect runs makes the two disagree for a reason the guard cannot tell from an
+external edit: the document has moved on and `value` has not. So the guard fails, `setContent`
+puts the older body back, and the caret goes with it.
+
+**The measurement**, from this suite rather than from the window: `"Fourteen sources."` typed at
+`userEvent`'s default inter-key delay — which yields to the macrotask queue between letters, and
+is therefore the instrument that opens the window — arrives as **`"Futen ore."`**. It arrives
+**intact** three ways: uncontrolled, at `delay: null`, and pasted. That triple is what says the
+fault is the round trip and not the editor's own input handling.
+
+**The redesign did not move it.** The old in-row editor drove the same component with the same
+arrangement — a `useState(note.body)` in the host and `<NoteEditor value onChange>` under it —
+so the dialog inherited the race rather than introducing it, and `NoteEditorDialog.test.tsx`'s
+`typist()` (a `userEvent.setup({ delay: null })`) steps around it so that file's cases measure the
+dialog instead of this.
+
+**The fix not taken** is to stop asking the document what it holds and latch what was last
+*serialised out*: a ref written in `onUpdate` beside the `onChange` call, compared against `value`
+in the sync effect in place of `editor.getMarkdown()`. That answers *"is this `value` one we
+produced"* rather than *"does the document currently match"*, which is the question the guard was
+always trying to ask, and it is immune to the document having moved on in between. It is not done
+here because this branch's subject is the band around the surface, and a change to the sync effect
+is a change every note, every sticky note and the card modal's overlay ride on.
+
+**The one question jsdom cannot settle**: whether a human reaches it. Every reading above comes
+from a synthetic typist whose inter-key delay is a scheduler yield rather than a duration — the
+real question is whether a keystroke at **key-repeat speed** in the shipped window lands inside the
+same gap, and only driving the real WebView2 can answer it. Nothing was measured there, and the
+2026-09-21 pass did not attempt it.

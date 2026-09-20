@@ -145,6 +145,16 @@ describe("what the card picker offers", () => {
    *
    * Both orders are asserted on purpose: the second is what the old "first row wins" rule would
    * also have passed, so it cannot tell the two implementations apart on its own.
+   *
+   * **All four printing fields are asserted, `imageUris` included, and that one is the reason
+   * this comment has a third paragraph.** It was pinned by nothing until 2026-09-21:
+   * `validation/fixtures`' `card()` leaves the field off altogether, so both rows read
+   * `undefined`, and deleting `seen.imageUris = card.imageUris` from the fold left the whole
+   * suite green. What that deletion actually ships is the picker drawing the *losing* printing's
+   * art beside the winner's set code — the exact disagreement between a ticked row and the crop
+   * it produces that this rule exists to prevent. A fixture has to carry the field for the
+   * assertion to mean anything, which is why these two rows set it and the rest of the file does
+   * not.
    */
   it("takes the lowest cardId even when the deck lists the higher one first", () => {
     const [row] = attachableCards([
@@ -154,6 +164,7 @@ describe("what the card picker offers", () => {
         name: "Lightning Bolt",
         setCode: "m10",
         collectorNumber: "146",
+        imageUris: { display: "https://example.invalid/m10.png" },
       }),
       card({
         cardId: "lea",
@@ -161,12 +172,14 @@ describe("what the card picker offers", () => {
         name: "Lightning Bolt",
         setCode: "lea",
         collectorNumber: "161",
+        imageUris: { display: "https://example.invalid/lea.png" },
       }),
     ]);
 
     expect(row?.cardId).toBe("lea");
     expect(row?.setCode).toBe("lea");
     expect(row?.collectorNumber).toBe("161");
+    expect(row?.imageUris).toEqual({ display: "https://example.invalid/lea.png" });
   });
 
   it("takes the same printing when the deck lists the lower one first", () => {
@@ -177,6 +190,7 @@ describe("what the card picker offers", () => {
         name: "Lightning Bolt",
         setCode: "lea",
         collectorNumber: "161",
+        imageUris: { display: "https://example.invalid/lea.png" },
       }),
       card({
         cardId: "m10",
@@ -184,11 +198,13 @@ describe("what the card picker offers", () => {
         name: "Lightning Bolt",
         setCode: "m10",
         collectorNumber: "146",
+        imageUris: { display: "https://example.invalid/m10.png" },
       }),
     ]);
 
     expect(row?.cardId).toBe("lea");
     expect(row?.collectorNumber).toBe("161");
+    expect(row?.imageUris).toEqual({ display: "https://example.invalid/lea.png" });
   });
 
   it("folds the copies over every printing whichever one wins the art", () => {
