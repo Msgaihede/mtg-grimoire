@@ -72,6 +72,7 @@ import { DEFAULT_VARIANT, useDeck } from "@/features/decks/useDeck";
 import { useDeckFolders } from "@/features/decks/useDeckFolders";
 import { useDecks } from "@/features/decks/useDecks";
 import { sameDeckSlot } from "@/features/decks/deckWalk";
+import { departureFrom, useReturnToRemovedCard, type PaneDeparture } from "./cardReturn";
 import { LabelSwatch } from "@/features/decks/LabelColorPicker";
 import type { DropdownOption } from "@/components/Dropdown/types";
 import { MENU_CONDITION } from "@/lib/conditions";
@@ -506,6 +507,16 @@ export function CardDetailModal() {
   const next = at >= 0 && at + 1 < stops.length ? stops[at + 1] : null;
 
   /**
+   * The other half of issue #474 — walk back onto a card whose removal has been undone.
+   *
+   * Mounted here because this is the one component in the app that reads `cardWalk`, and the walk
+   * regaining a removed stop is the only evidence the page has that a removal was reversed. The
+   * hook carries the whole argument, including why it watches for the row coming *back* rather
+   * than listening to Ctrl+Z.
+   */
+  const returnDepth = useReturnToRemovedCard(stops);
+
+  /**
    * A step: the list behind the scrim follows, in the store's own words for where a card was
    * opened from.
    *
@@ -626,6 +637,18 @@ export function CardDetailModal() {
       // The arrows below live on the panel, so the panel has to be holding the caret for them to
       // exist — see `DialogProps.stackedOver`, where the failure this closes is written out.
       stackedOver={stacked}
+      // **And the third way that caret is lost, which is this modal's own doing** (issue #474).
+      // The press that removes a card is a press on `−` at 1, and `QuantityStepper` puts the
+      // `disabled` attribute on that button the moment the count reaches its floor — so the
+      // reader's last press takes the caret to `<body>` with it, and the arrows this fix exists
+      // to keep alive are dead on arrival. **The depth of the return stack is the pulse**,
+      // because it is already the count of moves the app has made that nobody asked for: it goes
+      // up when a removal steps the reader on and down when an undo walks them back, and those
+      // are exactly the two moments a control may have vanished under them. Both surfaces are
+      // covered by one number even though they lose the caret at different moments — the deck at
+      // the optimistic patch, the collection a refetch later — because the settle watches rather
+      // than reads.
+      caretPulse={returnDepth}
       // **Two different functions, and the difference is the caret.** Escape and the ✕ are the
       // reader saying "put me back", so they go through the body's own close and whatever opened
       // the card gets the caret. A press on the **scrim** is not: they have already moved the
@@ -651,6 +674,7 @@ export function CardDetailModal() {
           error={card.isError ? ipcError(card.error) : null}
           scope={scope}
           chevrons={chevrons}
+          removalDeparture={departureFrom(stops, at)}
           onClose={close}
           closeRef={closeRef}
         />
@@ -700,6 +724,7 @@ function Body({
   error,
   scope,
   chevrons,
+  removalDeparture,
   onClose,
   closeRef,
 }: {
@@ -710,12 +735,25 @@ function Body({
   scope: CardModalScope;
   /** The step pair, when the window has no room for `Dialog`'s flanks. */
   chevrons: ReactNode;
+  /**
+   * Where the modal would go if the row behind this card were removed, or `null` when the card is
+   * on no walk — issue #474, and the collection's and the wishlist's half of it.
+   *
+   * **Handed down as data rather than looked up here**, because the walk is the parent's: it is
+   * the one component in the app that selects `cardWalk`, and the store says at that field why it
+   * should stay the one. The deck's removals do not come through this prop at all — they go
+   * through `useDeck.setQuantity`, which has to plan a press earlier still (the optimistic patch
+   * takes the row off the walk before the answer arrives) and reads the store directly.
+   */
+  removalDeparture: PaneDeparture | null;
   onClose: () => void;
   closeRef: React.RefObject<(() => void) | null>;
 }) {
   const { marketplace } = useMarketplace();
   const queryClient = useQueryClient();
   const openAllPrintings = useAppStore((s) => s.openAllPrintings);
+  /** The move off a removed card, with the stop it was made from remembered — see the store. */
+  const leaveRemovedCard = useAppStore((s) => s.leaveRemovedCard);
   /**
    * **Whether the controls column has anything to draw**, which decides whether the main area is
    * one column or two.
@@ -1166,8 +1204,35 @@ function Body({
       return;
     }
     const id = rows[0]?.id ?? null;
-    if (scope.quantity === "owned") setOwned.mutate({ id, quantity: next });
-    else setWished.mutate({ id, quantity: next });
+    /**
+     * **Zero deletes the entry on both of these lists too** — `collection_set_quantity` and
+     * `wishlist_set_quantity` each `DELETE` the row rather than storing a zero — so the card the
+     * modal is open on stops being a stop on the walk, exactly as a cut deck row does. Issue
+     * #474 is that failure on the deck; this is the same failure on the reader's two lists, and
+     * the same answer.
+     *
+     * **Planned here rather than in the mutation's `onSuccess`, for `useDeck`'s reason read
+     * across a different clock.** There the walk loses the row at the press (the optimistic
+     * patch) and the plan has to be made before it; here the walk loses it a refetch *after* the
+     * answer, so a plan made in `onSuccess` would still be correct — but then the rule about when
+     * a departure is decided would be two rules, one per surface, and the second is the one that
+     * comes to be made at the wrong moment. One rule: at the press, off the walk the reader is
+     * looking at.
+     *
+     * `id === null` is a printing the reader holds no row of, where this press is an **add** and
+     * `next` cannot be zero anyway; naming it keeps the departure out of the one arm where a
+     * zero would mean nothing.
+     */
+    const departure = next === 0 && id !== null ? removalDeparture : null;
+    // A per-call `onSuccess`, which TanStack runs after the mutation's own — so the invalidations
+    // in `settle` are already queued and nothing here has to know about them. Omitted entirely
+    // when there is no departure, rather than passed as a callback that does nothing.
+    const moveOn =
+      departure === null
+        ? undefined
+        : { onSuccess: () => leaveRemovedCard(departure.leaving, departure.to) };
+    if (scope.quantity === "owned") setOwned.mutate({ id, quantity: next }, moveOn);
+    else setWished.mutate({ id, quantity: next }, moveOn);
   };
 
   const categoryOptions: DropdownOption[] = useMemo(

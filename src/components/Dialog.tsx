@@ -2,6 +2,11 @@ import { useEffect, useId, useRef, type JSX, type ReactNode } from "react";
 import { X } from "lucide-react";
 import { AnimatePresence, motion, useIsPresent } from "motion/react";
 import { FOCUS } from "@/lib/focus";
+import { LAYER } from "@/lib/layers";
+import { dialog as dialogMotion, scrim } from "@/lib/motion";
+import { trapTab } from "@/lib/trapTab";
+import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
+import { cn } from "@/lib/utils";
 
 /**
  * How long a re-take waits for the caret to settle after a layer above closes.
@@ -10,13 +15,12 @@ import { FOCUS } from "@/lib/focus";
  * panel's exit tween is always finished inside it, and short enough that a reader who has clicked
  * somewhere in the meantime is never overruled a beat later. It is a ceiling rather than a delay:
  * the ordinary case takes the caret on the first frame after the closing node is removed.
+ *
+ * **Exported for the suite alone**, so that the one test which has to prove a settle has
+ * *expired* waits this number rather than a copy of it — a literal there would be a second
+ * spelling of a ceiling, and the drift would show up as a test that passes for the wrong reason.
  */
-const CARET_SETTLE_MS = 500;
-import { LAYER } from "@/lib/layers";
-import { dialog as dialogMotion, scrim } from "@/lib/motion";
-import { trapTab } from "@/lib/trapTab";
-import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
-import { cn } from "@/lib/utils";
+export const CARET_SETTLE_MS = 500;
 
 /**
  * A control drawn **outside** the panel, one on each side, vertically centred.
@@ -221,6 +225,28 @@ export interface DialogProps {
    */
   stackedOver?: boolean;
   /**
+   * A counter the host bumps when it has reason to think the caret may have just been dropped —
+   * every change re-arms {@link stackedOver}'s settle.
+   *
+   * **A third way the caret reaches `<body>`, and it is the same failure that prop describes.**
+   * A control the reader is pressing can take the `disabled` attribute under their finger, and a
+   * `disabled` element holding the caret drops it to `<body>` with no `blur` and no `focusout` —
+   * exactly as an unmounting panel does. `QuantityStepper` disables `−` at its floor, so on every
+   * surface where stepping to zero *removes* something the reader's last press is also the press
+   * that takes the arrows away: measured in this suite as `document.activeElement === BODY` with
+   * both step chevrons drawn and enabled, which is issue #474's second half.
+   *
+   * **A pulse rather than a boolean**, for `AppState.viewPulse`'s reason: the host's signal is an
+   * event ("something just moved") rather than a state, and two of them in a row — two cards cut
+   * one after the other — have to re-arm twice. A boolean would re-arm on the first and sit
+   * there.
+   *
+   * It re-arms rather than focusing: every guard the settle carries still applies, so a caret
+   * that has landed anywhere real is left where it landed, and a bump from a host whose caret was
+   * never dropped costs one animation frame.
+   */
+  caretPulse?: number;
+  /**
    * Escape, and the close control: hand focus back to whatever opened the dialog, then close.
    *
    * **Stability is a courtesy here now, not a requirement**, and the reason it used to be one is
@@ -312,6 +338,7 @@ export function Dialog({
   flanks,
   onPanelKeyDown,
   stackedOver,
+  caretPulse,
   onDismiss,
   onClose,
   children,
@@ -349,6 +376,7 @@ export function Dialog({
           flanks={flanks}
           onPanelKeyDown={onPanelKeyDown}
           stackedOver={stackedOver}
+          caretPulse={caretPulse}
           onDismiss={onDismiss}
           onClose={onClose}
         >
@@ -388,6 +416,7 @@ function Panel({
   flanks,
   onPanelKeyDown,
   stackedOver,
+  caretPulse,
   onDismiss,
   onClose,
   children,
@@ -418,7 +447,9 @@ function Panel({
   }, []);
 
   // **The second half of the caret rule** — see {@link DialogProps.stackedOver}, which carries
-  // the whole of why this waits instead of reading `document.activeElement` once.
+  // the whole of why this waits instead of reading `document.activeElement` once, and
+  // {@link DialogProps.caretPulse}, which is the host saying "a control just took the caret out
+  // from under the reader" and re-arms the same settle.
   useEffect(() => {
     if (stackedOver !== false) return;
     const panel = panelRef.current;
@@ -438,7 +469,7 @@ function Panel({
     };
     frame = requestAnimationFrame(settle);
     return () => cancelAnimationFrame(frame);
-  }, [stackedOver]);
+  }, [stackedOver, caretPulse]);
 
   return (
     // Scrim and panel in one presence: the ground fades first and the panel scales up over it,

@@ -779,6 +779,193 @@ describe("the list the reader is standing in, in its drawn order", () => {
 });
 
 /**
+ * Where a removal put the reader, and how Ctrl+Z puts them back — issue #474.
+ *
+ * Stepping a deck row to zero deletes it, and a deleted row is not a stop on the walk above: the
+ * open modal lost its place, both chevrons unmounted and the arrow keys went dead on a card nobody
+ * had asked to leave. Stepping onto the next stop is half the answer. The other half is that a
+ * move nobody asked for has to be reversible — a reader who presses Ctrl+Z means "put that card
+ * back", and the row coming back is only half of that while they are still standing somewhere
+ * else.
+ */
+describe("the stops a removal moved the reader off", () => {
+  const ramp = (cardId: string): PaneDeckContext => ({
+    deckId: 4,
+    categoryId: 9,
+    categoryName: "Ramp",
+    cardId,
+    variant: "live",
+    finish: null,
+  });
+
+  const stop = (name: string, cardId: string, deck: PaneDeckContext | null): CardWalkStop => ({
+    cardId,
+    oracleId: `o-${cardId}`,
+    name,
+    deck,
+  });
+
+  const SOL_RING_ROW = ramp("sol-ring-c14");
+  const SOL_RING = stop("Sol Ring", SOL_RING_ROW.cardId, SOL_RING_ROW);
+  const SIGNET = stop("Arcane Signet", "signet-eld", ramp("signet-eld"));
+  const CRYPT = stop("Mana Crypt", "crypt-2xm", ramp("crypt-2xm"));
+
+  /** The other kind of list the modal walks — a collection entry, a wishlist row, a search
+   *  result — whose stops are printings rather than deck slots. */
+  const ENTRY = stop("Lightning Bolt", "bolt-lea", null);
+
+  it("steps the card onto the next stop and remembers the one it left", () => {
+    useAppStore.getState().openCardFromDeck(SOL_RING_ROW);
+    useAppStore.getState().openCardOverlay("legality");
+
+    useAppStore.getState().leaveRemovedCard(SOL_RING, SIGNET);
+
+    const s = useAppStore.getState();
+    expect(s.selectedCardId).toBe(SIGNET.cardId);
+    expect(s.paneDeckContext).toEqual(SIGNET.deck);
+    expect(s.paneReturns).toEqual([SOL_RING]);
+    // The overlay goes with the card, as it does through every opener: a legality table left
+    // standing would silently re-answer about the card the app had just moved them onto.
+    expect(s.cardOverlay).toBeNull();
+  });
+
+  /**
+   * The last card of a one-card deck, where the walk holds nothing to step to. Without the
+   * memory, the reader who undid that cut would be looking at a card that is in the deck again
+   * and drawn as though it were not — no stepper, no pickers — with nothing on screen saying why.
+   */
+  it("keeps a card the walk had no successor for open, unanchored, and still remembers it", () => {
+    useAppStore.getState().openCardFromDeck(SOL_RING_ROW);
+
+    useAppStore.getState().leaveRemovedCard(SOL_RING, null);
+
+    const s = useAppStore.getState();
+    expect(s.selectedCardId).toBe(SOL_RING.cardId);
+    expect(s.paneDeckContext).toBeNull();
+    expect(s.paneReturns).toEqual([SOL_RING]);
+  });
+
+  /**
+   * The stop decides what the reader comes back to, never whatever the modal happened to be
+   * showing when they pressed undo. A return that left `paneDeckContext` standing would offer
+   * "Use this printing" over a collection entry that is a row of no deck at all.
+   */
+  it("hands a deck stop back with its slot and a plain stop back without one", () => {
+    useAppStore.getState().leaveRemovedCard(SOL_RING, SIGNET);
+    useAppStore.getState().returnToRemovedCard();
+
+    expect(useAppStore.getState().selectedCardId).toBe(SOL_RING.cardId);
+    expect(useAppStore.getState().paneDeckContext).toEqual(SOL_RING_ROW);
+
+    useAppStore.getState().leaveRemovedCard(ENTRY, SIGNET);
+    useAppStore.getState().returnToRemovedCard();
+
+    expect(useAppStore.getState().selectedCardId).toBe(ENTRY.cardId);
+    expect(useAppStore.getState().paneDeckContext).toBeNull();
+  });
+
+  /**
+   * Two cards cut in a row is two presses of Ctrl+Z, and the deck's undo cursor is LIFO —
+   * `deck_audit` holds a row per write, so they come back newest first. A queue here would put
+   * the reader on the card they cut first while the deck was putting back the one they cut last.
+   */
+  it("walks back through two removals newest first", () => {
+    useAppStore.getState().leaveRemovedCard(SOL_RING, SIGNET);
+    useAppStore.getState().leaveRemovedCard(SIGNET, CRYPT);
+
+    expect(useAppStore.getState().paneReturns).toEqual([SOL_RING, SIGNET]);
+
+    useAppStore.getState().returnToRemovedCard();
+    expect(useAppStore.getState().selectedCardId).toBe(SIGNET.cardId);
+    expect(useAppStore.getState().paneReturns).toEqual([SOL_RING]);
+
+    useAppStore.getState().returnToRemovedCard();
+    expect(useAppStore.getState().selectedCardId).toBe(SOL_RING.cardId);
+    expect(useAppStore.getState().paneReturns).toEqual([]);
+  });
+
+  /**
+   * `useReturnToRemovedCard` is an effect over a walk that changes on every refetch, so one that
+   * fires once more than it meant to is ordinary rather than a bug — it must not be a crash, and
+   * it must not move a reader who is not standing anywhere the app put them.
+   */
+  it("does nothing when there is nowhere to go back to", () => {
+    useAppStore.getState().setSelectedCardId(ENTRY.cardId);
+
+    useAppStore.getState().returnToRemovedCard();
+
+    expect(useAppStore.getState().selectedCardId).toBe(ENTRY.cardId);
+    expect(useAppStore.getState().paneReturns).toEqual([]);
+  });
+
+  /**
+   * **Every opener spends it, and that is the rule the whole design rests on.** The memory is
+   * good only while the app is still standing where it put the reader: the moment they step a
+   * chevron, close the modal, open another card or leave the view, a Ctrl+Z would yank them onto
+   * a card they had moved on from, for a press they could not connect to it.
+   *
+   * `openCardFromDeck` is the one that matters most, and the only opener here that *sets* a deck
+   * row rather than clearing one — it is what a chevron and an arrow key both call, which is the
+   * reader stepping off the stop of their own accord.
+   */
+  const OPENERS: [string, () => void][] = [
+    ["a view change", () => useAppStore.getState().setActiveView("collection")],
+    ["the modal closing", () => useAppStore.getState().setSelectedCardId(null)],
+    ["a step onto another deck row", () => useAppStore.getState().openCardFromDeck(SOL_RING_ROW)],
+    [
+      "a tile in the deck's search column",
+      () => useAppStore.getState().openCardFromDeckSearch(ENTRY.cardId),
+    ],
+    [
+      "a collection tile opened as a finish",
+      () => useAppStore.getState().openCardAsFinish(ENTRY.cardId, "foil"),
+    ],
+    ["the editor closing under it", () => useAppStore.getState().setOpenDeckId(null)],
+  ];
+
+  it.each(OPENERS)("is spent by %s", (_opener, press) => {
+    useAppStore.getState().leaveRemovedCard(SOL_RING, SIGNET);
+
+    press();
+
+    expect(useAppStore.getState().paneReturns).toEqual([]);
+  });
+
+  /**
+   * `viewPrinting` is the one navigation that is not an opener — browsing printings **inside**
+   * the modal, which is why it leaves `paneDeckContext` alone too. A reader comparing printings
+   * of the card the app moved them onto has not stepped off it, and spending the memory there
+   * would make Ctrl+Z do nothing for a click that went nowhere.
+   */
+  it("survives the reader browsing printings inside the modal", () => {
+    useAppStore.getState().leaveRemovedCard(SOL_RING, SIGNET);
+
+    useAppStore.getState().viewPrinting("signet-2xm");
+
+    expect(useAppStore.getState().paneReturns).toEqual([SOL_RING]);
+  });
+
+  /**
+   * **The empty stack is always the same array**, which is the empty walk's property one field
+   * along and not pedantry about identity: the card modal selects this field on every render and
+   * this store notifies every subscriber on every write, so a fresh `[]` per clear would re-render
+   * the modal to tell it that nothing is still nothing — for every card anybody opens anywhere in
+   * the app.
+   */
+  it("clears to the same empty stack, whether it is spent or emptied", () => {
+    const empty = useAppStore.getState().paneReturns;
+
+    useAppStore.getState().leaveRemovedCard(SOL_RING, SIGNET);
+    useAppStore.getState().setSelectedCardId(ENTRY.cardId);
+    expect(useAppStore.getState().paneReturns).toBe(empty);
+
+    useAppStore.getState().leaveRemovedCard(SOL_RING, SIGNET);
+    useAppStore.getState().returnToRemovedCard();
+    expect(useAppStore.getState().paneReturns).toBe(empty);
+  });
+});
+
+/**
  * Four layouts, four settings. Every one of them opens on the art — this is a card app — and a
  * reader who switches one to compare prices has said nothing about the other three, which one
  * shared toggle would decide for them in a view they were not looking at.

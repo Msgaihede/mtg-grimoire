@@ -931,6 +931,65 @@ interface AppState {
    *  the open deck or the view is this write's business. */
   setCardWalk: (walk: CardWalk) => void;
   /**
+   * The stops the app has moved the reader **off**, because the row behind each was removed —
+   * newest last. Issue #474.
+   *
+   * Stepping a deck row to zero deletes it, and a deleted row is not a stop on
+   * {@link cardWalk} — so the open card lost its place, both chevrons unmounted and the arrow
+   * keys went dead on a modal the reader had not asked to leave. The answer is to step onto the
+   * next stop while there still is one (see `features/card/cardReturn.ts`), and this is the
+   * other half of it: **a move nobody asked for has to be reversible**, and a reader who presses
+   * Ctrl+Z means "put that card back", which has to include putting *them* back on it.
+   *
+   * **A stack rather than one slot, because removals chain.** Two cards cut in a row is two
+   * presses of Ctrl+Z — `deck_audit` holds a row per write — and the deck's undo cursor is LIFO,
+   * so the order rows come back in is exactly the order they went. Popping the top as each one
+   * reappears walks the modal back through them in step.
+   *
+   * **Cleared by every opener that clears {@link paneDeckContext}**, which is the whole of what
+   * keeps it from firing later at something nobody connects it to: the moment the reader steps a
+   * chevron, closes the modal or opens another card, the app is no longer standing anywhere it
+   * put them, and the memory is spent. That clearing is in each opener's own `set` rather than
+   * in a rule this field states, for the reason written at `setSelectedCardId` — by construction
+   * instead of by six call sites remembering.
+   *
+   * **A stop, not a `PaneDeckContext`**, because the two kinds of list are both here: a deck row
+   * comes back as a deck row and a collection entry as a plain printing, and `CardWalkStop`
+   * already carries that distinction in the one field the modal reads it from.
+   */
+  paneReturns: CardWalkStop[];
+  /**
+   * Move the open card onto `to` and remember `leaving` as somewhere to be put back.
+   *
+   * **One write rather than an opener followed by a push**, because every opener clears
+   * {@link paneReturns} — a push made after one would be pushing onto the stack that call had
+   * just emptied, and a push made before it would be erased. The two facts are one event.
+   *
+   * `to` is `null` where the walk holds nothing else to step to (the last card of a one-card
+   * deck), and then this is exactly what `useDeck`'s unanchor has always done — the card stays
+   * open, addressing no deck row — **plus** the memory, which is what lets Ctrl+Z hand the
+   * stepper and the two pickers back rather than leaving a card that is in the deck again drawn
+   * as though it were not.
+   */
+  leaveRemovedCard: (leaving: CardWalkStop, to: CardWalkStop | null) => void;
+  /**
+   * Put the reader back on the stop at the top of {@link paneReturns} and pop it.
+   *
+   * Pressed by nothing: `useReturnToRemovedCard` calls it when that stop is back on the walk,
+   * which is the only evidence this app has that the removal was reversed. A pop with an empty
+   * stack is a no-op rather than a throw — the watcher is an effect over a changing walk, and an
+   * effect that ran once more than it meant to must not be a crash.
+   *
+   * **It clears {@link paneFinish}, so a foil the reader opened comes back plain — and that is
+   * the same thing a chevron does rather than a hole in this one.** A stop carries no finish (it
+   * is a printing and a deck row, and the collection's walk is deduped by printing, so one stop
+   * stands for a foil row and a played nonfoil one alike), and every step along a walk goes
+   * through `setSelectedCardId`, which clears it for the reason written at that setter. A return
+   * *is* a step — the app making the one the reader would have made — so it clears the same
+   * field. A deck row is untouched by this either way: it carries its own finish in the context.
+   */
+  returnToRemovedCard: () => void;
+  /**
    * The format, field set and Arena filter each surface was last exported with.
    *
    * **Per surface rather than globally**: a deck export wants Moxfield's printing line and a
@@ -1105,6 +1164,9 @@ export interface CardWalk {
 /** The one empty walk — see {@link AppState.setCardWalk} for why there is only one of it. */
 const NO_WALK: CardWalk = { label: "", stops: [] };
 
+/** The one empty return stack — {@link NO_WALK}'s reason, one field along. */
+const EMPTY_RETURNS: CardWalkStop[] = [];
+
 /**
  * UI state that outlives a single component tree.
  *
@@ -1161,6 +1223,8 @@ export const useAppStore = create<AppState>((set) => ({
         cardOverlay: null,
         cardSelection: null,
         paneDeckContext: null,
+        // Every navigation spends the return stack — see {@link AppState.paneReturns}.
+        paneReturns: EMPTY_RETURNS,
         paneFromDeckSearch: false,
         paneFinish: null,
         // The deck comes back on a **return** and only on a return — Decks arrived at from
@@ -1392,6 +1456,8 @@ export const useAppStore = create<AppState>((set) => ({
       selectedCardId,
       cardOverlay: null,
       paneDeckContext: null,
+      // Every navigation spends the return stack — see {@link AppState.paneReturns}.
+      paneReturns: EMPTY_RETURNS,
       paneFromDeckSearch: false,
       paneFinish: null,
     }),
@@ -1417,6 +1483,11 @@ export const useAppStore = create<AppState>((set) => ({
       // The row carries its own finish and the pane reads it off the context, so a tile's answer
       // left standing here would be a second opinion about one card from a surface behind it.
       paneFinish: null,
+      // **The one opener that clears the stack while _setting_ a context rather than clearing
+      // one**, and it is the clear the whole design rests on: this is what a chevron and an arrow
+      // key both call, so the moment the reader steps anywhere of their own accord the app has
+      // stopped standing where it put them. See {@link AppState.paneReturns}.
+      paneReturns: EMPTY_RETURNS,
     }),
   paneFromDeckSearch: false,
   openCardFromDeckSearch: (selectedCardId, paneFinish = null) =>
@@ -1424,6 +1495,8 @@ export const useAppStore = create<AppState>((set) => ({
       selectedCardId,
       cardOverlay: null,
       paneDeckContext: null,
+      // Every navigation spends the return stack — see {@link AppState.paneReturns}.
+      paneReturns: EMPTY_RETURNS,
       paneFromDeckSearch: true,
       paneFinish,
     }),
@@ -1434,6 +1507,8 @@ export const useAppStore = create<AppState>((set) => ({
       paneFinish,
       cardOverlay: null,
       paneDeckContext: null,
+      // Every navigation spends the return stack — see {@link AppState.paneReturns}.
+      paneReturns: EMPTY_RETURNS,
       paneFromDeckSearch: false,
     }),
   // Deliberately not touching `paneDeckContext` or `paneFinish` — see the interface doc.
@@ -1463,6 +1538,8 @@ export const useAppStore = create<AppState>((set) => ({
       // the deck they were picked in.
       cardSelection: null,
       paneDeckContext: null,
+      // Every navigation spends the return stack — see {@link AppState.paneReturns}.
+      paneReturns: EMPTY_RETURNS,
       // Beside the context and for a sharper version of its reason: the flag is about a column
       // that only exists inside an editor, so carrying it across an open or a close would aim
       // the pane at a surface that is not on screen.
@@ -1511,6 +1588,37 @@ export const useAppStore = create<AppState>((set) => ({
   // those two are *navigations*, and this is a fact about what is drawn, which only the surface
   // drawing it knows. A second writer would be a second place for the two to disagree.
   setCardWalk: (walk) => set({ cardWalk: walk.stops.length === 0 ? NO_WALK : walk }),
+  // **The one empty stack, for `NO_WALK`'s reason exactly**: this field is selected by the card
+  // modal on every render, and a fresh `[]` per clear would be a new identity and a re-render of
+  // the modal for every card anybody opens anywhere in the app.
+  paneReturns: EMPTY_RETURNS,
+  // **Spelled out rather than calling `openCardFromDeck`/`setSelectedCardId`**, because both of
+  // those clear this stack — see the interface. The five fields written for each kind of stop are
+  // those two openers', field for field, and the pair of them is what `step` in
+  // `CardDetailModal` chooses between when the *reader* is the one moving.
+  leaveRemovedCard: (leaving, to) =>
+    set((s) => ({
+      selectedCardId: to === null ? leaving.cardId : to.cardId,
+      paneDeckContext: to?.deck ?? null,
+      cardOverlay: null,
+      paneFromDeckSearch: false,
+      paneFinish: null,
+      paneReturns: [...s.paneReturns, leaving],
+    })),
+  returnToRemovedCard: () =>
+    set((s) => {
+      const back = s.paneReturns[s.paneReturns.length - 1];
+      if (back === undefined) return {};
+      const rest = s.paneReturns.slice(0, -1);
+      return {
+        selectedCardId: back.cardId,
+        paneDeckContext: back.deck,
+        cardOverlay: null,
+        paneFromDeckSearch: false,
+        paneFinish: null,
+        paneReturns: rest.length === 0 ? EMPTY_RETURNS : rest,
+      };
+    }),
   // A collection opens on CSV because that is the only format that can carry a condition, and a
   // collection without conditions is a card list rather than a record of what the reader owns.
   // `arenaOnly` opens **off** everywhere: the Arena export has written every card handed to it

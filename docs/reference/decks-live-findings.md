@@ -2209,3 +2209,69 @@ report's and not a measurement.
   **47** of a format-check finding, both computing `user-select: text`.
 - **Not driven live**: the text-field exemption. React reset the filter field's value when it was
   set from outside, so there was nothing selected to pull; `nativeDrag.test.ts` is its only proof.
+
+## Issue #474 — removing a card took the walk with it, 2026-09-20, `npm run tauri dev` (debug), 1920×1080
+
+The reader's report was *removing the card from the deck leaves the user on that page and prevents
+navigation to the next card*, filed as a possible regression of #178 — the pass above, which gave
+this surface its arrows. It was not a regression of that work: the arrows were fine, the modal had
+simply stopped being anywhere on the walk. Every removal in this app **deletes** a row rather than
+zeroing one, so the cut card stopped being a stop; `useDeck`'s `unanchorPane` then cleared
+`paneDeckContext`, which moved the modal onto the lookup's plain arm where no deck stop can ever
+match. `at` went to `-1`, both chevrons unmounted, `onPanelKeyDown` returned on every press.
+
+Driven on a five-card deck seeded for the pass (`Counterspell · Dark Ritual · Giant Growth ·
+Lightning Bolt · Llanowar Elves`, one copy each, Grid view), with a **real pointer click** on the
+modal's own `−` — the entry point [frontend-design.md](frontend-design.md) records a pass having
+missed once, and the one that matters here for a second reason given below.
+
+- **A removal steps onto the next card.** Giant Growth at one copy, `−` pressed: the modal
+  redrew as **Lightning Bolt**, chevrons `Previous … Dark Ritual` / `Next … Llanowar Elves`, the
+  stepper reading Lightning Bolt's own `1`, and the wall behind the scrim down to four tiles.
+- **The arrows work from there, which is the whole report.** ArrowRight → Llanowar Elves, then two
+  ArrowLefts → Lightning Bolt → Dark Ritual.
+- **At the end of the walk it falls back.** Removing Llanowar Elves, the last stop, landed on
+  **Lightning Bolt** with `Previous … Giant Growth` and a disabled `Next`.
+- **Ctrl+Z reaches the window handler past an `aria-modal` panel**, which was worth proving rather
+  than reasoning about: `DeckEditor` binds undo on `window` and yields only inside a text field,
+  and the panel is a `tabIndex={-1}` div. One press with the modal open put the row back.
+- **And it walks the reader back.** Dark Ritual removed (modal → Giant Growth), Ctrl+Z: modal →
+  **Dark Ritual**, quantity `1`, stepper re-addressed at *Dark Ritual in this deck*, category
+  picker reading `Main deck`, chevrons `Counterspell` / `Giant Growth`, deck back to five.
+- **Two cuts, two undos, in step.** Dark Ritual then Giant Growth removed (modal → Giant Growth →
+  Lightning Bolt); two Ctrl+Zs walked it back **Giant Growth → Dark Ritual**, each at quantity 1.
+- **A reader who has stepped away is left alone.** After a removal, three arrow presses, then
+  Ctrl+Z: the row came back and the modal **stayed** where the reader had put it. Every opener
+  spends the return stack, and this is that rule in the window.
+- **The collection is the same defect and the same fix.** Three entries seeded at the root;
+  Counterspell's stepper to zero redrew the modal as **Giant Growth** with
+  `Previous … A Realm Reborn` / `Next … Llanowar Elves`, and ArrowRight/ArrowLeft stepped from
+  there. The wishlist shares those three lines and was **not** driven.
+
+### The half that nearly made the fix cosmetic
+
+**`document.activeElement` was `<body>` with both chevrons drawn and enabled.** `QuantityStepper`
+puts the `disabled` attribute on `−` at its floor, and a `disabled` element holding the caret drops
+it with no `blur` and no `focusout` — so the press that removes the card is also the press that
+kills the arrows, and every store assertion in the suite passes over it. It is the failure
+`DialogProps.stackedOver` already describes from a cause that prop cannot see; `Dialog` gained
+`caretPulse`, a counter that re-arms the settle it already runs, and the modal passes the depth of
+`paneReturns`. Measured after the fix: `caretInPanel: true` on the deck removal, on the
+end-of-walk removal and on the collection removal alike.
+
+**The root cause is `QuantityStepper`'s `disabled`**, which [`src/CLAUDE.md`](../../src/CLAUDE.md)
+already rules against in favour of `aria-disabled` — *a `disabled` button leaves the tab order*.
+Changing a control drawn in four tables and on every card face was left out of this fix
+deliberately; the stepper is still dropping the caret everywhere else it reaches zero.
+
+### One thing this pass found that is not this issue's
+
+- **`Attempted to invoke queryFn when set to skipToken`** on the console, naming a `["card", …]`
+  hash. It fires on a pass that removes **nothing** — opening a card and arrowing is enough — and
+  names a card that pass never touched, so it is neither new nor a removal's doing.
+  `cardDetailKey` is deliberately shared by six surfaces and five of them sit on it with
+  `skipToken` while their overlay is shut; that is where to look.
+- **The Collection page's docked search column adds nothing.** Three presses of a tile's
+  `Add … to Collection`, no refusal banner, no console line, and no row at the root — checked
+  against `collection_entries` directly. Unrelated to this issue and not investigated further;
+  the rows for the collection leg above were seeded instead.
