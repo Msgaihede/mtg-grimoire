@@ -2,14 +2,7 @@
  * The deck as stacks of cards in columns — the default view, and the one the redesign is
  * built around.
  */
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type KeyboardEvent as ReactKeyboardEvent,
-} from "react";
+import { useCallback, useRef, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { GripVertical } from "lucide-react";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { keepCaretForCard } from "@/lib/caretWalk";
@@ -33,6 +26,7 @@ import { useCategoryDragSource, useCategoryReorderDrop } from "../categoryDrag";
 import { deckCardSlot, DECK_CARD_ATTR } from "../dnd";
 import { DropIndicator } from "../DropIndicator";
 import type { CardGroup } from "../grouping";
+import { masonryRowSpan, useMasonryRowSpan } from "../masonry";
 import type { TheoryPlan } from "../theoryMatch";
 import type { ValidationIssue } from "../validation/types";
 import { RAIL_ATTR, splitRail } from "./columns";
@@ -129,68 +123,17 @@ const ROOT_GUTTER = 8;
  * How many rows of the flowing grid a pile of this pixel height claims — its height, plus the one
  * gutter under it.
  *
- * `Math.ceil` because a measured height is fractional and a span is an integer: rounding *up* is
- * the only safe direction, since a span a pixel short would let the pile below it start a pixel
- * inside this one. `Math.max(1, …)` because `grid-row: span 0` is invalid and would be dropped,
- * and because **jsdom measures every box as 0** — a suite that never sees a layout still has to
- * produce a legal span.
+ * **The arithmetic is `masonry.ts`'s now**, shared with the notes band, which spaces its cards by
+ * 8 where this spaces its piles by {@link FLOW_GAP_Y}'s 20. The one-argument signature stays
+ * because this view's gutter is a constant and `views.test.tsx` pins the four values it answers.
  */
 export function flowRowSpan(height: number): number {
-  return Math.max(1, Math.ceil(height) + FLOW_GAP_Y);
+  return masonryRowSpan(height, FLOW_GAP_Y);
 }
 
-/**
- * A pile's own height, measured, as a row span for the flowing grid — `null` until it has been.
- *
- * **The measurement is of the pile, never of the box the piles are in**, which is the distinction
- * that lets this exist beside the rule stated on `TextView`'s flowing box: a view has no business
- * observing *its own* box, because a second reading of the box it is laid out in answers a frame
- * behind the layout it is reacting to. Nothing here reads the desk. How many columns fit is still
- * CSS's answer — `repeat(auto-fill, …)`, which needs no number from us — and what a pile measures
- * cannot be derived from it: a heading wraps or it does not, and only the browser knows.
- *
- * **There is no feedback loop, and `align-items: start` is what forbids one.** A grid item aligned
- * to the start of its area is sized by its content, so a pile's height does not depend on the span
- * we give it; the span depends on the height and never the other way round. Stretch it — the
- * default — and this would oscillate.
- *
- * The read is a `useLayoutEffect` on **every** render rather than a dependency list, so a span is
- * never a frame behind the thing that changed it: a card added, a zoom step, a filter. It runs
- * before paint, so the first frame a pile is drawn in already has its right span. The
- * `ResizeObserver` beside it is for the changes no render of this component causes — the desk
- * narrowing under a dragged search panel until a heading wraps, a font arriving late.
- *
- * `enabled` is false in the rail, which is a `flex-col` box where a grid row means nothing: the
- * piles there are plain blocks and measuring them would be a rect read and a state update per
- * render for a number nobody would use.
- */
-function useFlowRowSpan(enabled: boolean) {
-  // The name has to end in `Ref` — `react-hooks/immutability` refuses a write to anything else a
-  // hook returned. It is the mirror of `useCategoryDrop`'s `attach`, which must *not* be called
-  // `ref` because the same plugin would then read every use of it as a ref access during render.
-  const elementRef = useRef<HTMLElement | null>(null);
-  const [span, setSpan] = useState<number | null>(null);
-
-  const read = useCallback(() => {
-    const node = elementRef.current;
-    if (!node || !enabled) return;
-    // Setting the value it already holds is a bail-out in React, so the every-render read costs
-    // one extra pass only when the pile has actually changed height.
-    setSpan(flowRowSpan(node.getBoundingClientRect().height));
-  }, [enabled]);
-
-  useLayoutEffect(read);
-
-  useEffect(() => {
-    const node = elementRef.current;
-    if (!node || !enabled) return;
-    const observer = new ResizeObserver(read);
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [enabled, read]);
-
-  return { elementRef, span };
-}
+/** A pile's own height as a row span — `masonry.ts`'s hook at this view's gutter. `enabled` is
+ *  false in the rail, which is a `flex-col` box where a grid row means nothing. */
+const useFlowRowSpan = (enabled: boolean) => useMasonryRowSpan(FLOW_GAP_Y, enabled);
 
 /**
  * Everything an arrow key may not be answered from — a text field the press belongs to, and the
