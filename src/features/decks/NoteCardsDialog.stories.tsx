@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, fn, userEvent } from "storybook/test";
+import { expect, fn, userEvent, within } from "storybook/test";
 import type { DeckNoteCard } from "@/lib/ipc";
 import { NoteCardsDialog } from "./NoteCardsDialog";
 import type { NoteCardChoice } from "./deckNotes";
@@ -223,6 +223,15 @@ export const SomeNamed: Story = {
  * one thing it can name. The count is spelled into the `aria-label` as a sentence rather than
  * left to the DOM: the label and the digit are two elements separated by a `gap`, which is CSS
  * and not a text node, so the computed name of an unspelled chip is `Land2`.
+ *
+ * ⚠️ **The same fact makes a bare `getAllByText("Land")` over this dialog match the chip as well
+ * as the rows, which is what this play got wrong until it was first run.** Testing Library's
+ * `getNodeText` joins an element's **direct** text-node children only
+ * (`@testing-library/dom/dist/get-node-text.js:12`), so the count in its own `<span>` is excluded
+ * and the chip whose visible content is `Land2` answers to the bare word `Land`. It is the
+ * `Missing2` hazard read from the other side: the accessible name and the queried text disagree,
+ * and each one is wrong about the other. So every assertion below names *what it is asking about*
+ * — the chip by its spelled `aria-label`, the rows by their own boxes.
  */
 export const NarrowedToALand: Story = {
   play: async ({ canvas }) => {
@@ -230,12 +239,19 @@ export const NarrowedToALand: Story = {
     await userEvent.click(land);
     await expect(land).toHaveAttribute("aria-checked", "true");
 
+    // **The chip's count is a promise about how many rows the press draws**, so the rows are
+    // counted as rows rather than by any word on them.
+    await expect(canvas.getAllByRole("checkbox")).toHaveLength(2);
     await expect(canvas.getByRole("checkbox", { name: /Forest/ })).toBeInTheDocument();
     await expect(canvas.getByRole("checkbox", { name: /Island/ })).toBeInTheDocument();
     await expect(canvas.queryByRole("checkbox", { name: /Lightning Bolt/ })).toBeNull();
 
-    // The row still says which bucket it is in, so a reader can see why it survived the press.
-    await expect(canvas.getAllByText("Land")).toHaveLength(2);
+    // **And each surviving row says which bucket it is in**, so a reader can see why it is here —
+    // asked of the row's own box, which is the question the count above could not answer.
+    for (const card of ["Forest", "Island"]) {
+      const row = canvas.getByRole("checkbox", { name: new RegExp(card) }).closest("li")!;
+      await expect(within(row).getByText("Land")).toBeInTheDocument();
+    }
   },
 };
 
