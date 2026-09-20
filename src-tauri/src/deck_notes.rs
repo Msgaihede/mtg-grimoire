@@ -264,6 +264,12 @@ fn attachments_by_note(
     filter: &str,
     id: i64,
 ) -> Result<HashMap<i64, Vec<DeckNoteCard>>, String> {
+    /// Where this statement's image columns start — one past `p.id`, the last named column.
+    /// Named rather than inlined for `deck_row`'s reason, and `collection.rs`'s: a number left
+    /// behind when a fifth named column lands reads one variant's URL as another's, and nothing
+    /// errors. **No test in this module can be relied on to catch that on its own** — the read
+    /// below says why — so the name is the fence, and a migration comment has something to move.
+    const IMAGE_COL: usize = 4;
     let images = crate::image_uri::front_face_selects("p").join(", ");
     let sql = format!(
         "SELECT nc.note_id,
@@ -293,11 +299,19 @@ fn attachments_by_note(
                     oracle_id: r.get(1)?,
                     name: r.get(2)?,
                     card_id: r.get(3)?,
-                    // **From 4** — the `crate::image_uri::FRONT_FACE_COLUMNS` expressions
-                    // `front_face_selects` appended, in the (top-level, face) pairs
+                    // **From `IMAGE_COL`** — the `crate::image_uri::FRONT_FACE_COLUMNS`
+                    // expressions `front_face_selects` appended, in the (top-level, face) pairs
                     // `front_face_map` folds back up, one pair per variant. The offset moves with
                     // every column added to the named list above it.
-                    image_uris: crate::image_uri::front_face_map(|i| r.get(4 + i))?,
+                    //
+                    // This read carries a failure the four above it do not, and it is the one
+                    // `card.rs`'s `fixture_with_both_image_columns` exists for: the pair is
+                    // (top-level, face) and `for_face` prefers the face, so a read one column
+                    // *early* puts the top-level URL into the face slot and answers a perfectly
+                    // real URL — the crop where the card belongs, on the real host, versioned.
+                    // A fixture carrying one column or one variant cannot tell that from a
+                    // correct read; only four different URLs in the four slots can.
+                    image_uris: crate::image_uri::front_face_map(|i| r.get(IMAGE_COL + i))?,
                 },
             ))
         })
@@ -1239,9 +1253,14 @@ mod tests {
         assert_eq!(note.cards[0].oracle_id, "o-bolt");
     }
 
-    /// One statement per attachment would multiply a card by its printings; the `GROUP BY` is what
-    /// stops it. Asserted with a real second printing of one oracle card in the corpus half of the
-    /// pair — `cards` there is the *corpus*, which no user table owns.
+    /// A join to `cards` would multiply a card by its printings; the correlated subquery that
+    /// picks **one** `cards.id` is what stops it. **It said "the `GROUP BY` is what stops it"
+    /// until the printing read landed** — that construct is gone, and the fence it named is
+    /// [`attachments_by_note`]'s `LEFT JOIN cards p ON p.id = (…)` now. The test is unchanged and
+    /// still the right one: what it asserts is that three printings are one attachment wearing
+    /// one name, which is true of either shape and is exactly what regresses if the subquery is
+    /// ever unwound back into a join. Asserted with a real second printing of one oracle card in
+    /// the corpus half of the pair — `cards` there is the *corpus*, which no user table owns.
     #[test]
     fn a_card_with_many_printings_is_one_attachment() {
         let (conn, burn, _) = deck_db();
@@ -1519,17 +1538,42 @@ mod tests {
     /// one oracle card are the same card to a note — it attaches by oracle id on purpose — but
     /// only one of them is the picture the reader is looking at in the deck, and a thumbnail of
     /// the other is a note that appears to name a card the deck does not hold.
+    ///
+    /// **`aaa` is in the *other* deck, and that is what makes the preference `n.deck_id`'s rather
+    /// than any deck's.** With the corpus holding two printings and neither in any deck, the
+    /// tie-break alone decides and a statement that had lost `AND dc.deck_id = n.deck_id` would
+    /// answer identically; with `aaa` filed in Storm it wins outright, because it sorts first and
+    /// *some* deck holds it. Mutated and confirmed red: deleting that conjunct answers
+    /// `Some("aaa")`.
+    ///
+    /// **Every one of the four image slots carries a different URL**, which is
+    /// `card::tests::fixture_with_both_image_columns`' rule and the only shape that can fail.
+    /// `front_face_selects` emits `(top-level, face)` per variant and `for_face` prefers the
+    /// face, so a read one column *early* slides each top-level URL into the face slot and
+    /// answers a real, versioned, on-host URL for every variant — the crop under `display`, and
+    /// nothing anywhere raising. A fixture with one column, or one variant, or the same URL in
+    /// two slots passes that shear. Mutated and confirmed red: `IMAGE_COL + i` → `3 + i` answers
+    /// the card-level URLs where the face's belong.
     #[test]
     fn an_attachment_names_the_printing_this_deck_holds() {
-        let (conn, burn, _) = deck_db();
-        // Two printings of one oracle card: `aaa` sorts first by id, `zzz` is the one in the deck.
+        let (conn, burn, storm) = deck_db();
+        // Two printings of one oracle card: `aaa` sorts first by id, `zzz` is the one in Burn.
+        // Four distinct pictures on each, so a pairing read wrong is a URL that is wrong too.
         conn.execute(
             "INSERT INTO cards (id, name, set_code, collector_number, lang, layout, oracle_id,
-                                 image_uris, raw)
+                                 image_uris, face_image_uris, raw)
              VALUES ('aaa','Bolt','lea','161','en','normal','o-bolt',
-                     json_object('art','https://cards.scryfall.io/art/front/a/a/a.webp?1'), '{}'),
+                     json_object('display','https://cards.scryfall.io/display/CARD-A.webp?1',
+                                 'art','https://cards.scryfall.io/art/CARD-A.webp?1'),
+                     json_array(
+                       json_object('display','https://cards.scryfall.io/display/FACE-A.webp?1',
+                                   'art','https://cards.scryfall.io/art/FACE-A.webp?1')), '{}'),
                     ('zzz','Bolt','m10','146','en','normal','o-bolt',
-                     json_object('art','https://cards.scryfall.io/art/front/z/z/z.webp?1'), '{}')",
+                     json_object('display','https://cards.scryfall.io/display/CARD-Z.webp?1',
+                                 'art','https://cards.scryfall.io/art/CARD-Z.webp?1'),
+                     json_array(
+                       json_object('display','https://cards.scryfall.io/display/FACE-Z.webp?1',
+                                   'art','https://cards.scryfall.io/art/FACE-Z.webp?1')), '{}')",
             [],
         )
         .unwrap();
@@ -1537,17 +1581,32 @@ mod tests {
         // no piles, so the add names one and `category_for_name` makes it.
         crate::deck::add_card(&conn, burn, "zzz", None, Some("Main deck"), "live", None, 1)
             .unwrap();
+        // And the id that would otherwise win, in a deck this note is not about.
+        crate::deck::add_card(
+            &conn,
+            storm,
+            "aaa",
+            None,
+            Some("Main deck"),
+            "live",
+            None,
+            1,
+        )
+        .unwrap();
 
         let note = create_note(&conn, burn, "", "Body", &["o-bolt".into()]).unwrap();
         let card = &note.cards[0];
 
         assert_eq!(card.card_id.as_deref(), Some("zzz"));
+        let images = card.image_uris.as_ref().expect("the printing has pictures");
+        // The face wins over the card for both variants, and each variant reads its own pair.
         assert_eq!(
-            card.image_uris
-                .as_ref()
-                .and_then(|m| m.get("art"))
-                .map(String::as_str),
-            Some("https://cards.scryfall.io/art/front/z/z/z.webp?1"),
+            images.get("display").map(String::as_str),
+            Some("https://cards.scryfall.io/display/FACE-Z.webp?1"),
+        );
+        assert_eq!(
+            images.get("art").map(String::as_str),
+            Some("https://cards.scryfall.io/art/FACE-Z.webp?1"),
         );
     }
 
