@@ -227,6 +227,98 @@ its edge, so clipping lives on the body scroller alone; and a grid box has **no 
 transform at rest**, so a card's `LAYER.popup` panel paints over the cards after it. Only the box
 being dragged is transformed and raised, and no popover is open while it is.
 
+### Ctrl+scroll zooms it, and it is the app's only CSS `zoom` (2026-09-20, issue #480)
+
+`home` is a `ZOOM_SECTIONS` entry like any other — same sixteen-stop ladder, same badge, same
+`app_meta` row, same trailing 400ms write — and the **only** one that is not a multiplier on a
+tile's width. It could not be. Every other section draws pictures, where `scaled(170, zoom)` *is*
+the question; a widget is a box of type, and a bigger box at the same type size is not a zoomed
+dashboard but the same dashboard showing **more** small rows. That is the reverse of the gesture: a
+reader rolling the wheel forward is asking for less on screen, more legibly.
+
+So the number is spent as a CSS `zoom` on the grid box. Chromium implements it as a **layout**
+scale rather than a paint one — measured in a browser on 2026-09-20, a 900px canvas holding a
+`zoom: 1.5` child lays that child out at **600** local px, paints it at **900**, and a 12px rule
+inside it paints at **18px**. Cells, cards, titles, figures, rows and chips all move together, and
+nothing in `fit.ts` had to learn the word.
+
+**What the page owes it is one division and one multiplication.**
+
+* The canvas is measured **outside** the zoom — the box carrying `HOME_CANVAS_ATTR` is never scaled
+  — and `columnsFor`/`cellFor` are asked about `width / zoom`, the width the grid actually lays out
+  in. **Fewer columns fall straight out of that**, which is the whole of "zooming takes tiles away".
+  Measuring *inside* the zoom would have worked too (`clientWidth` on a zoomed box answers in local
+  units — measured, 600 against a 900px parent), and is refused because it makes the arithmetic
+  depend on a browser behaviour **no test in this repo can see**: jsdom parses `zoom` into the style
+  object and lays nothing out with it. The division is the half that stays testable, and three
+  mutations of it are caught by `HomePage.test.tsx`.
+* A pointer event's `clientX` is in **viewport** pixels while `cell` and `GAP` are in the grid's own,
+  so a drag divides its travel by `step * zoom` and the dragged box's `transform` divides by `zoom`.
+  Without either, a widget dragged at 150% travels half again as many cells as the pointer did —
+  out from under the hand holding it. This is the one thing here that fails *silently*, so it has a
+  case of its own, a mutation behind it, and a live drag below.
+
+**The stack is reachable from both directions, and that is the honest reading of `CELL_MIN`.** The
+floor is not about painted pixels — a reader who zooms out has *asked* for small cells, and refusing
+them would make the gesture's one direction do nothing. It is about whether the grid has room to be
+a grid **in its own units**. The column count bottoms out at `GRID_MIN_COLUMNS`, so past that point
+zooming in cannot take a column away and takes local pixels off every cell instead: eight columns of
+a 900px window are 64px each at 150%, which is a widget body about ten characters wide however large
+the characters are. One widget per row at full width, type at the size asked for, is the right answer
+to that gesture. It runs the other way too — zooming *out* of a window narrow enough to stack at 100%
+widens the local canvas past the floor and lays the grid back out.
+
+**The gesture is caught on the whole page section, not on the canvas**, which is where this departs
+from `DecksPage`. That page puts its listener on the scrolling tiles and deliberately not on the
+view, because a ctrl+wheel over its folder tree is a gesture about navigation chrome. This page has
+no such chrome — a header row of three buttons, and empty desk under the last widget — and a wheel
+that misses the canvas does not do nothing: **it falls through to WebView2's own page zoom**, scaling
+the sidebar, the ribbon and the title bar. Covering the section makes "ctrl+wheel on the dashboard"
+one answer instead of two. (The same `preventDefault` is why this is `useCardZoomGesture` and not an
+`onWheel` prop: React registers `wheel` passively, and a passive listener's `preventDefault` does
+nothing at all.)
+
+**Rust needed no change.** `zoom.rs` stores section name to multiplier and says outright that the
+words are TypeScript's vocabulary; a new section is a new key in a row it already round-trips.
+
+#### Driven in the shipped window, 2026-09-20 (dev build, 1920x1080, 1672px canvas)
+
+| zoom | local canvas | painted canvas | columns | first widget, painted |
+| --- | --- | --- | --- | --- |
+| 0.5 | 3344 | 1672 | **28** | 234x114 |
+| 1 | 1657 | 1657 | **14** | 465x226 |
+| 1.5 | 1105 | 1657 | **9** | 726x354 |
+| 2 | 829 | 1657 | **8** | 817x396 |
+
+Five synthetic ctrl+wheel events on the section stepped 100% to 150% and every one came back
+`defaultPrevented`. `devicePixelRatio` and `visualViewport.scale` both stayed **1** across the
+ladder, which is the measurement that says the *app* did not zoom — the sidebar, the ribbon and the
+title bar are the same size in the 100% and 150% screenshots. A real `Input.dispatchMouseEvent`
+drag of **186px** at 150% — one painted cell, where a local cell is 124px — moved a widget exactly
+**one** row. Undivided it would have moved two, which is the defect the multiplication above exists
+to prevent.
+
+**The trap, and it would read as a bug in this feature.** `getComputedStyle(el).fontSize` on
+anything inside the zoom answers in **local** units — the Summary heading reports `15px` at every
+stop — so a probe that measures type that way concludes the words did not scale. They did: the same
+heading's `getBoundingClientRect().height` went **24 to 36** from 100% to 150%, exactly 1.5x.
+Measure a painted rect, never a computed length.
+
+**The two things that cross the zoom boundary were measured and both are correct.** A widget's
+settings popover is `absolute` inside its own trigger, so it scales with the card and stays put: at
+150% the panel's right edge landed on **896px** against a trigger right edge of **896px**. The
+tooltip is the harder one — `TooltipPanel` is `fixed` at the *app root*, outside the zoom, reading a
+zoomed anchor's `getBoundingClientRect()`. That rect is in painted viewport pixels, so it lines up
+by construction, and it does: hovering the `$3,869.83` figure at 150% put the tip **0px** off the
+anchor's horizontal centre with the standard **8px** gap. The tip itself stays at app scale, which
+is right — a tooltip is chrome, not dashboard content.
+
+**A widget shows the same content at a larger size, not more of it**, and that is the whole point:
+`tier`, `listColumns` and `fitCount` are all decided in local units, which the zoom holds roughly
+constant. Activity drew five rows and two at both stops. (`listColumns` is `round(widthPx / 240)`
+and can still flip at its own boundary — the Decks widget went 1 column to 2 across 348 to 360 local
+px — but that is the existing heuristic being knife-edged, which a 12px window drag does too.)
+
 **The page does no layout arithmetic of its own beyond cells.** A drop is `moveWidget(x, y)` and a
 corner release `resizeWidget(w, h)`, both refusing an occupied or out-of-grid rectangle by
 answering the document unchanged; the grip's arrow keys are a one-cell move, the corner's a
@@ -505,6 +597,14 @@ From the design's §9, plus two the build itself turned up:
   which passes `tsc` and vitest and dies only at `verify`. It also means each page reads the field
   as it *renders*, so the widget's two store writes are safe whether React batches them into one
   commit or two.
+* **Whether a CSS `zoom` traps a `fixed` descendant in general is still open.** The two elements
+  that actually cross the boundary on this page were measured at 150% and both are correct (§4),
+  but neither is a `fixed inset-0` scrim *inside* the zoom, and that case was not reachable: the
+  browser used for the 2026-09-20 property probe reported a 0×0 viewport, so a `fixed` rect came
+  back all zeros. **Nothing on the dashboard is on that path today** — no widget opens a dialog, the
+  tooltip panel is `fixed` at the app root outside the zoom, and `AnchoredPopup` says in its own doc
+  that it is anchored and not portalled. The first widget that opens a dialog is the one that has to
+  check, in a real window.
 * **Six refusal sentences are unreachable from Storybook**, and this is a gap in the workbench
   rather than in the feature — each is covered by its widget's own unit test. Measured while
   writing the stories: `.storybook/fake/db.ts`'s `gone` fault is checked in exactly one place

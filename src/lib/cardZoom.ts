@@ -125,6 +125,16 @@ export const MAX_ZOOM: number = ZOOM_STEPS[ZOOM_STEPS.length - 1];
  * drawn at, both keys are read inside `features/decks/`, and two keys one character apart are a
  * typo that steps a wall the reader is not looking at — which reads as a gesture that does
  * nothing rather than as a mistake.
+ *
+ * `home` is the dashboard, and it is the section on this list with **no art on it at all** — a
+ * grid of widgets whose content is type. It is on the list because the reader's question is still
+ * the one every other section answers (how much do I want on screen at once, against how well I
+ * want to read each thing), and because the gesture had to be caught somewhere: a ctrl+wheel the
+ * page ignores is not a no-op, it is WebView2's own page zoom scaling the sidebar and the ribbon
+ * out from under a reader who was pointing at the dashboard. It is also the one section whose
+ * number is **not** a multiplier on a tile's width — `HomePage` spends it as a CSS `zoom` on the
+ * grid box and divides its measured canvas by it, so the same ladder buys bigger type and fewer
+ * columns in one move. See `features/home/HomePage.tsx`.
  */
 export const ZOOM_SECTIONS = [
   "search",
@@ -136,6 +146,7 @@ export const ZOOM_SECTIONS = [
   "deckSearch",
   "deck",
   "deckGallery",
+  "home",
   "printings",
 ] as const;
 
@@ -183,6 +194,11 @@ export const DEFAULT_SECTION_ZOOMS: Readonly<Record<ZoomSection, number>> = {
   // the one section here whose default is a statement about a 626px art crop and a name under
   // it rather than about a 5:7 face.
   deckGallery: DEFAULT_ZOOM,
+  // The dashboard's grid of widgets. Neither a card nor a crop of art, so its default is a
+  // statement about a wall of type: the arrangement the reader built is drawn at the size the
+  // designer chose it at, and the ladder moves the whole grid — cells, cards and the words in
+  // them — off that.
+  home: DEFAULT_ZOOM,
   // The modal's wall. Its own key rather than the search's, for {@link ZOOM_SECTIONS}' own
   // reason: the modal opens *over* a wall the reader has already sized, and a ctrl+wheel inside
   // it must not resize the page underneath.

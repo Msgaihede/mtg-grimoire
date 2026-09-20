@@ -1,7 +1,13 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import type { DeckCombo } from "@/lib/ipc";
+import type { ComboBracketTag, DeckCombo } from "@/lib/ipc";
 import { card, gameChanger, islands, resetRowIds } from "./fixtures";
-import { bracketWarning, describeReason, estimateBracket } from "./bracket";
+import {
+  COMBO_FLOOR,
+  bracketWarning,
+  comboBrackets,
+  describeReason,
+  estimateBracket,
+} from "./bracket";
 import type { BracketCardFacts, CardFacts } from "./types";
 
 /**
@@ -750,6 +756,117 @@ describe("combos", () => {
     expect(comboWins.floor).toBe(4);
     expect(cardsWin.floor).toBe(4);
     expect(cardsWin.reasons.map((r) => r.code)).toEqual(["mass-land-denial"]);
+  });
+});
+
+/**
+ * The **card side's** reading of the table the block above reads as a deck advisory.
+ *
+ * Two questions, never one statement: `estimateBracket` asks *how strong is this pile* and
+ * answers a lower bound it may raise, and this asks *where does this one combo belong* and
+ * answers the set a reader is shown. So a floor of N comes back as N through 5, and the two
+ * `null`s in {@link COMBO_FLOOR} — which the estimate treats alike, because neither raises
+ * anything — have to be told apart here.
+ */
+describe("comboBrackets", () => {
+  /** Every letter, as the pane draws it. `B` is the empty list and `E` is all five; the rest
+   *  are their own rung through 5. */
+  it.each([
+    ["R", [4, 5]],
+    ["S", [3, 4, 5]],
+    ["P", [3, 4, 5]],
+    ["O", [2, 3, 4, 5]],
+    ["C", [2, 3, 4, 5]],
+    ["E", [1, 2, 3, 4, 5]],
+    ["B", []],
+  ] as const)("answers %s with %j", (tag, brackets) => {
+    expect(comboBrackets(tag)).toEqual(brackets);
+  });
+
+  /**
+   * **`E` has no floor because it is legal everywhere** — Spellbook's *for any deck*, which is
+   * bracket 1 and up, so the honest answer is all five. That is the `?? 1` arm and it is the
+   * only thing that reaches it.
+   *
+   * The mutation this catches is an `E` answering `[]`: it looks right beside the estimate,
+   * where `E` genuinely raises nothing, and it would draw *Not legal in Commander* over a combo
+   * anybody may play.
+   */
+  it("answers all five for E, whose null means legal everywhere", () => {
+    expect(COMBO_FLOOR.E).toBeNull();
+    expect(comboBrackets("E")).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  /**
+   * **`B` has no floor because *Banned* is a legality finding rather than a power one** — the
+   * same `null`, meaning the opposite thing. There is no bracket a banned combo is legal in, so
+   * the answer is the empty list and the caller says *Not legal in Commander* rather than
+   * drawing five empty pips.
+   *
+   * The mutation this catches is the one letter of the function that is not derived: drop the
+   * `B` arm and the coalesce below it hands a banned combo E's answer, so the pane says it is
+   * legal in every bracket there is. Both readings are plausible and only one is true, which is
+   * why this letter is asserted against **E's** answer as well as against the empty list.
+   */
+  it("answers nothing for B, whose null means banned rather than unbounded", () => {
+    expect(COMBO_FLOOR.B).toBeNull();
+    expect(comboBrackets("B")).toEqual([]);
+    // The two nulls are told apart before the `?? 1` is reached, and this is what says so.
+    expect(comboBrackets("B")).not.toEqual(comboBrackets("E"));
+  });
+
+  /**
+   * The derivation itself, pinned against {@link COMBO_FLOOR}'s own number rather than against
+   * the literals above: the lowest bracket answered **is** the table's floor, nothing below it
+   * survives, and the run reaches 5.
+   *
+   * So a second tag-to-bracket table — written in this dialog, or in the next surface that
+   * wants to draw a letter — would have to disagree with the one table to pass, which is the
+   * whole of what `comboBrackets` exists to make impossible. A re-tabulated copy that happened
+   * to agree today still fails here the day `COMBO_FLOOR` moves a rung.
+   */
+  it.each(Object.keys(COMBO_FLOOR) as ComboBracketTag[])(
+    "derives %s from COMBO_FLOOR's own number",
+    (tag) => {
+      const brackets = comboBrackets(tag);
+
+      if (tag === "B") {
+        expect(brackets).toEqual([]);
+        return;
+      }
+
+      const floor = COMBO_FLOOR[tag] ?? 1;
+      expect(brackets[0]).toBe(floor);
+      expect(brackets).toHaveLength(6 - floor);
+      expect(brackets.some((bracket) => bracket < floor)).toBe(false);
+    },
+  );
+
+  /** The sweep above reads its letters off the table, so a table that lost one would simply
+   *  stop testing it rather than go red. Seven is the whole of `ComboBracketTag`. */
+  it("is total over the seven letters, so the sweep above cannot go quiet", () => {
+    expect(Object.keys(COMBO_FLOOR).sort()).toEqual(["B", "C", "E", "O", "P", "R", "S"]);
+  });
+
+  /**
+   * **Every non-empty answer is a contiguous run ending at 5**, and that is a contract rather
+   * than an observation: `CombosDialog`'s `bracketRange` abbreviates the set to `2–5` off the
+   * first and last elements alone, so a run with a hole in it, or one stopping short of 5,
+   * would be drawn on the rail as a range it is not — with the pips beside it still correct and
+   * nothing else going red.
+   *
+   * The letters come off {@link COMBO_FLOOR} rather than out of a list here, so an eighth tag
+   * with a floor of its own is swept by this the day it lands. `B` filters itself out: the
+   * property is about a run, and the empty list is the absence of one rather than a short one.
+   */
+  it.each(
+    (Object.keys(COMBO_FLOOR) as ComboBracketTag[]).filter((tag) => comboBrackets(tag).length > 0),
+  )("answers %s as a contiguous run ending at 5", (tag) => {
+    const brackets = comboBrackets(tag);
+    const run = Array.from({ length: brackets.length }, (_, step) => brackets[0] + step);
+
+    expect(brackets[brackets.length - 1]).toBe(5);
+    expect(brackets).toEqual(run);
   });
 });
 
