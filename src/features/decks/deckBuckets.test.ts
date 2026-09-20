@@ -3,6 +3,7 @@ import type { DeckCard } from "@/lib/ipc";
 import { deckStats } from "./DeckStats";
 import {
   activeCards,
+  back,
   cardManaValue,
   curveBucket,
   curveLabel,
@@ -10,6 +11,8 @@ import {
   foldBuckets,
   front,
   isLand,
+  isMdfcLand,
+  MODAL_DFC,
   OTHER,
   sizedCards,
   typeBucket,
@@ -93,6 +96,82 @@ describe("isLand against typeBucket", () => {
     expect(typeBucket(null)).toBe(OTHER);
     expect(typeBucket("Token Creature")).toBe("Creature");
     expect(typeBucket("Scheme")).toBe(OTHER);
+  });
+});
+
+describe("back", () => {
+  it("takes the face a deck does not cast from, and answers a string for a card with none", () => {
+    expect(back("Sorcery // Land")).toBe(" Land");
+    expect(back("Instant")).toBe("");
+    expect(back(null)).toBe("");
+  });
+
+  /** Rejoined rather than indexed. Nothing in the corpus puts two `//` in one type line today,
+   *  and dropping everything after the second would be a silent answer if one ever did. */
+  it("keeps every half after the first", () => {
+    expect(back("A // B // C")).toBe(" B // C");
+  });
+});
+
+/**
+ * **`isMdfcLand` is a second number beside the Lands figure, never a widening of it** (issue
+ * #475), so every case below says what `isLand` answers about the same card. A case that only
+ * asserted this function would pass just as well over an implementation that had quietly moved
+ * a card out of `lands` — which is the one thing this may not do.
+ *
+ * Every fixture is a real printing, read off the debug corpus on 2026-09-20.
+ */
+describe("isMdfcLand against isLand", () => {
+  const mdfc = (name: string, typeLine: string, layout = MODAL_DFC) =>
+    card({ name, typeLine, layout });
+
+  /** Spell on the front, land on the back — the 50 oracle cards this figure is counting. */
+  it("counts a modal DFC whose back is a land and whose front is a spell", () => {
+    const sorcery = mdfc("Turntimber Symbiosis", "Sorcery // Land");
+    expect(isMdfcLand(sorcery)).toBe(true);
+    expect(isLand(sorcery.typeLine)).toBe(false);
+
+    const creature = mdfc("Skyclave Cleric", "Creature — Kor Cleric // Land");
+    expect(isMdfcLand(creature)).toBe(true);
+    expect(isLand(creature.typeLine)).toBe(false);
+  });
+
+  /**
+   * The Pathways, and the reason the front-face test is in this predicate rather than only the
+   * back one: `Land // Land` is already a land to every figure on the ledger, so counting it
+   * here would print `38 +10 MDFC` over a manabase of 38.
+   */
+  it("refuses a Pathway, whose front face the Lands figure already counts", () => {
+    const pathway = mdfc("Blightstep Pathway", "Land // Land");
+    expect(isMdfcLand(pathway)).toBe(false);
+    expect(isLand(pathway.typeLine)).toBe(true);
+  });
+
+  /**
+   * **The layout gate, and the case it exists for.** 32 oracle cards are `transform` with a
+   * spell front and a land back, and none of them can be *played* as a land — Search for Azcanta
+   * has to be cast and then flipped. Counting one is a manabase reading one land too many in
+   * every game it does not flip.
+   */
+  it("refuses a transform DFC whose back is a land", () => {
+    const azcanta = mdfc(
+      "Search for Azcanta",
+      "Legendary Enchantment // Legendary Land",
+      "transform",
+    );
+    expect(isMdfcLand(azcanta)).toBe(false);
+    expect(isLand(azcanta.typeLine)).toBe(false);
+  });
+
+  it("refuses a modal DFC with no land on either face", () => {
+    const valki = mdfc("Valki, God of Lies", "Legendary Creature — God // Legendary Planeswalker");
+    expect(isMdfcLand(valki)).toBe(false);
+  });
+
+  it("refuses a single-faced card, a plain land, and a row whose printing has left the corpus", () => {
+    expect(isMdfcLand(card({ name: "Bolt", typeLine: "Instant" }))).toBe(false);
+    expect(isMdfcLand(card({ name: "Island", typeLine: "Basic Land — Island" }))).toBe(false);
+    expect(isMdfcLand(card({ name: "Gone", typeLine: null, layout: null }))).toBe(false);
   });
 });
 

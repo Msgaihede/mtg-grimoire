@@ -17,7 +17,11 @@
  *
  * The type-line vocabulary also lives here — `TYPE_BUCKETS`, `front`, `isLand` and `typeCounts`
  * were `DeckStats.tsx`'s until the distribution needed them too, and a second spelling of "is
- * this a land" is exactly how two charts come to disagree about Urza's Saga.
+ * this a land" is exactly how two charts come to disagree about Urza's Saga. `back` and
+ * `isMdfcLand` joined them for the ledger's `+n MDFC` (issue #475), which is a **third** reading
+ * of one type line rather than a correction to either of the two above: `isLand` asks what the
+ * deck casts, `typeBucket` asks what heading the card sits under, and this asks what can be
+ * played as a land. Three questions, three answers, and none of them may be folded into another.
  */
 import type { DeckCard } from "@/lib/ipc";
 import { hasVariableCost } from "@/lib/mana";
@@ -100,6 +104,41 @@ export function front(typeLine: string | null): string {
  */
 export function isLand(typeLine: string | null): boolean {
   return front(typeLine).includes("Land");
+}
+
+/** The back face's type line, `""` for a card that has only a front. The halves after the first
+ *  are rejoined rather than indexed, so a line carrying more than one `//` keeps all of it. */
+export function back(typeLine: string | null): string {
+  const halves = (typeLine ?? "").split("//");
+  return halves.length > 1 ? halves.slice(1).join("//") : "";
+}
+
+/** Scryfall's `layout` for a modal double-faced card — the one value {@link isMdfcLand} accepts. */
+export const MODAL_DFC = "modal_dfc";
+
+/**
+ * Whether this row is a **land the deck can play off the back of a spell** — a modal DFC whose
+ * front is not a land and whose back is.
+ *
+ * It is the one land a manabase holds that {@link isLand} is right to answer `false` about, and
+ * the two are not in competition: a deck is cast from the front, so Turntimber Symbiosis is a
+ * seven-drop to the curve, to the average and to the type bars, and the Lands figure is the one
+ * place the reader is counting *how many cards can be a land this game*. So this is a second
+ * number beside that figure and never a widening of it — `Lands 38 +2 MDFC` — and nothing here
+ * may move `lands`, `nonlands` or a bucket.
+ *
+ * **`layout` and never the type line alone, and that gate is measured rather than tidy.** Against
+ * the debug corpus (117 738 printings, 2026-09-20): **50** oracle cards are `modal_dfc` with a
+ * spell front and a Land back, which is what this counts; **10** more are the Pathways
+ * (`Land // Land`), whose front already answers `isLand` and which must not be counted twice; and
+ * **32** are `transform` — Search for Azcanta, Legion's Landing, Treasure Map. Those last are the
+ * reason the gate exists: their backs are lands, and none of them can be *played* as one. A
+ * Growing Rites of Itlimoc counted here would make a manabase read one land longer than it
+ * plays, which is the direction a land count must never be wrong in.
+ */
+export function isMdfcLand(card: Pick<DeckCard, "typeLine" | "layout">): boolean {
+  if (card.layout !== MODAL_DFC) return false;
+  return !isLand(card.typeLine) && back(card.typeLine).includes("Land");
 }
 
 /**

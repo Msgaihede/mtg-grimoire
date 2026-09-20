@@ -30,6 +30,36 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.27.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.26.0...v0.27.0) (2026-09-20)
+
+
+### Features
+
+* **changes:** tell every window which user tables a commit wrote ([928c330](https://github.com/Msgaihede/mtg-grimoire/commit/928c330604ae04d1eefe03cb41972dc5ab5529de))
+* **scanner:** a second window's Scanner says it is open elsewhere and opens no camera ([400f6e6](https://github.com/Msgaihede/mtg-grimoire/commit/400f6e654d0006fb080d893b9bf6ad43cab8bd49))
+* **scanner:** one window scans at a time, as a two-second lease the frames renew ([02f1441](https://github.com/Msgaihede/mtg-grimoire/commit/02f1441b95fbc679dfde46558a4b15464f919002))
+* **scanner:** ship the hashes, Fast and Exact modes, set filters, and a review tray into the collection ([13dba8c](https://github.com/Msgaihede/mtg-grimoire/commit/13dba8c21f0008f561f13f5aaca7e9946e11a39e))
+* **windows:** a relaunch or window_new opens another window onto the same app ([e9c3a62](https://github.com/Msgaihede/mtg-grimoire/commit/e9c3a623bcc87fb63fd6478ef3af79b3d84a82ad))
+* **windows:** Ctrl+Shift+N, a snap hover per window, and a restart that says it closes them all ([6d19c9f](https://github.com/Msgaihede/mtg-grimoire/commit/6d19c9f97bbc01d19465980d5addd9fd6b34c1d6))
+* **windows:** more than one window onto one collection ([cbde155](https://github.com/Msgaihede/mtg-grimoire/commit/cbde1551e7e9ebcd060749d2c5ab13b7996dd224))
+* **windows:** refresh this window when another one writes ([f849f58](https://github.com/Msgaihede/mtg-grimoire/commit/f849f584a59a1060aa59cb8539c9bd7336790a3d))
+* **wishlist:** clear a folder, or delete it with its wishes ([#471](https://github.com/Msgaihede/mtg-grimoire/issues/471)) ([6b9636f](https://github.com/Msgaihede/mtg-grimoire/commit/6b9636f0aef0c7a94461c5960e958e978fe2d1db))
+* **wishlist:** clear a folder, or delete it with its wishes ([#471](https://github.com/Msgaihede/mtg-grimoire/issues/471)) ([26fbfac](https://github.com/Msgaihede/mtg-grimoire/commit/26fbfacbc78633ce38b0767871faad0be7090149))
+
+
+### Bug Fixes
+
+* **changes:** a bare DELETE is a second blind spot, and the emitter never loses a ring ([33efffe](https://github.com/Msgaihede/mtg-grimoire/commit/33efffe1395cb63232c81e7270c900e3822cd11a))
+* **decks:** a text selection can no longer be dragged out of the page and take the window with it ([3a89911](https://github.com/Msgaihede/mtg-grimoire/commit/3a899115251ff2127bc0cf98407e36e4cbd34d31))
+* **decks:** a text selection can no longer be dragged out of the page and take the window with it ([f059add](https://github.com/Msgaihede/mtg-grimoire/commit/f059add56d9e09926e31e3b31017f558b557c8dc)), closes [#473](https://github.com/Msgaihede/mtg-grimoire/issues/473)
+* **scanner:** a corrected title read or a misread collector number can no longer name the wrong card in Exact ([64c5810](https://github.com/Msgaihede/mtg-grimoire/commit/64c5810ef5ff04aa7a5b7e3ac5f21bd1dbca57f0))
+* **scanner:** a vote freeze after NotFound does not hold back the next Exact stretch ([68917fa](https://github.com/Msgaihede/mtg-grimoire/commit/68917fa154e84096e5e8cef1607a770a771ba1ba))
+* **scanner:** an admitted command holds the lease until it settles ([569f725](https://github.com/Msgaihede/mtg-grimoire/commit/569f72508f6e507d4b9654d259118daa3873b77e))
+* **scanner:** one physical card is one tray row across settings changes, and a commit and its tray write are one write ([fb6a773](https://github.com/Msgaihede/mtg-grimoire/commit/fb6a77377c76b60cd60f0c9011b40d1164d4bb85))
+* **scanner:** the lease means the Scanner is in use, and unsaved cards survive another window ([ec3cccc](https://github.com/Msgaihede/mtg-grimoire/commit/ec3cccc50eca55fb3dcad1cefe4d845dd41ca434))
+* **scanner:** the synthetic evaluation reports without gating the bundle publish ([d56e3e1](https://github.com/Msgaihede/mtg-grimoire/commit/d56e3e1e88b9dc491ea3b842760b4dfdbf39a366))
+* **scanner:** tray and prefs writes retry until they land, holding the scanner meanwhile ([4972cad](https://github.com/Msgaihede/mtg-grimoire/commit/4972cadf2398bd1f23928e57d4a93fb73b5eff91))
+
 ## [0.26.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.25.0...v0.26.0) (2026-09-15)
 
 

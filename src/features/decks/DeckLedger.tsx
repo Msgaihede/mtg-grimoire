@@ -1,7 +1,7 @@
 import { useMemo, type ReactNode } from "react";
 import { Crown } from "lucide-react";
 import { useTooltip } from "@/components/tooltip/useTooltip";
-import { count } from "@/lib/counts";
+import { count, plural, verb } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
 import type { DeckCard } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
@@ -170,6 +170,8 @@ export function DeckLedger({
     .map((category) => `${count(category.quantity)} ${category.name.toLowerCase()}`)
     .join(" + ");
   const spare = stats.copies - stats.sized;
+  // Read once: it is the figure, the tooltip's number and the gate on both being drawn at all.
+  const mdfc = stats.mdfcLands;
 
   return (
     <dl
@@ -213,9 +215,39 @@ export function DeckLedger({
       </div>
       <Rule />
 
-      <div className="flex shrink-0 items-baseline gap-1.5">
+      {/* The `+n MDFC` beside it is the lands the deck plays off the *back* of a spell (issue
+          #475). Dim and set apart in the `Cards` term's own vocabulary, because it is not part of
+          the headline: those cards are cast from the front, so every other figure on this line
+          counts them as spells and this one may not quietly fold them in. The tooltip is bound
+          only when there is an abbreviation on screen to expand — `Lands` needs no gloss. */}
+      <div
+        className="flex shrink-0 items-baseline gap-1.5"
+        {...tip(
+          mdfc > 0 &&
+            `Lands by type line, and ${plural(mdfc, "modal double-faced card")} that ${verb(
+              mdfc,
+              "plays",
+              "play",
+            )} as a land off the back.`,
+        )}
+      >
         <dt className="text-[0.6875rem] text-dim">Lands</dt>
-        <dd className="font-mono text-[0.8125rem] tabular-nums">{count(stats.lands)}</dd>
+        <dd className="font-mono text-[0.8125rem] tabular-nums">
+          {count(stats.lands)}
+          {mdfc > 0 && (
+            <>
+              {/* The separator is a **sibling** text node rather than a space inside the span,
+                  which is this app's rule for the spacing between two elements: a name
+                  computation trims each element's contribution before appending it, so a `{" "}`
+                  in there would survive `textContent` and vanish from an accessible name. Nothing
+                  computes one over this `<dl>` today, so the two spellings are indistinguishable
+                  to both suites — it is written the safe way so that a surface which later does
+                  name this pair reads `38 +2 MDFC` rather than `38+2 MDFC`. */}
+              {" "}
+              <span className="text-dim">+{count(mdfc)} MDFC</span>
+            </>
+          )}
+        </dd>
       </div>
       <Rule />
 

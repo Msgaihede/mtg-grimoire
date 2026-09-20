@@ -244,6 +244,49 @@ export const PriceAsOf: Story = {
 };
 
 /**
+ * The lands a deck plays off the **back** of a spell, said beside the manabase figure
+ * ([issue #475](https://github.com/Msgaihede/mtg-grimoire/issues/475)).
+ *
+ * `znr 90` is Agadeem's Awakening — a `modal_dfc` whose front is a sorcery and whose back is a
+ * land. Every other figure on this line reads it as a spell, correctly: a deck is cast from the
+ * front, so it is a three-drop to the curve and to the average, and `autoCategoryFor` files it
+ * under what it *does* rather than under Land. What a reader counts when they read `Lands` is
+ * *how many cards can be a land this game*, and until this term there was no figure that said so.
+ *
+ * **A second number, never a wider first one.** The `+2 MDFC` is dim and set apart in the `Cards`
+ * term's own vocabulary, because it is not part of the headline — and the abbreviation is what
+ * the tooltip is there to expand, which is why a deck with none binds no hint at all.
+ *
+ * The gate is the **layout** and not the type line: `transform` cards with a land back (Search
+ * for Azcanta, Legion's Landing) cannot be *played* as a land, and a Pathway is `Land // Land`,
+ * already counted once by the figure beside this one.
+ */
+export const ModalLands: Story = {
+  args: {
+    cards: allOwned([
+      deckCard(printing("lea", "288"), { quantity: 38 }),
+      deckCard(printing("znr", "90"), { quantity: 2 }),
+      deckCard(printing("mh2", "138"), { quantity: 4 }),
+    ]),
+    check,
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const lands = canvas.getByText("Lands", { selector: "dt" }).closest("div") as HTMLElement;
+
+    // The whole string, because `38` and `+2 MDFC` found separately are also satisfied by a
+    // render with no separator at all — `38+2 MDFC`, which reads as one number.
+    await expect(lands).toHaveTextContent("38 +2 MDFC");
+
+    await userEvent.hover(lands);
+    const tip = await canvas.findByRole("tooltip", undefined, {
+      timeout: TOOLTIP_OPEN_MS + 1000,
+    });
+    await expect(tip).toHaveTextContent("2 modal double-faced cards that play as a land");
+  },
+};
+
+/**
  * A deck the collection cannot cover, which is the one red thing on this line.
  *
  * It is a **fact**, not a refusal: the press that acts on it is `Send missing to wishlist`, under

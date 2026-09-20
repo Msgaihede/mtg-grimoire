@@ -742,6 +742,77 @@ describe("deckStats", () => {
     expect(stats.spellsByColor.R).toBe(1);
   });
 
+  /**
+   * **`mdfcLands` is a tally beside the Lands figure and moves no other number** (issue #475).
+   *
+   * These cards are cast from the front, so the curve, the average and the land/nonland split all
+   * go on reading them as spells — Turntimber Symbiosis is a six-drop and Skyclave Cleric a
+   * two-drop, and both are nonlands. What the reader is counting when they read the Lands figure
+   * is *how many cards can be a land this game*, and that is the second term.
+   *
+   * The Pathway is here because it is the case that double-counts: its front already answers
+   * `isLand`, so it must be in `lands` and not in `mdfcLands`, and an implementation reading the
+   * whole type line would put it in both.
+   */
+  it("counts an MDFC land beside the Lands figure without moving it", () => {
+    const stats = usdStats([
+      card({ name: "Turntimber Symbiosis", typeLine: "Sorcery // Land", cmc: 7, layout: "modal_dfc" }),
+      card({
+        name: "Skyclave Cleric",
+        typeLine: "Creature — Kor Cleric // Land",
+        cmc: 2,
+        layout: "modal_dfc",
+        quantity: 2,
+      }),
+      card({ name: "Blightstep Pathway", typeLine: "Land // Land", cmc: 0, layout: "modal_dfc" }),
+      card({ name: "Island", typeLine: "Basic Land — Island", cmc: 0, quantity: 10 }),
+      spell("Bolt", 1),
+    ]);
+
+    // Copies, not rows: the two Skyclave Clerics are two cards that can be a land.
+    expect(stats.mdfcLands).toBe(3);
+    // The Pathway is in here and the three MDFCs are not — 10 Islands plus the one Pathway.
+    expect(stats.lands).toBe(11);
+    // And they are still spells to every other figure, `lands + nonlands` still every copy.
+    expect(stats.nonlands).toBe(4);
+    expect(stats.lands + stats.nonlands).toBe(stats.copies);
+    expect(stats.curve[7]).toBe(1);
+    expect(stats.curve[2]).toBe(2);
+  });
+
+  /** A deck with none reads `0` rather than going absent — the ledger is what decides not to draw
+   *  the term, and a summary field that meant two things would make that decision twice. */
+  it("counts no MDFC lands for a deck that plays none", () => {
+    const stats = usdStats([
+      card({ name: "Island", typeLine: "Basic Land — Island", cmc: 0, quantity: 10 }),
+      card({
+        name: "Search for Azcanta",
+        typeLine: "Legendary Enchantment // Legendary Land",
+        cmc: 2,
+        layout: "transform",
+      }),
+    ]);
+
+    expect(stats.mdfcLands).toBe(0);
+    expect(stats.lands).toBe(10);
+  });
+
+  /** The switch decides it here as it decides every other figure on this line: a card parked in a
+   *  pile the reader turned off is not part of the manabase they are counting. */
+  it("leaves an MDFC land in a switched-off pile out of the tally", () => {
+    const stats = usdStats([
+      card({
+        name: "Turntimber Symbiosis",
+        typeLine: "Sorcery // Land",
+        cmc: 7,
+        layout: "modal_dfc",
+        categoryKind: "maybe",
+      }),
+    ]);
+
+    expect(stats.mdfcLands).toBe(0);
+  });
+
   /** The headline figure is the engine's `SIZE_KINDS` over the active categories, so the strip
    *  and the format check count the same cards; everything else is counted over every active
    *  pile. */
