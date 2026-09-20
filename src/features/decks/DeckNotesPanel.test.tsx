@@ -1,9 +1,10 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { DeckCard, DeckNote } from "@/lib/ipc";
 import { card } from "./validation/fixtures";
+import { NOTE_STRIP_ATTR } from "./NoteCard";
 
 const deckNotes = vi.hoisted(() => vi.fn());
 const deckNoteCreate = vi.hoisted(() => vi.fn());
@@ -31,8 +32,13 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
  *
  * **Mocked rather than mounted**, and not to save time: Tiptap is a real ProseMirror instance
  * over a DOM jsdom lays nothing out in, and what this file is about is the band around it — that
- * both drafts are sent as one write, and that pressing Edit is the only thing that reaches this
- * module at all. `NoteEditor.test.tsx` owns the editor's own round trip.
+ * a body typed in the dialog reaches the right write with the right *other* column, and that
+ * pressing Edit is the only thing that reaches this module at all. `NoteEditor.test.tsx` owns the
+ * editor's own round trip and `NoteEditorDialog.test.tsx` the dialog's.
+ *
+ * **The module is `NoteEditorDialog.tsx`'s now, not this band's** — the `lazy()` call moved there
+ * with the redesign — and the mock is unchanged by that, because the two files are in one
+ * directory and `./NoteEditor` resolves to one module id either way.
  *
  * It keeps the real component's three props, so a signature change here fails at the type level
  * rather than by silently rendering nothing.
@@ -69,6 +75,9 @@ function note(over: Partial<DeckNote> & { id: number }): DeckNote {
 /** A deck with nothing in it, as one identity — the editor hands the band its cards as a prop,
  *  and a fresh `[]` per render would rebuild the picker's memo on every keystroke. */
 const NO_CARDS: DeckCard[] = [];
+
+/** The key the band's own read sits under — how "another window deleted it" is spelled below. */
+const NOTES_KEY = ["decks", "notes", 4];
 
 function renderBand(
   props: { open?: boolean; cards?: DeckCard[]; request?: DeckNoteRequest | null } = {},
@@ -114,6 +123,16 @@ async function band(): Promise<HTMLElement> {
   return await screen.findByRole("region", { name: NOTES_HEADING });
 }
 
+/** Write a note into the dialog that is open, and save it. The stand-in editor is a textarea, so
+ *  the "markdown" that crosses `onSave` is the text itself — which is what lets a write assertion
+ *  below name a body rather than a serialisation. */
+async function writeAndSave(heading: string, body: string, verb: string) {
+  const surface = await screen.findByLabelText(`Body of ${heading}`);
+  await userEvent.clear(surface);
+  await userEvent.type(surface, body);
+  await userEvent.click(screen.getByRole("button", { name: verb }));
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   deckNotes.mockResolvedValue([]);
@@ -140,17 +159,23 @@ describe("the Notes band", () => {
     expect(await within(region).findByText("2 notes")).toBeInTheDocument();
     expect(deckNotes).toHaveBeenCalledWith(4);
 
-    // Nothing of the list is in the tree while it is shut — no row, no add field, no editor.
-    expect(within(region).queryByLabelText("New note title")).toBeNull();
+    // Nothing of the grid is in the tree while it is shut — no card, and therefore no editor.
+    expect(within(region).queryByRole("listitem")).toBeNull();
     expect(within(region).queryByRole("button", { name: "Edit Mana base" })).toBeNull();
+
+    // **The one act is in the header, so it is offered shut as well as open** — which is the half
+    // of the add row's deletion that a reader would otherwise have lost: that row lived inside the
+    // collapsible region and a shut band offered nothing at all.
+    expect(within(region).getByRole("button", { name: "New note" })).toBeInTheDocument();
   });
 
   /**
    * **The departure from the Tokens & emblems band, and the one this file exists to pin.** That
    * band draws its heading as plain type on a deck that makes nothing, because a control that
-   * spends the whole deck refusing teaches a reader to stop looking at it. Here the empty band is
-   * exactly where the reader has something to do — the way to write a first note is *inside* it —
-   * so a heading that could not be opened would be the one state this screen must not have.
+   * spends the whole deck refusing teaches a reader to stop looking at it. Here there is always
+   * something under the heading — on an empty deck, the sentence that says what the band is for
+   * and points at the control that fills it — so a heading that could not be opened would be the
+   * one state this screen must not have.
    */
   it("keeps the disclosure a control on a deck with no notes at all", async () => {
     const { onToggle } = renderBand({ open: false });
@@ -174,40 +199,46 @@ describe("the Notes band", () => {
     expect(document.getElementById(id as string)).not.toBeNull();
   });
 
-  /** Add-first is `LabelsDialog`'s ordering: the field a reader with no notes needs is above the
-   *  list they do not have yet, not under it. */
-  it("puts the add field before the list, and sends a new note with a title and nothing else", async () => {
-    deckNotes.mockResolvedValue([note({ id: 1, title: "Mana base" })]);
+  /**
+   * **A press opens a question, and nothing is written until it is answered** — which is the
+   * whole of what replaced the add row. That row wrote a note on submit with a title and nothing
+   * else in it; this one writes nothing at all until there is a body to write.
+   */
+  it("opens a dialog on New note, and writes nothing until Save", async () => {
     renderBand();
 
     const region = await band();
-    const field = await within(region).findByLabelText("New note title");
-    // **The row is found by a control's *role* and not by its text**, because the title is in the
-    // row four times over — the visible line, and the `sr-only` half of each of the three
-    // actions' names. A `getByText` here reports "found multiple elements" rather than anything
-    // about the order this test is asking about.
-    const row = await within(region).findByRole("button", { name: "Edit Mana base" });
-    // `Node.DOCUMENT_POSITION_FOLLOWING` — the row comes after the field, which is the whole of
-    // what "add first" means and the only part of it a suite can see.
-    expect(field.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await userEvent.click(within(region).getByRole("button", { name: "New note" }));
 
-    await userEvent.type(field, "  Sideboard plan  ");
-    await userEvent.click(within(region).getByRole("button", { name: "Add note" }));
-    // Trimmed, and with an empty body and no cards: the add row is one field, and everything else
-    // about a note is filled in afterwards. That is what keeps the lazy editor off this path.
-    expect(deckNoteCreate).toHaveBeenCalledWith(4, "Sideboard plan", "", []);
+    expect(await screen.findByRole("dialog", { name: "New note" })).toBeInTheDocument();
+    expect(deckNoteCreate).not.toHaveBeenCalled();
   });
 
-  it("refuses to send a note with nothing but spaces in its title", async () => {
+  /**
+   * **`title: ""` on every note this band writes**, and the body is the whole of the create.
+   * `noteTitle()` answers the first line, which is what it already did for a blank title — so a
+   * note is named by what the reader wrote rather than by a field they had to fill in first.
+   */
+  it("writes the body and no title at all when the dialog is saved", async () => {
     renderBand();
-    const region = await band();
-    const field = await within(region).findByLabelText("New note title");
 
-    const add = within(region).getByRole("button", { name: "Add note" });
-    expect(add).toBeDisabled();
-    await userEvent.type(field, "   ");
-    expect(add).toBeDisabled();
-    expect(deckNoteCreate).not.toHaveBeenCalled();
+    const region = await band();
+    await userEvent.click(within(region).getByRole("button", { name: "New note" }));
+    await writeAndSave("New note", "Fourteen sources.", "Save note");
+
+    expect(deckNoteCreate).toHaveBeenCalledWith(4, "", "Fourteen sources.", []);
+    // And the dialog is gone: the create is the reader's whole answer to the question it asked.
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("points an empty deck at the control that makes one", async () => {
+    renderBand();
+
+    const region = await band();
+    expect(await within(region).findByText(/No notes on this deck yet/)).toBeInTheDocument();
+    // The add field this replaced is gone, not hidden.
+    expect(screen.queryByPlaceholderText("New note title…")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("New note title")).not.toBeInTheDocument();
   });
 
   /**
@@ -215,6 +246,14 @@ describe("the Notes band", () => {
    * they are attached to a card."* The attachments hang off the note, so this is true by
    * construction — and it is written down because it is the property the whole schema was chosen
    * for.
+   *
+   * **The `N cards` chip is gone with the row**: a card draws the crops themselves and counts only
+   * what is left over, so what says "this note names four" is a strip of pictures and a `+1 more`.
+   * What that strip is made of is `NoteCard.test.tsx`'s; what is asserted here is the band's own
+   * half — both notes in the grid, and the strip on the one that names cards and not on the one
+   * that names none. `NOTE_STRIP_ATTR` is what makes that second half sayable at all: the strip
+   * has no role and no text, so without a handle *"draws no strip"* and *"draws an empty strip"*
+   * are the same assertion.
    */
   it("lists a note that names four cards beside one that names none", async () => {
     deckNotes.mockResolvedValue([
@@ -234,47 +273,71 @@ describe("the Notes band", () => {
 
     const region = await band();
     expect(await within(region).findByText("2 notes")).toBeInTheDocument();
-    expect(within(region).getByText("4 cards")).toBeInTheDocument();
+    expect(
+      within(region).getByRole("button", { name: "Edit The one-drops" }),
+    ).toBeInTheDocument();
     expect(
       within(region).getByRole("button", { name: "Edit Sleeve these" }),
     ).toBeInTheDocument();
-    // No chip on the note that names nothing — `0 cards` on the commonest row in the band would
-    // be the same nothing said over and over.
+
+    // The strip is the count: pictures rather than a chip, and only the note that names cards
+    // draws one at all.
+    const [named, unnamed] = within(region).getAllByRole("listitem");
+    expect(named.querySelector(`[${NOTE_STRIP_ATTR}]`)).not.toBeNull();
+    expect(unnamed.querySelector(`[${NOTE_STRIP_ATTR}]`)).toBeNull();
+    expect(
+      within(region).getByRole("button", { name: /more cards? in The one-drops$/ }),
+    ).toBeInTheDocument();
+    // Neither chip survives: `0 cards` on the commonest card in the band would be the same
+    // nothing said over and over, and `4 cards` beside four pictures would be the same fact twice.
     expect(within(region).queryByText("0 cards")).toBeNull();
+    expect(within(region).queryByText("4 cards")).toBeNull();
   });
 
   /**
-   * A blank title is legal and reads as the body's first line, computed at render and never
-   * stored — and it reaches the reader who cannot see the row, because every control on it folds
-   * the title into its own name.
+   * **Three flags kept exclusive by an `only()` helper became one value that cannot be two.**
+   * The band used to hold `editing`, `confirming` and `picking` as three `number | null`s, so
+   * "never two at once" was a rule everybody had to remember to call; it is the union's shape now
+   * and nothing here can open a second layer without closing the first.
    */
-  it("names a blank-titled note by its body's first line, in its controls too", async () => {
-    // A **blank line** and not a single one: a lone newline is a soft wrap inside one paragraph,
-    // so `noteToPlainText` joins it and the "first line" would be the whole paragraph. That is
-    // markdown being markdown, and a fixture written the other way asserts the wrong thing.
-    deckNotes.mockResolvedValue([
-      note({ id: 1, body: "Ask Supreme about the Bolt count\n\nlater" }),
-    ]);
+  it("opens one panel at a time, because there is only one to open", async () => {
+    deckNotes.mockResolvedValue([note({ id: 1, title: "Mana base", body: "Fourteen." })]);
     renderBand();
 
     const region = await band();
-    // The computed name, whole — a CSS `gap` is not a word separator, so the parts are never
-    // asserted separately.
-    expect(
-      await within(region).findByRole("button", { name: "Edit Ask Supreme about the Bolt count" }),
-    ).toBeInTheDocument();
+    await userEvent.click(
+      await within(region).findByRole("button", { name: "Cards on Mana base" }),
+    );
+
+    expect(await screen.findByRole("dialog", { name: "Mana base" })).toBeInTheDocument();
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
   });
 
-  /** The body is drawn as blocks, so the source characters never reach the screen. */
-  it("renders the body rather than printing it", async () => {
-    deckNotes.mockResolvedValue([
-      note({ id: 1, title: "Mana base", body: "Fourteen is **one short**." }),
-    ]);
-    renderBand();
+  /**
+   * ⚠️ **A dialog can outlive the note it was opened on.**
+   *
+   * A panel holds the note **object** rather than its id, which is what lets a dialog read the
+   * title, the body and the card list without a second lookup — and it is exactly what makes a
+   * note deleted somewhere else a dialog drawing a row nothing answers for. Another window on the
+   * same collection is that somewhere else (`docs/reference/multi-window.md`), so the band
+   * re-finds its note in the read at draw time and shuts the dialog when it has gone.
+   *
+   * Written into the cache rather than driven through a refetch, because what is being simulated
+   * is the *read changing under the dialog* and not the press that changed it.
+   */
+  it("shuts a dialog whose note another window deleted", async () => {
+    deckNotes.mockResolvedValue([note({ id: 1, title: "Mana base", body: "Fourteen." })]);
+    const { client } = renderBand();
 
     const region = await band();
-    expect(await within(region).findByText("one short")).toBeInTheDocument();
-    expect(within(region).queryByText(/\*\*one short\*\*/)).toBeNull();
+    await userEvent.click(
+      await within(region).findByRole("button", { name: "Cards on Mana base" }),
+    );
+    expect(await screen.findByRole("dialog", { name: "Mana base" })).toBeInTheDocument();
+
+    act(() => client.setQueryData(NOTES_KEY, []));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
   /**
@@ -286,6 +349,12 @@ describe("the Notes band", () => {
    * nothing anywhere going red, because the characters are all still in the DOM. jsdom collapses
    * nothing either, so what is asserted is the declaration rather than the layout: the whitespace
    * class on the box the runs inherit it from.
+   *
+   * ⚠️ **It stayed here when the body moved to `NoteCard`, because it did not land there.**
+   * `NoteCard.test.tsx` took the blank-title and the render-rather-than-print claims and this one
+   * was listed with them; `noteMarkdown.test.ts` pins the *parser*'s half — that the run carries a
+   * newline — and nothing else in the suite asks whether anything draws it. Delete this only once
+   * some file does.
    */
   it("keeps the newline a hard break leaves in a text run", async () => {
     // **Two trailing spaces**, which is CommonMark's hard break and one of the two spellings
@@ -309,12 +378,20 @@ describe("the Notes band", () => {
 
 describe("editing a note", () => {
   /**
-   * **Both fields in one write.** `deck_note_update` has no patch shape a caller can half-fill
-   * usefully — the title control and the body control are one form — and the labels dialog's
-   * lesson is what this is guarding: two controls each sending the other's field back is how a
-   * rename quietly undoes a recolour.
+   * ⚠️ **The note's existing title goes back unchanged, and this is the fence for it.**
+   *
+   * `deck_note_update` takes both columns and has no patch shape a caller can half-fill usefully,
+   * and the labels dialog one file over is where this app learned what happens otherwise: two
+   * controls each sending the other's field back is how a rename quietly undoes a recolour. The
+   * dialog edits the body only and knows nothing about a title, so the band is the only place
+   * this can be got right and the only place it can be seen.
+   *
+   * The fixture's title is a **stored** one on purpose. Every note written through the dialog
+   * carries `title: ""`, so a band that sent the draft's own idea of a title back would pass
+   * against every note it had made itself and lose the title of exactly the notes the card menu
+   * wrote.
    */
-  it("sends the title and the body together", async () => {
+  it("sends the note's own title back with the body it edited", async () => {
     deckNotes.mockResolvedValue([note({ id: 1, title: "Mana base", body: "Fourteen." })]);
     renderBand();
 
@@ -322,41 +399,21 @@ describe("editing a note", () => {
     await userEvent.click(
       await within(region).findByRole("button", { name: "Edit Mana base" }),
     );
-
     // The editor is reached through `React.lazy`, so it arrives a tick later than the press.
-    const body = await within(region).findByLabelText("Body of Mana base");
-    await userEvent.clear(body);
-    await userEvent.type(body, "Fifteen.");
+    await writeAndSave("Mana base", "Fifteen.", "Save");
 
-    const title = within(region).getByLabelText("Title of Mana base");
-    await userEvent.clear(title);
-    await userEvent.type(title, "Lands");
-
-    await userEvent.click(within(region).getByRole("button", { name: "Save" }));
-    expect(deckNoteUpdate).toHaveBeenCalledWith(4, 1, { title: "Lands", body: "Fifteen." });
-  });
-
-  it("writes nothing when the reader backs out", async () => {
-    deckNotes.mockResolvedValue([note({ id: 1, title: "Mana base", body: "Fourteen." })]);
-    renderBand();
-
-    const region = await band();
-    await userEvent.click(
-      await within(region).findByRole("button", { name: "Edit Mana base" }),
-    );
-    await within(region).findByLabelText("Body of Mana base");
-    await userEvent.click(within(region).getByRole("button", { name: "Cancel" }));
-
-    await waitFor(() =>
-      expect(within(region).queryByLabelText("Body of Mana base")).toBeNull(),
-    );
-    expect(deckNoteUpdate).not.toHaveBeenCalled();
+    expect(deckNoteUpdate).toHaveBeenCalledWith(4, 1, { title: "Mana base", body: "Fifteen." });
   });
 
   /**
    * A destructive press asks first, and the question says how far it reaches. The cards cascade
    * away with the note; the *cards themselves* do not, and that is the half a reader can only be
    * told before the press.
+   *
+   * **The question is a `Dialog` now** — the band is a masonry, and a box unfolding inside one
+   * card would reflow every card after it at the moment the reader was reading the question. The
+   * caret still comes into the *question* rather than onto a button in it, which the shell does by
+   * focusing its own panel; `useDestructiveFocus` and `useConfirmFocus` went with the row.
    */
   it("asks before deleting, and says what the delete does not reach", async () => {
     deckNotes.mockResolvedValue([
@@ -374,28 +431,29 @@ describe("editing a note", () => {
     );
     expect(deckNoteDelete).not.toHaveBeenCalled();
 
-    const question = await within(region).findByRole("group", { name: "Delete Mana base" });
+    // The heading *is* the question, so the panel's own accessible name carries it — curly quotes
+    // and all, which is what a reader sees and therefore what this asserts.
+    const question = await screen.findByRole("dialog", { name: "Delete “Mana base”?" });
     expect(question).toHaveTextContent("The cards themselves stay in the deck.");
-    // The caret comes into the question rather than onto a button in it: the reader has not
-    // decided yet, and a stray Enter must not decide for them.
-    expect(question).toHaveFocus();
+    await waitFor(() => expect(question).toHaveFocus());
 
     await userEvent.click(within(question).getByRole("button", { name: "Delete note" }));
     expect(deckNoteDelete).toHaveBeenCalledWith(4, 1);
   });
 
-  it("hands the caret back to the control that opened a confirmation the reader declined", async () => {
+  /** Declining writes nothing and takes the question away — the other half of asking first. */
+  it("writes nothing when the reader keeps the note", async () => {
     deckNotes.mockResolvedValue([note({ id: 1, title: "Mana base" })]);
     renderBand();
 
     const region = await band();
-    const trigger = await within(region).findByRole("button", { name: "Delete Mana base" });
-    await userEvent.click(trigger);
-    await userEvent.click(within(region).getByRole("button", { name: "Keep it" }));
-
-    await waitFor(() =>
-      expect(within(region).getByRole("button", { name: "Delete Mana base" })).toHaveFocus(),
+    await userEvent.click(
+      await within(region).findByRole("button", { name: "Delete Mana base" }),
     );
+    const question = await screen.findByRole("dialog", { name: "Delete “Mana base”?" });
+    await userEvent.click(within(question).getByRole("button", { name: "Keep it" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(deckNoteDelete).not.toHaveBeenCalled();
   });
 
@@ -415,9 +473,8 @@ describe("editing a note", () => {
     client.setQueryData(cardKey, []);
 
     const region = await band();
-    const field = await within(region).findByLabelText("New note title");
-    await userEvent.type(field, "Mana base");
-    await userEvent.click(within(region).getByRole("button", { name: "Add note" }));
+    await userEvent.click(within(region).getByRole("button", { name: "New note" }));
+    await writeAndSave("New note", "Mana base", "Save note");
 
     await waitFor(() => expect(client.getQueryState(cardKey)?.isInvalidated).toBe(true));
   });
@@ -426,11 +483,13 @@ describe("editing a note", () => {
 /* -------------------------------------------------------------------- the picker ------- */
 
 describe("naming cards in a note", () => {
-  // The dedupe, the fold and the bucketing moved to `deckNotes.test.ts` with `attachableCards`
-  // itself: they are arithmetic over a card list and never a fact about this band, which is what
-  // the move to `deckNotes.ts` is for. What stays here is what the *picker* does with the answer.
+  // What the picker *does* with a card list is `NoteCardsDialog.test.tsx`'s, and how that list is
+  // built out of the deck's rows is `deckNotes.test.ts`' — the dedupe, the fold, the printing race
+  // and the bucketing all moved there with `attachableCards`. What is left here, and what neither
+  // of those files can see, is the wiring: that the deck's own cards reach the dialog at all, and
+  // that a tick and an untick reach the two commands with this note's id.
 
-  it("offers the deck's own cards, minus the ones the note already names", async () => {
+  it("hands the deck's own cards to the picker, and a tick reaches the write", async () => {
     deckNotes.mockResolvedValue([
       note({
         id: 1,
@@ -450,44 +509,16 @@ describe("naming cards in a note", () => {
       await within(region).findByRole("button", { name: "Cards on Burn plan" }),
     );
 
-    expect(
-      await within(region).findByRole("button", { name: "Name Goblin Guide in Burn plan" }),
-    ).toBeInTheDocument();
-    expect(
-      within(region).queryByRole("button", { name: "Name Lightning Bolt in Burn plan" }),
-    ).toBeNull();
-
+    const picker = await screen.findByRole("dialog", { name: "Burn plan" });
     await userEvent.click(
-      within(region).getByRole("button", { name: "Name Goblin Guide in Burn plan" }),
+      within(picker).getByRole("checkbox", { name: "Name Goblin Guide in Burn plan" }),
     );
     expect(deckNoteAttach).toHaveBeenCalledWith(4, 1, "o-goblin");
-  });
 
-  it("takes a card off a note without taking the note anywhere", async () => {
-    deckNotes.mockResolvedValue([
-      note({
-        id: 1,
-        title: "Burn plan",
-        cards: [{ oracleId: "o-bolt", name: "Lightning Bolt", cardId: "c-bolt" }],
-      }),
-    ]);
-    renderBand({ cards: [card({ name: "Lightning Bolt", oracleId: "o-bolt" })] });
-
-    const region = await band();
     await userEvent.click(
-      await within(region).findByRole("button", { name: "Cards on Burn plan" }),
-    );
-    await userEvent.click(
-      await within(region).findByRole("button", {
-        name: "Detach Lightning Bolt from Burn plan",
-      }),
+      within(picker).getByRole("checkbox", { name: "Name Lightning Bolt in Burn plan" }),
     );
     expect(deckNoteDetach).toHaveBeenCalledWith(4, 1, "o-bolt");
-    // Still in the list, which is the requirement rather than a consequence — asked of the row's
-    // own control, since the title is in this row several times over and a text query would only
-    // report that.
-    expect(within(region).getByRole("button", { name: "Edit Burn plan" })).toBeInTheDocument();
-    expect(within(region).getByText("1 note")).toBeInTheDocument();
   });
 });
 
@@ -524,9 +555,8 @@ describe("a refused read", () => {
     renderBand();
 
     const region = await band();
-    const field = await within(region).findByLabelText("New note title");
-    await userEvent.type(field, "Mana base");
-    await userEvent.click(within(region).getByRole("button", { name: "Add note" }));
+    await userEvent.click(within(region).getByRole("button", { name: "New note" }));
+    await writeAndSave("New note", "Mana base", "Save note");
 
     expect(await within(region).findByRole("alert")).toHaveTextContent("the deck is gone");
   });
@@ -551,10 +581,11 @@ describe("a note act asked for from the card menu", () => {
   /**
    * **Titled with the card, naming the card, in one write.**
    *
-   * The title is what `noteTitle` would otherwise have to invent: a blank one reads
-   * `Untitled note` in this band and in that card's own `Notes ▸` submenu the moment it appears,
-   * which is a row with no identity in a list of rows. `oracleIds` in the same call is what makes
-   * it turn up under the card again with no attach step to lose.
+   * This is the one note in the feature born with a title, and the reason is that it is also the
+   * one born *before* its body: a blank one reads `Untitled note` in this band and in that card's
+   * own `Notes ▸` submenu the moment it appears, which is a row with no identity in a list of
+   * rows. `oracleIds` in the same call is what makes it turn up under the card again with no
+   * attach step to lose.
    */
   it("writes a note that already names the card", async () => {
     renderBand({ request: BOLT });
@@ -589,6 +620,10 @@ describe("a note act asked for from the card menu", () => {
    * than re-reading the request: `onSuccess` is the only place that id ever arrives. The second
    * answer from `deck_notes` is the invalidation landing — the row cannot be drawn before it, so
    * a fixture with one answer would assert about an editor that could never appear.
+   *
+   * ⚠️ That second answer is also why an `edit` focus is **taken late**: the focus reaches the
+   * band a render before the note it names is in the list, so a band that consumed it there would
+   * find nothing to open on and open nothing, for ever.
    */
   it("opens the new note's editor once the write lands", async () => {
     deckNotes.mockResolvedValueOnce([]).mockResolvedValue([note({ id: 9, title: "Lightning Bolt" })]);
@@ -640,8 +675,8 @@ describe("a note act asked for from the card menu", () => {
   /**
    * **`open` brings the note to the reader and stops there.**
    *
-   * Reading is the point, so no editor — an `open` that mounted one would put a row the reader
-   * wanted to *look* at behind 141.5 kB of ProseMirror and shut whatever panel they already had
+   * Reading is the point, so no editor — an `open` that mounted one would put a card the reader
+   * wanted to *look* at behind 141.5 kB of ProseMirror and shut whatever dialog they already had
    * open. The caret is the "into view" half: focusing an element scrolls it into view in a
    * browser, and it is the half jsdom can actually see.
    */
@@ -650,13 +685,13 @@ describe("a note act asked for from the card menu", () => {
     const view = renderBand({ request: { kind: "open", noteId: 5 } });
 
     const region = await band();
-    // The row and not its title: a note's own words are spelled a fourth time inside each of its
+    // The card and not its title: a note's own words are spelled a fourth time inside each of its
     // three actions' `sr-only` twins (`Edit Mana base`), so a text query finds four nodes and the
-    // one it is about is a `<span>` inside the row rather than the row.
+    // one it is about is a `<span>` inside the card rather than the card.
     const row = await within(region).findByRole("listitem");
     await waitFor(() => expect(document.activeElement).toBe(row));
 
-    expect(within(region).queryByLabelText("Body of Mana base")).toBeNull();
+    expect(screen.queryByLabelText("Body of Mana base")).toBeNull();
     expect(deckNoteCreate).not.toHaveBeenCalled();
     expect(view.onRequestHandled).toHaveBeenCalledTimes(1);
   });
@@ -708,6 +743,9 @@ describe("the editor's 141.5 kB", () => {
    * size, which nobody reads on a green build.
    *
    * `NoteEditor`'s own file and its test are the two places that are *supposed* to name it.
+   * **The one `lazy()` call is `NoteEditorDialog.tsx`'s** since the redesign moved the editor
+   * behind a dialog; this sweep does not care which file holds it, only that nobody reaches it
+   * statically.
    */
   it("is reached by nothing but a dynamic import", () => {
     // A glob that stops matching returns `{}`, and a sweep over nothing finds nothing.

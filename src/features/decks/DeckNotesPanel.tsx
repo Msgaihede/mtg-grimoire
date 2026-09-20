@@ -25,27 +25,31 @@
  * - **The disclosure is always a control, even at zero notes**, which is where this band parts
  *   company with `DeckTokensPanel`. That one draws its heading as plain type on a deck that makes
  *   nothing, because there is nothing to disclose and a greyed control would spend the whole deck
- *   refusing. Here the empty band is exactly where the reader has something to do: the way to
- *   write a first note is *inside* it, so a heading that could not be opened would be the one
- *   state this screen must not have.
+ *   refusing. Here there is always something under it: on an empty deck the region holds the
+ *   sentence that says what the band is for and points at the control that fills it. A heading
+ *   that greyed while the `New note` button beside it went on working would be the area saying it
+ *   is unavailable at the one moment it is not.
  *
- * ## Add first, which is `LabelsDialog`'s ordering and its reason
+ * ## One act, and it is in the header
  *
- * The field that makes a note is the first thing in the body, above the list. **A reader with no
- * notes is who this screen is hardest for**, and putting the add row under a list they do not
- * have yet is how the labels dialog used to read.
+ * Making a note is a press on `New note`, beside the count, which opens {@link NoteEditorDialog}.
+ * **That replaced an add row** — a title field and a submit sitting above a list a reader with no
+ * notes did not have yet — and the reason is that a control in the heading is the same offer
+ * without a form standing in for one. It is also drawn while the band is shut, so the offer does
+ * not depend on the disclosure.
  *
  * ## Reading loads no editor, and that is a bundle rule rather than a preference
  *
- * The list draws {@link parseNoteBody}'s blocks — a small closed reader over the dialect
- * `noteMarkdown.ts` pins, modelled on `src/lib/releaseNotes.ts`, with no library and no HTML
- * string anywhere near it (the shipped CSP is `script-src 'self'` and nothing in `src/` uses
- * `dangerouslySetInnerHTML`). **Editing** mounts Tiptap, and Tiptap is **141.5 kB gzip** against
- * the app's own 481.45 kB — measured with `esbuild --bundle --minify`, React external, `gzip -9`,
- * 2026-09-10. So `NoteEditor` is reached through `React.lazy` and **nothing on this path may
- * import it any other way**: one eager import puts that chunk back in the main bundle and
- * *nothing anywhere goes red*. Mounting a ProseMirror instance per note merely to render one
- * would be the same mistake drawn larger.
+ * A note is drawn by {@link NoteCard}, over `parseNoteBody`'s blocks — a small closed reader
+ * over the dialect `noteMarkdown.ts` pins, modelled on `src/lib/releaseNotes.ts`, with no library
+ * and no HTML string anywhere near it (the shipped CSP is `script-src 'self'` and nothing in
+ * `src/` uses `dangerouslySetInnerHTML`). **Writing** mounts Tiptap, and Tiptap is **141.5 kB
+ * gzip** against the app's own 481.45 kB — measured with `esbuild --bundle --minify`, React
+ * external, `gzip -9`, 2026-09-10. So `NoteEditor` is reached through `React.lazy` from
+ * **`NoteEditorDialog.tsx` and nowhere else**: that file holds the app's only reference of any
+ * kind, this one holds none at all, and `DeckNotesPanel.test.tsx` sweeps every source file in
+ * `src/` for a static import — because one of those puts the whole chunk back in the main bundle
+ * and *nothing anywhere goes red*.
  *
  * ## Two components, and the split is where the database stops
  *
@@ -54,43 +58,20 @@
  * arrangement and it is what lets the workbench stand this band up in the six states that matter
  * — including a refused read, which no seed can produce and no fault reaches.
  */
-import {
-  Suspense,
-  lazy,
-  useEffect,
-  useId,
-  useMemo,
-  useRef,
-  useState,
-  type JSX,
-} from "react";
-import { ChevronRight, X } from "lucide-react";
+import { useEffect, useId, useMemo, useRef, useState, type JSX } from "react";
+import { ChevronRight, Plus } from "lucide-react";
+import { Dialog } from "@/components/Dialog";
 import { plural } from "@/lib/counts";
-import { openExternal } from "@/lib/externalLinks";
-import { FOCUS, FOCUS_INSET } from "@/lib/focus";
+import { FOCUS } from "@/lib/focus";
 import type { DeckCard, DeckNote, DeckNoteCard } from "@/lib/ipc";
 import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import { attachableCards, noteTitle, type NoteCardChoice } from "./deckNotes";
-import {
-  CONFIRM_CANCEL,
-  CONFIRM_DESTRUCTIVE,
-  META_FIELD,
-  META_SUBMIT,
-  RowAction,
-  useConfirmFocus,
-} from "./metaRows";
-import { parseNoteBody, type Block, type Inline } from "./noteMarkdown";
+import { CONFIRM_CANCEL, CONFIRM_DESTRUCTIVE, META_SUBMIT } from "./metaRows";
+import { NOTE_GAP, NoteCard, type NoteFocus } from "./NoteCard";
+import { NoteCardsDialog } from "./NoteCardsDialog";
+import { NoteEditorDialog } from "./NoteEditorDialog";
 import { useDeckNotes } from "./useDeckNotes";
-
-/**
- * The rich-text editor, and **the only reference to it on this path**.
- *
- * `React.lazy` over a dynamic import, so the Tiptap chunk is fetched the first time a reader
- * presses Edit and never on a page that only reads. See this file's header for the measurement
- * and for why a static import here would be invisible to every build in the repository.
- */
-const NoteEditor = lazy(() => import("./NoteEditor"));
 
 /**
  * The area's name, in one place because three things say it: the region's `aria-label`, the
@@ -102,11 +83,6 @@ const NoteEditor = lazy(() => import("./NoteEditor"));
  * Settings. Nothing in the deck editor spells this word for anything else.
  */
 export const NOTES_HEADING = "Notes";
-
-/** Both sub-headings inside a row. Uppercase and tracked, which is the one place in this band a
- *  word is not a sentence — `LabelsDialog`'s `SECTION`, respelled here rather than exported from
- *  a dialog this band has nothing else in common with. */
-const SECTION = "mb-1.5 text-[0.6875rem] uppercase tracking-[0.04em] text-dim";
 
 export interface DeckNotesPanelProps {
   deckId: number;
@@ -139,10 +115,10 @@ export interface DeckNotesPanelProps {
    * (issue #447).
    *
    * The band is the only thing on the page that can honour one: it holds the notes query, the
-   * five writes and the one-panel-per-row state, and a menu row that reached any of those itself
-   * would be a second spelling of all three. So `deckCardMenu.tsx`'s `Add note…` and `Notes ▸`
-   * hand their answer up to `DeckEditor`, which parks it here — the shape `quickCategory` already
-   * uses for a drop that has to survive until a dialog answers.
+   * five writes and the one-layer-at-a-time state, and a menu row that reached any of those
+   * itself would be a second spelling of all three. So `deckCardMenu.tsx`'s `Add note…` and
+   * `Notes ▸` hand their answer up to `DeckEditor`, which parks it here — the shape
+   * `quickCategory` already uses for a drop that has to survive until a dialog answers.
    *
    * **`null` is the resting state and the only one that means nothing is owed.** A *handled*
    * request is cleared by the host through {@link DeckNotesPanelProps.onRequestHandled}, so the
@@ -185,20 +161,6 @@ export interface DeckNotesPanelProps {
 export type DeckNoteRequest =
   | { kind: "add"; card: Pick<DeckNoteCard, "oracleId" | "name"> }
   | { kind: "open"; noteId: number };
-
-/**
- * The note the band has been sent to, and whether it was sent there to write or to read.
- *
- * It is **not** {@link DeckNoteRequest} one layer down, and the difference is the whole reason
- * for the second type: an `add` request holds a card and no id, because the id does not exist
- * until the create answers. This is what the request *becomes* once there is a row to point at.
- */
-interface NoteFocus {
-  noteId: number;
-  /** Open this note's editor as it arrives — `add` only. Reading is what `open` is for, and an
-   *  editor a reader did not ask for is a body they can lose by pressing the wrong thing. */
-  edit: boolean;
-}
 
 /**
  * The band, wired.
@@ -290,12 +252,14 @@ export function DeckNotesPanel({
     if (!open) onToggle(true);
 
     if (taken.kind === "add") {
-      // **Titled with the card's name, and the card attached in the same write.** The title is
-      // what `noteTitle` would otherwise have to invent — a blank one reads `Untitled note` in
-      // the band and in that card's own `Notes ▸` submenu the moment it appears, which is a row
-      // with no identity in a list of rows; the reader is looking at the title field a beat later
-      // and can type over it. `oracleIds` is what *names* the card, in the same transaction, so
-      // the note turns up under this card's submenu on the next read with no attach step to lose.
+      // **Titled with the card's name, and the card attached in the same write.** This is the one
+      // note in the feature that is born with a title, and the reason is that it is also the one
+      // born *before* its body: a blank one would read `Untitled note` in the band and in that
+      // card's own `Notes ▸` submenu the moment it appears, which is a row with no identity in a
+      // list of rows — where every note written through {@link NoteEditorDialog} has a body by
+      // the time it exists and `noteTitle` answers its first line. `oracleIds` is what *names*
+      // the card, in the same transaction, so the note turns up under this card's submenu on the
+      // next read with no attach step to lose.
       //
       // **The scoped `onSuccess` is safe here where it is a defect in the label chain**
       // (`deckCardMenu.tsx`'s `addLabel`): that callback belongs to the *observer*, and the
@@ -320,7 +284,10 @@ export function DeckNotesPanel({
       answered={notes.query.isSuccess}
       failure={notes.failure}
       pending={notes.pending}
-      onCreate={(title) => notes.create.mutate({ title, body: "", oracleIds: [] })}
+      // **`title: ""` on every note this band writes**, which is the redesign's own sentence:
+      // there is no title field anywhere in {@link NoteEditorDialog}, and `noteTitle()` answers
+      // the body's first line — the thing it already did for a blank title.
+      onCreate={(body, oracleIds) => notes.create.mutate({ title: "", body, oracleIds })}
       onSave={(id, patch) => notes.update.mutate({ id, patch })}
       onDelete={(id) => notes.remove.mutate(id)}
       onAttach={(noteId, oracleId) => notes.attach.mutate({ noteId, oracleId })}
@@ -361,7 +328,10 @@ export interface NotesBandProps {
   failure: string | null;
   /** A write is in flight. */
   pending: boolean;
-  onCreate: (title: string) => void;
+  /** A new note: the body the reader typed, and the cards it is born naming.
+   *  **`title` is not a parameter** — every note this band writes is written with `title: ""`, and
+   *  `noteTitle()` answers the first line. See {@link NoteEditorDialog}. */
+  onCreate: (body: string, oracleIds: string[]) => void;
   onSave: (id: number, patch: { title: string; body: string }) => void;
   onDelete: (id: number) => void;
   onAttach: (noteId: number, oracleId: string) => void;
@@ -369,12 +339,38 @@ export interface NotesBandProps {
 }
 
 /**
+ * The one layer this band has open, or `null`.
+ *
+ * **`panels.ts`' shape, one file over**, and for its reason: three booleans that must never be two
+ * at once become one value that structurally cannot be. The band used to hold `editing`,
+ * `confirming` and `picking` as three `number | null`s kept exclusive by an `only()` helper — a
+ * rule enforced by everybody remembering to call it.
+ *
+ * `newNote` and `newFromCard` carry no id because there is no row yet: the create happens on Save.
+ *
+ * ⚠️ **`newFromCard` is spelled here and nothing in this file raises it yet.** The card menu's
+ * `add` still writes its note straight away, titled with the card and naming it in the same
+ * transaction — see {@link DeckNotesPanel}'s request effect for why that one note is born with a
+ * title, and why moving that path behind this dialog is a change to the request contract rather
+ * than to this union. The arm is drawn because {@link NoteEditorDialog} already answers it and
+ * {@link NotesBand} is the only surface that could ever express it; the dialog's own workbench
+ * covers the draft, and this band has no story for it.
+ */
+type NotePanel =
+  | { kind: "newNote" }
+  | { kind: "newFromCard"; card: Pick<DeckNoteCard, "oracleId" | "name"> }
+  | { kind: "edit"; note: DeckNote }
+  | { kind: "cards"; note: DeckNote }
+  | { kind: "confirm"; note: DeckNote }
+  | null;
+
+/**
  * Everything the band draws, over plain props — the half of this file with no database behind it.
  *
- * **Three pieces of "which row is open", not one per row**, which is `LabelsDialog`'s
- * arrangement: editing, confirming and picking cards are each single-tenant, so opening one on a
- * row below closes the one above. A band with three rows unfolded is a band with no list left in
- * it — and, here, three ProseMirror instances for a reader who wanted one.
+ * **One layer at a time, and {@link NotePanel} is what makes that structural.** Every one of the
+ * three things a reader can do to a note opens a dialog over the page rather than a panel
+ * unfolding under a card, so the grid never has a hole in it and the three card actions are never
+ * greyed — there is no state of *this* card a press could honestly be refused for.
  */
 export function NotesBand({
   open,
@@ -392,20 +388,24 @@ export function NotesBand({
   onDetach,
 }: NotesBandProps): JSX.Element {
   const bodyId = useId();
-  const addId = useId();
-  const [draft, setDraft] = useState("");
-  const [editing, setEditing] = useState<number | null>(null);
-  const [confirming, setConfirming] = useState<number | null>(null);
-  const [picking, setPicking] = useState<number | null>(null);
+  const [panel, setPanel] = useState<NotePanel>(null);
 
-  /** Open one panel on one row, and shut the other two wherever they were. */
-  const only = (which: "edit" | "confirm" | "cards", id: number | null) => {
-    setEditing(which === "edit" ? id : null);
-    setConfirming(which === "confirm" ? id : null);
-    setPicking(which === "cards" ? id : null);
-  };
+  /**
+   * The panel's note as the read currently holds it — `null` once it has gone, which shuts the
+   * dialog rather than leaving one drawing a row nothing answers for.
+   *
+   * ⚠️ Another window on the same collection may delete a note this one has open;
+   * `docs/reference/multi-window.md` is why that is a live case and not a hypothesis. A panel
+   * holds the note **object** rather than its id — which is what lets `noteTitle`, the card list
+   * and the body be read without a second lookup — so the freshness has to be re-established at
+   * draw time, here, once, for all three dialogs.
+   */
+  const live = useMemo(() => {
+    if (panel === null || !("note" in panel)) return null;
+    return notes.find((n) => n.id === panel.note.id) ?? null;
+  }, [panel, notes]);
 
-  /** The focus this band has already opened a row for — see the adjustment below. */
+  /** The focus this band has already opened a panel for — see the adjustment below. */
   const [sentTo, setSentTo] = useState<NoteFocus | null>(null);
 
   /**
@@ -413,25 +413,29 @@ export function NotesBand({
    *
    * **Only `edit` touches this state**, which is the whole of the read/write split the two menu
    * rows make: `Add note…` ends in a body the reader is about to type and `Notes ▸` ends in one
-   * they came to read — so an `open` reaching in here would put a row they wanted to *look* at
-   * behind 141.5 kB of ProseMirror, and shut whatever panel they already had open on the way.
-   * Bringing the row into view is {@link NoteRow}'s half and happens for both.
+   * they came to read — so an `open` reaching in here would put a card they wanted to *look* at
+   * behind 141.5 kB of ProseMirror, and shut whatever dialog they already had open on the way.
+   * Bringing the card into view is {@link NoteCard}'s half and happens for both.
    *
    * **During render and not in an effect**, for {@link DeckNotesPanel}'s reason —
    * `react-hooks/set-state-in-effect`, and React's own *adjusting state when a prop changes*.
    * Comparing the focus **object** is what lets a reader shut an editor this opened without it
-   * being reopened under them on the next render: closing writes `editing`, and `sentTo` is
+   * being reopened under them on the next render: closing writes `panel`, and `sentTo` is
    * untouched until a genuinely new focus arrives.
    *
-   * The three setters rather than `only`, which is redefined on every render and could not be
-   * compared against anything.
+   * ⚠️ **An `edit` focus is taken only once the note it names is in `notes`, and the wait is
+   * load-bearing.** The id arrives from the create's `onSuccess`, which runs before the
+   * invalidation it fired has refetched — so on the render the focus first appears the row does
+   * not exist yet. Recording `sentTo` there and finding nothing would consume the focus and open
+   * nothing at all, for ever. Nothing is recorded until there is a note to open on, so the
+   * adjustment simply runs again on the render the read lands in.
    */
   if (focus !== sentTo) {
-    setSentTo(focus);
-    if (focus !== null && focus.edit) {
-      setEditing(focus.noteId);
-      setConfirming(null);
-      setPicking(null);
+    const wanted =
+      focus !== null && focus.edit ? (notes.find((n) => n.id === focus.noteId) ?? null) : null;
+    if (focus === null || !focus.edit || wanted !== null) {
+      setSentTo(focus);
+      if (wanted !== null) setPanel({ kind: "edit", note: wanted });
     }
   }
 
@@ -473,6 +477,24 @@ export function NotesBand({
         {answered && notes.length > 0 && (
           <span className="text-xs text-dim">{plural(notes.length, "note")}</span>
         )}
+
+        {/* **The band's one act, and it is in the header rather than over the list.** The add row
+            it replaces was a field and a submit sitting above a list a reader with no notes did
+            not have yet; a control in the heading is the same offer without a form standing in
+            for one. Outside the collapsible region, so the offer does not depend on the
+            disclosure — and `ml-auto` puts it at the far end of the row rather than hard against
+            the count. */}
+        <button
+          type="button"
+          onClick={() => setPanel({ kind: "newNote" })}
+          className={cn("ml-auto inline-flex items-center gap-1.5", META_SUBMIT)}
+        >
+          {/* `inline-flex items-center gap-1.5` on the button is what puts the glyph beside the
+              word: `META_SUBMIT` is geometry and colour only and names no `display`, which is the
+              trap the toolbar's first chip with a glyph in it fell into. */}
+          <Plus aria-hidden="true" className="size-3.5 shrink-0" />
+          New note
+        </button>
       </div>
 
       {/* Outside the collapsible region on purpose: a read refused while the band is shut still
@@ -493,80 +515,53 @@ export function NotesBand({
       <div id={bodyId} className="select-text">
         {open && (
           <div className="mt-3 flex flex-col gap-3">
-            {/* Making one comes first, and the band opens on it. A reader with no notes is who
-                this screen is hardest for, and an add row under a list they do not have yet is
-                exactly how the labels dialog used to read. */}
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                const trimmed = draft.trim();
-                if (trimmed === "") return;
-                onCreate(trimmed);
-                setDraft("");
-              }}
-              className="flex items-center gap-2"
-            >
-              <label htmlFor={addId} className="sr-only">
-                New note title
-              </label>
-              <input
-                id={addId}
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                placeholder="New note title…"
-                className={META_FIELD}
-              />
-              {/* **A title is required here and optional everywhere else**, which is not a
-                  contradiction: a blank title is legal in the table and reads as the body's first
-                  line, and this row has no body to read one from. Written blank it would make a
-                  note with nothing in it at all. Edit is where a reader may then clear it. */}
-              <button
-                type="submit"
-                disabled={pending || draft.trim() === ""}
-                className={META_SUBMIT}
-              >
-                Add note
-              </button>
-            </form>
-
             {/* Four states and only three sentences, which is the point: a **refused** read has
                 no rows and is not pending either, so captioning it *no notes* or *reading…*
                 would both be the app asserting something it does not know. The alert above has
                 already said what happened, so this says nothing at all. */}
             {notes.length > 0 ? (
-              <ul className="flex flex-col gap-1.5">
+              /* **A masonry, not a grid of equal tiles** — `masonry.ts`, and `NoteCard` for the
+                 argument. `repeat(auto-fill, minmax(280px, 1fr))` is CSS counting how many cards
+                 fit on a line, which is the one number this band refuses to work out for itself:
+                 four up at the editor column's 1192px, two from about 860, one below about 580.
+
+                 **`gridAutoRows: 1px` and `rowGap: 0`, and the vertical gutter lives inside each
+                 card's span.** A grid gap is drawn at every row boundary an item *crosses*, so a
+                 card spanning 200 one-pixel rows would carry 199 gutters inside itself.
+                 `NOTE_GAP` is added to each span instead, which puts it exactly once under each
+                 card — at the cost of one trailing gutter under the last card of every column.
+
+                 **`items-start` is load-bearing.** It keeps each card its own height, and that
+                 same content-sizing is what makes the measurement safe: a card's height cannot
+                 depend on the span it was given, so measure → span → measure cannot oscillate. */
+              <ul
+                className="grid items-start"
+                style={{
+                  gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
+                  gridAutoRows: "1px",
+                  columnGap: NOTE_GAP,
+                  rowGap: 0,
+                }}
+              >
                 {notes.map((note) => (
-                  <NoteRow
+                  <NoteCard
                     key={note.id}
                     note={note}
                     // The focus object itself and never a boolean: two presses on one note are
-                    // two objects and one `true`, so a boolean would bring the row into view the
+                    // two objects and one `true`, so a boolean would bring the card into view the
                     // first time and do nothing the second — which is exactly the press a reader
-                    // makes when the row has scrolled away again.
+                    // makes when it has scrolled away again.
                     focused={focus !== null && focus.noteId === note.id ? focus : null}
-                    attachable={attachable}
-                    pending={pending}
-                    editing={editing === note.id}
-                    confirming={confirming === note.id}
-                    picking={picking === note.id}
-                    onOpen={(which) => only(which, note.id)}
-                    onDone={() => only("edit", null)}
-                    onSave={(patch) => {
-                      onSave(note.id, patch);
-                      only("edit", null);
-                    }}
-                    onDelete={() => {
-                      onDelete(note.id);
-                      only("edit", null);
-                    }}
-                    onAttach={(oracleId) => onAttach(note.id, oracleId)}
-                    onDetach={(oracleId) => onDetach(note.id, oracleId)}
+                    onEdit={() => setPanel({ kind: "edit", note })}
+                    onCards={() => setPanel({ kind: "cards", note })}
+                    onDelete={() => setPanel({ kind: "confirm", note })}
                   />
                 ))}
               </ul>
             ) : answered ? (
               <p className="text-xs text-dim">
-                No notes on this deck yet — name one above, then write it out.
+                No notes on this deck yet — press <span className="text-text">New note</span> to
+                write one.
               </p>
             ) : failure === null ? (
               <p className="text-xs text-dim">Reading this deck&rsquo;s notes…</p>
@@ -574,558 +569,135 @@ export function NotesBand({
           </div>
         )}
       </div>
+
+      {/* The three dialogs, inside the `<section>` and outside the collapsible region — a dialog
+          is drawn over the page rather than under the heading, and one whose note was opened from
+          a card menu must not vanish with a disclosure the reader then shuts.
+
+          **`live` and never `panel.note` wherever a dialog draws the note**, so a note deleted
+          from another window takes its dialog with it rather than leaving one addressing a row
+          nothing answers for. */}
+      <NoteEditorDialog
+        open={
+          panel?.kind === "newNote" ||
+          panel?.kind === "newFromCard" ||
+          (panel?.kind === "edit" && live !== null)
+        }
+        draft={
+          panel?.kind === "edit" && live !== null
+            ? { kind: "edit", note: live }
+            : panel?.kind === "newFromCard"
+              ? { kind: "newFromCard", card: panel.card }
+              : { kind: "new" }
+        }
+        pending={pending}
+        // ⚠️ **The note's existing title goes back unchanged.** `deck_note_update` takes both
+        // columns and has no patch shape a caller can half-fill usefully, and the labels dialog
+        // one file over is where this app learned what happens otherwise: two controls each
+        // sending the other's field back is how a rename quietly undoes a recolour. This dialog
+        // edits the body only, so the title travels with it untouched — and on a note written
+        // through it that title is `""`, which is exactly what it should stay.
+        onSave={(body) => {
+          if (panel?.kind === "edit" && live !== null) onSave(live.id, { title: live.title, body });
+          else onCreate(body, panel?.kind === "newFromCard" ? [panel.card.oracleId] : []);
+          setPanel(null);
+        }}
+        onClose={() => setPanel(null)}
+      />
+
+      {panel?.kind === "cards" && live !== null && (
+        <NoteCardsDialog
+          open
+          // `noteTitle` here rather than in the dialog, so the heading the picker draws and the
+          // name the card it was opened from carries are one computation.
+          title={noteTitle(live)}
+          named={live.cards}
+          attachable={attachable}
+          onAttach={(oracleId) => onAttach(live.id, oracleId)}
+          onDetach={(oracleId) => onDetach(live.id, oracleId)}
+          onClose={() => setPanel(null)}
+        />
+      )}
+
+      {panel?.kind === "confirm" && live !== null && (
+        <DeleteNoteDialog
+          open
+          title={noteTitle(live)}
+          cardCount={live.cards.length}
+          pending={pending}
+          onDelete={() => {
+            onDelete(live.id);
+            setPanel(null);
+          }}
+          onClose={() => setPanel(null)}
+        />
+      )}
     </section>
   );
-}
-
-/**
- * One note's title folded into a verb, for a control's accessible name.
- *
- * **Spelled as a text node beside an `sr-only` span, never assembled from two elements.** Name
- * computation trims each element's contribution before appending it, so `<span>Edit</span>` next
- * to `<span>Mana base</span>` computes to `EditMana base` — the `Missing2` failure. A bare text
- * child followed by `{" "}` survives as a sibling text node and reads correctly.
- *
- * **A note's title is not unique and is not meant to be** (§2: two devices each typing a note
- * about the mana base must stay two notes), so two rows really can carry one name. What keeps
- * that usable is that only one row's panel is ever open at a time — every control that *acts*
- * names the row it is on, and the list itself is what a reader reads.
- */
-function actionLabel(verb: string, rest: string): JSX.Element {
-  return (
-    <>
-      {verb}
-      {/* The space is a sibling of both, which is the whole of why this reads as two words. */}{" "}
-      <span className="sr-only">{rest}</span>
-    </>
-  );
-}
-
-/** One note: what it is called, what it says, which cards it names, and the three things a
- *  reader can do to it. */
-function NoteRow({
-  note,
-  focused,
-  attachable,
-  pending,
-  editing,
-  confirming,
-  picking,
-  onOpen,
-  onDone,
-  onSave,
-  onDelete,
-  onAttach,
-  onDetach,
-}: {
-  note: DeckNote;
-  /** Non-null while this is the row the band was sent to — see {@link NotesBandProps.focus}. */
-  focused: NoteFocus | null;
-  attachable: readonly NoteCardChoice[];
-  pending: boolean;
-  editing: boolean;
-  confirming: boolean;
-  picking: boolean;
-  onOpen: (which: "edit" | "confirm" | "cards") => void;
-  onDone: () => void;
-  onSave: (patch: { title: string; body: string }) => void;
-  onDelete: () => void;
-  onAttach: (oracleId: string) => void;
-  onDetach: (oracleId: string) => void;
-}) {
-  const title = noteTitle(note);
-  const { deleteRef, owedFocusRef } = useDestructiveFocus(confirming);
-  const rowRef = useRef<HTMLLIElement>(null);
-
-  /**
-   * Bring this row where the reader is looking, when the card menu sent them here.
-   *
-   * **The caret rather than a scroll call, and the scroll is the belt.** A press on `Notes ▸` is
-   * a reader going somewhere, so the caret goes with them — otherwise it is left on the card they
-   * right-clicked, which is behind the deck they have just scrolled past, and their next Tab
-   * restarts from there. Focusing an element scrolls it into view by itself in a browser; the
-   * explicit call is what covers a row already partly on screen, and `block: "nearest"` is the
-   * app's rule for it.
-   *
-   * **`tabIndex={-1}` and no focus class**, which is the app's landing-pad rule: a reader can
-   * neither Tab nor arrow onto this row, so a ring here would mark a stop that does not exist.
-   *
-   * **The caret is deliberately not put in the editor an `add` opens.** `NoteEditor` arrives
-   * behind `React.lazy`, so a focus call made here races a chunk fetch and lands on nothing; the
-   * row is what is on screen at the moment the request is honoured.
-   *
-   * jsdom implements neither scroll-on-focus nor `scrollIntoView`, hence the `?.` — the same
-   * absence `CardGrid`'s tile works around.
-   */
-  useEffect(() => {
-    if (focused === null) return;
-    const el = rowRef.current;
-    if (el === null) return;
-    el.focus();
-    el.scrollIntoView?.({ block: "nearest" });
-  }, [focused]);
-
-  return (
-    <li ref={rowRef} tabIndex={-1} className="rounded-md border border-border px-2.5 py-2">
-      <div className="flex items-center gap-2.5">
-        <span className="min-w-0 flex-1 truncate text-[0.8125rem] text-text">{title}</span>
-        {/* The card-count chip, drawn only where the note names any — a `0 cards` on every note
-            with none would be the band's commonest row saying the same nothing over and over. */}
-        {note.cards.length > 0 && (
-          <span className="shrink-0 font-mono text-[0.625rem] tabular-nums text-dim">
-            {plural(note.cards.length, "card")}
-          </span>
-        )}
-        <RowAction onClick={() => onOpen("cards")} disabled={picking}>
-          {actionLabel("Cards", `on ${title}`)}
-        </RowAction>
-        <RowAction onClick={() => onOpen("edit")} disabled={editing}>
-          {actionLabel("Edit", title)}
-        </RowAction>
-        <RowAction
-          ref={deleteRef}
-          onClick={() => onOpen("confirm")}
-          disabled={confirming}
-          destructive
-        >
-          {actionLabel("Delete", title)}
-        </RowAction>
-      </div>
-
-      {/* The body, read-only, and the whole reason this list loads no editor. A note being edited
-          draws the editor in its place rather than beside it — two renderings of one body on one
-          row is the drift `noteMarkdown.test.ts`' round trip exists to prevent, drawn on screen. */}
-      {editing ? (
-        <NoteEditForm
-          note={note}
-          title={title}
-          pending={pending}
-          onSave={onSave}
-          onCancel={onDone}
-        />
-      ) : (
-        <div className="mt-1.5">
-          <NoteBody body={note.body} />
-        </div>
-      )}
-
-      {picking && (
-        <NoteCards
-          title={title}
-          named={note.cards}
-          attachable={attachable}
-          onAttach={onAttach}
-          onDetach={onDetach}
-          onDone={onDone}
-        />
-      )}
-
-      {confirming && (
-        <DeleteNote
-          title={title}
-          cardCount={note.cards.length}
-          pending={pending}
-          onDelete={onDelete}
-          onCancel={() => {
-            owedFocusRef.current = true;
-            onDone();
-          }}
-        />
-      )}
-    </li>
-  );
-}
-
-/** `LabelsDialog`'s hand-back, on the sibling control and for the identical reason: cancelling a
- *  confirmation must put the caret back on the button that opened it, not at the top of the band
- *  — and it cannot until the render that re-enables that button. */
-function useDestructiveFocus(confirming: boolean) {
-  const deleteRef = useRef<HTMLButtonElement>(null);
-  const owedFocusRef = useRef(false);
-  useEffect(() => {
-    if (confirming || !owedFocusRef.current) return;
-    owedFocusRef.current = false;
-    deleteRef.current?.focus();
-  }, [confirming]);
-  return { deleteRef, owedFocusRef };
 }
 
 /**
  * Delete a note, and say what goes with it.
  *
  * **The cards are the clause worth spelling.** `deck_note_cards` cascades with the note, so the
- * attachments go — and a reader who has just spent a press attaching four cards has every reason
+ * attachments go — and a reader who has just spent a press naming four cards has every reason
  * to think the press might reach further than the note. It does not: the cards themselves are in
  * the deck and stay there, which is the half a confirmation can say before the press rather than
  * after it.
+ *
+ * **A `Dialog` rather than a box unfolding under the card**, which is what it was: the band is a
+ * masonry now, and a question that grew inside one card would reflow every card after it at the
+ * moment the reader was reading the question. It is also what retired `useDestructiveFocus` and
+ * `useConfirmFocus` — a dialog takes the caret into its own panel as it opens, so there is no
+ * hand-back for this component to arrange and no `role="group"` landing pad to focus.
+ *
+ * The button order is the band's old one: the destructive act first and the way out beside it,
+ * which is `ClearCategory`'s arrangement and every other confirmation in this folder's.
  */
-function DeleteNote({
+function DeleteNoteDialog({
+  open,
   title,
   cardCount,
   pending,
   onDelete,
-  onCancel,
+  onClose,
 }: {
+  open: boolean;
   title: string;
   cardCount: number;
   pending: boolean;
   onDelete: () => void;
-  onCancel: () => void;
-}) {
-  // The caret comes into the question rather than onto a button in it: the reader has not decided
-  // yet, and a stray Enter must not decide for them.
-  const confirm = useConfirmFocus(`Delete ${title}`);
-
+  onClose: () => void;
+}): JSX.Element {
   return (
-    <div {...confirm}>
-      <p className="text-xs">Delete “{title}”?</p>
-      <p className="mt-1 text-[0.6875rem] leading-relaxed text-dim">
-        {cardCount === 0
-          ? "The note goes for good."
-          : `The note goes for good, and stops naming its ${plural(cardCount, "card")}. The cards themselves stay in the deck.`}
-      </p>
-      <div className="mt-2 flex gap-2">
-        <button
-          type="button"
-          disabled={pending}
-          onClick={onDelete}
-          className={CONFIRM_DESTRUCTIVE}
-        >
+    <Dialog
+      open={open}
+      // The question *is* the heading, so there is no second paragraph asking it. `Dialog` is
+      // `aria-labelledby` this, which is what a test and a screen reader address the panel by.
+      title={`Delete “${title}”?`}
+      closeLabel="Close the delete question"
+      // Narrower than the picker's `w-[47.5rem]` and the editor's `w-[40rem]`: the widest thing in
+      // it is one sentence, and a question set across 760px reads as a page rather than a prompt.
+      size="w-[26rem]"
+      onDismiss={onClose}
+      onClose={onClose}
+    >
+      <div className="px-5 py-4">
+        <p className="text-xs leading-relaxed text-dim">
+          {cardCount === 0
+            ? "The note goes for good."
+            : `The note goes for good, and stops naming its ${plural(cardCount, "card")}. The cards themselves stay in the deck.`}
+        </p>
+      </div>
+
+      <footer className="flex items-center justify-end gap-2 border-t border-border px-5 py-3.5">
+        <button type="button" disabled={pending} onClick={onDelete} className={CONFIRM_DESTRUCTIVE}>
           Delete note
         </button>
-        <button type="button" onClick={onCancel} className={CONFIRM_CANCEL}>
+        <button type="button" onClick={onClose} className={CONFIRM_CANCEL}>
           Keep it
         </button>
-      </div>
-    </div>
-  );
-}
-
-/**
- * Which cards this note names, and the picker over the deck's own.
- *
- * **The picker offers the deck's cards and nothing wider**, which is the spec's line: a note is
- * about a card *in this deck*. A card that later leaves the deck keeps its note — deliberately,
- * because a note about a card you cut is the note most worth keeping — so this list narrows what
- * can be *added* and never what is already here.
- *
- * **Attaching is its own panel rather than part of Edit**, and the reason is the chunk: reaching
- * `Attach` through the editor would make a reader load 141.5 kB of ProseMirror in order to name a
- * card. It is a row action beside Edit for that reason alone.
- */
-function NoteCards({
-  title,
-  named,
-  attachable,
-  onAttach,
-  onDetach,
-  onDone,
-}: {
-  title: string;
-  /** What the note already names — a {@link DeckNoteCard} and no longer a
-   *  {@link NoteCardChoice}, which were one type until the picker's row grew a printing, a type
-   *  and a copy count. An attached card carries none of those, and the chips beside this list
-   *  never filter it. */
-  named: readonly DeckNoteCard[];
-  attachable: readonly NoteCardChoice[];
-  onAttach: (oracleId: string) => void;
-  onDetach: (oracleId: string) => void;
-  onDone: () => void;
-}) {
-  const findId = useId();
-  const [find, setFind] = useState("");
-  const ref = useRef<HTMLInputElement>(null);
-
-  // The caret starts in the field the reader opened. `focus()` on a node with no `tabIndex` is a
-  // silent no-op and this one is an `<input>`, so the single call is the whole of it — but the
-  // call itself is not optional: without it the caret stays on the `Cards` trigger this row has
-  // just disabled, parked on a dead control, and the first keystroke goes to the page.
-  useEffect(() => {
-    ref.current?.focus();
-  }, []);
-
-  const already = useMemo(() => new Set(named.map((c) => c.oracleId)), [named]);
-  const needle = find.trim().toLowerCase();
-  const choices = attachable.filter(
-    (c) => !already.has(c.oracleId) && (needle === "" || c.name.toLowerCase().includes(needle)),
-  );
-
-  return (
-    <div className="mt-2 border-t border-border pt-2">
-      <p className={SECTION}>Cards this note names</p>
-      {named.length === 0 ? (
-        <p className="text-[0.6875rem] text-dim">None yet — pick one below.</p>
-      ) : (
-        <ul className="flex flex-wrap gap-1.5">
-          {named.map((card) => (
-            <li
-              key={card.oracleId}
-              className="flex items-center gap-1 rounded-md border border-border py-0.5 pl-2 pr-1 text-[0.6875rem] text-text"
-            >
-              {card.name}
-              <button
-                type="button"
-                onClick={() => onDetach(card.oracleId)}
-                aria-label={`Detach ${card.name} from ${title}`}
-                className={cn("grid size-4 shrink-0 place-items-center rounded text-dim", FOCUS)}
-              >
-                <X aria-hidden="true" className="size-3" />
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      <div className="mt-2 flex items-center gap-2">
-        <label htmlFor={findId} className="sr-only">
-          Find a card to name in {title}
-        </label>
-        <input
-          ref={ref}
-          id={findId}
-          value={find}
-          onChange={(e) => setFind(e.target.value)}
-          placeholder="Find a card in this deck…"
-          className={META_FIELD}
-        />
-        <RowAction onClick={onDone}>Done</RowAction>
-      </div>
-
-      {/* **`relative`, because a scroll container has to be the containing block for its own
-          absolutely positioned content** — and `FOCUS_INSET` on the rows, because an outline
-          standing 2px off a row that fills a clipped box is painted entirely in the clipped
-          region and is never seen at all. Both are app rules with a shipped failure behind them;
-          jsdom lays nothing out, so neither can go red in the suite. */}
-      {choices.length === 0 ? (
-        <p className="mt-1.5 text-[0.6875rem] text-dim">
-          {attachable.length === 0
-            ? "This deck has no cards to name yet."
-            : "No card in this deck matches — and one this note already names is not offered twice."}
-        </p>
-      ) : (
-        <ul className="relative mt-1.5 max-h-40 overflow-y-auto">
-          {choices.map((card) => (
-            <li key={card.oracleId}>
-              <button
-                type="button"
-                onClick={() => onAttach(card.oracleId)}
-                aria-label={`Name ${card.name} in ${title}`}
-                className={cn(
-                  "w-full truncate rounded-sm px-1.5 py-1 text-left text-[0.6875rem] text-dim",
-                  "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
-                  FOCUS_INSET,
-                )}
-              >
-                {card.name}
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
-/**
- * The editor, in place, behind a `Suspense`.
- *
- * **The title and the body are one write**, which is `deck_note_update`'s shape and the labels
- * dialog's lesson one dialog over: two controls sending each other's field back unchanged is how
- * a rename quietly undoes a recolour. Both drafts are held here and sent together.
- *
- * The fallback is a sentence rather than a spinner: the chunk arrives off local disk, so what a
- * reader sees is one frame of type rather than something spinning.
- */
-function NoteEditForm({
-  note,
-  title,
-  pending,
-  onSave,
-  onCancel,
-}: {
-  note: DeckNote;
-  title: string;
-  pending: boolean;
-  onSave: (patch: { title: string; body: string }) => void;
-  onCancel: () => void;
-}) {
-  const titleId = useId();
-  const [draftTitle, setDraftTitle] = useState(note.title);
-  const [draftBody, setDraftBody] = useState(note.body);
-
-  return (
-    <div className="mt-2 border-t border-border pt-2">
-      <div className="flex items-center gap-2">
-        <label htmlFor={titleId} className="sr-only">
-          Title of {title}
-        </label>
-        <input
-          id={titleId}
-          value={draftTitle}
-          onChange={(e) => setDraftTitle(e.target.value)}
-          // Blank is legal here where it is not on the add row: a note with a body reads its
-          // first line as its title, computed at render and never stored.
-          placeholder="Untitled — the first line stands in"
-          className={META_FIELD}
-        />
-      </div>
-
-      <div className="mt-2">
-        <Suspense fallback={<p className="text-[0.6875rem] text-dim">Opening the editor…</p>}>
-          <NoteEditor
-            value={draftBody}
-            onChange={setDraftBody}
-            ariaLabel={`Body of ${title}`}
-          />
-        </Suspense>
-      </div>
-
-      <div className="mt-2 flex gap-2">
-        <button
-          type="button"
-          disabled={pending}
-          onClick={() => onSave({ title: draftTitle.trim(), body: draftBody })}
-          className={META_SUBMIT}
-        >
-          Save
-        </button>
-        <button type="button" onClick={onCancel} className={CONFIRM_CANCEL}>
-          Cancel
-        </button>
-      </div>
-    </div>
-  );
-}
-
-/**
- * A note's body, drawn.
- *
- * `parseNoteBody` is a reader for one pinned dialect and not a markdown parser: a construct it
- * has no rule for falls through to a paragraph and renders as written, so the worst case is the
- * reader's own typing and the ordinary case is a note. `ReleaseNotes.tsx` is the same shape one
- * feature over, and this is deliberately not a general component shared with it — that one draws
- * a changelog at the settings panel's type scale and this one draws prose inside a deck row.
- */
-function NoteBody({ body }: { body: string }): JSX.Element {
-  const blocks = useMemo(() => parseNoteBody(body), [body]);
-
-  if (blocks.length === 0) {
-    // A note really can be a title and nothing else — that is what the add row makes — and an
-    // empty box under a heading reads as something that failed to load.
-    return <p className="text-[0.6875rem] text-dim">Nothing written yet — press Edit.</p>;
-  }
-
-  return (
-    // **`whitespace-pre-line`, and it is load-bearing rather than typography.** The `Inline` union
-    // has no break member, so `parseNoteBody` represents a hard break as a `"\n"` *inside a text
-    // run* — under the default `normal` every one of them would collapse to a space, and a note
-    // laid out in short lines would come back as one paragraph with nothing going red. It is set
-    // once here because `white-space` inherits, so a run nested in a list item or a quote is
-    // covered by the same declaration.
-    <div className="space-y-1.5 whitespace-pre-line text-xs leading-relaxed text-dim">
-      {blocks.map((block, i) => (
-        <NoteBlock key={i} block={block} />
-      ))}
-    </div>
-  );
-}
-
-function NoteBlock({ block }: { block: Block }): JSX.Element {
-  if (block.kind === "heading") {
-    // One drawn weight for all three depths. A note is a paragraph or two inside a deck row, and
-    // three sizes inside a 12px block would be a type scale nobody chose — `ReleaseNotes`' call,
-    // for the same reason.
-    return (
-      <p className="pt-1 text-[0.6875rem] font-medium uppercase tracking-wide text-text first:pt-0">
-        <Inlines inlines={block.inlines} />
-      </p>
-    );
-  }
-  if (block.kind === "list") {
-    // A real list marker and not a drawn glyph in a span: the marker stays out of the element's
-    // `textContent` and out of the accessibility tree, where a hand-drawn one has to be
-    // `aria-hidden` and still turns up in every assertion about the row's words.
-    const items = block.items.map((item, i) => (
-      <li key={i}>
-        <Inlines inlines={item} />
-      </li>
-    ));
-    // **`start` is drawn, and it is only ever present on a list that does not begin at 1.**
-    // Tiptap keeps a reader's start number and serialises it, so a list begun at `3.` would be
-    // drawn as `1.` the moment they stopped editing — the two renderers disagreeing about one
-    // body, which is the failure the dialect's round trip exists to prevent.
-    return block.ordered ? (
-      <ol start={block.start} className="list-decimal space-y-1 pl-4 marker:text-dim/60">
-        {items}
-      </ol>
-    ) : (
-      <ul className="list-disc space-y-1 pl-4 marker:text-dim/60">{items}</ul>
-    );
-  }
-  if (block.kind === "quote") {
-    return (
-      <blockquote className="border-l-2 border-border pl-2 italic">
-        <Inlines inlines={block.inlines} />
-      </blockquote>
-    );
-  }
-  return (
-    <p>
-      <Inlines inlines={block.inlines} />
-    </p>
-  );
-}
-
-function Inlines({ inlines }: { inlines: readonly Inline[] }): JSX.Element {
-  return (
-    <>
-      {inlines.map((run, i) => {
-        if (run.kind === "strong") {
-          return (
-            <strong key={i} className="font-medium text-text">
-              {run.text}
-            </strong>
-          );
-        }
-        if (run.kind === "em") {
-          return (
-            <em key={i} className="italic">
-              {run.text}
-            </em>
-          );
-        }
-        if (run.kind === "strike") {
-          return (
-            <s key={i} className="line-through">
-              {run.text}
-            </s>
-          );
-        }
-        if (run.kind === "code") {
-          return (
-            <code key={i} className="rounded bg-surface px-1 py-0.5 font-mono text-[0.95em]">
-              {run.text}
-            </code>
-          );
-        }
-        if (run.kind === "link") {
-          // A button and not an `<a href>`: this window has nowhere to navigate to, and an anchor
-          // a middle-click could follow would replace the app with a web page. `openExternal` is
-          // the one call in this app that leaves it — `ReleaseNotes` makes the identical call for
-          // the identical reason.
-          return (
-            <button
-              key={i}
-              type="button"
-              onClick={() => void openExternal(run.href)}
-              className={cn("rounded-sm text-accent underline-offset-2 hover:underline", FOCUS)}
-            >
-              {run.text}
-            </button>
-          );
-        }
-        return <span key={i}>{run.text}</span>;
-      })}
-    </>
+      </footer>
+    </Dialog>
   );
 }
