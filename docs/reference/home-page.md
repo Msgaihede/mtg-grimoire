@@ -659,17 +659,20 @@ From the design's §9, plus two the build itself turned up:
   a refused `set_home_layout`, which `WhileTheDatabaseIsBusy` presses Remove under, asserting the
   widget still leaves the page and nothing is said: the optimistic, deliberately-unrolled-back
   write `useHomeLayout` documents.
-* ⚠️ **`sticky_note_reorder` is built and reaches no press.** It exists end to end — the function
-  and its tests in `sticky_notes.rs`, the registration in `lib.rs`, `desktop.rs` and
-  `web/route.rs`, the handler in the Storybook fake, `ipc.stickyNoteReorder`, and `reorder` on
-  `useStickyNotes`' returned API — and **nothing in the UI calls it**, so a reader cannot change
-  the order of their notes and they stay in the order they were written. The affordance it was
-  written for belonged to a third layout, an *Index* list with drag handles, which was drawn
-  against the design canvas and then rejected; Board and Pad both shipped without a drag, and the
-  command outlived the layout that would have pressed it. It is recorded here rather than deleted
-  because the plumbing is the expensive half and the next reader should find a decision instead of
-  a mystery — but until a press exists, the only thing keeping it honest is a Rust test, and a
-  grep for its callers answers *none* on purpose.
+* ~~**`sticky_note_reorder` is built and reaches no press.**~~ **Wired the same day**, and the
+  entry is kept because the reason it was ever true is the useful part. The command shipped end to
+  end — the function and its tests in `sticky_notes.rs`, the registration in `lib.rs`,
+  `desktop.rs` and `web/route.rs`, the handler in the Storybook fake, `ipc.stickyNoteReorder` and
+  `reorder` on `useStickyNotes`' API — with **nothing in the UI calling it**, because the
+  affordance it was written for belonged to a third layout: an *Index* list with drag handles,
+  drawn against the design canvas and then rejected. Board and Pad both shipped without a drag and
+  the command outlived the layout that would have pressed it. `stickyNoteDrag.ts` is the press it
+  was missing — a pointer drag onto another tile, and **Ctrl/⌘ with an arrow** for a reader
+  without one, since `dndManager` ships no `KeyboardSensor` and a drag-only reorder would have
+  been half an interaction. **The lesson is the ordering, not the outcome**: plumbing built for a
+  design that is then cut is not dead code and is not a mistake, but it is unreachable until
+  something presses it, and a grep for its callers is the only thing that says which of the two it
+  currently is.
 
 ## 9. The live pass
 
