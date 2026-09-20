@@ -70,7 +70,7 @@ import {
 // these tests are about is the value that ends up in it. Reset in `beforeEach` below, because a
 // zustand store is a module singleton and a context left behind is a context the next test's
 // guard would match.
-import { useAppStore, type PaneDeckContext } from "@/lib/store";
+import { useAppStore, type CardWalkStop, type PaneDeckContext } from "@/lib/store";
 
 const DECK: DeckRow = {
   gameKey: "any",
@@ -1828,6 +1828,36 @@ describe("re-anchoring the open card", () => {
   }
 
   /**
+   * One stop on the deck's own walk, as `DeckEditor` publishes them: a deck stop *is* a deck row,
+   * so its `deck` is the whole six-field address and the stop and the row cannot drift.
+   */
+  const stop = (deck: PaneDeckContext, name: string): CardWalkStop => ({
+    cardId: deck.cardId,
+    oracleId: `o-${deck.cardId}`,
+    name,
+    deck,
+  });
+
+  /** The walk, published the way the editor publishes it. `label` is that surface's own noun and
+   *  reaches nothing here. */
+  const publish = (...stops: CardWalkStop[]) =>
+    useAppStore.setState({ cardWalk: { label: "the deck", stops } });
+
+  /**
+   * The stop before the open one and the stop after it — the two a departure can land on.
+   *
+   * `NEXT` differs from `OPEN` in its **pile** as well as its printing, so an assertion about
+   * where the modal landed is an assertion about the whole address rather than about one id.
+   */
+  const PREVIOUS: PaneDeckContext = { ...OPEN, cardId: "p0" };
+  const NEXT: PaneDeckContext = {
+    ...OPEN,
+    cardId: "p2",
+    categoryId: SIDE.id,
+    categoryName: SIDE.name,
+  };
+
+  /**
    * The fifth part, and the arm that already worked — pinned here because it never had a test of
    * its own and the generalisation runs straight through it.
    *
@@ -2013,8 +2043,14 @@ describe("re-anchoring the open card", () => {
    * `card_gone` for a slot with no row, so the modal's stepper would become a `+` that can only
    * be refused, and the modal draws no error state for these mutations — the refusal would be
    * silent.
+   *
+   * **Since issue #474 this is the _floor_ rather than the rule, and what makes it the floor is
+   * a line that is not written here: no walk is published.** With one, the removed row has
+   * neighbours and the modal steps onto the next of them — the six tests below. So the absence
+   * of a `cardWalk` in this setup is load-bearing, and a walk added to a shared `beforeEach`
+   * would flip what this pins with nothing going red.
    */
-  it("lets the open card go when the row is stepped to zero", async () => {
+  it("lets the open card go when the removed row is on no walk", async () => {
     deckSetCardQuantity.mockResolvedValue({ id: 9, quantity: 0, removed: true });
     useAppStore.getState().openCardFromDeck(OPEN);
     const { result } = await openDeck();
@@ -2044,6 +2080,185 @@ describe("re-anchoring the open card", () => {
     });
 
     expect(anchor()).toEqual(OPEN);
+  });
+
+  /**
+   * **The reported bug** (issue #474). A deleted row is not a stop, so the modal open over it
+   * lost its place the moment the write landed — `at` went to `-1`, both chevrons unmounted and
+   * the arrow keys went dead on a surface where a cut is usually one of a run of them. The walk
+   * is the list the modal is able to navigate, so the answer is to carry on along it.
+   *
+   * The assertion is the **whole** address rather than the printing: the modal's stepper, its
+   * category picker and the desk's gold ring all read the context, so a step that moved `cardId`
+   * alone would point every one of them at a row in the pile the reader has just left.
+   */
+  it("steps the open card onto the next stop when its row is removed", async () => {
+    deckSetCardQuantity.mockResolvedValue({ id: 9, quantity: 0, removed: true });
+    const leaving = stop(OPEN, "Lightning Bolt");
+    useAppStore.getState().openCardFromDeck(OPEN);
+    publish(stop(PREVIOUS, "Shock"), leaving, stop(NEXT, "Fireblast"));
+    const { result } = await openDeck();
+
+    await result.current.setQuantity.mutateAsync({
+      cardId: "p1",
+      categoryId: MAIN.id,
+      finish: null,
+      quantity: 0,
+    });
+
+    expect(anchor()).toEqual(NEXT);
+    expect(useAppStore.getState().selectedCardId).toBe("p2");
+    // The move is one nobody asked for, so it has to be reversible: Ctrl+Z reaches past this
+    // modal, puts the row back, and the remembered stop is how the reader comes back with it.
+    expect(useAppStore.getState().paneReturns).toEqual([leaving]);
+  });
+
+  /**
+   * **The same step, through the command the reported press actually sends.** Every removal in
+   * the editor reaches `setQuantityAt`, which hands this mutation a `CutFrom` — so a cut on the
+   * live list is `deck_to_collection` and not the absolute write, and a departure planned for one
+   * command and spent on the other would be a fix that worked in this file and nowhere else.
+   */
+  it("steps the open card on when the removal went through the cut", async () => {
+    const leaving = stop(OPEN, "Lightning Bolt");
+    useAppStore.getState().openCardFromDeck(OPEN);
+    publish(leaving, stop(NEXT, "Fireblast"));
+    const { result } = await openDeck();
+
+    await result.current.setQuantity.mutateAsync({
+      cardId: "p1",
+      categoryId: MAIN.id,
+      finish: null,
+      quantity: 0,
+      held: { deckCardId: BOLT.id, quantity: BOLT.quantity },
+    });
+
+    expect(deckToCollection).toHaveBeenCalledWith(BOLT.id, BOLT.quantity);
+    expect(deckSetCardQuantity).not.toHaveBeenCalled();
+    expect(anchor()).toEqual(NEXT);
+    expect(useAppStore.getState().paneReturns).toEqual([leaving]);
+  });
+
+  /**
+   * **Next before previous, and the fallback exists only because the last stop has no next.** A
+   * reader going through a deck is going forwards, and walking them backwards would re-show a
+   * card they had just decided to keep — but at that end of the walk the card before is the only
+   * thing "carry on" can mean, and a cut of the last card must not strand them.
+   */
+  it("falls back to the previous stop when the last card on the walk is cut", async () => {
+    deckSetCardQuantity.mockResolvedValue({ id: 9, quantity: 0, removed: true });
+    const leaving = stop(OPEN, "Lightning Bolt");
+    useAppStore.getState().openCardFromDeck(OPEN);
+    publish(stop(PREVIOUS, "Shock"), leaving);
+    const { result } = await openDeck();
+
+    await result.current.setQuantity.mutateAsync({
+      cardId: "p1",
+      categoryId: MAIN.id,
+      finish: null,
+      quantity: 0,
+    });
+
+    expect(anchor()).toEqual(PREVIOUS);
+    expect(useAppStore.getState().paneReturns).toEqual([leaving]);
+  });
+
+  /**
+   * A walk of one has nowhere to step to, so the floor two tests up applies — **and the stop is
+   * remembered anyway**, which is the half that is not the floor. After a Ctrl+Z the card the
+   * reader is still looking at is a deck row again, and with nothing remembered it would go on
+   * being drawn as though it were not: no stepper, no category picker, no label.
+   */
+  it("stays put but remembers the stop when the walk holds nothing else", async () => {
+    deckSetCardQuantity.mockResolvedValue({ id: 9, quantity: 0, removed: true });
+    const leaving = stop(OPEN, "Lightning Bolt");
+    useAppStore.getState().openCardFromDeck(OPEN);
+    publish(leaving);
+    const { result } = await openDeck();
+
+    await result.current.setQuantity.mutateAsync({
+      cardId: "p1",
+      categoryId: MAIN.id,
+      finish: null,
+      quantity: 0,
+    });
+
+    expect(anchor()).toBeNull();
+    expect(useAppStore.getState().selectedCardId).toBe("p1");
+    expect(useAppStore.getState().paneReturns).toEqual([leaving]);
+  });
+
+  /**
+   * **The plan is made at the press and spent on the row's _fate_, never on the quantity that was
+   * asked for.** `quantity === 0` is the intent to remove and `removed: false` is the backend
+   * saying the slot survived it, so a modal walked off a row that is still there would be this
+   * hook reporting a removal that never happened — and the stop it walked off would be a return
+   * nothing can ever satisfy, since the row never left the walk.
+   */
+  it("moves nobody when the write that asked for zero did not remove the row", async () => {
+    deckSetCardQuantity.mockResolvedValue({ id: 9, quantity: 1, removed: false });
+    useAppStore.getState().openCardFromDeck(OPEN);
+    publish(stop(OPEN, "Lightning Bolt"), stop(NEXT, "Fireblast"));
+    const { result } = await openDeck();
+
+    await result.current.setQuantity.mutateAsync({
+      cardId: "p1",
+      categoryId: MAIN.id,
+      finish: null,
+      quantity: 0,
+    });
+
+    expect(anchor()).toEqual(OPEN);
+    expect(useAppStore.getState().paneReturns).toEqual([]);
+  });
+
+  /**
+   * `anchoredOn` is the departure's fence exactly as it is every re-anchor's above. A reader can
+   * have one card open and remove another from its menu, the tray or the `Delete` key, and a
+   * removal that walked them off the card they were reading would be this feature firing at a
+   * press they did not make on a row they were not looking at.
+   */
+  it("leaves the open card alone when a different row is removed", async () => {
+    deckSetCardQuantity.mockResolvedValue({ id: 9, quantity: 0, removed: true });
+    useAppStore.getState().openCardFromDeck(OPEN);
+    publish(stop(OPEN, "Lightning Bolt"), stop(NEXT, "Fireblast"));
+    const { result } = await openDeck();
+
+    await result.current.setQuantity.mutateAsync({
+      cardId: NEXT.cardId,
+      categoryId: NEXT.categoryId,
+      finish: null,
+      quantity: 0,
+    });
+
+    expect(anchor()).toEqual(OPEN);
+    expect(useAppStore.getState().selectedCardId).toBe("p1");
+    expect(useAppStore.getState().paneReturns).toEqual([]);
+  });
+
+  /**
+   * **A deck holds one printing in two piles, so two stops can share a `cardId` and differ only
+   * in the grain** — which is why the plan finds its place with `sameDeckSlot` and not with the
+   * printing. Matched on the id alone this walk answers the *twin* at index 0, and the reader
+   * would be stepped onto the very row the write has just deleted.
+   */
+  it("finds the open row among two stops holding one printing", async () => {
+    deckSetCardQuantity.mockResolvedValue({ id: 9, quantity: 0, removed: true });
+    const twin: PaneDeckContext = { ...OPEN, categoryId: MAYBE.id, categoryName: MAYBE.name };
+    const leaving = stop(OPEN, "Lightning Bolt");
+    useAppStore.getState().openCardFromDeck(OPEN);
+    publish(stop(twin, "Lightning Bolt"), leaving, stop(NEXT, "Fireblast"));
+    const { result } = await openDeck();
+
+    await result.current.setQuantity.mutateAsync({
+      cardId: "p1",
+      categoryId: MAIN.id,
+      finish: null,
+      quantity: 0,
+    });
+
+    expect(anchor()).toEqual(NEXT);
+    expect(useAppStore.getState().paneReturns).toEqual([leaving]);
   });
 
   /**

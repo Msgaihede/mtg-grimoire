@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { useIsPresent } from "motion/react";
 import { describe, expect, it, vi } from "vitest";
 import { LAYER } from "@/lib/layers";
-import { Dialog } from "./Dialog";
+import { CARET_SETTLE_MS, Dialog } from "./Dialog";
 
 /**
  * The shell's own contract, tested away from any host.
@@ -636,5 +636,52 @@ describe("Dialog", () => {
     expect(elsewhere).toHaveFocus();
 
     elsewhere.remove();
+  });
+
+  /**
+   * **The third way the caret reaches `<body>`, and it is the host's own doing rather than a
+   * layer above** — issue #474.
+   *
+   * A control the reader is pressing can take the `disabled` attribute under their finger:
+   * `QuantityStepper` disables `−` at its floor, so on every surface where stepping to zero
+   * *removes* something, the press that removes it is also the press that drops the caret. It
+   * leaves the same trace an unmounting panel does — no `blur`, no `focusout` — and costs the
+   * same thing, which on the card detail modal is the arrow keys going dead with both step
+   * chevrons still drawn and enabled.
+   *
+   * `stackedOver` cannot say it: nothing stacked, nothing closed, and the mount-time settle gave
+   * up long ago. So the host bumps a counter and the same settle re-arms — **a counter rather
+   * than a flag**, because two removals in a row are two events and a boolean would re-arm on
+   * the first and sit there.
+   */
+  it("takes the caret back when the host says a control just dropped it", async () => {
+    const view = open({ stackedOver: false, caretPulse: 0 });
+    const dialog = await panel();
+
+    // What a button disabling under the reader leaves behind.
+    (document.activeElement as HTMLElement | null)?.blur();
+    expect(document.body).toHaveFocus();
+    // The settle armed on mount has long since hit its deadline, so nothing is watching.
+    await new Promise((r) => setTimeout(r, CARET_SETTLE_MS + 60));
+    expect(document.body).toHaveFocus();
+
+    view.rerender(
+      <Dialog
+        open
+        title="Deck settings"
+        closeLabel="Close deck settings"
+        size="w-[55rem]"
+        stackedOver={false}
+        caretPulse={1}
+        onDismiss={vi.fn()}
+        onClose={vi.fn()}
+      >
+        <div className="min-h-0 flex-1 overflow-y-auto p-5">
+          <button type="button">A control inside the body</button>
+        </div>
+      </Dialog>,
+    );
+
+    await waitFor(() => expect(dialog).toHaveFocus());
   });
 });

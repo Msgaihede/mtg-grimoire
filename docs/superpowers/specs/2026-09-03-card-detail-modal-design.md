@@ -293,6 +293,52 @@ below that. **Hidden when the walk holds no stop for the open card** — a card 
 relation or from a printing swap has no position in any list, and a chevron that cannot say where it
 would go is worse than no chevron.
 
+### 6.1 Removing the open card — issue #474, 2026-09-20
+
+That last sentence had a case it did not mean to cover. **Every removal in this app deletes a row
+rather than zeroing one** — `deck_set_card_quantity` at 0 deletes the `deck_cards` row,
+`collection_set_quantity` at 0 `DELETE`s the entry, the wishlist's does the same — so the card a
+reader had just cut *stopped being a stop*, `at` went to `-1`, both chevrons unmounted and
+`onPanelKeyDown` returned on every press. `useDeck`'s `unanchorPane` then cleared
+`paneDeckContext`, which put the modal on the plain arm of the lookup where no deck stop can ever
+match. The reader reported it as *removing the card leaves you on that page and prevents
+navigation to the next card*, and named it a regression of #178 — the pass that gave this surface
+its arrows.
+
+**A fourth answer, alongside `unanchorPane`'s three.** Where the removed row was a stop, the modal
+**steps onto the next one**; at the end of a walk it falls back to the previous, the way every list
+does; with nothing else on the walk it stays put, which is the old behaviour kept as the floor.
+Next before previous is not a toss-up — a reader cutting their way through a deck is going
+forwards, and falling back the other way would re-show the card they had just decided to keep.
+
+**A move nobody asked for has to be reversible, so the stop that was left is remembered.**
+`AppState.paneReturns` is a stack of them; `useReturnToRemovedCard` walks the modal back onto one
+the moment it is a stop again. The trigger is **the walk regaining the row** rather than Ctrl+Z:
+`useDeckUndo` could re-open the card itself, but that would be a deck-only answer wired to one
+presser and firing on every undo, including the ones that rename a pile. *The row is back* is the
+same evidence whatever put it there, and it is evidence the modal can act on, because the walk is
+exactly the list it is able to navigate. Two cards cut in a row are two presses of Ctrl+Z and the
+stack is LIFO like the deck's own undo cursor, so the modal follows both. Every opener spends the
+stack, which is what stops it firing at something the reader has since navigated away from.
+
+**The watcher fires on a transition — absent, then present — and the guard is not defensive.** The
+two kinds of surface lose the row at different moments: the deck's optimistic patch takes it off
+the walk *before* the round trip answers, while the collection and the wishlist settle by
+invalidating a query and keep it for as long as the refetch takes. A plain presence test works on
+a deck and, on a collection, puts the reader straight back on the card they just deleted, one
+frame after moving them off it.
+
+**A third way the caret reaches `<body>`, which nearly made the fix cosmetic.** `QuantityStepper`
+puts the `disabled` attribute on `−` at its floor, and a `disabled` element holding the caret
+drops it to `<body>` with no `blur` and no `focusout` — so the press that removes the card is also
+the press that kills the arrows, with both chevrons drawn and enabled. It is the same failure
+`DialogProps.stackedOver` already describes, from a cause that prop cannot see, so `Dialog` gained
+`caretPulse`: a counter that re-arms the settle it already runs. The card modal passes the depth of
+`paneReturns`, which changes on exactly the two moments the app moves the reader without being
+asked. **The root cause is `QuantityStepper`'s `disabled`**, which `src/CLAUDE.md` already rules
+against in favour of `aria-disabled`; changing a control drawn in four tables and on every card
+face was left out of this fix deliberately.
+
 ## 7. Per-view content
 
 One layout everywhere; what does not apply is not drawn. Two store fields decide, both of which

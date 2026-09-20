@@ -15,12 +15,16 @@ import {
 } from "@/lib/ipc";
 import { useAppStore, type PaneDeckContext } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
+// The other end of the walk — the modal's own answer to "where does a reader go when the card
+// they are looking at stops existing", imported rather than respelled here. See `unanchorPane`.
+import { departureFrom, type PaneDeparture } from "@/features/card/cardReturn";
 // The condition every menu add in this app records a copy at, imported rather than respelled: the
 // card menu's collection add and this hook's quick add have to agree, and two spellings of a
 // default drift the first time either changes.
 import { MENU_CONDITION } from "@/lib/conditions";
 import { OWNED_WRITE_KEYS } from "@/lib/query";
 import { autoCategoryFor } from "./autoCategory";
+import { sameDeckSlot } from "./deckWalk";
 
 /**
  * What a re-file did — the quick zones' `Auto` for a card already in the deck.
@@ -192,6 +196,31 @@ function reanchorPane(wrote: WrittenRow, to: PaneMove): void {
 }
 
 /**
+ * Plan the departure a removal is about to force on the open card — **and it has to be planned
+ * rather than worked out afterwards, which is the one subtle thing here.**
+ *
+ * `setQuantity`'s `onMutate` takes the row out of the deck's cache at the moment of the press, so
+ * by the time the round trip answers the editor has re-derived its groups, republished its walk,
+ * and the stop this needs to find is gone — with it, any way of knowing which stops used to be
+ * its neighbours. So this is called from `onMutate`, *before* the optimistic patch, and its
+ * answer rides the mutation's context to `onSuccess`.
+ *
+ * `null` for every case that is not "a card is open on the row being removed and that row is on
+ * the walk": no card open, a card open on a different row, or a row that is on no walk at all —
+ * an orphan whose printing has left the corpus is not a stop, and neither is any row while the
+ * editor is not the surface publishing.
+ */
+function plannedDeparture(wrote: WrittenRow): PaneDeparture | null {
+  const pane = anchoredOn(wrote);
+  if (pane === null) return null;
+  const { stops } = useAppStore.getState().cardWalk;
+  // The modal's own arithmetic, asked from the other side — a deck row is told from a plain stop
+  // and from another row of the same printing by all five parts of the grain.
+  const at = stops.findIndex((stop) => stop.deck !== null && sameDeckSlot(stop.deck, pane));
+  return departureFrom(stops, at);
+}
+
+/**
  * Let the open card go, for the one write that leaves **no** address to re-anchor to.
  *
  * Stepping a deck row to zero *deletes* it (see {@link useDeck}'s `setQuantity`), so there is no
@@ -212,10 +241,19 @@ function reanchorPane(wrote: WrittenRow, to: PaneMove): void {
  * So the context is **cleared** and the card stays open, which is exactly the state
  * `setSelectedCardId` means everywhere else in this app — *opened from somewhere that is not a deck
  * row*. What that costs is stated rather than hidden: the deck stepper and the two deck pickers go
- * (the card is not in the deck any more, so none of them has anything to address), the modal leaves
- * a deck walk (a removed row is not a stop on it), and `setSelectedCardId` also clears
- * `cardOverlay`, so a legality or oracle-text popup open over the card shuts. All three are the
- * honest reading of *this card is no longer one of the deck's rows*.
+ * (the card is not in the deck any more, so none of them has anything to address) and
+ * `setSelectedCardId` also clears `cardOverlay`, so a legality or oracle-text popup open over the
+ * card shuts. Both are the honest reading of *this card is no longer one of the deck's rows*.
+ *
+ * **A fourth answer arrived with issue #474, and it is the one taken whenever it is available.**
+ * The cost this comment used to list third — *the modal leaves a deck walk (a removed row is not a
+ * stop on it)* — was not a cost the reader could live with: it took both step chevrons away and
+ * killed the arrow keys, on the surface where a cut is most often one of a run of them. So where
+ * {@link plannedDeparture} found the row on the walk, the modal **steps onto the next stop**
+ * instead, and remembers the one it left so Ctrl+Z can put it back
+ * (`AppState.leaveRemovedCard`). Clearing survives as the floor for the cases that plan
+ * finds nothing for — an orphan, which is on no walk, and any removal made while the editor is
+ * not the surface publishing one.
  *
  * **`clearCategory` and `clearDeck` delete rows too and are deliberately not wired to this**, which
  * is a reachability fact rather than an oversight: `paneDeckContext` lives exactly as long as the
@@ -223,9 +261,18 @@ function reanchorPane(wrote: WrittenRow, to: PaneMove): void {
  * doors go through it), and both clears are pressed from behind that modal's scrim — a heading's
  * right-click and Deck settings. There is no state in which one of them can orphan a live context.
  */
-function unanchorPane(wrote: WrittenRow): void {
+function unanchorPane(wrote: WrittenRow, departure: PaneDeparture | null): void {
+  // Asked again rather than trusted from the plan: the plan was made at the press and this runs
+  // at the answer. **What it fences is that the open card is still the row being removed** — not
+  // that the plan and the open card are the same *event*, which nothing here could tell. It does
+  // not have to: the two are the same row by this test, and `paneReturns`' clearing means a
+  // reader who left the card and came back has spent the memory in between.
   const pane = anchoredOn(wrote);
   if (pane === null) return;
+  if (departure !== null) {
+    useAppStore.getState().leaveRemovedCard(departure.leaving, departure.to);
+    return;
+  }
   useAppStore.getState().setSelectedCardId(pane.cardId);
 }
 
@@ -786,19 +833,29 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
     onMutate: async ({ cardId, categoryId, finish, quantity }) => {
       await queryClient.cancelQueries({ queryKey: detailKey });
       const saved = queryClient.getQueryData<DeckDetail | null>(detailKey);
+      // **Before the patch below, and that order is the whole reason this is planned here rather
+      // than read off at the answer** — see {@link plannedDeparture}. `quantity === 0` is the
+      // *intent* to remove; `result.removed` at the answer is the row's fate, and `onSuccess`
+      // reads that one before spending this.
+      const departure =
+        quantity === 0
+          ? plannedDeparture({ deckId: id, variant, cardId, categoryId, finish })
+          : null;
       // Zero takes the row out at the press rather than at the answer: it is what the write
       // means, and a row sitting at `0` for a round trip is a state this table never has.
       patchSlot(
         { cardId, categoryId, finish },
         quantity === 0 ? null : (card) => ({ ...card, quantity }),
       );
-      return saved;
+      return { saved, departure };
     },
-    onError: (_error, _slot, saved) => {
-      if (saved !== undefined) queryClient.setQueryData(detailKey, saved);
+    onError: (_error, _slot, context) => {
+      // The rollback puts the row back in the cache and the editor republishes a walk with it on,
+      // so a refused removal needs nothing done about `departure`: nobody was moved.
+      if (context?.saved !== undefined) queryClient.setQueryData(detailKey, context.saved);
       invalidate();
     },
-    onSuccess: (result, { cardId, categoryId, finish }) => {
+    onSuccess: (result, { cardId, categoryId, finish }, context) => {
       // The answer, not the guess: the backend clamps and canonicalises, and this is the
       // number it actually stored.
       patchSlot(
@@ -807,11 +864,18 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
       );
       // **The one write here that leaves no address to re-anchor to.** Zero deletes the row, so
       // an open card that came out of it is left addressing nothing — see {@link unanchorPane},
-      // which carries the argument for clearing the context rather than closing the modal.
-      // `result.removed`, never the `quantity` that was asked for: the two commands this
-      // mutation can send answer the same field, and it is the row's fate rather than the
-      // argument — which is the same reason the `patchSlot` above reads it.
-      if (result.removed) unanchorPane({ deckId: id, variant, cardId, categoryId, finish });
+      // which carries the argument for stepping the modal onto the next card rather than closing
+      // it or leaving it stranded. `result.removed`, never the `quantity` that was asked for: the
+      // two commands this mutation can send answer the same field, and it is the row's fate
+      // rather than the argument — which is the same reason the `patchSlot` above reads it. A
+      // `quantity` that asked for zero and came back `removed: false` moved nobody, so the plan
+      // made at the press is simply dropped.
+      if (result.removed) {
+        unanchorPane(
+          { deckId: id, variant, cardId, categoryId, finish },
+          context?.departure ?? null,
+        );
+      }
       invalidate();
       // **The outcome, not the argument.** A cut of a card nobody owned moves nothing, and
       // refetching the collection for it would answer exactly what is already on screen — see

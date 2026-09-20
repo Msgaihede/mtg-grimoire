@@ -1489,3 +1489,202 @@ it("follows the card into the pile a category pick filed it in", async () => {
     }),
   );
 });
+
+/**
+ * **Issue #474 — removing a card must not take the walk away with it.**
+ *
+ * Every removal in this app deletes a row rather than zeroing one, and a deleted row is not a
+ * stop on the walk — so the modal open over it used to lose its place the moment the write
+ * landed: `at` went to `-1`, both chevrons unmounted, and `onPanelKeyDown` returned on every
+ * press. The reader reported it as *removing the card leaves you on that page and prevents
+ * navigation to the next card*, and named it a regression of #178, which is the pass that gave
+ * the arrows to this surface in the first place.
+ *
+ * The deck's stops, in the order the desk draws them. One printing per stop is enough here — the
+ * two-rows-of-one-printing case is `sameDeckSlot`'s and is pinned in `cardReturn.test.ts`.
+ */
+function deckStop(cardId: string, name: string) {
+  return { cardId, oracleId: `o-${cardId}`, name, deck: { ...deckRow, cardId } };
+}
+
+const DECK_WALK = [
+  deckStop("c0", "Ancestral Recall"),
+  deckStop("c1", "Lightning Bolt"),
+  deckStop("c2", "Black Lotus"),
+];
+
+/** Publish a deck walk, the way `DeckEditor` does on every render of the desk. */
+function publishDeckWalk(stops: typeof DECK_WALK) {
+  act(() => {
+    useAppStore.setState({ cardWalk: { label: "the deck", stops } });
+  });
+}
+
+/**
+ * A deck holding a row per stop — **one copy of `opened`, two of the rest.**
+ *
+ * The single copy is what makes one press of `−` a removal. The others matter for a reason that
+ * is easy to miss and cost this file two red tests: `QuantityStepper` sets `disabled` on `−` at
+ * its floor, a disabled button drops the caret to `<body>`, and the panel's arrow handler never
+ * hears a press made from outside the panel. A deck whose next card had no row would therefore
+ * fail the keyboard assertions for a reason the app does not have — every card a reader lands on
+ * is a card the deck holds at least one of.
+ */
+function deckOfThree(opened: string) {
+  const fixture = deckDetail();
+  return {
+    ...fixture,
+    cards: DECK_WALK.map((stop, i) => ({
+      ...fixture.cards[0],
+      id: 9 + i,
+      cardId: stop.cardId,
+      quantity: stop.cardId === opened ? 1 : 2,
+    })),
+  };
+}
+
+/** The modal open on the deck's middle card, one copy of it in the deck. */
+async function renderOnDeckWalk(opened = "c1") {
+  deckGet.mockResolvedValue(deckOfThree(opened));
+  deckSetCardQuantity.mockResolvedValue({ quantity: 0, removed: true });
+  useAppStore.setState({
+    activeView: "decks",
+    cardWalk: { label: "the deck", stops: DECK_WALK },
+  });
+  useAppStore.getState().openCardFromDeck({ ...deckRow, cardId: opened });
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={qc}>
+      <CardDetailModal />
+    </QueryClientProvider>,
+  );
+  await screen.findByRole("dialog");
+  return screen.findByRole("button", { name: /decrease copies of lightning bolt/i });
+}
+
+it("steps onto the next card when the deck row behind the open one is removed", async () => {
+  const down = await renderOnDeckWalk();
+
+  await userEvent.click(down);
+  await waitFor(() => expect(deckSetCardQuantity).toHaveBeenCalled());
+
+  // **The full six-field address, not just the id.** A move that carried only `selectedCardId`
+  // would leave the modal drawing the next card with the *removed* row's stepper and pickers
+  // still addressed at a row that no longer exists — which is the failure `unanchorPane` existed
+  // to prevent, reintroduced one card along.
+  await waitFor(() =>
+    expect(useAppStore.getState().paneDeckContext).toEqual({ ...deckRow, cardId: "c2" }),
+  );
+  expect(useAppStore.getState().selectedCardId).toBe("c2");
+});
+
+it("keeps the chevrons and the arrow keys alive across a removal", async () => {
+  // **The reader's own words, and the half a store assertion cannot make.** Landing on the next
+  // card is only the fix if the walk is still walkable from there — the bug was two unmounted
+  // chevrons and a dead key, so those are what this asserts.
+  const down = await renderOnDeckWalk();
+  await userEvent.click(down);
+  await waitFor(() => expect(useAppStore.getState().selectedCardId).toBe("c2"));
+
+  // The desk republishes without the row it has just lost, which is what makes the walk two stops.
+  publishDeckWalk([DECK_WALK[0], DECK_WALK[2]]);
+
+  expect(await screen.findByRole("button", { name: /previous card in the deck/i })).toBeEnabled();
+  // **The half that nearly shipped broken, and the reason it is asserted separately from the
+  // press below.** `QuantityStepper` puts the `disabled` attribute on `−` the moment the count
+  // reaches its floor, and a `disabled` element holding the caret drops it to `<body>` with no
+  // `blur` and no `focusout` — so the very press that removes the card also takes the arrows
+  // away, with both chevrons still drawn and enabled. Measured here as
+  // `document.activeElement === BODY` before `Dialog`'s `caretPulse` settle was wired.
+  await waitFor(() =>
+    expect(document.activeElement?.closest('[role="dialog"]')).not.toBeNull(),
+  );
+
+  await userEvent.keyboard("{ArrowLeft}");
+  expect(useAppStore.getState().selectedCardId).toBe("c0");
+});
+
+it("falls back to the previous card when the last row of the walk is removed", async () => {
+  // Every list does this at its end, and the alternative is worse than it looks: a cut of the
+  // last card would otherwise leave the reader on a card that is not in the deck, which is
+  // exactly the state this whole fix exists to get them out of.
+  const down = await renderOnDeckWalk("c2");
+
+  await userEvent.click(down);
+
+  await waitFor(() =>
+    expect(useAppStore.getState().paneDeckContext).toEqual({ ...deckRow, cardId: "c1" }),
+  );
+});
+
+it("walks back onto the removed card when the row comes back", async () => {
+  // **What Ctrl+Z has to mean while a card is open.** `DeckEditor` binds undo on `window` and it
+  // yields only inside a text field, so the press reaches straight past this panel — and *put
+  // that card back* has to include putting the reader back on it, or the app has silently moved
+  // them somewhere and kept them there.
+  //
+  // The walk is driven by hand here because `DeckEditor` is not in this tree: the desk
+  // republishes without the row at the press, and with it again when the undo lands.
+  const down = await renderOnDeckWalk();
+  await userEvent.click(down);
+  await waitFor(() => expect(useAppStore.getState().selectedCardId).toBe("c2"));
+  publishDeckWalk([DECK_WALK[0], DECK_WALK[2]]);
+
+  publishDeckWalk(DECK_WALK);
+
+  await waitFor(() =>
+    expect(useAppStore.getState().paneDeckContext).toEqual({ ...deckRow, cardId: "c1" }),
+  );
+  // Spent, so a second reappearance of the same row later cannot yank the reader a second time.
+  expect(useAppStore.getState().paneReturns).toEqual([]);
+});
+
+it("does not walk back onto a card the reader has stepped away from", async () => {
+  // **The rule the memory rests on.** It is only live while the app is still standing where it
+  // put them; a chevron, an arrow or a close all go through an opener, and every opener spends
+  // it. Without that, a row restored in another window ten minutes later would haul the modal
+  // off whatever the reader had since opened.
+  const down = await renderOnDeckWalk();
+  await userEvent.click(down);
+  await waitFor(() => expect(useAppStore.getState().selectedCardId).toBe("c2"));
+  publishDeckWalk([DECK_WALK[0], DECK_WALK[2]]);
+
+  await userEvent.keyboard("{ArrowLeft}");
+  expect(useAppStore.getState().selectedCardId).toBe("c0");
+
+  publishDeckWalk(DECK_WALK);
+
+  await waitFor(() => expect(useAppStore.getState().selectedCardId).toBe("c0"));
+});
+
+it("steps onto the next card when a collection entry is stepped to zero", async () => {
+  // **The same defect on the reader's own lists** — `collection_set_quantity` at zero `DELETE`s
+  // the entry, so the tile leaves the wall and the stop leaves the walk exactly as a cut deck row
+  // does. It is a second surface rather than a second mechanism: the plan is made off the same
+  // walk and spent through the same store action.
+  collectionList.mockResolvedValue({ items: [{ id: 42, cardId: "c1", quantity: 1 }], total: 1 });
+  collectionSetQuantity.mockResolvedValue({ id: 42, quantity: 0 });
+  useAppStore.setState({
+    activeView: "collection",
+    cardWalk: {
+      label: "your collection",
+      stops: [
+        { cardId: "c1", oracleId: "o1", name: "Lightning Bolt", deck: null },
+        { cardId: "c2", oracleId: "o2", name: "Black Lotus", deck: null },
+      ],
+    },
+  });
+  renderModal("c1");
+  await screen.findByRole("dialog");
+
+  const down = await screen.findByRole("button", {
+    name: /decrease copies of lightning bolt you own/i,
+  });
+  await userEvent.click(down);
+
+  await waitFor(() => expect(collectionSetQuantity).toHaveBeenCalledWith(42, 0));
+  await waitFor(() => expect(useAppStore.getState().selectedCardId).toBe("c2"));
+  // A wall's stop names no deck row, so the reader lands there the way every non-deck surface in
+  // this app opens a card — with no context to address a stepper at somebody's Sideboard.
+  expect(useAppStore.getState().paneDeckContext).toBeNull();
+});
