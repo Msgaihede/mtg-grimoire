@@ -700,10 +700,25 @@ describe("Dialog", () => {
     const view = open({ stackedOver: false, caretPulse: 0 });
     const dialog = await panel();
 
+    // **The settle armed on mount ends on its first frame, not on its deadline**, and the drop
+    // below has to be staged after that frame rather than before it. `stackedOver={false}` arms
+    // the settle on mount as surely as a fall to it does; its first tick then finds the panel
+    // holding the caret and returns, which is the loop's own first guard and the whole of what
+    // ends it. Blurring ahead of that tick hands the same loop a caret on `<body>` instead — it
+    // re-takes it on the next frame, and the assertion below goes on to measure the mount
+    // settle rather than the pulse this test is about.
+    //
+    // Whether the tick had already run was a race decided by how long `panel()` took, and it
+    // was won by 0.4ms: a cold module made that ~107ms and hid this, a warm one makes it ~10ms
+    // and the tick is still pending. So it passed here and went red in CI's full run. Our frame
+    // is queued after the loop's, so one is enough — both run in registration order.
+    await new Promise((r) => requestAnimationFrame(r));
+
     // What a button disabling under the reader leaves behind.
     (document.activeElement as HTMLElement | null)?.blur();
     expect(document.body).toHaveFocus();
-    // The settle armed on mount has long since hit its deadline, so nothing is watching.
+    // Nothing is watching now: the settle ended on that frame, and its deadline passes with the
+    // caret left where the drop put it.
     await new Promise((r) => setTimeout(r, CARET_SETTLE_MS + 60));
     expect(document.body).toHaveFocus();
 
