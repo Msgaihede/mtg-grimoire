@@ -90,12 +90,25 @@ export function useDeckNotes(deckId: number | null) {
   };
 
   /**
-   * A new note, with a title and nothing else.
+   * A new note — **a body the reader has already written, and a title that is always empty**.
    *
-   * The band's add row is one field, so `body` and `oracleIds` are empty here and the reader
-   * fills them in afterwards — which is what keeps the lazy editor off the add path entirely. A
-   * caller that wants a note born attached to a card (the card menu's `Add note…`, issue #447's
-   * other half) passes both.
+   * ⚠️ This is the exact reverse of what it was, and the sentence it replaces is worth stating
+   * because it reads as the natural one: *the band's add row is one field, so `body` and
+   * `oracleIds` are empty here and the reader fills them in afterwards.* True of a band whose
+   * add row was a title box above the list, and false of every caller since that row was deleted
+   * (2026-09-20). A note is now made **by saving the editor**, so the body is the one thing
+   * there always is — and `title: ""` is what both call sites send, because the list draws the
+   * body's first line for a blank title and a second field asking for a heading was a second
+   * thing to write before writing anything.
+   *
+   * `oracleIds` is empty from the header's `New note` and carries one id from the card menu's
+   * `Add note…` (issue #447's other half), which is the only difference between the two doors.
+   *
+   * **The signature did not move and that is the trap.** It still takes all three, so a caller
+   * left on the old habit compiles, writes a titled note with no body, and is caught by nothing
+   * but the list drawing `Untitled note`. `deckNoteCreate`'s own argument order is pinned in
+   * `ipc.test.ts`; what a *band* sends is pinned in `DeckNotesPanel.test.tsx`, which asserts the
+   * empty title by name.
    */
   const create = useMutation({
     mutationFn: ({ title, body, oracleIds }: { title: string; body: string; oracleIds: string[] }) =>

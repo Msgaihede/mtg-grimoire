@@ -125,7 +125,7 @@ function note(over: Partial<DeckNote> = {}, names: string[] = []): DeckNote {
     title: "Mana base",
     body: "Fourteen sources.",
     sortOrder: 0,
-    cards: names.map((name) => ({ oracleId: `o-${name}`, name })),
+    cards: names.map((name) => ({ oracleId: `o-${name}`, name, cardId: `c-${name}` })),
     createdAt: 0,
     updatedAt: 0,
     ...over,

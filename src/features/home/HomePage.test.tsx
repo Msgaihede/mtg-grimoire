@@ -16,8 +16,8 @@ import { DEFAULT_LAYOUT, widgetMeta, type WidgetKind } from "./widgets";
  * widget body stubbed**, so this file is about the page.
  *
  * What a body draws, what it reads and what it does with the box it is given is each body's own
- * suite's; ten of them fetching through `ipc` here would make every assertion below wait on ten
- * queries it is not about. The stub records what the page *handed* each body — the fit, `editing`,
+ * suite's; every one of them fetching through `ipc` here would make every assertion below wait on a
+ * queue of queries it is not about. The stub records what the page *handed* each body — the fit, `editing`,
  * `still` — which is the page's half of that contract and the half only this file can see.
  *
  * **The arrangement is seeded into the query cache rather than mocked into `ipc`**, `HOME_LAYOUT_KEY`
@@ -59,8 +59,10 @@ vi.mock("./widgets/WishlistValueWidget", () => ({ WishlistValueWidget: stubs.bod
 vi.mock("./widgets/RecentCardsWidget", () => ({ RecentCardsWidget: stubs.body }));
 vi.mock("./widgets/SetCompletionWidget", () => ({ SetCompletionWidget: stubs.body }));
 vi.mock("./widgets/PriceMoversWidget", () => ({ PriceMoversWidget: stubs.body }));
+vi.mock("./widgets/StickyNotesWidget", () => ({ StickyNotesWidget: stubs.body }));
+
 /**
- * The tenth kind, and **the one mock whose settings stub says something**.
+ * **The one mock whose settings stub says something.**
  *
  * Both of the page's switches are over `widget.kind`, which is a free `string` with a `default`
  * arm — so a missing `case` compiles, type-checks and draws `UnknownWidgetBody` in silence. The
@@ -335,8 +337,8 @@ describe("HomePage", () => {
 
   /**
    * **A preview is the real body, told it is still.** Still is the body's promise to write nothing
-   * and open nothing, and the preview box is out of the accessibility tree — so ten pictures of
-   * widgets are not ten more regions with ten sets of controls.
+   * and open nothing, and the preview box is out of the accessibility tree — so a catalogue of
+   * pictures of widgets is not that many more regions with that many sets of controls.
    */
   it("draws each catalogue preview as a still body outside the accessibility tree", async () => {
     const user = userEvent.setup();

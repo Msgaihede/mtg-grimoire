@@ -106,7 +106,7 @@ impl Spec {
 }
 
 /// One spec per synced table. `schema::SYNCED_TABLES` is the census this is held to.
-pub const TABLES: [Spec; 15] = [
+pub const TABLES: [Spec; 16] = [
     Spec {
         table: "collection_entries",
         keys: &["id"],
@@ -484,6 +484,27 @@ pub const TABLES: [Spec; 15] = [
         // would be an op the far device cannot turn into a row at all.
         fields: &["namespace", "tag_id", "slug", "muted_at"],
         counters: &[],
+        parents: &[],
+        append_only: false,
+    },
+    Spec {
+        table: "sticky_notes",
+        keys: &["id"],
+        // `created_at` and `updated_at` are on no list, the rule [`Spec::fields`] states above:
+        // a sticky note's stamps are facts about when *this* device wrote the row, and the
+        // group's ordering is the hybrid logical clock.
+        fields: &["title", "body", "color", "pinned", "sort_order"],
+        counters: &[],
+        // **A sticky note hangs off nothing** (user schema v46) — no deck, no folder, no
+        // collection row — so `parents: &[]` is how "belongs to the reader and to nothing
+        // else" is spelled here rather than an omission. It is what separates this table from
+        // `deck_notes`, which is otherwise its twin: the same title-and-body shape, filed
+        // against a deck there and against nobody here.
+        //
+        // ⚠️ **This is the fourth empty `parents`, not the first.** `deck_labels`,
+        // `device_names` and `muted_tags` are already parentless, and the design document this
+        // was built from called it a first — worth knowing before quoting that sentence back.
+        // What is new is only that a parentless table here holds the reader's *prose*.
         parents: &[],
         append_only: false,
     },

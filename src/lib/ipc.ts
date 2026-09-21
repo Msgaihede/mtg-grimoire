@@ -24,6 +24,7 @@
  * `BracketCardRow`/`DeckBracketRead`/`DeckValue`   — `src-tauri/src/deck.rs`
  * `ActivityEntry`                                — `src-tauri/src/activity.rs`
  * `HomeWidget`/`HomeLayout`                      — `src-tauri/src/home.rs`
+ * `StickyNoteRow`                                — `src-tauri/src/sticky_notes.rs`
  * `CardFilters`, flattened into both list queries — `src-tauri/src/filters.rs`
  * `MarketplaceFeedStatus`                        — `src-tauri/src/marketplace_feed.rs`
  * `CardTags`/`PrintingTags`                     — `src-tauri/src/tags/oracle.rs`
@@ -4381,10 +4382,18 @@ export interface DeckNote {
  * see {@link DeckNote}. `name` is a convenience the backend joins from `cards`, and **it falls
  * back to the oracle id itself** where the corpus has no row for one: a note must not disappear
  * from a deck because a card left the reader's copy of Scryfall's data.
+ *
+ * `cardId` and `imageUris` are a **representative printing**, resolved at read time so a note card
+ * can draw a picture of what it names — the deck's own printing where the deck holds one, and any
+ * printing the corpus has otherwise. Neither is ever matched on, written, or synced, and the same
+ * row read twice may honestly name two different printings. `cardId: null` is the orphan, and it
+ * draws the empty frame rather than a broken image.
  */
 export interface DeckNoteCard {
   oracleId: string;
   name: string;
+  cardId: string | null;
+  imageUris?: Partial<Record<ImageVariant, string>> | null;
 }
 
 /**
@@ -6355,6 +6364,49 @@ export interface PriceMovers {
   movers: PriceMover[];
   since: number | null;
   days: number;
+}
+
+/**
+ * One of the reader's own sticky notes — `sticky_notes.rs`'s `StickyNoteRow` (user schema v46).
+ *
+ * **It hangs off nothing**, which is what separates it from {@link DeckNote}: no deck, no card,
+ * no scope. The home page's `stickyNotes` widget is its only reader.
+ *
+ * Two fields carry no vocabulary on this side of the wire and both are deliberate. `title` may be
+ * empty, and what a note is *called* is computed at render rather than stored — a stored
+ * derivation would go stale the moment the body was edited and no writer could notice. `color` is
+ * one of five words the page knows, and the column carries **no CHECK**: the table is synced, so a
+ * build that adds a sixth colour must be able to emit rows this build can still draw.
+ * `features/home/stickyNotes.ts`'s `noteColor` reads an unknown word as `slate`.
+ *
+ * `body` is CommonMark in the dialect `features/decks/noteMarkdown.ts` pins — never HTML and never
+ * ProseMirror JSON, which is what keeps a renderer out of the crate.
+ */
+export interface StickyNote {
+  id: number;
+  /** May be empty. See the note above: the drawn heading is derived, never this field alone. */
+  title: string;
+  body: string;
+  color: string;
+  pinned: boolean;
+  /** The reader's own arrangement, renumbered by {@link ipc.stickyNoteReorder}. */
+  sortOrder: number;
+  /** Unix seconds. Neither timestamp is synced — two answers to "when" is one too many. */
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * What {@link ipc.stickyNoteUpdate} changes — **absent means leave it**, and `""` really empties.
+ *
+ * Rust's `coalesce(?n, col)` is the whole of that rule, so an omitted key and a key set to
+ * `undefined` are the same thing on the wire and neither can blank a field by accident.
+ */
+export interface StickyNotePatch {
+  title?: string;
+  body?: string;
+  color?: string;
+  pinned?: boolean;
 }
 
 /**
@@ -9038,6 +9090,51 @@ export const ipc = {
     marketplace: MarketplaceId,
     limit: number,
   ) => invoke<PriceMovers>("price_movers", { window, direction, marketplace, limit }),
+  /**
+   * Every sticky note, `ORDER BY sort_order, id` — see {@link StickyNote}.
+   *
+   * **Takes no arguments and cannot fail**: the read is `#[tauri::command(async)]` on a *sync*
+   * function whose signature has no `Result`, because it is called while the window draws its
+   * first frame and a home page that refuses to draw over a note is a worse answer than a page
+   * with no notes on it. A database that has never held one answers an empty list.
+   */
+  stickyNotes: (): Promise<StickyNote[]> => invoke("sticky_notes"),
+  /**
+   * Write a new note and answer its id. It lands **last** — `max(sort_order) + 1` — so a reader
+   * who has arranged their board keeps that arrangement and finds the new note at the end of it.
+   *
+   * **The colour is stored as written and validated by nobody**, which is the column's own rule
+   * read from this end: a word a newer build sends survives the round trip, and this build draws
+   * it as `slate`. Answers `collection::BUSY` under a running sync like every other write.
+   */
+  stickyNoteCreate: (title: string, body: string, color: string): Promise<number> =>
+    invoke("sticky_note_create", { title, body, color }),
+  /**
+   * Change a note — see {@link StickyNotePatch}, whose absent-means-leave-it rule is the whole of
+   * what this sends.
+   *
+   * **The patch is spread rather than nested**, because `sticky_note_update` declares its four
+   * optional columns as four parameters beside `id` rather than taking a struct — so a wrapper
+   * that sent `{ id, patch }` would be refused at run time with nothing red in either build.
+   * `ipc.test.ts` pins all five names.
+   *
+   * **And a key the patch omits is simply not sent, where {@link ipc.deckNoteUpdate} spells every
+   * key and folds `undefined` to `null`.** That is the same rule met a different way rather than
+   * drift: an absent field deserialises into an `Option` as `None`, which is exactly the
+   * `coalesce(?n, col)` arm that leaves the column alone — and here there is no `null` to send,
+   * because `None` and *leave it* are one word on both sides of this wire.
+   */
+  stickyNoteUpdate: (id: number, patch: StickyNotePatch): Promise<void> =>
+    invoke("sticky_note_update", { id, ...patch }),
+  /** Delete one note. Refused in a sentence — `sticky_notes::NOTE_GONE` — if it is already gone. */
+  stickyNoteDelete: (id: number): Promise<void> => invoke("sticky_note_delete", { id }),
+  /**
+   * Renumber the notes in the order given, `0..n`.
+   *
+   * **An id that is no longer a note is skipped rather than refused**: the page sends what it
+   * drew, and a note deleted in another window must not fail the drag the reader just made.
+   */
+  stickyNoteReorder: (ids: number[]): Promise<void> => invoke("sticky_note_reorder", { ids }),
   /**
    * Reprints of cards the watched decks already hold, newest first — see {@link NewPrintings}.
    *

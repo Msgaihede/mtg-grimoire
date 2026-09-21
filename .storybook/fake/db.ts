@@ -240,6 +240,7 @@ import type {
   SetCompletion,
   SetSummary,
   ShareRow,
+  StickyNote,
   SupporterStatus,
   SwapResult,
   SyncOutcome,
@@ -1835,6 +1836,31 @@ export interface FakeDb {
    */
   recentCards: FakeRecentCard[];
   /**
+   * `sticky_notes` — the reader's own prose on the home page, user schema v46.
+   *
+   * **A sticky note hangs off nothing**, which is what separates it from {@link FakeDb.deckNotes}:
+   * no deck, no card, no scope. So there is no owner to filter by and no parent to resolve — the
+   * table is the list, and {@link readHandlers.sticky_notes} orders it and hands it back.
+   *
+   * **`StickyNote` and not a `FakeStickyNote`, which is the one place this file stores a DTO on
+   * purpose** — the header's rule met by a table that has nothing to derive. `ownedQuantity` is
+   * three questions under one name, so storing the *answer* would make all three agree; here the
+   * eight columns and the eight fields are the same eight things, `sticky_notes.rs` selects them
+   * and serde renames `sort_order`, and a `FakeStickyNote` would be that shape written twice for
+   * a mapping function that copied each field to itself. **The test that keeps it honest is that
+   * a second shape would have to exist first**: the day this table grows a column the read
+   * *computes* — a drawn heading off a blank title, say — the row type is owed and this comment
+   * is what says why it was not owed before.
+   *
+   * **Seeded by `starter` and empty in every other world**, {@link FakeDb.mutedTags}' rule one
+   * feature over and for its reason: a note is a thing a reader **wrote**, so a database that has
+   * never held one is every install out of the box and is the state the widget's empty card
+   * exists to draw. `empty` therefore gets none, and no derivation fills this in
+   * {@link makeDb} — unlike {@link FakeDb.recentCards} above, which a collection really does
+   * imply.
+   */
+  stickyNotes: StickyNote[];
+  /**
    * `price_history` — one row per day a price refresh saw a printing's finish at a marketplace.
    *
    * **The table the price movers are measured against**, and a table of facts rather than of
@@ -3063,6 +3089,12 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // a history to measure movers against, and a world with none opens on both sentences.
     recentCards: [],
     priceHistory: [],
+    // **Empty, and derived from nothing** — which is what separates it from the two fields above
+    // rather than an omission beside them. A collection implies cards the reader opened and
+    // prices those cards have had; it implies no prose at all, because a sticky note exists only
+    // where somebody typed one. So this is the state every world but `starter` opens in, and it
+    // is the one the widget's empty card is for.
+    stickyNotes: [],
     // The eleventh `app_meta` row and a `null` a third time: a reader who has never chosen a
     // landing view. `start_view` answers `home` for it, which is what the app opens on out of
     // the box and what every story that says nothing about the setting is standing in.
@@ -5536,15 +5568,23 @@ function storedToken(db: FakeDb, deckId: number, oracleId: string): FakeDeckToke
 
 /**
  * `image_uri::front_face_map` over a fixture row — the picture the **web target and the phone**
- * draw, and the field only two DTOs here carry.
+ * draw, and the field only three DTOs here carry.
  *
  * **Every other DTO omits `imageUris` and that is still the rule**: a picture under Storybook
  * comes from the `@/lib/images` alias, so a URL on a row would be one nobody ever fetches. What
  * earns an exception is a view that ***folds*** the field instead of passing it through, and
- * there are two of those. `deckTokenViews` reads a token tile's `imageUrl` as
+ * there are three of those. `deckTokenViews` reads a token tile's `imageUrl` as
  * `imageUris?.[WALL_CARD_VARIANT] ?? null`; `CombosDialog.tsx` reads a combo piece's the same
- * way, character for character. A row that omitted it would make the fake the one place both
- * views are always `null` and each panel's own resolution unexercised.
+ * way, character for character; and since 2026-09-20 a **note card** reads its representative
+ * printing's the same way again ({@link noteCardsOf}, through {@link noteCardPrinting}). A row
+ * that omitted it would make the fake the one place all three views are always `null` and each
+ * panel's own resolution unexercised.
+ *
+ * ⚠️ **This said "two" for as long as it took the notes band to grow a thumbnail**, which is the
+ * drift `.storybook/CLAUDE.md` names by rule: a prose-only edit routes to neither CI job, so a
+ * count here goes red nowhere. **Re-count the callers when you add one** —
+ * `grep -n "frontFaceImageUris(" .storybook/fake/db.ts` is the census, and the enumeration above
+ * is what makes it checkable.
  *
  * Nothing minted: the two URLs are the fixture's own real Scryfall ones, the same pair
  * {@link readHandlers.card_image_uri} answers with, and the same two variants
@@ -7054,11 +7094,49 @@ function cardNameOfOracle(db: FakeDb, oracleId: string): string {
  * {@link readHandlers.deck_tokens}' rule, and the same division of labour: Rust supplies facts,
  * TypeScript draws the order.
  */
-function noteCardsOf(db: FakeDb, noteId: number): DeckNoteCard[] {
+function noteCardsOf(db: FakeDb, deckId: number, noteId: number): DeckNoteCard[] {
   return db.deckNoteCards
     .filter((c) => c.noteId === noteId)
-    .map((c) => ({ oracleId: c.oracleId, name: cardNameOfOracle(db, c.oracleId) }))
+    .map((c) => {
+      const printing = noteCardPrinting(db, deckId, c.oracleId);
+      return {
+        oracleId: c.oracleId,
+        name: cardNameOfOracle(db, c.oracleId),
+        cardId: printing?.id ?? null,
+        imageUris: frontFaceImageUris(db, printing?.id ?? null),
+      };
+    })
     .sort((a, b) => cmp(a.name, b.name) || cmp(a.oracleId, b.oracleId));
+}
+
+/**
+ * `deck_notes::attachments_by_note`'s correlated subquery — the **representative printing** one
+ * attachment draws, and the third DTO in this file to fold {@link frontFaceImageUris}.
+ *
+ * **The deck's own printing first, any printing the corpus holds second**, which is that
+ * statement's `ORDER BY (dc.card_id IS NULL), c.id` spelled as two passes: SQLite sorts `0`
+ * before `1`, so a printing this deck sleeves wins, and `c.id` breaks every remaining tie. A
+ * note about Lightning Bolt in a deck playing the M10 art must not draw the Alpha art — the
+ * picture is how a reader recognises the row, and the wrong one reads as a note naming a card
+ * that is not in the deck.
+ *
+ * **`null` is the orphan and is a real answer**, not a lookup that went wrong: the crate's
+ * `LEFT JOIN` keeps an attachment whose oracle id the corpus has never heard of, named by that
+ * id, and the card draws an empty frame rather than a broken image.
+ *
+ * **Every printing of the deck is considered rather than the deck's own row order**, because a
+ * note attaches by oracle id and a deck may hold two printings of one card; `c.id` is what picks
+ * between them, on both sides, so the two passes cannot come to disagree.
+ */
+function noteCardPrinting(db: FakeDb, deckId: number, oracleId: string): FakeCard | null {
+  const byId = (a: FakeCard, b: FakeCard): number => cmp(a.id, b.id);
+  const held = db.deckCards
+    .filter((dc) => dc.deckId === deckId)
+    .map((dc) => cardById(db, dc.cardId))
+    .filter((c): c is FakeCard => c !== null && c.oracleId === oracleId)
+    .sort(byId);
+  if (held.length > 0) return held[0] ?? null;
+  return [...db.cards].filter((c) => c.oracleId === oracleId).sort(byId)[0] ?? null;
 }
 
 /** `deck_notes::note_row` — one stored note with the cards it names joined on, copied for
@@ -7071,7 +7149,7 @@ function toDeckNote(db: FakeDb, n: FakeDeckNote): DeckNote {
     title: n.title,
     body: n.body,
     sortOrder: n.sortOrder,
-    cards: noteCardsOf(db, n.id),
+    cards: noteCardsOf(db, n.deckId, n.id),
     createdAt: n.createdAt,
     updatedAt: n.updatedAt,
   };
@@ -10077,11 +10155,13 @@ export function readHandlers(db: FakeDb) {
      * {@link DECK_GONE} because an empty plan already means something else here — "nothing in
      * this deck can be filled" — and a dialog cannot tell those two apart from a bare `[]`.
      *
-     * `imageUris` is omitted, as it is from every DTO this fake builds bar one: under Storybook
-     * a card picture comes from the `@/lib/images` alias rather than from a URL on the row, so a
-     * hand-minted one here would be a URL nobody ever fetches. The exception is
-     * {@link frontFaceImageUris}, and its own comment says what earns it one — a view that *folds*
-     * the field rather than passing it through.
+     * `imageUris` is omitted, as it is from every DTO this fake builds but the ones that **fold**
+     * it: under Storybook a card picture comes from the `@/lib/images` alias rather than from a
+     * URL on the row, so a hand-minted one here would be a URL nobody ever fetches. The
+     * exceptions go through {@link frontFaceImageUris}, and its own comment enumerates them and
+     * says what earns one — a view that folds the field rather than passing it through. **No
+     * count here on purpose**: this sentence read "bar one" while two DTOs carried it and then
+     * three, because a number in prose goes red nowhere.
      */
     deck_pull_plan: (args: { deckId: number }): DeckPullRow[] => {
       // **First, ahead of the read, and {@link isVirtual}'s own contract is what makes that
@@ -10243,9 +10323,11 @@ export function readHandlers(db: FakeDb) {
      * reason: an empty plan already means something else here — *everything this deck is short of
      * has left the card database* — and a dialog cannot tell those two apart from a bare list.
      *
-     * `imageUris` is omitted, as it is from every DTO this fake builds bar one: under Storybook a
-     * card picture comes from the `@/lib/images` alias rather than from a URL on the row, so a
-     * hand-minted one here would be a URL nobody ever fetches.
+     * `imageUris` is omitted, as it is from every DTO this fake builds but the ones that **fold**
+     * it: under Storybook a card picture comes from the `@/lib/images` alias rather than from a
+     * URL on the row, so a hand-minted one here would be a URL nobody ever fetches.
+     * {@link frontFaceImageUris} enumerates the exceptions; no count is written here, for the
+     * reason its own comment gives.
      */
     deck_missing_plan: (args: { deckId: number }): DeckMissingRow[] => {
       // {@link deck_pull_plan}'s fence, ahead of the shortfall walk and for its reason: a
@@ -10754,6 +10836,33 @@ export function readHandlers(db: FakeDb) {
       }
       return out;
     },
+
+    /**
+     * `sticky_notes::list_notes` — every note the reader has written, `ORDER BY sort_order, id`.
+     *
+     * **No arguments, no limit and no refusal**, which is the whole of what this read is: the
+     * crate's is `#[tauri::command(async)]` on a *sync* `fn` whose signature carries no `Result`,
+     * because the home page asks for it while drawing its first frame and a page that refuses to
+     * draw over a note is a worse answer than a page with no notes on it.
+     *
+     * **`id` is the second term and is load-bearing**, not tidiness: `sticky_note_create` mints
+     * `max(sort_order) + 1`, but a reorder renumbers from 0 and two devices can land on one
+     * number — so a read sorting on `sort_order` alone would be free to draw those two in either
+     * order, and a board that reshuffled itself between two frames is the failure this term
+     * closes. A copy is handed back rather than the stored objects, for
+     * {@link writeHandlers.set_home_layout}'s reason: a page holding a row it can mutate is a
+     * state the backend cannot produce.
+     *
+     * A read, so it answers through every second of a sync — the four writes below do not.
+     * **That asymmetry leaves this command's BUSY unstoryable**, exactly as it does for the six
+     * other widgets whose reads take `db_read`, and it is a gap
+     * [home-page.md](../../docs/reference/home-page.md) already records rather than one to chase
+     * with a fault of its own.
+     */
+    sticky_notes: (): StickyNote[] =>
+      [...db.stickyNotes]
+        .sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id)
+        .map((n) => ({ ...n })),
 
     /**
      * `set_completion` — every set the collection holds a card from, and how much of it.
@@ -11538,6 +11647,32 @@ const CARD_NOT_IN_CATEGORY = "That card is not in this deck's category any more.
 const NOTE_GONE = "That note is not there any more.";
 const NOTE_WRONG_DECK = "That note belongs to a different deck.";
 /**
+ * `sticky_notes::NOTE_GONE` — **the same sentence as {@link NOTE_GONE} above, under a second
+ * name, and both halves of that are deliberate.**
+ *
+ * The *sentence* is the same because it is the house style — capitalised, punctuated, a whole
+ * sentence — and because a reader meeting "that note is gone" in two places should not be told
+ * it twice in two voices. It is copied verbatim from `sticky_notes.rs` rather than inferred, as
+ * every refusal here is: a story renders these.
+ *
+ * The *constant* is a second one because **the two modules are free to diverge and a shared
+ * constant would hide it if they did**. `deck_notes.rs` and `sticky_notes.rs` are separate
+ * files with separate refusals — that one already has a second sentence this has no twin for
+ * ({@link NOTE_WRONG_DECK}, since a sticky note has no deck to belong to the wrong one of) —
+ * so the day either crate rewords its own, this file has a place to put the difference. One
+ * constant would have made that edit look like a typo in the other feature's tests.
+ *
+ * ⚠️ **The plan this was built from spelled it `"that note is no longer there"`** — lower case
+ * and unpunctuated — and the fake was written to match before the crate landed. It does not
+ * say that; two sentences for one refusal is exactly the drift the fake exists to catch, and
+ * the crate is the authority. Read the constant, never a plan.
+ *
+ * It guards the **update** and the **delete** and neither of the other two writes. A create has
+ * no row to miss, and a **reorder skips an id that is not a note** rather than refusing —
+ * {@link writeHandlers.sticky_note_reorder} argues that one where it lives.
+ */
+const STICKY_NOTE_GONE = "That note is not there any more.";
+/**
  * `deck_notes::NO_ORACLE_ID` — the module's third refusal, and the only one about an *argument*
  * rather than about a row.
  *
@@ -11879,6 +12014,21 @@ function stamp(db: FakeDb): number {
 /** `INTEGER PRIMARY KEY`'s default rowid: one past the largest, and 1 for an empty table. */
 function nextId(rows: { id: number }[]): number {
   return rows.reduce((n, r) => Math.max(n, r.id), 0) + 1;
+}
+
+/**
+ * {@link stamp} for a table {@link stamp} does not scan — the sticky notes' own `unixepoch()`.
+ *
+ * **It has to read its own rows, and that is what makes it a second function rather than a
+ * fourth loop in `stamp`.** That one scans the three tables whose `updated_at` a *sort* is
+ * keyed on; `sticky_notes` is ordered by `sort_order` and never by a clock, so adding it there
+ * would move every deck's stamp in every story for a column nothing sorts by. What this is for
+ * instead is the same property one table down: two writes in one press must not stamp the same
+ * second, or a story asserting that an edit moved the clock passes on a world where it did not.
+ * {@link writeHandlers.record_recent_card} takes exactly this shape for exactly this reason.
+ */
+function stickyStamp(db: FakeDb): number {
+  return db.stickyNotes.reduce((n, r) => Math.max(n, r.updatedAt), stamp(db)) + 1;
 }
 
 /**
@@ -18522,6 +18672,136 @@ export function writeHandlers(db: FakeDb) {
         version: layout.version,
         widgets: layout.widgets.map((w: HomeWidget) => ({ ...w })),
       };
+    },
+
+    /* -------------------------------------------------------------- sticky notes -- */
+
+    /**
+     * `sticky_notes::create_note` — a new note at the **end** of the board.
+     *
+     * `max(sort_order) + 1`, and landing last is the whole of what the reader is promised: a
+     * board somebody has arranged keeps that arrangement, and the new note is where they can
+     * find it rather than where an insertion sort decided. `nextNoteSortOrder`'s arithmetic one
+     * table over, without the deck to filter by.
+     *
+     * **Nothing here refuses anything.** Not a blank title — what a note is *called* is derived
+     * at render, so an empty one is a state the page draws; not a blank body — a note that is
+     * only a heading is a note; and **not a colour**, which is the one worth saying out loud.
+     * The column carries no CHECK because the table is **synced**, so a build that adds a sixth
+     * colour has to be able to emit rows this build still draws — `features/home/stickyNotes.ts`
+     * reads a word it does not know as `slate`. A fake that narrowed the word here would make
+     * that fallback unreachable from a story while looking like diligence:
+     * {@link writeHandlers.set_home_layout}'s `kind` argument, one table over.
+     *
+     * It honours `busy` like every other write here, and **the lock comes first** — `with_write`
+     * takes it before `create_note` looks at an argument. There is nothing else this command
+     * could refuse, so BUSY is its only refusal at all.
+     */
+    sticky_note_create: (args: { title: string; body: string; color: string }): number => {
+      refuseIfBusy(db);
+      const at = stickyStamp(db);
+      db.stickyNotes.push({
+        id: nextId(db.stickyNotes),
+        title: args.title,
+        body: args.body,
+        color: args.color,
+        // **Not a colour's business and not an argument**: a note is pinned by pressing the pin,
+        // so the column's `DEFAULT 0` is the only value a create can write.
+        pinned: false,
+        sortOrder: db.stickyNotes.reduce((n, r) => Math.max(n, r.sortOrder + 1), 0),
+        createdAt: at,
+        updatedAt: at,
+      });
+      return db.stickyNotes[db.stickyNotes.length - 1].id;
+    },
+
+    /**
+     * `sticky_notes::update_note` — **absent means leave it, per field; `""` really empties.**
+     *
+     * `coalesce(?n, col)` is the whole of that rule, and `??` is how it is spelled here — never
+     * `||`, and this command has **two** values a truthiness test would swallow rather than
+     * {@link deck_note_update}'s one: `title: ""` is a title the reader deliberately cleared,
+     * and `pinned: false` is a pin they deliberately took out. Either read as "no change" would
+     * be a press that reported success and did nothing, for ever.
+     *
+     * **The wire shape is `{ id, ...patch }` and not `{ id, patch }`** — the crate declares four
+     * optional parameters beside `id` rather than a struct, so an omitted key simply is not sent
+     * and deserialises as `None`. That is why these four are `?:` here where
+     * {@link deck_note_update}'s two are `?: T | null`: that command spells every key and folds
+     * an absent one to `null` on the way out, and this one has no `null` to send.
+     *
+     * **The clock moves whether or not a field did**, which is `update_note`'s own SQL — one
+     * `updated_at = unixepoch()` with nothing compared first. It differs from
+     * {@link deck_note_update}, which guards its *history* row on a real change; there is no
+     * history here to guard, no deck to touch and no undo step to spend, so there is nothing a
+     * comparison would buy.
+     *
+     * The one refusal is {@link STICKY_NOTE_GONE}, and the lock is asked **before** the row is
+     * looked for: a stale editor saving into a sync gets BUSY, not "not there any more".
+     */
+    sticky_note_update: (args: {
+      id: number;
+      title?: string;
+      body?: string;
+      color?: string;
+      pinned?: boolean;
+    }): void => {
+      refuseIfBusy(db);
+      const note = db.stickyNotes.find((n) => n.id === args.id);
+      if (!note) throw refuse(STICKY_NOTE_GONE);
+      note.title = args.title ?? note.title;
+      note.body = args.body ?? note.body;
+      note.color = args.color ?? note.color;
+      note.pinned = args.pinned ?? note.pinned;
+      note.updatedAt = stickyStamp(db);
+    },
+
+    /**
+     * `sticky_notes::delete_note` — one note, gone.
+     *
+     * **The survivors are not renumbered**, which is the crate's `DELETE` and not an omission:
+     * `sort_order` is an ordering and never a position, so a board that goes `0, 1, 3` is in
+     * perfect order with a hole in it, and a renumbering pass would be four extra rows for the
+     * sync to carry every time a reader threw one note away. It is also why
+     * {@link readHandlers.sticky_notes} sorts on `id` as its second term rather than trusting
+     * the numbers to stay dense.
+     *
+     * **No undo step and no history row**, unlike {@link deck_note_delete} — there is no deck
+     * for {@link journalled} to snapshot and no `deck_audit` row for a step to key on, so the
+     * wrapper files nothing here without being told. A sticky note deleted is deleted.
+     */
+    sticky_note_delete: (args: { id: number }): void => {
+      refuseIfBusy(db);
+      if (!db.stickyNotes.some((n) => n.id === args.id)) throw refuse(STICKY_NOTE_GONE);
+      db.stickyNotes = db.stickyNotes.filter((n) => n.id !== args.id);
+    },
+
+    /**
+     * `sticky_notes::reorder_notes` — renumber in the order given, `0..n`.
+     *
+     * **An id that is not a note is skipped rather than refused**, which is
+     * {@link deck_note_reorder}'s rule and made for a sharper version of its reason: the page
+     * sends the order it drew, and a note deleted in **another window** must not fail the drag
+     * the reader just made. The sync makes that an ordinary Tuesday rather than a corner.
+     *
+     * ⚠️ **The number written is the position in the *argument*, strangers included.** A list
+     * of four whose third id names nothing leaves the notes at `0, 1, 3` — the crate's
+     * `enumerate()` counts the stranger — so the gap is real and is exactly the hole the delete
+     * above leaves. What the reader sees is the order they dragged either way, which is the only
+     * thing either handler promises.
+     *
+     * Every renumbered row's clock moves, because the crate's `UPDATE` writes `updated_at`
+     * alongside `sort_order`. One instant for all of them: a drag is one press.
+     */
+    sticky_note_reorder: (args: { ids: number[] }): void => {
+      refuseIfBusy(db);
+      const at = stickyStamp(db);
+      args.ids.forEach((id, position) => {
+        const note = db.stickyNotes.find((n) => n.id === id);
+        if (!note) return;
+        note.sortOrder = position;
+        note.updatedAt = at;
+      });
     },
 
     /**

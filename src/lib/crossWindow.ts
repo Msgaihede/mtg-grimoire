@@ -165,6 +165,16 @@ export const TABLE_KEYS: Readonly<Record<string, readonly QueryKey[]>> = {
   error_log: [["errorLog"]],
   muted_tags: [["tags-muted"], ["tag-search"], ["tag-children"], ["tags"]],
   price_snapshots: [],
+  // The home page's sticky notes, and **one key** because one query reads the whole table: the
+  // list is small, every one of the four writes changes its order or its contents, and
+  // `useStickyNotes` invalidates exactly this root in the window that made them. It is its own
+  // root rather than a child of `["home", …]` because no other query reads `sticky_notes`.
+  //
+  // ⚠️ Checked against the refresh-loop rule (`multi-window.md`), which is what `collection_shares`
+  // above maps to nothing for: a query whose command *writes* the table its own key reads is
+  // answered by a write that makes it stale again, once a lap, for ever. `sticky_notes` reads and
+  // writes nothing on the way past — the read is a plain `SELECT` — so this table maps normally.
+  sticky_notes: [["stickyNotes"]],
   sync_clock: [],
   sync_devices: [SYNC_KEY],
   sync_group: [SYNC_KEY],

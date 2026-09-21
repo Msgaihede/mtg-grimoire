@@ -270,6 +270,16 @@ pub const COMMANDS: &[&str] = &[
     // not write it would draw a widget that never changes.
     "recent_cards",
     "record_recent_card",
+    // **The Notes widget, all five.** Every one is connection-only: the read is one `SELECT`,
+    // and the four writes take their clock from SQLite's `unixepoch()` rather than
+    // `SystemTime::now()`, which panics on this target. None of them is a download wearing a
+    // command's name, and a browser that could read the stack and not write it would draw a
+    // widget the reader cannot use.
+    "sticky_notes",
+    "sticky_note_create",
+    "sticky_note_update",
+    "sticky_note_delete",
+    "sticky_note_reorder",
     // **The Set completion and Price movers widgets' reads.** Both are one `SELECT` over the
     // collection and the corpus with no clock of their own beyond SQLite's `date('now')`, so
     // neither is a download wearing a command's name. The history the movers read is written by
@@ -2297,6 +2307,72 @@ pub fn call(
             )
         }
 
+        // ── The Notes widget's five ────────────────────────────────────────────────
+        //
+        // `home_layout`'s shape again, five times: the read is infallible on this side too —
+        // a stack that will not read draws as no notes rather than as a page that will not
+        // draw — and the four writes refuse in words.
+        //
+        // **The patch's four fields are `optional` and not `field`, and that is the one thing
+        // here worth getting wrong once.** `ipc.ts` sends `{ id, ...patch }`, and a key
+        // JavaScript left off arrives as an absent key rather than as a `null`, so
+        // `field::<Option<String>>` would refuse the ordinary call with "missing `title`".
+        // Absent means *leave it alone*, which is `sticky_notes::update_note`'s contract on
+        // both targets.
+        "sticky_notes" => {
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::sticky_notes::list_notes(&conn).unwrap_or_default(),
+            )
+        }
+
+        "sticky_note_create" => {
+            let title: String = field(command, args, "title")?;
+            let body: String = field(command, args, "body")?;
+            let color: String = field(command, args, "color")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::sticky_notes::create_note(c, &title, &body, &color)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "sticky_note_update" => {
+            let id: i64 = field(command, args, "id")?;
+            let title: Option<String> = optional(command, args, "title")?;
+            let body: Option<String> = optional(command, args, "body")?;
+            let color: Option<String> = optional(command, args, "color")?;
+            let pinned: Option<bool> = optional(command, args, "pinned")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::sticky_notes::update_note(c, id, title, body, color, pinned)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "sticky_note_delete" => {
+            let id: i64 = field(command, args, "id")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| crate::sticky_notes::delete_note(c, id))
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "sticky_note_reorder" => {
+            let ids: Vec<i64> = field(command, args, "ids")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| crate::sticky_notes::reorder_notes(c, &ids))
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
         "set_completion" => {
             let conn = crate::sync::lock_db_read(state);
             encode(
@@ -3896,16 +3972,17 @@ mod tests {
         // their own branch and wrong in the merge**, which is exactly what a number derived by
         // adding cannot survive. 166 is `awk`'s answer over the merged array literal.
         //
-        // **174 since the New printings widget routed its two** — the feed and the cursor that
-        // puts its gold dots out. Counted with the `awk` the paragraphs above ask for
+        // **179 since the New printings widget routed two and the Notes widget five** — that
+        // one's feed and cursor, and `sticky_notes` with its four writes. Counted with the `awk`
+        // the paragraphs above ask for
         // (`awk '/^pub const COMMANDS/,/^\];/' src/web/route.rs | grep -c '^\s*"'`) over the
-        // array as it stands here, and **not** by adding 2 to 172 — which is the arithmetic this
-        // comment has now warned about six times, and which is wrong the moment another open
-        // branch routes anything of its own. If a later merge turns this red, take the number
-        // from `left`.
+        // array as it stands here, and **not** by adding anything to anything — the two branches
+        // above landed within a day of each other, which is exactly the case that makes the
+        // arithmetic wrong and is why this comment has now warned about it seven times. If a
+        // later merge turns this red, take the number from `left`.
         assert_eq!(
             COMMANDS.len(),
-            174,
+            179,
             "update this number when a command is added"
         );
     }

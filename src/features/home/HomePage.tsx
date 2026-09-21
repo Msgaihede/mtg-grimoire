@@ -128,6 +128,7 @@ import { NewPrintingsWidget, NewPrintingsWidgetSettings } from "./widgets/NewPri
 import { PriceMoversWidget } from "./widgets/PriceMoversWidget";
 import { RecentCardsWidget } from "./widgets/RecentCardsWidget";
 import { SetCompletionWidget } from "./widgets/SetCompletionWidget";
+import { StickyNotesWidget } from "./widgets/StickyNotesWidget";
 import { SummaryWidget, SummaryWidgetSettings } from "./widgets/SummaryWidget";
 import { WishlistValueWidget } from "./widgets/WishlistValueWidget";
 
@@ -233,6 +234,8 @@ function renderBody(props: WidgetBodyProps): ReactElement {
       return <PriceMoversWidget {...props} />;
     case "newPrintings":
       return <NewPrintingsWidget {...props} />;
+    case "stickyNotes":
+      return <StickyNotesWidget {...props} />;
     default:
       return <UnknownWidgetBody />;
   }

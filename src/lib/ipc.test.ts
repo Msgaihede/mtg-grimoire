@@ -44,6 +44,7 @@ import setCompletionRs from "../../src-tauri/src/set_completion.rs?raw";
 import shareRs from "../../src-tauri/src/share/commands.rs?raw";
 import startupRs from "../../src-tauri/src/startup.rs?raw";
 import startviewRs from "../../src-tauri/src/startview.rs?raw";
+import stickyNotesRs from "../../src-tauri/src/sticky_notes.rs?raw";
 import syncCommandsRs from "../../src-tauri/src/sync_engine/commands.rs?raw";
 import syncLiveRs from "../../src-tauri/src/sync_engine/live.rs?raw";
 import wishlistFoldersRs from "../../src-tauri/src/wishlist_folders.rs?raw";
@@ -1893,7 +1894,7 @@ describe("ipc argument names match the Rust command signatures", () => {
       sortOrder: 0,
       // Empty would be the ordinary case; one entry is what pins the nested shape, which no
       // parity check on the outer struct can see.
-      cards: [{ oracleId: "o-bolt", name: "Lightning Bolt" }],
+      cards: [{ oracleId: "o-bolt", name: "Lightning Bolt", cardId: "m10-146" }],
       createdAt: 1,
       updatedAt: 2,
     };
@@ -2929,6 +2930,96 @@ describe("ipc argument names match the Rust command signatures", () => {
     await ipc.markNewPrintingsSeen(1_700_000_000);
     expect(invoke).toHaveBeenCalledWith("mark_new_printings_seen", { at: 1_700_000_000 });
     declares(newPrintingsRs, "mark_new_printings_seen", "at");
+  });
+
+  /**
+   * **The sticky notes' five** (user schema v46), pinned on the day they were written — one case,
+   * because they are one widget's worth of commands and the traps are one family's.
+   *
+   * `sticky_notes` takes **no arguments at all**, `home_layout`'s trap: an argument object sent to
+   * a command that declares only the managed state is a deserialisation error and not a type
+   * error. It is also the one read here that is `#[tauri::command(async)]` on a *sync* `fn`, so
+   * the crate is matched on `fn <name>(` rather than through `commandParams`, which only sees a
+   * `pub async fn` — the home page's five reads' reason exactly.
+   *
+   * **`sticky_note_update` is the one worth the case.** Its patch is *spread*, so the four
+   * optional columns travel as four top-level keys beside `id` — and `payloadKeys` cannot see
+   * through a `...patch`, which is what makes the four names below the assertion rather than
+   * anything the parser could infer. A wrapper that nested them as `{ id, patch }` type-checks
+   * perfectly, is refused at run time, and the symptom is a note that never saves. The same
+   * parser blindness is why the four are asserted against the crate by name.
+   *
+   * `sticky_note_reorder` sends `ids` where `deck_note_reorder` beside it sends `deckId, ids` —
+   * a wrapper copied from that line sends a deck this command does not declare.
+   */
+  it("sends every sticky-note command under the name its command declares", async () => {
+    // A pass must never be able to mean "the crate was never read".
+    expect(stickyNotesRs.length, "sticky_notes.rs was not read").toBeGreaterThan(1_000);
+    const declares = (command: string, param: string) =>
+      expect(stickyNotesRs, `\`${command}\` declares no \`${param}\``).toMatch(
+        new RegExp(`fn ${command}\\([^)]*\\b${param}\\s*:`, "s"),
+      );
+
+    invoke.mockResolvedValue([]);
+    expect(await ipc.stickyNotes()).toEqual([]);
+    expect(invoke).toHaveBeenCalledWith("sticky_notes");
+    expect(stickyNotesRs).toContain("fn sticky_notes(");
+
+    invoke.mockResolvedValue(7);
+    expect(await ipc.stickyNoteCreate("Trade night", "Bring the binder", "amber")).toBe(7);
+    expect(invoke).toHaveBeenCalledWith("sticky_note_create", {
+      title: "Trade night",
+      body: "Bring the binder",
+      color: "amber",
+    });
+
+    // The whole patch, so every optional column is pinned at least once — and a second call with
+    // one key, because *absent means leave it* is the command's rule and a wrapper that folded
+    // the missing keys to `null` would blank three columns on every edit.
+    invoke.mockResolvedValue(undefined);
+    await ipc.stickyNoteUpdate(7, { title: "Renamed", body: "x", color: "jade", pinned: true });
+    expect(invoke).toHaveBeenCalledWith("sticky_note_update", {
+      id: 7,
+      title: "Renamed",
+      body: "x",
+      color: "jade",
+      pinned: true,
+    });
+    await ipc.stickyNoteUpdate(7, { body: "only the body" });
+    expect(invoke).toHaveBeenLastCalledWith("sticky_note_update", { id: 7, body: "only the body" });
+
+    await ipc.stickyNoteDelete(7);
+    expect(invoke).toHaveBeenLastCalledWith("sticky_note_delete", { id: 7 });
+
+    await ipc.stickyNoteReorder([3, 1, 2]);
+    expect(invoke).toHaveBeenLastCalledWith("sticky_note_reorder", { ids: [3, 1, 2] });
+
+    // And the crate declares every one of them. The four writes are `pub async fn`, so their
+    // payloads are read out of `ipc.ts` rather than written down here — containment rather than
+    // equality, `finishBearing`'s rule, since each also declares a `state` it is never sent.
+    for (const command of [
+      "sticky_note_create",
+      "sticky_note_update",
+      "sticky_note_delete",
+      "sticky_note_reorder",
+    ]) {
+      const sent = payloadKeys(ipcSource, command).map(snake);
+      const declared = commandParams(stickyNotesRs, command);
+      expect(sent, `nothing parsed out of ipc.ts for \`${command}\``).not.toHaveLength(0);
+      expect(
+        declared,
+        `\`${command}\` is not declared \`pub async fn\` in sticky_notes.rs`,
+      ).not.toHaveLength(0);
+      for (const key of sent) {
+        expect(declared, `\`${command}\` is sent \`${key}\` and does not declare it`).toContain(
+          key,
+        );
+      }
+    }
+    // The four the spread hides from `payloadKeys`, by name.
+    for (const param of ["id", "title", "body", "color", "pinned"]) {
+      declares("sticky_note_update", param);
+    }
   });
 
   it("reads the error log with a limit and clears it with nothing", async () => {
@@ -4555,6 +4646,21 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     // reader must never confuse, confused on every launch with nothing red.
     ["RecentCard", recentCardsRs, "RecentCard"],
     ["SetCompletion", setCompletionRs, "SetCompletion"],
+    // **The sticky notes' one** (user schema v46). Here rather than on `mirrors` for
+    // `HomeLayout`'s reason — it draws no card and it has eight fields against that table's floor
+    // of ten — and **`StickyNote`/`StickyNoteRow` is a third pair whose two spellings differ**,
+    // `DeckNote`/`DeckNoteRow`'s precedent, so both names are written out rather than assumed.
+    //
+    // Every drift it can catch is the quiet kind, and each leaves a board that still draws. A
+    // renamed `title` reads `undefined`, `stickyTitle` takes its body's-first-line arm, and every
+    // note on the page is headed by its own opening sentence — which is a *designed* state for a
+    // note with no heading, so the bug and the feature are one picture. A renamed `color` makes
+    // `noteColor` answer `slate` for every note, which is the same word an unknown colour gets,
+    // so the reader's whole filing turns grey and nothing anywhere says why. A renamed `pinned`
+    // is `undefined`, which is falsy, so the widget's *pinned first* toggle lifts nothing. And a
+    // renamed `sortOrder` makes the arrangement `undefined` on every row, so the board stops
+    // remembering a drag — `deck_notes`' failure one table over.
+    ["StickyNote", stickyNotesRs, "StickyNoteRow"],
     ["PriceMover", priceHistoryRs, "PriceMover"],
     ["PriceMovers", priceHistoryRs, "PriceMovers"],
     // **The tenth widget's three**, and they are nested two deep for `PriceMovers`' reason: a
@@ -4582,11 +4688,17 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     // chip and the deck's per-card marks, so a field renamed one level down leaves `DeckNoteRow`
     // agreeing field for field while every card the note names arrives `undefined`.
     //
-    // **On this table and not on `mirrors` above**, for `ShareRow`'s reason twice over and
-    // deliberately rather than by omission: neither draws a picture — a note is prose about a
-    // card, and a row carrying an art URL per attachment would be paying for a wall nobody
-    // renders — and the largest of the three is eight fields against that table's floor of ten.
-    // Both of those rules are properties of a card *wall's* row rather than of a mirror.
+    // **On this table and not on `mirrors` above, and since 2026-09-20 the _field floor_ is the
+    // whole of why.** `mirrors` asserts two things beyond field parity — `imageUris` present on
+    // both sides, and more than ten fields parsed — and this comment used to rest on the first:
+    // *neither draws a picture, and a row carrying an art URL per attachment would be paying for
+    // a wall nobody renders*. **That stopped being true when `DeckNoteCard` grew `cardId` and
+    // `imageUris`**, which is exactly that art URL per attachment: a note card draws a
+    // representative printing now, so the picture assertion is one these rows would **pass**.
+    // What still keeps all three here is the count — `DeckNoteRow` 8, `CardNoteRow` 5,
+    // `DeckNoteCard` 4 — against a floor of ten that is a property of a card *wall's* row rather
+    // than of a mirror. So: **a later rung that takes one of these past ten fields is a row that
+    // should move up to `mirrors`**, and for `DeckNoteCard` nothing else is in the way.
     //
     // **`DeckNote`/`DeckNoteRow` and `CardNote`/`CardNoteRow` are the two spellings that differ**,
     // `DeckCard`/`DeckCardRow`'s precedent, so both pairs are written out rather than assumed.

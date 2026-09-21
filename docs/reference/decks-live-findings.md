@@ -2275,3 +2275,134 @@ deliberately; the stepper is still dropping the caret everywhere else it reaches
   `Add … to Collection`, no refusal banner, no console line, and no row at the root — checked
   against `collection_entries` directly. Unrelated to this issue and not investigated further;
   the rows for the collection leg above were seeded instead.
+
+## The redesigned notes band, driven 2026-09-21, `npm run tauri dev` (debug), a fresh worktree db
+
+The band is a masonry of note cards now, and its three acts are dialogs. A fresh worktree
+database, its own Scryfall sync (118,609 cards, data from 2026-09-20), one Commander deck of
+eight real printings, and five untitled notes written through `deck_note_create` at body lengths
+chosen to make the layout disagree with itself. Every figure below is off that window.
+
+### The masonry is real, and the gap is what stays uniform
+
+At a **1657px** band, `repeat(auto-fill, minmax(280px, 1fr))` resolved to **five tracks of
+325px** with `column-gap: 8px`, `row-gap: 0px` and `align-items: flex-start` — the four values the
+band now asserts. The five cards measured **184, 186, 184, 207, 184** px tall. The floor holds at
+184 and nothing above it is clamped, which is the reader's call of 2026-09-20 reversing the design
+document's fixed height.
+
+Each card's `grid-row` span was its own height **plus exactly 8**: `span 192` at 184px, `span 194`
+at 186px, `span 215` at 207px. That is `masonryRowSpan(h, NOTE_GAP)` arriving intact through
+`ResizeObserver` and a layout effect.
+
+**The wrap is the thing worth having measured**, and one row of five cannot show it. Narrowing the
+grid to 700px through `element.style` and backing it out again — two columns:
+
+| card | top | height | bottom | the card under it starts at |
+| --- | --- | --- | --- | --- |
+| 1 | 2529 | 184 | 2713 | 2721 — **8px** |
+| 2 | 2529 | 186 | 2715 | 2723 — **8px** |
+| 3 | 2721 | 184 | 2905 | 2913 — **8px** |
+
+Card 4 begins at 2723 because card 2 above it is 2px taller — it is **not** pushed down to line up
+with card 3. Both columns advance independently and every vertical gutter is 8px. At 600px the
+fourth card grew to 226px and the gutters were still 8px. That is the failed-masonry reading the
+design document feared, measured and absent.
+
+### The Tiptap chunk stays out, and the probe that says otherwise is the wrong probe
+
+`performance.getEntriesByType("resource")` caps at **250 entries** by default and was already full
+before the band was opened, so it reported zero Tiptap modules both before *and* after the press —
+a clean pass against a defect. The buffer-independent question is whether
+`prosemirror-view/style/prosemirror.css` has been injected, since `NoteEditor` imports it:
+
+- deck open, band open, five notes drawn and read → **no `.ProseMirror` rule, no `role="textbox"`**
+- after one press of `New note` → **the rule is present and there is exactly one textbox**
+
+One textbox, not two: there is no title field in the create flow.
+
+### The placeholder genuinely paints
+
+`data-placeholder` carries *"Start typing — the first line becomes the note's name."* and the
+`::before` computes `content` to that same string, `color: oklch(0.65 0.01 90)` (`text-dim`),
+`float: left`, `height: 0px` — so the prompt sits beside the caret rather than pushing it down a
+line. `Save note` reads `aria-disabled="true"` on the empty body. A Tailwind arbitrary value that
+emitted nothing would have shown here as a missing `content`; it did not.
+
+### ⚠️ `loading="lazy"` makes `naturalWidth` a liar below the fold
+
+The band sits at y≈2529 in this deck, far under the viewport, and every strip image reported
+`naturalWidth: 0` with `?stall=2` on its URL — `CardImage`'s re-request deadline firing on a frame
+with no box. It reads exactly like seven broken images, and it survived a 45-second wait **and** a
+full collapse-and-reopen of the band. It is not a defect: `scrollIntoView` and all seven loaded at
+**626×457** in a 42×30 box. A `new Image()` probe of the same card had already shown all four
+variants serving (`display` 672×936, `art` 626×457, `grid` 488×680, `thumb` 146×204), which is what
+first separated "the protocol is fine" from "these images are fine".
+
+### The strip, the picker and the caret
+
+- A note naming **five** cards draws three crops and a `+2 more` chip; a note naming **none** draws
+  no strip at all, not an empty one.
+- The strip carries **zero tab stops** where no handler is passed, which is every shipped call
+  site, and exactly one where the `+N more` chip exists. Its `sr-only` sentence names every card,
+  not only the drawn three: *"Names 5 cards: Goblin Chieftain; Krenko, Mob Boss; Lightning Bolt;
+  Purphoros, God of the Forge; Skirk Prospector."* — semicolons, because two of those names carry
+  commas of their own.
+- The picker's chips are keyed on **card type** in `TYPE_BUCKETS` order and named as sentences:
+  `All, 8 cards` · `Named, 2 cards` · `Creature, 4 cards` · `Instant, 1 card` · `Artifact, 1 card`
+  · `Land, 2 cards`.
+- **The caret comes back.** Focusing `Cards on …`, pressing it, and pressing `Done` returns focus
+  to that same button — identity-compared against the element, not its name. Before the hand-back
+  landed this was `<body>`.
+
+### Open — the accessible name of an untitled note's controls is its whole first line
+
+`noteTitle()` is documented as never truncating, and with the title field gone every note is
+untitled, so a control's name is the body's entire opening sentence. Measured: the `+2 more` chip
+on the longest note computed an `aria-label` of **185 characters** —
+*"2 more cards in Haste enabler first, then the tap. Without one the whole turn is a draw step.
+Tested twice against the Simic deck and…"*. The visible title truncates by CSS; the name does not.
+It was the same before the redesign (`NoteRow` built its names the same way), but a blank title was
+the exception then and is the rule now. Not fixed here.
+
+### Open — `NoteEditor` drops keystrokes when the host re-renders between two of them
+
+**Pre-existing, and the redesign changed its reachability not at all** — which is the half worth
+stating, because the band was rewritten around this editor in the same week. It is written up here
+rather than left in a test comment because this file's index line promises *including the bugs
+still open*, and until 2026-09-21 the only record of it was
+`NoteEditorDialog.test.tsx`'s doc on `typist()`.
+
+**The mechanism.** `NoteEditor` is controlled. Each keystroke serialises the document to markdown,
+the host stores it, and the editor's own value-sync effect then compares `editor.getMarkdown()`
+against the `value` that render was handed — a guard whose whole job is to leave the document
+alone when the two already agree. A keystroke that lands **after** that render was scheduled and
+**before** its effect runs makes the two disagree for a reason the guard cannot tell from an
+external edit: the document has moved on and `value` has not. So the guard fails, `setContent`
+puts the older body back, and the caret goes with it.
+
+**The measurement**, from this suite rather than from the window: `"Fourteen sources."` typed at
+`userEvent`'s default inter-key delay — which yields to the macrotask queue between letters, and
+is therefore the instrument that opens the window — arrives as **`"Futen ore."`**. It arrives
+**intact** three ways: uncontrolled, at `delay: null`, and pasted. That triple is what says the
+fault is the round trip and not the editor's own input handling.
+
+**The redesign did not move it.** The old in-row editor drove the same component with the same
+arrangement — a `useState(note.body)` in the host and `<NoteEditor value onChange>` under it —
+so the dialog inherited the race rather than introducing it, and `NoteEditorDialog.test.tsx`'s
+`typist()` (a `userEvent.setup({ delay: null })`) steps around it so that file's cases measure the
+dialog instead of this.
+
+**The fix not taken** is to stop asking the document what it holds and latch what was last
+*serialised out*: a ref written in `onUpdate` beside the `onChange` call, compared against `value`
+in the sync effect in place of `editor.getMarkdown()`. That answers *"is this `value` one we
+produced"* rather than *"does the document currently match"*, which is the question the guard was
+always trying to ask, and it is immune to the document having moved on in between. It is not done
+here because this branch's subject is the band around the surface, and a change to the sync effect
+is a change every note, every sticky note and the card modal's overlay ride on.
+
+**The one question jsdom cannot settle**: whether a human reaches it. Every reading above comes
+from a synthetic typist whose inter-key delay is a scheduler yield rather than a duration — the
+real question is whether a keystroke at **key-repeat speed** in the shipped window lands inside the
+same gap, and only driving the real WebView2 can answer it. Nothing was measured there, and the
+2026-09-21 pass did not attempt it.
