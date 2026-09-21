@@ -30,6 +30,40 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.28.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.27.0...v0.28.0) (2026-09-21)
+
+
+### Features
+
+* **card:** a rail and a pane for the combos dialog ([f063ff3](https://github.com/Msgaihede/mtg-grimoire/commit/f063ff3eadb2d67a46eb9f20338a68d1d83b0c8c))
+* **card:** a rail and a pane for the combos dialog ([ac4c562](https://github.com/Msgaihede/mtg-grimoire/commit/ac4c5628886b94fa4dcec78b39d46553a1f941b6))
+* **decks:** count MDFC lands beside the deck header's Lands figure ([82331c7](https://github.com/Msgaihede/mtg-grimoire/commit/82331c75f98b7820cb0c7f3d5011cde736e9ab5f))
+* **decks:** count MDFC lands beside the deck header's Lands figure ([851354e](https://github.com/Msgaihede/mtg-grimoire/commit/851354ea6c4269fc3568980899a4854df7a1b547)), closes [#475](https://github.com/Msgaihede/mtg-grimoire/issues/475)
+* **home:** a New printings widget, the tenth kind ([e45dedb](https://github.com/Msgaihede/mtg-grimoire/commit/e45dedb6e2fcee4c13dfc32a060d5f17d4eed07d))
+* **home:** add a sticky notes widget ([08793e9](https://github.com/Msgaihede/mtg-grimoire/commit/08793e95841b1e4005ddde6037da3b8d3d011a43))
+* **home:** open the editor on New note, and reorder the board ([632ed37](https://github.com/Msgaihede/mtg-grimoire/commit/632ed37e147b67800c61741cf6d0700578f671ac))
+* **home:** zoom the dashboard with ctrl+scroll ([c52a5de](https://github.com/Msgaihede/mtg-grimoire/commit/c52a5def0def7f2c01b2509dcec8ee0e2f9205d0))
+* **home:** zoom the dashboard with ctrl+scroll ([0883ff9](https://github.com/Msgaihede/mtg-grimoire/commit/0883ff9848a4a956b778f7cd4fa6ec9d5784598a))
+* **notes:** carry a printing on DeckNoteCard, and widen what the picker offers ([3055ecd](https://github.com/Msgaihede/mtg-grimoire/commit/3055ecd4f56e264254c35479961a264ec54ab17f))
+* **notes:** create a card note on Save rather than on the press ([4c3bfc1](https://github.com/Msgaihede/mtg-grimoire/commit/4c3bfc1f672848cd525c01fb79ab228b19abc0fc))
+* **notes:** draw a note as a card with the art it names ([9375fa0](https://github.com/Msgaihede/mtg-grimoire/commit/9375fa0ea12b50de4c99609aa22e62e798caf382))
+* **notes:** draw the band as a masonry of cards over three dialogs ([903ed38](https://github.com/Msgaihede/mtg-grimoire/commit/903ed3836641636e0e36b7d454d97b10cc65a8af))
+* **notes:** name a representative printing for each card a note names ([c6d1de7](https://github.com/Msgaihede/mtg-grimoire/commit/c6d1de76b3328b6200cf77b81a938c7590b59dc0))
+* **notes:** pick a note cards in a dialog ([be97c5a](https://github.com/Msgaihede/mtg-grimoire/commit/be97c5a2f00b9053c2dc7f85130276a3ee57600e))
+* **notes:** write a note in a dialog, with no title field ([9a42967](https://github.com/Msgaihede/mtg-grimoire/commit/9a429679622de3ba6a1d97894c7fea76277d66f0))
+
+
+### Bug Fixes
+
+* **card:** keep the walk alive when the open card is removed ([e897fd2](https://github.com/Msgaihede/mtg-grimoire/commit/e897fd27fc5574e1eb69a1c939efeee42c4d3cf1))
+* **card:** keep the walk alive when the open card is removed ([1ccf4c9](https://github.com/Msgaihede/mtg-grimoire/commit/1ccf4c91281ea8e20a6f1fe02b2e4b9879adab91)), closes [#474](https://github.com/Msgaihede/mtg-grimoire/issues/474)
+* **dialog:** bound the panel's width, and what the live pass found ([b9c9b49](https://github.com/Msgaihede/mtg-grimoire/commit/b9c9b49685d05f256b899d1d94ce14d822fd05fd))
+* **notes:** fence the picker footer, its search and its vanishing chip ([2287e69](https://github.com/Msgaihede/mtg-grimoire/commit/2287e69deb2eabea9acfd4e6fe0fa3a604cb7224))
+* **notes:** give the caret back, and fence the masonry the band draws ([13eabd7](https://github.com/Msgaihede/mtg-grimoire/commit/13eabd77c588e02f0a0b7196f432bd9f21e2b671))
+* **notes:** give the thumbnail strip back its announcement ([0073d8c](https://github.com/Msgaihede/mtg-grimoire/commit/0073d8cf40c5782fc600a2ba9d055ac0d7705909))
+* **notes:** make the picker draw the same printing the note card will ([407fc6b](https://github.com/Msgaihede/mtg-grimoire/commit/407fc6b13940d19399d5c1e1c247e327bd5a6586))
+* **notes:** stop the thumbnail strip putting dead tab stops on every card ([9b67f69](https://github.com/Msgaihede/mtg-grimoire/commit/9b67f690ec0cb1fcfc65c6d9463bfda8ecb40442))
+
 ## [0.27.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.26.0...v0.27.0) (2026-09-20)
 
 
