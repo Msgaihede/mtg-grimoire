@@ -1244,20 +1244,32 @@ export const Gone: Story = {
 export const SwapFolds: Story = {
   args: { deckId: 2 },
   play: async ({ canvasElement }) => {
-    // **Every gesture goes through this one session, and that is a performance fence rather than
-    // a style.** `userEvent.click(...)` — the direct API — calls `setup()` internally, and a
-    // session prepares the whole document: it attaches its own listeners and builds the pointer
-    // and keyboard state against however many elements are mounted. This play mounts the editor,
-    // the card modal and the printings dialog, which is **~1 900–2 200 elements**, so each of the
-    // ten direct calls it used to make paid that preparation again.
+    // **Every gesture goes through this one session rather than through the direct API.**
+    // `userEvent.click(...)` calls `setup()` internally, and a session prepares the whole
+    // document: it attaches its own listeners and builds the pointer and keyboard state against
+    // however many elements are mounted. This play mounts the editor, the card modal and the
+    // printings dialog — **~1 900–2 200 elements** — so each of the ten direct calls it used to
+    // make paid that preparation again.
     //
-    // Measured 2026-09-20 on this machine, three runs each, back to back so the comparison is not
-    // load drift: ten direct calls gave **7272 / 6384 / 6988 ms**, and one shared session gives
-    // **4948 / 4878 / 4762 ms**. The median is ~30 % lower and the *spread* collapses from
-    // seconds to **186 ms**, which is the half that matters — under fleet load the direct-API
-    // version reached **15 798 ms** against the 15 000 ms `testTimeout` and failed, while the
-    // shared session did not move. This play is the suite's slowest and was a coin flip; it is
-    // not one now.
+    // **Measured back to back in one quiet window, three runs each** (2026-09-20): ten direct
+    // calls **7551 / 7163 / 7443 ms**, one shared session **6564 / 6659 / 6334 ms**. About
+    // **12 %**, and that is the number to quote.
+    //
+    // ⚠️ **The commit that landed this said ~30 % and a variance collapse from seconds to 186 ms,
+    // and both were load drift rather than this change.** Those figures came from runs taken
+    // tens of minutes apart while a fleet of worktrees was building; re-measured back to back the
+    // two arrangements are both stable (388 ms and 325 ms of spread) and differ by 12 %. The
+    // direct-API version really did hit **15 798 ms** against the 15 000 ms `testTimeout` once —
+    // that happened — but a 12 % saving moves such a spike to ~13.9 s rather than preventing it,
+    // so this reduces the odds of a timeout and does not abolish them. **On this machine, take no
+    // timing comparison seriously unless its two halves were measured minutes apart.**
+    //
+    // **It does not generalise, which is why there is no sweep.** The same conversion on
+    // `AutoPileArrivesWithItsCard` — seven direct calls, this same file, the same editor mount —
+    // measured **2457 / 2481 / 2435** against **2470** baseline: nothing. On `SearchPage`'s
+    // `Unplayable` (six calls) it was 13.5 %. So the per-call cost is somewhere between 0 and
+    // ~50 ms depending on the play, never the ~210 ms this one implied, and converting the
+    // suite's other 240 excess sessions was measured as not worth the churn.
     //
     // **It is not `pointerEventsCheck`.** Disabling that check on top of the shared session
     // measured 4131 / 4234 / 4233 — inside the noise of the session change alone — so the safety
