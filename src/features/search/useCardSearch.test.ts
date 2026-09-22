@@ -16,6 +16,7 @@ import { COLD_POLL_MS } from "./useCardFacets";
 import {
   activeFilterCount,
   ANY_CARD,
+  CARD_TYPES,
   cycleTriState,
   DEBOUNCE_MS,
   formatParams,
@@ -23,6 +24,7 @@ import {
   SEARCH_SORT_OPTIONS,
   toggleColor,
   toggleIn,
+  typesParam,
   useCardSearch,
   type FormatFilterOption,
 } from "./useCardSearch";
@@ -44,6 +46,7 @@ describe("activeFilterCount", () => {
     manaX: false,
     owned: undefined,
     rarities: [],
+    types: [],
     priceMin: undefined,
     priceMax: undefined,
   };
@@ -82,6 +85,19 @@ describe("activeFilterCount", () => {
     expect(activeFilterCount({ ...none, manaX: true })).toBe(1);
     expect(activeFilterCount({ ...none, manaValues: [1], manaX: true })).toBe(1);
     expect(activeFilterCount({ ...none, manaValues: [1], manaX: true, text: "bolt" })).toBe(2);
+  });
+
+  /**
+   * The type chips are one kind however many are pressed — the `colors`/`rarities` rule, over a
+   * row of eight. A reader who narrowed to instants and sorceries has narrowed once, and a badge
+   * reading `Reset all 2` over one chip row would be the wrong number about one control.
+   */
+  it("counts the type chips as one active filter however many are pressed", () => {
+    expect(activeFilterCount({ ...none, types: ["Creature"] })).toBe(1);
+    expect(activeFilterCount({ ...none, types: ["Instant", "Sorcery", "Land"] })).toBe(1);
+    // And a kind of its own beside the rarities, rather than folded in with them: two chip rows
+    // pressed is two things Reset all would clear.
+    expect(activeFilterCount({ ...none, types: ["Creature"], rarities: ["rare"] })).toBe(2);
   });
 
   /** Whitespace is not a search. */
@@ -170,6 +186,19 @@ const READY: FacetResponse = {
   manaX: 1,
   formats: { modern: 1 },
   rarities: { common: 1, uncommon: 1, rare: 1, mythic: 1 },
+  // The eight type counts. They overlap and do not sum to `total` — an artifact creature is in
+  // two of them — which is why the fixture's numbers are not arithmetic about the `total: 1`
+  // below them.
+  types: {
+    Creature: 1,
+    Planeswalker: 1,
+    Instant: 1,
+    Sorcery: 1,
+    Artifact: 1,
+    Enchantment: 1,
+    Battle: 1,
+    Land: 1,
+  },
   sets: { lea: 1 },
   owned: { owned: 1, missing: 0 },
   total: 1,
@@ -361,6 +390,211 @@ describe("the X mana chip", () => {
     // because the key *is* the search — a filter that survived the reset would show here as a
     // search that is not the one this view starts in.
     expect(result.current.searchKey).toBe(fresh);
+  });
+});
+
+/**
+ * The shared card-type vocabulary, which two of its three properties are load-bearing about.
+ *
+ * The words themselves are checked against `cardtypes.rs`'s `TYPE_KEYS` in Rust and cannot be
+ * checked against it from here — what this file can hold is that the list is the eight and that
+ * the order is the *display* order rather than the bit order, because a list that had quietly
+ * become alphabetical would draw a chip row nobody would report as wrong.
+ */
+describe("CARD_TYPES and typesParam", () => {
+  it("offers the eight types in decklist order, Creature first and Land last", () => {
+    expect(CARD_TYPES).toHaveLength(8);
+    expect(CARD_TYPES[0]).toBe("Creature");
+    expect(CARD_TYPES[CARD_TYPES.length - 1]).toBe("Land");
+    // The same eight words `TYPE_KEYS` freezes, in a different order on purpose: sorted, the two
+    // lists are identical, and that is the half a chip row cannot show.
+    expect([...CARD_TYPES].sort()).toEqual([
+      "Artifact",
+      "Battle",
+      "Creature",
+      "Enchantment",
+      "Instant",
+      "Land",
+      "Planeswalker",
+      "Sorcery",
+    ]);
+  });
+
+  /** Canonicalised before it reaches a key, for `setsParam`'s reason: picking Creature then Land
+   *  is the same search as Land then Creature and must not cost a second round trip. */
+  it("sorts the picked types and answers nothing for none", () => {
+    expect(typesParam([])).toBeUndefined();
+    expect(typesParam(["Land", "Creature"])).toEqual(["Creature", "Land"]);
+    expect(typesParam(["Creature", "Land"])).toEqual(typesParam(["Land", "Creature"]));
+  });
+});
+
+/**
+ * The `Exactly` chip and the type chips, whose whole risk is the query key — the X chip's risk
+ * one row over, and the reason that block above is the template for this one.
+ *
+ * `WU` and `WU` strict are two different sets of cards against the same local SQLite, so a key
+ * that could not tell them apart would answer the second out of the first's cached pages
+ * *instantly*: no request, no spinner, nothing on screen to notice, and a reader who reads it as
+ * "the chip does nothing". A new request having gone out at all is therefore the assertion, and
+ * the payload is read off that request rather than off a re-render.
+ */
+describe("the Exactly chip and the type chips", () => {
+  beforeEach(() => {
+    qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    searchCards.mockReset().mockResolvedValue({ items: [], total: 0, totalIsCapped: false });
+    facetCards.mockReset().mockResolvedValue(READY);
+  });
+
+  it("is off and absent from both payloads until it is pressed", async () => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+    await waitFor(() => expect(facetCards).toHaveBeenCalled());
+
+    expect(result.current.colorsStrict).toBe(false);
+    expect(result.current.types).toEqual([]);
+    // **`undefined` rather than `false`.** A literal `false` on the wire reads as "the reader
+    // chose loose" where they chose nothing at all — and React Query hashes the facet request
+    // with its `undefined` values dropped, so it would also mint a second key for the search an
+    // untouched row has always had.
+    expect(lastSearchRequest().colorsStrict).toBeUndefined();
+    expect(lastFacetRequest().colorsStrict).toBeUndefined();
+    expect(lastSearchRequest().types).toBeUndefined();
+    expect(lastFacetRequest().types).toBeUndefined();
+  });
+
+  it("gives strict colours their own query-key segment", async () => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    act(() => result.current.toggleColor("W"));
+    await waitFor(() => expect(lastSearchRequest().colors).toBe("W"));
+    const asked = searchCards.mock.calls.length;
+    const key = result.current.searchKey;
+
+    act(() => result.current.toggleColorsStrict());
+
+    await waitFor(() => expect(searchCards.mock.calls.length).toBeGreaterThan(asked));
+    expect(result.current.searchKey).not.toBe(key);
+    expect(lastSearchRequest().colorsStrict).toBe(true);
+    // The letters are unchanged: strict is a modifier on the row rather than a different row.
+    expect(lastSearchRequest().colors).toBe("W");
+    // The counts have to describe the same corpus the page does, or a colour count taken loosely
+    // would offer an option the strict wall has nothing under.
+    await waitFor(() => expect(lastFacetRequest().colorsStrict).toBe(true));
+
+    // …and turning it back off is the same search again, by the same key — which is also what
+    // says the segment is the chip's own rather than something that grows on every press.
+    act(() => result.current.toggleColorsStrict());
+    expect(result.current.searchKey).toBe(key);
+  });
+
+  it("gives the type chips their own query-key segment", async () => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+    const asked = searchCards.mock.calls.length;
+    const key = result.current.searchKey;
+
+    act(() => result.current.toggleType("Creature"));
+
+    await waitFor(() => expect(searchCards.mock.calls.length).toBeGreaterThan(asked));
+    expect(result.current.searchKey).not.toBe(key);
+    expect(lastSearchRequest().types).toEqual(["Creature"]);
+    await waitFor(() => expect(lastFacetRequest().types).toEqual(["Creature"]));
+
+    // Sorted on the way out, so the press order is not a fact about the filter: picking Land
+    // second must be the same request — and the same cache entry — as picking it first.
+    act(() => result.current.toggleType("Land"));
+    await waitFor(() => expect(lastSearchRequest().types).toEqual(["Creature", "Land"]));
+  });
+
+  /**
+   * **Clearing the last colour clears strict**, which is the rule that keeps the flag from
+   * surviving as state with no control. The `Exactly` chip is only drawn while a colour is
+   * picked, so a flag left standing over an empty row would be invisible to the reader, still in
+   * the query key, and still waiting to change what the next colour they press means.
+   */
+  it("turns strict off when the last colour goes", async () => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    act(() => result.current.toggleColor("W"));
+    act(() => result.current.toggleColor("U"));
+    act(() => result.current.toggleColorsStrict());
+    expect(result.current.colorsStrict).toBe(true);
+
+    // One colour left: the chip is still drawn, so the flag stays.
+    act(() => result.current.toggleColor("U"));
+    expect(result.current.colors).toEqual(["W"]);
+    expect(result.current.colorsStrict).toBe(true);
+
+    act(() => result.current.toggleColor("W"));
+
+    expect(result.current.colors).toEqual([]);
+    expect(result.current.colorsStrict).toBe(false);
+    await waitFor(() => expect(lastSearchRequest().colorsStrict).toBeUndefined());
+  });
+
+  /**
+   * Reset all reaches both — and reaches `colorsStrict` although the badge never counted it,
+   * which is the asymmetry worth pinning: the number captions *how much this press changes*,
+   * and a modifier that narrows nothing on its own is not one of those things, while a flag left
+   * behind by the press that clears the colours would be exactly the invisible state above.
+   */
+  it("clears both new filters on resetAll", async () => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+    const fresh = result.current.searchKey;
+
+    act(() => result.current.toggleColor("W"));
+    act(() => result.current.toggleColorsStrict());
+    act(() => result.current.toggleType("Creature"));
+
+    // Two kinds and not three: the colours and the types are one each, and `colorsStrict` is
+    // counted by neither.
+    expect(result.current.activeCount).toBe(2);
+    expect(result.current.unfiltered).toBe(false);
+
+    act(() => result.current.resetAll());
+
+    expect(result.current.colors).toEqual([]);
+    expect(result.current.colorsStrict).toBe(false);
+    expect(result.current.types).toEqual([]);
+    expect(result.current.activeCount).toBe(0);
+    expect(result.current.unfiltered).toBe(true);
+    // Back to the key the row opened on. Asserted rather than read off the next request, because
+    // the key *is* the search: a filter that survived the reset would show up here as a search
+    // that is not the one this view starts in.
+    expect(result.current.searchKey).toBe(fresh);
+  });
+
+  /**
+   * A type chip narrows, so `unfiltered` has to see it — that flag is what decides whether an
+   * empty wall is captioned "wait for the sync" or "try another word", and a reader who filtered
+   * to Battles on a cold database would otherwise be told there is no other word.
+   *
+   * **`colorsStrict` is deliberately not in that predicate**, and cannot be: it is unreachable
+   * without a colour picked, so a term for it could never decide the answer.
+   */
+  it("counts a type chip as a filter and a strict flag as none of its own", async () => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+    expect(result.current.unfiltered).toBe(true);
+
+    act(() => result.current.toggleType("Battle"));
+    expect(result.current.unfiltered).toBe(false);
+    expect(result.current.activeCount).toBe(1);
+
+    // A second chip in the same row is the same one kind — the `colors`/`rarities` rule.
+    act(() => result.current.toggleType("Land"));
+    expect(result.current.activeCount).toBe(1);
+
+    // And strict over a picked colour adds nothing to either number: the colours were already
+    // one kind that is on, and the chip changes what they mean rather than adding a narrowing.
+    act(() => result.current.toggleColor("G"));
+    expect(result.current.activeCount).toBe(2);
+    act(() => result.current.toggleColorsStrict());
+    expect(result.current.activeCount).toBe(2);
   });
 });
 

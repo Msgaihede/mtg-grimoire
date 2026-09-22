@@ -4325,7 +4325,7 @@ describe("DeckEditor", () => {
     // holding a stray row would read a `""` and fail here rather than where the defect was. The
     // two cases below are the ones that add such a row, through `withPlan`'s `extraLive`.
     for (const mark of document.querySelectorAll(`[${THEORY_MATCH_ATTR}]`)) {
-      expect(mark).toHaveTextContent("-2");
+      expect(mark).toHaveTextContent("−2");
       // The tier as the attribute's own value, which is what the case below turns on: this deck
       // is born with all three switches on, so the printing the plan named draws the **exact**
       // mark.

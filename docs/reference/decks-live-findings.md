@@ -2406,3 +2406,100 @@ from a synthetic typist whose inter-key delay is a scheduler yield rather than a
 real question is whether a keystroke at **key-repeat speed** in the shipped window lands inside the
 same gap, and only driving the real WebView2 can answer it. Nothing was measured there, and the
 2026-09-21 pass did not attempt it.
+
+## The editor's missing bottom margin, and one `<dl>` spelled two ways — 2026-09-22, `npm run tauri dev` (debug), 1920×1080, a copy of the real db
+
+A reader's report of two things at once: that the bottom-most controls were "very hard to use",
+and that the numbers on the ledger line were not all set alike. Both turned out to be true, and
+**neither suite could see either one** — the first is a layout fact with no test that reads a
+scroll extent, and the second is a pair of literals in two tests that never met.
+
+### `padding-bottom` on the page scroller reached nothing
+
+`AppShell`'s `<main>` is `relative min-h-0 flex-1 overflow-auto p-5`, so every page in this app is
+drawn with 20px under its last row. **The deck editor got none of it.** Measured on the 100-card
+Commander deck, scrolled to the end (`scrollTop === scrollHeight - clientHeight`, both 3317):
+
+| | |
+| --- | --- |
+| `main.scrollHeight` / `clientHeight` | **4305** / 988 |
+| editor `<section>` height | **948** — *not* 4285, its content's height |
+| last band (`Notes`) bottom edge | y **1079.59** in a **1080**px window |
+| clearance under the last control | **0.41px** |
+
+The section was `relative flex h-full min-h-0 flex-col gap-3`. `h-full` pins it to exactly the
+scroller's height; its children are `shrink-0`; on any deck taller than the window they **overflow**
+it rather than extend it. **A scroll container's bottom padding is part of the scrollable overflow
+of its own in-flow content only** — an overflowing descendant contributes its border box and
+nothing after it. So `main`'s 20px was real on Collection and Wishlist and silently absent here,
+and the `New note` button sat flush against the window frame.
+
+**A `pb-*` on the section does not fix it, and that was tried first.** Under `box-sizing:
+border-box` the padding is *inside* a box whose height is already pinned at 100%. `pb-8` applied —
+`getComputedStyle(section).paddingBottom` read back `32px` — and moved nothing: `main.scrollHeight`
+**4305 before and 4305 after**, clearance still **0.41px**. That is the whole trap, and it is the
+kind that reads as "the class did not apply".
+
+**`min-h-full` is the fix**, which is what `DecksPage` had always used (`flex min-h-full flex-col
+gap-3`). Backed in and out live in one pass via `element.style`, on both a tall and an empty deck:
+
+| | `h-full` (before) | `min-h-full` (after) |
+| --- | --- | --- |
+| section height, 100-card deck | 948 | **4296.6** |
+| `main.scrollHeight`, 100-card deck | 4305 | **4337** |
+| clearance under the last control | 0.41px | **32.41px** |
+| deck view height, 100-card deck | 2502.5 | **2502.5** |
+| section height, empty deck | 948 | 1207.8 |
+| deck view height, empty deck | 815 | **815** |
+
+**The view height is identical in both, on both decks**, which is the thing worth recording: the
+views are `flex-1` under `DECK_HEIGHT_FLOOR`'s `min-h-96`, and dropping the definite height changes
+neither case. On a deck shorter than the window the box is still 100% tall, free space still
+exists, and `flex-1` still stretches into it; on one taller there was never free space to
+distribute and the floor was what held the view up already. The shipped class list is
+`relative flex min-h-full flex-col gap-3 pb-3 select-none` — `main`'s own 20px lands once the
+section is in flow, and `pb-3` brings the total to the 32px asked for. **`min-h-0` went with it and
+is no loss**: `main` is `display: block`, measured, so a `min-height: 0` on a non-flex child was
+inert the whole time.
+
+### Three tallies on one line, three mechanisms
+
+The ledger's `<dd>` text, read straight off the DOM before the change:
+
+```
+["FormatCommander", "Cards100+3", "Lands32 +5 MDFC", "Avg. mana2.58", "Price$955.83", "Owned103"]
+```
+
+`Cards` glued its `+n` on with nothing; `Lands` set its own off with a `{" "}` sibling; `Owned`
+used a **CSS `ml-1.5`** and no text node at all. One `<dl>`, one `<dd>` type, the same sentence —
+*this many, and this many more* — said three ways. Both suites were green throughout, because
+`DeckLedger.test.tsx` asserted each term against its own literal and nothing ever compared them.
+
+Settled tight, which is the `Cards` term's spelling and the idiom every other tally in the editor
+already writes (`+3 sideboard`, `+24 inactive`, `+4 more`, `+2` on a theory mark). After:
+`"Cards100+3"`, `"Lands32+5 MDFC"`. The `Owned` term's margin is gone: the sign branch is tight
+like the other two, and the word branch takes a **sibling space**, which also closes a quiet
+`Missing2`-class defect — `ml-1.5` was drawing `103 3 missing` for the eye while `textContent`
+read `1033 missing`. `DeckLedger.test.tsx`'s new sibling test reads the separator off **both**
+terms and compares them to each other, so a change to either one alone goes red.
+
+### The typographic minus is in the mono face, and the comment saying otherwise was wrong
+
+`CardMarks.tsx`' `theoryDeltaText` drew ASCII `-`, on a written argument that "the typographic
+minus is not in that face's fixed-advance run" — so a `-8` and a `+2` would be different widths in
+a box whose job is to match the tag opposite it. **Measured against a live `font-mono tabular-nums`
+element at 13px in the shipped window:**
+
+| glyph | advance |
+| --- | --- |
+| `+` | **7.813px** |
+| `-` (U+002D) | **7.813px** |
+| `−` (U+2212) | **7.813px** |
+| `0`, `8` | **7.813px** |
+
+`document.fonts.check('13px "Geist Mono Variable"', "−")` is `true`, and a monospace face's whole
+promise is that advance. The claim was false, and what the ASCII hyphen actually cost was the other
+alignment: a short mark sitting low beside a `+` whose bar is centred on the digits' x-height, so
+the mark's two states were two different heights on the same card. The mark draws `−8` now, in one
+vocabulary with the ledger's own `−{missing}`. Three story plays (`GridView`, `StackView`,
+`TextView`) and two tests caught the glyph change, which is the fence working.

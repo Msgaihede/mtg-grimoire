@@ -32,6 +32,11 @@ const search = (over: Record<string, unknown> = {}) =>
     anyCard: true,
     colors: [] as string[],
     toggleColor: vi.fn(),
+    // **Required on `FilterSurface`, beside `colors`** — every surface that has colours can
+    // answer it, so a stub without one is a shape no mounted surface has. `false` is the
+    // unfiltered value, and the chip it drives is not drawn at all until a colour is picked.
+    colorsStrict: false,
+    toggleColorsStrict: vi.fn(),
     sets: [] as string[],
     toggleSet: vi.fn(),
     manaValues: [] as number[],
@@ -65,6 +70,12 @@ const search = (over: Record<string, unknown> = {}) =>
     // `false`), which is what the row reads them as.
     rarities: [] as string[],
     toggleRarity: vi.fn(),
+    // The type cell's pair. Optional on `FilterSurface` and present here because `SEARCH_TRAY`
+    // names the cell and `useCardSearch` answers it — the one case below that is about a surface
+    // which *cannot* answer it overrides `toggleType` to `undefined` rather than leaving a hole
+    // in the shape every other case shares.
+    types: [] as string[],
+    toggleType: vi.fn(),
     setOwned: vi.fn(),
     allPrintings: false,
     toggleAllPrintings: vi.fn(),
@@ -469,6 +480,20 @@ const facets = (over: Partial<FacetResponse> = {}): FacetResponse => ({
   // All four keys, as a ready response always carries them — a chip greys on a counted zero and
   // stays live on an absent key, so a fixture missing one would be testing the wrong arm.
   rarities: { common: 5, uncommon: 5, rare: 5, mythic: 5 },
+  // All eight, as a ready response always carries them — a chip greys on a counted zero and
+  // stays live on an absent key, so a fixture missing one would be testing the wrong arm. They
+  // do **not** sum to `total` and are not meant to: a card can be Artifact *and* Creature, and
+  // the corpus holds types no chip offers.
+  types: {
+    Creature: 5,
+    Planeswalker: 5,
+    Instant: 5,
+    Sorcery: 5,
+    Artifact: 5,
+    Enchantment: 5,
+    Battle: 5,
+    Land: 5,
+  },
   sets: { lea: 5 },
   owned: { owned: 3, missing: 37 },
   total: 40,
@@ -2115,6 +2140,324 @@ describe("FilterBar, its rarity chips", () => {
     expect(screen.getByRole("button", { name: /^Mythic\b/ })).not.toHaveAttribute("aria-disabled");
   });
 });
+
+/**
+ * The sixth chip in the colour group — **the reading the five beside it get**.
+ *
+ * Loose is the default and the deckbuilder's question: `RW` answers mono-R, mono-W, RW and the
+ * colourless cards that fit in any deck. Strict is the issue's ask said out loud — the RW cards
+ * alone — and it is a *modifier* on the colour filter rather than a filter of its own, which is
+ * why it is not in the badge's count and why the strip states it inside the colour chip.
+ *
+ * **Most of what is asserted here is when the chip is on screen at all.** Strict with nothing
+ * picked filters nothing at either end — the backend's arm is inside its own `nonblank` guard —
+ * so a chip drawn on an unfiltered row would be a control whose press does nothing, and a sixth
+ * chip competing for the deck panel's 206px floor for the privilege.
+ */
+describe("FilterBar, its Exactly chip", () => {
+  /** Matched on a **prefix**: the chip's accessible name is its own `title`, which names the
+   *  state as well as the label, and the sentence changes with the press. */
+  const exactly = () => screen.queryByRole("button", { name: /^Exactly\b/ });
+
+  it("does not draw the Exactly chip until a colour is picked", () => {
+    render(<FilterBar search={search()} />);
+
+    expect(exactly()).toBeNull();
+  });
+
+  /**
+   * The flag can never be stranded as state with no control drawing it.
+   *
+   * Clearing the last colour turning strict off is the *hook's* job — this row does not own the
+   * state — so what is asserted here is the half this file can be the authority on: with no
+   * colour picked the chip is not drawn even when the flag is somehow on, so there is no screen
+   * on which a reader can see strict without seeing the colours it is about.
+   */
+  it("still draws no Exactly chip when strict is on with no colour picked", () => {
+    render(<FilterBar search={search({ colors: [], colorsStrict: true })} />);
+
+    expect(exactly()).toBeNull();
+  });
+
+  /** In the colour group and not merely somewhere on the row — a chip about the colours that had
+   *  drifted out of them would read as a filter of its own. */
+  it("draws the Exactly chip once a colour is picked, unpressed", () => {
+    render(<FilterBar search={search({ colors: ["W"] })} />);
+
+    const chip = exactly()!;
+    expect(chip).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("group", { name: "Color identity" })).toContainElement(chip);
+  });
+
+  it("presses through to the surface's own toggle", async () => {
+    const toggleColorsStrict = vi.fn();
+    render(<FilterBar search={search({ colors: ["W"], toggleColorsStrict })} />);
+
+    await userEvent.click(exactly()!);
+
+    expect(toggleColorsStrict).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * The two readings said in words, because the chip is one word and the word does not say which
+   * of them is on. `ToggleChip`'s `title` *is* the accessible name, so the sentence is what a
+   * screen reader hears and what a pointer gets — and the visible label still leads it, which is
+   * what WCAG 2.5.3 asks.
+   */
+  it("says which reading is on, in words, at both ends of the press", () => {
+    const { unmount } = render(<FilterBar search={search({ colors: ["W", "U"] })} />);
+    expect(exactly()).toHaveAccessibleName(
+      "Exactly — cards whose colour identity fits within these colours",
+    );
+    unmount();
+
+    render(<FilterBar search={search({ colors: ["W", "U"], colorsStrict: true })} />);
+    const on = exactly()!;
+    expect(on).toHaveAttribute("aria-pressed", "true");
+    expect(on).toHaveAccessibleName(
+      "Exactly — cards whose colour identity is exactly these colours",
+    );
+  });
+
+  /**
+   * The strip states strict **inside the colour chip** rather than as a chip of its own.
+   *
+   * One chip per kind is this row's whole arithmetic — the number under the bar and the number on
+   * Reset all have to be the same number — and strict is not a kind: it is which reading the
+   * colour filter gets. A chip of its own would put a second entry under a badge still counting
+   * one.
+   */
+  it("names the active colour filter as exact when strict is on", () => {
+    render(
+      <FilterBar search={search({ colors: ["W", "U"], colorsStrict: true, activeCount: 1 })} />,
+    );
+
+    expect(chipLabels()).toEqual(["Colour: exactly White, Blue"]);
+  });
+
+  it("leaves the word out when the colours are read loosely", () => {
+    render(<FilterBar search={search({ colors: ["W", "U"], activeCount: 1 })} />);
+
+    expect(chipLabels()).toEqual(["Colour: White, Blue"]);
+  });
+
+  /**
+   * The × clears the whole kind, and the flag is part of it.
+   *
+   * Left behind, strict would survive a cleared colour row as invisible state — still in the
+   * query key, still asked of the backend, and with no control on screen once the colours it was
+   * about are gone. That is the same failure the chip's own draw condition prevents, reached from
+   * the other side.
+   */
+  it("clears the strict flag along with the colours it was about", async () => {
+    const toggleColor = vi.fn();
+    const toggleColorsStrict = vi.fn();
+    render(
+      <FilterBar
+        search={search({
+          colors: ["W", "U"],
+          colorsStrict: true,
+          toggleColor,
+          toggleColorsStrict,
+          activeCount: 1,
+        })}
+      />,
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Remove filter — Colour: exactly White, Blue" }),
+    );
+
+    expect(toggleColor.mock.calls.map(([c]) => c)).toEqual(["W", "U"]);
+    expect(toggleColorsStrict).toHaveBeenCalledTimes(1);
+  });
+
+  /** …and it is not pressed on a row that was never strict, which is what keeps the × a *clear*
+   *  rather than a toggle: pressing it must never turn strict on. */
+  it("does not touch the flag when the colours were read loosely", async () => {
+    const toggleColorsStrict = vi.fn();
+    render(<FilterBar search={search({ colors: ["W"], toggleColorsStrict, activeCount: 1 })} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Remove filter — Colour: White" }));
+
+    expect(toggleColorsStrict).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The type cell — eight chips, and the one filter on this row that is not a fact about a
+ * *printing*.
+ *
+ * **"Does this card have this type", not "which bucket is it in".** Dryad Arbor
+ * (`Land Creature — Forest Dryad`) is under both Land and Creature here, where `autoCategory.ts`
+ * files it under Land alone and `deckBuckets.ts` under Creature alone. Those two each answer
+ * *one* question with one bucket; a filter answers a different question, and a reader pressing
+ * Creature who could not find an artifact creature has been told a falsehood. That rule is the
+ * backend's, so what this file is the authority on is which words are drawn, in which order, and
+ * which of them grey.
+ */
+describe("FilterBar, its type chips", () => {
+  /** Every type counted, so a case overriding one is overriding exactly one. */
+  const ALL_TYPES = {
+    Creature: 5,
+    Planeswalker: 5,
+    Instant: 5,
+    Sorcery: 5,
+    Artifact: 5,
+    Enchantment: 5,
+    Battle: 5,
+    Land: 5,
+  };
+
+  const group = () => screen.getByRole("group", { name: "Type" });
+
+  /**
+   * A `tray` naming a cell the surface cannot answer draws **nothing** rather than a dead
+   * control — `FilterSurface`'s optional half, and the rule that lets the wishlist skip the price
+   * band. `SEARCH_TRAY` names `type` on every surface that takes the default, so this is the only
+   * thing standing between a backend with no type filter and eight chips that do not work.
+   */
+  it("draws the type cell only where the surface answers it", async () => {
+    render(<FilterBar search={search({ toggleType: undefined })} />);
+    await openTray();
+
+    expect(screen.queryByRole("group", { name: "Type" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Creature\b/ })).toBeNull();
+  });
+
+  /**
+   * Creature first and Land last, which is how every decklist reads — `deckBuckets.ts`' order and
+   * deliberately **not** `cardtypes.rs`' alphabetical bit order, which is storage and would put
+   * Artifact and Battle in front of the two types a reader reaches for first.
+   *
+   * The whole sequence rather than a spot check: two chips swapped past each other satisfy any
+   * assertion about one being present. The **text** and not the accessible name, because the name
+   * carries a facet count wherever there is one — the condition cell's own matcher.
+   */
+  it("draws all eight type chips in reading order", async () => {
+    render(<FilterBar search={search()} />);
+    await openTray();
+
+    expect(
+      within(group())
+        .getAllByRole("button")
+        .map((b) => b.textContent),
+    ).toEqual([
+      "Creature",
+      "Planeswalker",
+      "Instant",
+      "Sorcery",
+      "Artifact",
+      "Enchantment",
+      "Battle",
+      "Land",
+    ]);
+  });
+
+  it("shows which types are on, and toggles one", async () => {
+    const toggleType = vi.fn();
+    render(<FilterBar search={search({ types: ["Land"], toggleType })} />);
+    await openTray();
+
+    expect(screen.getByRole("button", { name: /^Land\b/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: /^Creature\b/ })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /^Creature\b/ }));
+
+    // The word and not a key: `picked_types` matches `TYPE_KEYS` exactly and drops anything it
+    // does not recognise, so a chip sending a different spelling filters nothing and nothing
+    // anywhere goes red for it.
+    expect(toggleType).toHaveBeenCalledWith("Creature");
+  });
+
+  /**
+   * The row's one greying rule, one dimension further along. `aria-disabled` and never the
+   * attribute, so the chip keeps its tab stop and a reader sweeping the tray still hears the
+   * option and its count — and **the name carries the reason**, which is what a `getByRole` on
+   * the bare word would miss.
+   */
+  it("greys a type nothing in this search has, and keeps it reachable", async () => {
+    const toggleType = vi.fn();
+    render(
+      <FilterBar
+        search={search({ toggleType, facets: facets({ types: { ...ALL_TYPES, Battle: 0 } }) })}
+      />,
+    );
+    await openTray();
+
+    const battle = screen.getByRole("button", { name: "Battle — nothing in this search" });
+    expect(battle).toHaveAttribute("aria-disabled", "true");
+    expect(battle).not.toBeDisabled();
+
+    await userEvent.click(battle);
+    expect(toggleType).not.toHaveBeenCalled();
+  });
+
+  /** A selected option is never greyed — that is the way out of a dead end (`facets.ts`), and the
+   *  rarity cell's own arm read over this map. */
+  it("never greys a type that is switched on", async () => {
+    render(
+      <FilterBar
+        search={search({
+          types: ["Battle"],
+          facets: facets({ types: { ...ALL_TYPES, Battle: 0 } }),
+        })}
+      />,
+    );
+    await openTray();
+
+    expect(screen.getByRole("button", { name: /^Battle\b/ })).not.toHaveAttribute("aria-disabled");
+  });
+});
+  /**
+   * **This row and the badge are one arithmetic**, which is what makes the chip worth its place:
+   * the type chips are in the tray, so with the tray shut a type filter has no control on screen
+   * at all, and a `Reset all 1` over nothing under the rule would be a reader told a number with
+   * no sentence behind it.
+   *
+   * `CARD_TYPES`' own order rather than the order they were pressed, the rarities' rule — the
+   * statement reads the same however the reader got to it.
+   */
+  it("states the picked types as one chip, in reading order", () => {
+    render(
+      <FilterBar search={search({ types: ["Land", "Creature"], activeCount: 1 })} />,
+    );
+
+    expect(chipLabels()).toEqual(["Type: Creature, Land"]);
+  });
+
+  /** One press takes the whole kind off — the inverse of the count. */
+  it("takes every picked type off in one press", async () => {
+    const toggleType = vi.fn();
+    render(
+      <FilterBar search={search({ types: ["Creature", "Land"], toggleType, activeCount: 1 })} />,
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Remove filter — Type: Creature, Land" }),
+    );
+
+    expect(toggleType.mock.calls.map(([t]) => t)).toEqual(["Creature", "Land"]);
+  });
+
+  /** Nothing stated where the surface cannot answer the question — the strip is gated on the
+   *  setter, like every other optional kind on it. */
+  it("states no type filter on a surface that has no type chips", () => {
+    render(
+      <FilterBar
+        search={search({ types: ["Creature"], toggleType: undefined, activeCount: 0 })}
+      />,
+    );
+
+    expect(chipLabels()).toEqual([]);
+  });
+
 
 /**
  * The chips under the rule — the search, said in words.

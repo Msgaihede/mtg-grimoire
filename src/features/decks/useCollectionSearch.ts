@@ -12,9 +12,12 @@ import {
   colorParam,
   DEBOUNCE_MS,
   formatsWithDefault,
+  NO_COLORS,
   searchTerms,
-  toggleColor,
+  toggleColorFilter,
   toggleIn,
+  typesParam,
+  type ColorFilter,
   type ColorKey,
   type FormatFilterOption,
 } from "@/features/search/useCardSearch";
@@ -336,7 +339,17 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
    * every one of the three lists, which is what makes this state-only work rather than a
    * schema change.
    */
-  const [colors, setColors] = useState<readonly ColorKey[]>([]);
+  // **One state for the row and its `Exactly` flag, not two** — see {@link ColorFilter}, which
+  // is shared with the other three hooks that own a colour filter and carries the reason. The
+  // flag stays out of the `activeFilterCount` call below: it is a modifier on the row rather
+  // than a filter of its own.
+  const [colorFilter, setColorFilter] = useState<ColorFilter>(NO_COLORS);
+  const colors = colorFilter.picked;
+  const colorsStrict = colorFilter.strict;
+  // The eight card-type chips, ORed with each other and ANDed with everything else — the rarity
+  // chips' shape exactly, and on the wire for free: `CollectionQuery extends CardFilters`, so
+  // `push_card_filters` already emits them for this list.
+  const [types, setTypes] = useState<readonly string[]>([]);
   const [manaValues, setManaValues] = useState<readonly number[]>([]);
   const [manaX, setManaX] = useState(false);
   /**
@@ -378,6 +391,10 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
   // about the filter, and an unsorted array would be a second cache entry for one answer.
   const setsParam = sets.length > 0 ? [...sets].sort() : undefined;
   const raritiesParam = rarities.length > 0 ? [...rarities].sort() : undefined;
+  // Through the shared `typesParam` rather than a fourth inline sort: three other hooks
+  // canonicalise this same list, and four copies of one normal form is four places for it to
+  // drift.
+  const typesParamValue = typesParam(types);
 
   /**
    * The box, read as Scryfall's query syntax — the free text and the typed predicates.
@@ -398,7 +415,12 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
     ...terms,
     format: format || undefined,
     colors: colorsParam,
+    // Absent rather than `false` when the chip is off, the rule every optional filter on this
+    // payload follows: `false` on the wire reads as "the reader chose loose" where they chose
+    // nothing at all.
+    colorsStrict: colorsStrict || undefined,
     sets: setsParam,
+    types: typesParamValue,
     rarities: raritiesParam,
     manaValues: manaParam,
     manaX: manaX || undefined,
@@ -459,7 +481,13 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
     // holding an array compares by structure, so `["W","U"]` and `["U","W"]` would be two entries
     // for one answer. `colorParam` and the sort above have already put both in order.
     colorsParam ?? "",
+    // Its own segment beside the letters, and load-bearing in `allocation`'s way: `WU` loose and
+    // `WU` strict are two different sets of rows over the same local SQLite, so a key built from
+    // the letters alone would serve the strict press out of the loose list's cached pages —
+    // instantly, with nothing in this column to notice.
+    colorsStrict ? "strict" : "",
     setsParam?.join(",") ?? "",
+    typesParamValue?.join(",") ?? "",
     raritiesParam?.join(",") ?? "",
     manaParam?.join(",") ?? "",
     manaX ? "x" : "",
@@ -563,9 +591,21 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
     colors,
     /** `toggleColor` rather than a plain `toggleIn`, so **C excludes the five and the five exclude
      *  C** — colourless is not a sixth colour and the search's own rule is the one to keep. */
-    toggleColor: (key: ColorKey) => setColors((picked) => toggleColor(picked, key)),
+    // A functional updater, so a batch of presses composes, and clearing the last colour clears
+    // `Exactly` — one rule in {@link toggleColorFilter}, shared by all four hooks.
+    toggleColor: (key: ColorKey) => setColorFilter((s) => toggleColorFilter(s, key)),
+    /** Read the colour row as "exactly these colours" rather than "at least these" — the
+     *  `Exactly` chip. A modifier on the row rather than a filter beside it, which is why the
+     *  `activeCount` below never sees it and why `resetAll` clears it anyway. */
+    colorsStrict,
+    toggleColorsStrict: () => setColorFilter((s) => ({ ...s, strict: !s.strict })),
     sets,
     toggleSet: (code: string) => setSets((picked) => toggleIn(picked, code)),
+    /** The card-type chips, ORed with each other and ANDed with everything else. A copy matches
+     *  a chip if that word is on its printing's type line as a whole word, so an artifact land
+     *  answers `Land` and `Artifact` both. */
+    types,
+    toggleType: (type: string) => setTypes((picked) => toggleIn(picked, type)),
     rarities,
     toggleRarity: (rarity: string) => setRarities((picked) => toggleIn(picked, rarity)),
     priceMin,
@@ -644,6 +684,11 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
      *
      * `owned` is `undefined` for the reason the tray has no Owned cell: every row here is a copy
      * the reader has, so it is not a question this list can ask.
+     *
+     * **`colorsStrict` is not passed either, and that is a third reason again**: it is not a
+     * field of `FilterState` at all. The `Exactly` chip modifies what a picked colour means
+     * rather than being a filter beside it, so a badge that counted it would move for a press
+     * that narrowed nothing new.
      */
     activeCount: activeFilterCount({
       text,
@@ -654,14 +699,18 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
       manaX,
       owned: undefined,
       rarities,
+      types,
       priceMin,
       priceMax,
     }),
     resetAll: () => {
       setText("");
       setFormat("");
-      setColors([]);
-      setSets([]);
+      setColorFilter(NO_COLORS);
+      // Cleared although it is not counted, and the asymmetry is the point: Reset all means "no
+      // filters", and a strict flag left standing over an empty colour row is exactly the
+            setSets([]);
+      setTypes([]);
       setRarities([]);
       setPriceMin(undefined);
       setPriceMax(undefined);

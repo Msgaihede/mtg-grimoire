@@ -8,7 +8,12 @@ import type { FacetResponse } from "@/lib/ipc";
  * > **An option greys out when turning it on would not change the result set.**
  *
  * That sentence and not "would return nothing", because the filters do not all narrow — see
- * {@link colorDisabled}, which is the one that broadens.
+ * {@link colorDisabled}, which is the one that can broaden.
+ *
+ * **Can, rather than does, since strict colours landed**: a colour press broadens under subset
+ * semantics and narrows under exact ones. That is the whole reason the rule is phrased about the
+ * result set *changing* rather than about the direction it moves in — `colorDisabled` needs no
+ * branch on the mode, because the backend already counted under it.
  */
 
 /**

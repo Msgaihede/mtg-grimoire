@@ -278,6 +278,7 @@ const NONE = {
   manaValues: [],
   manaX: false,
   rarities: [],
+  types: [],
   needsReview: undefined,
 } satisfies WishlistFilterState;
 
@@ -312,10 +313,15 @@ describe("activeFilterCount", () => {
     expect(activeFilterCount({ ...NONE, manaValues: [1], manaX: true })).toBe(1);
   });
 
-  /** Seven — three until the three card views started drawing one `FilterBar`, eight until
-   *  `fulfilled` went with the rest of this list's comparisons against the collection. Reset all
-   *  has to reach every one of them, so the count has to see every one of them. */
-  it("sees all seven kinds the wishlist offers", () => {
+  /** Eight — three until the three card views started drawing one `FilterBar`, eight until
+   *  `fulfilled` went with the rest of this list's comparisons against the collection, seven
+   *  after it, and eight again since the type chips. Reset all has to reach every one of them,
+   *  so the count has to see every one of them.
+   *
+   *  **`colorsStrict` is deliberately not a ninth**, here or in `activeFilterCount` itself: it
+   *  modifies the colour filter rather than being one, so a badge that moved when it was pressed
+   *  would be counting a narrowing that had not happened. */
+  it("sees all eight kinds the wishlist offers", () => {
     expect(
       activeFilterCount({
         text: "bolt",
@@ -325,8 +331,9 @@ describe("activeFilterCount", () => {
         manaValues: [1],
         manaX: true,
         rarities: ["rare"],
+        types: ["Creature"],
         needsReview: true,
       }),
-    ).toBe(7);
+    ).toBe(8);
   });
 });

@@ -280,8 +280,15 @@ export function DeckTokensPanel({
 
         {/* The count is a bare number and it is honest here for the app's own reason: the
             heading is set in type immediately beside it and says what is being counted. It is
-            its own element, so nothing computes it into another control's name. */}
-        {canOpen && <span className="text-xs text-dim">{count(kept)} to bring</span>}
+            its own element, so nothing computes it into another control's name.
+
+            **The data face since 2026-09-22.** It was plain sans with no `tabular-nums`, which
+            made it the one count on this page set in the prose face — every pile heading a few
+            inches above writes `12 cards · $5.00` in mono, and the stats band's own notes are
+            `font-mono text-xs tabular-nums text-dim` exactly. Same slot, same size, one face. */}
+        {canOpen && (
+          <span className="font-mono text-xs tabular-nums text-dim">{count(kept)} to bring</span>
+        )}
 
         {answered && rows.length === 0 && (
           <p className="text-xs text-dim">Nothing in this deck makes a token or an emblem.</p>

@@ -6,9 +6,12 @@ import {
   cycleTriState,
   DEBOUNCE_MS,
   FORMATS,
+  NO_COLORS,
   searchTerms,
-  toggleColor,
+  toggleColorFilter,
   toggleIn,
+  typesParam,
+  type ColorFilter,
   type ColorKey,
 } from "@/features/search/useCardSearch";
 import { ipc, type WishlistQuery, type WishlistSortKey } from "@/lib/ipc";
@@ -66,11 +69,18 @@ const WISHLIST_FIRST_DIR: Record<WishlistSortKey, SortDir> = {
 export interface WishlistFilterState {
   text: string;
   format: string;
+  /** The colour chips. **The `Exactly` chip beside them is deliberately not a field here** — it
+   *  modifies what a picked colour means rather than being a filter of its own, so counting it
+   *  would move the number on Reset all over a press that narrowed nothing new. Both siblings
+   *  carry the same omission and the same argument. */
   colors: readonly string[];
   sets: readonly string[];
   manaValues: readonly number[];
   manaX: boolean;
   rarities: readonly string[];
+  /** The card-type chips — `CARD_TYPES`, ORed with each other. One kind however many are
+   *  pressed, for `rarities`' reason. */
+  types: readonly string[];
   /** `true` is the wishes a sync flagged, `false` everything it did not touch. Three-way
    *  because the complement is a real question, and compared against `undefined` rather than
    *  tested for truthiness because `false` is a filter too. */
@@ -80,7 +90,7 @@ export interface WishlistFilterState {
 /**
  * How many *kinds* of filter are on — the number on the Reset all badge.
  *
- * Seven, where it was three until 2026-08-26 and the argument for three was about the *screen*
+ * Eight, where it was three until 2026-08-26 and the argument for three was about the *screen*
  * rather than the plumbing: a shopping list is read by name, so a row of colour chips over forty
  * rows was chrome that would never be pressed. What overturned it is that the chips are no longer
  * a row — the three card views draw one `FilterBar` now, where everything but the box, the
@@ -91,9 +101,11 @@ export interface WishlistFilterState {
  * `WishlistQuery extends CardFilters`, so every one of these was already a field the backend read
  * and this hook simply never sent. Kinds and not values, as both siblings count them.
  *
- * **It was eight until 2026-09-08.** `fulfilled` — the wishes the collection already covered —
- * went with every other comparison this list made against the binder, so there is one fewer kind
- * to count and one fewer chip in the tray.
+ * **The number has been eight before, and for a different eighth kind.** `fulfilled` — the wishes
+ * the collection already covered — was counted here until 2026-09-08, when it went with every
+ * other comparison this list made against the binder; the card-type chips took the eighth place
+ * back on 2026-09-22. A count is a fact about the list below it and nothing else, so read that
+ * list rather than this sentence if the two ever disagree.
  */
 export function activeFilterCount(f: WishlistFilterState): number {
   return [
@@ -105,6 +117,9 @@ export function activeFilterCount(f: WishlistFilterState): number {
     // same group and is OR'd with them, so "3 and X" is one thing to clear.
     f.manaValues.length > 0 || f.manaX,
     f.rarities.length > 0,
+    // One kind however many chips are pressed, the way the colours and the rarities beside it
+    // are counted: `Creature` and `Land` together are one narrowing of one question.
+    f.types.length > 0,
     f.needsReview !== undefined,
   ].filter(Boolean).length;
 }
@@ -127,7 +142,16 @@ export function useWishlist() {
   // field the backend already read and this hook simply never sent. See {@link activeFilterCount}
   // for what changed on screen.
   const [format, setFormat] = useState("");
-  const [colors, setColors] = useState<readonly ColorKey[]>([]);
+  // **One state for the row and its `Exactly` flag, not two** — see {@link ColorFilter}, which
+  // is shared with the other three hooks that own a colour filter and carries the reason.
+  // `WishlistFilterState` still has no field for the flag: it is a modifier on the row rather
+  // than a filter of its own, so it is counted by no `activeFilterCount`.
+  const [colorFilter, setColorFilter] = useState<ColorFilter>(NO_COLORS);
+  const colors = colorFilter.picked;
+  const colorsStrict = colorFilter.strict;
+  // The eight card-type chips, ORed with each other and ANDed with everything else — the rarity
+  // chips' shape exactly, and on the wire for free: `WishlistQuery extends CardFilters`.
+  const [types, setTypes] = useState<readonly string[]>([]);
   const [sets, setSets] = useState<readonly string[]>([]);
   const [manaValues, setManaValues] = useState<readonly number[]>([]);
   // Additive rather than exclusive, exactly as both siblings are: `cmc` counts `{X}` as zero, so
@@ -180,6 +204,10 @@ export function useWishlist() {
   const setsParam = sets.length > 0 ? [...sets].sort() : undefined;
   const manaParam = manaValues.length > 0 ? [...manaValues].sort((a, b) => a - b) : undefined;
   const raritiesParam = rarities.length > 0 ? [...rarities].sort() : undefined;
+  // Through the shared `typesParam` rather than a fourth inline sort: three other hooks
+  // canonicalise this same list, and four copies of one normal form is four places for it to
+  // drift.
+  const typesParamValue = typesParam(types);
 
   /**
    * The box, read as Scryfall's query syntax — the free text and the typed predicates.
@@ -204,7 +232,12 @@ export function useWishlist() {
     // row to put back.
     format: format || undefined,
     colors: colorsParam,
+    // Absent rather than `false` when the chip is off, the rule every optional filter on this
+    // payload follows: `false` on the wire reads as "the reader chose loose" where they chose
+    // nothing at all.
+    colorsStrict: colorsStrict || undefined,
     sets: setsParam,
+    types: typesParamValue,
     manaValues: manaParam,
     // Absent rather than `false`, which is what the backend defaults to. `true` widens — it adds
     // the `{X}` rows to whatever the numerals matched.
@@ -253,7 +286,13 @@ export function useWishlist() {
     // for one answer. The four params above have already put each in order.
     format,
     colorsParam ?? "",
+    // Its own segment beside the letters, and load-bearing for the X chip's reason one field
+    // down: `WU` loose and `WU` strict are two different sets of wishes over the same local
+    // SQLite, so a key built from the letters alone would serve the strict press out of the
+    // loose list's cached pages.
+    colorsStrict ? "strict" : "",
     setsParam?.join(",") ?? "",
+    typesParamValue?.join(",") ?? "",
     manaParam?.join(",") ?? "",
     // Its own segment, and load-bearing: X is a second axis over the same chips, so a key built
     // from the numerals alone would serve "3, and also X" out of the pages cached for plain "3".
@@ -304,9 +343,21 @@ export function useWishlist() {
     colors,
     /** `toggleColor` rather than a plain `toggleIn`, so **C excludes the five and the five exclude
      *  C** — colourless is not a sixth colour, and the search's rule is the one to keep. */
-    toggleColor: (key: ColorKey) => setColors((picked) => toggleColor(picked, key)),
+    // A functional updater, so a batch of presses composes, and clearing the last colour clears
+    // `Exactly` — one rule in {@link toggleColorFilter}, shared by all four hooks.
+    toggleColor: (key: ColorKey) => setColorFilter((s) => toggleColorFilter(s, key)),
+    /** Read the colour row as "exactly these colours" rather than "at least these" — the
+     *  `Exactly` chip. A modifier on the row rather than a filter beside it, which is why
+     *  {@link activeFilterCount} never sees it and why `resetAll` clears it anyway. */
+    colorsStrict,
+    toggleColorsStrict: () => setColorFilter((s) => ({ ...s, strict: !s.strict })),
     sets,
     toggleSet: (code: string) => setSets((picked) => toggleIn(picked, code)),
+    /** The card-type chips, ORed with each other and ANDed with everything else. A wish matches
+     *  a chip if that word is on its card's type line as a whole word, so an artifact land
+     *  answers `Land` and `Artifact` both. */
+    types,
+    toggleType: (type: string) => setTypes((picked) => toggleIn(picked, type)),
     manaValues,
     toggleManaValue: (value: number) => setManaValues((picked) => toggleIn(picked, value)),
     /** Also match the wishes whose printed cost contains `{X}` — **additive, never exclusive**,
@@ -391,6 +442,8 @@ export function useWishlist() {
         : []),
       ...sortOptions(WISHLIST_SORTS, (s) => s.label),
     ] as readonly { value: WishlistSortKey | ""; label: string; disabled?: boolean }[],
+    // `colorsStrict` is deliberately not passed: it is not a field of
+    // {@link WishlistFilterState}, for the reason written there.
     activeCount: activeFilterCount({
       text,
       format,
@@ -399,6 +452,7 @@ export function useWishlist() {
       manaValues,
       manaX,
       rarities,
+      types,
       needsReview,
     }),
     /** Clear every filter at once. The sort is not a filter and stays: it is how the reader
@@ -415,8 +469,11 @@ export function useWishlist() {
     resetAll: () => {
       setText("");
       setFormat("");
-      setColors([]);
-      setSets([]);
+      setColorFilter(NO_COLORS);
+      // Cleared although it is not counted, and the asymmetry is the point: Reset all means "no
+      // filters", and a strict flag left standing over an empty colour row is exactly the
+            setSets([]);
+      setTypes([]);
       setManaValues([]);
       setManaX(false);
       setRarities([]);

@@ -124,6 +124,61 @@ using it.
   over a rarity the search dropped reports an option as live that the search cannot reach. It
   lower-cases, because `cards.rarity` holds Scryfall's own lower-case word and SQLite's `=` on
   text is case-sensitive.
+- **The card-type chips are the newest dimension (2026-09-22) and they are `rarity`'s shape with
+  its caveat doubled.** `CardIndex.types` is eight bitsets — one per `cardtypes::TYPE_KEYS` entry
+  — a bitset apiece rather than an ordinal array, because eight is the low end of cardinality and
+  the module's rule is that low cardinality gets a bitset. `Skip::Types` drops the whole type
+  question from the base its own counts are taken over, so pressing `Creature` does not grey
+  `Land`: the rule every dimension on this page follows, and the property that keeps a control
+  from moving under the press that is using it.
+  **They neither sum to `total` nor bound it, and nothing may derive one from them.** `rarity` is
+  already not a partition — `special` and `bonus` exist and the row offers neither — and this
+  dimension misses in *both* directions at once. The eight **overlap**: Dryad Arbor
+  (`Land Creature — Forest Dryad`) is in the `Land` bitset *and* the `Creature` one, because this
+  filter asks *does this card have this type* rather than which bucket it is in, so the sum can
+  exceed the result set. And the corpus holds types no chip offers — `Vanguard`, `Plane`,
+  `Scheme` — which mask to 0 and are in none of the eight, so the sum can also fall short. One
+  seeded Dryad Arbor and one Vanguard demonstrate both halves in the same fixture, which is what
+  `type_counts_do_not_sum_to_total` is.
+  **The index reads `cards.type_mask` and never `type_line`**, as a ninth column on the build's
+  one scan. The mask is what the SQL predicate tests, so parsing the text here would be a second
+  implementation of the type rule — two spellings that agree until they don't, on a page whose
+  whole subject is a count and a filter describing the same corpus. `union_types` narrows by
+  `filters::picked_types`, the search's own normaliser, for `picked_rarities`' and `picked_tags`'
+  reason: a facet counted over a type the search dropped reports an option as live that the
+  search cannot reach. Matching there is **exact and case-sensitive** — `TYPE_KEYS` holds the
+  capitalised words, the frontend sends those same words out of one constant (`CARD_TYPES`), and
+  a loose match would be a second spelling rule the mask does not have. **The frontend's constant
+  is a different order on purpose**: `TYPE_KEYS` is alphabetical because bit positions are frozen
+  stored data, `CARD_TYPES` is Creature-first and Land-last because that is how a decklist reads.
+  A matching order and a display order cannot be one constant. **Nothing here has been timed** —
+  the eight `and_count`s are one more dimension on a pass this page measures at 1.8 ms unfiltered
+  (release, synthetic corpus, and already a floor since the `mana_x` overlay), and nobody has
+  re-run it.
+- **Strict colours have no dimension of their own — they change what `apply_colors` means, and
+  that function has two call sites.** The chip is a *modifier* on the colour filter rather than a
+  filter beside it, so `FacetResponse` grows no field for it and `Skip` grows no variant: the
+  request carries `colorsStrict` and every base computed under it is narrower. The mirror is the
+  usual one — `index/facets.rs` holds a second implementation of `push_card_filters`' colour arm
+  and the module doc says the two are one contract — so `apply_colors` gains the picked letters as
+  an intersection alongside the unpicked ones as a complement, exactly as the SQL gains an
+  `instr(…) > 0` per picked letter beside its `instr(…) = 0` per unpicked one.
+  **The second call site is the one that gets missed, and missing it is silent.** `base` is the
+  one that filters the result set; `compute`'s colour-counting loop is the one that answers *how
+  big is the result set after pressing this chip*.
+  Pass the flag at `base` alone and the search runs strict while every chip's count is still
+  computed loose — a wall the reader can see is narrow, beside counts describing the wide answer,
+  with nothing on screen or in a stack trace to say which half is lying.
+  `strict_colours_reach_the_chip_counts_too` is the test that exists for that and nothing else.
+  **`toggle_colors` needs no change and that is not an oversight.** It mirrors the frontend's
+  `toggleColor`, which produces the picked-colour *string*; strict is a sibling boolean that no
+  colour press alters. And `colorDisabled`'s two arms need none either: "pressing this would not
+  change the result set" is true under either reading, so the rule is semantics-agnostic — but its
+  second arm (*or equals `total`*) was written because loose colours **broaden**, and under strict
+  they do not, so the counts feeding it have to be computed under the active mode or every chip
+  greys by a rule that no longer describes what the press does. **`C` is degenerate in both
+  modes**: the existing arm already means `color_identity = ''`, which is the strict reading of
+  it, and `toggleColor` makes `C` exclusive both ways so `"WC"` is unreachable.
 - **The price band has no dimension and cannot cheaply have one — it is the newest thing on this
   page that fails open.** `priceMin`/`priceMax` narrow the wall in `run_search`, over
   `sorting::printing_price_expr` (the same expression the Price column shows), and
@@ -248,9 +303,12 @@ using it.
   `facets::compute` counts an option it has never heard of as **zero**, so an index one sync
   behind greys out sets the search would happily return printings for. Cold is therefore a
   supported state and the only safe guess: `ready: false`, every map **empty** rather than
-  zeroed, and `facetsOrUndefined` collapses that to `undefined` so all five controls stay
-  live. Nothing here is fatal either — if the index cannot be built the app runs exactly as it
-  did before the feature existed.
+  zeroed, and `facetsOrUndefined` collapses that to `undefined` so **every control on the row
+  stays live**. (This line read "all five controls" until 2026-09-22, when the type dimension made
+  it one short; the number is gone rather than corrected, because
+  `grep 'pub [a-z_]*: BTreeMap' src-tauri/src/index/facets.rs` answers it and a count in prose is
+  a fact about a tree.) Nothing here is fatal either — if the index cannot be built the app runs
+  exactly as it did before the feature existed.
 - **The X chip is the one count that cannot fail open on a raw cold response, and
   `facetsOrUndefined` is the entire guard.** Every other count on the row is read out of a map,
   and a cold response's maps are **empty**: the lookup misses, the miss is `undefined`,
@@ -258,8 +316,8 @@ using it.
   ungated. `manaX` is a scalar and has no empty to send — Rust answers `0`, and the fake's
   `indexCold` handler answers `0` beside its empty maps for the same reason — and **`0` is
   precisely what the greying rule reads as "nothing in this search"**. Nothing downstream can
-  tell that zero from a counted one. So the `ready` check, which is belt-and-braces for the four
-  maps, is load-bearing here: a caller reading `facets.manaX` rather than
+  tell that zero from a counted one. So the `ready` check, which is belt-and-braces for the
+  counted maps, is load-bearing here: a caller reading `facets.manaX` rather than
   `facetsOrUndefined(facets)?.manaX` would grey the X chip through the whole of a cold index and
   the whole of a first-run sync, and nothing would say so. `owned` and `total` are scalars too
   and neither is a counter-example: `total` is only ever a denominator, and `colorDisabled`'s
