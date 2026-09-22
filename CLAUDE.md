@@ -21,7 +21,13 @@ has never fetched them has a Tags page that says so and still answers from the o
 and [the art one](docs/superpowers/research/2026-08-20-scryfall-art-tags.md).
 **A _tag_ in this app is one of those two and nothing else.** The deckbuilder's own coloured
 per-card mark is a **label** — `deck_labels`, `deck_cards.label_id`, the `Labels` dialog — and the
-collection's free-text `tags` column is a third thing again. Never let the words trade places.
+collection's free-text `tags` column is a third thing again. **A _keyword_ is a fourth, and it is
+the one most likely to be miscalled a tag**: `cards.keywords` at corpus schema 5 holds the card's
+own **keyword abilities** — `flying`, `vigilance` — which is what the search box's `kw:` asks
+about, and it is a fact Scryfall ships on the card rather than a taxonomy anyone tagged it with.
+The measurement that separates it from the rules text it is written in is in
+[search-syntax.md](docs/reference/search-syntax.md): `kw:flying` answers 3,318 cards and
+`o:flying` 4,617, while `kw:flying -o:flying` is 0. Never let the words trade places.
 
 **_Note_ is the same trap one word over, and it is worse because all four spellings are the
 reader's own prose rather than three of one thing and one of another.** A **deck note** is what
@@ -226,7 +232,7 @@ number to compare against.
 | [the price-feed research](docs/superpowers/research/2026-08-12-card-kingdom-mana-pool-price-feeds.md) | Both feeds measured live — sizes, key collisions, the NM-vs-cheapest trap |
 | [image-cache.md](docs/reference/image-cache.md) | Cache layout, concurrency, placeholders, the `/cover/` route |
 | [search-faceting.md](docs/reference/search-faceting.md) | The in-memory index, and why faceting fails open |
-| [tag-search-syntax.md](docs/reference/tag-search-syntax.md) | Scryfall tagger syntax in the search box — the keywords, why resolution is exact, and the two failures that fail closed |
+| [search-syntax.md](docs/reference/search-syntax.md) | Scryfall query syntax in every card search box — the fourteen keywords and why `:` does not mean one thing, the day `a:` and `o:` stopped being tags, FTS against LIKE measured at 82× and 277×, `kw:` and the corpus rung behind it, why tag resolution is exact, and the one arm that fails closed among all the ones that fail open |
 | [in-app-updates.md](docs/reference/in-app-updates.md) | Why the portable swap is hand-written |
 | [web-target.md](docs/reference/web-target.md) | The browser build — the module map, the single Worker and what it costs, the measured browse and facet, and **why two wasm instances in one Worker read as an out-of-memory** |
 | [android-target.md](docs/reference/android-target.md) | The Android build — the toolchain and what it cost, what is gated and what merely never runs, the `content://` file seam, and every figure taken on the phone |
