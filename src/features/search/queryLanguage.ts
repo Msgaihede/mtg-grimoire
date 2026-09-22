@@ -316,8 +316,6 @@ const SPEC_BY_KEYWORD = new Map<string, KeywordSpec>(
  */
 const TERM = /^(-?)([A-Za-z][A-Za-z0-9_-]*)(>=|<=|!=|:|=|>|<)([\s\S]*)$/;
 
-/** A keyword on its own, no operator yet — `cmc` on the way to `cmc>=3`. See {@link tokenFrom}. */
-const BARE = /^-?([A-Za-z][A-Za-z0-9_-]*)$/;
 
 const OP_BY_SIGN: Record<string, PredicateOp> = {
   ":": "colon",
@@ -412,26 +410,24 @@ function unquote(value: string): string {
  * `otag`. Every keystroke on the way to a term passes through that state, so it is the common
  * case rather than an edge one.
  *
- * **A keyword with no operator yet is partial only as the last thing typed**, which `final`
- * carries. `cmc`, `cmc>` and `cmc>=` are the three keystrokes on the way to `cmc>=3` and none of
- * them should narrow anything — but a reader searching for the card *Power Conduit* types the
- * word `power`, and swallowing every bare keyword wherever it appeared would quietly drop
- * `art`, `set`, `power`, `type`, `legal`, `oracle` and a dozen more from the free text of any
- * query that contains them. A word the reader has finished — one with something after it — is a
- * word; only the one their caret is still inside is on the way to a term.
+ * **The operator is what makes a term, so a keyword with no operator is free text.** `otag:`
+ * and `cmc>=` are partial because the operator says a term was intended and only the value is
+ * missing. Bare `cmc` is not: it is a word.
+ *
+ * That distinction is load-bearing rather than tidy. Treating a bare keyword as partial drops it
+ * from the query, and a query left with nothing in it is not "no results" — it is the
+ * **unfiltered wall**. `art`, `set`, `type`, `power`, `legal`, `oracle`, `format`, `rarity`,
+ * `colour`, `keyword`, `identity` and every single letter are all keywords, so a reader who
+ * types `power` looking for *Power Conduit* would be shown their whole collection instead. Free
+ * text answers that keystroke with the cards they asked for.
  */
 function tokenFrom(
   chunk: string,
   start: number,
   end: number,
-  final: boolean,
 ): TagToken | PredicateToken | "partial" | "text" {
   const m = TERM.exec(chunk);
-  if (!m) {
-    const bare = BARE.exec(chunk);
-    if (final && bare && SPEC_BY_KEYWORD.has(keywordKey(bare[1]))) return "partial";
-    return "text";
-  }
+  if (!m) return "text";
   const spec = SPEC_BY_KEYWORD.get(keywordKey(m[2]));
   if (!spec) return "text";
   const sign = m[3];
@@ -487,7 +483,7 @@ export function parseQuery(input: string): ParsedQuery {
       i += 1;
     }
     const chunk = input.slice(start, i);
-    const token = tokenFrom(chunk, start, i, i === input.length);
+    const token = tokenFrom(chunk, start, i);
     if (token === "text") words.push(chunk);
     else if (token !== "partial") {
       if ("field" in token) predicates.push(token);

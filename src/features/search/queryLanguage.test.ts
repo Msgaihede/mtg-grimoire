@@ -241,12 +241,26 @@ describe("parseQuery — the a:/o: reassignment", () => {
 });
 
 describe("parseQuery — partial and unparseable", () => {
-  it("answers partial at every keystroke on the way to cmc>=3", () => {
-    for (const s of ["cmc", "cmc>", "cmc>="]) {
+  it("answers partial once an operator is typed, since that is what says a term was meant", () => {
+    for (const s of ["cmc>", "cmc>=", "otag:"]) {
       const p = parseQuery(s);
       expect(p.predicates).toEqual([]);
+      expect(p.tags).toEqual([]);
       expect(p.text).toBe(""); // not free text either — neither a term nor a word
     }
+  });
+
+  it("leaves a keyword with no operator as free text, wherever it sits", () => {
+    // A bare keyword swallowed from the query leaves an EMPTY query, which draws the
+    // unfiltered wall rather than no results — and `power`, `art`, `set`, `type`, `legal`
+    // and `oracle` are all keywords. A reader typing `power` wants Power Conduit.
+    for (const word of ["power", "art", "set", "type", "legal", "oracle", "t", "o"]) {
+      expect(parseQuery(word).text, `${word} was swallowed`).toBe(word);
+      expect(parseQuery(word).predicates).toEqual([]);
+      expect(parseQuery(word).tags).toEqual([]);
+    }
+    expect(parseQuery("power sink").text).toBe("power sink");
+    expect(parseQuery("bolt t:goblin").text).toBe("bolt");
   });
 
   it("hands an unparseable value to FTS as words rather than refusing it", () => {

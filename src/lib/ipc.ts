@@ -5331,14 +5331,14 @@ export interface TagRef {
  * One tag a reader named in a card search box — `tags::query::TagLookup`, the ask half of
  * {@link ipc.tagResolve}.
  *
- * `tagQuery.ts`'s token minus what is the *box's* business: where the term sat in the string,
+ * `queryLanguage.ts`'s token minus what is the *box's* business: where the term sat in the string,
  * and whether it was negated. Resolution answers "is there such a tag"; which of
  * {@link TagTerms}' two lists the slug lands in is decided in TypeScript, because that is a
  * conclusion rather than a fact.
  */
 export interface TagLookup {
   /** **Never `"both"`**, unlike {@link ipc.tagSearch}'s: a typed `o:` names one taxonomy, and
-   *  answering across both would let `o:dog` filter by the picture. */
+   *  answering across both would let `otag:dog` filter by the picture. */
   namespace: TagNamespace;
   /** What the reader typed after the keyword. Normalised by Rust, never here — two copies of
    *  that rule would leave both halves self-consistent and the search matching nothing. */
@@ -9411,7 +9411,7 @@ export const ipc = {
     invoke<TagHit[]>("tag_children", { namespace, slug }),
   /**
    * Turn tag names typed into a card search box into the slugs {@link SearchRequest.artTags} and
-   * {@link SearchRequest.oracleTags} match on — `tagQuery.ts`'s tokens, resolved.
+   * {@link SearchRequest.oracleTags} match on — `queryLanguage.ts`'s tokens, resolved.
    *
    * **One answer per ask, in the order asked, `null` where there is no such tag.** The misses
    * ride along rather than being filtered out, because the box has to be able to name the token
@@ -9420,7 +9420,7 @@ export const ipc = {
    * **Exact, where {@link ipc.tagSearch} is a substring, and the difference is the job.** That
    * one is a type-ahead and should find `removal` from `remov`; this one builds a *filter*, and
    * a substring here would resolve one token to many tags that would have to be ORed — while
-   * every tag filter in this app intersects, so `a:dragon` would silently also answer
+   * every tag filter in this app intersects, so `atag:dragon` would silently also answer
    * `dragonborn`. Separators and case are still noise (`otag:"spot removal"`,
    * `otag:spot-removal` and `otag:SPOT-REMOVAL` are one tag, verified live 2026-08-20), because
    * Rust matches through `slug_norm`.

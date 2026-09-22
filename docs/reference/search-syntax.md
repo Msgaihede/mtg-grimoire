@@ -250,9 +250,15 @@ Scryfall ships it as an array of capitalised strings — verified live, Serra An
 `["Flying", "Vigilance"]` — and matching there is **exact against a known vocabulary**, not
 substring: `kw:fly` answers *"All of your terms were ignored"*. So the column stores the
 keywords lowercased, delimited and wrapped — `|flying|vigilance|` — and the predicate is a
-boundary-anchored `instr` on `|flying|`, never a bare substring, so `kw:fly` cannot match
-`flying` here either. A card with no keywords is `NULL`, **never** `"|"`: a bare delimiter would
-make every keywordless card match every `kw:`.
+boundary-anchored `instr` on `|flying|`, never a bare substring. A card with no keywords is
+`NULL`, **never** `"|"`: a bare delimiter would make every keywordless card match every `kw:`.
+
+⚠️ **The delimiters fence the column arm and only the column arm, so `kw:fly` is not empty
+here.** An ingested row holding `|flying|` refuses `fly`, matching Scryfall. A row that
+predates the rung has no column to fence and falls to the bridge below, where the rules text
+says "Flying" and `fly` is a substring of it — so the same query answers those rows and not the
+ingested ones. That is the bridge working rather than a hole in it: over-inclusive until the
+next ingest, never empty. Do not write down that `kw:fly` returns nothing.
 
 **The rung copies corpus schema 3 (`cards.produced_mana`) in every respect**, which is the
 precedent for this shape:

@@ -259,7 +259,7 @@ describe("mergeTagTerms", () => {
   });
 
   /**
-   * Chipping `dog` and *also* typing `a:dog` is one predicate at the far end
+   * Chipping `dog` and *also* typing `atag:dog` is one predicate at the far end
    * (`filters::picked_tags` sorts and dedups) — and, more to the point here, one **query key**.
    * Sorted for the same reason: the order the reader picked them in must not mint a second one.
    */
