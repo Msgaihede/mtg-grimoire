@@ -122,15 +122,24 @@ pub struct CardRow {
     /// whole of what stops `kw:fly` matching `flying`. A separator-only form (`flying|
     /// vigilance`) would leave the first and last keyword unfenced on one side each.
     ///
-    /// ⚠️ **`None` for a card with no keywords, and never `Some("|")` — this is the fence,
-    /// and it is the opposite of [`CardRow::produced_mana`]'s.** A bare delimiter is a
-    /// substring of *every* wrapped value, so one `Some("|")` row would match every `kw:`
-    /// there is; the fence there buys NULL a single meaning, and the fence here refuses a
-    /// value that would match everything. What this costs is that NULL no longer means only
-    /// "this row predates the column" — and nothing is built on it meaning that, because the
-    /// gap is bridged in SQL by the `keywords IS NULL` arm, which answers a keywordless card
-    /// correctly (its rules text holds no keyword either) and an un-migrated one
-    /// over-inclusively.
+    /// ⚠️ **`Some("")` for a card with no keywords, never `None` — [`CardRow::produced_mana`]'s
+    /// fence exactly, and NULL therefore means one thing only: this row predates the column.**
+    ///
+    /// This read `None` until the live pass on 2026-09-22 and it was wrong in a way only real
+    /// rows showed. The `kw:` predicate bridges the pre-ingest window with a `keywords IS NULL`
+    /// arm that falls back to the card's rules text — sound while NULL means "not ingested
+    /// yet", and unsound the moment it also means "ingested, has no keywords". After a full
+    /// ingest **68,808 of 118,609 printings were NULL**, all of them simply keywordless, and
+    /// every one of them was being matched from its rules text: `kw:flying` picked up 2,435
+    /// printings that merely *mention* flying — *Mystic Skyfish* ("gains flying"),
+    /// *Workshop Elders* ("have flying"), *Destructive Tampering* ("creatures without
+    /// flying"). Not a window that closes at the next sync: a permanent 58%-of-the-corpus hole.
+    ///
+    /// An empty string cannot match, and the direction is worth stating because the doc this
+    /// replaces had it backwards: the predicate is `instr(keywords, '|flying|')`, so the
+    /// **row** is the haystack and the wrapped keyword is the needle. A row holding `""` — or
+    /// `"|"` — contains no `|flying|` and answers no `kw:` at all. A bare delimiter would only
+    /// match everything if it were the *needle*, which it never is.
     ///
     /// **`to_ascii_lowercase`, matching what the predicate binds.** `str::to_lowercase` is
     /// Unicode-aware and the query side folds with `to_ascii_lowercase`; two different folds
@@ -203,24 +212,32 @@ fn joined_letters(v: &Value, k: &str) -> Option<String> {
 /// (`Partner with`) and a hyphen.
 ///
 /// **Wrapped as well as delimited**, so the first and last entries are fenced on both sides
-/// and `instr(keywords, '|flying|')` cannot match a prefix. And **`None` rather than
-/// `Some("|")`** for the empty and absent cases alike — a bare delimiter is a substring of
-/// every wrapped value, so it would match every `kw:` rather than none. Both rules are
-/// [`CardRow::keywords`]'.
+/// and `instr(keywords, '|flying|')` cannot match a prefix. And **`Some("")` rather than
+/// `None`** for the empty and absent cases alike, so that NULL in the column keeps exactly one
+/// meaning — "this row predates corpus schema 5" — which is what the `kw:` predicate's bridge
+/// arm is built on. Both rules are [`CardRow::keywords`]', and the second one cost a live pass
+/// to find.
 ///
 /// An entry that is not a string is dropped rather than stringified, which is [`s`]'s rule
-/// and `joined_letters`'; an array of nothing but such entries is therefore `None` too,
-/// because a wrapped empty list is the value this function exists to refuse.
-fn delimited_keywords(v: &Value) -> Option<String> {
+/// and `joined_letters`'; an array of nothing but such entries is therefore `Some("")` too —
+/// the card has no storable keywords, which is a fact about the card and not a missing row.
+fn delimited_keywords(v: &Value) -> String {
     let words: Vec<String> = v
-        .get("keywords")?
-        .as_array()?
-        .iter()
-        .filter_map(Value::as_str)
-        .filter(|w| !w.is_empty())
-        .map(str::to_ascii_lowercase)
-        .collect();
-    (!words.is_empty()).then(|| format!("|{}|", words.join("|")))
+        .get("keywords")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .filter(|w| !w.is_empty())
+                .map(str::to_ascii_lowercase)
+                .collect()
+        })
+        .unwrap_or_default();
+    if words.is_empty() {
+        String::new()
+    } else {
+        format!("|{}|", words.join("|"))
+    }
 }
 
 /// Store an object/array field verbatim as compact JSON. Used for the fields whose
@@ -395,7 +412,10 @@ impl CardRow {
             // point rather than an oversight — see the field's doc. A wrapped empty value is
             // `"|"`, which is a substring of every other value this column ever holds, so
             // storing it would make one keywordless card match every `kw:` in the app.
-            keywords: delimited_keywords(v),
+            // `Some` unconditionally, `produced_mana`'s rule one field up: NULL in this
+            // column must mean "predates corpus schema 5" and nothing else, because the
+            // `kw:` bridge reads it that way.
+            keywords: Some(delimited_keywords(v)),
         })
     }
 }
@@ -828,35 +848,46 @@ mod tests {
         );
     }
 
-    /// ⚠️ **The one that matters: no keywords is `None`, never `Some("|")`.**
+    /// ⚠️ **The one that matters: no keywords is `Some("")`, never `None`.**
     ///
-    /// A bare delimiter is a substring of every wrapped value, so a single row holding one
-    /// would match `kw:flying`, `kw:vigilance` and every other `kw:` in the app. This is the
-    /// exact opposite of [`CardRow::produced_mana`]'s fence one field up, which writes
-    /// `Some("")` so that NULL keeps one meaning — and the two are right for the same reason
-    /// read from opposite ends: what a column stores is decided by what its reader does with
-    /// it.
+    /// [`CardRow::produced_mana`]'s fence one field up, for its reason: NULL in this column
+    /// must mean "this row predates corpus schema 5" and nothing else, because the `kw:`
+    /// predicate bridges that window by falling back to the card's rules text. Let NULL also
+    /// mean "ingested, has no keywords" and the bridge fires on every vanilla card forever.
+    ///
+    /// **That is not hypothetical — it is what the live pass found on 2026-09-22.** With
+    /// `None` here, a fully ingested corpus held **68,808 NULLs out of 118,609 printings**,
+    /// and `kw:flying` matched 2,435 printings whose rules text merely mentions flying:
+    /// *Mystic Skyfish*, *Workshop Elders*, *Destructive Tampering*. The suite was green
+    /// throughout, because no test had ever asked what a keywordless card does *after* an
+    /// ingest.
     ///
     /// Three inputs, because Scryfall really does send all three: the key absent (older
     /// bulk rows), an empty array (the common modern case for a vanilla card), and an array
     /// whose entries are not strings, which nothing has sent but which `filter_map` would
     /// otherwise reduce to the same empty list.
     #[test]
-    fn a_card_with_no_keywords_is_none_rather_than_a_bare_delimiter() {
-        let absent = parse(
-            r#"{"object":"card","id":"bolt","name":"Lightning Bolt","lang":"en","layout":"normal","set":"lea","collector_number":"161"}"#,
-        );
-        assert_eq!(absent.keywords, None, "no key at all");
-
-        let empty = parse(
-            r#"{"object":"card","id":"bear","name":"Grizzly Bears","lang":"en","layout":"normal","set":"lea","collector_number":"162","keywords":[]}"#,
-        );
-        assert_eq!(empty.keywords, None, "an empty array is not `Some(\"|\")`");
-
-        let junk = parse(
-            r#"{"object":"card","id":"junk","name":"Nothing","lang":"en","layout":"normal","set":"lea","collector_number":"163","keywords":[null,7]}"#,
-        );
-        assert_eq!(junk.keywords, None, "nothing storable is still nothing");
+    fn a_card_with_no_keywords_is_an_empty_string_rather_than_null() {
+        for (label, json) in [
+            (
+                "no key at all",
+                r#"{"object":"card","id":"bolt","name":"Lightning Bolt","lang":"en","layout":"normal","set":"lea","collector_number":"161"}"#,
+            ),
+            (
+                "an empty array",
+                r#"{"object":"card","id":"bear","name":"Grizzly Bears","lang":"en","layout":"normal","set":"lea","collector_number":"162","keywords":[]}"#,
+            ),
+            (
+                "nothing storable",
+                r#"{"object":"card","id":"junk","name":"Nothing","lang":"en","layout":"normal","set":"lea","collector_number":"163","keywords":[null,7]}"#,
+            ),
+        ] {
+            assert_eq!(
+                parse(json).keywords.as_deref(),
+                Some(""),
+                "{label}: NULL here would put this card back on the rules-text bridge"
+            );
+        }
     }
 
     /// A database that has migrated to v3 but has not synced yet holds plain-text `raw` in

@@ -325,8 +325,17 @@ pub fn fts_match(text: Option<&str>, preds: &[QueryPredicate]) -> (Option<String
         }
     }
 
-    // A space is FTS5's implicit AND, which is what a list of terms means here.
-    ((!positive.is_empty()).then(|| positive.join(" ")), negative)
+    // **`AND` spelled out, never a space.** FTS5's implicit AND *is* a space between bare
+    // phrases — but after a column filter a space is a syntax error, not a conjunction:
+    // `type_line : (…) search_text : (…)` raises `fts5: syntax error near "search_text"`, and
+    // so does free text followed by a filtered term. Measured against the real
+    // 118,609-printing corpus on 2026-09-22; the spelled form answers 314 where both space
+    // forms refuse to parse. A single term is unaffected either way, which is exactly why this
+    // was invisible until the window ran `t:goblin o:haste`.
+    (
+        (!positive.is_empty()).then(|| positive.join(" AND ")),
+        negative,
+    )
 }
 
 /// The `ESCAPE` character for a `LIKE` pattern built from a user's text.
@@ -966,8 +975,18 @@ fn predicate_clause(
         //
         // **The delimiters are the whole of the exactness.** Scryfall matches `kw:` against a
         // known vocabulary and refuses `kw:fly` outright; the column stores `|flying|
-        // vigilance|` so a bare `instr` cannot match a prefix. Task 3 owns that format and the
-        // two must not drift.
+        // vigilance|` so a bare `instr` cannot match a prefix. `card_row.rs` owns that format
+        // and the two must not drift.
+        //
+        // ⚠️ **This arm is only sound because NULL means one thing**, and it briefly did not.
+        // `card_row.rs` wrote `None` for a card with no keywords until the live pass of
+        // 2026-09-22, which made NULL mean "predates the rung" *and* "vanilla card" at once —
+        // so the bridge fired on every vanilla card permanently rather than on un-ingested
+        // rows temporarily. Measured on a freshly ingested corpus: 68,808 NULLs out of 118,609
+        // printings, and `kw:flying` collecting 2,435 printings that only mention flying
+        // (*Mystic Skyfish*, *Workshop Elders*). A keywordless card now stores `""`, so NULL
+        // is once again exactly "this row predates corpus schema 5". Do not let that field go
+        // back to `None`.
         //
         // Parenthesised as a whole because the arms are ORed and this clause is ANDed into the
         // `WHERE` beside every other one — unwrapped, the `OR` would reach across it.
@@ -2586,9 +2605,17 @@ mod tests {
         assert!(neg[0].contains("type_line :"), "{}", neg[0]);
     }
 
-    /// The free text, the type line and the oracle text share one `MATCH`, joined by the
-    /// space that is FTS5's implicit AND — and the negatives are split out whether or not
-    /// there is a positive beside them, which is what makes the rule uniform.
+    /// The free text, the type line and the oracle text share one `MATCH`, joined by a
+    /// spelled-out `AND` — and the negatives are split out whether or not there is a positive
+    /// beside them, which is what makes the rule uniform.
+    ///
+    /// ⚠️ **This test asserted a space here and was green while the window was broken.** A
+    /// space is FTS5's implicit AND between bare phrases and a *syntax error* after a column
+    /// filter, so every string this test blessed — free text beside `t:`, `t:` beside `o:` —
+    /// raised `fts5: syntax error near "search_text"` in the shipped app. The assertion was on
+    /// the string's *shape* and nothing ever handed it to FTS5, which is the whole of how it
+    /// shipped: see `two_positive_terms_join_with_an_explicit_and`, which runs it against a
+    /// real index instead and is the fence that would have caught this.
     #[test]
     fn the_match_string_ands_the_free_text_and_every_positive_term() {
         let preds = vec![
@@ -2603,7 +2630,7 @@ mod tests {
         let (m, neg) = fts_match(Some("bolt"), &preds);
         assert_eq!(
             m.unwrap(),
-            "\"bolt\"* type_line : (\"goblin\"*) search_text : (\"draw\"* \"a\"* \"card\"*)"
+            "\"bolt\"* AND type_line : (\"goblin\"*) AND search_text : (\"draw\"* \"a\"* \"card\"*)"
         );
         assert_eq!(neg, vec!["search_text : (\"sacrifice\"*)"]);
     }
@@ -2639,6 +2666,64 @@ mod tests {
     /// The `MATCH` strings this builder produces have to be strings FTS5 will accept — which
     /// a `contains` assertion cannot tell, because a syntax error is a *prepare* failure and
     /// not a wrong answer.
+    /// Two positive terms in one MATCH string — the shape the shipped window broke on.
+    ///
+    /// **FTS5's implicit AND is a space only between bare phrases.** After a column filter a
+    /// space is a *syntax error*: `type_line : (…) search_text : (…)` does not parse, and
+    /// neither does free text followed by a filtered term. Measured against the real
+    /// 118,609-printing corpus on 2026-09-22 — both space forms raise
+    /// `fts5: syntax error near "search_text"` while both `AND` forms answer 314 — and the live
+    /// window said exactly that under `t:goblin o:haste`.
+    ///
+    /// **Nothing in the suite had ever put two positives in one string**, which is why this
+    /// shipped green: the test below builds one positive and one *negated* term, and a negated
+    /// term goes to its own `NOT IN` subquery rather than into the MATCH. So the join was only
+    /// ever exercised with a single element, where `join` returns it untouched and any
+    /// separator is correct.
+    #[test]
+    fn two_positive_terms_join_with_an_explicit_and() {
+        let conn = corpus_with_card_facts();
+        conn.execute_batch("INSERT INTO cards_fts(cards_fts) VALUES('rebuild');")
+            .unwrap();
+        let run = |query: &str| -> rusqlite::Result<i64> {
+            conn.prepare(
+                "SELECT count(*) FROM cards c JOIN cards_fts ON cards_fts.rowid = c.rowid
+                 WHERE cards_fts MATCH ?",
+            )?
+            .query_row([query], |r| r.get::<_, i64>(0))
+        };
+
+        // Two filtered columns: `t:creature o:goblin`.
+        let (two, _) = fts_match(
+            None,
+            &[
+                pred(PredicateField::TypeLine, PredicateOp::Colon, "creature"),
+                pred(PredicateField::OracleText, PredicateOp::Colon, "goblin"),
+            ],
+        );
+        let two = two.unwrap();
+        assert!(two.contains(" AND "), "two terms must be ANDed, got: {two}");
+        run(&two).expect("two filtered columns must parse");
+
+        // Free text beside a filtered column: `bolt t:creature` — the commoner shape, and
+        // just as broken, so a reader typing a name beside a type saw an error rather than
+        // a narrowed wall.
+        let (mixed, _) = fts_match(
+            Some("bolt"),
+            &[pred(
+                PredicateField::TypeLine,
+                PredicateOp::Colon,
+                "creature",
+            )],
+        );
+        let mixed = mixed.unwrap();
+        assert!(
+            mixed.contains(" AND "),
+            "free text must be ANDed, got: {mixed}"
+        );
+        run(&mixed).expect("free text beside a filtered column must parse");
+    }
+
     #[test]
     fn the_match_strings_prepare_and_run_against_a_real_index() {
         let conn = corpus_with_card_facts();
