@@ -253,7 +253,7 @@ export const PriceAsOf: Story = {
  * under what it *does* rather than under Land. What a reader counts when they read `Lands` is
  * *how many cards can be a land this game*, and until this term there was no figure that said so.
  *
- * **A second number, never a wider first one.** The `+2 MDFC` is dim and set apart in the `Cards`
+ * **A second number, never a wider first one.** The `+2 MDFC` is dim and set in the `Cards`
  * term's own vocabulary, because it is not part of the headline — and the abbreviation is what
  * the tooltip is there to expand, which is why a deck with none binds no hint at all.
  *
@@ -274,9 +274,11 @@ export const ModalLands: Story = {
     const canvas = within(canvasElement);
     const lands = canvas.getByText("Lands", { selector: "dt" }).closest("div") as HTMLElement;
 
-    // The whole string, because `38` and `+2 MDFC` found separately are also satisfied by a
-    // render with no separator at all — `38+2 MDFC`, which reads as one number.
-    await expect(lands).toHaveTextContent("38 +2 MDFC");
+    // The whole string, because `38` and `+2 MDFC` found separately are satisfied by a render
+    // with a separator this term must not have. Tight since 2026-09-22, which is the `Cards`
+    // term's own spelling — `DeckLedger.test.tsx` has the argument and the sibling test that
+    // holds the two together.
+    await expect(lands).toHaveTextContent("38+2 MDFC");
 
     await userEvent.hover(lands);
     const tip = await canvas.findByRole("tooltip", undefined, {

@@ -159,7 +159,7 @@ export const TheoryMatches: Story = {
         `[${THEORY_MATCH_ATTR}]:not([${THEORY_MATCH_ATTR}="unplanned"])`,
       ),
     ];
-    expect(planned.map((mark) => mark.textContent).sort()).toEqual(["", "", "+2", "-1"]);
+    expect(planned.map((mark) => mark.textContent).sort()).toEqual(["", "", "+2", "−1"]);
 
     // The card carrying both marks: in the plan **and** breaking a rule. The two facts are in
     // one sentence because a button's `aria-label` replaces everything inside it.

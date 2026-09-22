@@ -234,8 +234,8 @@ export function TheoryMarksPanel(): JSX.Element {
  * Positive and small: a `+2` is two characters in the same fixed-advance box the tick occupies,
  * which is what makes the two previews the same shape. It is also the mark's commonest real state
  * — since issue #400 the sign is the action, so `+2` is *two to add*, which is what a card on a
- * list still being sleeved up against its plan mostly says. The sign is ASCII for
- * `theoryDeltaText`'s reason — the typographic minus is not in that face's fixed-advance run.
+ * list still being sleeved up against its plan mostly says. The negative state this previews
+ * beside it is `−8` with a **U+2212** sign, which `theoryDeltaText` measured the face for.
  *
  * **The unplanned row draws no second preview at all**, so this number never reaches it: that
  * tier has no order to be short of, and `theoryMatchLabel` and both mark components ignore a

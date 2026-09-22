@@ -140,7 +140,7 @@ export interface DeckStatsSummary {
    * and they are filed under Ramp, Removal or whatever they *do*, because `autoCategoryFor` reads
    * the front face too. What a deckbuilder counts them as is *cards that can be a land this
    * game*, which no figure here could say while `lands` was the only one. So the ledger draws
-   * `38 +2 MDFC` and the two terms answer two questions.
+   * `38+2 MDFC` and the two terms answer two questions.
    *
    * **It is a disjoint tally and never a subtotal**: a Pathway is `Land // Land`, so its front
    * answers {@link isLand} and it is in `lands` and not here. `lands + nonlands` is still every
