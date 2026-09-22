@@ -1065,14 +1065,15 @@ layer.
   **Since 2026-09-08 the sign is the *action to take*, not the discrepancy**
   ([issue #400](https://github.com/Msgaihede/mtg-grimoire/issues/400), reported by the reader who
   asked for the number in the first place): **positive is copies to add, negative is copies to
-  remove** — `+2` means *put two more in*, `-8` means *take eight out*, and `0` is still the tick.
+  remove** — `+2` means *put two more in*, `−8` means *take eight out*, and `0` is still the tick.
   It was `live − planned` from 2026-08-26 (issue #212) until 2026-09-08, and the complaint against
   that arrangement is that it described the disagreement without answering it: *"the displayed
   number indicates what is missing as a minus and what is over the required quantity as a plus.
   This does not directly tell the user what action to take."* **Only the direction moved.** The
   grain still follows the tier, both sides are still summed across their piles, an inactive pile
   is still excluded from both, `DIFFERENCE_FLOOR` still fences the whole thing, and
-  `theoryDeltaText` still writes `+N` / `-N` with ASCII signs. **The words moved with it**:
+  `theoryDeltaText` still writes `+N` / `−N` — though the minus became U+2212 on 2026-09-22, when
+  the fixed-advance claim that had kept it ASCII was measured and found false. **The words moved with it**:
   `theoryMatchLabel` now says `In the theory list · 2 to add` and
   `In the theory list · 3 to remove` (and `… · a different printing · 3 to add` on the blue tier),
   so *"more than planned"* and *"fewer than planned"* are gone from the tooltip, the badge and the
@@ -1534,7 +1535,7 @@ layer.
     scope. Read-only — changing it is a Deck settings trip — and it is the first thing to go at
     `TIGHT_HEADER_PX`, where the check button's own name still carries it. With no spec in hand it
     falls back to the deck row's `formatName`.
-  - **The `Lands` term says `38 +2 MDFC`, and the second number is a tally beside the figure
+  - **The `Lands` term says `38+2 MDFC`, and the second number is a tally beside the figure
     rather than a widening of it** (2026-09-20,
     [issue #475](https://github.com/Msgaihede/mtg-grimoire/issues/475)). A modal DFC with a spell
     on the front and a land on the back is filed by what it *does* — `autoCategoryFor` pins `Land`

@@ -148,7 +148,7 @@ describe("theoryMatchLabel", () => {
    *  delta and the words its tooltip says are the same sign, read off the same number. */
   it("draws the same sign it speaks", () => {
     expect(theoryDeltaText(2)).toBe("+2");
-    expect(theoryDeltaText(-3)).toBe("-3");
+    expect(theoryDeltaText(-3)).toBe("−3");
   });
 
   /**

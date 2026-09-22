@@ -1606,7 +1606,7 @@ describe("CardStack marks", () => {
    * is the half a `Math.abs` or a flipped subtraction gets wrong silently.
    *
    * **The sign reads as the press since issue #400**: the delta is `planned − live`, so `+2` is
-   * two copies to put in and `-3` is three to take out.
+   * two copies to put in and `−3` is three to take out.
    */
   it("draws the count difference in place of the tick, with the sign both ways", async () => {
     const short = card({ name: "Mana Crypt", quantity: 2 });
@@ -1633,7 +1633,7 @@ describe("CardStack marks", () => {
     // ASCII `+` and `-`, which is what keeps the two the same width in a `tabular-nums` face —
     // a typographic minus is outside that fixed-advance run.
     expect(marks[0]).toHaveTextContent("+2");
-    expect(marks[1]).toHaveTextContent("-3");
+    expect(marks[1]).toHaveTextContent("−3");
     // The tick is gone rather than sitting beside the number: `lucide` draws it as an `<svg>`,
     // so this is the assertion that would fail if the two were rendered together.
     expect(marks[0].querySelector("svg")).toBeNull();

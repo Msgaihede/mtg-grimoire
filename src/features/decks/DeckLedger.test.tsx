@@ -87,12 +87,19 @@ describe("DeckLedger", () => {
    * lands in Ramp — and is a spell to the curve and the average, so the manabase figure had no
    * way to say a reader could draw it and play a land.
    *
-   * **The whole string is asserted rather than the two halves separately**, because `38` and
-   * `+2 MDFC` both being present is what a render with no separator at all also satisfies —
-   * `38+2 MDFC`, which reads as a single number and is the one way this can be visibly wrong.
-   * What it deliberately does **not** claim to see is which side of the `<span>` the space sits
-   * on: `textContent` concatenates across element boundaries, so both spellings answer alike.
-   * That placement is a convention with no fence, and the reason is at its own site.
+   * **The whole string is asserted rather than the two halves separately**, and the string is
+   * `38+2 MDFC` — tight, which is what the `Cards` term one row up had always been and what this
+   * one became on 2026-09-22. It read `38 +2 MDFC` until then, and the comment here argued that
+   * the tight spelling "reads as a single number and is the one way this can be visibly wrong".
+   * The reader's verdict went the other way: two tallies spelled two ways in one `<dl>` is what
+   * looked wrong on screen, and `+n` is a unit everywhere else in this editor (`+3 sideboard`,
+   * `+4 more`, `+2` on a theory mark). `MDFC` keeps its space because it is a word rather than
+   * part of the tally.
+   *
+   * `textContent` concatenates across element boundaries, so this assertion sees the separator
+   * wherever it sits — inside the span, outside it, or absent. What it cannot see is a **CSS**
+   * gap, which is why the sibling test below pins the two terms against each other rather than
+   * against a literal.
    */
   it("says the lands the deck plays off the back of a spell, beside the figure", async () => {
     ledger([
@@ -106,10 +113,43 @@ describe("DeckLedger", () => {
       }),
     ]);
 
-    expect(term("Lands").querySelector("dd")?.textContent).toBe("38 +2 MDFC");
+    expect(term("Lands").querySelector("dd")?.textContent).toBe("38+2 MDFC");
     expect(await openTooltip(term("Lands"))).toHaveTextContent(
       "Lands by type line, and 2 modal double-faced cards that play as a land off the back.",
     );
+  });
+
+  /**
+   * **The one assertion that is about the line rather than about a term**, and the only thing
+   * standing between this `<dl>` and the drift that put it here (2026-09-22).
+   *
+   * `Cards` and `Lands` each say *this many, and this many more*. They are the same sentence in
+   * the same `<dd>` type 26 lines apart, and for months they said it two ways — `100+3` against
+   * `38 +2 MDFC` — because each has its own test asserting its own literal and nothing ever
+   * compared them. Both suites were green the whole time. So this reads the separator **off both
+   * terms and compares them to each other**, which fails for a change to either one alone,
+   * whichever direction a future reader takes the spelling.
+   *
+   * **The separator is read as the run between the digits, not matched against a literal**, so a
+   * `{" "}` sibling, a space inside the span and a bare newline are all seen alike — and all
+   * seen as *different from* each other only when they actually differ in the text. A **CSS**
+   * gap is the one thing `textContent` cannot see, which is why neither term may use one: the
+   * `Owned` term's `ml-1.5` was exactly that, and it is gone for the same reason.
+   */
+  it("spells the two compound tallies alike", () => {
+    ledger([
+      card({ name: "Island", typeLine: "Basic Land — Island", cmc: 0, quantity: 38 }),
+      card({ name: "Turntimber Symbiosis", typeLine: "Sorcery // Land", cmc: 7, layout: "modal_dfc" }),
+      card({ name: "Pyroblast", categoryKind: "side", quantity: 3 }),
+    ]);
+
+    // Whatever sits between the headline figure and the `+` of the tally after it.
+    const separator = (label: string) =>
+      /\d(\D*?)\+/.exec(term(label).querySelector("dd")?.textContent ?? "")?.[1];
+
+    expect(separator("Cards")).toBe(separator("Lands"));
+    // Named as well as compared, so a future change has to come here and say so on purpose.
+    expect(separator("Cards")).toBe("");
   });
 
   /** `plural` and `verb` together — the count a reader is likeliest to meet is one. */
@@ -119,7 +159,7 @@ describe("DeckLedger", () => {
       card({ name: "Turntimber Symbiosis", typeLine: "Sorcery // Land", cmc: 7, layout: "modal_dfc" }),
     ]);
 
-    expect(term("Lands").querySelector("dd")?.textContent).toBe("38 +1 MDFC");
+    expect(term("Lands").querySelector("dd")?.textContent).toBe("38+1 MDFC");
     expect(await openTooltip(term("Lands"))).toHaveTextContent(
       "1 modal double-faced card that plays as a land off the back.",
     );
@@ -212,6 +252,10 @@ describe("DeckLedger", () => {
 
     expect(term("Owned")).toHaveTextContent("1");
     expect(screen.getByText("3 missing")).toBeInTheDocument();
+    // **A real space, not the `ml-1.5` this carried until 2026-09-22.** The margin drew the gap
+    // for the eye and concatenated `13 missing` for everything that reads the text — the
+    // `Missing2` failure `src/CLAUDE.md` names, on the one term of this line that had it.
+    expect(term("Owned").querySelector("dd")?.textContent).toBe("1 3 missing");
   });
 
   it("says nothing about a shortfall for a deck it holds every copy of", () => {
