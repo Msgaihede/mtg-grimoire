@@ -6743,12 +6743,23 @@ fn keywords_are_owed(conn: &Connection, schema: &str) -> rusqlite::Result<bool> 
 /// attached it *succeeds*, putting the column on a table `user.db` does not have and leaving
 /// the one that matters untouched.
 ///
-/// **One statement and no more.** No `cards_fts` rebuild — the rung adds an unindexed column
-/// and renumbers no rowid, schema v2's precedent — and **no [`CARDS_INDEXES`] entry for this
-/// column**: [`crate::filters::push_card_filters`] reads it with `instr`, which no b-tree can
-/// seek through, so an index on it would be a second copy of the column bought for nothing.
-/// (The `idx_cards_artist` entry that landed in the same commit is a *different* column and a
-/// measured 26×; the two are not one decision.)
+/// **No `cards_fts` rebuild** — the rung adds an unindexed column and renumbers no rowid,
+/// schema v2's precedent — and **no [`CARDS_INDEXES`] entry for this column**:
+/// [`crate::filters::push_card_filters`] reads it with `instr`, which no b-tree can seek
+/// through, so an index on it would be a second copy of the column bought for nothing.
+///
+/// **The second statement is a different column, and it is here rather than left to the next
+/// sync on purpose.** `idx_cards_artist` is in [`CARDS_INDEXES`], and that list is replayed by
+/// `swap_staging` — which means a corpus already sitting at head would go on answering a bare
+/// `a:` from a full `SCAN c` until its next ingest: **466–510 ms measured against the real
+/// 117,738-printing corpus, against ~16 ms once the index exists**, a measured 26×. Every
+/// corpus in the world is at schema 4 or below the day this rung lands, so putting the
+/// `CREATE INDEX` here reaches all of them at the launch that migrates them, and a fresh file
+/// gets it from [`CORPUS_SCHEMA_SQL`] instead. `IF NOT EXISTS` makes the overlap free.
+///
+/// **It is safe here for the same reason the `ALTER` is**: this function runs only when
+/// [`keywords_are_owed`] said yes, and that gate reads `PRAGMA table_info(cards)` and answers
+/// false for a `cards` that is not there — so neither statement can meet a missing table.
 ///
 /// **And no backfill, because none is possible.** The array lives in `raw`, `raw` is a gzip
 /// BLOB from schema v3 on, and `json_extract` over one is a hard `malformed JSON` error rather
@@ -6763,7 +6774,8 @@ fn keywords_are_owed(conn: &Connection, schema: &str) -> rusqlite::Result<bool> 
 fn add_keywords(conn: &Connection, schema: &str) -> rusqlite::Result<()> {
     conn.execute_batch(&on_schema(
         schema,
-        "ALTER TABLE {schema}.cards ADD COLUMN keywords TEXT;",
+        "ALTER TABLE {schema}.cards ADD COLUMN keywords TEXT;
+         CREATE INDEX IF NOT EXISTS {schema}.idx_cards_artist ON cards(artist);",
     ))
 }
 
@@ -18931,6 +18943,45 @@ pub(crate) mod tests {
         assert!(
             corpus_cards_has(&conn, "keywords"),
             "the number said head and the shape did not"
+        );
+    }
+
+    /// The rung builds `idx_cards_artist` too, and this is the corpus that says why it must.
+    ///
+    /// The index is in [`CARDS_INDEXES`], and **only `swap_staging` replays that list** — so a
+    /// corpus already stamped at head would go on answering a bare `a:` from a full `SCAN c`
+    /// until its next ingest. Measured against the real 117,738-printing corpus: **466–510 ms
+    /// that way, ~16 ms with the index**, the same `instr(lower(…), …)` either way. Every
+    /// corpus that exists the day this rung lands is at schema 4 or below, so this is the one
+    /// place that reaches all of them, at the launch that migrates them.
+    #[test]
+    fn the_keywords_rung_also_builds_the_artist_index() {
+        let conn = corpus_missing_keywords();
+        let has_index = |c: &Connection| -> i64 {
+            c.query_row(
+                &format!(
+                    "SELECT count(*) FROM {CORPUS}.sqlite_master
+                     WHERE type = 'index' AND name = 'idx_cards_artist'"
+                ),
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        conn.execute_batch(&format!("DROP INDEX IF EXISTS {CORPUS}.idx_cards_artist;"))
+            .unwrap();
+        assert_eq!(
+            has_index(&conn),
+            0,
+            "the fixture must start without the index or this tests nothing"
+        );
+
+        migrate_corpus(&conn).unwrap();
+
+        assert_eq!(
+            has_index(&conn),
+            1,
+            "a bare `a:` is a 26x full scan without it"
         );
     }
 
