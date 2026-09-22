@@ -205,9 +205,20 @@ never runs alone against the whole corpus in the ordinary case**: it is ANDed in
 the FTS join, the format mask or the collapse index has usually already narrowed. A bare `a:` in
 an otherwise empty box is the worst case.
 
-> **Not yet measured.** The bare-`a:` timing against the real corpus is owed by the live pass and
-> belongs in this section. If it lands above ~250 ms the fallback is an index on `cards.artist`,
-> which is cheap and additive. Do not quote a number here until one has been taken.
+**Measured, and it needed the index.** A bare `a:` against the real corpus, debug build,
+2026-09-22, through `node:sqlite`: **466–510 ms** best-of-three — `a:rebecca` 486 ms for 170
+collapsed rows, `a:seb mckinnon` 466 ms, and `a:zzzzzznobody`, which matches nothing, 477 ms. The
+"never alone" argument held: ANDed with a text term it is **12 ms**. But the bare case was four
+times over the threshold, and the cause was exactly the missing index — `instr(lower(c.artist),…)`
+planned as a bare `SCAN c` at **417.7 ms**, while the identical expression on the indexed `name`
+column was **15.7 ms** under `SCAN c USING COVERING INDEX idx_cards_name`.
+
+So `idx_cards_artist` was added, and **built by the corpus schema 5 rung rather than left to
+`CARDS_INDEXES`**. That list is replayed only by `swap_staging`, so a corpus already at head would
+have kept the full scan until its next ingest; every corpus in the world is below schema 5 the day
+the rung lands, so the rung reaches all of them. Confirmed on the real 936 MB file immediately
+after migration: the plan is `SCAN c USING COVERING INDEX idx_cards_artist` and a bare
+`a:rebecca` answers 408 rows in **17.8 ms**. A measured **26×**, with no sync in between.
 
 ### Everything else is a plain predicate
 
@@ -236,7 +247,10 @@ other non-numeric, and so matches the `pow>=0` observation. `pow:*` — a litera
 value — is matched as **string equality** before any cast is attempted, which is the only way to
 ask that question at all.
 
-> **Not yet measured here.** What `pow:*` returns against this corpus is owed by the live pass.
+**Measured against this corpus, 2026-09-22**: `pow:*` answers **866** printings through the
+string-equality arm, and `pow>=*` answers **51,740** — the same as `pow>=0`, because the cast
+resolves `*` to `0.0`. Both arms of the split behave as Scryfall's do (`pow>=0` = `pow>=*` =
+19,128 there, over its own deduplicated corpus).
 
 ## `kw:` and corpus schema 5
 
@@ -515,10 +529,104 @@ overhang** at that width, and 290px at the panel's normal 384.
 
 ### The query-syntax pass
 
-> **Owed.** Each keyword typed into at least one surface, the collection and wishlist boxes
-> included — they are the two nothing else proves — with counts, the bare-`a:` timing and
-> `pow:*`'s behaviour recorded in the two slots above. Until it has run, everything in this
-> document about the shipped window is the tagger pass and says so.
+`npm run tauri dev` from the `scryfall-search-syntax` worktree, **debug build**, 2026-09-22,
+window 1920×1080, against a copy of the main checkout's real data. The launch migrated the corpus
+to schema 5 and then ran a full ingest: **118,609 printings, 49,801 of them carrying keywords**.
+
+**It found two defects that 2,700 Rust tests and 4,000 frontend tests had all passed over.** Both
+are recorded below rather than quietly fixed, because each is a shape of test failure worth
+recognising again.
+
+### The counts
+
+| typed | wall |
+| --- | --- |
+| `t:goblin` | **525 cards** |
+| `t:"legendary creature"` | **3,447** |
+| `o:"draw a card"` | **4,165** |
+| `kw:flying` | **3,906** |
+| `c>=rg` | **625** |
+| `id<=wu` | 5,000+ (the caption's cap) |
+| `cmc>=15` | **5** |
+| `pow>=4` | **4,412** |
+| `tou<=2` | 5,000+ |
+| `r>=rare` | 5,000+ |
+| `s:neo` | **287** |
+| `f:modern` | 5,000+ |
+| `a:rebecca` | **165** |
+| `otag:removal` | 5,000+ |
+| `atag:dragon` | **1,092** |
+| `power` | **2,273** — free text, the bare-keyword rule |
+| `cmc>=banana` | *No cards match* — free text, nothing narrowed |
+| `t:goblin o:haste` | **89** |
+| `bolt t:creature` | **9** |
+| `t:goblin t:creature` | **518** |
+| `o:flying -t:creature` | **782** |
+| `a:rebecca t:legendary` | **8** |
+
+The caption caps at `5,000+`, so it cannot measure a filter above that — an old finding, and the
+reason the narrow queries are the informative ones here.
+
+### The first defect: FTS5's implicit AND is not a conjunction after a column filter
+
+`t:goblin o:haste` answered **`fts5: syntax error near "search_text"`** in the window. A space is
+FTS5's implicit AND between bare phrases and a *syntax error* after a column filter, so every
+query combining two text terms was broken — `t:` beside `o:`, `t:` beside `t:`, and the commonest
+shape of all, **free text beside a type**: `bolt t:creature`. Measured against the corpus: both
+space forms refuse to parse, both `AND` forms answer 314.
+
+**Why the suite was green** is the part worth keeping. The one test that ran a MATCH string
+against a real index built *one* positive term and one **negated** one — and a negated term goes
+to its own `NOT IN` subquery rather than into the MATCH. So the join was only ever exercised with
+a single element, where `join` returns it untouched and any separator is correct. The test that
+did cover two positives asserted the string's **shape** and never handed it to FTS5.
+
+### The second defect: NULL meant two things
+
+`kw:flying` answered 3,906 where Scryfall says 3,318, and the split says why. `card_row` wrote
+`None` for a card with **no** keywords, so `keywords IS NULL` meant "predates the rung" *and*
+"vanilla card" at once — and the `kw:` bridge reads the first and falls back to rules text. On the
+freshly ingested corpus that was **68,808 NULLs out of 118,609**, so the bridge fired on every
+vanilla card permanently rather than on un-ingested rows briefly.
+
+Arm by arm, for `flying`: the column arm answered **10,979** printings and the NULL arm added
+**2,435** more — *Mystic Skyfish* ("gains flying"), *Workshop Elders* ("have flying"),
+*Destructive Tampering* ("creatures without flying"). None of them has the keyword.
+
+A keywordless card now stores `""`, which is `produced_mana`'s fence one field up, and NULL means
+"predates corpus schema 5" again. ⚠️ **The corpus this was measured on still holds the old NULLs**,
+so the arithmetic above is what the fix removes rather than a re-measurement of it; the unit tests
+pin the new extraction, and the next full ingest is what makes the live number match.
+
+### The collection and the wishlist
+
+The two surfaces nothing else proves — neither had a parser before this change.
+
+| typed | collection (flattened) | wishlist |
+| --- | --- | --- |
+| *(empty)* | 340 cards / 273 unique | 20 tiles |
+| `t:creature` | **92 / 89** | 20 |
+| `t:instant` | **78 / 77** | — |
+| `t:land` | — | **18** |
+| `o:flying` | **41 / 40** | **6** |
+| `kw:flying` | **37 / 37** | — |
+| `c>=g` | **42 / 33** | — |
+| `r:common` | — | **3** |
+| `cmc>=5` / `cmc>=7` | **15 / 15** | **16** |
+| `a:zzzznope` | **0 / 0** | **0** |
+
+`kw:flying` (37) narrower than `o:flying` (41) is the relationship Scryfall shows, reproduced
+locally. On the wishlist — whose free text is a `LIKE` over its own denormalised name column —
+the predicates reach `cards` through the shared `push_card_filters` while the text path is
+untouched, which is what §"One function, three searches" claims and this is the check of it.
+
+### The F1 panel
+
+Two tabs, `Shortcuts` selected on open. The syntax tab draws all **14** keywords in three groups,
+`role="tab"`/`role="tabpanel"` with `aria-selected` tracking. Measured: tab panel **358 px** wide
+inside the 384 px frame, `scrollWidth` equal to `clientWidth` — **no horizontal overflow** — and
+648 px tall against a `scrollHeight` of 815, so `max-h-[60vh]` is scrolling as intended. The whole
+panel sits inside the window (`right` 1769 of 1920, `bottom` 726 of 1080).
 
 ## Refused, and named so it is a decision
 
