@@ -712,7 +712,7 @@ export const FlattenSwitch: Story = {
 /**
  * Scryfall's tagger syntax, typed straight into the search box.
  *
- * `o:ramp -a:forest` is two questions and no free text at all: the parser lifts both terms out,
+ * `otag:ramp -atag:forest` is two questions and no free text at all: the parser lifts both terms out,
  * `tag_resolve` turns the names into slugs, and what is left for FTS is the empty string. The
  * chips under the row are what the box turned into — removable, and flippable between include
  * and exclude, because the box stays the one source of truth and both gestures rewrite the text
@@ -723,7 +723,7 @@ export const FlattenSwitch: Story = {
  * most searches never use.
  */
 export const TaggerSyntax: Story = {
-  args: { preset: (search) => search.setText("o:ramp -a:forest") },
+  args: { preset: (search) => search.setText("otag:ramp -atag:forest") },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const chips = await canvas.findByRole("group", { name: "Tags from the search box" });
@@ -733,7 +733,7 @@ export const TaggerSyntax: Story = {
     // a red chip would read as an error, which an exclusion is not.
     await expect(within(chips).getByText("not Forest")).toBeInTheDocument();
     // The whole box is still the query, and it is still what the reader typed.
-    await expect(canvas.getByLabelText("Search cards")).toHaveValue("o:ramp -a:forest");
+    await expect(canvas.getByLabelText("Search cards")).toHaveValue("otag:ramp -atag:forest");
   },
 };
 
@@ -743,7 +743,7 @@ export const TaggerSyntax: Story = {
  * The wall behind this row is deliberately **empty** — `useCardSearch` refuses to run a search
  * whose tag name resolved to nothing, because answering it as though the term were not there
  * would show the unfiltered corpus in reply to a narrowing the reader asked for. Scryfall 404s
- * here and says no more; a reader who mistypes `o:remov` and is shown a silent empty wall
+ * here and says no more; a reader who mistypes `otag:remov` and is shown a silent empty wall
  * concludes their collection has no removal in it.
  *
  * So the note names the word and offers the tags that *are* called something like it, from
@@ -752,7 +752,7 @@ export const TaggerSyntax: Story = {
  * keeps the keyword the reader typed.
  */
 export const UnknownTag: Story = {
-  args: { preset: (search) => search.setText("o:remov") },
+  args: { preset: (search) => search.setText("otag:remov") },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const note = await canvas.findByRole("status");
@@ -763,7 +763,7 @@ export const UnknownTag: Story = {
     await userEvent.click(suggestion);
 
     await waitFor(async () => {
-      await expect(canvas.getByLabelText("Search cards")).toHaveValue("o:removal");
+      await expect(canvas.getByLabelText("Search cards")).toHaveValue("otag:removal");
     });
     // The note is gone with the name it was about, and the tag is a chip instead.
     await expect(canvas.queryByRole("status")).toBeNull();
@@ -776,19 +776,19 @@ export const UnknownTag: Story = {
 /**
  * A tag and a word in one query — the case the parser exists for.
  *
- * `bolt a:lightning` sends `bolt` to FTS and the art tag beside it, so the two narrow together.
+ * `bolt atag:lightning` sends `bolt` to FTS and the art tag beside it, so the two narrow together.
  * Sending the raw box instead would have the index hunting for a card whose text contains
- * `a:lightning`, which is no card: the wall would be empty and the tag filter would never have
+ * `atag:lightning`, which is no card: the wall would be empty and the tag filter would never have
  * been applied at all.
  */
 export const TagBesideFreeText: Story = {
-  args: { preset: (search) => search.setText("bolt a:lightning") },
+  args: { preset: (search) => search.setText("bolt atag:lightning") },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const chips = await canvas.findByRole("group", { name: "Tags from the search box" });
     await expect(within(chips).getByText("Lightning")).toBeInTheDocument();
     // The word is still in the box: the chips are a reading of the query, not a replacement.
-    await expect(canvas.getByLabelText("Search cards")).toHaveValue("bolt a:lightning");
+    await expect(canvas.getByLabelText("Search cards")).toHaveValue("bolt atag:lightning");
     // And the text filter counts, so Reset all has something to clear.
     await expect(await canvas.findByRole("button", { name: /^Reset all/ })).not.toHaveAttribute(
       "aria-disabled",

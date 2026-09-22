@@ -893,14 +893,41 @@ pub fn run_facets(state: &AppState, req: &SearchRequest) -> Result<FacetResponse
         });
     };
 
-    // `nonblank` then `fts_query`, exactly as `search::run_search` does it — including the
-    // arm that reads as a bug and is not: **all-punctuation input leaves nothing to match on,
-    // and the answer is no text clause at all**, which is what an empty search box does
-    // anyway. An empty bitset there would turn a search for `"!!!"` into zero results instead
-    // of everything, and grey every option over a page that is full. It stays `None` all the
-    // way into [`compute`], and a tag term beside it does not fill the hole.
-    let query = crate::filters::nonblank(&req.text).and_then(crate::filters::fts_query);
+    // **[`crate::filters::fts_match`], the same call `search::run_search` makes** — so the
+    // bitset folded below is built from the same string the search runs, and `t:`/`o:` narrow
+    // the counts for free rather than leaving them wider than the wall. That sharing is the
+    // whole of spec §5.2's "rides the bitset", and it is only free because this line makes the
+    // call.
+    //
+    // It keeps the arm that reads as a bug and is not: **all-punctuation input leaves nothing
+    // to match on, and the answer is no text clause at all**, which is what an empty search box
+    // does anyway. An empty bitset there would turn a search for `"!!!"` into zero results
+    // instead of everything, and grey every option over a page that is full. It stays `None`
+    // all the way into [`compute`], and a tag term beside it does not fill the hole.
+    //
+    // ⚠️ **The negatives are DISCARDED and the counts therefore read high under a `-t:` or a
+    // `-o:` term.** This is the module note's rule applied deliberately rather than an
+    // oversight: excluding them would need a bitset complement, [`BitSet`] has `and` and no
+    // `and_not`, and growing the index is out of scope (spec §11). A count that is too high
+    // leaves an option live that returns fewer cards than it advertised — one press wasted —
+    // where a count that is too low greys out an option that would have worked, which hides
+    // cards and which nobody reports. Same direction as every other fail-open here.
+    let (query, _negated_text) = crate::filters::fts_match(
+        crate::filters::nonblank(&req.text),
+        req.predicates.as_deref().unwrap_or(&[]),
+    );
     let probes = tag_probes(req);
+
+    // ⚠️ **The other ten predicate fields are ignored here, deliberately, and the counts read
+    // high under every one of them.** `kw:`, `a:`, `c:`, `pow:` and `tou:` have no dimension in
+    // this index at all (`super::CardIndex` carries no text, keywords, artist, power, toughness
+    // or *card* colour axis — only colour **identity**), and `cmc:`, `r:`, `s:`, `id:` and `f:`
+    // have one that answers a *set* of chips rather than an operator, so `cmc>=3` and
+    // `r>=rare` cannot be expressed against it either. That is spec §7's decision rather than
+    // an oversight: a chip may advertise more cards than pressing it returns, which costs one
+    // press, where a chip that vanished is a filter the reader cannot reach. **Growing the
+    // index is explicitly out of scope** (spec §11) — do not add a dimension here to close
+    // this; it is closed by deciding to, in a change of its own.
 
     // Neither narrowing is asked for, so the database is not touched at all — this is the
     // path the unfiltered browse takes, and it is the commonest request there is. Both halves
@@ -1829,9 +1856,63 @@ mod tests {
         assert_eq!(f.sets.get("rav").copied(), Some(0), "offered, and empty");
     }
 
+    /// **`t:` narrows the facet counts, and "for free" is a claim about one call.**
+    ///
+    /// `run_facets` builds its bitset from [`crate::filters::fts_match`] — the same function
+    /// and therefore the same `MATCH` string `search::run_search` runs — so a type-line term
+    /// narrows the counts without this module growing a dimension. That is spec §5.2's
+    /// claim, and the only thing that makes it true is that one call: a `fts_query` left here
+    /// would count a text term and ignore a typed one, and every chip would advertise cards
+    /// the wall does not show.
+    ///
+    /// ⚠️ **The second half is the fail-open direction, asserted so it cannot drift into a
+    /// silent regression.** A *negated* text term is dropped here, because excluding it
+    /// needs a bitset complement this index has no operator for — so `-t:instant` counts
+    /// three where the wall shows one. Counting high leaves an option live that returns
+    /// fewer cards than it promised; counting low would grey out an option that works.
+    #[test]
+    fn a_type_line_predicate_narrows_every_count_and_a_negated_one_fails_open() {
+        let state = state_with_seeded_cards("predicate-facets");
+        {
+            let conn = crate::db::lock_blocking(&state.db);
+            conn.execute_batch(
+                "UPDATE cards SET type_line = 'Instant' WHERE id IN ('1','2');
+                 UPDATE cards SET type_line = 'Artifact' WHERE id IN ('3','4');
+                 INSERT INTO cards_fts(cards_fts) VALUES('rebuild');",
+            )
+            .unwrap();
+        }
+        crate::index::lifecycle::build_now(&state).unwrap();
+
+        let term = |negated| {
+            Some(vec![crate::filters::QueryPredicate {
+                field: crate::filters::PredicateField::TypeLine,
+                op: crate::filters::PredicateOp::Colon,
+                value: "instant".into(),
+                negated,
+            }])
+        };
+
+        let f = run_facets(&state, &req(|r| r.predicates = term(false))).unwrap();
+        assert!(f.ready);
+        assert_eq!(
+            f.total, 2,
+            "the two instants; the digital artifact is not paper"
+        );
+        assert_eq!(f.sets.get("lea").copied(), Some(1), "Bolt, not Sol Ring");
+        assert_eq!(f.sets.get("rav").copied(), Some(1));
+        assert_eq!(f.sets.get("alc").copied(), Some(0), "offered, and empty");
+
+        let wide = run_facets(&state, &req(|r| r.predicates = term(true))).unwrap();
+        assert_eq!(
+            wide.total, 3,
+            "every paper printing: the negative is dropped rather than counted"
+        );
+    }
+
     /// **All-punctuation input leaves nothing to match on, and the answer is no text clause
-    /// at all** — which is what an empty search box does anyway. `fts_query` answers `None`
-    /// there, and an implementation that reads that as an empty match set turns a search for
+    /// at all** — which is what an empty search box does anyway. `fts_match` answers `None`
+    /// there, through `fts_query`, and an implementation that reads that as an empty match set turns a search for
     /// `"!!!"` into zero results instead of everything. `run_search` makes the same choice;
     /// facets that disagreed with it would grey every option over a page that is full.
     #[test]
@@ -2109,7 +2190,7 @@ mod tests {
     }
 
     /// **`text: None` is meaningful and must stay meaningful under a tag term.**
-    /// All-punctuation input leaves nothing to match on and `fts_query` answers `None`, which
+    /// All-punctuation input leaves nothing to match on and `fts_match` answers `None`, which
     /// means *no text clause* rather than an empty match set. A tag narrowing that filled that
     /// slot with an empty bitset — or that let the punctuation empty it — would turn a search
     /// for `"!!!"` into zero results over a page that is full.

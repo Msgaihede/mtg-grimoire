@@ -7,6 +7,7 @@ import {
   DEBOUNCE_MS,
   FORMATS,
   NO_COLORS,
+  searchTerms,
   toggleColorFilter,
   toggleIn,
   typesParam,
@@ -208,10 +209,21 @@ export function useWishlist() {
   // drift.
   const typesParamValue = typesParam(types);
 
+  /**
+   * The box, read as Scryfall's query syntax — the free text and the typed predicates.
+   *
+   * **This surface has no tag wiring**, so a tag term folds back into the free text rather than
+   * being dropped: see {@link searchTerms}, which is the whole rule and the whole reason.
+   *
+   * Nothing new is owed to `filterKey` below: `debouncedText` is already a segment of it and
+   * these two fields are a pure function of that string.
+   */
+  const terms = useMemo(() => searchTerms(debouncedText), [debouncedText]);
+
   const filters: Omit<WishlistQuery, "limit" | "offset" | "sort"> = {
-    // A blank string is dropped rather than sent: the backend reads it as unset anyway, and
-    // sending it would make the payload lie about intent.
-    text: debouncedText || undefined,
+    // A blank string and an empty term list are dropped rather than sent: the backend reads
+    // them as unset anyway, and sending them would make the payload lie about intent.
+    ...terms,
     // The same rule for all five. **`playableOnly` is deliberately never sent beside `format`** —
     // the card search pairs the two (`formatParams`), and that pairing must not travel here: a
     // wish for an art card is a card the reader wants, and a corpus filter would answer their own

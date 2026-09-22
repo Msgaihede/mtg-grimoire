@@ -112,6 +112,43 @@ pub struct CardRow {
     /// whole-card property in Scryfall's schema (an MDFC with a land back carries it at the top
     /// level), so a face read would be a second source for one fact.
     pub produced_mana: Option<String>,
+    /// The card's **keyword abilities** — corpus schema 5.
+    ///
+    /// **Lowercased, pipe-delimited _and wrapped_**: `["Flying","Vigilance"]` becomes
+    /// `"|flying|vigilance|"`. Scryfall matches `kw:` against a closed vocabulary rather than
+    /// as a substring — `kw:fly` is refused outright, measured 2026-09-22 — and
+    /// [`crate::filters::push_card_filters`] reproduces that with
+    /// `instr(keywords, '|flying|') > 0`, so the **leading and trailing** delimiters are the
+    /// whole of what stops `kw:fly` matching `flying`. A separator-only form (`flying|
+    /// vigilance`) would leave the first and last keyword unfenced on one side each.
+    ///
+    /// ⚠️ **`Some("")` for a card with no keywords, never `None` — [`CardRow::produced_mana`]'s
+    /// fence exactly, and NULL therefore means one thing only: this row predates the column.**
+    ///
+    /// This read `None` until the live pass on 2026-09-22 and it was wrong in a way only real
+    /// rows showed. The `kw:` predicate bridges the pre-ingest window with a `keywords IS NULL`
+    /// arm that falls back to the card's rules text — sound while NULL means "not ingested
+    /// yet", and unsound the moment it also means "ingested, has no keywords". After a full
+    /// ingest **68,808 of 118,609 printings were NULL**, all of them simply keywordless, and
+    /// every one of them was being matched from its rules text: `kw:flying` picked up 2,435
+    /// printings that merely *mention* flying — *Mystic Skyfish* ("gains flying"),
+    /// *Workshop Elders* ("have flying"), *Destructive Tampering* ("creatures without
+    /// flying"). Not a window that closes at the next sync: a permanent 58%-of-the-corpus hole.
+    ///
+    /// An empty string cannot match, and the direction is worth stating because the doc this
+    /// replaces had it backwards: the predicate is `instr(keywords, '|flying|')`, so the
+    /// **row** is the haystack and the wrapped keyword is the needle. A row holding `""` — or
+    /// `"|"` — contains no `|flying|` and answers no `kw:` at all. A bare delimiter would only
+    /// match everything if it were the *needle*, which it never is.
+    ///
+    /// **`to_ascii_lowercase`, matching what the predicate binds.** `str::to_lowercase` is
+    /// Unicode-aware and the query side folds with `to_ascii_lowercase`; two different folds
+    /// over one column is a match that depends on which side saw the string first.
+    ///
+    /// **Top level only, no face fallback**, for `produced_mana`'s reason: Scryfall publishes
+    /// `keywords` as a whole-card property and a face read would be a second source for one
+    /// fact.
+    pub keywords: Option<String>,
 }
 
 /// A bulk line, gzipped for storage.
@@ -164,6 +201,43 @@ fn joined_letters(v: &Value, k: &str) -> Option<String> {
     v.get(k)
         .and_then(Value::as_array)
         .map(|a| a.iter().filter_map(Value::as_str).collect::<String>())
+}
+
+/// `["Flying","Vigilance"]` -> `"|flying|vigilance|"` — corpus schema 5's storage form.
+///
+/// [`joined_letters`]' neighbour and deliberately not a reuse of it: colour letters are one
+/// character each and concatenate unambiguously, while keywords are words and need a
+/// separator that cannot occur inside one. `|` is that separator — no Scryfall keyword
+/// contains a pipe, and several contain spaces (`First strike`, `Protection from`), a comma
+/// (`Partner with`) and a hyphen.
+///
+/// **Wrapped as well as delimited**, so the first and last entries are fenced on both sides
+/// and `instr(keywords, '|flying|')` cannot match a prefix. And **`Some("")` rather than
+/// `None`** for the empty and absent cases alike, so that NULL in the column keeps exactly one
+/// meaning — "this row predates corpus schema 5" — which is what the `kw:` predicate's bridge
+/// arm is built on. Both rules are [`CardRow::keywords`]', and the second one cost a live pass
+/// to find.
+///
+/// An entry that is not a string is dropped rather than stringified, which is [`s`]'s rule
+/// and `joined_letters`'; an array of nothing but such entries is therefore `Some("")` too —
+/// the card has no storable keywords, which is a fact about the card and not a missing row.
+fn delimited_keywords(v: &Value) -> String {
+    let words: Vec<String> = v
+        .get("keywords")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .filter(|w| !w.is_empty())
+                .map(str::to_ascii_lowercase)
+                .collect()
+        })
+        .unwrap_or_default();
+    if words.is_empty() {
+        String::new()
+    } else {
+        format!("|{}|", words.join("|"))
+    }
 }
 
 /// Store an object/array field verbatim as compact JSON. Used for the fields whose
@@ -334,6 +408,14 @@ impl CardRow {
             // Scryfall omits on every card that makes no mana, and passing that through
             // would spell "makes nothing" and "row predates the column" the same way.
             produced_mana: Some(joined_letters(v, "produced_mana").unwrap_or_default()),
+            // **`None` where `produced_mana` above is `Some("")`**, and the asymmetry is the
+            // point rather than an oversight — see the field's doc. A wrapped empty value is
+            // `"|"`, which is a substring of every other value this column ever holds, so
+            // storing it would make one keywordless card match every `kw:` in the app.
+            // `Some` unconditionally, `produced_mana`'s rule one field up: NULL in this
+            // column must mean "predates corpus schema 5" and nothing else, because the
+            // `kw:` bridge reads it that way.
+            keywords: Some(delimited_keywords(v)),
         })
     }
 }
@@ -731,6 +813,81 @@ mod tests {
         // 2.64:1 measured across 5 828 real bulk lines (gzip's header alone is 18 bytes),
         // so all that is checked here is that compression happened at all.
         assert!(row.raw.len() < line.len(), "compressed, not merely wrapped");
+    }
+
+    /// Corpus schema 5's storage form, stated as the exact string because two other files
+    /// depend on it byte for byte: `filters.rs` binds `|flying|` and `schema.rs`'s
+    /// `the_keyword_predicate_reads_both_arms_against_real_rows` runs the pair against rows.
+    ///
+    /// Serra Angel's array is `["Flying","Vigilance"]` — verified live against
+    /// `api.scryfall.com` on 2026-09-22 — so the capitalisation being folded here is
+    /// Scryfall's own and not a hypothetical.
+    #[test]
+    fn keywords_are_lowercased_delimited_and_wrapped() {
+        let two = parse(
+            r#"{"object":"card","id":"serra","name":"Serra Angel","lang":"en","layout":"normal","set":"lea","collector_number":"1","keywords":["Flying","Vigilance"]}"#,
+        );
+        assert_eq!(two.keywords.as_deref(), Some("|flying|vigilance|"));
+
+        let one = parse(
+            r#"{"object":"card","id":"shivan","name":"Shivan Dragon","lang":"en","layout":"normal","set":"lea","collector_number":"2","keywords":["Flying"]}"#,
+        );
+        assert_eq!(
+            one.keywords.as_deref(),
+            Some("|flying|"),
+            "a single keyword is wrapped on both sides too — the fence is not about the join"
+        );
+
+        // A keyword with a space in it is why the delimiter is a pipe rather than nothing.
+        let spaced = parse(
+            r#"{"object":"card","id":"white","name":"White Knight","lang":"en","layout":"normal","set":"lea","collector_number":"3","keywords":["First strike","Protection from"]}"#,
+        );
+        assert_eq!(
+            spaced.keywords.as_deref(),
+            Some("|first strike|protection from|")
+        );
+    }
+
+    /// ⚠️ **The one that matters: no keywords is `Some("")`, never `None`.**
+    ///
+    /// [`CardRow::produced_mana`]'s fence one field up, for its reason: NULL in this column
+    /// must mean "this row predates corpus schema 5" and nothing else, because the `kw:`
+    /// predicate bridges that window by falling back to the card's rules text. Let NULL also
+    /// mean "ingested, has no keywords" and the bridge fires on every vanilla card forever.
+    ///
+    /// **That is not hypothetical — it is what the live pass found on 2026-09-22.** With
+    /// `None` here, a fully ingested corpus held **68,808 NULLs out of 118,609 printings**,
+    /// and `kw:flying` matched 2,435 printings whose rules text merely mentions flying:
+    /// *Mystic Skyfish*, *Workshop Elders*, *Destructive Tampering*. The suite was green
+    /// throughout, because no test had ever asked what a keywordless card does *after* an
+    /// ingest.
+    ///
+    /// Three inputs, because Scryfall really does send all three: the key absent (older
+    /// bulk rows), an empty array (the common modern case for a vanilla card), and an array
+    /// whose entries are not strings, which nothing has sent but which `filter_map` would
+    /// otherwise reduce to the same empty list.
+    #[test]
+    fn a_card_with_no_keywords_is_an_empty_string_rather_than_null() {
+        for (label, json) in [
+            (
+                "no key at all",
+                r#"{"object":"card","id":"bolt","name":"Lightning Bolt","lang":"en","layout":"normal","set":"lea","collector_number":"161"}"#,
+            ),
+            (
+                "an empty array",
+                r#"{"object":"card","id":"bear","name":"Grizzly Bears","lang":"en","layout":"normal","set":"lea","collector_number":"162","keywords":[]}"#,
+            ),
+            (
+                "nothing storable",
+                r#"{"object":"card","id":"junk","name":"Nothing","lang":"en","layout":"normal","set":"lea","collector_number":"163","keywords":[null,7]}"#,
+            ),
+        ] {
+            assert_eq!(
+                parse(json).keywords.as_deref(),
+                Some(""),
+                "{label}: NULL here would put this card back on the rules-text bridge"
+            );
+        }
     }
 
     /// A database that has migrated to v3 but has not synced yet holds plain-text `raw` in

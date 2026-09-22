@@ -4315,6 +4315,86 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     expect(tsFields(ipcSource, "SearchRequest")).toContain("availableForDeck");
   });
 
+  /** Variant names of a `pub enum` in a Rust source file, in declaration order. */
+  const rustVariants = (src: string, name: string): string[] => {
+    const start = src.indexOf(`pub enum ${name} {`);
+    expect(start, `\`pub enum ${name}\` is not in the Rust source given`).toBeGreaterThan(-1);
+    const body = srcLines(src.slice(start)).slice(1);
+    const end = body.indexOf("}");
+    expect(end, `\`${name}\` has no closing brace`).toBeGreaterThan(0);
+    return body
+      .slice(0, end)
+      .join("\n")
+      .replace(/\/\/.*$/gm, "")
+      .split(/[,\n]/)
+      .map((piece) => piece.trim())
+      .filter((piece) => /^[A-Z][A-Za-z0-9]*$/.test(piece));
+  };
+
+  /**
+   * What `#[serde(rename_all = "camelCase")]` does to a **variant**, which is not what
+   * {@link camel} does to a field: a variant is already PascalCase, so serde only lower-cases
+   * its first character — `Cmc` → `cmc`, `TypeLine` → `typeLine`. Passing one through `camel`
+   * leaves it PascalCase and every comparison below fails for the wrong reason.
+   */
+  const variantName = (v: string) => v[0].toLowerCase() + v.slice(1);
+
+  /** The string members of an exported string-union type in `ipc.ts`. */
+  const tsUnion = (src: string, name: string): string[] => {
+    const body = new RegExp(`export type ${name} =([^;]*);`).exec(src);
+    expect(body, `\`export type ${name}\` is not in ipc.ts`).not.toBeNull();
+    return [...(body?.[1] ?? "").matchAll(/"([A-Za-z0-9_]+)"/g)].map((m) => m[1]);
+  };
+
+  /**
+   * **`filters::QueryPredicate` is a cross-boundary contract with a closed enum at each end,
+   * and nothing in either build type-checks one against the other.**
+   *
+   * The failure it guards is the quietest kind this file knows. `CardFilters` carries
+   * `#[serde(rename_all = "camelCase", default)]`, so a field whose name the two sides spell
+   * differently is **dropped** rather than refused: the chip draws, the reader believes the
+   * wall is narrowed, and every card is still there. `vi.fn()` mocks erase the mirror, so no
+   * suite on this side can see it either.
+   *
+   * The variant names are the sharp end. serde's camelCase leaves a one-word variant alone
+   * (`Cmc` → `cmc`) and lower-cases only the first word of a two-word one (`TypeLine` →
+   * `typeLine`), which is a rule a reader would have to know serde to predict — and a union
+   * member spelled `typeline` here would be a keyword that silently filters nothing.
+   * `filters::tests::the_wire_names_every_field_and_operator_in_camel_case` is the Rust end
+   * of the same contract, written out rather than derived for the same reason.
+   */
+  it("mirrors the query predicate, its two enums and every one of their names", () => {
+    const rustPredicate = rustFields(cardFiltersRs, "QueryPredicate").map(camel);
+    const tsPredicate = tsFields(ipcSource, "QueryPredicate");
+    expect(rustPredicate).toEqual(["field", "op", "value", "negated"]);
+    expect([...tsPredicate].sort()).toEqual([...rustPredicate].sort());
+
+    const fields = rustVariants(cardFiltersRs, "PredicateField").map(variantName);
+    expect(fields).toHaveLength(12);
+    expect(fields).toContain("typeLine");
+    expect(fields).toContain("cmc");
+    expect([...tsUnion(ipcSource, "PredicateField")].sort()).toEqual([...fields].sort());
+
+    const ops = rustVariants(cardFiltersRs, "PredicateOp").map(variantName);
+    expect(ops).toEqual(["colon", "eq", "ne", "gt", "gte", "lt", "lte"]);
+    expect([...tsUnion(ipcSource, "PredicateOp")].sort()).toEqual([...ops].sort());
+  });
+
+  /**
+   * The field itself, on all three payloads that carry it — and the three are one edit in
+   * Rust and three here, because `CollectionQuery` and `WishlistQuery` flatten
+   * `filters::CardFilters` while `SearchRequest` declares its own copy of the same fields.
+   *
+   * A missing one is a search box whose typed terms narrow one list and not the next, with a
+   * green build and no error: `#[serde(default)]` drops the unknown key on the way in.
+   */
+  it("carries the predicate list on the card filters and on the search request", () => {
+    expect(rustFields(cardFiltersRs, "CardFilters")).toContain("predicates");
+    expect(tsFields(ipcSource, "CardFilters")).toContain("predicates");
+    expect(rustFields(searchRs, "SearchRequest")).toContain("predicates");
+    expect(tsFields(ipcSource, "SearchRequest")).toContain("predicates");
+  });
+
   /**
    * **The other three card walls, pinned the same way and for a failure that has already
    * shipped.** `CardSummary` was the only DTO carrying `image_uris` until 2026-08-31, on the

@@ -1537,7 +1537,7 @@ export function FilterBar<SortKey extends string>({
             two places, and in the sheet neither. See {@link statedFiltersStrip}. */}
         {!narrow && statedFilters}
 
-        {/* The chips a typed `o:ramp` produces, and the note an unknown tag name gets. Under the
+        {/* The chips a typed `otag:ramp` produces, and the note an unknown tag name gets. Under the
             stated filters rather than among them: these are the *query's* own terms, which the box
             above still holds the text of, and a reader looking for why a name did not resolve is
             looking under the box they typed it into. Renders nothing at all until there is

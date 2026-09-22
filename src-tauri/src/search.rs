@@ -176,6 +176,13 @@ pub struct SearchRequest {
     /// every caller that does not ask keeps the shape and the behaviour it had. The search
     /// view sends `true` explicitly.
     pub collapse: Option<bool>,
+    /// The Scryfall-syntax terms the box was parsed into — `t:goblin`, `cmc>=3`, `-a:rebecca`.
+    ///
+    /// **Two of the twelve fields never become SQL and ride [`Self::text`]'s `MATCH` string
+    /// instead**, which is why they are read here by [`filters::fts_match`] rather than
+    /// handed straight to `push_card_filters` with the rest. See
+    /// [`crate::filters::PredicateField`].
+    pub predicates: Option<Vec<filters::QueryPredicate>>,
     pub limit: u32,
     pub offset: u32,
 }
@@ -218,6 +225,10 @@ impl SearchRequest {
             art_tags: self.art_tags.clone(),
             oracle_tags: self.oracle_tags.clone(),
             art_weight_floor: self.art_weight_floor.clone(),
+            // Carried whole, unlike `text`: ten of the twelve fields are SQL and come out of
+            // `push_card_filters` like every other filter. The two that are not are skipped
+            // there by name — see [`crate::filters::PredicateField`].
+            predicates: self.predicates.clone(),
         }
     }
 }
@@ -807,14 +818,30 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
     // does not read that table is a *prepare* error, not a bad ranking.
     let mut from_sql = "cards c";
     let mut ranked = false;
-    if let Some(text) = filters::nonblank(&req.text) {
-        // All-punctuation input leaves nothing to match on. Dropping the clause searches
-        // everything, which is what an empty search box does anyway.
-        if let Some(query) = filters::fts_query(text) {
-            from_sql = "cards c JOIN cards_fts ON cards_fts.rowid = c.rowid";
-            p.push("cards_fts MATCH ?".to_owned(), Box::new(query));
-            ranked = true;
-        }
+    // The free text **and** every `t:`/`o:` term, in one MATCH string — see
+    // [`filters::fts_match`], which is where the reason those two fields are not SQL lives.
+    //
+    // All-punctuation input leaves nothing to match on. Dropping the clause searches
+    // everything, which is what an empty search box does anyway, and `ranked` stays false so
+    // `bm25(cards_fts, …)` is never named in a statement that does not read that table.
+    let (matched, negatives) = filters::fts_match(
+        filters::nonblank(&req.text),
+        req.predicates.as_deref().unwrap_or(&[]),
+    );
+    if let Some(query) = matched {
+        from_sql = "cards c JOIN cards_fts ON cards_fts.rowid = c.rowid";
+        p.push("cards_fts MATCH ?".to_owned(), Box::new(query));
+        ranked = true;
+    }
+    // A negated text term, as its own subquery. FTS5's `NOT` is binary, so `-t:goblin` alone
+    // has no left operand and cannot be folded into the MATCH above at all — and a query that
+    // is *only* negatives therefore makes no join and is not ranked, which is right: there is
+    // nothing to rank by.
+    for negative in negatives {
+        p.push(
+            "c.rowid NOT IN (SELECT rowid FROM cards_fts WHERE cards_fts MATCH ?)".to_owned(),
+            Box::new(negative),
+        );
     }
     // `None`: this query reads `cards` and nothing else, so there is no second place a set
     // code could come from — see `push_card_filters`.

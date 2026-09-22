@@ -54,6 +54,34 @@ both plus the frontend.
   at all once a sync has run. **The gate answers "is the ALTER owed" rather than "does the
   column exist"**, and the difference is a corpus with no `cards` at all: it owes nothing, because
   only an ingest can put that table back and `migrate_corpus` may stop a launch.
+- **`cards.keywords` is corpus schema 5 and copies that rung in every respect** — the same
+  schema-qualified `ALTER`, the same `PRAGMA {schema}.table_info(cards)` shape gate, the same "a
+  missing `cards` owes nothing", no `CARDS_INDEXES` entry and no `cards_fts` rebuild. It holds
+  the card's **keyword abilities** lowercased, delimited **and wrapped** — `|flying|vigilance|` —
+  because Scryfall matches them against a closed vocabulary rather than as substrings (`kw:fly`
+  is refused there, measured 2026-09-22), so `filters.rs` asks `instr(keywords, '|flying|')` and
+  the wrapping is the whole of what stops `kw:fly` matching `flying`. **A card with no keywords
+  is `None`, never `Some("|")`**: a bare delimiter would make every keywordless card match every
+  `kw:`. A backfill is impossible for `produced_mana`'s reason — the array lives in the gzip
+  `raw` BLOB — so **`kw:` is bridged in the SQL instead**: `keywords IS NOT NULL AND <delimited
+  match>` OR `keywords IS NULL AND <the oracle text contains it>`. That second arm is licensed by
+  a measurement and not by optimism — `kw:flying -o:flying` is **0** on Scryfall, so the rules
+  text is a superset of the keyword — which makes the bridge over-inclusive before the next
+  ingest rather than empty, and empty is the one direction a search must never fail in.
+  [search-syntax.md](../docs/reference/search-syntax.md) has every figure.
+- **A typed query predicate is a fact the caller hands over; this crate never parses a query
+  string.** `CardFilters.predicates` is a `Vec<QueryPredicate>` of closed enums
+  (`PredicateField`, `PredicateOp`, a value and `negated`), and one match arm per field in
+  `push_card_filters` is what reaches **all three** card searches — `search_cards`,
+  `collection_list` and `wishlist_list` already call that one function with the same `"c"` alias,
+  so a predicate costs one edit rather than three. **Two of the twelve fields emit no SQL at
+  all**: `TypeLine` and `OracleText` ride the FTS `MATCH` string instead, because `LIKE` measured
+  82× and 277× slower on the two warm probes. Their arms are **explicit skips with a comment** —
+  a bare `_ => {}` would hide the next field somebody forgets, and a field handled by neither
+  side is a filter that silently does nothing. **FTS5's `NOT` is binary**, so a purely negative
+  text term cannot ride the `MATCH` at all and becomes `rowid NOT IN (SELECT … MATCH ?)`. An
+  **orphan row fails a predicate**, which is `push_card_filters`' documented rule inherited
+  rather than a new one.
 - **The data folder holds two databases, and which one is `main` is the whole design**
   (schema 27). `data/user.db` is the reader's — the twenty-nine tables in `schema::TABLES` marked
   `Side::User`, which nothing outside this app can produce again — and it is what
@@ -173,14 +201,16 @@ both plus the frontend.
   which is one above a deck's group
   holding only copies its live list claims at `(card_id, finish)`, itself one above a
   condition learning to say nothing —
-  `CORPUS_SCHEMA_VERSION` **5** since 2026-09-22 (`cards.type_mask`, the eight-bit card-type
-  column the type chips filter on), deliberately
+  `CORPUS_SCHEMA_VERSION` **6** since 2026-09-22 (`cards.keywords`, for the search box's `kw:`,
+  on the same shape gate as the rungs below it — **5**, the same day, is `cards.type_mask`, the
+  eight-bit card-type column the type chips filter on), deliberately
   incomparable and **not to be subtracted from the other**: a user version is "what has been done
   to rows that exist nowhere else", a corpus version is "is this file's shape what this build
   expects". The corpus number stood at 1 from the split until the combo feed's four prose columns
   landed, which is the corpus ladder's first rung ever; **2 is that one, 3 is
   `cards.produced_mana`** (2026-09-10), **4 is `sets.printed_size`** (2026-09-15, for the home
-  page's set completion) **and 5 is `cards.type_mask`** (2026-09-22) — **and every one of them is
+  page's set completion) **5 is `cards.type_mask`** (2026-09-22) **and 6 is `cards.keywords`** (2026-09-22, for the
+  search box's `kw:`) — **and every one of them is
   gated on the table's shape rather than on this number**, for a reason that catches every fresh
   install and is written up under *Commander Spellbook* below and under the `produced_mana`
   bullet beside it. **Rung 5 is the first of them that also backfills**, and that difference is
@@ -204,6 +234,15 @@ both plus the frontend.
   rung may not name a column a later rung adds.** Nothing is lost by the narrower list — every
   ladder-walked file gets the widened index moments later from `add_type_mask`, because the rung
   is owed on precisely the `cards` that ladder just built.
+
+  **Rung 6 also carries a `CREATE INDEX`, and it is for a different column than its own.**
+  `idx_cards_artist` is in `CARDS_INDEXES`, and that list is replayed only by `swap_staging` — so
+  a corpus already at head would have gone on answering a bare `a:` from a full `SCAN c` until its
+  next ingest: **466–510 ms** measured against the real 117,738-printing corpus against **~16 ms**
+  with the index, a **26×**. On the ordinary 4→6 path rung 5's own replay has already built it and
+  rung 6's `IF NOT EXISTS` is a no-op; it earns its place on 5→6, where nothing else does. The
+  `keywords` column itself takes **no** index: `push_card_filters` reads it with `instr`, which no
+  b-tree can seek through.
   This line read **v25** while that was head, and
   [the ladder's history](../docs/reference/data-and-sync.md) is the story. (This line read
   **v18** for two whole rungs, then **v20** for two more, then **v23** for one and **v24** for
@@ -496,8 +535,9 @@ shared_cell` walks both into two databases and compares them column by column.
 - **A tag slug reaching `filters::picked_tags` has never been typed, and `tag_resolve` is what
   keeps that true.** That function compares `slug` byte for byte and case-sensitively, on the
   stated grounds that a slug arrives from the tag search's own results rather than from a
-  keyboard. The search box reads Scryfall's tagger syntax now (`o:ramp`, `-a:dragon`), so
-  something had to give — either the filter SQL learns to normalise, or the typed name is
+  keyboard. The search box reads Scryfall's query syntax now (`otag:ramp`, `-atag:dragon` — the
+  two single letters `o:` and `a:` were tag spellings until 2026-09-22 and are the oracle text
+  and the artist since), so something had to give — either the filter SQL learns to normalise, or the typed name is
   resolved at the edge and the filter goes on receiving real slugs.
   **It is the second**, `tags::query::run_tag_resolve`: `slug` keeps one meaning throughout the
   crate, `index::facets` narrows by exactly the list the search does with no second copy of a
@@ -507,7 +547,7 @@ shared_cell` walks both into two databases and compares them column by column.
   `run_tag_search` is a substring, it **ignores `muted_tags`** — the one read in that module that
   does, because muting is documented never to hide a card — and it refuses a blank needle outright,
   because `slug_norm = ''` matches a *whole taxonomy* on any database between v20 and v22. Full
-  reasoning: [tag-search-syntax.md](../docs/reference/tag-search-syntax.md).
+  reasoning: [search-syntax.md](../docs/reference/search-syntax.md).
 - **`muted_tags` is a user table and sits outside both `*_TAG_TABLES` lists** (schema v20) — it is
   the reader's answer about which tags they never want offered, and those two lists are what a
   refresh drops and rebuilds wholesale. It carries the namespace rather than being two tables,
@@ -2477,6 +2517,7 @@ The whole record, including the pipeline the crate implements:
 | [scryfall.md](../docs/reference/scryfall.md) | Rate limits, the penalty, bulk data, `error_log`, pre-warm keys |
 | [image-cache.md](../docs/reference/image-cache.md) | Cache layout, concurrency, placeholders, and the `/cover/` route as it was before 2026-08-31 — the encoder, the traversal fence and why the CSP never moved for it |
 | [search-faceting.md](../docs/reference/search-faceting.md) | `src/index/` — why the index is in memory, and the fail-open rule |
+| [search-syntax.md](../docs/reference/search-syntax.md) | `filters.rs`' predicate arms and `fts_match`, `tags/query.rs`' `tag_resolve`, and **corpus schema 5** — the fourteen keywords and why `:` resolves per keyword, FTS against LIKE measured on the real corpus, the two fields that emit no SQL, `kw:`'s delimiter and the bridge that keeps it from answering zero, and which failures close and which open |
 | [in-app-updates.md](../docs/reference/in-app-updates.md) | `update.rs` — why the portable swap is hand-written |
 | [decks-storage.md](../docs/reference/decks-storage.md) | The deck tables, the card commands, how owned/missing is answered, the audit log, the decklist import, and the token resolver — the union keep rule, why there is no name test, and the v36 table |
 | [commander-brackets.md](../docs/reference/commander-brackets.md) | `combos.rs`, the v26 rung and **corpus schema 2** — the feed measured end to end, what is kept and what is skipped, **both** match queries and the card side's three statements, the shape gate and why a version gate skips every fresh install, the launch gate and the clear, and `decks.bracket` |

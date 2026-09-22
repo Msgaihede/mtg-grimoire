@@ -1,8 +1,10 @@
-import { Fragment, useEffect, useRef, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { AnimatePresence } from "motion/react";
 import { usePopupPlacement } from "@/components/Dropdown/usePopupPlacement";
 import { NAV } from "@/components/nav";
 import { PopupPanel } from "@/components/PopupListbox";
+import { QuerySyntaxHelp } from "@/components/QuerySyntaxHelp";
+import { FOCUS_INSET } from "@/lib/focus";
 import { isDesktop } from "@/lib/platform";
 import {
   SHORTCUTS,
@@ -52,6 +54,27 @@ const CAP =
  * defend if it were proposed the other way round.
  */
 const SECTION = "text-[0.6875rem] uppercase tracking-[0.08em] text-dim";
+
+/** Which half of the panel is on screen. */
+type KeyMapTab = "shortcuts" | "syntax";
+
+/**
+ * The two halves, in the order they are drawn and walked.
+ *
+ * Written out rather than derived, for the reason `DeckSearchPanel`'s strip gives: a
+ * `text-transform` changes what is *drawn* and not what a control is **called**, so a label a
+ * reader has to ask for by voice must be spelled in the case they would say it in (WCAG 2.5.3).
+ * `Shortcuts` first because that is what `F1` is for — the syntax tab is the thing a reader
+ * comes to the panel for second.
+ */
+const TABS = [
+  { id: "shortcuts", label: "Shortcuts" },
+  { id: "syntax", label: "Search syntax" },
+] as const satisfies readonly { id: KeyMapTab; label: string }[];
+
+/** A tab's id and its panel's, paired so the `aria-controls` hop cannot be spelled two ways. */
+const tabDomId = (tab: KeyMapTab) => `keymap-tab-${tab}`;
+const panelDomId = (tab: KeyMapTab) => `keymap-panel-${tab}`;
 
 /** What a scope is called on screen. */
 function headingFor(scope: ShortcutScope): string {
@@ -131,6 +154,201 @@ export function Caps({ shortcut }: { shortcut: Shortcut }) {
 }
 
 /**
+ * The panel's contents: the tab bar and whichever half it selects.
+ *
+ * **A component of its own because that is what makes the reset structural.** The tab has to go
+ * back to `Shortcuts` when the panel closes — a reader who opened `F1` for a chord should find
+ * chords, whatever the last person to open it was looking up — and the cheapest way to say that
+ * is to put the state in something that *stops existing* when the panel does. `AnimatePresence`
+ * unmounts this with the frame, so the reset is the element going away rather than an effect
+ * watching a flag. An effect would also have been a lint failure rather than a style
+ * preference: `react-hooks`' `set-state-in-effect` refuses a `setState` in an effect body, and
+ * it is refused for exactly the reason that matters here — the state does not need to be
+ * synchronised with `open`, because it does not need to outlive it.
+ *
+ * The one seam is a close and a re-open **inside the fade**, where `AnimatePresence` reverses
+ * the element it still holds and the tab survives with it. That is a gesture round trip of
+ * about 120ms and the reader is looking at the tab they just left, so it is left alone rather
+ * than papered over with a key that would swap the panel's contents mid-fade.
+ *
+ * It also takes the two store reads, which `KeyMap` itself no longer needs: only the shortcuts
+ * half asks where the reader is standing.
+ */
+function KeyMapTabs() {
+  const activeView = useAppStore((s) => s.activeView);
+  const openDeckId = useAppStore((s) => s.openDeckId);
+  const [tab, setTab] = useState<KeyMapTab>("shortcuts");
+  const barRef = useRef<HTMLDivElement>(null);
+
+  /**
+   * The arrows walk the pair, and the selection follows the caret.
+   *
+   * **`role="tab"` is a contract rather than a name, and this is the half of it that is easy to
+   * leave out** — `DeckSearchPanel`'s strip settles for `aria-pressed` precisely to avoid owing
+   * this. Taking the role means owing it: one tab stop for the pair (the roving `tabIndex`
+   * below), `ArrowLeft`/`ArrowRight` between them, `Home`/`End` to the ends, and the panel
+   * changing with the caret. A `tab` role with no keyboard behaviour announces a contract the
+   * control does not keep, which is worse than no role at all.
+   *
+   * Automatic activation — the panel follows the arrow rather than waiting for `Enter` — is the
+   * APG default for tabs whose panels cost nothing to draw, and both of these are already in
+   * the reader's hands.
+   *
+   * **Exact modifiers**: a bare `ArrowRight` is the chord, so `Ctrl+ArrowRight` falls through to
+   * whatever else the app does with it rather than being swallowed here. `shortcuts.ts`'
+   * `matchesChord` rule, applied to a control that does not read the catalogue.
+   */
+  function onTabKeys(e: KeyboardEvent<HTMLButtonElement>) {
+    if (e.ctrlKey || e.shiftKey || e.altKey || e.metaKey) return;
+    const at = TABS.findIndex((entry) => entry.id === tab);
+    const to =
+      e.key === "ArrowRight"
+        ? (at + 1) % TABS.length
+        : e.key === "ArrowLeft"
+          ? (at - 1 + TABS.length) % TABS.length
+          : e.key === "Home"
+            ? 0
+            : e.key === "End"
+              ? TABS.length - 1
+              : -1;
+    if (to === -1) return;
+    // `Home` and `End` scroll a page by default, and the arrows scroll a scrollable panel.
+    e.preventDefault();
+    const next = TABS[to].id;
+    setTab(next);
+    // The caret moves with the selection, which is what "roving" means: the tab losing it is
+    // about to become `tabIndex={-1}`, and a caret left on an untabbable element is a `Tab`
+    // that restarts from the top of the app. Both buttons are already mounted, so this lands.
+    barRef.current?.querySelector<HTMLElement>(`#${tabDomId(next)}`)?.focus();
+  }
+
+  return (
+    <>
+      {/* Full-bleed across the panel's own `p-3`, so the hairline is one line across the panel
+          with a lit segment in it rather than a rule floating inside a margin — `TabStrip`'s
+          shape in the deck editor, which is this app's one vocabulary for a tab bar. The panel
+          is `rounded-lg` and clips nothing, and the bar has no fill of its own, so pulling it
+          to the edges costs the corners nothing. */}
+      <div
+        ref={barRef}
+        role="tablist"
+        // Named for what the pair picks between. The button that opened this is called
+        // `Keyboard shortcuts`, so a reader stepping in hears what else is in here.
+        aria-label="Reference"
+        className="-mx-3 -mt-3 mb-3 flex border-b border-border"
+      >
+        {TABS.map(({ id, label }) => {
+          const on = tab === id;
+          return (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              id={tabDomId(id)}
+              aria-selected={on}
+              // **Only the selected tab names a panel, because only its panel is drawn.** The
+              // inactive half is not rendered at all — a `hidden` twin would still be in the
+              // tree for `getByText` and for anything else reading the document rather than the
+              // accessibility tree — so an `aria-controls` on both would leave one of them
+              // pointing at an id that is not there.
+              aria-controls={on ? panelDomId(id) : undefined}
+              tabIndex={on ? 0 : -1}
+              onClick={() => {
+                setTab(id);
+              }}
+              onKeyDown={onTabKeys}
+              className={cn(
+                // 28px: this is chrome on a 384px panel whose own rows are `text-sm`, not a
+                // toolbar press. `min-w-0 flex-1` makes each tab half the bar, so the lit rule
+                // is half the hairline and the target is where the pointer already is.
+                "h-7 min-w-0 flex-1 text-xs",
+                // Drawn transparent when the tab is off rather than left off, or the word would
+                // move up two pixels every time the reader switched. `-mb-px` pulls it over the
+                // row's own hairline so the two are one line.
+                "-mb-px border-b-2",
+                "transition-colors duration-150 motion-reduce:transition-none",
+                on
+                  ? "border-accent font-medium text-accent"
+                  : "border-transparent text-dim hover:text-text",
+                // Inset, and that reverses `TabStrip`'s choice for a reason of geometry rather
+                // than taste: these two are flush with the panel's own edges, so an outline
+                // standing 2px *off* the outer tab would be drawn outside the panel's border.
+                FOCUS_INSET,
+              )}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
+
+      {tab === "shortcuts" ? (
+        <div role="tabpanel" id={panelDomId("shortcuts")} aria-labelledby={tabDomId("shortcuts")}>
+          {activeScopes({ activeView, openDeckId }).map((scope) => {
+            // Filtered with the same answer `AppShell` binds against, so a row for something
+            // this build cannot do — a second window, on a phone or in a tab — is neither
+            // listed nor bound, rather than listed and dead. **Nothing reaches this branch
+            // off the desktop today**: this panel's one mount is `TitleBar`, which is itself
+            // desktop-only. The filter is what keeps the rows honest the day the panel is
+            // drawn anywhere else, and it belongs here rather than at that mount because
+            // this is the component that reads the catalogue.
+            const rows = SHORTCUTS[scope].filter((row) => shownOn(row, isDesktop()));
+            // **A scope with nothing in it draws nothing — not a heading over a gap.** All
+            // nine views are in that state today — `deckEditor` is a scope of its own and
+            // *replaces* `decks` rather than filling it — and that is the honest answer
+            // rather than a page whose section is "coming soon": what a reader on the
+            // search page can press is exactly what `Everywhere` lists.
+            if (rows.length === 0) return null;
+            return (
+              <Fragment key={scope}>
+                <h2 className={cn(SECTION, "mt-3 mb-1.5 first:mt-0")}>{headingFor(scope)}</h2>
+                {/* Two columns rather than a row of `justify-between`: the caps then line up
+                    down one edge across the whole section, which is what turns a list into
+                    something scannable. A label wraps inside its own column; nothing
+                    truncates, because the label is the thing being looked for. */}
+                <dl className="grid grid-cols-[1fr_auto] items-baseline gap-x-4 gap-y-1.5">
+                  {rows.map((row) => (
+                    <Fragment key={row.id}>
+                      <dt className="text-sm">{row.label}</dt>
+                      <Caps shortcut={row} />
+                    </Fragment>
+                  ))}
+                </dl>
+              </Fragment>
+            );
+          })}
+        </div>
+      ) : (
+        // **The cap goes on the tab panel and never on the frame**, which is what
+        // `usePopupPlacement` measures: a `max-h` up there would bound the box the placement
+        // is computed from and the panel would be positioned against a height it does not
+        // have. Here it also keeps the tab bar still while the list moves, which is the
+        // better reading of the two anyway.
+        //
+        // `tabIndex={0}` because this panel scrolls and holds nothing focusable, which is the
+        // exact pair APG names — without it a reader on the keyboard cannot reach the bottom
+        // of the list (WCAG 2.1.1). The shortcuts half deliberately does **not** take one: it
+        // does not scroll, and a focusable ancestor there would swallow the press on a `<kbd>`
+        // that `KeyMap`'s Escape rescue is written for.
+        <div
+          role="tabpanel"
+          id={panelDomId("syntax")}
+          aria-labelledby={tabDomId("syntax")}
+          tabIndex={0}
+          // `scrollbar-slim` because this is the case that class was written for — a scroll
+          // area **inside** a panel, where 15px of opaque platform gutter down the side of a
+          // 358px list reads as a second window. It is worth 5px of the row as well: the table
+          // below is laid out against what is left after the bar.
+          className={cn("scrollbar-slim max-h-[60vh] overflow-y-auto", FOCUS_INSET)}
+        >
+          <QuerySyntaxHelp />
+        </div>
+      )}
+    </>
+  );
+}
+
+/**
  * The keyboard map: the caption button's panel, and the only surface that says what the app's
  * chords are.
  *
@@ -161,8 +379,6 @@ export function Caps({ shortcut }: { shortcut: Shortcut }) {
 export function KeyMap({ children }: { children: ReactNode }) {
   const open = useAppStore((s) => s.keyMapOpen);
   const setOpen = useAppStore((s) => s.setKeyMapOpen);
-  const activeView = useAppStore((s) => s.activeView);
-  const openDeckId = useAppStore((s) => s.openDeckId);
 
   const anchorRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<HTMLDivElement>(null);
@@ -254,39 +470,7 @@ export function KeyMap({ children }: { children: ReactNode }) {
                 placement === null && "invisible",
               )}
             >
-              {activeScopes({ activeView, openDeckId }).map((scope) => {
-                // Filtered with the same answer `AppShell` binds against, so a row for something
-                // this build cannot do — a second window, on a phone or in a tab — is neither
-                // listed nor bound, rather than listed and dead. **Nothing reaches this branch
-                // off the desktop today**: this panel's one mount is `TitleBar`, which is itself
-                // desktop-only. The filter is what keeps the rows honest the day the panel is
-                // drawn anywhere else, and it belongs here rather than at that mount because
-                // this is the component that reads the catalogue.
-                const rows = SHORTCUTS[scope].filter((row) => shownOn(row, isDesktop()));
-                // **A scope with nothing in it draws nothing — not a heading over a gap.** All
-                // nine views are in that state today — `deckEditor` is a scope of its own and
-                // *replaces* `decks` rather than filling it — and that is the honest answer
-                // rather than a page whose section is "coming soon": what a reader on the
-                // search page can press is exactly what `Everywhere` lists.
-                if (rows.length === 0) return null;
-                return (
-                  <Fragment key={scope}>
-                    <h2 className={cn(SECTION, "mt-3 mb-1.5 first:mt-0")}>{headingFor(scope)}</h2>
-                    {/* Two columns rather than a row of `justify-between`: the caps then line up
-                        down one edge across the whole section, which is what turns a list into
-                        something scannable. A label wraps inside its own column; nothing
-                        truncates, because the label is the thing being looked for. */}
-                    <dl className="grid grid-cols-[1fr_auto] items-baseline gap-x-4 gap-y-1.5">
-                      {rows.map((row) => (
-                        <Fragment key={row.id}>
-                          <dt className="text-sm">{row.label}</dt>
-                          <Caps shortcut={row} />
-                        </Fragment>
-                      ))}
-                    </dl>
-                  </Fragment>
-                );
-              })}
+              <KeyMapTabs />
             </PopupPanel>
           </div>
         )}

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type JSX } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { CardImage } from "@/components/CardImage";
 import { useTooltip } from "@/components/tooltip/useTooltip";
-import { DEBOUNCE_MS } from "@/features/search/useCardSearch";
+import { DEBOUNCE_MS, searchTerms } from "@/features/search/useCardSearch";
 import { count } from "@/lib/counts";
 import { FOCUS_INSET } from "@/lib/focus";
 import { ART_ASPECT, cardArtSrc, cardImageUrl } from "@/lib/images";
@@ -139,7 +139,13 @@ export function DeckCoverPicker({
     queryKey: ["cards", "search", "deck-cover", query],
     queryFn: () =>
       ipc.searchCards({
-        text: query,
+        // **Scryfall's syntax, same as every other card box.** A cover picker is a card search,
+        // so `a:rebecca` here has to mean the artist rather than three words for FTS — and this
+        // is the one surface where picking by illustrator is the obvious thing to want.
+        // {@link searchTerms} folds a tag term back into the free text, because this box has no
+        // chip row and no `tag_resolve` behind it. The key needs nothing: it is `query`, and
+        // both fields are a function of that string.
+        ...searchTerms(query),
         // **`collapse: false`.** Collapsing folds every printing of a card into one row, and
         // different printings are *different art* — which is the entire choice being made here.
         // The search view collapses because "which cards exist" is what a search box is asked;

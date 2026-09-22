@@ -444,6 +444,15 @@ export interface SearchRequest {
    * `activeFilterCount` and `resetAll`.
    */
   collapse?: boolean;
+  /**
+   * The Scryfall-syntax terms the box was parsed into — see {@link QueryPredicate}.
+   *
+   * **`typeLine` and `oracleText` ride {@link text}'s `MATCH` string rather than becoming SQL**,
+   * so they narrow the facet counts for free and a purely negative one (`-t:goblin`) becomes a
+   * `NOT IN` subquery of its own, FTS5's `NOT` being binary. Nothing here has to know that; it
+   * is why the list is read by `filters::fts_match` as well as by `push_card_filters`.
+   */
+  predicates?: QueryPredicate[];
   /** Clamped to 200 by the backend; 0 means "use the default page size". */
   limit: number;
   offset: number;
@@ -1084,6 +1093,75 @@ export interface CardFilters {
   /** `"strong"` drops the `weak` art matches; absent or `"any"` keeps them. Art includes only —
    *  see {@link ArtWeightFloor}. */
   artWeightFloor?: ArtWeightFloor;
+  /**
+   * The Scryfall-syntax terms the search box was parsed into — see {@link QueryPredicate}.
+   *
+   * **Declared here as well as on {@link SearchRequest}, because `filters::push_card_filters`
+   * emits them for all three lists** — {@link oracleId} and {@link artTags} above are here for
+   * exactly that reason, and this is the same fact one field along. So `t:goblin cmc>=3`
+   * narrows a binder and a wishlist as well as the search wall, and Rust needed one edit for
+   * the three.
+   */
+  predicates?: QueryPredicate[];
+}
+
+/**
+ * What one {@link QueryPredicate} is a statement about — `filters::PredicateField`, whose
+ * variants carry `#[serde(rename_all = "camelCase")]`, so these strings are the wire.
+ *
+ * **`typeLine` and `oracleText` emit no SQL at all.** They travel in the same list as the other
+ * ten and are folded into the FTS5 `MATCH` string instead, because `LIKE` over either column
+ * measured 80× to 250× slower on the real corpus. Nothing on this side has to know that — it is
+ * recorded because the two are the fields whose behaviour differs from their neighbours', and
+ * the difference is invisible in the payload.
+ */
+export type PredicateField =
+  | "typeLine"
+  | "oracleText"
+  | "keyword"
+  | "artist"
+  | "colors"
+  | "colorIdentity"
+  | "cmc"
+  | "power"
+  | "toughness"
+  | "rarity"
+  | "setCode"
+  | "format";
+
+/**
+ * A {@link QueryPredicate}'s comparison — `filters::PredicateOp`, camelCase on the wire.
+ *
+ * **`"colon"` is Scryfall's `:` and means a different thing on each field**: `c:rg` is `c>=rg`
+ * and answers 676 cards, while `id:rg` is `id<=rg` and answers 13,399 (both measured on
+ * Scryfall, 2026-09-22). `queryLanguage.ts` resolves it per keyword before sending, so a
+ * `"colon"` on the wire is one of the four fields whose default really is `:` — and Rust
+ * resolves it the same way for anything else, rather than refusing.
+ */
+export type PredicateOp = "colon" | "eq" | "ne" | "gt" | "gte" | "lt" | "lte";
+
+/**
+ * One parsed term of a search box — `t:goblin`, `cmc>=3`, `-a:rebecca`. Rust:
+ * `filters::QueryPredicate`.
+ *
+ * **Parsing happens here and never in Rust.** `src/features/search/queryLanguage.ts` reads the
+ * box into free text, tag tokens and a list of these; the crate receives closed enums and emits
+ * SQL. Rust supplies facts, TypeScript draws conclusions, and a query grammar is a conclusion.
+ *
+ * **One list rather than ten fields on {@link CardFilters}**, because a list carries three
+ * things no field can spell: negation, repetition (`t:creature t:goblin` is two terms and both
+ * must hold) and an operator per term. Terms AND with each other and with every other filter;
+ * there is no `or` and no grouping.
+ */
+export interface QueryPredicate {
+  field: PredicateField;
+  op: PredicateOp;
+  /** Exactly what the reader typed, **unnormalised except for rarity**: `c:RG` and `s:NEO`
+   *  arrive with their case, and Rust folds it. Rarity is the one keyword the parser expands
+   *  and lower-cases first, so `r:c` is sent as `"common"`. */
+  value: string;
+  /** A leading `-` in the box. Rust reads an absent field as `false`. */
+  negated: boolean;
 }
 
 /**
@@ -5321,14 +5399,14 @@ export interface TagRef {
  * One tag a reader named in a card search box — `tags::query::TagLookup`, the ask half of
  * {@link ipc.tagResolve}.
  *
- * `tagQuery.ts`'s token minus what is the *box's* business: where the term sat in the string,
+ * `queryLanguage.ts`'s token minus what is the *box's* business: where the term sat in the string,
  * and whether it was negated. Resolution answers "is there such a tag"; which of
  * {@link TagTerms}' two lists the slug lands in is decided in TypeScript, because that is a
  * conclusion rather than a fact.
  */
 export interface TagLookup {
   /** **Never `"both"`**, unlike {@link ipc.tagSearch}'s: a typed `o:` names one taxonomy, and
-   *  answering across both would let `o:dog` filter by the picture. */
+   *  answering across both would let `otag:dog` filter by the picture. */
   namespace: TagNamespace;
   /** What the reader typed after the keyword. Normalised by Rust, never here — two copies of
    *  that rule would leave both halves self-consistent and the search matching nothing. */
@@ -9401,7 +9479,7 @@ export const ipc = {
     invoke<TagHit[]>("tag_children", { namespace, slug }),
   /**
    * Turn tag names typed into a card search box into the slugs {@link SearchRequest.artTags} and
-   * {@link SearchRequest.oracleTags} match on — `tagQuery.ts`'s tokens, resolved.
+   * {@link SearchRequest.oracleTags} match on — `queryLanguage.ts`'s tokens, resolved.
    *
    * **One answer per ask, in the order asked, `null` where there is no such tag.** The misses
    * ride along rather than being filtered out, because the box has to be able to name the token
@@ -9410,7 +9488,7 @@ export const ipc = {
    * **Exact, where {@link ipc.tagSearch} is a substring, and the difference is the job.** That
    * one is a type-ahead and should find `removal` from `remov`; this one builds a *filter*, and
    * a substring here would resolve one token to many tags that would have to be ORed — while
-   * every tag filter in this app intersects, so `a:dragon` would silently also answer
+   * every tag filter in this app intersects, so `atag:dragon` would silently also answer
    * `dragonborn`. Separators and case are still noise (`otag:"spot removal"`,
    * `otag:spot-removal` and `otag:SPOT-REMOVAL` are one tag, verified live 2026-08-20), because
    * Rust matches through `slug_norm`.

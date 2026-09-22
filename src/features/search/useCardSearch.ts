@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { keepPreviousData, useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
   ipc,
+  type QueryPredicate,
   type SearchRequest,
   type SearchResponse,
   type SearchSortKey,
@@ -19,13 +20,14 @@ import {
 } from "@/features/tags/tagFilters";
 import { useCardFacets, type FacetRequest } from "./useCardFacets";
 import {
-  parseTagQuery,
+  parseQuery,
   removeToken,
   setTokenNegated,
   setTokenValue,
   tokenKey,
+  type PredicateToken,
   type TagToken,
-} from "./tagQuery";
+} from "./queryLanguage";
 
 /**
  * No tag chips — what a caller that has never heard of the Tags page passes.
@@ -43,6 +45,78 @@ export const PAGE_SIZE = 50;
 
 /** How long the search box stays quiet before a keystroke becomes a query. */
 export const DEBOUNCE_MS = 300;
+
+/**
+ * One parsed term as the **wire** carries it: the span dropped.
+ *
+ * `start`/`end` are the box's business — they exist so a chip can splice the term back out of
+ * the text — and the backend has no use for them at all. Sending them would be worse than
+ * useless: the payload is what every query key here is hashed from, so `t:goblin bolt` and
+ * `bolt t:goblin` are one search that would cost two cache entries, and the same query typed
+ * two characters further along the box would miss its own cached pages.
+ */
+function bare({ field, op, value, negated }: PredicateToken): QueryPredicate {
+  return { field, op, value, negated };
+}
+
+/**
+ * A search box with **no tag wiring**, read into the two fields a card query takes.
+ *
+ * The collection, the wishlist, the deck editor's collection column, `QuickAdd` and
+ * `DeckCoverPicker` all send a raw string today and none of them resolves tag names: there is no
+ * `tag_resolve` round trip behind them and no chip row in front of them. So a tag term typed
+ * into one of those boxes has nowhere to go — and being *dropped* is the one thing it must not
+ * do, because a term that vanishes silently **widens** the search, which is the single direction
+ * a search must never fail in (`useCardSearch`'s `tagQueryBlocked` is the same rule from the
+ * other side).
+ *
+ * **So a tag folds back into the free text as its own value.** `atag:dragon` on the collection
+ * page is a name-and-rules search for `dragon` rather than no filter at all: narrower than the
+ * reader asked for in kind, never wider in extent. A **negated** tag folds the same way, because
+ * the alternatives are worse — free text has no `-`, so the choice is between the word and
+ * nothing, and nothing is the silent widening this whole function exists to refuse. The reader
+ * can see the word did not do what they meant; they cannot see a term that was never sent.
+ *
+ * Absent rather than empty on both fields, which is the rule every other filter in this app
+ * follows: a blank `text` and an empty `predicates` are read as unset at the far end, and
+ * sending them would make the payload lie about intent — and mint a second query key for the
+ * search an untouched box has always made.
+ */
+export function searchTerms(input: string): { text?: string; predicates?: QueryPredicate[] } {
+  const parsed = parseQuery(input);
+  const text = [parsed.text, ...parsed.tags.map((t) => t.value)].filter(Boolean).join(" ");
+  return {
+    ...(text ? { text } : {}),
+    ...(parsed.predicates.length > 0 ? { predicates: parsed.predicates.map(bare) } : {}),
+  };
+}
+
+/**
+ * One typed predicate, as the chip row under the box draws it.
+ *
+ * **Not a {@link TagChip}, and the difference is the vocabulary rather than the pixels.** A tag
+ * chip names a row of a taxonomy — it carries a slug, a namespace and a label Scryfall wrote —
+ * and a screen reader is told "oracle tag". `cmc>=3` is none of those things, so it is drawn by
+ * its own component saying "search term": a predicate announced as a tag would be exactly the
+ * word swap the root `CLAUDE.md` spends a paragraph refusing.
+ */
+export interface PredicateChip {
+  /** `field|op|value`, case-folded — what the row dedupes on and what the ✕ names. Two terms
+   *  that ask the same question are one chip, for the tag row's reason: a chip's identity is the
+   *  filter, while a token's is where it sits in the string. */
+  key: string;
+  /** The term exactly as the reader typed it, minus any leading `-` — `cmc>=3`, `mv>=3`,
+   *  `o:"draw a card"`. Their spelling and not a canonical one, because the chip stands over
+   *  their own sentence and the ✕ edits that sentence. */
+  label: string;
+  mode: "include" | "exclude";
+}
+
+/** A predicate's identity, for {@link PredicateChip.key}. Case-folded because Rust folds the
+ *  value too, so `c:RG` and `c:rg` are one question and must not be two chips. */
+function predicateKey(p: QueryPredicate): string {
+  return `${p.field}|${p.op}|${p.value.toLowerCase()}`;
+}
 
 /**
  * The `legalities` keys the format picker offers, in the order those keys rank — which is a
@@ -660,8 +734,8 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   }, [text]);
 
   /**
-   * Scryfall's tagger syntax, read out of the box — `o:ramp`, `otag:"spot removal"`, `-a:dragon`
-   * — and the free text left over for FTS.
+   * Scryfall's query syntax, read out of the box — `t:goblin`, `cmc>=3`, `otag:"spot removal"`,
+   * `-atag:dragon` — and the free text left over for FTS.
    *
    * Parsed from the **debounced** string rather than the live one, so the chips, the note and
    * the wall all move together. A row that appeared a keystroke at a time while the wall waited
@@ -669,12 +743,28 @@ export function useCardSearch(options: CardSearchOptions = {}) {
    * its include/exclude toggle — flush the debounce themselves, because a press is a deliberate
    * act and should not sit for 300 ms.
    */
-  const parsed = useMemo(() => parseTagQuery(debouncedText), [debouncedText]);
+  const parsed = useMemo(() => parseQuery(debouncedText), [debouncedText]);
+
+  /**
+   * The typed predicates, as the wire carries them — spans dropped ({@link bare}).
+   *
+   * **Absent rather than empty**, so a box with no syntax in it sends exactly the payload it
+   * always did: `filters::push_card_filters` reads an empty list as no filter, and React Query
+   * would read it as a second search.
+   *
+   * Nothing keys on this and nothing has to: `debouncedText` is already a segment of both keys
+   * below, and these are a pure function of it. A predicate that changed without the text
+   * changing would be a parser that is not a function.
+   */
+  const predicates = useMemo(
+    () => (parsed.predicates.length > 0 ? parsed.predicates.map(bare) : undefined),
+    [parsed],
+  );
 
   /** The tokens as asks, and the one string that identifies them. Order matters: the answer is
    *  positional, so two queries naming the same tags in a different order are two questions. */
   const asks = useMemo(
-    () => parsed.tokens.map((t) => ({ namespace: t.namespace, value: t.value })),
+    () => parsed.tags.map((t) => ({ namespace: t.namespace, value: t.value })),
     [parsed],
   );
   const askKey = useMemo(() => asks.map(tokenKey).join(" "), [asks]);
@@ -683,8 +773,8 @@ export function useCardSearch(options: CardSearchOptions = {}) {
    * The typed names, as the canonical slugs the filters match on.
    *
    * Keyed on {@link askKey} rather than on the whole query, so editing the free text beside a
-   * tag does not re-ask a question already answered — and so the two searches `a:dog bolt` and
-   * `bolt a:dog` share one answer.
+   * tag does not re-ask a question already answered — and so the two searches `atag:dog bolt`
+   * and `bolt atag:dog` share one answer.
    */
   const tagResolution = useQuery({
     queryKey: ["tags", "resolve", askKey],
@@ -696,16 +786,17 @@ export function useCardSearch(options: CardSearchOptions = {}) {
    * What the reader typed, as chips — and the tokens that could not be resolved.
    *
    * **Deduplicated by `chipKey`, first mode winning.** A chip's identity is the tag, while a
-   * token's is where it sits in the string, so `a:dog a:dog` is two terms and one chip. That is
-   * also what makes the ✕ honest: it removes *every* term that produced the chip, because a
-   * chip that vanished and left the wall still narrowed would be worse than no chip at all.
+   * token's is where it sits in the string, so `atag:dog atag:dog` is two terms and one chip.
+   * That is also what makes the ✕ honest: it removes *every* term that produced the chip,
+   * because a chip that vanished and left the wall still narrowed would be worse than no chip
+   * at all.
    */
   const typed = useMemo(() => {
     const answers = tagResolution.data;
     const chips: TagChip[] = [];
     const seen = new Set<string>();
     const unknown: TagToken[] = [];
-    parsed.tokens.forEach((token, i) => {
+    parsed.tags.forEach((token, i) => {
       // Undefined while the query is in flight, which is why the search is gated below rather
       // than being allowed to run against a half-resolved list.
       const ref = answers?.[i];
@@ -740,11 +831,52 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   );
 
   /**
+   * The typed predicates, as chips — what the row under the box draws for them.
+   *
+   * **Built from the box's own text, so a chip says what the reader wrote.** The label is the
+   * source slice rather than a reconstruction from `field`/`op`/`value`: a reader who typed
+   * `mv>=3` should read `mv>=3` back, not the canonical `cmc>=3`, because the ✕ edits *their*
+   * sentence and a chip naming a term they cannot find in the box is a control that lies.
+   *
+   * **Deduplicated by the filter and not by the spelling**, which is the tag row's rule one
+   * field over: `cmc>=3 mv>=3` asks one question twice, so it is one chip — and its ✕ then
+   * removes both terms, because a chip that vanished and left the wall still narrowed would be
+   * worse than no chip at all.
+   *
+   * Unlike the tag chips there is nothing to resolve and nothing to wait for, so these are
+   * present on the first render after the debounce. See the payload above for why that is the
+   * whole difference between a tag and a predicate.
+   */
+  const predicateChips = useMemo(() => {
+    const chips: PredicateChip[] = [];
+    const seen = new Set<string>();
+    for (const token of parsed.predicates) {
+      const key = predicateKey(token);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      chips.push({
+        key,
+        // The `-` is the chip's `mode` rather than part of its name, exactly as a tag chip
+        // draws `not Forest` rather than carrying the dash in its label.
+        label: debouncedText.slice(token.start, token.end).replace(/^-/, ""),
+        mode: token.negated ? "exclude" : "include",
+      });
+    }
+    return chips;
+  }, [parsed, debouncedText]);
+
+  /** Every term that produced one predicate chip, latest first — so that splicing a later term
+   *  out leaves the earlier ones' spans still true. {@link removeTagChip}'s rule, and the same
+   *  reason: every span is an offset into the string being edited. */
+  const termsBehind = (key: string): PredicateToken[] =>
+    parsed.predicates.filter((p) => predicateKey(p) === key).reverse();
+
+  /**
    * Every tag this search filters by: the caller's chips ANDed with the reader's typed ones.
    *
    * Both are narrowings the reader asked for, so they merge rather than one winning — see
    * `mergeTagTerms`, which also sorts and dedupes each list so that chipping `dog` and typing
-   * `a:dog` is one predicate and, more to the point, one query key.
+   * `atag:dog` is one predicate and, more to the point, one query key.
    */
   const tagTerms = useMemo(
     () => mergeTagTerms(callerTagTerms, typedTerms),
@@ -891,12 +1023,19 @@ export function useCardSearch(options: CardSearchOptions = {}) {
     queryFn: ({ pageParam }) =>
       ipc.searchCards({
         // **The free text, not the box** — the tag terms have been lifted out of it, so
-        // `bolt a:dragon` searches FTS for `bolt` alone. Sending the raw string would have FTS
-        // hunting for a card whose text contains `a:dragon`, which is no card.
+        // `bolt atag:dragon` searches FTS for `bolt` alone. Sending the raw string would have FTS
+        // hunting for a card whose text contains `atag:dragon`, which is no card.
         //
         // Blank strings are dropped rather than sent: the backend treats them as unset
         // anyway, and sending them would make the request payload lie about intent.
         text: parsed.text || undefined,
+        // **The typed terms, and they are not gated the way the tags above are.** A tag name can
+        // be *unknown* — a string that names no row of a taxonomy — which is why an unresolved
+        // one holds the whole query closed. A predicate has no such state: `t:goblin` either
+        // matches rows or does not, and an empty answer to it is the honest one. Gating on these
+        // would blank the wall at every keystroke of `t:goblin` waiting for a resolve that is
+        // never asked for.
+        predicates,
         // `format` and `playableOnly` together, from the one select that decides both. See
         // {@link formatParams} — including why a named format sends `playableOnly` too.
         ...formatParams(format),
@@ -993,6 +1132,15 @@ export function useCardSearch(options: CardSearchOptions = {}) {
     // wall that chip filters have to describe one corpus, and a facet request carrying the whole
     // box would be counting over an FTS query the search never ran.
     text: parsed.text || undefined,
+    // **The typed terms, and only two of the twelve fields actually narrow a count.**
+    // `typeLine` and `oracleText` ride the FTS bitset `run_facets` already folds, so they narrow
+    // the counts for free; the index carries no power, toughness, artist or card-colour
+    // dimension, so the other ten leave the counts **wider than the wall**. That is spec §7's
+    // fail-open decision rather than a gap to close here: `facets.ts` greys only what would
+    // change nothing, so a count that is too high offers an option that turns out empty, where
+    // one that was too low would hide cards nobody would think to report missing. They ride
+    // anyway, because the two that do narrow are in the same list.
+    predicates,
     // Spelled through the same {@link formatParams} the page's payload is, so the counts
     // greying this row's chips and the wall those chips filter can never describe different
     // corpora. `playableOnly` is a filter the facets must carry (unlike `collapse`): it decides
@@ -1078,9 +1226,9 @@ export function useCardSearch(options: CardSearchOptions = {}) {
     /**
      * The tags the reader typed into the box, resolved — what the chip row under it draws.
      *
-     * Empty on a box with no tagger syntax in it, and empty *while a name is resolving*, which
-     * is the state the row must not draw a half-answer in. Deduplicated by tag, so `a:dog
-     * a:dog` is one chip; see the note on `typed` for why the ✕ then removes both terms.
+     * Empty on a box with no tag syntax in it, and empty *while a name is resolving*, which
+     * is the state the row must not draw a half-answer in. Deduplicated by tag, so `atag:dog
+     * atag:dog` is one chip; see the note on `typed` for why the ✕ then removes both terms.
      */
     tagChips: typed.chips,
     /**
@@ -1106,7 +1254,7 @@ export function useCardSearch(options: CardSearchOptions = {}) {
       const key = chipKey(namespace, slug);
       // Right to left: every span is an offset into the string being edited, so removing a
       // later term first leaves the earlier ones' spans still true.
-      const doomed = parsed.tokens
+      const doomed = parsed.tags
         .map((token, i) => ({ token, ref: tagResolution.data?.[i] }))
         .filter(({ ref }) => ref && chipKey(ref.namespace, ref.slug) === key)
         .map(({ token }) => token)
@@ -1122,6 +1270,31 @@ export function useCardSearch(options: CardSearchOptions = {}) {
      */
     replaceTagToken: (token: TagToken, value: string) =>
       rewrite(setTokenValue(debouncedText, token, value)),
+    /**
+     * The typed predicates, as chips — `cmc>=3`, `t:goblin`, `not a:rebecca`.
+     *
+     * Drawn beside the tag chips and **not as tag chips**: see {@link PredicateChip}. Always
+     * present once the debounce has settled, because a predicate has nothing to resolve.
+     */
+    predicateChips,
+    /** Take one typed predicate out of the query — a chip's ✕. Removes every term that produced
+     *  the chip, for {@link removeTagChip}'s reason. */
+    removePredicateChip: (key: string) =>
+      rewrite(termsBehind(key).reduce((query, token) => removeToken(query, token), debouncedText)),
+    /** Flip one typed predicate between include and exclude — a chip's press. Rewrites each term
+     *  where it stands rather than re-appending it, so the reader's own sentence keeps its
+     *  order. */
+    togglePredicateChipMode: (key: string) => {
+      const picked = predicateChips.find((c) => c.key === key);
+      if (!picked) return;
+      const negated = picked.mode === "include";
+      rewrite(
+        termsBehind(key).reduce(
+          (query, token) => setTokenNegated(query, token, negated),
+          debouncedText,
+        ),
+      );
+    },
     /** Flip one typed tag between include and exclude — a chip's press. Rewrites every term
      *  that produced the chip, for {@link removeTagChip}'s reason. */
     toggleTagChipMode: (slug: string, namespace: TagNamespace) => {
@@ -1129,7 +1302,7 @@ export function useCardSearch(options: CardSearchOptions = {}) {
       const picked = typed.chips.find((c) => chipKey(c.namespace, c.slug) === key);
       if (!picked) return;
       const negated = picked.mode === "include";
-      const doomed = parsed.tokens
+      const doomed = parsed.tags
         .map((token, i) => ({ token, ref: tagResolution.data?.[i] }))
         .filter(({ ref }) => ref && chipKey(ref.namespace, ref.slug) === key)
         .map(({ token }) => token)
