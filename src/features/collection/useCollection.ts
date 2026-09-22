@@ -5,6 +5,7 @@ import {
   cycleTriState,
   DEBOUNCE_MS,
   FORMATS,
+  searchTerms,
   toggleColor,
   toggleIn,
   type ColorKey,
@@ -245,10 +246,22 @@ export function useCollection() {
   const conditionParam =
     conditions.length > 0 ? CONDITIONS.filter((c) => conditions.includes(c)) : undefined;
 
+  /**
+   * The box, read as Scryfall's query syntax — the free text and the typed predicates.
+   *
+   * **This surface has no tag wiring**, so a tag term folds back into the free text rather than
+   * being dropped: see {@link searchTerms}, which is the whole rule and the whole reason.
+   *
+   * Nothing new is owed to `filterKey` below. `debouncedText` is already a segment of it and
+   * these two fields are a pure function of that string, so a payload that changed without the
+   * key changing would be a parser that is not a function.
+   */
+  const terms = useMemo(() => searchTerms(debouncedText), [debouncedText]);
+
   const filters: Omit<CollectionQuery, "limit" | "offset" | "sort"> = {
-    // Blank strings are dropped rather than sent: the backend reads them as unset anyway,
-    // and sending them would make the payload lie about intent.
-    text: debouncedText || undefined,
+    // Blank strings and empty term lists are dropped rather than sent: the backend reads them
+    // as unset anyway, and sending them would make the payload lie about intent.
+    ...terms,
     format: format || undefined,
     colors: colorsParam,
     sets: setsParam,

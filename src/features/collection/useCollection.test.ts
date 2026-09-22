@@ -594,4 +594,60 @@ describe("useCollection", () => {
 
     expect(result.current.queryKeyString).toBe(flat);
   });
+
+  /**
+   * Scryfall's syntax reaches the binder too — the same parse the search page makes, minus the
+   * tags, which this surface has no wiring for.
+   */
+  it("sends the free text and the typed predicates apart", async () => {
+    const { result } = renderHook(() => useCollection(), { wrapper });
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
+
+    act(() => result.current.setText("bolt cmc>=3"));
+
+    await waitFor(() => expect(lastQuery().predicates).toBeDefined());
+    expect(lastQuery().text).toBe("bolt");
+    // No `start`/`end`: the spans are the box's business, and on the wire they would make two
+    // cache entries out of one search typed at two positions.
+    expect(lastQuery().predicates).toEqual([
+      { field: "cmc", op: "gte", value: "3", negated: false },
+    ]);
+    // The header counts over the same rows the list draws, so it gets the same terms.
+    expect(lastSummary().predicates).toEqual(lastQuery().predicates);
+  });
+
+  /**
+   * **A tag typed here folds back into the free text rather than being dropped.**
+   *
+   * This surface resolves no tag names — no `tag_resolve` behind it, no chip row in front of it
+   * — so a parsed tag token has nowhere to go. Dropped, `atag:dragon` would be a term the
+   * reader typed that narrowed *nothing*, which silently **widens** the search: the one
+   * direction a search must never fail in, and the failure a reader cannot see. Folded, they
+   * get a name-and-rules search for the word instead — narrower in kind than they asked for,
+   * never wider in extent.
+   */
+  it("folds a tag term back into the free text instead of dropping it", async () => {
+    const { result } = renderHook(() => useCollection(), { wrapper });
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
+
+    act(() => result.current.setText("atag:dragon"));
+
+    await waitFor(() => expect(lastQuery().text).toBe("dragon"));
+    // Not a tag filter either — this hook sends none, which is what makes the fold necessary
+    // rather than belt-and-braces.
+    expect(lastQuery().artTags).toBeUndefined();
+    expect(lastQuery().oracleTags).toBeUndefined();
+  });
+
+  /** A box with no syntax in it sends exactly the payload it always did: an empty `predicates`
+   *  would be a payload lying about intent and a second cache key for one search. */
+  it("sends no predicates field for a plain search", async () => {
+    const { result } = renderHook(() => useCollection(), { wrapper });
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
+
+    act(() => result.current.setText("bolt"));
+
+    await waitFor(() => expect(lastQuery().text).toBe("bolt"));
+    expect(lastQuery().predicates).toBeUndefined();
+  });
 });

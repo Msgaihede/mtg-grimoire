@@ -3,7 +3,7 @@ import { keepPreviousData, useMutation, useQuery } from "@tanstack/react-query";
 import { AnimatePresence } from "motion/react";
 import { ManaText } from "@/components/ManaText";
 import { PopupPanel } from "@/components/PopupListbox";
-import { DEBOUNCE_MS } from "@/features/search/useCardSearch";
+import { DEBOUNCE_MS, searchTerms } from "@/features/search/useCardSearch";
 import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError, type CardSummary } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
@@ -92,7 +92,17 @@ export function QuickAdd({
   const suggestions = useQuery({
     queryKey: ["quick-add", debouncedText],
     queryFn: () =>
-      ipc.searchCards({ text: debouncedText, collapse: true, limit: MAX_SUGGESTIONS, offset: 0 }),
+      // **Scryfall's syntax, same as every other card box** — `t:goblin` here would otherwise go
+      // to FTS as two words and suggest nothing. {@link searchTerms} is what parses it, and a
+      // tag term folds back into the free text there rather than being dropped, because this
+      // field has no chip row and no `tag_resolve` behind it. The key needs nothing: it is
+      // `debouncedText`, and both fields are a function of that string.
+      ipc.searchCards({
+        ...searchTerms(debouncedText),
+        collapse: true,
+        limit: MAX_SUGGESTIONS,
+        offset: 0,
+      }),
     enabled: debouncedText.length > 0,
     // So the list does not blink empty between keystrokes: a dropdown that empties and refills
     // on every letter is a dropdown whose rows move out from under the pointer.
@@ -156,7 +166,11 @@ export function QuickAdd({
    * is where {@link miss} comes from: a miss is said in words rather than swallowed.
    */
   const lookup = useMutation({
-    mutationFn: (t: string) => ipc.searchCards({ text: t, collapse: true, limit: 1, offset: 0 }),
+    // Parsed exactly as the suggestion query above is, so Enter answers the same question the
+    // list was answering — a fallback that read the box a second way would be a field where
+    // pressing Enter and taking the top row add different cards.
+    mutationFn: (t: string) =>
+      ipc.searchCards({ ...searchTerms(t), collapse: true, limit: 1, offset: 0 }),
     onSuccess: (found, t) => {
       const card = found.items[0];
       if (!card) {

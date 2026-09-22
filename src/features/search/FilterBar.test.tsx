@@ -12,7 +12,7 @@ import { openDropdown, pickOption } from "@/test-dropdown";
 import { DROP_MARK_ROOM } from "@/lib/dropMarks";
 import { LAYER } from "@/lib/layers";
 import { stubNarrowWindow } from "@/test-viewport";
-import type { TagToken } from "./tagQuery";
+import type { TagToken } from "./queryLanguage";
 import { FilterBar } from "./FilterBar";
 import { ANY_CARD, FORMATS } from "./useCardSearch";
 
@@ -38,7 +38,7 @@ const search = (over: Record<string, unknown> = {}) =>
     toggleManaValue: vi.fn(),
     manaX: false,
     toggleManaX: vi.fn(),
-    // The tagger syntax's five members. Empty on every case here but the ones that override
+    // The tag syntax's five members. Empty on every case here but the ones that override
     // them: `TagQueryRow` draws nothing at all with no tags typed, so the row this suite has
     // always measured is exactly the row it measures now.
     tagChips: [] as TagChip[],

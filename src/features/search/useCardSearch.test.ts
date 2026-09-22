@@ -1108,15 +1108,20 @@ describe("the printings mode a caller can open on", () => {
 
 
 /**
- * Scryfall's tagger syntax, read out of the card search box — the whole of what
- * `useCardSearch` does with `tagQuery.ts`'s tokens.
+ * Scryfall's **tag** syntax, read out of the card search box — the whole of what
+ * `useCardSearch` does with `queryLanguage.ts`'s tag tokens.
  *
  * The parser has its own suite; these are the four places the *wiring* can be wrong in a way
  * nothing on screen would name: the free text sent to FTS, the terms sent beside it, the
  * request that must not be made before the names resolve, and the wall that must not survive a
  * name that resolves to nothing.
+ *
+ * **Every tag here is spelled `atag:`/`otag:`, and that is the change of 2026-09-22 rather than
+ * a preference.** `a:` is the artist and `o:` is the rules text now, which is what they mean on
+ * Scryfall; the predicates they became have their own block below, and the two together are
+ * what says the reassignment reached the wiring and not just the parser.
  */
-describe("useCardSearch, reading tagger syntax out of the box", () => {
+describe("useCardSearch, reading tag syntax out of the box", () => {
   beforeEach(() => {
     qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     searchCards.mockReset().mockResolvedValue({ items: [], total: 0, totalIsCapped: false });
@@ -1138,8 +1143,8 @@ describe("useCardSearch, reading tagger syntax out of the box", () => {
     );
 
   /**
-   * The decisive one. `bolt a:dragon` is two questions and only one of them is FTS's — sending
-   * the raw box would have the index hunting for a card whose text contains `a:dragon`, which
+   * The decisive one. `bolt atag:dragon` is two questions and only one of them is FTS's — sending
+   * the raw box would have the index hunting for a card whose text contains `atag:dragon`, which
    * is no card, so the wall would be empty and the tag filter would never have been applied.
    */
   it("sends the free text to FTS and the tag as a term", async () => {
@@ -1147,7 +1152,7 @@ describe("useCardSearch, reading tagger syntax out of the box", () => {
     const { result } = renderHook(() => useCardSearch(), { wrapper });
     await waitFor(() => expect(searchCards).toHaveBeenCalled());
 
-    act(() => result.current.setText("bolt a:dragon"));
+    act(() => result.current.setText("bolt atag:dragon"));
 
     await waitFor(() => expect(lastSearchRequest().artTags).toEqual({
       include: ["dragon"],
@@ -1168,7 +1173,7 @@ describe("useCardSearch, reading tagger syntax out of the box", () => {
     const { result } = renderHook(() => useCardSearch(), { wrapper });
     await waitFor(() => expect(searchCards).toHaveBeenCalled());
 
-    act(() => result.current.setText("o:ramp -a:dragon"));
+    act(() => result.current.setText("otag:ramp -atag:dragon"));
 
     await waitFor(() => expect(lastSearchRequest().oracleTags).toEqual({
       include: ["ramp"],
@@ -1191,7 +1196,7 @@ describe("useCardSearch, reading tagger syntax out of the box", () => {
     await waitFor(() => expect(searchCards).toHaveBeenCalled());
     const before = searchCards.mock.calls.length;
 
-    act(() => result.current.setText("a:dragon"));
+    act(() => result.current.setText("atag:dragon"));
     // Long enough for the debounce to have fired and a request to have been made if one were
     // going to be: the point is that the resolve is still outstanding.
     await new Promise((r) => setTimeout(r, DEBOUNCE_MS * 2));
@@ -1219,7 +1224,7 @@ describe("useCardSearch, reading tagger syntax out of the box", () => {
     const { result } = renderHook(() => useCardSearch(), { wrapper });
     await waitFor(() => expect(result.current.rows.length).toBe(1));
 
-    act(() => result.current.setText("o:remov"));
+    act(() => result.current.setText("otag:remov"));
 
     await waitFor(() => expect(result.current.tagNotFound.length).toBe(1));
     expect(result.current.tagNotFound[0].value).toBe("remov");
@@ -1239,7 +1244,7 @@ describe("useCardSearch, reading tagger syntax out of the box", () => {
     const { result } = renderHook(() => useCardSearch({ tagTerms }), { wrapper });
     await waitFor(() => expect(searchCards).toHaveBeenCalled());
 
-    act(() => result.current.setText("o:ramp"));
+    act(() => result.current.setText("otag:ramp"));
 
     await waitFor(() => expect(lastSearchRequest().oracleTags).toBeDefined());
     expect(lastSearchRequest().artTags).toEqual({ include: ["dog"], exclude: [] });
@@ -1247,7 +1252,7 @@ describe("useCardSearch, reading tagger syntax out of the box", () => {
   });
 
   /**
-   * A box with no tagger syntax in it must send exactly the payload it always did — an
+   * A box with no tag syntax in it must send exactly the payload it always did — an
    * `artTags: { include: [], exclude: [] }` riding on every search would be a payload that lies
    * about intent, and `filters::picked_tags` treats it as no filter while the *query key* it
    * feeds treats it as a second search.
@@ -1275,7 +1280,7 @@ describe("useCardSearch, reading tagger syntax out of the box", () => {
     const { result } = renderHook(() => useCardSearch(), { wrapper });
     await waitFor(() => expect(searchCards).toHaveBeenCalled());
 
-    act(() => result.current.setText("bolt a:dragon"));
+    act(() => result.current.setText("bolt atag:dragon"));
     await waitFor(() => expect(result.current.tagChips.length).toBe(1));
 
     act(() => result.current.removeTagChip("dragon", "art"));
@@ -1294,12 +1299,12 @@ describe("useCardSearch, reading tagger syntax out of the box", () => {
     const { result } = renderHook(() => useCardSearch(), { wrapper });
     await waitFor(() => expect(searchCards).toHaveBeenCalled());
 
-    act(() => result.current.setText("a:dog o:ramp"));
+    act(() => result.current.setText("atag:dog otag:ramp"));
     await waitFor(() => expect(result.current.tagChips.length).toBe(2));
 
     act(() => result.current.toggleTagChipMode("dog", "art"));
 
-    expect(result.current.text).toBe("-a:dog o:ramp");
+    expect(result.current.text).toBe("-atag:dog otag:ramp");
   });
 
   /** Naming a tag the box does not hold leaves the query alone rather than rewriting it into
@@ -1309,13 +1314,13 @@ describe("useCardSearch, reading tagger syntax out of the box", () => {
     const { result } = renderHook(() => useCardSearch(), { wrapper });
     await waitFor(() => expect(searchCards).toHaveBeenCalled());
 
-    act(() => result.current.setText("a:dog"));
+    act(() => result.current.setText("atag:dog"));
     await waitFor(() => expect(result.current.tagChips.length).toBe(1));
 
     act(() => result.current.removeTagChip("cat", "art"));
     act(() => result.current.toggleTagChipMode("cat", "art"));
 
-    expect(result.current.text).toBe("a:dog");
+    expect(result.current.text).toBe("atag:dog");
   });
 
   /** A tag typed into the box *is* the reader asking something, so an empty answer to it is a
@@ -1325,9 +1330,180 @@ describe("useCardSearch, reading tagger syntax out of the box", () => {
     const { result } = renderHook(() => useCardSearch(), { wrapper });
     await waitFor(() => expect(result.current.unfiltered).toBe(true));
 
-    act(() => result.current.setText("a:dragon"));
+    act(() => result.current.setText("atag:dragon"));
 
     await waitFor(() => expect(result.current.unfiltered).toBe(false));
+  });
+});
+
+/**
+ * The typed predicates — `t:goblin`, `cmc>=3`, `-a:rebecca` — which are the *other* half of what
+ * the box parses into and behave nothing like the tags above.
+ *
+ * `queryLanguage.ts` owns the grammar and has its own suite. These are the five places the
+ * wiring can be wrong where nothing on screen would name the fault: the terms reaching the
+ * request, the spans **not** reaching it, the gate that must not close on them, the counts that
+ * have to be taken over the same query the wall is, and the chips that are a reader's only way
+ * to see a filter they typed.
+ */
+describe("useCardSearch, reading typed predicates out of the box", () => {
+  beforeEach(() => {
+    qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    searchCards.mockReset().mockResolvedValue({ items: [], total: 0, totalIsCapped: false });
+    facetCards.mockReset().mockResolvedValue(READY);
+    tagResolve.mockReset();
+  });
+
+  /**
+   * **The decisive one, and the span is half of it.** `PredicateToken` carries where the term
+   * sits in the box so a chip can splice it back out; the backend has no use for that and the
+   * *query key* is hashed from this payload — so a span on the wire makes `t:goblin bolt` and
+   * `bolt t:goblin` two cache entries for one search, and moves the key every time the reader
+   * edits a word in front of a term they did not touch.
+   */
+  it("sends the free text to FTS and the term beside it, with no spans", async () => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    act(() => result.current.setText("bolt cmc>=3"));
+
+    await waitFor(() => expect(lastSearchRequest().predicates).toBeDefined());
+    expect(lastSearchRequest().text).toBe("bolt");
+    expect(lastSearchRequest().predicates).toEqual([
+      { field: "cmc", op: "gte", value: "3", negated: false },
+    ]);
+    // The counts greying the chips and the wall those chips filter have to describe one corpus.
+    expect(lastFacetRequest().text).toBe("bolt");
+    expect(lastFacetRequest().predicates).toEqual([
+      { field: "cmc", op: "gte", value: "3", negated: false },
+    ]);
+  });
+
+  /**
+   * **A predicate must never gate the query, and this is the test that says so.**
+   *
+   * A tag name can be *unknown* — a string naming no row of a taxonomy — which is why an
+   * unresolved one holds the whole search closed. `t:goblin` has no such state: it matches rows
+   * or it does not, and an empty answer is the honest one. Gated, every keystroke on the way to
+   * `t:goblin` would blank the wall waiting for a resolve that is never even asked for.
+   */
+  it("fires immediately for a predicate, since a predicate cannot be unknown", async () => {
+    searchCards.mockResolvedValue({ items: [{ id: "c1" }], total: 1, totalIsCapped: false });
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(result.current.rows.length).toBe(1));
+
+    act(() => result.current.setText("t:goblin"));
+
+    await waitFor(() => expect(lastSearchRequest().predicates).toEqual([
+      { field: "typeLine", op: "colon", value: "goblin", negated: false },
+    ]));
+    // No resolve was asked for, so there is nothing that could have been waited on — and the
+    // wall is a result rather than the deliberate emptiness an unknown tag produces.
+    expect(tagResolve).not.toHaveBeenCalled();
+    expect(result.current.rows.length).toBe(1);
+    expect(result.current.total).toBe(1);
+  });
+
+  /**
+   * A box with no syntax in it must send exactly the payload it always did: an empty
+   * `predicates` riding on every search is a payload lying about intent, and React Query would
+   * read it as a second search over the same rows.
+   */
+  it("sends no predicates field at all for a plain search", async () => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    act(() => result.current.setText("bolt"));
+
+    await waitFor(() => expect(lastSearchRequest().text).toBe("bolt"));
+    expect(lastSearchRequest().predicates).toBeUndefined();
+    expect(lastFacetRequest().predicates).toBeUndefined();
+  });
+
+  /** Repetition is meaningful and is not collapsed: `t:creature t:goblin` is two terms and both
+   *  have to hold, which only a list can say. */
+  it("ands repeated terms rather than folding them into one", async () => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    act(() => result.current.setText("t:creature t:goblin"));
+
+    await waitFor(() => expect(lastSearchRequest().predicates).toHaveLength(2));
+  });
+
+  /**
+   * The chips are a reader's only way to see — and take off — a filter they typed, and unlike
+   * the tag chips they need nothing resolved to be drawn.
+   *
+   * The label is the reader's own spelling because the ✕ edits the reader's own sentence; the
+   * *key* is the filter, which is what makes `cmc>=3 mv>=3` one chip whose ✕ removes both.
+   */
+  it("draws a chip per term, keyed on the filter and labelled with the spelling", async () => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    act(() => result.current.setText("cmc>=3 mv>=3 -t:goblin"));
+
+    await waitFor(() => expect(result.current.predicateChips.length).toBe(2));
+    expect(result.current.predicateChips[0]).toEqual({
+      key: "cmc|gte|3",
+      label: "cmc>=3",
+      mode: "include",
+    });
+    // The `-` is the chip's mode rather than part of its name — a chip draws `not …`.
+    expect(result.current.predicateChips[1]).toEqual({
+      key: "typeLine|colon|goblin",
+      label: "t:goblin",
+      mode: "exclude",
+    });
+  });
+
+  /** The box is the one source of truth for the query, so a chip's ✕ splices the term out of the
+   *  text the reader can see — **every** term that produced the chip, or the wall would stay
+   *  narrowed by a filter with no chip left to remove. */
+  it("removes a chip by splicing every term behind it out of the box", async () => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    act(() => result.current.setText("bolt cmc>=3 mv>=3"));
+    await waitFor(() => expect(result.current.predicateChips.length).toBe(1));
+
+    act(() => result.current.removePredicateChip("cmc|gte|3"));
+
+    expect(result.current.text).toBe("bolt");
+    await waitFor(() => expect(lastSearchRequest().predicates).toBeUndefined());
+  });
+
+  /** The include/exclude press rewrites each term where it stands rather than moving it to the
+   *  end of the reader's own sentence. */
+  it("flips a chip by writing the dash into the box", async () => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    act(() => result.current.setText("cmc>=3 bolt"));
+    await waitFor(() => expect(result.current.predicateChips.length).toBe(1));
+
+    act(() => result.current.togglePredicateChipMode("cmc|gte|3"));
+
+    expect(result.current.text).toBe("-cmc>=3 bolt");
+    await waitFor(() => expect(lastSearchRequest().predicates).toEqual([
+      { field: "cmc", op: "gte", value: "3", negated: true },
+    ]));
+  });
+
+  /** Naming a filter the box does not hold leaves the query alone rather than rewriting it into
+   *  something the reader never typed. */
+  it("leaves the box alone when asked about a term that is not in it", async () => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    act(() => result.current.setText("cmc>=3"));
+    await waitFor(() => expect(result.current.predicateChips.length).toBe(1));
+
+    act(() => result.current.removePredicateChip("power|gte|4"));
+    act(() => result.current.togglePredicateChipMode("power|gte|4"));
+
+    expect(result.current.text).toBe("cmc>=3");
   });
 });
 
