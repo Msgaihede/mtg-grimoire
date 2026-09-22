@@ -209,6 +209,30 @@ const CARDS_INDEXES: &[&str] = &[
     // an index the app has until the next morning — and the failure is silent, because nothing
     // becomes wrong, only slow.
     "CREATE INDEX IF NOT EXISTS {schema}.idx_cards_illustration ON cards(illustration_id)",
+    // `a:` is Scryfall's artist search since 2026-09-22, and `cards.artist` had no index at
+    // all — so it was the one predicate in [`crate::filters::push_card_filters`] that read
+    // every row of the table.
+    //
+    // **Measured 2026-09-22 through `node:sqlite` against the real 892 MB dev corpus** —
+    // SQLite's own C, identical under a debug or a release crate, so the fixture is what
+    // needs naming rather than a cargo profile. `instr(lower(c.artist), lower(?)) > 0` plans
+    // as a bare `SCAN c` and costs **417.7 ms**; the identical expression over the *indexed*
+    // `name` column costs **15.7 ms** and plans as `SCAN c USING COVERING INDEX
+    // idx_cards_name`. A bare `a:` on an otherwise empty box measured 466–510 ms end to end.
+    // Spec §5.3 named ~250 ms as the line and an index on this column as the fallback; this
+    // is that fallback, and what it buys is the 26× the name column already gets.
+    //
+    // **It buys the scan a covering index, not a seek.** `instr` is not sargable, so no
+    // planner can look a value up through it — what changes is that the scan reads a narrow
+    // index instead of the whole row heap, which is the entire reason the same expression is
+    // already cheap over `name`.
+    //
+    // In this list rather than in a migration step, for the reason the list exists:
+    // [`swap_staging`] drops and recreates `cards` on every sync, so an index declared only
+    // in a rung is an index the app has until the next morning. The cost of that is one
+    // direction only — a corpus already at head picks it up at its next sync, and until then
+    // a bare `a:` is 418 ms rather than 16 ms, which is slow and never wrong.
+    "CREATE INDEX IF NOT EXISTS {schema}.idx_cards_artist ON cards(artist)",
 ];
 
 /// [`CARDS_INDEXES`] as one executable batch, over one schema.
@@ -450,6 +474,32 @@ pub const USER_SCHEMA_VERSION: i64 = 46;
 /// and rebuild, because what is behind it is a download. Sharing a scale would invite somebody
 /// to subtract them.
 ///
+/// **5 (2026-09-22) is `cards.keywords`** — the card's **keyword abilities**, which is the one
+/// term in the search box's new query language with no column behind it and the one that cannot
+/// be faked from oracle text. Measured against Scryfall the same day: `kw:flying` answers 3 318
+/// and `o:flying` 4 617, so the text over-matches by 39% on reminder text and on phrases like
+/// "can't be blocked by creatures with flying". It is corpus schema 3's shape in every respect —
+/// one schema-qualified `ALTER TABLE {schema}.cards ADD COLUMN keywords TEXT`, gated on
+/// `PRAGMA {schema}.table_info(cards)` and never on this number, a missing `cards` owing
+/// nothing, no `cards_fts` rebuild and no backfill, because the array lives in the gzip `raw`
+/// BLOB that SQL cannot see into.
+///
+/// **The column stores the keywords lowercased, delimited _and wrapped_ — `|flying|vigilance|`**
+/// — and a card with no keywords is `None` rather than `Some("|")`. Scryfall matches `kw:`
+/// against a closed vocabulary rather than as a substring (`kw:fly` is refused outright,
+/// measured), so [`crate::filters::push_card_filters`] asks `instr(keywords, '|flying|')` and
+/// the wrapping is the whole of what stops `kw:fly` matching `flying`; a bare delimiter would
+/// make every keywordless card match every `kw:`. **The gap before the next ingest is bridged in
+/// the SQL rather than in Rust**, which is where this parts company with `produced_mana`'s
+/// `fill_unknown_produced_mana`: `keywords IS NOT NULL AND <delimited match>` OR
+/// `keywords IS NULL AND <the rules text contains it>`, licensed by `kw:flying -o:flying` being
+/// **0** on Scryfall — the text is a superset of the keyword, so the bridge is over-inclusive
+/// before the next ingest rather than empty, and empty is the one direction a search must never
+/// fail in. **NULL therefore means one thing here too**, *this row predates the column*, and it
+/// is a weaker claim than schema 3's on purpose: a card Scryfall publishes no keywords for is
+/// `None` as well, because the bridge's second arm answers that card correctly either way while
+/// a `Some("|")` would answer every other card wrongly.
+///
 /// **4 (2026-09-15) is `sets.printed_size`** — Scryfall's denominator for a set's printed
 /// collector numbers, the `/280` at the foot of a card, and what the home page's Set completion
 /// widget divides by. It is corpus schema 3's shape exactly, one table over: one
@@ -497,7 +547,7 @@ pub const USER_SCHEMA_VERSION: i64 = 46;
 /// on an INSERT naming four columns the table does not have. [`migrate_corpus`] therefore asks
 /// the *shape*; this number is the record of what the shape is, and the thing a future rung
 /// will still want to have moved.
-pub const CORPUS_SCHEMA_VERSION: i64 = 4;
+pub const CORPUS_SCHEMA_VERSION: i64 = 5;
 
 /// Which of the two files a table lives in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4287,7 +4337,7 @@ pub fn create_user_schema(conn: &Connection, schema: &str) -> rusqlite::Result<(
     conn.execute_batch(&USER_SCHEMA_SQL.replace("{schema}", schema))
 }
 
-/// Seventeen of the twenty corpus tables and nine of their eleven indexes, at
+/// Seventeen of the twenty corpus tables and ten of their twelve indexes, at
 /// [`CORPUS_SCHEMA_VERSION`]'s shape, with `{schema}` where the file goes.
 ///
 /// [`USER_SCHEMA_SQL`]'s twin and every one of its rules: copied out of a migrated
@@ -4341,7 +4391,7 @@ CREATE TABLE {schema}.cards (
     image_status TEXT,
     image_updated_at TEXT,
     search_text TEXT,
-    raw TEXT NOT NULL, image_uris TEXT, face_image_uris TEXT, artist TEXT, power TEXT, toughness TEXT, legal_mask INTEGER NOT NULL DEFAULT 0, produced_mana TEXT);
+    raw TEXT NOT NULL, image_uris TEXT, face_image_uris TEXT, artist TEXT, power TEXT, toughness TEXT, legal_mask INTEGER NOT NULL DEFAULT 0, produced_mana TEXT, keywords TEXT);
 
 CREATE TABLE {schema}.sets (
                 code TEXT PRIMARY KEY, name TEXT NOT NULL, arena_code TEXT, mtgo_code TEXT,
@@ -4556,6 +4606,8 @@ CREATE INDEX {schema}.idx_cards_name ON cards(name);
 CREATE INDEX {schema}.idx_cards_collapse ON cards(oracle_id, is_paper, released_at, id, name, price_usd, legal_mask, cmc, color_identity);
 
 CREATE INDEX {schema}.idx_cards_illustration ON cards(illustration_id);
+
+CREATE INDEX {schema}.idx_cards_artist ON cards(artist);
 "#;
 
 /// The combo feed's three tables at head — and **the only literal that builds them**.
@@ -6446,7 +6498,7 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
 /// cards already exists` and stops the launch rather than quietly doing nothing. Anything else
 /// is a file with a shape, and the only things these rungs have to say about one are that the
 /// combo feed's three tables may be a version behind, that `cards` may be missing
-/// `produced_mana` and that `sets` may be missing `printed_size`.
+/// `produced_mana` or `keywords`, and that `sets` may be missing `printed_size`.
 ///
 /// **Both rungs are gated on the shape and not on `v < CORPUS_SCHEMA_VERSION`, and that is the
 /// trap worth writing down.** `crate::split`'s `finish` stamps [`CORPUS_SCHEMA_VERSION`] — head,
@@ -6507,6 +6559,14 @@ pub(crate) fn migrate_corpus(conn: &Connection) -> rusqlite::Result<()> {
         // the last step of every ingest — so the sync would fail *after* downloading the cards.
         if printed_size_is_owed(conn, CORPUS)? {
             add_printed_size(conn, CORPUS)?;
+        }
+        // Corpus schema 5, the shape gate a third time and over the same table as schema 3 —
+        // so the symptom a version gate would buy is schema 3's, word for word with one
+        // column name changed: `table cards_staging has no column named keywords` at the
+        // first ingest after the upgrade, on every converted database and every fresh
+        // install, because [`create_staging`] derives staging's layout from the live table.
+        if keywords_are_owed(conn, CORPUS)? {
+            add_keywords(conn, CORPUS)?;
         }
     }
     if v < CORPUS_SCHEMA_VERSION {
@@ -6651,6 +6711,59 @@ fn add_printed_size(conn: &Connection, schema: &str) -> rusqlite::Result<()> {
     conn.execute_batch(&on_schema(
         schema,
         "ALTER TABLE {schema}.sets ADD COLUMN printed_size INTEGER;",
+    ))
+}
+
+/// Whether corpus schema 5's `ALTER` is owed on `cards` in `schema` — [`produced_mana_is_owed`]
+/// over the same table, and every one of its reasons verbatim.
+///
+/// **Column names and never `sqlite_master`'s text**, because [`swap_staging`] drops and
+/// recreates `cards` on every sync and the stored `CREATE TABLE` is then whatever
+/// [`create_staging`] rebuilt out of `PRAGMA table_info` — the same columns, a different
+/// string. A text probe would re-issue the `ALTER` and die at `duplicate column name` on
+/// exactly the databases that are already correct.
+///
+/// ⚠️ **A `cards` that is not there at all owes nothing**, which is what makes this a debt
+/// question rather than a shape question: `PRAGMA table_info` on a missing table is an empty
+/// result, `ALTER TABLE … ADD COLUMN` on one raises, and [`migrate_corpus`] is one of the two
+/// things allowed to stop a launch. Only an ingest can put `cards` back, and a launch must
+/// survive a repair it cannot carry out.
+fn keywords_are_owed(conn: &Connection, schema: &str) -> rusqlite::Result<bool> {
+    let mut stmt = conn.prepare(&format!("PRAGMA {schema}.table_info(cards)"))?;
+    let names: Vec<String> = stmt
+        .query_map([], |r| r.get::<_, String>(1))?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(!names.is_empty() && !names.iter().any(|n| n == "keywords"))
+}
+
+/// Corpus schema 5: give `cards` its `keywords` column.
+///
+/// **Schema-qualified through [`on_schema`]**, for [`add_produced_mana`]'s reason: a bare
+/// `ALTER TABLE cards ADD COLUMN` means `main` — the reader's own file — and with the corpus
+/// attached it *succeeds*, putting the column on a table `user.db` does not have and leaving
+/// the one that matters untouched.
+///
+/// **One statement and no more.** No `cards_fts` rebuild — the rung adds an unindexed column
+/// and renumbers no rowid, schema v2's precedent — and **no [`CARDS_INDEXES`] entry for this
+/// column**: [`crate::filters::push_card_filters`] reads it with `instr`, which no b-tree can
+/// seek through, so an index on it would be a second copy of the column bought for nothing.
+/// (The `idx_cards_artist` entry that landed in the same commit is a *different* column and a
+/// measured 26×; the two are not one decision.)
+///
+/// **And no backfill, because none is possible.** The array lives in `raw`, `raw` is a gzip
+/// BLOB from schema v3 on, and `json_extract` over one is a hard `malformed JSON` error rather
+/// than a NULL. Every existing row reads NULL until the next full ingest drops and recreates
+/// `cards` — at most a day away, Scryfall regenerating the bulk file daily — and unlike
+/// `produced_mana`, whose gap is bridged at read time in Rust by
+/// [`crate::deck::fill_unknown_produced_mana`], **this one is bridged in the SQL**: the
+/// `keywords IS NULL` arm of the `kw:` predicate falls back to the card's rules text, which
+/// `kw:flying -o:flying` = 0 licenses as a superset. A read-time bridge was not available
+/// here because the question is asked of a `WHERE` clause over the whole corpus rather than of
+/// one deck's rows.
+fn add_keywords(conn: &Connection, schema: &str) -> rusqlite::Result<()> {
+    conn.execute_batch(&on_schema(
+        schema,
+        "ALTER TABLE {schema}.cards ADD COLUMN keywords TEXT;",
     ))
 }
 
@@ -7671,6 +7784,12 @@ pub(crate) mod tests {
         add_produced_mana(&ladder, "main").unwrap();
         // Corpus schema 4's, after it for the same reason — take it away and `sets` goes red.
         add_printed_size(&ladder, "main").unwrap();
+        // Corpus schema 5's, third and last, over `cards` again. Take it away and the
+        // ladder's `cards` is a column short of the literal's and this goes red on that
+        // table. `idx_cards_artist`, which landed in the same commit, needs no line here:
+        // [`cards_indexes_sql`] reads [`CARDS_INDEXES`] at head, so the v20 step builds it on
+        // this route exactly as the literal does on the other.
+        add_keywords(&ladder, "main").unwrap();
         let want = dump(&ladder, "main");
 
         let pair = memory_pair();
@@ -18766,6 +18885,220 @@ pub(crate) mod tests {
             .unwrap();
         assert!(!printed_size_is_owed(&conn, CORPUS).unwrap());
         migrate_corpus(&conn).expect("a launch must not die over a repair it cannot carry out");
+    }
+
+    // ---- corpus schema 5: a card's keyword abilities ---------------------------------
+
+    /// A pair whose corpus wears **head's version stamp over a `cards` that has no
+    /// `keywords`** — [`corpus_missing_produced_mana`]'s construction one column over, and
+    /// the state every converted database and every fresh install is in on the day corpus
+    /// schema 5 ships.
+    ///
+    /// `DROP COLUMN` is available for that fixture's reason and it is worth restating here,
+    /// because this commit adds an index to `cards` for the first time since v20: SQLite
+    /// refuses a `DROP COLUMN` on a column an index names, and the rung deliberately declares
+    /// none on `keywords`. `idx_cards_artist` names a different column and does not reach it.
+    fn corpus_missing_keywords() -> Connection {
+        let conn = memory_pair();
+        conn.execute_batch(&format!(
+            "ALTER TABLE {CORPUS}.cards DROP COLUMN keywords;
+             PRAGMA {CORPUS}.user_version = {CORPUS_SCHEMA_VERSION};"
+        ))
+        .unwrap();
+        conn
+    }
+
+    /// **The population a version gate would miss**, for `keywords`: head's number over the
+    /// old shape, which is what `crate::split`'s `finish` stamps onto every converted file and
+    /// every fresh install. The failure it would buy is corpus schema 3's word for word with
+    /// one name changed — the next ingest raising `table cards_staging has no column named
+    /// keywords`, because [`create_staging`] derives staging's layout from the live table's
+    /// own `PRAGMA table_info`.
+    #[test]
+    fn a_corpus_stamped_at_head_with_no_keywords_still_gets_it() {
+        let conn = corpus_missing_keywords();
+        let version: i64 = conn
+            .query_row(&format!("PRAGMA {CORPUS}.user_version"), [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, CORPUS_SCHEMA_VERSION);
+        assert!(
+            !corpus_cards_has(&conn, "keywords"),
+            "the fixture must start without the column or it tests nothing"
+        );
+
+        migrate_corpus(&conn).unwrap();
+
+        assert!(
+            corpus_cards_has(&conn, "keywords"),
+            "the number said head and the shape did not"
+        );
+    }
+
+    /// The counterweight: a corpus already carrying the column is left alone.
+    ///
+    /// `a_launch_over_a_corpus_that_has_the_column_does_not_add_it_twice`'s claim for this
+    /// rung, and it is the same loud one — `ALTER TABLE … ADD COLUMN` has no `IF NOT EXISTS`,
+    /// so an ungated second pass raises `duplicate column name` and **stops the launch** on
+    /// every database that is already correct, which after one sync is all of them.
+    #[test]
+    fn a_fresh_corpus_has_keywords_and_owes_nothing() {
+        let conn = memory_pair();
+        assert!(corpus_cards_has(&conn, "keywords"));
+        assert!(!keywords_are_owed(&conn, CORPUS).unwrap());
+
+        migrate_corpus(&conn).unwrap();
+        migrate_corpus(&conn).unwrap();
+
+        assert!(corpus_cards_has(&conn, "keywords"));
+    }
+
+    /// ⚠️ **The rung is schema-qualified**, `the_produced_mana_rung_lands_on_the_corpus_and_
+    /// not_on_the_user_file`'s claim for this one. The decoy on the user side is what makes
+    /// the two spellings able to disagree at all: with a `cards` on each side the unqualified
+    /// form lands on the wrong one and the qualified form cannot. In the field `user.db` has
+    /// no `cards`, which is what makes the mistake *silent* — nothing raises, the corpus is
+    /// left unrepaired, and the next ingest fails naming a different table.
+    #[test]
+    fn the_keywords_rung_lands_on_the_corpus_and_not_on_the_user_file() {
+        let conn = corpus_missing_keywords();
+        conn.execute_batch("CREATE TABLE main.cards (id TEXT PRIMARY KEY);")
+            .unwrap();
+
+        add_keywords(&conn, CORPUS).unwrap();
+
+        assert!(
+            corpus_cards_has(&conn, "keywords"),
+            "the column belongs to the corpus"
+        );
+        let mut stmt = conn.prepare("PRAGMA main.table_info(cards)").unwrap();
+        let user_side: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(1))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            user_side,
+            vec!["id".to_owned()],
+            "an unqualified ALTER puts the corpus's column in the reader's own file, silently"
+        );
+    }
+
+    /// And a corpus with no `cards` at all owes nothing rather than dying.
+    ///
+    /// The debt this rung can repair is *a table missing a column*, never *a missing table* —
+    /// only an ingest can put `cards` back, and [`migrate_corpus`] is one of the two things
+    /// allowed to stop a launch.
+    #[test]
+    fn a_corpus_with_no_cards_table_owes_the_keywords_rung_nothing() {
+        let conn = memory_pair();
+        conn.execute_batch(&format!(
+            "DROP TABLE {CORPUS}.cards_fts; DROP TABLE {CORPUS}.cards;"
+        ))
+        .unwrap();
+
+        assert!(
+            !keywords_are_owed(&conn, CORPUS).unwrap(),
+            "there is no table to alter, so nothing is owed"
+        );
+        migrate_corpus(&conn).expect("a launch must not die over a repair it cannot carry out");
+    }
+
+    /// **The `kw:` bridge against real rows, which is the half `filters.rs` could not test.**
+    ///
+    /// Task 2 shipped the two-arm predicate and pinned its SQL text and both bound parameters;
+    /// what it could not do was run it, because this column did not exist yet. Spec §10 asks
+    /// for exactly this pairing — *the NULL-keywords arm answers from oracle text and the
+    /// populated arm answers exactly* — and it belongs here rather than there because what it
+    /// really asserts is that the **format this rung's ingest writes** and the **form
+    /// `push_card_filters` binds** are one string. They are two files apart and nothing else
+    /// compares them.
+    ///
+    /// The delimiters are the whole of the exactness: `bear` carries `|flying|` and must not
+    /// match, and `angel` — whose column is populated — must not fall through to the rules
+    /// text arm. `dragon` is the un-ingested row the bridge exists for.
+    #[test]
+    fn the_keyword_predicate_reads_both_arms_against_real_rows() {
+        use crate::filters::{
+            push_card_filters, CardFilters, PredicateField, PredicateOp, Predicates, QueryPredicate,
+        };
+
+        let conn = memory_pair();
+        conn.execute_batch(
+            "INSERT INTO cards (id, name, set_code, collector_number, lang, layout, raw,
+                 search_text, keywords)
+             VALUES
+               ('angel','Serra Angel','lea','1','en','normal','{}',
+                'Flying, vigilance', '|flying|vigilance|'),
+               ('dragon','Shivan Dragon','lea','2','en','normal','{}',
+                'Flying {R}: Shivan Dragon gets +1/+0 until end of turn.', NULL),
+               ('bear','Grizzly Bears','lea','3','en','normal','{}',
+                'A vanilla bear.', '|flying|');",
+        )
+        .unwrap();
+        // The third row's column says `|flying|` on purpose — it is the control for the
+        // *first* arm, so `kw:fly` failing below cannot be passing because no row has it.
+
+        let hits = |value: &str| -> Vec<String> {
+            let mut p = Predicates::default();
+            push_card_filters(
+                &mut p,
+                &CardFilters {
+                    predicates: Some(vec![QueryPredicate {
+                        field: PredicateField::Keyword,
+                        op: PredicateOp::Colon,
+                        value: value.to_owned(),
+                        negated: false,
+                    }]),
+                    ..Default::default()
+                },
+                "c",
+                None,
+            );
+            let sql = format!(
+                "SELECT c.id FROM cards c WHERE {} ORDER BY c.id",
+                p.where_sql()
+            );
+            let mut stmt = conn.prepare(&sql).unwrap();
+            let rows = stmt
+                .query_map(
+                    rusqlite::params_from_iter(p.params.iter().map(|b| b.as_ref())),
+                    |r| r.get::<_, String>(0),
+                )
+                .unwrap()
+                .map(Result::unwrap)
+                .collect::<Vec<_>>();
+            rows
+        };
+
+        assert_eq!(
+            hits("flying"),
+            vec!["angel".to_owned(), "bear".to_owned(), "dragon".to_owned()],
+            "the populated rows match on the column and the NULL row matches on its rules text"
+        );
+        assert_eq!(
+            hits("Flying"),
+            vec!["angel".to_owned(), "bear".to_owned(), "dragon".to_owned()],
+            "the reader's capitalisation is not theirs to get right: both arms fold case"
+        );
+        assert_eq!(
+            hits("vigilance"),
+            vec!["angel".to_owned()],
+            "a keyword only one card has"
+        );
+        // ⚠️ **The delimiter contract, stated as a behaviour rather than as a string compare,
+        // and the over-inclusiveness stated beside it so neither can be mistaken for the
+        // other.** Scryfall refuses `kw:fly` outright (measured 2026-09-22). On the *column*
+        // arm the wrapping `|` is the whole of what reproduces that, so `angel` and `bear` —
+        // both ingested — must be absent; drop one delimiter and both walk in. On the *rules
+        // text* arm there is no such fence and there cannot be one, so `dragon`, whose column
+        // is NULL, matches on the word "Flying" and that is the bridge behaving as designed:
+        // over-inclusive before the next ingest, never empty. The day `dragon` is ingested it
+        // leaves this answer, which is the gap closing rather than a test going stale.
+        assert_eq!(
+            hits("fly"),
+            vec!["dragon".to_owned()],
+            "a prefix must not reach an ingested row, and must still reach an un-ingested one"
+        );
     }
 
     /// And it takes an interrupted ingest's staging pair with it, so nothing shaped like

@@ -112,6 +112,34 @@ pub struct CardRow {
     /// whole-card property in Scryfall's schema (an MDFC with a land back carries it at the top
     /// level), so a face read would be a second source for one fact.
     pub produced_mana: Option<String>,
+    /// The card's **keyword abilities** — corpus schema 5.
+    ///
+    /// **Lowercased, pipe-delimited _and wrapped_**: `["Flying","Vigilance"]` becomes
+    /// `"|flying|vigilance|"`. Scryfall matches `kw:` against a closed vocabulary rather than
+    /// as a substring — `kw:fly` is refused outright, measured 2026-09-22 — and
+    /// [`crate::filters::push_card_filters`] reproduces that with
+    /// `instr(keywords, '|flying|') > 0`, so the **leading and trailing** delimiters are the
+    /// whole of what stops `kw:fly` matching `flying`. A separator-only form (`flying|
+    /// vigilance`) would leave the first and last keyword unfenced on one side each.
+    ///
+    /// ⚠️ **`None` for a card with no keywords, and never `Some("|")` — this is the fence,
+    /// and it is the opposite of [`CardRow::produced_mana`]'s.** A bare delimiter is a
+    /// substring of *every* wrapped value, so one `Some("|")` row would match every `kw:`
+    /// there is; the fence there buys NULL a single meaning, and the fence here refuses a
+    /// value that would match everything. What this costs is that NULL no longer means only
+    /// "this row predates the column" — and nothing is built on it meaning that, because the
+    /// gap is bridged in SQL by the `keywords IS NULL` arm, which answers a keywordless card
+    /// correctly (its rules text holds no keyword either) and an un-migrated one
+    /// over-inclusively.
+    ///
+    /// **`to_ascii_lowercase`, matching what the predicate binds.** `str::to_lowercase` is
+    /// Unicode-aware and the query side folds with `to_ascii_lowercase`; two different folds
+    /// over one column is a match that depends on which side saw the string first.
+    ///
+    /// **Top level only, no face fallback**, for `produced_mana`'s reason: Scryfall publishes
+    /// `keywords` as a whole-card property and a face read would be a second source for one
+    /// fact.
+    pub keywords: Option<String>,
 }
 
 /// A bulk line, gzipped for storage.
@@ -164,6 +192,35 @@ fn joined_letters(v: &Value, k: &str) -> Option<String> {
     v.get(k)
         .and_then(Value::as_array)
         .map(|a| a.iter().filter_map(Value::as_str).collect::<String>())
+}
+
+/// `["Flying","Vigilance"]` -> `"|flying|vigilance|"` — corpus schema 5's storage form.
+///
+/// [`joined_letters`]' neighbour and deliberately not a reuse of it: colour letters are one
+/// character each and concatenate unambiguously, while keywords are words and need a
+/// separator that cannot occur inside one. `|` is that separator — no Scryfall keyword
+/// contains a pipe, and several contain spaces (`First strike`, `Protection from`), a comma
+/// (`Partner with`) and a hyphen.
+///
+/// **Wrapped as well as delimited**, so the first and last entries are fenced on both sides
+/// and `instr(keywords, '|flying|')` cannot match a prefix. And **`None` rather than
+/// `Some("|")`** for the empty and absent cases alike — a bare delimiter is a substring of
+/// every wrapped value, so it would match every `kw:` rather than none. Both rules are
+/// [`CardRow::keywords`]'.
+///
+/// An entry that is not a string is dropped rather than stringified, which is [`s`]'s rule
+/// and `joined_letters`'; an array of nothing but such entries is therefore `None` too,
+/// because a wrapped empty list is the value this function exists to refuse.
+fn delimited_keywords(v: &Value) -> Option<String> {
+    let words: Vec<String> = v
+        .get("keywords")?
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_str)
+        .filter(|w| !w.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect();
+    (!words.is_empty()).then(|| format!("|{}|", words.join("|")))
 }
 
 /// Store an object/array field verbatim as compact JSON. Used for the fields whose
@@ -334,6 +391,11 @@ impl CardRow {
             // Scryfall omits on every card that makes no mana, and passing that through
             // would spell "makes nothing" and "row predates the column" the same way.
             produced_mana: Some(joined_letters(v, "produced_mana").unwrap_or_default()),
+            // **`None` where `produced_mana` above is `Some("")`**, and the asymmetry is the
+            // point rather than an oversight — see the field's doc. A wrapped empty value is
+            // `"|"`, which is a substring of every other value this column ever holds, so
+            // storing it would make one keywordless card match every `kw:` in the app.
+            keywords: delimited_keywords(v),
         })
     }
 }
@@ -731,6 +793,70 @@ mod tests {
         // 2.64:1 measured across 5 828 real bulk lines (gzip's header alone is 18 bytes),
         // so all that is checked here is that compression happened at all.
         assert!(row.raw.len() < line.len(), "compressed, not merely wrapped");
+    }
+
+    /// Corpus schema 5's storage form, stated as the exact string because two other files
+    /// depend on it byte for byte: `filters.rs` binds `|flying|` and `schema.rs`'s
+    /// `the_keyword_predicate_reads_both_arms_against_real_rows` runs the pair against rows.
+    ///
+    /// Serra Angel's array is `["Flying","Vigilance"]` — verified live against
+    /// `api.scryfall.com` on 2026-09-22 — so the capitalisation being folded here is
+    /// Scryfall's own and not a hypothetical.
+    #[test]
+    fn keywords_are_lowercased_delimited_and_wrapped() {
+        let two = parse(
+            r#"{"object":"card","id":"serra","name":"Serra Angel","lang":"en","layout":"normal","set":"lea","collector_number":"1","keywords":["Flying","Vigilance"]}"#,
+        );
+        assert_eq!(two.keywords.as_deref(), Some("|flying|vigilance|"));
+
+        let one = parse(
+            r#"{"object":"card","id":"shivan","name":"Shivan Dragon","lang":"en","layout":"normal","set":"lea","collector_number":"2","keywords":["Flying"]}"#,
+        );
+        assert_eq!(
+            one.keywords.as_deref(),
+            Some("|flying|"),
+            "a single keyword is wrapped on both sides too — the fence is not about the join"
+        );
+
+        // A keyword with a space in it is why the delimiter is a pipe rather than nothing.
+        let spaced = parse(
+            r#"{"object":"card","id":"white","name":"White Knight","lang":"en","layout":"normal","set":"lea","collector_number":"3","keywords":["First strike","Protection from"]}"#,
+        );
+        assert_eq!(
+            spaced.keywords.as_deref(),
+            Some("|first strike|protection from|")
+        );
+    }
+
+    /// ⚠️ **The one that matters: no keywords is `None`, never `Some("|")`.**
+    ///
+    /// A bare delimiter is a substring of every wrapped value, so a single row holding one
+    /// would match `kw:flying`, `kw:vigilance` and every other `kw:` in the app. This is the
+    /// exact opposite of [`CardRow::produced_mana`]'s fence one field up, which writes
+    /// `Some("")` so that NULL keeps one meaning — and the two are right for the same reason
+    /// read from opposite ends: what a column stores is decided by what its reader does with
+    /// it.
+    ///
+    /// Three inputs, because Scryfall really does send all three: the key absent (older
+    /// bulk rows), an empty array (the common modern case for a vanilla card), and an array
+    /// whose entries are not strings, which nothing has sent but which `filter_map` would
+    /// otherwise reduce to the same empty list.
+    #[test]
+    fn a_card_with_no_keywords_is_none_rather_than_a_bare_delimiter() {
+        let absent = parse(
+            r#"{"object":"card","id":"bolt","name":"Lightning Bolt","lang":"en","layout":"normal","set":"lea","collector_number":"161"}"#,
+        );
+        assert_eq!(absent.keywords, None, "no key at all");
+
+        let empty = parse(
+            r#"{"object":"card","id":"bear","name":"Grizzly Bears","lang":"en","layout":"normal","set":"lea","collector_number":"162","keywords":[]}"#,
+        );
+        assert_eq!(empty.keywords, None, "an empty array is not `Some(\"|\")`");
+
+        let junk = parse(
+            r#"{"object":"card","id":"junk","name":"Nothing","lang":"en","layout":"normal","set":"lea","collector_number":"163","keywords":[null,7]}"#,
+        );
+        assert_eq!(junk.keywords, None, "nothing storable is still nothing");
     }
 
     /// A database that has migrated to v3 but has not synced yet holds plain-text `raw` in
