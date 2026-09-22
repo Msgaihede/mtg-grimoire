@@ -85,6 +85,20 @@ pub fn type_mask_sql(col: &str) -> String {
 /// Both faces of a double-faced card count — `cards.type_line` holds `Sorcery // Land`, and an
 /// MDFC land is a land to anyone filtering for lands. Within each face only the **type** half
 /// is read: everything after the `—` is subtypes.
+///
+/// **The comparison folds ASCII case, and one real card is why.** `capital offense` (Unstable,
+/// UST 52) is printed in lower case as the joke, so `cards.type_line` is literally `"instant"` —
+/// and it is the *only* row of 117 738 in the live corpus whose type line carries a type word in
+/// any case but Scryfall's own. A case-sensitive `==` gave it a mask of 0 where
+/// [`type_mask_sql`]'s `LIKE` gave it the Instant bit, because SQLite's `LIKE` folds ASCII case
+/// and Rust's `==` does not. That is two answers about one card that would have parted at a
+/// **sync**: the backfill writes 16, the next ingest writes 0, and the card leaves the Instant
+/// chip on a morning nothing else changed. `eq_ignore_ascii_case` is the side that agrees with
+/// the SQL *and* with the reader, an instant in lower case still being an instant.
+///
+/// **Found by replaying the rung against a copy of the real corpus**, not by the fixtures: every
+/// hand-written type line in this file is title case, so the divergence was documented as
+/// unreachable and shipped one card wide.
 pub fn type_mask(type_line: &str) -> u32 {
     let mut mask = 0u32;
     for face in type_line.split("//") {
@@ -92,7 +106,10 @@ pub fn type_mask(type_line: &str) -> u32 {
         // the type half.
         let types = face.split(['—', '-']).next().unwrap_or("");
         for word in types.split_whitespace() {
-            if let Some(k) = TYPE_KEYS.iter().position(|name| *name == word) {
+            if let Some(k) = TYPE_KEYS
+                .iter()
+                .position(|name| name.eq_ignore_ascii_case(word))
+            {
                 mask |= 1 << k;
             }
         }
@@ -190,6 +207,25 @@ mod tests {
         );
     }
 
+    /// `capital offense` (Unstable, UST 52) prints its whole card in lower case as the joke, so
+    /// `cards.type_line` is literally `"instant"` — the one row of 117 738 in the live corpus
+    /// whose type line is not in Scryfall's own case.
+    ///
+    /// **It is a sync-time divergence rather than a wrong answer**, which is what makes it worth
+    /// a test of its own: SQLite's `LIKE` folds ASCII case, so the corpus schema 5 backfill gave
+    /// this card the Instant bit while a case-sensitive ingest gave it none — the card would have
+    /// answered the Instant chip until the next sync and then quietly stopped.
+    #[test]
+    fn a_lower_case_type_line_is_still_that_type() {
+        assert_eq!(type_mask("instant"), bit("Instant"));
+        assert_eq!(type_mask("INSTANT"), bit("Instant"));
+        assert_eq!(
+            type_mask("legendary creature — human"),
+            bit("Creature"),
+            "the subtype half is still dropped, whatever its case"
+        );
+    }
+
     #[test]
     fn supertypes_and_subtypes_contribute_nothing() {
         assert_eq!(
@@ -239,6 +275,11 @@ mod tests {
             "Battle — Siege",
             "Vanguard",
             "",
+            // `capital offense` (UST 52), the one live row whose type line is not title case.
+            // It is in this list rather than only in its own test because this is the
+            // assertion that would have caught the divergence: every other line here is title
+            // case, so the two sides agreed over the whole fixture and disagreed in the corpus.
+            "instant",
         ];
         for line in lines {
             conn.execute("INSERT INTO t (line) VALUES (?1)", [line])
