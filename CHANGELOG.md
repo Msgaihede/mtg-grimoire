@@ -30,6 +30,30 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.29.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.28.0...v0.29.0) (2026-09-22)
+
+
+### Features
+
+* **corpus:** schema 5 gives cards their keywords column ([f09df44](https://github.com/Msgaihede/mtg-grimoire/commit/f09df447fdcd437c3844c11c0e428b5a0f6f15f4))
+* **search:** carry query predicates to all three card searches ([2c7bcf8](https://github.com/Msgaihede/mtg-grimoire/commit/2c7bcf8be5a6bf8c554196c7b5142c0ca2f2ddb3))
+* **search:** read the query language in every card search box ([7af908a](https://github.com/Msgaihede/mtg-grimoire/commit/7af908ad2100d90b63f623b08ef1185b30978d0a))
+* **search:** strict colour matching and a card-type filter ([b5be775](https://github.com/Msgaihede/mtg-grimoire/commit/b5be775816b0c23db93bfbed51a09523fa652bf7))
+* **search:** strict colour matching and a card-type filter ([033d20f](https://github.com/Msgaihede/mtg-grimoire/commit/033d20f89d46c3a4b3c7eb97451252c36e2dfdb8))
+* **search:** typed query predicates in the shared card filter ([c7a8477](https://github.com/Msgaihede/mtg-grimoire/commit/c7a84775b89757762ecabd5d5cb5a6291c836d34))
+* **search:** widen the tagger grammar into a query language ([5b45b23](https://github.com/Msgaihede/mtg-grimoire/commit/5b45b23bcfd4b3f05b7cb12aad08ab058c5fb5a1))
+* **shortcuts:** a Search syntax tab in the F1 panel ([bf7ae27](https://github.com/Msgaihede/mtg-grimoire/commit/bf7ae27898fb6b453f638bd0ca43f24bbc3504ba))
+
+
+### Bug Fixes
+
+* **cardtypes:** fold ASCII case, so `capital offense` keeps its Instant bit ([18264ab](https://github.com/Msgaihede/mtg-grimoire/commit/18264abfd0c7e8bd8511a978614334f2388c8aa7))
+* **cardtypes:** fold ASCII case, so `capital offense` keeps its Instant bit ([a8f1268](https://github.com/Msgaihede/mtg-grimoire/commit/a8f1268c154bba184bb133d882bafa0f8a25aba7))
+* **decks:** one spelling for the editor's tallies, and a bottom margin it never had ([3994d6d](https://github.com/Msgaihede/mtg-grimoire/commit/3994d6d446f2292bb03d878f9b3dffa273336261))
+* **decks:** one spelling for the editor's tallies, and a bottom margin it never had ([aa591c7](https://github.com/Msgaihede/mtg-grimoire/commit/aa591c764a880a9fa6639399644a82e9db3fdff4))
+* **search:** a bare keyword is free text, not a term on its way ([3f1b2a2](https://github.com/Msgaihede/mtg-grimoire/commit/3f1b2a2c155523d621b38487805410f03f8f0ab6))
+* **search:** AND the FTS terms, and stop NULL keywords meaning two things ([448b2d1](https://github.com/Msgaihede/mtg-grimoire/commit/448b2d1324ff66023a5310be5687616e9ba3387a))
+
 ## [0.28.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.27.0...v0.28.0) (2026-09-21)
 
 
