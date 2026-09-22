@@ -168,7 +168,7 @@ Measured on the real corpus:
 | `cards_fts MATCH 'search_text : draw*'` | 15,359 | **6.7 ms** |
 | `cards.oracle_text LIKE '%draw%'` | 14,753 | **1,858 ms** (warm) |
 
-**80× to 250×.** LIKE is not an option for a box that fires on a debounce. So `t:` and `o:` are
+**82× and 277× warm, 2,082× cold.** LIKE is not an option for a box that fires on a debounce. So `t:` and `o:` are
 folded into the FTS MATCH string that `filters::fts_query` already builds, as FTS5 column
 filters, and they are shared by `search_cards` and `collection_list` for free because both call
 `fts_query`.
