@@ -1921,27 +1921,44 @@ fn from_sql() -> String {
 fn scope(q: &CollectionQuery) -> crate::filters::Predicates {
     let mut p = crate::filters::Predicates::default();
 
-    if let Some(text) = crate::filters::nonblank(&q.cards.text) {
-        if let Some(query) = crate::filters::fts_query(text) {
-            // Searching by text is a statement about a card's name or rules, so it can only
-            // match rows that still have a card — this narrows the list to those, on
-            // purpose.
-            //
-            // A subquery over `c.rowid`, **not** the `JOIN cards_fts ON cards_fts.rowid =
-            // c.rowid` the search uses, and the difference is not style. Joined, SQLite
-            // offers `cards_fts.rowid = c.rowid` to FTS5's own `xBestIndex`, which drops a
-            // rowid constraint whose value is NULL rather than failing it — so on this
-            // query's LEFT JOIN *every orphaned row* would survive any text at all that
-            // matched something, and a search for "counterspell" would list a Lightning
-            // Bolt whose printing had vanished. `NULL IN (…)` is NULL, which is the answer
-            // this needs. (`a_text_filter_matches_through_the_search_index_and_never_lists
-            // _an_orphan` is the evidence; the search's own join is safe because it has no
-            // LEFT JOIN and so no NULL rowid to offer.)
-            p.push(
-                "c.rowid IN (SELECT rowid FROM cards_fts WHERE cards_fts MATCH ?)".to_owned(),
-                Box::new(query),
-            );
-        }
+    // The free text **and** every `t:`/`o:` term the box was parsed into, in the one MATCH
+    // string [`crate::filters::fts_match`] builds — so a typed `t:goblin` narrows a binder
+    // exactly as it narrows the search wall, through the same index and with no second
+    // spelling of the rule.
+    let (matched, negatives) = crate::filters::fts_match(
+        crate::filters::nonblank(&q.cards.text),
+        q.cards.predicates.as_deref().unwrap_or(&[]),
+    );
+    if let Some(query) = matched {
+        // Searching by text is a statement about a card's name or rules, so it can only
+        // match rows that still have a card — this narrows the list to those, on
+        // purpose.
+        //
+        // A subquery over `c.rowid`, **not** the `JOIN cards_fts ON cards_fts.rowid =
+        // c.rowid` the search uses, and the difference is not style. Joined, SQLite
+        // offers `cards_fts.rowid = c.rowid` to FTS5's own `xBestIndex`, which drops a
+        // rowid constraint whose value is NULL rather than failing it — so on this
+        // query's LEFT JOIN *every orphaned row* would survive any text at all that
+        // matched something, and a search for "counterspell" would list a Lightning
+        // Bolt whose printing had vanished. `NULL IN (…)` is NULL, which is the answer
+        // this needs. (`a_text_filter_matches_through_the_search_index_and_never_lists
+        // _an_orphan` is the evidence; the search's own join is safe because it has no
+        // LEFT JOIN and so no NULL rowid to offer.)
+        p.push(
+            "c.rowid IN (SELECT rowid FROM cards_fts WHERE cards_fts MATCH ?)".to_owned(),
+            Box::new(query),
+        );
+    }
+    // A negated text term is its own subquery, because FTS5's `NOT` is binary — see
+    // [`crate::filters::fts_match`]. **An orphan fails this too**: its `c.rowid` is NULL
+    // over the LEFT JOIN and `NULL NOT IN (…)` is NULL, which is the same rule
+    // `push_card_filters` states for every other card-row claim, arrived at by the same
+    // three-valued logic rather than by a branch.
+    for negative in negatives {
+        p.push(
+            "c.rowid NOT IN (SELECT rowid FROM cards_fts WHERE cards_fts MATCH ?)".to_owned(),
+            Box::new(negative),
+        );
     }
     // `paper_only` is forced off: the user owns what the user owns, and `c.is_paper = 1`
     // over a LEFT JOIN would also throw away every orphan (`NULL = 1` is not true).
@@ -4939,6 +4956,156 @@ mod tests {
             unfiltered.total, 2,
             "and the list without one still has both"
         );
+    }
+
+    /// **The design's central bet, and this is the only thing that checks it.**
+    ///
+    /// All three card searches call one `push_card_filters` with the same `"c"` alias, so a
+    /// predicate emitted there reaches `search_cards`, `collection_list` **and**
+    /// `wishlist_list` in one edit and needs no new plumbing in two of them. Asserted
+    /// end to end rather than by reading the call graph, because "the wishlist joins `cards`
+    /// too" is the load-bearing half and it is not obvious from that file.
+    ///
+    /// **Both halves of the split are exercised**, because they travel in the same list and
+    /// leave by different doors: `t:goblin` rides the FTS `MATCH` string
+    /// (`filters::fts_match`) and `cmc>=3` is SQL out of `push_card_filters`. A regression in
+    /// either is a filter that silently does nothing.
+    ///
+    /// **And an orphan fails both**, which is `push_card_filters`' documented rule inherited
+    /// rather than a new one: `ghost-goblin` keeps its collection row and its wish after its
+    /// printing leaves `cards`, both still *listed* — an orphan is flagged, never hidden — and
+    /// neither answers a claim only a card row can make.
+    #[test]
+    fn one_predicate_list_narrows_all_three_card_searches_and_excludes_an_orphan() {
+        let conn = seeded();
+        conn.execute_batch(
+            "UPDATE cards SET type_line = 'Instant', search_text = 'Lightning Bolt Instant',
+                              cmc = 1.0 WHERE oracle_id = 'o1';
+             UPDATE cards SET type_line = 'Creature — Goblin',
+                              search_text = 'Test Card Creature Goblin', cmc = 3.0
+                        WHERE id = 'card-1';
+             INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
+                 rarity,type_line,search_text,cmc,raw)
+             VALUES ('ghost-goblin','o3','Ghost Goblin','tst','2','en','normal','common',
+                 'Creature — Goblin','Ghost Goblin Creature Goblin',3.0,'{}');
+             INSERT INTO cards_fts(cards_fts) VALUES('rebuild');",
+        )
+        .unwrap();
+
+        add_entry(&conn, &input("bolt-lea", "nonfoil", 1)).unwrap();
+        add_entry(&conn, &input("card-1", "nonfoil", 1)).unwrap();
+        add_entry(&conn, &input("ghost-goblin", "nonfoil", 1)).unwrap();
+        for card_id in ["bolt-lea", "card-1", "ghost-goblin"] {
+            crate::wishlist::add_wish(
+                &conn,
+                &crate::wishlist::WishInput {
+                    card_id: Some(card_id.to_owned()),
+                    quantity: 1,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        }
+
+        // The orphan: the entry and the wish stay, the printing goes. Both rows keep their
+        // denormalised columns and are still listed by an unfiltered query below.
+        conn.execute("DELETE FROM cards WHERE id = 'ghost-goblin'", [])
+            .unwrap();
+        conn.execute_batch("INSERT INTO cards_fts(cards_fts) VALUES('rebuild');")
+            .unwrap();
+
+        let goblin = || {
+            vec![crate::filters::QueryPredicate {
+                field: crate::filters::PredicateField::TypeLine,
+                op: crate::filters::PredicateOp::Colon,
+                value: "goblin".into(),
+                negated: false,
+            }]
+        };
+        let heavy = || {
+            vec![crate::filters::QueryPredicate {
+                field: crate::filters::PredicateField::Cmc,
+                op: crate::filters::PredicateOp::Gte,
+                value: "3".into(),
+                negated: false,
+            }]
+        };
+
+        let searched = |preds: Option<Vec<crate::filters::QueryPredicate>>| {
+            crate::search::run_search(
+                &conn,
+                &crate::search::SearchRequest {
+                    predicates: preds,
+                    limit: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .total
+        };
+        let filed = |preds: Option<Vec<crate::filters::QueryPredicate>>| {
+            list_entries(
+                &conn,
+                &CollectionQuery {
+                    cards: crate::filters::CardFilters {
+                        predicates: preds,
+                        ..Default::default()
+                    },
+                    limit: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .total
+        };
+        let wished = |preds: Option<Vec<crate::filters::QueryPredicate>>| {
+            crate::wishlist::list_wishes(
+                &conn,
+                &crate::wishlist::WishlistQuery {
+                    cards: crate::filters::CardFilters {
+                        predicates: preds,
+                        ..Default::default()
+                    },
+                    limit: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .total
+        };
+
+        // Unfiltered: the orphan is listed everywhere it has a row of its own, and is gone
+        // from the search because the search *is* `cards`.
+        assert_eq!(searched(None), 3, "bolt-lea, bolt-jp, card-1");
+        assert_eq!(filed(None), 3);
+        assert_eq!(wished(None), 3);
+
+        // `t:goblin` — the FTS half, in all three.
+        assert_eq!(searched(Some(goblin())), 1);
+        assert_eq!(filed(Some(goblin())), 1, "the orphan answers no type line");
+        assert_eq!(wished(Some(goblin())), 1, "nor does the orphaned wish");
+
+        // `cmc>=3` — the SQL half, out of the one `push_card_filters` all three call.
+        assert_eq!(searched(Some(heavy())), 1);
+        assert_eq!(filed(Some(heavy())), 1, "the orphan has no mana value");
+        assert_eq!(wished(Some(heavy())), 1);
+
+        // And the wishlist's free text is still its own `LIKE` over the denormalised name,
+        // which is what keeps an orphaned wish findable at all — the reason `fts_match` is
+        // called there with `None` and never with `q.cards.text`.
+        let by_name = crate::wishlist::list_wishes(
+            &conn,
+            &crate::wishlist::WishlistQuery {
+                cards: crate::filters::CardFilters {
+                    text: Some("Ghost".into()),
+                    ..Default::default()
+                },
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(by_name.total, 1, "the orphaned wish still answers its name");
     }
 
     /// Every sort key is a *string interpolated into the statement*, so one that names a

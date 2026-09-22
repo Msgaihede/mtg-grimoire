@@ -421,6 +421,15 @@ export interface SearchRequest {
    * `activeFilterCount` and `resetAll`.
    */
   collapse?: boolean;
+  /**
+   * The Scryfall-syntax terms the box was parsed into — see {@link QueryPredicate}.
+   *
+   * **`typeLine` and `oracleText` ride {@link text}'s `MATCH` string rather than becoming SQL**,
+   * so they narrow the facet counts for free and a purely negative one (`-t:goblin`) becomes a
+   * `NOT IN` subquery of its own, FTS5's `NOT` being binary. Nothing here has to know that; it
+   * is why the list is read by `filters::fts_match` as well as by `push_card_filters`.
+   */
+  predicates?: QueryPredicate[];
   /** Clamped to 200 by the backend; 0 means "use the default page size". */
   limit: number;
   offset: number;
@@ -1016,6 +1025,75 @@ export interface CardFilters {
   /** `"strong"` drops the `weak` art matches; absent or `"any"` keeps them. Art includes only —
    *  see {@link ArtWeightFloor}. */
   artWeightFloor?: ArtWeightFloor;
+  /**
+   * The Scryfall-syntax terms the search box was parsed into — see {@link QueryPredicate}.
+   *
+   * **Declared here as well as on {@link SearchRequest}, because `filters::push_card_filters`
+   * emits them for all three lists** — {@link oracleId} and {@link artTags} above are here for
+   * exactly that reason, and this is the same fact one field along. So `t:goblin cmc>=3`
+   * narrows a binder and a wishlist as well as the search wall, and Rust needed one edit for
+   * the three.
+   */
+  predicates?: QueryPredicate[];
+}
+
+/**
+ * What one {@link QueryPredicate} is a statement about — `filters::PredicateField`, whose
+ * variants carry `#[serde(rename_all = "camelCase")]`, so these strings are the wire.
+ *
+ * **`typeLine` and `oracleText` emit no SQL at all.** They travel in the same list as the other
+ * ten and are folded into the FTS5 `MATCH` string instead, because `LIKE` over either column
+ * measured 80× to 250× slower on the real corpus. Nothing on this side has to know that — it is
+ * recorded because the two are the fields whose behaviour differs from their neighbours', and
+ * the difference is invisible in the payload.
+ */
+export type PredicateField =
+  | "typeLine"
+  | "oracleText"
+  | "keyword"
+  | "artist"
+  | "colors"
+  | "colorIdentity"
+  | "cmc"
+  | "power"
+  | "toughness"
+  | "rarity"
+  | "setCode"
+  | "format";
+
+/**
+ * A {@link QueryPredicate}'s comparison — `filters::PredicateOp`, camelCase on the wire.
+ *
+ * **`"colon"` is Scryfall's `:` and means a different thing on each field**: `c:rg` is `c>=rg`
+ * and answers 676 cards, while `id:rg` is `id<=rg` and answers 13,399 (both measured on
+ * Scryfall, 2026-09-22). `queryLanguage.ts` resolves it per keyword before sending, so a
+ * `"colon"` on the wire is one of the four fields whose default really is `:` — and Rust
+ * resolves it the same way for anything else, rather than refusing.
+ */
+export type PredicateOp = "colon" | "eq" | "ne" | "gt" | "gte" | "lt" | "lte";
+
+/**
+ * One parsed term of a search box — `t:goblin`, `cmc>=3`, `-a:rebecca`. Rust:
+ * `filters::QueryPredicate`.
+ *
+ * **Parsing happens here and never in Rust.** `src/features/search/queryLanguage.ts` reads the
+ * box into free text, tag tokens and a list of these; the crate receives closed enums and emits
+ * SQL. Rust supplies facts, TypeScript draws conclusions, and a query grammar is a conclusion.
+ *
+ * **One list rather than ten fields on {@link CardFilters}**, because a list carries three
+ * things no field can spell: negation, repetition (`t:creature t:goblin` is two terms and both
+ * must hold) and an operator per term. Terms AND with each other and with every other filter;
+ * there is no `or` and no grouping.
+ */
+export interface QueryPredicate {
+  field: PredicateField;
+  op: PredicateOp;
+  /** Exactly what the reader typed, **unnormalised except for rarity**: `c:RG` and `s:NEO`
+   *  arrive with their case, and Rust folds it. Rarity is the one keyword the parser expands
+   *  and lower-cases first, so `r:c` is sent as `"common"`. */
+  value: string;
+  /** A leading `-` in the box. Rust reads an absent field as `false`. */
+  negated: boolean;
 }
 
 /**

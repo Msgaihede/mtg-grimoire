@@ -2506,6 +2506,58 @@ mod tests {
         );
     }
 
+    /// **The wire spelling, asserted from Rust rather than assumed from the attribute.**
+    ///
+    /// `#[serde(rename_all = "camelCase")]` on an *enum* renames its variants, and what it
+    /// does to a one-word variant (`Cmc` -> `cmc`) against a two-word one (`TypeLine` ->
+    /// `typeLine`) is the half a reader would have to know serde's rule to predict. These are
+    /// the strings `src/lib/ipc.ts` declares and `queryLanguage.ts` produces, so this is the
+    /// Rust end of a cross-boundary contract whose other end is `ipc.test.ts`'s drift fence —
+    /// and neither end can check the other, which is why both are written out.
+    ///
+    /// `negated` is `#[serde(default)]`, so a payload that omits it is a positive term rather
+    /// than a rejected request.
+    #[test]
+    fn the_wire_names_every_field_and_operator_in_camel_case() {
+        let parsed: Vec<QueryPredicate> = serde_json::from_str(
+            r#"[
+                {"field":"typeLine","op":"colon","value":"goblin","negated":true},
+                {"field":"oracleText","op":"eq","value":"draw a card"},
+                {"field":"colorIdentity","op":"lte","value":"rg"},
+                {"field":"setCode","op":"eq","value":"neo"},
+                {"field":"cmc","op":"gte","value":"3"},
+                {"field":"keyword","op":"ne","value":"flying"},
+                {"field":"power","op":"gt","value":"4"},
+                {"field":"toughness","op":"lt","value":"2"},
+                {"field":"artist","op":"colon","value":"rebecca"},
+                {"field":"colors","op":"gte","value":"rg"},
+                {"field":"rarity","op":"eq","value":"rare"},
+                {"field":"format","op":"eq","value":"modern"}
+            ]"#,
+        )
+        .expect("every name here is what the TypeScript mirror sends");
+
+        assert_eq!(parsed.len(), EVERY_FIELD.len(), "one payload per field");
+        assert!(parsed[0].negated);
+        assert!(
+            !parsed[1].negated,
+            "an omitted `negated` is a positive term"
+        );
+        let ops: Vec<PredicateOp> = parsed.iter().map(|p| p.op).collect();
+        assert!(ops.contains(&PredicateOp::Ne) && ops.contains(&PredicateOp::Gte));
+
+        // And a name this build has never heard of is a **refused request**, not a silently
+        // dropped filter — which is what a closed enum buys over a stringly-typed value.
+        assert!(serde_json::from_str::<QueryPredicate>(
+            r#"{"field":"flavourText","op":"colon","value":"x"}"#
+        )
+        .is_err());
+        assert!(serde_json::from_str::<QueryPredicate>(
+            r#"{"field":"cmc","op":"approximately","value":"3"}"#
+        )
+        .is_err());
+    }
+
     // ---------------------------------------------------------------------------------
     // The FTS half
     // ---------------------------------------------------------------------------------

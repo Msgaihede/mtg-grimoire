@@ -1245,6 +1245,27 @@ pub(crate) fn wishlist_scope(
             Box::new(escape_like(text)),
         );
     }
+    // The typed `t:`/`o:` terms, and **only** those — [`crate::filters::fts_match`] is called
+    // with `None` text, never with `q.cards.text`, because the free text above is deliberately
+    // a `LIKE` over this table's own denormalised name: a wish may have no card row at all, and
+    // routing its name through `cards_fts` would hide exactly the orphan that column exists
+    // for. A `t:goblin` beside it is a claim only a card row can answer, so it narrows to rows
+    // that still have one — `push_card_filters`' documented orphan rule, and `NULL IN (…)` is
+    // NULL over this LEFT JOIN without a branch.
+    let (matched, negatives) =
+        crate::filters::fts_match(None, q.cards.predicates.as_deref().unwrap_or(&[]));
+    if let Some(query) = matched {
+        p.push(
+            "c.rowid IN (SELECT rowid FROM cards_fts WHERE cards_fts MATCH ?)".to_owned(),
+            Box::new(query),
+        );
+    }
+    for negative in negatives {
+        p.push(
+            "c.rowid NOT IN (SELECT rowid FROM cards_fts WHERE cards_fts MATCH ?)".to_owned(),
+            Box::new(negative),
+        );
+    }
     // **No filter here reads the collection**, and the absence is the rule rather than a gap. A
     // `fulfilled` term stood next to this one until 2026-09-08, comparing a correlated
     // `OWNED_SQL` against `w.quantity` so the page could show "what is still missing"; the
