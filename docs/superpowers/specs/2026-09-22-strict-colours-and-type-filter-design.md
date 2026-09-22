@@ -61,11 +61,17 @@ inside `idx_cards_collapse`'s trailing `color_identity`.
 ### 2.3 The facet mirror, which is the part that breaks silently
 
 `index/facets.rs` holds a second implementation of this predicate and the two are one contract
-(module doc, `facets.rs:14`). **Two functions need strict, not one:**
+(module doc, `facets.rs:14`). `apply_colors` (`facets.rs:225-240`) gains a `strict: bool` and
+mirrors §2.2.
 
-- `apply_colors` (`facets.rs:225-240`) — the complement-of-unpicked filter, mirroring §2.2.
-- `toggle_colors` (`facets.rs:490-505`) — which mirrors the *frontend's* `toggleColor` to answer
-  "how big is the result set after pressing this chip".
+**It has two call sites and the second is the one that gets missed** — `base` (`facets.rs:192`),
+which filters the result set, and `compute` (`facets.rs:469`), which answers "how big is the
+result set after pressing this chip". Pass the flag at `base` only and the search runs strict
+while every chip's count is still computed loose.
+
+`toggle_colors` (`facets.rs:490-505`) needs **no** change: it mirrors the frontend's
+`toggleColor`, which produces the picked-colour *string*, and strict is a sibling boolean that no
+colour press alters.
 
 `FacetResponse.colors` is documented as the size of the result set **after toggling that chip**,
 and `colorDisabled` (`facets.ts:70`) greys a chip when that number is `0` **or equals `total`**.
