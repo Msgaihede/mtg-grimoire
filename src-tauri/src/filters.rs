@@ -80,6 +80,16 @@ pub struct CardFilters {
     pub text: Option<String>,
     pub format: Option<String>,
     pub colors: Option<String>,
+    /// Read [`Self::colors`] as an **exact** identity rather than a subset: `"RW"` answers the
+    /// RW cards alone, not mono-R, mono-W or the colourless cards that fit in any deck.
+    ///
+    /// **Degenerate for `"C"`, and deliberately not special-cased.** A `colors` of exactly
+    /// `"C"` already means `color_identity = ''`, which is the strict reading of it — and the
+    /// UI's `toggleColor` makes `C` exclusive both ways, so `"WC"` is unreachable.
+    ///
+    /// A `true` here with no [`Self::colors`] adds no SQL: the arm is inside the [`nonblank`]
+    /// guard, matching a UI that does not draw the chip until a colour is picked.
+    pub colors_strict: Option<bool>,
     pub set_code: Option<String>,
     /// Narrow to every printing of one oracle card — the card, not the cardboard.
     ///
@@ -112,6 +122,13 @@ pub struct CardFilters {
     /// spell. They AND with each other if a caller sends both, exactly as any two filters on
     /// this struct do; nothing in the app sends both today.
     pub rarities: Option<Vec<String>>,
+    /// The card-type chips — [`crate::cardtypes::TYPE_KEYS`] entries. OR within, AND without,
+    /// exactly like [`Self::rarities`].
+    ///
+    /// **"Does this card have this type", not "which bucket is it in".** Dryad Arbor
+    /// (`Land Creature — Forest Dryad`) answers both `Land` and `Creature` — which is what a
+    /// filter means and what `autoCategory.ts`'s one-bucket rule deliberately does not.
+    pub types: Option<Vec<String>>,
     /// Omitted means true in the search and false in the collection: a search offers cards
     /// to own, a collection lists cards that are owned.
     pub paper_only: Option<bool>,
@@ -270,12 +287,19 @@ pub fn push_card_filters(p: &mut Predicates, f: &CardFilters, alias: &str, rows:
         }
     }
 
-    // Subset semantics, as in a deckbuilder: show what this identity can *cast*, so "RW"
-    // returns mono-R, mono-W, RW — and colourless, which fits in any deck. Expressed as
+    // Subset semantics by default, as in a deckbuilder: show what this identity can *cast*, so
+    // "RW" returns mono-R, mono-W, RW — and colourless, which fits in any deck. Expressed as
     // exclusions so the number of clauses stays fixed and each one is a plain `instr`.
+    //
+    // **`colors_strict` adds the other half rather than replacing it**: an inclusion per picked
+    // letter alongside the exclusion per unpicked one, so "RW" answers the RW cards alone. Five
+    // `instr` clauses either way, which is what keeps the arm inside `idx_cards_collapse`'s
+    // trailing `color_identity`.
     if let Some(colors) = nonblank(&f.colors) {
         let colors = colors.to_ascii_uppercase();
+        let strict = f.colors_strict.unwrap_or(false);
         if colors == "C" {
+            // Already exact, with or without `strict` — see `CardFilters::colors_strict`.
             p.wheres.push(format!(
                 "({alias}.color_identity = '' OR {alias}.color_identity IS NULL)"
             ));
@@ -284,6 +308,10 @@ pub fn push_card_filters(p: &mut Predicates, f: &CardFilters, alias: &str, rows:
                 if !colors.contains(ch) {
                     p.wheres.push(format!(
                         "instr(coalesce({alias}.color_identity,''), '{ch}') = 0"
+                    ));
+                } else if strict {
+                    p.wheres.push(format!(
+                        "instr(coalesce({alias}.color_identity,''), '{ch}') > 0"
                     ));
                 }
             }
@@ -405,6 +433,26 @@ pub fn push_card_filters(p: &mut Predicates, f: &CardFilters, alias: &str, rows:
             }
         }
     }
+
+    // One clause and one parameter, inside the covering index — the `format` arm's shape, and
+    // the whole reason `type_mask` is a column rather than a `LIKE` on `type_line`.
+    //
+    // A list that names nothing this build knows masks to 0 and adds no SQL, which is
+    // [`picked_rarities`]' rule: a cleared picker sends `[]`, and some send `[""]`.
+    //
+    // `{alias}.type_mask` with no `rows` fallback, like the format, colour, rarity and
+    // mana-value arms: a type line is a claim only a card row can make, so an orphaned
+    // collection entry fails it — `NULL & ? != 0` is NULL.
+    if let Some(types) = f.types.as_deref() {
+        let mask = crate::cardtypes::mask_of(&picked_types(types));
+        if mask != 0 {
+            p.push(
+                format!("({alias}.type_mask & ?) != 0"),
+                Box::new(i64::from(mask)),
+            );
+        }
+    }
+
     if f.paper_only.unwrap_or(true) {
         p.wheres.push(format!("{alias}.is_paper = 1"));
     }
@@ -591,6 +639,23 @@ pub fn picked_rarities(rarities: &[String]) -> Vec<String> {
     picked.sort();
     picked.dedup();
     picked
+}
+
+/// The type chips this build recognises, blanks dropped.
+///
+/// **A shared function for [`picked_rarities`]' reason**: [`crate::index::facets`] counts over the
+/// same list, and a facet counted over a type the search drops would report an option as live
+/// that the search cannot reach.
+///
+/// Matched **exactly**, no case folding: [`crate::cardtypes::TYPE_KEYS`] holds the capitalised
+/// words, the UI sends those same words from one constant, and a loose match here would be a
+/// second spelling rule the mask does not have.
+pub fn picked_types(types: &[String]) -> Vec<String> {
+    types
+        .iter()
+        .filter(|t| crate::cardtypes::TYPE_KEYS.contains(&t.as_str()))
+        .cloned()
+        .collect()
 }
 
 pub fn picked_sets(sets: &[String]) -> Vec<String> {
@@ -1305,5 +1370,285 @@ mod tests {
         assert!(sql.contains("x.illustration_id"), "{sql}");
         assert!(sql.contains("x.oracle_id"), "{sql}");
         assert_eq!(shape("x", Some("e")), (sql, params));
+    }
+
+    // ---------------------------------------------------------------------------------
+    // Strict colours and the type filter
+    // ---------------------------------------------------------------------------------
+
+    /// Seed `cards` from `(id, color_identity, type_line)` triples — enough columns for the
+    /// two arms below and no more.
+    ///
+    /// **`type_mask` is computed by [`crate::cardtypes::type_mask`] from the row's own type
+    /// line, never written here as an integer.** A hand-written mask would make every type
+    /// assertion a statement about this fixture rather than about the function the ingest
+    /// really calls, and the day the two disagreed this file would still be green.
+    ///
+    /// `color_identity` is **concatenated letters** (`"WR"`), not a JSON array — the form
+    /// `crate::card_row`'s `joined_letters` writes and the form the `instr` arm reads.
+    fn seed_cards(conn: &rusqlite::Connection, rows: &[(&str, &str, &str)]) {
+        for (id, color_identity, type_line) in rows {
+            conn.execute(
+                "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,is_paper,
+                                    oracle_id,search_text,raw,color_identity,type_line,type_mask)
+                 VALUES (?1,?1,'tst','1','en','normal',1,?1,?1,'{}',?2,?3,?4)",
+                rusqlite::params![
+                    id,
+                    color_identity,
+                    type_line,
+                    i64::from(crate::cardtypes::type_mask(type_line)),
+                ],
+            )
+            .unwrap();
+        }
+    }
+
+    /// The five identities the strict/loose difference is visible across: each of the two
+    /// picked letters alone, both together, a superset, and the colourless card that fits in
+    /// any deck and is the one loose answers most readers do not expect.
+    fn corpus_with_colors() -> rusqlite::Connection {
+        let conn = crate::schema::memory_pair();
+        seed_cards(
+            &conn,
+            &[
+                ("card-colorless", "", "Artifact"),
+                ("card-mono-r", "R", "Instant"),
+                ("card-mono-w", "W", "Sorcery"),
+                ("card-rw", "WR", "Creature — Human Soldier"),
+                ("card-wubrg", "WUBRG", "Creature — Elemental"),
+            ],
+        );
+        conn
+    }
+
+    /// Strict is exact-set equality on `color_identity`, which is the issue's whole ask:
+    /// "cards with fewer than X colors should not match. Cards must include all X colors."
+    ///
+    /// The axis stays `color_identity` either way — one chip row reading two different columns
+    /// depending on a toggle is a control that lies.
+    #[test]
+    fn strict_colors_answer_the_exact_set_and_nothing_else() {
+        let conn = corpus_with_colors();
+
+        assert_eq!(
+            search_ids(
+                &conn,
+                CardFilters {
+                    colors: Some("RW".into()),
+                    ..Default::default()
+                }
+            ),
+            owned(&["card-colorless", "card-mono-r", "card-mono-w", "card-rw"]),
+            "loose is the subset reading, colourless included"
+        );
+        assert_eq!(
+            search_ids(
+                &conn,
+                CardFilters {
+                    colors: Some("RW".into()),
+                    colors_strict: Some(true),
+                    ..Default::default()
+                }
+            ),
+            owned(&["card-rw"]),
+            "strict answers the exact identity and nothing else"
+        );
+        assert_eq!(
+            search_ids(
+                &conn,
+                CardFilters {
+                    colors: Some("W".into()),
+                    colors_strict: Some(true),
+                    ..Default::default()
+                }
+            ),
+            owned(&["card-mono-w"]),
+            "one letter strict drops the colourless card too"
+        );
+
+        // Five `instr` clauses and no parameter, strict or loose — the shape that keeps the
+        // arm inside `idx_cards_collapse`'s trailing `color_identity`.
+        let mut p = Predicates::default();
+        push_card_filters(
+            &mut p,
+            &CardFilters {
+                colors: Some("RW".into()),
+                colors_strict: Some(true),
+                ..Default::default()
+            },
+            "c",
+            None,
+        );
+        let color: Vec<&String> = p
+            .wheres
+            .iter()
+            .filter(|w| w.contains("color_identity"))
+            .collect();
+        assert_eq!(color.len(), 5, "{color:?}");
+        assert!(color.iter().all(|w| w.starts_with("instr(")), "{color:?}");
+        assert!(p.params.is_empty(), "the colour arm binds nothing");
+    }
+
+    /// `C` is degenerate on purpose and needs no special case: `toggleColor` makes it exclusive
+    /// both ways, and the existing arm already means `color_identity = ''`, which *is* the
+    /// strict reading of it.
+    #[test]
+    fn strict_changes_nothing_for_colourless() {
+        let conn = corpus_with_colors();
+        let loose = search_ids(
+            &conn,
+            CardFilters {
+                colors: Some("C".into()),
+                ..Default::default()
+            },
+        );
+        let strict = search_ids(
+            &conn,
+            CardFilters {
+                colors: Some("C".into()),
+                colors_strict: Some(true),
+                ..Default::default()
+            },
+        );
+        assert_eq!(loose, owned(&["card-colorless"]));
+        assert_eq!(strict, loose);
+    }
+
+    /// Strict with no colour picked adds no SQL, matching the UI, where the chip is not drawn
+    /// until a colour is picked. The arm lives inside the [`nonblank`] guard, so a cleared
+    /// control's `""` is the same thing as an absent one.
+    #[test]
+    fn strict_with_no_colour_picked_is_not_a_filter() {
+        let conn = corpus_with_colors();
+        let all = search_ids(&conn, no_filters());
+        assert_eq!(all.len(), 5);
+
+        for f in [
+            CardFilters {
+                colors_strict: Some(true),
+                ..Default::default()
+            },
+            CardFilters {
+                colors: Some("  ".into()),
+                colors_strict: Some(true),
+                ..Default::default()
+            },
+        ] {
+            let mut p = Predicates::default();
+            push_card_filters(&mut p, &f, "c", None);
+            let sql = p.where_sql();
+            assert!(!sql.contains("color_identity"), "{sql}");
+            assert_eq!(search_ids(&conn, f), all);
+        }
+    }
+
+    /// Dryad Arbor is the row the whole "every type it has" rule is written for, and the two
+    /// plain cards beside it are what tell a working filter from one that answers its own
+    /// first word.
+    fn corpus_with_types() -> rusqlite::Connection {
+        let conn = crate::schema::memory_pair();
+        seed_cards(
+            &conn,
+            &[
+                ("card-arbor", "G", "Land Creature — Forest Dryad"),
+                ("card-bear", "G", "Creature — Bear"),
+                ("card-bolt", "R", "Instant"),
+                ("card-forest", "", "Land — Forest"),
+                ("card-ritual", "B", "Sorcery"),
+            ],
+        );
+        conn
+    }
+
+    fn of_types(types: &[&str]) -> CardFilters {
+        CardFilters {
+            types: Some(owned(types)),
+            ..Default::default()
+        }
+    }
+
+    /// A filter answers "does this card have this type", so a card with two types is in both —
+    /// which is deliberately not `autoCategory.ts`'s one-bucket rule, and a reader who presses
+    /// `Creature` and cannot find Dryad Arbor has been told a falsehood.
+    #[test]
+    fn the_type_filter_matches_every_type_a_card_has() {
+        let conn = corpus_with_types();
+        assert_eq!(
+            search_ids(&conn, of_types(&["Creature"])),
+            owned(&["card-arbor", "card-bear"])
+        );
+        assert_eq!(
+            search_ids(&conn, of_types(&["Land"])),
+            owned(&["card-arbor", "card-forest"]),
+            "the same row answers both chips"
+        );
+    }
+
+    /// OR within the group, the rarity chips' rule — and one clause with one parameter, which
+    /// is the `format` arm's shape and the whole reason `type_mask` is a column rather than a
+    /// `LIKE` on `type_line`.
+    #[test]
+    fn two_types_or_with_each_other() {
+        let conn = corpus_with_types();
+        assert_eq!(
+            search_ids(&conn, of_types(&["Instant", "Sorcery"])),
+            owned(&["card-bolt", "card-ritual"])
+        );
+
+        let mut p = Predicates::default();
+        push_card_filters(&mut p, &of_types(&["Instant", "Sorcery"]), "c", None);
+        let types: Vec<&String> = p
+            .wheres
+            .iter()
+            .filter(|w| w.contains("type_mask"))
+            .collect();
+        assert_eq!(
+            types,
+            vec!["(c.type_mask & ?) != 0"],
+            "one clause, ORed inside the mask"
+        );
+        assert_eq!(p.params.len(), 1);
+
+        // No `rows` fallback, whatever table the caller joins: a type line is a claim only a
+        // card row can make, so an orphaned collection entry fails it.
+        let mut joined = Predicates::default();
+        push_card_filters(&mut joined, &of_types(&["Instant"]), "c", Some("e"));
+        assert!(
+            joined.wheres.iter().any(|w| w == "(c.type_mask & ?) != 0"),
+            "{:?}",
+            joined.wheres
+        );
+    }
+
+    /// A blank or unrecognised list adds no SQL at all — [`picked_rarities`]/[`picked_sets`]'
+    /// rule. A cleared picker sends `[]`, and a word this build has never heard of must read as
+    /// "no filter" rather than as an empty wall with no chip drawn to explain it.
+    #[test]
+    fn an_empty_or_unknown_type_list_is_not_a_filter() {
+        let conn = corpus_with_types();
+        let all = search_ids(&conn, no_filters());
+        assert_eq!(all.len(), 5);
+
+        for f in [
+            of_types(&[]),
+            of_types(&["Shiny"]),
+            of_types(&["", "  "]),
+            of_types(&["creature"]),
+        ] {
+            let mut p = Predicates::default();
+            push_card_filters(&mut p, &f, "c", None);
+            let sql = p.where_sql();
+            assert!(!sql.contains("type_mask"), "{sql}");
+            assert_eq!(search_ids(&conn, f), all);
+        }
+
+        // Matched exactly: `TYPE_KEYS` holds the capitalised words and the UI sends those same
+        // words from one constant, so a lower-cased `creature` above is an unknown word rather
+        // than a second spelling rule the mask does not have.
+        assert_eq!(
+            picked_types(&owned(&["Creature", "Shiny", ""])),
+            vec!["Creature"]
+        );
+        assert!(picked_types(&[]).is_empty());
     }
 }

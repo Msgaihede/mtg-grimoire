@@ -93,6 +93,20 @@ pub struct CardIndex {
     /// same shape [`Self::mana`] has for a fractional cost, and it is why nothing may derive a
     /// total from them.
     pub rarity: [BitSet; Self::RARITY_KEYS.len()],
+    /// One bitset per [`crate::cardtypes::TYPE_KEYS`] entry, same order.
+    ///
+    /// **Not a partition, for [`Self::rarity`]'s reason twice over.** A card can be Artifact
+    /// *and* Creature — `Land Creature — Forest Dryad` is in two of these — so the bitsets
+    /// overlap; and the corpus holds types this list does not name (`Vanguard`, `Plane`,
+    /// `Scheme`), so a card can be in none. Their counts therefore neither sum to the result
+    /// set nor bound it, and nothing may derive a total from them. `rarity`'s version of this
+    /// is the weaker one: those four only ever under-count, where these can over-count too.
+    ///
+    /// **Filled from `cards.type_mask` and never from `type_line`.** The mask is what
+    /// [`crate::filters::push_card_filters`] tests, so reading the text here would be a second
+    /// implementation of the type rule — one that can disagree with the first, which is the
+    /// greyed-option-over-results-that-exist failure this module exists to prevent.
+    pub types: [BitSet; crate::cardtypes::TYPE_KEYS.len()],
     /// Set ordinal per doc, indexing [`CardIndex::set_codes`]. `u16` because 986 codes is
     /// three orders of magnitude inside its range and this array is one per printing.
     pub set_ord: Vec<u16>,
@@ -136,10 +150,11 @@ impl CardIndex {
     /// and a backfill that rewrote all 116 695 rows: the page layout scanned here is that
     /// rewrite's, which may be more or less fragmented than a synced database's. The spec
     /// left this figure *estimated* at "467 ms for five
-    /// columns, and the real read wants about fifteen"; the read as built wants **seven**
-    /// (`rowid`, `set_code`, `cmc`, `color_identity`, `legal_mask`, `is_paper`, `mana_cost`),
-    /// which is where the estimate's headroom went. **The 767 ms was measured at six** — the
-    /// X overlay added `mana_cost` afterwards and nobody has re-timed it, so read that figure
+    /// columns, and the real read wants about fifteen"; the read as built wants **nine**
+    /// (`rowid`, `set_code`, `cmc`, `color_identity`, `legal_mask`, `is_paper`, `mana_cost`,
+    /// `rarity`, `type_mask`), which is where the estimate's headroom went. **The 767 ms was
+    /// measured at six** — the X overlay added `mana_cost` afterwards, the rarity chips
+    /// `rarity`, the type chips `type_mask`, and nobody has re-timed it, so read that figure
     /// as a floor rather than as this read's cost. Comfortably inside the ~1.5 s at which the
     /// spec would have spent its fallback — a covering index for this read — so that stays
     /// unspent. It is a full table scan today and no existing index changes that:
@@ -195,6 +210,7 @@ impl CardIndex {
                 .collect(),
             playable: BitSet::new(capacity),
             rarity: std::array::from_fn(|_| BitSet::new(capacity)),
+            types: std::array::from_fn(|_| BitSet::new(capacity)),
             set_ord: vec![0; capacity],
             set_codes: Vec::new(),
             owned: BitSet::new(capacity),
@@ -203,7 +219,7 @@ impl CardIndex {
         let mut seen: std::collections::HashMap<String, u16> = std::collections::HashMap::new();
         let mut stmt = conn.prepare(
             "SELECT rowid, set_code, cmc, color_identity, legal_mask, is_paper, mana_cost,
-                    rarity
+                    rarity, type_mask
                FROM cards",
         )?;
         let mut rows = stmt.query([])?;
@@ -222,6 +238,11 @@ impl CardIndex {
             // Nullable, and a NULL rarity is in none of the four buckets — the same answer the
             // SQL gives, where `NULL IN (…)` is NULL rather than false.
             let rarity: Option<String> = row.get(7)?;
+            // `NOT NULL DEFAULT 0`, unlike every nullable column above it, so a bare `i64` is
+            // the right read: a row the backfill has not reached yet masks to 0 and lands in
+            // none of the eight bitsets, which is the same answer `type_mask & ? != 0` gives
+            // it in SQL.
+            let type_mask: i64 = row.get(8)?;
 
             ix.all.set(doc);
             if paper {
@@ -298,6 +319,17 @@ impl CardIndex {
                 }
             }
 
+            // Bit per [`crate::cardtypes::TYPE_KEYS`] entry, and a row can set several — the
+            // loop has no `break` for that reason, where the rarity block above matches one
+            // word and stops. A bit above the eight this build names contributes nothing here
+            // and cannot be asked for either: `picked_types` narrows the request to the same
+            // list, so the index and the SQL run out of vocabulary together.
+            for (k, set) in ix.types.iter_mut().enumerate() {
+                if type_mask & (1i64 << k) != 0 {
+                    set.set(doc);
+                }
+            }
+
             let mask = mask.unwrap_or(0) as u64;
             // The whole integer, before it is picked apart into bits — `legal_mask != 0`, the
             // predicate `push_card_filters` emits for `playable_only`.
@@ -366,6 +398,11 @@ pub(crate) mod fixtures {
 
     /// Four printings that between them exercise every column the index reads: a colourless
     /// card, a two-colour one, a digital-only one, and one with no `cmc` at all.
+    ///
+    /// **None of them carries a type line**, so all four mask to 0 and sit in none of
+    /// [`super::CardIndex::types`]' eight bitsets. That is a property to seed against rather
+    /// than around — a type facet over these four counts zero everywhere, which is what the
+    /// chips must grey on — and [`typed`] is how a test that needs a type adds one.
     ///
     /// **Every row names `legal_mask` explicitly.** The column is `NOT NULL DEFAULT 0`, so a
     /// fixture that omits it inserts happily and answers *empty* for every format assertion
@@ -475,6 +512,30 @@ pub(crate) mod fixtures {
         })
     }
 
+    /// One printing with a **type line**, for the type dimension.
+    ///
+    /// **`type_mask` is computed from that line by [`crate::cardtypes::type_mask`] and never
+    /// written by hand.** The mask is derived data — the ingest writes it and corpus schema 5
+    /// backfills it — so a hand-written integer here would let a test assert against a row the
+    /// app could not produce, which is the failure a fixture is least able to show.
+    ///
+    /// Paper, in `lea`, with no `cmc` and no legality bit: a row seeded here is a row about
+    /// types, and every other dimension reads whatever `cards` defaults to.
+    pub(crate) fn typed(conn: &Connection, id: &str, name: &str, type_line: &str) {
+        conn.execute(
+            "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,is_paper,
+                type_line,type_mask,raw)
+             VALUES (?1,?2,'lea',?1,'en','normal',1,?3,?4,'{}')",
+            rusqlite::params![
+                id,
+                name,
+                type_line,
+                i64::from(crate::cardtypes::type_mask(type_line))
+            ],
+        )
+        .unwrap();
+    }
+
     /// A collection entry for one printing. `set_code`/`collector_number` are denormalized
     /// migration insurance rather than part of [`crate::schema::COLLECTION_GRAIN`], so they
     /// are filler here — the `card_id` is what makes two entries distinct.
@@ -499,8 +560,18 @@ pub(crate) mod fixtures {
 
 #[cfg(test)]
 mod tests {
-    use super::fixtures::{doc, own, seeded};
+    use super::fixtures::{doc, own, seeded, typed};
     use super::*;
+
+    /// The slot in [`CardIndex::types`] one type key occupies — the bit position
+    /// `crate::cardtypes::type_mask` writes, read back by name so a reordering of that frozen
+    /// list breaks the assertion rather than silently relabelling it.
+    fn type_slot(name: &str) -> usize {
+        crate::cardtypes::TYPE_KEYS
+            .iter()
+            .position(|k| *k == name)
+            .unwrap()
+    }
 
     #[test]
     fn the_paper_set_holds_paper_printings_and_nothing_else() {
@@ -726,6 +797,72 @@ mod tests {
             ix.playable.and_count(&ix.paper),
             3,
             "Bolt, Helix and the bit"
+        );
+    }
+
+    /// A card is in **every** type bitset its mask names, because the question a filter asks
+    /// is "does this card have this type" — Dryad Arbor is a Land and a Creature, and a reader
+    /// pressing `Creature` who could not find it has been told a falsehood. That is the third
+    /// type vocabulary in the app and the only one that answers this way: `autoCategory.ts`
+    /// files Dryad Arbor under Land alone and `deckBuckets.ts` puts an artifact creature on the
+    /// Artifact bar, both by design.
+    ///
+    /// **And the eight do not partition**, which is the same row read the other way: summing
+    /// them here gives 4 over three printings, and the Vanguard is in none of them at all.
+    #[test]
+    fn a_card_is_in_every_type_bitset_its_mask_names_and_they_do_not_partition() {
+        let conn = seeded();
+        typed(&conn, "5", "Dryad Arbor", "Land Creature — Forest Dryad");
+        typed(&conn, "6", "Grizzly Bears", "Creature — Bear");
+        typed(&conn, "7", "Fabled Hero", "Vanguard");
+        let ix = CardIndex::build(&conn).unwrap();
+
+        let arbor = doc(&conn, "5");
+        assert!(ix.types[type_slot("Land")].contains(arbor));
+        assert!(
+            ix.types[type_slot("Creature")].contains(arbor),
+            "two types, two bitsets — the whole reason this is not `autoCategory.ts`"
+        );
+
+        assert_eq!(
+            ix.types[type_slot("Creature")].count(),
+            2,
+            "Arbor and Bears"
+        );
+        assert_eq!(ix.types[type_slot("Land")].count(), 1, "Arbor alone");
+
+        let vanguard = doc(&conn, "7");
+        assert!(
+            (0..crate::cardtypes::TYPE_KEYS.len()).all(|i| !ix.types[i].contains(vanguard)),
+            "the corpus holds types this list does not name, so a card can be in none"
+        );
+        assert_eq!(
+            ix.types.iter().map(|t| t.count()).sum::<u32>(),
+            3,
+            "over three typed printings — the sum over-counts Arbor and misses the Vanguard, \
+             which is why nothing may derive a total from these"
+        );
+    }
+
+    /// **The mask is read, never the type line.** A printing whose `type_mask` is still the
+    /// column default — every row until corpus schema 5's backfill reaches it, and every row a
+    /// pre-mask ingest wrote — is in no bitset, exactly as `type_mask & ? != 0` answers it in
+    /// SQL. A build that parsed `type_line` here would put this row in `Creature` and hand the
+    /// chip a count the search cannot reach.
+    #[test]
+    fn the_build_reads_the_mask_and_not_the_type_line() {
+        let conn = seeded();
+        conn.execute(
+            "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,is_paper,
+                type_line,raw)
+             VALUES ('5','Un-backfilled','lea','5','en','normal',1,'Creature — Human','{}')",
+            [],
+        )
+        .unwrap();
+        let ix = CardIndex::build(&conn).unwrap();
+        assert!(
+            !ix.types[type_slot("Creature")].contains(doc(&conn, "5")),
+            "the line says Creature and the mask says nothing; the mask is what the SQL tests"
         );
     }
 

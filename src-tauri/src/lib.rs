@@ -47,6 +47,7 @@ pub mod app_meta;
 /// the command the reader hit first on the phone.
 pub mod card;
 pub mod card_row;
+pub mod cardtypes;
 /// **The deck domain, and the ten modules below it, moved here on 2026-08-29** — they were
 /// under "Desktop and Android" because of where their *commands* were, not because of
 /// anything in them. Every one is `&Connection` in and a DTO out, with no `tauri::`, no
