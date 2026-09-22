@@ -166,6 +166,13 @@ pub struct SearchRequest {
     /// every caller that does not ask keeps the shape and the behaviour it had. The search
     /// view sends `true` explicitly.
     pub collapse: Option<bool>,
+    /// The Scryfall-syntax terms the box was parsed into — `t:goblin`, `cmc>=3`, `-a:rebecca`.
+    ///
+    /// **Two of the twelve fields never become SQL and ride [`Self::text`]'s `MATCH` string
+    /// instead**, which is why they are read here by [`filters::fts_match`] rather than
+    /// handed straight to `push_card_filters` with the rest. See
+    /// [`crate::filters::PredicateField`].
+    pub predicates: Option<Vec<filters::QueryPredicate>>,
     pub limit: u32,
     pub offset: u32,
 }
@@ -206,6 +213,10 @@ impl SearchRequest {
             art_tags: self.art_tags.clone(),
             oracle_tags: self.oracle_tags.clone(),
             art_weight_floor: self.art_weight_floor.clone(),
+            // Carried whole, unlike `text`: ten of the twelve fields are SQL and come out of
+            // `push_card_filters` like every other filter. The two that are not are skipped
+            // there by name — see [`crate::filters::PredicateField`].
+            predicates: self.predicates.clone(),
         }
     }
 }
